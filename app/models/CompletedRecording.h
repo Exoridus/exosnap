@@ -178,6 +178,13 @@ struct CompletedRecording {
     }
 };
 
+// EDIT-OVERLAY-R1 (review): editability gate shared by the post-stop result Edit
+// button and the Recent-recordings Edit action. Split (multi-segment) recordings
+// have no single MKV edit master, so they cannot be opened in the edit surface.
+[[nodiscard]] inline bool CanOpenInEditor(const CompletedRecording& rec) {
+    return rec.fileExists() && !rec.isMultiSegment();
+}
+
 inline bool operator==(const CompletedRecording& a, const CompletedRecording& b) noexcept {
     return a.file_path == b.file_path && a.file_size_bytes == b.file_size_bytes &&
            a.duration_seconds == b.duration_seconds && a.source_width == b.source_width &&

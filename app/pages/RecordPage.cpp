@@ -23,6 +23,7 @@
 #include <recorder_core/audio_input_device.h>
 
 #include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
 #include <QByteArray>
 #include <QClipboard>
@@ -37,6 +38,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
@@ -47,6 +49,7 @@
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QTimer>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -131,6 +134,36 @@ using exosnap::ui::containerLabel;
 using exosnap::ui::frameRateLabel;
 using exosnap::ui::resolutionLabel;
 using exosnap::ui::videoCodecLabel;
+
+// EDIT-OVERLAY-R1 (review): single source for the EditContext fields both Edit
+// entry points share (post-stop result button + Recent-menu Edit action). The
+// live-session-only extras (mkv_master_path override, peak drift, diagnostics
+// snapshot) are layered on by the result-button path.
+EditContext MakeEditContext(const CompletedRecording& rec) {
+    EditContext ctx;
+    ctx.output_path = rec.file_path;
+    ctx.mkv_master_path = rec.file_path; // best-effort fallback (may not be correct for MP4)
+    ctx.duration = QString::fromStdWString(RecordViewModel::FormatElapsed(rec.totalDurationSeconds()));
+    ctx.size = rec.totalSizeBytes() > 0
+                   ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.totalSizeBytes())))
+                   : QString{};
+    if (rec.output_width > 0 && rec.output_height > 0)
+        ctx.resolution = QStringLiteral("%1x%2").arg(rec.output_width).arg(rec.output_height);
+    ctx.fps = frameRateLabel(rec.frame_rate_num, rec.frame_rate_den) + QStringLiteral(" ") +
+              (rec.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+    ctx.video_codec = videoCodecLabel(rec.video_codec);
+    ctx.audio_codec = audioCodecLabel(rec.audio_codec);
+    ctx.container = containerLabel(rec.container);
+    ctx.markers = rec.markers;
+    ctx.marker_sidecar_path = rec.marker_sidecar_path;
+    return ctx;
+}
+
+// Shared explainer for why a split recording's Edit affordance is disabled
+// (result panel button + Recent-menu Edit action use the same wording).
+QString splitEditDisabledTooltip() {
+    return QStringLiteral("Split recordings can't be edited — there is no single edit master.");
+}
 
 QString toClock(const std::wstring& elapsed_text) {
     const QString text = QString::fromStdWString(elapsed_text);
@@ -638,6 +671,20 @@ void RecordPage::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
 }
 
+void RecordPage::setEditOverlayActive(bool active) {
+    // EDIT-OVERLAY-R1 (review): the Edit overlay covers this page without hiding
+    // it, so hideEvent's privacy gating never fires — suspend/resume the
+    // visibility-gated meter monitoring explicitly (mic-in-use indicator must not
+    // burn through a whole edit session over an old file).
+    if (edit_overlay_active_ == active)
+        return;
+    edit_overlay_active_ = active;
+    syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
+    updateAudioMeterLevels();
+}
+
 void RecordPage::updatePreviewHeightClamp() {
     if (!preview_surface_ || !preview_surface_host_) {
         return;
@@ -690,6 +737,22 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     source_lock_label_ = makeLabel("Source locked", "recordSourceLock", source_row_);
     source_lock_label_->setVisible(false);
 
+    // EDIT-OVERLAY-R1: quiet "Recent" button — reopens an older recording, either
+    // externally (existing onRecentItemOpen behavior) or in the Edit overlay (new).
+    // The menu is rebuilt from view_model_.recent_recordings just before it shows.
+    recent_recordings_btn_ = new QToolButton(source_row_);
+    recent_recordings_btn_->setObjectName("recordRecentButton");
+    recent_recordings_btn_->setText(QStringLiteral("Recent"));
+    recent_recordings_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    recent_recordings_btn_->setPopupMode(QToolButton::InstantPopup);
+    recent_recordings_btn_->setToolTip(QStringLiteral("Reopen a past recording."));
+    recent_recordings_btn_->setEnabled(false);
+    auto* recent_menu = new QMenu(recent_recordings_btn_);
+    recent_menu->setObjectName(QStringLiteral("recordRecentMenu"));
+    recent_menu->setToolTipsVisible(true);
+    connect(recent_menu, &QMenu::aboutToShow, this, &RecordPage::rebuildRecentMenu);
+    recent_recordings_btn_->setMenu(recent_menu);
+
     change_source_btn_ = new QPushButton("Change source", source_row_);
     change_source_btn_->setObjectName("recordChangeSourceButton");
     change_source_btn_->setProperty("role", "ghost");
@@ -697,6 +760,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     source_row_layout->addWidget(source_chip_panel_, 1);
     source_row_layout->addWidget(source_lock_label_, 0, Qt::AlignVCenter);
+    source_row_layout->addWidget(recent_recordings_btn_, 0, Qt::AlignVCenter);
     source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
     preview_column_layout->addWidget(source_row_);
 
@@ -949,29 +1013,19 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(result_delete_btn_, &QPushButton::clicked, this, &RecordPage::onDeleteFile);
 
     // 0.9.0 S1: Edit button — build EditContext from the last completed result and navigate.
+    // EDIT-OVERLAY-R1 (review): common fields come from the shared MakeEditContext
+    // helper (current_completed_recording mirrors the result_* fields, and rename
+    // keeps both in sync); the live session layers on its extras below.
     connect(result_edit_btn_, &QPushButton::clicked, this, [this]() {
         const auto& vm = view_model_;
         if (!vm.last_succeeded)
             return;
-        EditContext ctx;
-        ctx.output_path = QString::fromStdWString(vm.result_output_path);
+        EditContext ctx = MakeEditContext(vm.current_completed_recording);
+        // Live-session extras the history rows don't carry:
         ctx.mkv_master_path = QString::fromStdWString(vm.result_mkv_master_path);
-        ctx.duration = QString::fromStdWString(RecordViewModel::FormatElapsed(vm.result_elapsed_seconds));
-        ctx.size = vm.result_output_file_bytes > 0
-                       ? QString::fromStdWString(RecordViewModel::FormatBytes(vm.result_output_file_bytes))
-                       : QString{};
-        if (vm.result_output_width > 0 && vm.result_output_height > 0)
-            ctx.resolution = QStringLiteral("%1x%2").arg(vm.result_output_width).arg(vm.result_output_height);
-        ctx.fps = frameRateLabel(vm.result_frame_rate_num, vm.result_frame_rate_den) + QStringLiteral(" ") +
-                  (vm.result_cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-        ctx.video_codec = videoCodecLabel(vm.result_video_codec);
-        ctx.audio_codec = audioCodecLabel(vm.result_audio_codec);
-        ctx.container = containerLabel(vm.result_container);
         ctx.peak_av_drift_ms = peak_av_drift_ms_;
         ctx.av_drift_available = av_drift_ever_available_;
         ctx.completed_snapshot = last_completed_snapshot_;
-        ctx.markers = vm.result_markers;
-        ctx.marker_sidecar_path = QString::fromStdWString(vm.result_marker_sidecar_path);
         emit editExportRequested(ctx);
     });
     connect(rename_cancel_btn_, &QPushButton::clicked, this, [this]() {
@@ -1992,6 +2046,67 @@ void RecordPage::onRecentItemOpenFolder(int history_index) {
         return;
 
     QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+}
+
+void RecordPage::onRecentItemEdit(int history_index) {
+    if (history_index < 0 || history_index >= view_model_.recent_recordings.size())
+        return;
+
+    const auto& rec = view_model_.recent_recordings[history_index];
+    // Same gate as the post-stop result Edit button: split (multi-segment)
+    // recordings have no single edit master and cannot open in the editor.
+    if (!CanOpenInEditor(rec))
+        return;
+
+    // Fallback EditContext: file metadata from history, no live diagnostics —
+    // older recordings don't carry the session's diagnostics snapshot or
+    // peak-drift tracking, so the Review phase shows "–" for those fields,
+    // which is acceptable (ADR 0022). mkv_master_path stays the best-effort
+    // file path itself, same as the notification-toast entry point.
+    emit editExportRequested(MakeEditContext(rec));
+}
+
+void RecordPage::rebuildRecentMenu() {
+    if (!recent_recordings_btn_)
+        return;
+    QMenu* menu = recent_recordings_btn_->menu();
+    if (!menu)
+        return;
+    menu->clear();
+
+    if (view_model_.recent_recordings.isEmpty()) {
+        QAction* empty_action = menu->addAction(QStringLiteral("No recent recordings"));
+        empty_action->setEnabled(false);
+        return;
+    }
+
+    for (int i = 0; i < view_model_.recent_recordings.size(); ++i) {
+        const auto& rec = view_model_.recent_recordings[i];
+        const bool exists = rec.fileExists();
+        const QString name = rec.fileName();
+        const QString label = name.isEmpty() ? rec.file_path : name;
+
+        QAction* open_action = menu->addAction(label);
+        open_action->setEnabled(exists);
+        connect(open_action, &QAction::triggered, this, [this, i]() { onRecentItemOpen(i); });
+
+        QAction* edit_action = menu->addAction(QStringLiteral("    Edit \xe2\x80\x94 %1").arg(label));
+        // Same gate as the post-stop result Edit button (EDIT-OVERLAY-R1 review):
+        // split recordings can't be edited — no single edit master.
+        edit_action->setEnabled(CanOpenInEditor(rec));
+        connect(edit_action, &QAction::triggered, this, [this, i]() { onRecentItemEdit(i); });
+
+        if (!exists) {
+            const QString gone_tip = QStringLiteral("File no longer exists.");
+            open_action->setToolTip(gone_tip);
+            edit_action->setToolTip(gone_tip);
+        } else if (rec.isMultiSegment()) {
+            edit_action->setToolTip(splitEditDisabledTooltip());
+        }
+
+        if (i + 1 < view_model_.recent_recordings.size())
+            menu->addSeparator();
+    }
 }
 
 void RecordPage::startPreviewIfIdle() {
@@ -3497,7 +3612,7 @@ void RecordPage::syncMicMeterService() {
     // page. A mic device must be selected for monitoring to make sense.
     const bool mic_device_available = view_model_.audio_ui_state.selected_mic_device_id.has_value();
     const bool should_run =
-        (view_model_.audio_ui_state.IsMicEnabled() || record_page_visible_) && mic_device_available && !transition_busy;
+        (view_model_.audio_ui_state.IsMicEnabled() || meterPageGateOpen()) && mic_device_available && !transition_busy;
 
     if (!should_run) {
         coordinator_->StopMicMeter();
@@ -3521,7 +3636,7 @@ void RecordPage::syncSysMeterService() {
                                  view_model_.state == UiRecordingState::Saving;
     // System audio is passive loopback — no OS privacy indicator. Run the meter
     // whenever the page is visible so the dock always has a live level to show.
-    const bool should_run = (view_model_.audio_active_sys || record_page_visible_) && !transition_busy;
+    const bool should_run = (view_model_.audio_active_sys || meterPageGateOpen()) && !transition_busy;
 
     if (!should_run) {
         coordinator_->StopSysMeter();
@@ -3544,7 +3659,7 @@ void RecordPage::syncAppMeterService() {
     // App audio is passive loopback — no OS privacy indicator. Run the meter
     // whenever the page is visible (and a Window target with a known PID is
     // selected), so the dock shows a live grey level even when app audio is off.
-    const bool try_app_meter = (view_model_.audio_active_app || record_page_visible_) && !transition_busy;
+    const bool try_app_meter = (view_model_.audio_active_app || meterPageGateOpen()) && !transition_busy;
 
     uint32_t target_pid = 0;
     if (try_app_meter && view_model_.selected_target_index >= 0 &&
@@ -4066,6 +4181,20 @@ void RecordPage::updateSourceChip() {
     } else {
         change_source_btn_->setToolTip(QStringLiteral("Choose a screen, window, or region source."));
     }
+
+    // EDIT-OVERLAY-R1: Recent stays alongside Change source — hidden while the
+    // source is locked (recording/paused/interaction in progress), same as today.
+    if (recent_recordings_btn_) {
+        const bool has_history = !view_model_.recent_recordings.isEmpty();
+        recent_recordings_btn_->setEnabled(!locked && has_history);
+        recent_recordings_btn_->setVisible(!locked);
+        recent_recordings_btn_->setToolTip(has_history ? QStringLiteral("Reopen a past recording.")
+                                                       : QStringLiteral("No recent recordings yet."));
+        // If the source just locked (recording/countdown start) while the menu is
+        // open, close it — its actions must not fire into a live capture.
+        if (locked && recent_recordings_btn_->menu() && recent_recordings_btn_->menu()->isVisible())
+            recent_recordings_btn_->menu()->close();
+    }
 }
 
 bool RecordPage::isSourceSelectionLocked() const {
@@ -4261,9 +4390,14 @@ void RecordPage::updateResultDetailsPanel() {
         result_rename_btn_->setEnabled(rec.fileExists());
     if (result_delete_btn_)
         result_delete_btn_->setEnabled(rec.fileExists());
-    // Edit button: enabled for single-file results (split sessions have no single MKV master).
-    if (result_edit_btn_)
-        result_edit_btn_->setEnabled(rec.fileExists() && !rec.isMultiSegment());
+    // Edit button: enabled for single-file results (split sessions have no single
+    // MKV master) — shared gate with the Recent-menu Edit action (CanOpenInEditor).
+    if (result_edit_btn_) {
+        result_edit_btn_->setEnabled(CanOpenInEditor(rec));
+        result_edit_btn_->setToolTip(rec.fileExists() && rec.isMultiSegment()
+                                         ? splitEditDisabledTooltip()
+                                         : QStringLiteral("Trim and export this recording"));
+    }
 
     // Hide overlays if file is missing
     if (!rec.fileExists()) {

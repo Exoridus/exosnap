@@ -39,9 +39,11 @@ class QAbstractButton;
 class QFrame;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QPushButton;
 class QResizeEvent;
 class QTimer;
+class QToolButton;
 class QVBoxLayout;
 
 namespace exosnap {
@@ -86,6 +88,15 @@ class RecordPage : public QWidget {
     void setRuntimeCapabilitiesFailed(const QString& reason);
     void rebroadcastChromeState();
     void restoreRecordingHistory();
+
+    // EDIT-OVERLAY-R1 (review): while the Edit overlay covers this page, the page
+    // stays visible to Qt (no hideEvent fires), so the visibility-gated meter
+    // monitoring — the mic meter in particular, which lights the Windows
+    // microphone-in-use indicator — would keep running through the whole edit
+    // session. MainWindow calls this on overlay open (true) / close (false); it
+    // mirrors the hideEvent/showEvent gating explicitly. A mic that is enabled as
+    // a recording source is unaffected (same as navigating to another page today).
+    void setEditOverlayActive(bool active);
 
     // ---- Preset capture/countdown API (Stage 1) ----
 
@@ -283,6 +294,14 @@ class RecordPage : public QWidget {
     void onDeleteFile();
     void onRecentItemOpen(int history_index);
     void onRecentItemOpenFolder(int history_index);
+    // EDIT-OVERLAY-R1: reopen an older recording in the Edit overlay. Distinct from
+    // onRecentItemOpen (which keeps its pre-existing "open externally" behavior) —
+    // builds a fallback, path-only EditContext (same shape as the notification-toast
+    // path in MainWindow::dispatchNotificationAction) and emits editExportRequested.
+    void onRecentItemEdit(int history_index);
+    // Populates the Recent-recordings menu (recordRecentMenu) just before it is
+    // shown, so it always reflects the current view_model_.recent_recordings.
+    void rebuildRecentMenu();
     void populateMicDeviceCombo();
     void syncMicMeterService();
     void syncSysMeterService();
@@ -331,6 +350,10 @@ class RecordPage : public QWidget {
     QLabel* source_name_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
+    // EDIT-OVERLAY-R1: quiet "Recent" button — opens a menu of recent recordings
+    // (Open, preserving onRecentItemOpen's existing external-open behavior, plus a
+    // new Edit action that reopens the recording in the Edit overlay).
+    QToolButton* recent_recordings_btn_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
     std::filesystem::path last_output_folder_;
@@ -354,6 +377,15 @@ class RecordPage : public QWidget {
     // corresponding source toggle is off, so the dock shows a live (grey)
     // level preview before the user enables recording.
     bool record_page_visible_ = false;
+    // EDIT-OVERLAY-R1: true while the Edit overlay covers this (still Qt-visible)
+    // page — suspends the visibility-gated meter monitoring (mic privacy). See
+    // setEditOverlayActive() and meterPageGateOpen().
+    bool edit_overlay_active_ = false;
+    // Combined visibility gate for the meter services: the page is the active
+    // stack page AND not covered by the Edit overlay.
+    [[nodiscard]] bool meterPageGateOpen() const noexcept {
+        return record_page_visible_ && !edit_overlay_active_;
+    }
     capability::CapabilitySet shared_runtime_caps_{};
     // True once VALID runtime caps have been delivered to the coordinator (success).
     // Stays false if the async probe fails so capability-gated logic never runs

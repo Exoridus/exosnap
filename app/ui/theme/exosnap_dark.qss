@@ -2894,3 +2894,41 @@ QFrame[panelRole="accentNote"] {
     border: 1px solid ${accent-b2};
     border-radius: ${radius-lg}px;
 }
+
+/* ── EDIT-OVERLAY-R1: EditExportPage hosted as an overlay over Record ──
+   (ADR 0022 update). Framed panel look for the hosted page inside
+   EditExportOverlay's dimmed backdrop — mirrors the sourcePickerDialog treatment. */
+QWidget#editExportOverlayPanel {
+    background: ${bg1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+/* Record source row "Recent" button — QToolButton has no [role="ghost"] attribute
+   selector support, so it gets its own rule matching QPushButton[role="ghost"]
+   (mirrors QToolButton#presetManageButton's existing treatment). */
+QToolButton#recordRecentButton {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 0 ${space-lg}px;
+    color: ${text1};
+    min-height: ${control-height}px;
+    font-weight: 600;
+}
+
+QToolButton#recordRecentButton:hover {
+    background: ${bg3};
+    border-color: ${line3};
+    color: ${text0};
+}
+
+QToolButton#recordRecentButton:disabled {
+    color: ${text3};
+    border-color: ${line1};
+}
+
+QToolButton#recordRecentButton::menu-indicator {
+    image: none;
+    width: 0;
+}

@@ -25,6 +25,7 @@
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
+#include "ui/dialogs/EditExportOverlay.h"
 #include "ui/dialogs/PresetManageOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
@@ -560,14 +561,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     output_placeholder_ = new QWidget(stack_);
     stack_->addWidget(output_placeholder_);
     // Deferred: about_page_ is built by buildAboutPage() after show().
-    // A cheap placeholder holds index kAboutPageIndex so EditExportPage gets
-    // the correct subsequent index without re-numbering.
+    // A cheap placeholder holds index kAboutPageIndex (the last stack slot —
+    // EDIT-OVERLAY-R1 removed the former EditExportPage tail slot).
     about_placeholder_ = new QWidget(stack_);
     stack_->addWidget(about_placeholder_);
-    // EditExportPage is a non-nav page reached programmatically (navigateToEditExportPage);
-    // it lives at the tail of the stack, past all kPageDescriptors slots.
-    // Deferred: built by buildEditExportPage() after show() — no placeholder needed
-    // because it is accessed only via setCurrentWidget(), not setCurrentIndex().
+    // EDIT-OVERLAY-R1 (ADR 0022 update): EditExportPage is no longer a stack page —
+    // it is hosted by edit_export_overlay_, an in-window overlay over Record
+    // (navigateToEditExportPage). Deferred: built by buildEditExportOverlay() after
+    // show() — no stack slot/placeholder needed at all now.
     // Inject the recovery manifest store before the coordinator is initialized.
     record_page_->setRecoveryManifestStore(&recovery_manifest_store_);
     record_page_->setOutputSettings(output_settings_);
@@ -594,6 +595,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(central);
     source_picker_overlay_->hide();
     record_page_->setSourcePickerOverlay(source_picker_overlay_);
+
+    // EDIT-OVERLAY-R1: edit_export_overlay_ itself is lightweight, but the
+    // EditExportPage it hosts is not (recorder_core-coupled, builds a full UI) — so
+    // its construction stays deferred to buildEditExportOverlay() via
+    // hydrateSecondaryPages()/navigateToEditExportPage(), exactly like the former
+    // buildEditExportOverlay(). Only the (cheap) member pointer starts null here.
 
     // PS-PHASE-B: Notification hub panel — top-level popup, no Qt parent.
     notification_hub_ = new ui::chrome::NotificationHubPanel(nullptr);
@@ -1750,6 +1757,18 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         stack_->currentIndex() != 0)
         navigateToPage(kRecordPageIndex);
 
+    // EDIT-OVERLAY-R1 (review): a capture start (recording or countdown) dismisses
+    // the Edit overlay. On main this happened implicitly via the stack swap-back
+    // above; with the overlay the stack usually already shows Record, so the
+    // dismissal must be explicit — otherwise a recording started by hotkey would
+    // run invisibly underneath an editor opened on an old file. Deliberate: this
+    // closes even during Phase::Exporting — closing only hides the progress UI,
+    // the hosted page and its export worker thread live on, and re-entering after
+    // Stop re-shows the running export (see navigateToEditExportPage; ADR 0022).
+    if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && edit_export_overlay_ &&
+        edit_export_overlay_->isOpen())
+        edit_export_overlay_->closeOverlay();
+
     // Update recording overlay visibility/state.
     updateRecordingOverlay();
     // Update diagnostics overlay visibility/state.
@@ -2084,6 +2103,35 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
 
+    // EDIT-OVERLAY-R1 (review): a stream-copy export from the Edit surface is
+    // running (possibly with its overlay dismissed by a recording start). Closing
+    // would cancel it in ~EditExportPage without a word — ask, mirroring the remux
+    // guard above. Data-wise "cancel and close" is safe: an export never mutates
+    // the original recording; at most a partial .tmp/_edit file is abandoned.
+    if (edit_export_overlay_ && edit_export_overlay_->page() &&
+        edit_export_overlay_->page()->phase() == EditExportPage::Phase::Exporting) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle(QStringLiteral("Export in progress"));
+        msgBox.setText(QStringLiteral("ExoSnap is exporting your edited recording. Closing now will cancel the "
+                                      "export. The original recording is untouched."));
+        msgBox.setIcon(QMessageBox::Warning);
+
+        auto* waitBtn = msgBox.addButton(QStringLiteral("Wait for export to finish"), QMessageBox::RejectRole);
+        auto* closeBtn = msgBox.addButton(QStringLiteral("Cancel export and close"), QMessageBox::AcceptRole);
+        Q_UNUSED(closeBtn);
+        msgBox.setDefaultButton(waitBtn);
+
+        msgBox.exec();
+
+        if (msgBox.clickedButton() == static_cast<QAbstractButton*>(waitBtn)) {
+            event->ignore();
+            return;
+        }
+        // Accepted: fall through to the remaining guards (a recording could in
+        // principle be active as well); ~EditExportPage cancels the export
+        // cooperatively and joins the worker thread during teardown.
+    }
+
     if (recording_active_) {
         QMessageBox msgBox(this);
         msgBox.setWindowTitle(QStringLiteral("Recording in progress"));
@@ -2179,6 +2227,17 @@ void MainWindow::navigateToPage(int index) {
     // over an unrelated page.
     if (source_picker_overlay_)
         source_picker_overlay_->closeOverlay();
+
+    // EDIT-OVERLAY-R1: navigating to any page other than Record dismisses the Edit
+    // overlay — it is only meaningful "over Record", never left floating above a
+    // different page. Mid-export (Phase::Exporting) is the one exception: the same
+    // rule that blocks Escape/backdrop dismiss also blocks nav-away, so a running
+    // export is never silently abandoned by clicking another nav item.
+    if (edit_export_overlay_ && edit_export_overlay_->isOpen() && index != kRecordPageIndex) {
+        if (edit_export_overlay_->isDismissBlocked())
+            return; // stay put — the export keeps running
+        edit_export_overlay_->closeOverlay();
+    }
 
     setCurrentPage(index);
     if (title_bar_)
@@ -3722,22 +3781,39 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
 }
 
 void MainWindow::navigateToEditExportPage(const EditContext& ctx) {
-    if (!edit_export_page_)
-        buildEditExportPage();
-    edit_export_page_->setEditContext(ctx);
-    edit_export_page_->setPhase(EditExportPage::Phase::Review);
-    title_bar_->setActivePage(kRecordPageIndex);
-    stack_->setCurrentWidget(edit_export_page_);
+    // EDIT-OVERLAY-R1 (review): a live capture owns the Record surface — opening
+    // the editor over a running recording/countdown makes no sense (on main the
+    // stack swap-back would have immediately undone it anyway). A toast's Edit
+    // action simply stays available until after Stop.
+    if (recording_active_ || record_status_label_ == QStringLiteral("COUNTDOWN"))
+        return;
+    if (!edit_export_overlay_)
+        buildEditExportOverlay();
+    // A running export must never be clobbered by a new context (stale toast Edit
+    // pill, Recent-menu action). If its overlay was dismissed (e.g. by a recording
+    // start), re-show the in-progress export instead of resetting the page.
+    if (edit_export_overlay_->isDismissBlocked()) {
+        navigateToPage(kRecordPageIndex);
+        edit_export_overlay_->openOverlay();
+        return;
+    }
+    // Activate Record first (if not already active) — the overlay is only
+    // meaningful "over Record" — then populate and open the overlay itself.
+    navigateToPage(kRecordPageIndex);
+    edit_export_overlay_->page()->setEditContext(ctx);
+    edit_export_overlay_->page()->setPhase(EditExportPage::Phase::Review);
+    edit_export_overlay_->openOverlay();
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& scenario) {
-    if (!edit_export_page_)
-        buildEditExportPage();
-    edit_export_page_->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
-                                        scenario.edit_export_size, scenario.edit_export_resolution,
-                                        scenario.edit_export_fps, scenario.edit_export_video_codec,
-                                        scenario.edit_export_audio_codec, scenario.edit_export_container);
+    if (!edit_export_overlay_)
+        buildEditExportOverlay();
+    setCurrentPage(kRecordPageIndex);
+    edit_export_overlay_->page()->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
+                                                   scenario.edit_export_size, scenario.edit_export_resolution,
+                                                   scenario.edit_export_fps, scenario.edit_export_video_codec,
+                                                   scenario.edit_export_audio_codec, scenario.edit_export_container);
     EditExportPage::Phase phase = EditExportPage::Phase::Review;
     if (scenario.edit_export_phase == QStringLiteral("edit"))
         phase = EditExportPage::Phase::Edit;
@@ -3749,9 +3825,11 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
         phase = EditExportPage::Phase::Done;
     else if (scenario.edit_export_phase == QStringLiteral("failed"))
         phase = EditExportPage::Phase::Failed;
-    edit_export_page_->setPhase(phase);
-    stack_->setCurrentWidget(edit_export_page_);
-    title_bar_->setActivePage(kRecordPageIndex);
+    edit_export_overlay_->page()->setPhase(phase);
+    edit_export_overlay_->openOverlay();
+    // stack_->currentIndex() is now kRecordPageIndex, so the shared post-switch
+    // title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex())) in
+    // applyVisualScenario() already highlights Record correctly.
 }
 #endif
 
@@ -3760,9 +3838,10 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 void MainWindow::hydrateSecondaryPages() {
     // Build one deferred page per event-loop tick so the UI can paint and respond
     // between constructors. Order: ConfigPage first — it is the heaviest and the
-    // most commonly visited item; then DevicePage (adapter enumeration + probe is
-    // cheap for the common 1-2 adapter case), HotkeysPage, DiagnosticsPage,
-    // LogsPage, AboutPage, EditExportPage (tail slot), WebcamPage, OutputPage.
+    // most commonly visited item; then DevicePage (construction only — the adapter
+    // scan runs async on its first showEvent), HotkeysPage, DiagnosticsPage,
+    // LogsPage, AboutPage, EditExportOverlay (not a stack page — see
+    // EDIT-OVERLAY-R1), WebcamPage, OutputPage.
     // Webcam/Output come last because their fan-out replay depends on stable
     // live_webcam_ and the preset registry, both settled before the ctor exits.
     buildConfigPage();
@@ -3777,7 +3856,7 @@ void MainWindow::hydrateSecondaryPages() {
                     QTimer::singleShot(0, this, [this]() {
                         buildAboutPage();
                         QTimer::singleShot(0, this, [this]() {
-                            buildEditExportPage();
+                            buildEditExportOverlay();
                             QTimer::singleShot(0, this, [this]() {
                                 buildWebcamPage();
                                 QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
@@ -4205,12 +4284,23 @@ void MainWindow::buildDevicePage() {
     connect(device_page_, &DevicePage::openSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
 }
 
-void MainWindow::buildEditExportPage() {
-    if (edit_export_page_)
+void MainWindow::buildEditExportOverlay() {
+    if (edit_export_overlay_)
         return; // already built (e.g. by navigateToEditExportPage or visual harness)
-    edit_export_page_ = new EditExportPage(stack_);
-    stack_->addWidget(edit_export_page_);
-    connect(edit_export_page_, &EditExportPage::backRequested, this, [this]() { navigateToPage(kRecordPageIndex); });
+    // EDIT-OVERLAY-R1: parented to the central widget — same recipe as
+    // source_picker_overlay_ — so it covers the full client area (title bar
+    // included) with a backdrop that correctly composites over the native DXGI
+    // live-preview HWND. Never added to stack_. The overlay wires its own hosted
+    // page's backRequested -> closeOverlay() internally (see EditExportOverlay ctor).
+    edit_export_overlay_ = new ui::dialogs::EditExportOverlay(centralWidget());
+    edit_export_overlay_->hide();
+    // Mic privacy (review): the overlay covers the Record page without hiding it,
+    // so RecordPage's hideEvent gating never fires — suspend/resume the
+    // visibility-gated meter monitoring (mic-in-use indicator) explicitly.
+    connect(edit_export_overlay_, &ui::dialogs::EditExportOverlay::opened, this,
+            [this]() { record_page_->setEditOverlayActive(true); });
+    connect(edit_export_overlay_, &ui::dialogs::EditExportOverlay::closed, this,
+            [this]() { record_page_->setEditOverlayActive(false); });
 }
 
 void MainWindow::buildWebcamPage() {

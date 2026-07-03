@@ -101,6 +101,8 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerOverlay.h
     ui/dialogs/SourcePickerOverlay.cpp
     ui/dialogs/SourcePickerWindowRules.h
+    ui/dialogs/EditExportOverlay.h
+    ui/dialogs/EditExportOverlay.cpp
     ui/dialogs/CrashReportPanel.h
     ui/dialogs/CrashReportPanel.cpp
     ui/dialogs/CrashReportOverlay.h
@@ -1117,6 +1119,23 @@ exosnap_add_gtest(
 )
 target_include_directories(edit_export_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(edit_export_page_tests PROPERTIES AUTOMOC ON)
+
+# EDIT-OVERLAY-R1: EditExportOverlay hosts EditExportPage as an overlay over Record
+# (ADR 0022 update) instead of a stack page — same technical recipe as
+# SourcePickerOverlay (see source_picker_overlay_tests below).
+exosnap_add_gtest(
+    NAME edit_export_overlay_tests
+    TEST_PREFIX edit_export_overlay.
+    SOURCES
+        tests/test_edit_export_overlay.cpp
+        ui/dialogs/EditExportOverlay.cpp
+        pages/EditExportPage.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
+)
+target_include_directories(edit_export_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(edit_export_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME test_edit_context

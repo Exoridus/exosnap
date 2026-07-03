@@ -125,6 +125,57 @@ TEST_F(CompletedResultTest, ModelFileSizeFromDisk_UsesActualFile) {
     EXPECT_EQ(rec.fileSizeFromDisk(), 2048);
 }
 
+// --- Editability gate (EDIT-OVERLAY-R1 review) ---
+// Shared by the post-stop result Edit button and the Recent-menu Edit action.
+
+TEST_F(CompletedResultTest, CanOpenInEditor_TrueForExistingSingleFile) {
+    QString path = createDummyFile(QStringLiteral("editable.mkv"));
+    CompletedRecording rec;
+    rec.succeeded = true;
+    rec.file_path = path;
+    EXPECT_TRUE(CanOpenInEditor(rec));
+}
+
+TEST_F(CompletedResultTest, CanOpenInEditor_FalseForMissingFile) {
+    CompletedRecording rec;
+    rec.succeeded = true;
+    rec.file_path = tempPath(QStringLiteral("never_created.mkv"));
+    EXPECT_FALSE(CanOpenInEditor(rec));
+}
+
+TEST_F(CompletedResultTest, CanOpenInEditor_FalseForMultiSegment_EvenWhenFileExists) {
+    // Split recordings have no single MKV edit master — the Edit affordances
+    // (result button AND Recent-menu action) must both be disabled.
+    QString path = createDummyFile(QStringLiteral("split.mkv"));
+    CompletedRecording rec;
+    rec.succeeded = true;
+    rec.file_path = path;
+    CompletedRecordingSegment a;
+    a.succeeded = true;
+    a.file_path = path;
+    CompletedRecordingSegment b;
+    b.succeeded = true;
+    b.file_path = createDummyFile(QStringLiteral("split_part-002.mkv"));
+    rec.segments = {a, b};
+    ASSERT_TRUE(rec.isMultiSegment());
+    ASSERT_TRUE(rec.fileExists());
+    EXPECT_FALSE(CanOpenInEditor(rec));
+}
+
+TEST_F(CompletedResultTest, CanOpenInEditor_TrueForSingleSegmentList) {
+    // Exactly one segment == single-file semantics; stays editable.
+    QString path = createDummyFile(QStringLiteral("single_seg.mkv"));
+    CompletedRecording rec;
+    rec.succeeded = true;
+    rec.file_path = path;
+    CompletedRecordingSegment a;
+    a.succeeded = true;
+    a.file_path = path;
+    rec.segments = {a};
+    ASSERT_FALSE(rec.isMultiSegment());
+    EXPECT_TRUE(CanOpenInEditor(rec));
+}
+
 // --- Multi-segment results (SPLIT-RECORDING-R1) ---
 
 TEST_F(CompletedResultTest, SingleFileRecording_SegmentCountIsOne) {

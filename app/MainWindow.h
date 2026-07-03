@@ -57,6 +57,7 @@ class TrayPresence;
 namespace ui::dialogs {
 class AboutOverlay;
 class CrashReportOverlay;
+class EditExportOverlay;
 class PresetManageOverlay;
 class RecoveryOverlay;
 class SourcePickerOverlay;
@@ -196,9 +197,12 @@ class MainWindow : public QMainWindow {
     // Does NOT scan adapters (the page scans asynchronously on its first showEvent);
     // delivers the current runtime CapabilitySet if the async probe already completed.
     void buildDevicePage();
-    // Builds EditExportPage (tail slot, past all kPageDescriptors indices) with its
-    // back-connection.
-    void buildEditExportPage();
+    // Builds the EditExportOverlay (hosting EditExportPage) with its back-connection.
+    // EDIT-OVERLAY-R1 (ADR 0022 update): the surface is an overlay over Record, not
+    // a stack page — it is parented to the central widget (same recipe as
+    // source_picker_overlay_), never added to stack_. Lazy: built on first use,
+    // same staged-hydration timing as the former stack-tail page.
+    void buildEditExportOverlay();
     // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
     // Ends with applySettings(live_webcam_) to replay preset-applied state.
     void buildWebcamPage();
@@ -316,6 +320,7 @@ class MainWindow : public QMainWindow {
     ui::dialogs::PresetManageOverlay* preset_manage_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
+    ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
     ui::dialogs::RecordingErrorOverlay* recording_error_overlay_ = nullptr;
     ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;
@@ -354,7 +359,6 @@ class MainWindow : public QMainWindow {
     QWidget* webcam_placeholder_ = nullptr; // cheap slot-reservation until buildWebcamPage()
     HotkeysPage* hotkeys_page_ = nullptr;
     QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
-    EditExportPage* edit_export_page_ = nullptr;
     pages::AboutPage* about_page_ = nullptr;
     QWidget* about_placeholder_ = nullptr;  // cheap slot-reservation until buildAboutPage()
     QWidget* output_placeholder_ = nullptr; // cheap slot-reservation until buildOutputPage()
