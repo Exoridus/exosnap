@@ -421,6 +421,8 @@ void traceFrameMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) 
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_(recovery_manifest_store_) {
     diagnostics::AppLog::init();
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("mainwindow-ctor-start %1 ms").arg(diagnostics::StartupClock().elapsed()));
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructing"));
 
     setWindowTitle("ExoSnap");
@@ -485,6 +487,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     live_webcam_ = startup_cfg.webcam;
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("settings loaded"));
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("settings-loaded %1 ms").arg(diagnostics::StartupClock().elapsed()));
 
     // ---- Crash-capture session lifecycle (CRASH-WIRE-R1 · ADR 0017) ----
     // ORDER IS CRITICAL: read the previous session's crash context (if any)
@@ -524,6 +528,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_ = new QStackedWidget(central);
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("record-page-built %1 ms").arg(diagnostics::StartupClock().elapsed()));
     // Deferred: device_page_ is built by buildDevicePage() after show().
     // A cheap placeholder holds index kDevicePageIndex so config_placeholder_ and
     // all subsequent pages get the correct indices without any re-numbering.
@@ -976,6 +982,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     applyPresetConfig(startup_cfg);
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructed"));
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("mainwindow-ctor-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
 
     navigateToPage(kRecordPageIndex);
 
@@ -993,6 +1001,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // stall the UI. onRuntimeCapsReady() is invoked on the main thread via
         // QueuedConnection when the probe completes; it also starts the device
         // notifiers (which must follow caps so the first snapshot has context).
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("caps-probe-start %1 ms").arg(diagnostics::StartupClock().elapsed()));
         QThread* worker = QThread::create([this]() {
             // Exception barrier: QueryRuntimeFacts() allocates and has no top-level
             // noexcept guarantee, so an escaped throw here would abort the QThread and
@@ -1037,6 +1047,8 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
     runtime_caps_ = std::move(caps);
     runtime_caps_ready_ = true;
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed (async)"));
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("caps-probe-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
     if (record_page_)
         record_page_->setRuntimeCapabilities(runtime_caps_); // delivers caps to coordinator (A1 gate)
     if (device_page_)
@@ -1064,6 +1076,8 @@ void MainWindow::onRuntimeCapsFailed(const QString& reason) {
     runtime_caps_ready_ = true;
     diagnostics::AppLog::error(QStringLiteral("window"),
                                QStringLiteral("capability probe failed (async): %1").arg(reason));
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("caps-probe-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
     if (record_page_)
         record_page_->setRuntimeCapabilitiesFailed(reason);
     refreshPresetUi();
@@ -3844,22 +3858,54 @@ void MainWindow::hydrateSecondaryPages() {
     // EDIT-OVERLAY-R1), WebcamPage, OutputPage.
     // Webcam/Output come last because their fan-out replay depends on stable
     // live_webcam_ and the preset registry, both settled before the ctor exits.
+    //
+    // PERF-MEASURE: logPerf brackets every step with a "<name> <elapsed> ms" pair
+    // (same convention as first-paint / preview-live) so a later optimization slice
+    // has a per-page cost baseline (see .workspace/refactor-2.md Phase 1). It is a
+    // stateless lambda (no captures of its own), so copying it into each nested
+    // QTimer::singleShot capture list below is trivial.
+    auto logPerf = [](const QString& name) {
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("%1 %2 ms").arg(name).arg(diagnostics::StartupClock().elapsed()));
+    };
+
+    logPerf(QStringLiteral("hydrate-config-start"));
     buildConfigPage();
-    QTimer::singleShot(0, this, [this]() {
+    logPerf(QStringLiteral("hydrate-config-end"));
+    QTimer::singleShot(0, this, [this, logPerf]() {
+        logPerf(QStringLiteral("hydrate-page-start:device"));
         buildDevicePage();
-        QTimer::singleShot(0, this, [this]() {
+        logPerf(QStringLiteral("hydrate-page-end:device"));
+        QTimer::singleShot(0, this, [this, logPerf]() {
+            logPerf(QStringLiteral("hydrate-page-start:hotkeys"));
             buildHotkeysPage();
-            QTimer::singleShot(0, this, [this]() {
+            logPerf(QStringLiteral("hydrate-page-end:hotkeys"));
+            QTimer::singleShot(0, this, [this, logPerf]() {
+                logPerf(QStringLiteral("hydrate-page-start:diagnostics"));
                 buildDiagnosticsPage();
-                QTimer::singleShot(0, this, [this]() {
+                logPerf(QStringLiteral("hydrate-page-end:diagnostics"));
+                QTimer::singleShot(0, this, [this, logPerf]() {
+                    logPerf(QStringLiteral("hydrate-page-start:logs"));
                     buildLogsPage();
-                    QTimer::singleShot(0, this, [this]() {
+                    logPerf(QStringLiteral("hydrate-page-end:logs"));
+                    QTimer::singleShot(0, this, [this, logPerf]() {
+                        logPerf(QStringLiteral("hydrate-page-start:about"));
                         buildAboutPage();
-                        QTimer::singleShot(0, this, [this]() {
+                        logPerf(QStringLiteral("hydrate-page-end:about"));
+                        QTimer::singleShot(0, this, [this, logPerf]() {
+                            logPerf(QStringLiteral("hydrate-page-start:edit-export"));
                             buildEditExportOverlay();
-                            QTimer::singleShot(0, this, [this]() {
+                            logPerf(QStringLiteral("hydrate-page-end:edit-export"));
+                            QTimer::singleShot(0, this, [this, logPerf]() {
+                                logPerf(QStringLiteral("hydrate-page-start:webcam"));
                                 buildWebcamPage();
-                                QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                                logPerf(QStringLiteral("hydrate-page-end:webcam"));
+                                QTimer::singleShot(0, this, [this, logPerf]() {
+                                    logPerf(QStringLiteral("hydrate-page-start:output"));
+                                    buildOutputPage();
+                                    logPerf(QStringLiteral("hydrate-page-end:output"));
+                                    logPerf(QStringLiteral("hydrate-all-end"));
+                                });
                             });
                         });
                     });

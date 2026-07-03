@@ -1,5 +1,7 @@
 #include "DevicePage.h"
 
+#include "../diagnostics/AppLog.h"
+#include "../diagnostics/StartupClock.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/LucideIcon.h"
@@ -357,6 +359,11 @@ void DevicePage::startScan() {
     if (scan_in_flight_)
         return;
     scan_in_flight_ = true;
+    // PERF-MEASURE: brackets the off-thread adapter enumeration + NVENC probe
+    // (device-rescan-end is logged in applyScanResults(), the completion callback),
+    // same "<name> <elapsed> ms" convention as first-paint / preview-live.
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("device-rescan-start %1 ms").arg(diagnostics::StartupClock().elapsed()));
     if (rescan_btn_)
         rescan_btn_->setEnabled(false); // no double-click scan queue
     if (empty_state_label_) {
@@ -399,6 +406,8 @@ void DevicePage::setAdaptersForTest(std::vector<capability::AdapterInfo> adapter
 
 void DevicePage::applyScanResults(std::vector<capability::AdapterInfo> adapters,
                                   std::vector<capability::AdapterEncoderCapability> capabilities) {
+    diagnostics::AppLog::info(QStringLiteral("perf"),
+                              QStringLiteral("device-rescan-end %1 ms").arg(diagnostics::StartupClock().elapsed()));
     adapters_ = std::move(adapters);
     capabilities_ = std::move(capabilities);
     scanned_ = true;

@@ -1351,7 +1351,9 @@ exosnap_add_gtest(
         ui/widgets/SectionRuleHeader.cpp
         # DevicePage's adapter avatar + codec-chip icons use lucidePixmap() (Lucide glyph renderer).
         ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
+    # exosnap_app_log_test_support: DevicePage logs the device-rescan-start/end perf
+    # milestones via AppLog (perf/startup-milestones slice).
+    LIBRARIES exosnap_app_log_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(device_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(device_page_tests PROPERTIES AUTOMOC ON)

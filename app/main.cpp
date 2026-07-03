@@ -10,6 +10,7 @@
 
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion
 #include "MainWindow.h"
+#include "diagnostics/AppLog.h"
 #include "diagnostics/StartupClock.h"
 #include "exosnap_resource.h"
 #include "services/ElevatedRelaunch.h"
@@ -94,9 +95,25 @@ int main(int argc, char* argv[]) {
     // PERF-MEASURE: start the process-global startup clock before anything else so
     // first-paint / preview-live milestones measure true start→milestone latency.
     exosnap::diagnostics::StartupClock().start();
+    // Capture elapsed time at the true moment of each early milestone; the actual
+    // AppLog::info() calls happen further down (AppLog::init() needs QCoreApplication
+    // to exist, so it cannot run before QApplication is constructed), but the elapsed
+    // value below is read right here so the logged number still reflects the real
+    // start→milestone latency, not the latency to whenever logging became possible.
+    const qint64 main_start_ms = exosnap::diagnostics::StartupClock().elapsed();
 
     QApplication app(argc, argv);
+    const qint64 qapplication_created_ms = exosnap::diagnostics::StartupClock().elapsed();
     app.setApplicationName("ExoSnap");
+
+    // PERF-MEASURE: bring the log sink up as early as possible so main-start /
+    // qapplication-created / theme-applied land in the physical log file. Previously
+    // AppLog::init() only ran once MainWindow was constructed (see MainWindow.cpp);
+    // that call is still there and is a harmless no-op (AppLog::init() is idempotent).
+    exosnap::diagnostics::AppLog::init();
+    exosnap::diagnostics::AppLog::info(QStringLiteral("perf"), QStringLiteral("main-start %1 ms").arg(main_start_ms));
+    exosnap::diagnostics::AppLog::info(QStringLiteral("perf"),
+                                       QStringLiteral("qapplication-created %1 ms").arg(qapplication_created_ms));
 
     static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
     if (!QFile::exists(kAppIconPath))
@@ -112,6 +129,9 @@ int main(int argc, char* argv[]) {
     if (!app_icon.isNull())
         QApplication::setWindowIcon(app_icon);
     exosnap::ui::theme::ApplyExoSnapTheme(app);
+    exosnap::diagnostics::AppLog::info(
+        QStringLiteral("perf"),
+        QStringLiteral("theme-applied %1 ms").arg(exosnap::diagnostics::StartupClock().elapsed()));
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     exosnap::visual::VisualTestOptions visual_options;
