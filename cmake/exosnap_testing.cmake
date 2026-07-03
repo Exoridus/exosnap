@@ -64,6 +64,25 @@ function(exosnap_add_gtest)
               "$<TARGET_FILE:${_qt_target}>" "$<TARGET_FILE_DIR:${ARG_NAME}>")
       endif()
     endforeach()
+    # Qt resolves platform plugins relative to the loaded QtCore — the copy
+    # staged next to the test exe, NOT the Qt install — so without a platforms/
+    # subdirectory any QApplication test aborts at startup ("no Qt platform
+    # plugin could be initialized"; interactively that is a modal dialog plus a
+    # hung process). Stage the windows + offscreen platform plugins alongside.
+    set(_exosnap_platforms_dir_created FALSE)
+    foreach(_qt_plugin IN ITEMS Qt6::QWindowsIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
+      if(TARGET ${_qt_plugin})
+        if(NOT _exosnap_platforms_dir_created)
+          list(APPEND _exosnap_stage_commands
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${ARG_NAME}>/platforms")
+          set(_exosnap_platforms_dir_created TRUE)
+        endif()
+        list(APPEND _exosnap_stage_commands
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:${_qt_plugin}>" "$<TARGET_FILE_DIR:${ARG_NAME}>/platforms")
+      endif()
+    endforeach()
     add_custom_target(${_exosnap_stage_target} ${_exosnap_stage_commands}
       COMMENT "Staging FFmpeg + Qt runtime DLLs for tests in ${CMAKE_CURRENT_BINARY_DIR}"
       VERBATIM)
