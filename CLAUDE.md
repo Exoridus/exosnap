@@ -20,8 +20,10 @@ Read:
 - Exact label: `Merge with above`
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
-- Top-level navigation: **Record, Settings, Diagnostics, Logs, About** (5 items; Hotkeys moved into Settings as an embedded card — PS-PHASE-C)
+- Top-level navigation: **Record, Device, Settings, Diagnostics, Logs, About** (6 items; Hotkeys moved into Settings as an embedded card — PS-PHASE-C; Device tab added in the final-redesign port)
   - **Settings** hosts Video, Audio, Output, Webcam, Hotkeys, and Advanced (expert-only) as embedded sections
+  - **Device** hosts adapter selection + the per-GPU capability matrix (moved out of Diagnostics)
+  - **Edit/Output/Save** is an overlay over the Record page (ADR 0022), not a nav item
 
 ## Work style
 
