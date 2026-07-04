@@ -20,6 +20,7 @@
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
+#include <recorder_core/sdr_white_level.h>
 #include <recorder_core/webcam_placement.h>
 
 #include <windows.graphics.capture.interop.h>
@@ -1068,7 +1069,8 @@ void VideoThread::Run() {
         chroma.spill_reduction = overlay.chroma_spill_reduction;
 
         std::string compErr;
-        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr)) {
+        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr,
+                                      overlay.opacity)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU webcam composite: " + compErr);
             return false;
         }
@@ -1541,9 +1543,15 @@ void VideoThread::Run() {
             hdrNativeActive ? DXGI_FORMAT_R16G16B16A16_FLOAT
                             : (hdrToneMapActive ? DXGI_FORMAT_B8G8R8A8_UNORM
                                                 : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM));
+        // Only the native-HDR FP16 path uses the SDR white level (linear-light
+        // overlay compositing); every other path keeps the 203-nit default,
+        // which Init ignores for non-FP16 render formats anyway.
+        const float overlayRefWhiteNits =
+            hdrNativeActive ? EffectiveOverlayReferenceWhiteNits(odSrc.DisplayFacts().sdr_white_level_nits)
+                            : kDefaultSdrWhiteLevelNits;
         std::string compErr;
         if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
-                                compositorFormat)) {
+                                compositorFormat, overlayRefWhiteNits)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "GPU compositor init: " + compErr);
             if (!useOdCapture) {
                 if (captureSession != nullptr)

@@ -516,6 +516,27 @@ TEST(RecordingPreset, Sanitize_Webcam_NanChroma_BecomesFinite) {
     EXPECT_TRUE(std::isfinite(s.webcam.chroma_key.softness));
 }
 
+TEST(RecordingPreset, Sanitize_Webcam_Opacity_AboveOne_ClampsToOne) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.webcam.opacity = 3.0f;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(s.webcam.opacity, 1.0f);
+}
+
+TEST(RecordingPreset, Sanitize_Webcam_Opacity_Negative_ClampsToZero) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.webcam.opacity = -0.5f;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(s.webcam.opacity, 0.0f);
+}
+
+TEST(RecordingPreset, Sanitize_Webcam_Opacity_Nan_ResetToOne) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.webcam.opacity = std::numeric_limits<float>::quiet_NaN();
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(s.webcam.opacity, 1.0f);
+}
+
 // ===========================================================================
 // ReconcileContainerCodecs — all rules
 // ===========================================================================

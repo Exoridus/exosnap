@@ -248,6 +248,11 @@ Behavior:
   tone-map is explicitly not a conflict.
 - For native HDR10, the pipeline pins **limited range** and **10-bit**, writes HDR10 container/MP4
   metadata, and the on-screen monitoring preview is an SDR approximation of the HDR signal.
+- SDR overlay sprites (webcam PiP, cursor) are placed at the captured display's Windows SDR-content
+  brightness level (`DISPLAYCONFIG_SDR_WHITE_LEVEL`) so the PiP matches SDR windows on the same
+  screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
+  the recording starts — moving the Windows SDR-brightness slider afterward does not retune an
+  active recording.
 - **HDR scope for 1.0:** native HDR10 recording applies to **monitor (duplication) capture only**.
   Windows Graphics Capture (WGC) window/game capture stays SDR for now, and there is no HLG or
   wide-gamut generalization. Extending HDR to WGC capture via an FP16 frame pool is technically
@@ -269,11 +274,12 @@ available during recording via an on-screen dock control and a hotkey.
 
 **Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a
-selectable overlay placement. It is off by default and configured in Settings → Webcam and on the
-Record page. The webcam is the only feature that depends on Windows Media Foundation: on Windows N/KN
-editions without the Media Feature Pack, the app still launches and records normally, but the webcam
-UI is disabled with a notice referencing the Media Feature Pack and a "Webcam (MF)" row appears in
-Diagnostics.
+selectable overlay placement. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
+applied identically in the Record-page preview and the recorded output. It is off by default and
+configured in Settings → Webcam and on the Record page. The webcam is the only feature that depends
+on Windows Media Foundation: on Windows N/KN editions without the Media Feature Pack, the app still
+launches and records normally, but the webcam UI is disabled with a notice referencing the Media
+Feature Pack and a "Webcam (MF)" row appears in Diagnostics.
 
 **Capture-exclusion.** ExoSnap's own on-screen overlays (recording status, diagnostics, countdown,
 quick-control pill) are drawn with `WDA_EXCLUDEFROMCAPTURE` so they are visible on screen but not in

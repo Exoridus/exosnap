@@ -52,7 +52,8 @@ class DxgiPreviewRenderer {
     // chrome) is drawn here for true WYSIWYG. Placement is normalized to the same
     // content rectangle the recording compositor uses, so preview and output match.
     // Thread-safe: called from the UI thread; applied on the render thread.
-    void SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh, bool mirror);
+    void SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh, bool mirror,
+                               float opacity);
     // bgra: tightly indexable BGRA pixels (stride bytes per row). nullptr clears it.
     void SetWebcamOverlayFrame(const uint8_t* bgra, int width, int height, int stride);
 
@@ -97,6 +98,9 @@ class DxgiPreviewRenderer {
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vertexShader_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> pixelShader_;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> samplerState_;
+    // Constant-colour blend state for the webcam PiP quad: SrcBlend/DestBlend read the
+    // BLEND_FACTOR passed to OMSetBlendState, so a single state serves any opacity.
+    Microsoft::WRL::ComPtr<ID3D11BlendState> overlayBlendState_;
 
     mutable std::mutex frameMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrame_;
@@ -124,6 +128,7 @@ class DxgiPreviewRenderer {
     bool overlayEnabled_ = false;
     bool overlaySelected_ = false;
     bool overlayMirror_ = false;
+    float overlayOpacity_ = 1.0f;
     float overlayNx_ = 0.0f;
     float overlayNy_ = 0.0f;
     float overlayNw_ = 0.25f;

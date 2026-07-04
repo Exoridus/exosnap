@@ -121,6 +121,7 @@ static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings
     overlay.overlay_w_norm = sanitized.overlay.w_norm;
     overlay.overlay_h_norm = sanitized.overlay.h_norm;
     overlay.mirror = sanitized.mirror;
+    overlay.opacity = sanitized.opacity;
     overlay.chroma_key_enabled = sanitized.chroma_key.enabled;
     {
         const auto ac = sanitized.chroma_key.active_color();
@@ -787,6 +788,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
     config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
     config.webcam.mirror = webcam_settings_.mirror;
+    config.webcam.opacity = webcam_settings_.opacity;
     config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
     {
         const auto ac = webcam_settings_.chroma_key.active_color();

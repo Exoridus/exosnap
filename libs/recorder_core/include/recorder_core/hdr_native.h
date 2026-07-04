@@ -27,6 +27,10 @@ struct HdrDisplayFacts {
     // Display luminance range, cd/m^2.
     float max_luminance_nits = 0.0f;
     float min_luminance_nits = 0.0f;
+    // The display's DISPLAYCONFIG_SDR_WHITE_LEVEL in nits at session start
+    // (0 = unknown / query failed). Independent of hdr_active gating: it is the
+    // OS SDR-content-brightness reference, not an EDID capability claim.
+    float sdr_white_level_nits = 0.0f;
 };
 
 // Only HEVC and AV1 can carry an HDR10 (10-bit PQ/BT.2020) bitstream; H.264 is

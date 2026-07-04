@@ -692,6 +692,17 @@ exosnap_add_gtest(
 target_include_directories(test_hdr_pq PRIVATE src)
 target_compile_definitions(test_hdr_pq PRIVATE NOMINMAX)
 
+# HDR overlay reference white: pure conversion/fallback logic for scaling SDR
+# overlay sprites to the display's SDR content brightness on the native-HDR10
+# path. No GPU/D3D needed (the DisplayConfig query itself lives in
+# dxgi_od_capture_src.cpp, exercised indirectly via test_gpu_compositor).
+exosnap_add_gtest(
+    NAME test_sdr_white_level
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_sdr_white_level.cpp
+    LIBRARIES recorder_core
+)
+
 # On-screen monitoring decode for native HDR10 (P010 PQ/BT.2020 -> tone-mapped
 # SDR BGRA): pure curve/matrix math shared with the encode reference, plus the
 # 10-bit native-HDR guard. No GPU.

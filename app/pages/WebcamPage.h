@@ -65,6 +65,7 @@ class WebcamPage : public QWidget {
     void onToleranceChanged(int value);
     void onSoftnessChanged(int value);
     void onSpillReductionChanged(int value);
+    void onOpacityChanged(int value);
     void onRefreshDevices();
     void onPreviewFrame(QImage frame);
 
@@ -111,6 +112,10 @@ class WebcamPage : public QWidget {
     QLabel* tolerance_label_ = nullptr;
     QLabel* softness_label_ = nullptr;
     QLabel* spill_label_ = nullptr;
+
+    // Overlay opacity (uniform PiP transparency)
+    QSlider* opacity_slider_ = nullptr;
+    QLabel* opacity_label_ = nullptr;
 
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;
