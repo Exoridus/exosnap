@@ -1640,6 +1640,31 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailablePro
     EXPECT_TRUE(it->fix_action->reversible);
 }
 
+// Final-review follow-up: the codec pick must also respect container compatibility.
+// MP4 + H.264 + AAC is the Recommended MP4 path, so MP4 + Hdr10 is a legal config —
+// but MP4 + AV1 + AAC is Experimental, which ReconcileCodecs fixes back to H.264.
+// Proposing AV1 there would make the applied fix silently self-revert (user confirms
+// "H.264 -> AV1", ReconcileContainerCodecs undoes it, blocker re-fires). On MP4 the
+// fix must propose HEVC (MP4 + HEVC + AAC is Allowed) even when the GPU has AV1.
+TEST(RecommendationEngineTest, Hdr10PlusH264OnMp4ProposesHevcDespiteAv1CapableGpu) {
+    const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.container = capability::Container::Mp4;
+    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(true);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.hdr.h264"; });
+    ASSERT_NE(it, list.results.end()) << "H.264 + HDR10-native on an HDR display must block recording.";
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.hdr.codec.hevc")
+        << "MP4 + AV1 + AAC is Experimental (ReconcileCodecs reverts it) — the fix must propose HEVC.";
+    EXPECT_EQ(it->fix_action->label, "Switch to HEVC");
+}
+
 TEST(RecommendationEngineTest, Hdr10PlusH264OnSdrDisplayRaisesNoBlocker) {
     // Auto-detect: on an SDR desktop the HDR10-native path never engages, so there
     // is no real conflict — the calm-diagnostics line means no blocker.

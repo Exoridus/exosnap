@@ -3,6 +3,7 @@
 #include "DiskSpaceThresholds.h"
 
 #include <capability/codec_selection.h>
+#include <capability/container_compat_registry.h>
 #include <capability/support_level.h>
 
 #include <chrono>
@@ -332,12 +333,24 @@ void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) c
         return; // SDR desktop — HDR10-native path does not engage
     }
 
-    // Prefer AV1 (best quality/efficiency); fall back to HEVC when AV1 is not
-    // GPU-selectable. Both are hdr10_native-capable per the QueryHdr10Native gate
-    // above, so either is a real fix — proposing an unavailable AV1 would just land
-    // the user in the codec-unavailable blocker (rec.003) instead of fixing anything.
+    // Prefer AV1 (best quality/efficiency); fall back to HEVC when AV1 is not a real
+    // fix here. Both are hdr10_native-capable per the QueryHdr10Native gate above, so
+    // either resolves the HDR conflict — but AV1 only qualifies when it is BOTH
+    //   (a) GPU-selectable — otherwise applying it just lands the user in the
+    //       codec-unavailable blocker (rec.003), and
+    //   (b) a working combo in the current container — Recommended/Allowed, the same
+    //       criterion ContainerCompatRegistry::ReconcileCodecs enforces. Without this,
+    //       MP4 (where AV1+AAC is Experimental) confirms "H.264 -> AV1" and the
+    //       MainWindow handler's ReconcileContainerCodecs silently reverts it to
+    //       H.264 — the fix self-reverts and the blocker re-fires.
+    const capability::ContainerCompatLevel av1_combo =
+        capability::ContainerCompatRegistry::Query(config_.container, capability::VideoCodec::Av1Nvenc,
+                                                   config_.audio_codec)
+            .level;
+    const bool av1_is_working_combo = av1_combo == capability::ContainerCompatLevel::Recommended ||
+                                      av1_combo == capability::ContainerCompatLevel::Allowed;
     const capability::VideoCodec proposed_codec =
-        capability::IsSelectable(caps_.QueryVideoCodec(capability::VideoCodec::Av1Nvenc))
+        capability::IsSelectable(caps_.QueryVideoCodec(capability::VideoCodec::Av1Nvenc)) && av1_is_working_combo
             ? capability::VideoCodec::Av1Nvenc
             : capability::VideoCodec::HevcNvenc;
     const std::string current_label(capability::VisibleVideoCodecLabel(config_.video_codec));

@@ -335,12 +335,16 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   to the codec the FixAction proposed and runs `ReconcileContainerCodecs`.
 - **The fix no longer hardcodes AV1.** `checkHdrH264Blocker` used to always propose AV1 even when
   the GPU only has HEVC encode, which would have applied a fix that just traded one blocker
-  (`rec.hdr.h264`) for another (`rec.003`, codec unavailable). It now checks
-  `caps_.QueryVideoCodec(VideoCodec::Av1Nvenc)` via `IsSelectable` and proposes AV1 when
-  GPU-selectable, else HEVC (both are `hdr10_native`-capable per the gate above) — mirroring the
-  `BestAvailableVideoCodec` preference order without importing that resolver's container-compat
-  step (the container is already fixed to Matroska/WebM by the time this blocker can fire). The fix
-  id/label follow the proposed codec (`fix.hdr.codec.av1` / `fix.hdr.codec.hevc`, "Switch to AV1" /
+  (`rec.hdr.h264`) for another (`rec.003`, codec unavailable). It now proposes AV1 only when BOTH
+  hold, else HEVC (both are `hdr10_native`-capable per the gate above): (a) AV1 is GPU-selectable
+  (`IsSelectable(caps_.QueryVideoCodec(Av1Nvenc))`), and (b) AV1 forms a working combo in the
+  current container — Recommended/Allowed per
+  `ContainerCompatRegistry::Query(container, Av1Nvenc, audio_codec)`, the same criterion
+  `ReconcileCodecs` enforces. Gate (b) matters because the container is NOT constrained by the
+  blocker's three firing gates: MP4 + H.264 + AAC + Hdr10 is a legal config, and MP4 + AV1 + AAC is
+  Experimental — without the gate, applying the AV1 fix would be silently reverted to H.264 by the
+  handler's own `ReconcileContainerCodecs` and the blocker would re-fire. The fix id/label follow
+  the proposed codec (`fix.hdr.codec.av1` / `fix.hdr.codec.hevc`, "Switch to AV1" /
   "Switch to HEVC"); the MainWindow handler keys off both ids so it applies exactly the codec the
   FixAction proposed, never a blind AV1.
 - **Remaining dormancy cause.** With the three fixes above, the `hdr_mode` plumbing and the fix
