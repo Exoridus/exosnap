@@ -372,7 +372,9 @@ QWidget#recordSourceRow[sourceLocked="true"] {
 QWidget#recordPreviewSurfaceHost {
     background: #0A0A0B;
     border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
+    /* Square corners: the live preview is a rectangular native swap-chain child
+       window that would cover any rounded corner unevenly. */
+    border-radius: 0px;
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="ready"] {
