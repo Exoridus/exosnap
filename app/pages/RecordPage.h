@@ -128,6 +128,17 @@ class RecordPage : public QWidget {
     // True iff the recording state allows a preset switch.
     [[nodiscard]] bool canApplyPresetNow() const;
 
+    // SETTINGS-HONESTY-R1: true iff a completed recording exists that Edit can open
+    // (mirrors the result Edit button's own last_succeeded gate). Diagnostics' Phase
+    // ④ "Open last report" link uses this to gate its own enabled state.
+    [[nodiscard]] bool hasCompletedRecording() const noexcept;
+
+    // Builds the same EditContext the result Edit button emits (common fields plus
+    // live-session extras: mkv master path, peak A/V drift, completed snapshot).
+    // Only meaningful when hasCompletedRecording() is true; returns a default
+    // (empty-path) EditContext otherwise.
+    [[nodiscard]] EditContext currentEditContext() const;
+
     // ADR-0014: Cancel an in-progress MP4 remux job.  Safe to call when not
     // remuxing (no-op).  Called by MainWindow::closeEvent when the user chooses
     // "Cancel save and close".

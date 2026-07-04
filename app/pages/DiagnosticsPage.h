@@ -70,6 +70,11 @@ class DiagnosticsPage : public QWidget {
     void setExpertModeEnabled(bool enabled);
     [[nodiscard]] bool isExpertModeEnabled() const noexcept;
 
+    // SETTINGS-HONESTY-R1: gates Phase ④'s "Open last report" link. MainWindow calls
+    // this whenever a recording completes/fails or the page is (re)built, mirroring
+    // RecordPage::hasCompletedRecording(). No-op-safe before the button is built.
+    void setHasLastRecording(bool has_last_recording);
+
   signals:
     void navigateToLogsRequested();
     // v0.8.0-D: FixAction routing — MainWindow wires these in a later wave.
@@ -85,9 +90,25 @@ class DiagnosticsPage : public QWidget {
     // row emits this; MainWindow routes it to kDevicePageIndex.
     void openDevicePageRequested();
 
+    // SETTINGS-HONESTY-R1: Phase ④'s "Open last report" link. The real post-flight
+    // report lives on the Edit overlay's Review step (EditExportPage); this button
+    // never duplicates it, only routes there. The button itself is disabled unless
+    // a completed recording exists to open (see setHasLastRecording); MainWindow's
+    // handler re-checks the same gate before routing.
+    void openLastReportRequested();
+
+    // Review F4: emitted on every showEvent so MainWindow re-pushes the current
+    // last-recording gate (setHasLastRecording). Covers the timing residue where
+    // last_succeeded flips after the most recent chrome-state event -- the page
+    // stays ignorant of recording state; it only asks to be refreshed.
+    void lastRecordingGateRefreshRequested();
+
   private slots:
     void onRunCheck();
     void onExportReport();
+
+  protected:
+    void showEvent(QShowEvent* event) override;
 
   private:
     void refreshOverview();
@@ -167,6 +188,10 @@ class DiagnosticsPage : public QWidget {
     QLabel* selftest_status_label_ = nullptr;
 
     ui::widgets::ElevationLock* elevation_lock_ = nullptr;
+
+    // SETTINGS-HONESTY-R1: Phase ④ "Open last report" link + its gate state.
+    QPushButton* open_last_report_btn_ = nullptr;
+    bool has_last_recording_ = false;
 
     // ── Injected data ──────────────────────────────────────────────────────────
     capability::CapabilitySet caps_;

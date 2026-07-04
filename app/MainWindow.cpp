@@ -248,6 +248,23 @@ QString UpdateChannelToString(update::UpdateChannel channel) {
     return channel == update::UpdateChannel::Preview ? QStringLiteral("Preview") : QStringLiteral("Stable");
 }
 
+// SETTINGS-HONESTY-R1: map the persisted/UI developer log-level string ("Off" |
+// "Error" | "Warning" | "Info" | "Debug") to AppLog's filter (nullopt = "Off",
+// i.e. record nothing). Unknown/legacy values fall back to Debug (record
+// everything, review F1) so a corrupt or stale key can never silently narrow
+// support diagnostics below what main always recorded.
+std::optional<diagnostics::LogSeverity> DeveloperLogLevelFromString(const QString& level) {
+    if (level.compare(QStringLiteral("Off"), Qt::CaseInsensitive) == 0)
+        return std::nullopt;
+    if (level.compare(QStringLiteral("Error"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Error;
+    if (level.compare(QStringLiteral("Warning"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Warning;
+    if (level.compare(QStringLiteral("Info"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Info;
+    return diagnostics::LogSeverity::Debug;
+}
+
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
         return ResizeZone::None;
@@ -448,6 +465,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
+    // SETTINGS-HONESTY-R1: narrow AppLog's recording filter to the persisted developer
+    // log-level now that it is known. AppLog::init() (above) already ran with the
+    // "record everything" default, so early-startup entries are unaffected.
+    diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(persisted_settings_.developer_log_level));
     // ADR 0033: sync the present provider opt-in from the persisted setting now
     // that the settings store has been loaded. The provider was constructed with
     // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
@@ -1789,6 +1810,11 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     updateDiagnosticsOverlay();
     // QUICK-PILL-R1: update interactive quick-control pill visibility/state.
     updateQuickControlPill();
+
+    // SETTINGS-HONESTY-R1: keep Diagnostics Phase ④'s "Open last report" link's
+    // enabled state in sync with whether a completed recording actually exists.
+    if (diagnostics_page_ && record_page_)
+        diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {
@@ -3955,6 +3981,17 @@ void MainWindow::buildConfigPage() {
         settings_store_.Save(persisted_settings_);
     });
 
+    // SETTINGS-HONESTY-R1: Developer card log-level combo — genuinely wired (was a
+    // UI-only stub). Seed from the persisted value, persist + apply on change.
+    config_page_->setDeveloperLogLevel(persisted_settings_.developer_log_level);
+    connect(config_page_, &ConfigPage::developerLogLevelChanged, this, [this](const QString& level) {
+        diagnostics::AppLog::info(QStringLiteral("settings"),
+                                  QStringLiteral("Developer log level changed to %1").arg(level));
+        persisted_settings_.developer_log_level = level;
+        settings_store_.Save(persisted_settings_);
+        diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(level));
+    });
+
     // ---- Format / preset / video / audio / webcam signal connects ----
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         if (applying_preset_)
@@ -4274,6 +4311,23 @@ void MainWindow::buildDiagnosticsPage() {
     // Capability facts moved to the Device page; the Expert environment row links there.
     connect(diagnostics_page_, &DiagnosticsPage::openDevicePageRequested, this,
             [this]() { navigateToPage(kDevicePageIndex); });
+    // SETTINGS-HONESTY-R1: Phase ④'s "Open last report" link routes to the REAL
+    // post-flight report on the Edit overlay's Review step (EditExportPage) instead
+    // of duplicating it in Diagnostics. Guarded the same way the result Edit button
+    // is: only meaningful once a recording has completed.
+    connect(diagnostics_page_, &DiagnosticsPage::openLastReportRequested, this, [this]() {
+        if (!record_page_ || !record_page_->hasCompletedRecording())
+            return;
+        navigateToEditExportPage(record_page_->currentEditContext());
+    });
+    // Review F4: re-push the gate on every page show, so the link cannot stay stale
+    // if last_succeeded settled after the most recent chrome-state event.
+    connect(diagnostics_page_, &DiagnosticsPage::lastRecordingGateRefreshRequested, this, [this]() {
+        if (record_page_ && diagnostics_page_)
+            diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
+    });
+    // Seed the initial gate state (record_page_ is always valid; see above).
+    diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
     // Route live recording-pipeline diagnostics from the Record page's coordinator to
     // the Diagnostics page (same UI thread; direct connection).
     // CRITICAL: record_page_ is built unconditionally in the ctor and is always valid here.

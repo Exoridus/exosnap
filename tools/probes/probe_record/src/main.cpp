@@ -12,6 +12,8 @@
 //   --acodec  opus|aac|pcm|flac|none
 //   --bitdepth 8|10        encoder bit depth (default 8; 10 = HEVC Main10 / AV1 10-bit, P010)
 //   --range   full|limited Y'CbCr quantization range (default limited = 16-235; full = 0-255)
+//   --preset  p1..p7       NVENC speed/quality preset (default p4; p1 fastest/lowest quality,
+//                          p7 slowest/best quality; applies uniformly to all 3 NVENC codecs)
 //   --seconds <N>          recording duration (default 4)
 //   --out     <path>       output file (default: %TEMP%\probe_<combo>.<ext>)
 //
@@ -64,6 +66,17 @@ bool ParseVideo(const std::string& s, VideoCodec& out) {
     return false;
 }
 
+bool ParsePreset(const std::string& s, NvencPreset& out) {
+    if (s == "p1") { out = NvencPreset::P1; return true; }
+    if (s == "p2") { out = NvencPreset::P2; return true; }
+    if (s == "p3") { out = NvencPreset::P3; return true; }
+    if (s == "p4") { out = NvencPreset::P4; return true; }
+    if (s == "p5") { out = NvencPreset::P5; return true; }
+    if (s == "p6") { out = NvencPreset::P6; return true; }
+    if (s == "p7") { out = NvencPreset::P7; return true; }
+    return false;
+}
+
 bool ParseAudio(const std::string& s, AudioCodec& out, bool& record_audio) {
     record_audio = true;
     if (s == "none") { record_audio = false; out = AudioCodec::Opus; return true; }
@@ -97,6 +110,7 @@ int main(int argc, char* argv[]) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
     std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s, range_s = "limited";
+    std::string preset_s = "p4";
     int seconds = 4;
     int bitdepth = 8;
     size_t target_idx = 0;
@@ -112,6 +126,7 @@ int main(int argc, char* argv[]) {
         else if (a == "--seconds") seconds = std::atoi(next().c_str());
         else if (a == "--bitdepth") bitdepth = std::atoi(next().c_str());
         else if (a == "--range") range_s = next();
+        else if (a == "--preset") preset_s = next();
         else if (a == "--target") target_idx = static_cast<size_t>(std::atoi(next().c_str()));
         else if (a == "--out") out_s = next();
         else { fprintf(stderr, "[probe_record] unknown arg: %s\n", a.c_str()); return 64; }
@@ -142,10 +157,15 @@ int main(int argc, char* argv[]) {
     Container container{};
     VideoCodec vcodec{};
     AudioCodec acodec{};
+    NvencPreset preset{};
     bool record_audio = true;
     if (!ParseContainer(container_s, container) || !ParseVideo(vcodec_s, vcodec) ||
         !ParseAudio(acodec_s, acodec, record_audio)) {
         fprintf(stderr, "[probe_record] ERROR: bad container/vcodec/acodec\n");
+        return 64;
+    }
+    if (!ParsePreset(preset_s, preset)) {
+        fprintf(stderr, "[probe_record] ERROR: bad --preset (use p1..p7)\n");
         return 64;
     }
 
@@ -177,6 +197,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "[probe_record] ERROR: bad --range (use full|limited)\n");
         return 64;
     }
+    cfg.nvenc_preset = preset;
     cfg.frame_rate_num = 60;
     cfg.frame_rate_den = 1;
     cfg.cfr = true;
@@ -189,8 +210,9 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
-    fprintf(stdout, "[probe_record] recording %s/%s/%s for %ds on target [%zu] -> %s\n", container_s.c_str(),
-            vcodec_s.c_str(), acodec_s.c_str(), seconds, target_idx, out_path.string().c_str());
+    fprintf(stdout, "[probe_record] recording %s/%s/%s preset=%s for %ds on target [%zu] -> %s\n",
+            container_s.c_str(), vcodec_s.c_str(), acodec_s.c_str(), preset_s.c_str(), seconds, target_idx,
+            out_path.string().c_str());
     fflush(stdout);
 
     std::thread stopper([&session, seconds]() {

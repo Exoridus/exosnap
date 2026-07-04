@@ -82,6 +82,14 @@ struct PersistedAppSettings {
     // turning it on while non-elevated offers the "relaunch as administrator"
     // path. Persisted so the choice survives the self-relaunch.
     bool present_diagnostics_optin = false;
+
+    // SETTINGS-HONESTY-R1: developer log-level filter (Settings > Advanced >
+    // Developer card, expert-only). One of "Off" | "Error" | "Warning" | "Info" |
+    // "Debug" -- see AppLog::setMinSeverity. Ship default is "Debug" (record
+    // everything, review F1): main recorded every severity before this control was
+    // wired, and Debug lines (DxgiPreviewRenderer, target enumeration, ...) are
+    // exactly what support cases need. The filter only narrows on explicit user choice.
+    QString developer_log_level = QStringLiteral("Debug");
 };
 
 class AppSettingsStore {

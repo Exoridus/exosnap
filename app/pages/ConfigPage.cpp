@@ -1284,6 +1284,56 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(video_color_range_row_);
         }
 
+        // --- Encoder preset (NVENC-PRESET-R1) ---
+        // NVENC SDK speed/quality preset P1 (fastest, lowest quality) .. P7
+        // (slowest, best quality). Independent of the quality-tier CQP values
+        // and rate-control mode above — this selects NVENC's internal
+        // encoding-pipeline tradeoff. Always valid for every codec (H.264/HEVC/
+        // AV1) and container, so never capability-gated — only the recording
+        // lock disables it (see updateVideoEncoderPresetControl()).
+        {
+            video_encoder_preset_row_ = new QWidget(fmt_expert_section_);
+            auto* pvl = new QVBoxLayout(video_encoder_preset_row_);
+            pvl->setContentsMargins(0, 0, 0, 0);
+            pvl->setSpacing(0);
+            auto* prule = new QFrame(video_encoder_preset_row_);
+            prule->setFrameShape(QFrame::HLine);
+            prule->setProperty("frameRole", "sectionRuleLine");
+            pvl->addWidget(prule);
+            auto* phl = new QHBoxLayout();
+            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setSpacing(14);
+            auto* plbl = new QLabel(QStringLiteral("Encoder preset (NVENC)"), video_encoder_preset_row_);
+            plbl->setProperty("labelRole", "settingsRowLabel");
+            phl->addWidget(plbl, 0);
+            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kEncoderPreset, video_encoder_preset_row_), 0,
+                           Qt::AlignVCenter);
+            phl->addStretch(1);
+            video_encoder_preset_combo_ = new QComboBox(video_encoder_preset_row_);
+            video_encoder_preset_combo_->setObjectName(QStringLiteral("videoEncoderPresetCombo"));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P1 \xe2\x80\x94 Fastest"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P1));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P2"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P2));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P3"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P3));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P4 \xe2\x80\x94 Balanced (default)"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P4));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P5"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P5));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P6"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P6));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P7 \xe2\x80\x94 Slowest"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P7));
+            video_encoder_preset_combo_->setFixedWidth(200);
+            video_encoder_preset_combo_->setProperty("settingsRowInput", true);
+            phl->addWidget(video_encoder_preset_combo_, 0, Qt::AlignVCenter);
+            pvl->addLayout(phl);
+            video_encoder_preset_row_->setProperty("settingsRow", true);
+            video_encoder_preset_row_->setProperty("expertEdge", true); // P3: left accent edge
+            fes_layout->addWidget(video_encoder_preset_row_);
+        }
+
         // --- Frame pacing (ADR 0035 Slice 2) ---
         // Smooth = phase-correct present-time-nearest selection (default, the recording
         // use case). Newest = lowest-latency newest-at-tick (WGC fallback behaviour).
@@ -1360,19 +1410,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // These are real, enabled controls wired to nothing, used so the roadmap
         // layout can be designed and captured on pixels.  Gate: #ifndef NDEBUG.
         // NOTE (0.7.0 — S7): the HEVC-codec and Bit-depth mockups were promoted to
-        // real controls (Video codec combo + Video bit depth row above). The rows
-        // left here are still placeholders for later waves: HDR10 (HDR slice) and
-        // chroma subsampling / encoder preset (no engine path yet).
+        // real controls (Video codec combo + Video bit depth row above). The
+        // encoder-preset mockup was promoted to a real control (NVENC-PRESET-R1,
+        // below). The rows left here are still placeholders for later waves:
+        // HDR10 (HDR slice) and chroma subsampling (no engine path yet).
         {
-            auto* enc_preset_combo = new QComboBox(fmt_expert_section_);
-            enc_preset_combo->setObjectName(QStringLiteral("roadmapDummy_encoderPreset"));
-            enc_preset_combo->addItems({QStringLiteral("P1 — Fastest"), QStringLiteral("P2"), QStringLiteral("P3"),
-                                        QStringLiteral("P4 — Balanced"), QStringLiteral("P5"), QStringLiteral("P6"),
-                                        QStringLiteral("P7 — Slowest")});
-            enc_preset_combo->setCurrentIndex(3);
-            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("Encoder preset (NVENC)"),
-                                                  nullptr, QString(), enc_preset_combo));
-
             auto* hdr10_toggle = new ui::widgets::ExoToggle(fmt_expert_section_);
             hdr10_toggle->setObjectName(QStringLiteral("roadmapDummy_hdr10"));
             hdr10_toggle->setOn(false);
@@ -2125,6 +2167,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onVideoBitDepthChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
+    if (video_encoder_preset_combo_) {
+        connect(video_encoder_preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                &ConfigPage::onVideoEncoderPresetChanged);
+    }
     connect(frame_pacing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         if (idx < 0 || !frame_pacing_combo_)
             return;
@@ -2389,6 +2435,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // a latent hydration bug masked while the model default happened to BE
     // Full; exposed when the default flipped to Limited (fix/color-range-signaling).
     updateVideoColorRangeControl();
+    // Seed the encoder-preset combo from the model at construction (same
+    // hydration-bug class as the colour-range combo above).
+    updateVideoEncoderPresetControl();
     updateExampleFilename();
     updateQualitySegmentSelection();
     updateFrameRateSelection();
@@ -2721,6 +2770,29 @@ void ConfigPage::updateVideoColorRangeControl() {
     }
 }
 
+void ConfigPage::updateVideoEncoderPresetControl() {
+    if (!video_encoder_preset_combo_ || !video_encoder_preset_row_)
+        return;
+
+    // Every NVENC preset (P1..P7) is ALWAYS valid for every codec and container —
+    // no capability gating here. Only the recording lock disables it.
+    const bool locked = controls_locked_;
+    {
+        const QSignalBlocker b(video_encoder_preset_combo_);
+        const int idx = video_encoder_preset_combo_->findData(static_cast<int>(format_settings_.nvenc_preset));
+        video_encoder_preset_combo_->setCurrentIndex(idx >= 0 ? idx : 3 /* P4 */);
+    }
+
+    video_encoder_preset_combo_->setEnabled(!locked);
+    if (locked) {
+        video_encoder_preset_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        video_encoder_preset_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        video_encoder_preset_combo_->setToolTip(QString());
+        video_encoder_preset_combo_->unsetCursor();
+    }
+}
+
 void ConfigPage::updateFramePacingControl() {
     if (!frame_pacing_combo_ || !frame_pacing_row_)
         return;
@@ -2885,6 +2957,16 @@ void ConfigPage::onVideoColorRangeChanged(int index) {
     emitCurrentFormatSettings();
 }
 
+void ConfigPage::onVideoEncoderPresetChanged(int index) {
+    if (index < 0 || !video_encoder_preset_combo_)
+        return;
+    // Every preset is valid for every codec/container — no gating. Just record the model.
+    format_settings_.nvenc_preset =
+        static_cast<recorder_core::NvencPreset>(video_encoder_preset_combo_->itemData(index).toInt());
+    updateVideoEncoderPresetControl();
+    emitCurrentFormatSettings();
+}
+
 void ConfigPage::onAudioCodecChanged(int index) {
     if (index < 0)
         return;
@@ -2911,6 +2993,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.video_codec = settings.video_codec;
     format_settings_.bit_depth = settings.bit_depth;
     format_settings_.color_range = settings.color_range;
+    format_settings_.nvenc_preset = settings.nvenc_preset;
     format_settings_.audio_codec = settings.audio_codec;
     format_settings_.output_folder = settings.output_folder;
     format_settings_.naming_pattern = settings.naming_pattern;
@@ -2933,6 +3016,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateVideoCodecChoices();
     updateAudioCodecChoices();
     updateVideoColorRangeControl();
+    updateVideoEncoderPresetControl();
     updateFormatDisplay();
     updateOutputResolutionSelection();
     updateCustomResolutionVisibility();
@@ -4581,10 +4665,20 @@ void ConfigPage::buildDeveloperCard() {
         dev_layout->setContentsMargins(18, 14, 18, 14);
         dev_layout->setSpacing(M::kSpaceSm);
         dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
+        // SETTINGS-HONESTY-R1 (review F2): the old hint ("not persisted between
+        // sessions") became false once the log level was genuinely wired + persisted.
         dev_layout->addWidget(
-            makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
+            makeHint(QStringLiteral("Expert debug controls. The logging level is persisted across sessions; "
+                                    "profiling markers are planned."),
+                     developer_card_));
 
-        // Log level (UI stub — not wired to any backend)
+        // SETTINGS-HONESTY-R1: log level, genuinely wired to AppLog::setMinSeverity
+        // (via MainWindow) and persisted (AppSettingsStore::developer_log_level).
+        // Controls which severities land in the in-app Logs page + session log file.
+        // "Trace" was dropped from the original 6-item stub: AppLog only has four
+        // severities (Debug/Info/Warning/Error); inventing a fifth would mean adding a
+        // LogSeverity nothing in the app actually emits, so the combo is honest about
+        // what levels exist instead.
         {
             auto* row = new QFrame(developer_card_);
             row->setProperty("panelRole", "compactRow");
@@ -4593,15 +4687,40 @@ void ConfigPage::buildDeveloperCard() {
             rl->setSpacing(M::kSpaceXs);
             rl->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), row));
             auto* log_level_combo = new QComboBox(row);
+            log_level_combo->setObjectName(QStringLiteral("developerLogLevelCombo"));
             log_level_combo->setMinimumWidth(220);
             log_level_combo->setMaximumWidth(320);
-            log_level_combo->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
-            log_level_combo->setCurrentIndex(3);
+            log_level_combo->addItem(QStringLiteral("Off"), QStringLiteral("Off"));
+            log_level_combo->addItem(QStringLiteral("Error"), QStringLiteral("Error"));
+            log_level_combo->addItem(QStringLiteral("Warning"), QStringLiteral("Warning"));
+            log_level_combo->addItem(QStringLiteral("Info"), QStringLiteral("Info"));
+            log_level_combo->addItem(QStringLiteral("Debug"), QStringLiteral("Debug"));
+            // Review F3: name the consequence — raising the level drops lines from
+            // support diagnostics, which is exactly the surprise a user should see coming.
+            log_level_combo->setToolTip(
+                QStringLiteral("Raising this hides lower-severity lines from the in-app log and session log "
+                               "file — support diagnostics may be incomplete."));
+            developer_log_level_combo_ = log_level_combo;
+            {
+                const int idx = log_level_combo->findData(developer_log_level_);
+                log_level_combo->setCurrentIndex(idx >= 0 ? idx : 4); // fallback: Debug (record everything)
+            }
+            connect(log_level_combo, &QComboBox::currentIndexChanged, this, [this](int index) {
+                if (!developer_log_level_combo_)
+                    return;
+                const QString level = developer_log_level_combo_->itemData(index).toString();
+                if (level.isEmpty())
+                    return;
+                developer_log_level_ = level;
+                emit developerLogLevelChanged(level);
+            });
             rl->addWidget(log_level_combo);
             dev_layout->addWidget(row);
         }
 
-        // NVTX profiling markers (UI stub — not wired to any backend)
+        // NVTX profiling markers: no NVTX infrastructure exists anywhere in the app
+        // (no headers, no instrumentation calls) — honestly disabled + tooltip rather
+        // than building speculative NVTX plumbing for a control nothing else uses yet.
         {
             auto* row = new QFrame(developer_card_);
             row->setProperty("panelRole", "compactRow");
@@ -4610,6 +4729,9 @@ void ConfigPage::buildDeveloperCard() {
             rl->setSpacing(M::kSpaceXs);
             rl->addWidget(makeFieldLabel(QStringLiteral("Profiling"), row));
             auto* nvtx_check = new ui::widgets::ExoCheckBox(QStringLiteral("Enable NVTX / profiling markers"), row);
+            nvtx_check->setObjectName(QStringLiteral("nvtxProfilingCheck"));
+            nvtx_check->setEnabled(false);
+            nvtx_check->setToolTip(QStringLiteral("Profiling markers are planned for a future build."));
             rl->addWidget(nvtx_check);
             dev_layout->addWidget(row);
         }
@@ -4684,6 +4806,9 @@ void ConfigPage::updateExpertModeVisibility() {
     // 0.7.0: sync the colour-range combo (Full/Limited) when the section shows.
     if (expert_mode_enabled_)
         updateVideoColorRangeControl();
+    // NVENC-PRESET-R1: sync the encoder-preset combo (P1..P7) when the section shows.
+    if (expert_mode_enabled_)
+        updateVideoEncoderPresetControl();
     if (expert_mode_enabled_ && rate_control_combo_) {
         // Seed rate control selection from model.
         {
@@ -4849,6 +4974,17 @@ void ConfigPage::setPresentDiagnosticsOptIn(bool on) {
         const QSignalBlocker blocker(present_diag_check_);
         present_diag_check_->setOn(on);
     }
+}
+
+void ConfigPage::setDeveloperLogLevel(const QString& level) {
+    developer_log_level_ = level;
+    if (!developer_log_level_combo_)
+        return; // Developer card not built yet (lazy) -- applied on buildDeveloperCard().
+    const int idx = developer_log_level_combo_->findData(level);
+    if (idx < 0)
+        return;
+    const QSignalBlocker blocker(developer_log_level_combo_);
+    developer_log_level_combo_->setCurrentIndex(idx);
 }
 
 void ConfigPage::setThemeId(const QString& theme_id) {
@@ -5104,6 +5240,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     updateVideoBitDepthControl();
     // 0.7.0: colour-range combo honours the recording lock (never codec-gated).
     updateVideoColorRangeControl();
+    // NVENC-PRESET-R1: encoder-preset combo honours the recording lock (never codec-gated).
+    updateVideoEncoderPresetControl();
     // ADR 0035 Slice 2: frame-pacing combo honours the recording lock (never codec-gated).
     updateFramePacingControl();
     // 0.9.0 S1: keyframe interval combo honours the recording lock.

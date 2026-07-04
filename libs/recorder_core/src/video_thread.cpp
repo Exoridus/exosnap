@@ -537,6 +537,7 @@ void VideoThread::Run() {
         nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
+        nvenc.SetPreset(m_state.config.nvenc_preset);
         // Color signaling (fix for color-range-signaling bug): the encoded
         // bitstream itself must carry the same color description as the
         // VideoProcessor conversion below and the Matroska Colour element

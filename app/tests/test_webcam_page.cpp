@@ -185,14 +185,22 @@ TEST_F(WebcamPageTest, SettingsChanged_EmittedOnToleranceSliderChange) {
     page.applySettings(init);
 
     int count = 0;
-    QObject::connect(&page, &WebcamPage::settingsChanged, [&](const WebcamSettings&) { ++count; });
+    float last_tolerance = -1.0f;
+    QObject::connect(&page, &WebcamPage::settingsChanged, [&](const WebcamSettings& s) {
+        ++count;
+        last_tolerance = s.chroma_key.tolerance;
+    });
 
-    auto sliders = page.findChildren<QSlider*>();
-    ASSERT_FALSE(sliders.isEmpty());
-    const int orig = sliders.front()->value();
-    sliders.front()->setValue(orig + 1);
+    // Review F6: address the tolerance slider by objectName. The previous
+    // findChildren().front() depended on construction order and had silently driven
+    // a different (hidden) slider before the dead overlay widgets were removed.
+    auto* tolerance = page.findChild<QSlider*>(QStringLiteral("chromaToleranceSlider"));
+    ASSERT_NE(tolerance, nullptr);
+    const int orig = tolerance->value();
+    tolerance->setValue(orig + 1);
 
     EXPECT_GE(count, 1);
+    EXPECT_FLOAT_EQ(last_tolerance, static_cast<float>(orig + 1) / 100.0f);
 }
 
 // -----------------------------------------------------------------------

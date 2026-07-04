@@ -276,6 +276,39 @@ TEST(RecordingPreset, NormalizedEquals_ColorRangeDifference_NotEqual) {
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
+// NVENC-PRESET-R1: default is P4 (balanced), and every preset value is preserved
+// through sanitize regardless of codec (the preset is never capability-gated —
+// P1..P7 exist uniformly for H.264, HEVC, and AV1).
+TEST(RecordingPreset, Sanitize_NvencPreset_DefaultIsP4_AndPreservedForAllCodecs) {
+    EXPECT_EQ(MakeDefaultPreset().config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+
+    for (const auto codec :
+         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+        for (const auto preset :
+             {recorder_core::NvencPreset::P1, recorder_core::NvencPreset::P4, recorder_core::NvencPreset::P7}) {
+            RecordingPresetConfig cfg = MakeDefaultPreset().config;
+            cfg.output.container = capability::Container::Matroska;
+            cfg.output.video_codec = codec;
+            cfg.output.audio_codec = capability::AudioCodec::Opus;
+            cfg.output.nvenc_preset = preset;
+
+            const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+            EXPECT_EQ(s.output.nvenc_preset, preset);
+        }
+    }
+}
+
+// nvenc_preset participates in dirty/normalized equality.
+TEST(RecordingPreset, NormalizedEquals_NvencPresetDifference_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.nvenc_preset = recorder_core::NvencPreset::P1;
+    RecordingPresetConfig b = a;
+    b.output.nvenc_preset = recorder_core::NvencPreset::P7;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
 // ===========================================================================
 // SanitizePresetConfig — countdown
 // ===========================================================================

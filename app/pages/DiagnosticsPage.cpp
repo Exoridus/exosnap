@@ -32,6 +32,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -357,7 +358,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
         ex->addWidget(live_toggle->parentWidget());
     }
 
-    // ④ Post-flight & Review — honest placeholder until a report card lands.
+    // ④ Post-flight & Review — the real report card lives on the Edit overlay's
+    // Review step (EditExportPage), reachable once a recording has finished. This
+    // section never duplicates it; it only links there when a completed recording
+    // exists to open.
     {
         QToolButton* post_toggle = nullptr;
         auto* post_body = makeCollapsibleSection(
@@ -365,8 +369,15 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
             QStringLiteral("After Stop: drop-%, max drift, achieved vs target and file validity, then a bridge to the "
                            "Edit overlay."),
             expert_container_, post_toggle);
-        post_body->layout()->addWidget(
-            makeSubLabel(QStringLiteral("The report card appears here after a recording finishes."), post_body));
+        post_body->layout()->addWidget(makeSubLabel(
+            QStringLiteral("The report card appears in the Edit view's Review step after a recording finishes."),
+            post_body));
+        open_last_report_btn_ = new QPushButton(QStringLiteral("Open last report"), post_body);
+        open_last_report_btn_->setObjectName(QStringLiteral("openLastReportBtn"));
+        open_last_report_btn_->setProperty("role", "ghost");
+        open_last_report_btn_->setEnabled(has_last_recording_);
+        connect(open_last_report_btn_, &QPushButton::clicked, this, [this]() { emit openLastReportRequested(); });
+        post_body->layout()->addWidget(open_last_report_btn_);
         ex->addWidget(post_toggle->parentWidget());
     }
 
@@ -456,6 +467,20 @@ void DiagnosticsPage::setExpertModeEnabled(bool enabled) {
 
 bool DiagnosticsPage::isExpertModeEnabled() const noexcept {
     return expert_mode_enabled_;
+}
+
+void DiagnosticsPage::setHasLastRecording(bool has_last_recording) {
+    has_last_recording_ = has_last_recording;
+    if (open_last_report_btn_)
+        open_last_report_btn_->setEnabled(has_last_recording_);
+}
+
+void DiagnosticsPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    // Review F4: ask MainWindow for the current last-recording gate on every show,
+    // so the "Open last report" link cannot stay stale if the recording result
+    // settled after the most recent chrome-state push.
+    emit lastRecordingGateRefreshRequested();
 }
 
 void DiagnosticsPage::applyExpertVisibility() {

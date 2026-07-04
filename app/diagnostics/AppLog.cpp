@@ -35,6 +35,10 @@ struct LogState {
     bool qt_handler_installed = false;
     QtMessageHandler previous_qt_handler = nullptr;
     std::function<QDateTime()> timestamp_provider;
+    // SETTINGS-HONESTY-R1: nullopt = "Off" (record nothing); otherwise the minimum
+    // severity (inclusive) that gets recorded. Default = record everything, so
+    // behavior is unchanged until something explicitly narrows the filter.
+    std::optional<LogSeverity> min_severity = LogSeverity::Debug;
 };
 
 LogState& state() {
@@ -55,6 +59,14 @@ QString normalizedCategory(const QString& category) {
 
 QString normalizedMessage(const QString& message) {
     return message.trimmed();
+}
+
+bool passesMinSeverity(LogSeverity severity) {
+    QMutexLocker lock(&state().mutex);
+    const auto& min = state().min_severity;
+    if (!min.has_value())
+        return false; // "Off": nothing recorded
+    return static_cast<int>(severity) >= static_cast<int>(*min);
 }
 
 bool writeLineUnlocked(const LogEntry& entry) {
@@ -128,6 +140,7 @@ void resetUnlocked(int max_entries) {
     s.log_path.clear();
     s.initialized = false;
     s.timestamp_provider = nullptr;
+    s.min_severity = LogSeverity::Debug;
 }
 
 } // namespace
@@ -207,6 +220,9 @@ void AppLog::error(const QString& category, const QString& message) {
 }
 
 void AppLog::write(LogSeverity severity, const QString& category, const QString& message) {
+    if (!passesMinSeverity(severity))
+        return;
+
     LogEntry entry{
         0, currentTimestamp(), severity, normalizedCategory(category), normalizedMessage(message),
     };
@@ -359,6 +375,16 @@ void AppLog::resetForTesting(int max_entries) {
 void AppLog::setTimestampProviderForTesting(std::function<QDateTime()> provider) {
     QMutexLocker lock(&state().mutex);
     state().timestamp_provider = std::move(provider);
+}
+
+void AppLog::setMinSeverity(std::optional<LogSeverity> min_severity) {
+    QMutexLocker lock(&state().mutex);
+    state().min_severity = min_severity;
+}
+
+std::optional<LogSeverity> AppLog::minSeverity() {
+    QMutexLocker lock(&state().mutex);
+    return state().min_severity;
 }
 
 void AppLog::deliverPending() {

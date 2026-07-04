@@ -178,6 +178,32 @@ void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const Color
 }
 
 // ---------------------------------------------------------------------------
+// NvencPresetToGuid — pure mapping from the canonical NvencPreset to the
+// NVENC SDK preset GUID (NV_ENC_PRESET_P1_GUID .. NV_ENC_PRESET_P7_GUID).
+// Applies uniformly across codecs; the caller passes the resulting GUID to
+// nvEncGetEncodePresetConfigEx together with whichever codec GUID is active.
+// ---------------------------------------------------------------------------
+GUID NvencPresetToGuid(NvencPreset preset) noexcept {
+    switch (preset) {
+    case NvencPreset::P1:
+        return NV_ENC_PRESET_P1_GUID;
+    case NvencPreset::P2:
+        return NV_ENC_PRESET_P2_GUID;
+    case NvencPreset::P3:
+        return NV_ENC_PRESET_P3_GUID;
+    case NvencPreset::P4:
+        return NV_ENC_PRESET_P4_GUID;
+    case NvencPreset::P5:
+        return NV_ENC_PRESET_P5_GUID;
+    case NvencPreset::P6:
+        return NV_ENC_PRESET_P6_GUID;
+    case NvencPreset::P7:
+        return NV_ENC_PRESET_P7_GUID;
+    }
+    return NV_ENC_PRESET_P4_GUID;
+}
+
+// ---------------------------------------------------------------------------
 // NvencStatusName
 // ---------------------------------------------------------------------------
 
@@ -554,20 +580,22 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
     m_presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
 
-    // AV1 with P6 preset has internal pipeline depth causing NEED_MORE_INPUT on every frame
-    // even when lookahead is disabled. P4 avoids this and produces frames synchronously.
-    // HEVC uses P4 as well (same pipeline-depth concern applies for higher presets).
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
     if (m_codec == VideoCodec::H264Nvenc) {
         codecGuid = NV_ENC_CODEC_H264_GUID;
-        // m_presetGuid stays at P6 (set in member initializer) for H.264
     } else if (m_codec == VideoCodec::HevcNvenc) {
         codecGuid = NV_ENC_CODEC_HEVC_GUID;
-        m_presetGuid = NV_ENC_PRESET_P4_GUID;
-    } else {
-        // AV1: use P4
-        m_presetGuid = NV_ENC_PRESET_P4_GUID;
     }
+
+    // NVENC speed/quality preset (P1..P7) — user-selectable expert setting,
+    // default P4. Resolved via the pure NvencPresetToGuid mapping and applied
+    // uniformly across all three codecs (no per-codec gating). NOTE: P5-P7 on
+    // AV1/HEVC previously triggered NV_ENC_ERR_NEED_MORE_INPUT on every frame
+    // even with lookahead disabled (internal pipeline depth); EncodeFrame
+    // already buffers/drains this case (m_pendingPts/m_pendingSlots), so it is
+    // not fatal, but it increases encode latency and 8-slot input-ring pressure.
+    m_presetGuid = NvencPresetToGuid(m_preset);
+
     NVENCSTATUS st =
         m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, codecGuid, m_presetGuid, m_tuningInfo, &m_presetConfig);
     if (st != NV_ENC_SUCCESS) {

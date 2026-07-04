@@ -486,6 +486,17 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_color_config PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_preset_guid: pure unit tests for NvencPresetToGuid (P1..P7 -> SDK
+# preset GUID mapping — no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_preset_guid
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_preset_guid.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_preset_guid PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
     TEST_PREFIX recorder_core.

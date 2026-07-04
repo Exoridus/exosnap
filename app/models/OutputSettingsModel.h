@@ -1,6 +1,7 @@
 #pragma once
 
 #include <capability/config_types.h>
+#include <recorder_core/codec_types.h>
 #include <recorder_core/output_geometry.h>
 
 #include <cstdint>
@@ -91,6 +92,13 @@ struct OutputSettingsModel {
     // remains available as an opt-in for pipelines known to honour the range
     // flag. Always valid for every codec/container — never gated.
     capability::ColorRange color_range = capability::ColorRange::Limited;
+    // NVENC encoder speed/quality preset (P1 fastest/lowest quality .. P7
+    // slowest/best quality). Applies uniformly to all three NVENC codecs; never
+    // capability-gated. Default P4 (balanced) — matches the prior AV1/HEVC
+    // default; H.264 previously used P6 (visible default change, expert-
+    // overridable — see ADR 0039). Takes effect from the next recording
+    // (not applied live).
+    recorder_core::NvencPreset nvenc_preset = recorder_core::NvencPreset::P4;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 
@@ -102,9 +110,12 @@ struct OutputSettingsModel {
 // so a model field can never again be dropped silently on the way to output_settings_
 // (color_range and bit_depth were lost exactly that way: the combo emitted them but the
 // field-by-field copy in the handler ignored them, so the recording never saw the
-// selection). NOTE: split is deliberately not merged here yet — the pre-existing handler
-// never carried it and changing split-flow behavior is out of scope for this fix; see
-// the open P2 note in the PR/ADR trail.
+// selection). `split` is merged too (SETTINGS-HONESTY-R1): it was the last field the
+// handler still dropped, so a live edit of the Output Split card (mode / custom minutes /
+// size mode / custom MB) only reached output_settings_ via preset-apply or startup —
+// never from the live Settings edit itself. Consumption still happens once, at recording
+// start (RecordingCoordinator::SetOutputSettings) — "a split change applies from the next
+// recording" remains the correct, intentional semantics; only the live-mirror gap is fixed.
 void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming);
 
 [[nodiscard]] std::optional<recorder_core::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept;

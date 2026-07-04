@@ -1017,16 +1017,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // helper (current_completed_recording mirrors the result_* fields, and rename
     // keeps both in sync); the live session layers on its extras below.
     connect(result_edit_btn_, &QPushButton::clicked, this, [this]() {
-        const auto& vm = view_model_;
-        if (!vm.last_succeeded)
+        if (!hasCompletedRecording())
             return;
-        EditContext ctx = MakeEditContext(vm.current_completed_recording);
-        // Live-session extras the history rows don't carry:
-        ctx.mkv_master_path = QString::fromStdWString(vm.result_mkv_master_path);
-        ctx.peak_av_drift_ms = peak_av_drift_ms_;
-        ctx.av_drift_available = av_drift_ever_available_;
-        ctx.completed_snapshot = last_completed_snapshot_;
-        emit editExportRequested(ctx);
+        emit editExportRequested(currentEditContext());
     });
     connect(rename_cancel_btn_, &QPushButton::clicked, this, [this]() {
         rename_overlay_->setVisible(false);
@@ -1514,6 +1507,21 @@ bool RecordPage::canApplyPresetNow() const {
         return false;
     }
     return false;
+}
+
+bool RecordPage::hasCompletedRecording() const noexcept {
+    return view_model_.last_succeeded;
+}
+
+EditContext RecordPage::currentEditContext() const {
+    const auto& vm = view_model_;
+    EditContext ctx = MakeEditContext(vm.current_completed_recording);
+    // Live-session extras the history rows don't carry:
+    ctx.mkv_master_path = QString::fromStdWString(vm.result_mkv_master_path);
+    ctx.peak_av_drift_ms = peak_av_drift_ms_;
+    ctx.av_drift_available = av_drift_ever_available_;
+    ctx.completed_snapshot = last_completed_snapshot_;
+    return ctx;
 }
 
 void RecordPage::cancelRemux() {

@@ -277,6 +277,13 @@ struct RecorderConfig {
     // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
     RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;
 
+    // NVENC speed/quality preset (P1 fastest/lowest quality .. P7 slowest/best
+    // quality). Applies uniformly to all three NVENC codecs; never capability-
+    // gated. Default P4 (balanced) — matches the prior hardcoded AV1/HEVC
+    // default; H.264 previously used P6 (visible default change, expert-
+    // overridable — see ADR 0039).
+    NvencPreset nvenc_preset = NvencPreset::P4;
+
     // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.
     // Ignored (and zero-ed by the encoder) when mode is ConstantQuality.
     uint32_t nvenc_bitrate_kbps = 20000;

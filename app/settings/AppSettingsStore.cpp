@@ -10,9 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 17: ELEVATION-FOUNDATION-R1 adds present_diagnostics_optin (ADR 0033).
-// Pre-1.0: no migration; missing key defaults to false.
-constexpr int kSettingsVersionCurrent = 17;
+// Bump to 18: SETTINGS-HONESTY-R1 adds developer_log_level.
+// Pre-1.0: no migration; missing key defaults to "Info".
+constexpr int kSettingsVersionCurrent = 18;
 
 } // namespace
 
@@ -113,6 +113,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.present_diagnostics_optin = settings.value(QStringLiteral("present_diagnostics_optin"), false).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("developer"));
+    // SETTINGS-HONESTY-R1: developer log-level filter (default "Debug" = record
+    // everything, review F1). Pre-1.0: no migration; missing key defaults to "Debug".
+    persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Debug")).toString();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -199,6 +205,11 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.beginGroup(QStringLiteral("diagnostics"));
     // ELEVATION-FOUNDATION-R1 (ADR 0033): present-diagnostics opt-in.
     settings.setValue(QStringLiteral("present_diagnostics_optin"), settings_snapshot.present_diagnostics_optin);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("developer"));
+    // SETTINGS-HONESTY-R1: developer log-level filter.
+    settings.setValue(QStringLiteral("log_level"), settings_snapshot.developer_log_level);
     settings.endGroup();
 
     settings.sync();
