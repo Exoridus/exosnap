@@ -401,6 +401,13 @@ void WebcamSetupPanel::refreshDevices() {
 }
 
 void WebcamSetupPanel::refreshFormats() {
+    // Preserve the caller's suppression state instead of hard-resetting it: when
+    // called from applySettings() (already suppressing for the whole call), a
+    // hardcoded "false" here used to re-enable emissions partway through
+    // applySettings(), letting the tail of that function leak a spurious
+    // settingsChanged (dropping opacity, see collectSettings()) before
+    // applySettings() even returns.
+    const bool was_suppressed = suppress_signals_;
     suppress_signals_ = true;
     resolution_combo_->clear();
     const QString dev_id = device_combo_->currentData().toString();
@@ -419,7 +426,7 @@ void WebcamSetupPanel::refreshFormats() {
         resolution_combo_->addItem(QStringLiteral("(no camera)"), QVariant());
         resolution_combo_->setEnabled(false);
     }
-    suppress_signals_ = false;
+    suppress_signals_ = was_suppressed;
 }
 
 void WebcamSetupPanel::startPreview() {
@@ -523,11 +530,12 @@ WebcamSettings WebcamSetupPanel::collectSettings() const {
 
     s.mirror = mirror_toggle_->isChecked();
 
-    // Preserve overlay and chroma from current (panel does not expose these controls).
+    // Preserve overlay, chroma, and opacity from current (panel does not expose these controls).
     s.overlay = current_settings_.overlay;
     s.overlay_user_placed = current_settings_.overlay_user_placed;
     s.aspect_ratio_locked = current_settings_.aspect_ratio_locked;
     s.chroma_key = current_settings_.chroma_key;
+    s.opacity = current_settings_.opacity;
 
     return SanitizeWebcamSettings(s);
 }

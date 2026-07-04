@@ -1043,6 +1043,17 @@ set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 exosnap_add_gtest(
+    NAME webcam_setup_panel_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_setup_panel.cpp
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(webcam_setup_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(webcam_setup_panel_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(webcam_setup_panel_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+exosnap_add_gtest(
     NAME hotkeys_page_tests
     TEST_PREFIX hotkey.
     SOURCES

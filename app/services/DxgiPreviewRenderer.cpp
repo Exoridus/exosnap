@@ -16,6 +16,7 @@
 #include <d3dcompiler.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 // High-resolution waitable timer flag (Windows 10 1803+). Define defensively in
@@ -180,7 +181,7 @@ void DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, flo
     overlayNy_ = ny;
     overlayNw_ = nw;
     overlayNh_ = nh;
-    overlayOpacity_ = opacity;
+    overlayOpacity_ = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
     if (overlayMirror_ != mirror) {
         overlayMirror_ = mirror;
         overlayDirty_ = true; // re-upload with the new flip
