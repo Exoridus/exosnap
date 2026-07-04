@@ -54,7 +54,7 @@ Top-level navigation is **six items**, in order:
 - **Diagnostics** — the live, changeable environment as readiness cards (disk, display, audio,
   elevation, blockers), plus a capability-matrix reference section.
 - **Logs** — runtime events and per-session recording diagnostics.
-- **About** — application identity, build metadata, links, and the update-check UI.
+- **About** — application identity, build metadata, and links.
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
 recording stops, the surface opens over Record (dimmed backdrop) and is stepped in three linear
@@ -248,8 +248,10 @@ Behavior:
   tone-map is explicitly not a conflict.
 - For native HDR10, the pipeline pins **limited range** and **10-bit**, writes HDR10 container/MP4
   metadata, and the on-screen monitoring preview is an SDR approximation of the HDR signal.
-- Windows Graphics Capture (WGC) window/game capture stays SDR for now; native HDR applies to the
-  monitor-duplication path.
+- **HDR scope for 1.0:** native HDR10 recording applies to **monitor (duplication) capture only**.
+  Windows Graphics Capture (WGC) window/game capture stays SDR for now, and there is no HLG or
+  wide-gamut generalization. Extending HDR to WGC capture via an FP16 frame pool is technically
+  feasible and planned as a later wave.
 
 ---
 
@@ -359,8 +361,11 @@ trim** (stream copy, no re-encode); Output offers container **MKV / MP4** and a 
 (`<name>_edit.<ext>`) or overwrite-original (atomic rename). A **keyframe interval** selector
 (Settings → Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim
 accuracy. The original recording is never mutated during export; not-yet-exported edits are discarded
-on dismiss. *(Open: the trim/export engine is a roadmap item; the current shipped build presents the
-surface without the editing engine — see §15.)*
+on dismiss.
+
+**Current boundary:** the overlay surface — the Review → Edit → Output stepper shown after stop — is
+shipped. The editing engine behind it (Quick Trim stream-copy, marker display, chapter export) is not
+yet implemented and remains a planned wave.
 
 ---
 
@@ -370,10 +375,10 @@ surface without the editing engine — see §15.)*
 - **Toast notifications** (bottom-right, auto-dismiss): recording saved, low storage, unexpected
   stop, recovery available, frames-dropped caution. Toasts are not visually queued when several
   arrive at once — the most recent is shown. Windows Focus Assist / Do Not Disturb may suppress them.
-- **Notification hub** — a persistent in-app notification layer alongside toasts, reachable via a bell
-  icon in the title bar; hub entries survive until dismissed while the tray badge counts unread items.
-  *(Open: the 0.8.1 known-limitations text still describes the notification "center" as a tray unread
-  badge only; the persistent hub is the intended end state.)*
+- **Notification hub** — the canonical notification center is a **bell icon with a notification hub
+  panel in the app header**; hub entries persist until dismissed. The **system-tray icon additionally
+  shows an unread badge** for the same items. Toasts remain the transient fire-and-forget layer on
+  top.
 - **On-screen overlays** (all capture-excluded and click-through): a recording-status pill + elapsed
   timer (anchored top-right of the recorded monitor), a diagnostics readout overlay (bottom-right,
   **off by default**), a countdown overlay anchored to the recorded monitor's bottom-center, and an
@@ -460,19 +465,25 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
 **Updates.**
 
 - **Off by default for self-built binaries**; the official build's update check is opt-in and
-  consent-gated. Both a manual "Check now" and an auto-check toggle exist.
+  consent-gated. Both a manual "Check now" and a toggleable automatic update check exist.
 - **Stable** and **Preview** channels.
 - The client verifies a **signed manifest** (ed25519 via Monocypher + SHA-256) and **refuses
-  downgrades**.
-- Current shipped behavior is **notify + manual download**: an update-available notification
-  deep-links to the update card, which shows "Available · Update to vX.Y" and opens the releases page.
-  It does not download or install the update itself and never restarts silently. No GitHub token is
-  used by the client. No update is performed during recording or finalization.
-- *(Open: an in-place dual-swap auto-updater — with Downloading / Verifying / Installing / Restarting
-  status and a keep-old-until-healthy rollback — is designed but not the current shipped behavior.
-  Also open: the update-check UI's exact home moved to the About overlay in the production-suite
-  redesign, while some 0.8.x text still references a Settings Updates card; confirm placement per
-  build.)*
+  downgrades**. No GitHub token is used by the client. No update is performed during recording or
+  finalization, and the app never restarts silently.
+- **UI home:** the update UI lives on the **Settings update card**, plus a **dedicated updater
+  window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded.
+- **Target flow (designed):** the automatic update check finds a new version → an "update available"
+  notification deep-links to the Settings update card → clicking **Update** opens the dedicated
+  updater, a separate process that performs every step itself — download, verify download (signature
+  and hash), wait for the app to close, install/swap the new files, verify the installation — and
+  then restarts the app on the new version. The swap is **staged and reversible** (dual-swap): a
+  failure before the swap leaves the current version intact and retryable; a verification failure
+  after installing restores the previous version. Nothing is swapped until verification passes.
+- **Current shipped behavior:** check + notify + manual download. The update card shows
+  "Available · Update to vX.Y" and opens the releases page; the app does not yet download or install
+  the update itself.
+- **Planned:** after a completed update, a **"what's new" window/overlay** is shown on the first
+  launch of the new version, with a checkbox to suppress it for future updates.
 
 **Crash reporting.**
 
@@ -515,10 +526,11 @@ release binaries will be signed once the certificate is issued.
 - Requires the **Microsoft Visual C++ 2022 x64 Redistributable** (bundled as a declared dependency by
   the WinGet package; not bundled by MSI, portable ZIP, Chocolatey, or Scoop).
 - Distributed as portable ZIP and MSI (both unsigned for now).
-- Not present in current builds: Replay Buffer; a working built-in editor / trimming / Quick Trim
-  engine (the Edit/Output/Save surface ships without it for now); true HDR beyond the native-HDR10
-  monitor path described above (HLG and wide-gamut across all paths not yet general, WGC capture stays
-  SDR); 4:2:2 / 4:4:4 chroma; multi-vendor hardware encoding; in-place auto-update; immediate
+- Not present in current builds: Replay Buffer; the editing engine behind the Edit/Output/Save
+  surface (Quick Trim, markers, chapter export — the surface itself ships); HDR beyond the
+  native-HDR10 monitor-capture path (WGC capture stays SDR; no HLG/wide-gamut — the confirmed 1.0
+  scope, with WGC HDR via FP16 frame pool planned as a later wave); 4:2:2 / 4:4:4 chroma;
+  multi-vendor hardware encoding; the in-place dual-swap updater (designed, not shipped); immediate
   in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix.
 
 **Licensing.** ExoSnap is GPL-3.0-or-later and bundles FFmpeg as LGPL-2.1-or-later shared libraries
@@ -526,20 +538,8 @@ release binaries will be signed once the certificate is issued.
 
 ---
 
-## Open markers (unresolved / needs confirmation)
+## Resolved-decision notes
 
-- **Notification hub vs tray-badge-only.** 0.8.1 known-limitations text still says the notification
-  center is a tray unread badge only; the roadmap/redesign describes a persistent notification hub.
-  Treat the hub as the intended end state; confirm which is live in the current build.
-- **Edit/Output/Save engine.** The surface (Review → Edit → Output) is defined, but the shipped build
-  presents it without the trim/export engine; keyframe-accurate lossless trim is the intended model.
-- **In-place auto-update.** A dual-swap auto-updater is designed but the current shipped behavior is
-  notify + manual download.
-- **Update UI placement.** The update-check UI moved to the About overlay in the production-suite
-  redesign, while some 0.8.x text still references a Settings Updates card. Confirm per build.
-- **True HDR breadth.** Native HDR10 recording exists for the monitor-duplication path; WGC
-  window/game capture stays SDR, and broader HDR (HLG, wide-gamut across all paths) is not yet
-  general. Confirm the exact current capability surface per release.
-- **Default audio state vs older preset note.** The canonical default is all three sources
-  (APP/SYS/MIC) enabled as separate tracks (per `CLAUDE.md` and README). An older internal preset
-  note described a System-only default; the enabled-all default is authoritative.
+- **Default audio state.** The canonical default is all three sources (APP/SYS/MIC) enabled as
+  separate tracks (per `CLAUDE.md` and README). An older internal preset note described a
+  System-only default; the enabled-all default is authoritative.
