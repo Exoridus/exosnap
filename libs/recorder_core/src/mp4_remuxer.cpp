@@ -248,7 +248,10 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // always explicitly tagged. The fallback is suppressed when the stream
         // carries mastering-display metadata: an HDR file with a partially
         // UNSPECIFIED CICP field must not have SDR BT.709 primaries stamped over
-        // it, which would desync the colr box from the mdcv box.
+        // it, which would desync the colr box from the mdcv box. This is
+        // defensive — no current production writer emits mastering-display
+        // metadata with partial CICP (our recordings are always fully tagged);
+        // it protects foreign/hand-crafted inputs and future writer changes.
         if (out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             const bool has_mastering_display =
                 av_packet_side_data_get(out_st->codecpar->coded_side_data, out_st->codecpar->nb_coded_side_data,

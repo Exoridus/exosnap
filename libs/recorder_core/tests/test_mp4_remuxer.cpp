@@ -731,6 +731,70 @@ TEST_F(RemuxerTest, Mp4HdrColorAndMasteringPassthrough) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: the BT.709 fallback for unspecified CICP fields must NOT fire when the
+// stream carries mastering-display metadata. Fixture: an HDR source with the
+// matrix left Unspecified (2) but mastering-display set — no production writer
+// emits this shape (recordings are always fully tagged), so this pins the
+// guard's branch directly: stamping SDR BT.709 onto such a stream would desync
+// the colr box from the mdcv box.
+//
+// Empirical mov-muxer behaviour (verified against the vendored avformat 62):
+// the colr box is all-or-nothing — it is written only when primaries AND
+// transfer AND matrix are all specified. With the matrix unspecified the muxer
+// omits colr entirely, so every CICP field reads back UNSPECIFIED from the
+// output. The pinned contract is therefore: no field is BT.709-stamped (in
+// particular no bt709 colr desynced from mdcv), and mdcv is still carried.
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, Mp4Bt709FallbackSuppressedWhenMasteringPresent) {
+    ColorMetadata color = Hdr10ColorWithMastering();
+    color.matrix = recorder_core::MatrixCoefficients::Unspecified;
+
+    {
+        MatroskaStreamWriter w;
+        auto cfg = MakeHevcConfig(mkv_path_);
+        cfg.color = color;
+        ASSERT_TRUE(w.Open(cfg)) << "Failed to open partial-CICP HDR MKV fixture";
+        FeedSeconds(w, 2.0, /*gop=*/60, /*payload=*/256);
+        ASSERT_TRUE(w.Finalize()) << "Failed to finalize partial-CICP HDR MKV fixture";
+    }
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+    ASSERT_TRUE(result.success) << "Remux failed: " << result.message << " (av_err=" << result.av_error_code << ")";
+
+    AVFormatContext* ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(ctx, nullptr), 0);
+
+    AVStream* video_st = FindVideoStream(ctx);
+    ASSERT_NE(video_st, nullptr) << "No video stream in remuxed MP4";
+
+    // Nothing may be BT.709-stamped: with the fallback suppressed the muxer
+    // omits colr (all-or-nothing), so every field reads back UNSPECIFIED. If
+    // the guard's condition were inverted or removed, the matrix (and range)
+    // would read back bt709/tv here and desync from the mdcv box.
+    EXPECT_EQ(video_st->codecpar->color_space, AVCOL_SPC_UNSPECIFIED)
+        << "Unspecified matrix was overwritten (got " << static_cast<int>(video_st->codecpar->color_space)
+        << ") — the BT.709 fallback fired despite mastering-display metadata";
+    EXPECT_EQ(video_st->codecpar->color_primaries, AVCOL_PRI_UNSPECIFIED)
+        << "Expected no colr box (all-or-nothing with unspecified matrix); got primaries "
+        << static_cast<int>(video_st->codecpar->color_primaries);
+    EXPECT_EQ(video_st->codecpar->color_trc, AVCOL_TRC_UNSPECIFIED)
+        << "Expected no colr box (all-or-nothing with unspecified matrix); got transfer "
+        << static_cast<int>(video_st->codecpar->color_trc);
+    EXPECT_EQ(video_st->codecpar->color_range, AVCOL_RANGE_UNSPECIFIED)
+        << "Range must not be tv-stamped when the fallback is suppressed; got "
+        << static_cast<int>(video_st->codecpar->color_range);
+
+    // mdcv must still be carried.
+    const AVPacketSideData* mdcv =
+        av_packet_side_data_get(video_st->codecpar->coded_side_data, video_st->codecpar->nb_coded_side_data,
+                                AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+    EXPECT_NE(mdcv, nullptr) << "Mastering-display (mdcv) side data lost in partial-CICP remux";
+
+    avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
 // Test: SDR remux carries NO mastering-display metadata. A plain BT.709 source
 // (the default recording) must remux to an MP4 with bt709 colr and no mdcv
 // side data — the HDR passthrough must not leak into SDR output.
