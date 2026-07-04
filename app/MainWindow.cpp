@@ -2460,6 +2460,11 @@ void MainWindow::refreshDiagnosticsData() {
     diagnostics_page_->setDiagnosticData(runtime_caps_, output_settings_, video_settings_, live_audio_, preset_name,
                                          hotkeys_summary, settings_store_.SettingsFilePath().toStdString(),
                                          hotkeys_registered_);
+    std::optional<recorder_core::CaptureTarget> selected_target;
+    if (record_page_) {
+        selected_target = record_page_->selectedCaptureTarget();
+    }
+    diagnostics_page_->setSelectedCaptureTarget(selected_target);
 }
 
 // ---------------------------------------------------------------------------

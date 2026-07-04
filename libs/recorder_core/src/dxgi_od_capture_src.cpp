@@ -94,21 +94,63 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
         return false;
     }
 
+    // HDR facts of the active output (IDXGIOutput6::GetDesc1), read before
+    // duplicating so the format request can depend on the display's HDR state.
+    // hdr_active is only true in a PQ/BT.2020 colour space — an SDR-mode display
+    // still reports its EDID luminance caps here, which are not the active
+    // reference; consumers gate their use of the luminance/primaries on it.
+    m_hdr_active = false;
+    m_max_luminance_nits = 0.0f;
+    m_hdr_facts = HdrDisplayFacts{};
+    if (winrt::com_ptr<IDXGIOutput6> output6 = matchedOutput.try_as<IDXGIOutput6>()) {
+        DXGI_OUTPUT_DESC1 desc1{};
+        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+            m_hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+            m_max_luminance_nits = desc1.MaxLuminance;
+            // Full facts for native HDR10 mastering-display metadata. The
+            // primaries/luminance are the display's capabilities (the usual
+            // approximation for content mastering values).
+            m_hdr_facts.hdr_active = m_hdr_active;
+            m_hdr_facts.red_primary_x = desc1.RedPrimary[0];
+            m_hdr_facts.red_primary_y = desc1.RedPrimary[1];
+            m_hdr_facts.green_primary_x = desc1.GreenPrimary[0];
+            m_hdr_facts.green_primary_y = desc1.GreenPrimary[1];
+            m_hdr_facts.blue_primary_x = desc1.BluePrimary[0];
+            m_hdr_facts.blue_primary_y = desc1.BluePrimary[1];
+            m_hdr_facts.white_point_x = desc1.WhitePoint[0];
+            m_hdr_facts.white_point_y = desc1.WhitePoint[1];
+            m_hdr_facts.max_luminance_nits = desc1.MaxLuminance;
+            m_hdr_facts.min_luminance_nits = desc1.MinLuminance;
+        }
+    }
+
     // Prefer IDXGIOutput5::DuplicateOutput1 (Win10 1703+): declaring the
     // supported formats lets DXGI hand us the desktop's native surface — BGRA8
     // on an 8-bit desktop, R10G10B10A2 on a 10 bpc SDR desktop, and scRGB FP16
     // on an HDR/Advanced-Color desktop — instead of relying on the legacy API's
-    // implicit 8-bit-only behavior. Listing FP16 means an HDR desktop delivers
-    // its real linear signal for a controlled tone-map, rather than DWM's
-    // uncontrolled SDR compatibility surface. If none of the listed formats can
-    // be provided, DuplicateOutput1 fails and we fall back to the legacy API.
+    // implicit 8-bit-only behavior.
+    //
+    // The array is a PRIORITY order, not just a set: DXGI provides the first
+    // listed format it can supply. On an HDR display, FP16 must come first so the
+    // duplication delivers the real scRGB linear signal; with BGRA8 first, DXGI
+    // tone-maps the HDR desktop down to an 8-bit SDR compatibility surface
+    // (measured) and the HDR signal never reaches the pipeline. On an SDR display
+    // the priority is unchanged (BGRA8 for 8-bit, R10G10B10A2 for a 10 bpc
+    // desktop) so SDR capture keeps its exact prior behaviour. Also note:
+    // DuplicateOutput1 returns DXGI_ERROR_UNSUPPORTED for a process that is not
+    // per-monitor-DPI-aware, which forces the legacy BGRA8 path below — the app
+    // is DPI-aware (Qt sets Per-Monitor-v2), a required precondition for HDR
+    // capture. If none of the listed formats can be provided, DuplicateOutput1
+    // fails and we fall back to the legacy API.
     winrt::com_ptr<IDXGIOutputDuplication> duplication;
     HRESULT dup1Hr = E_NOINTERFACE;
     if (winrt::com_ptr<IDXGIOutput5> output5 = matchedOutput.try_as<IDXGIOutput5>()) {
-        static constexpr DXGI_FORMAT kSupportedFormats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
-                                                            DXGI_FORMAT_R16G16B16A16_FLOAT};
-        dup1Hr = output5->DuplicateOutput1(device, 0, static_cast<UINT>(std::size(kSupportedFormats)),
-                                           kSupportedFormats, duplication.put());
+        static constexpr DXGI_FORMAT kHdrFormats[] = {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM,
+                                                      DXGI_FORMAT_B8G8R8A8_UNORM};
+        static constexpr DXGI_FORMAT kSdrFormats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
+                                                      DXGI_FORMAT_R16G16B16A16_FLOAT};
+        const DXGI_FORMAT* formats = m_hdr_active ? kHdrFormats : kSdrFormats;
+        dup1Hr = output5->DuplicateOutput1(device, 0, 3u, formats, duplication.put());
     }
 
     if (!duplication) {
@@ -139,21 +181,6 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
                             ? (desc.ModeDesc.RefreshRate.Numerator / desc.ModeDesc.RefreshRate.Denominator)
                             : 0u;
     m_frame_held = false;
-
-    // HDR facts of the active output (IDXGIOutput6::GetDesc1). The knee for the
-    // scRGB->SDR tone-map uses the display peak luminance, but only when the
-    // output is actually in an HDR colour space — an SDR-mode display still
-    // reports its EDID luminance caps via GetDesc1, which are not the active
-    // reference. Best-effort: absence leaves the tone-map on its fallback peak.
-    m_hdr_active = false;
-    m_max_luminance_nits = 0.0f;
-    if (winrt::com_ptr<IDXGIOutput6> output6 = matchedOutput.try_as<IDXGIOutput6>()) {
-        DXGI_OUTPUT_DESC1 desc1{};
-        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
-            m_hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
-            m_max_luminance_nits = desc1.MaxLuminance;
-        }
-    }
     return true;
 }
 
@@ -220,20 +247,34 @@ bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept {
            format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 }
 
-bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, OdCaptureMode& out_mode) noexcept {
+bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active, bool hdr10_output_supported,
+                          OdCaptureMode& out_mode) noexcept {
     switch (format) {
     case DXGI_FORMAT_B8G8R8A8_UNORM:
+        out_mode = OdCaptureMode::Sdr;
+        return true;
     case DXGI_FORMAT_R10G10B10A2_UNORM:
+        // A 10 bpc desktop composites to R10G10B10A2 in BOTH SDR (gamma/BT.709)
+        // and HDR10 (PQ/BT.2020) mode — the format alone cannot tell them apart,
+        // so hdr_active disambiguates. An HDR10 desktop with the native path
+        // requested is passed straight through (already PQ-encoded); every SDR
+        // 10 bpc desktop keeps its existing SDR handling unchanged.
+        if (hdr_active && hdr_mode == HdrMode::Hdr10 && hdr10_output_supported) {
+            out_mode = OdCaptureMode::HdrNative;
+            return true;
+        }
         out_mode = OdCaptureMode::Sdr;
         return true;
     case DXGI_FORMAT_R16G16B16A16_FLOAT:
         // scRGB FP16 HDR desktop. Off keeps the pre-HDR behaviour (a defined
-        // capture error); TonemapSdr and Hdr10 both tone-map to SDR here (the
-        // native HDR10 output path is not yet implemented).
+        // capture error). Hdr10 with an HDR10-capable codec keeps the native
+        // PQ/BT.2020 signal; otherwise (TonemapSdr, or Hdr10 on H.264) the
+        // desktop is tone-mapped down to SDR.
         if (hdr_mode == HdrMode::Off) {
             return false;
         }
-        out_mode = OdCaptureMode::HdrToneMap;
+        out_mode = (hdr_mode == HdrMode::Hdr10 && hdr10_output_supported) ? OdCaptureMode::HdrNative
+                                                                          : OdCaptureMode::HdrToneMap;
         return true;
     default:
         return false;

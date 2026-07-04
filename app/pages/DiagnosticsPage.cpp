@@ -20,8 +20,11 @@
 #include "../ui/widgets/TipChip.h"
 #include <capability/audio_ui_state.h>
 #include <capability/resolver.h>
+#include <capability/runtime_snapshot.h>
 #include <capability/support_level.h>
 #include <capability/user_config.h>
+
+#include <windows.h>
 
 #include <QDateTime>
 #include <QFrame>
@@ -46,6 +49,30 @@ using M = ui::theme::ExoSnapMetrics;
 using Pal = ui::theme::ExoSnapPalette;
 
 namespace {
+
+// True when the monitor capture target's display currently has Windows HDR ON.
+// The impure HMONITOR -> display-device-name step lives here; the pure lookup
+// over the already-probed facts is capability::FindDisplayByName. A window/region
+// target (WGC path) is always treated as SDR — its capture never engages HDR10.
+static bool SelectedTargetHdrActive(const std::optional<recorder_core::CaptureTarget>& target,
+                                    const capability::CapabilitySet& caps) {
+    if (!target.has_value() || target->kind != recorder_core::CaptureTarget::Kind::Monitor) {
+        return false;
+    }
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target->native_id), &mi) == FALSE) {
+        return false;
+    }
+    const int len = WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 1) {
+        return false;
+    }
+    std::string device_name(static_cast<size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, device_name.data(), len, nullptr, nullptr);
+    const capability::DisplayHdrFacts* facts = capability::FindDisplayByName(caps.runtime.displays, device_name);
+    return facts != nullptr && facts->hdr_active;
+}
 
 static recorder_core::PresentMode ToSnapshotMode(diagnostics::PresentMode m) noexcept {
     switch (m) {
@@ -502,6 +529,13 @@ void DiagnosticsPage::applyExpertVisibility() {
 }
 
 // ── Data injection ──────────────────────────────────────────────────────────────
+
+void DiagnosticsPage::setSelectedCaptureTarget(const std::optional<recorder_core::CaptureTarget>& target) {
+    selected_capture_target_ = target;
+    if (data_ready_ && isVisible()) {
+        refreshOverview();
+    }
+}
 
 void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, const OutputSettingsModel& output,
                                         const VideoSettingsModel& video, const capability::AudioUiState& audio,
@@ -1297,6 +1331,9 @@ void DiagnosticsPage::refreshOverview() {
     }
 
     engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed);
+    // Feed the selected capture target's live HDR status so the HDR10 + H.264
+    // pre-flight blocker (rec.hdr.h264) fires only on an HDR-active desktop.
+    engine.SetCaptureTargetHdrActive(SelectedTargetHdrActive(selected_capture_target_, caps_));
 
     auto recs = engine.Generate();
 

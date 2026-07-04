@@ -29,9 +29,12 @@ class GpuCompositor {
     // render_format: format of the composite render target. Must match the
     // capture source's frame format (BeginFrame copies the background via
     // CopyResource, which requires identical formats). BGRA8 for WGC and
-    // 8-bit SDR OD capture; R10G10B10A2 for a 10 bpc SDR desktop. The overlay
-    // shader samples normalized floats and writes through the RTV, so it is
-    // format-agnostic; webcam/cursor upload textures stay BGRA8 regardless.
+    // 8-bit SDR OD capture; R10G10B10A2 for a 10 bpc SDR desktop;
+    // R16G16B16A16_FLOAT for the native HDR10 path, where the background is
+    // linear scRGB and overlays are composited in linear light (sRGB-decoded and
+    // scaled to the HDR overlay reference white). The overlay shader samples
+    // normalized floats and writes through the RTV; webcam/cursor upload textures
+    // stay BGRA8 regardless.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
               DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM);
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
@@ -56,6 +59,8 @@ class GpuCompositor {
         float key_color[4]; // r, g, b (0-1) + tolerance
         // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
         float params[4];
+        // x=hdrLinear (0/1), y=refWhiteScale, z=opacity, w=reserved
+        float params2[4];
     };
 
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
@@ -68,6 +73,7 @@ class GpuCompositor {
     UINT width_ = 0;
     UINT height_ = 0;
     DXGI_FORMAT render_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
+    bool hdr_linear_ = false; // true for the FP16 native-HDR path (linear-light compositing)
 
     winrt::com_ptr<ID3D11Texture2D> composite_tex_;
     winrt::com_ptr<ID3D11RenderTargetView> composite_rtv_;

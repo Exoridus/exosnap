@@ -3,7 +3,12 @@
 #include "../../../libs/recorder_core/src/loopback_meter_service.h"
 #include "../../../libs/recorder_core/src/mic_meter_service.h"
 
+#include <recorder_core/hdr_native.h>
 #include <recorder_core/mp4_remuxer.h>
+
+#include <capability/runtime_snapshot.h>
+
+#include <windows.h>
 
 #include "../diagnostics/DiskSpaceThresholds.h"
 
@@ -52,6 +57,29 @@ static std::wstring ToWide(const std::string& s) {
     std::wstring w(static_cast<size_t>(n), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
     return w;
+}
+
+// Resolve the HDR facts of the display a monitor capture target is on. The
+// impure HMONITOR -> Windows display-device-name step lives here; the pure
+// lookup over the already-probed facts is capability::FindDisplayByName. Returns
+// nullopt for window targets or when the display cannot be matched.
+static const capability::DisplayHdrFacts* FindTargetDisplayFacts(const recorder_core::CaptureTarget& target,
+                                                                 const capability::CapabilitySet& caps) {
+    if (target.kind != recorder_core::CaptureTarget::Kind::Monitor) {
+        return nullptr;
+    }
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &mi) == FALSE) {
+        return nullptr;
+    }
+    const int len = WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, nullptr, 0, nullptr, nullptr);
+    if (len <= 1) {
+        return nullptr;
+    }
+    std::string device_name(static_cast<size_t>(len - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, device_name.data(), len, nullptr, nullptr);
+    return capability::FindDisplayByName(caps.runtime.displays, device_name);
 }
 
 static std::string TrimAscii(const std::string& value) {
@@ -721,6 +749,34 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     ApplyOutputSettingsToRecorderConfig(config, output_settings_);
     config.target = target;
     config.crop_region = crop_region;
+
+    // Native HDR10 output: when HDR10 handling is selected, the captured display
+    // is HDR-active, and the codec can encode HDR10, derive the BT.2020/PQ colour
+    // metadata (with the display's mastering-display facts) and pin the encode to
+    // 10-bit. HDR10 is 10-bit by definition — PQ in 8-bit bands severely — so the
+    // 8-bit setting is deliberately overridden here for the native path. H.264 is
+    // excluded (it cannot encode HDR10; the pre-flight blocker catches it).
+    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, caps_)) {
+        if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
+            recorder_core::HdrDisplayFacts hdr_facts;
+            hdr_facts.hdr_active = facts->hdr_active;
+            hdr_facts.red_primary_x = facts->red_primary_x;
+            hdr_facts.red_primary_y = facts->red_primary_y;
+            hdr_facts.green_primary_x = facts->green_primary_x;
+            hdr_facts.green_primary_y = facts->green_primary_y;
+            hdr_facts.blue_primary_x = facts->blue_primary_x;
+            hdr_facts.blue_primary_y = facts->blue_primary_y;
+            hdr_facts.white_point_x = facts->white_point_x;
+            hdr_facts.white_point_y = facts->white_point_y;
+            hdr_facts.max_luminance_nits = facts->max_luminance_nits;
+            hdr_facts.min_luminance_nits = facts->min_luminance_nits;
+            config.color = recorder_core::MakeHdr10ColorMetadata(hdr_facts);
+            config.bit_depth = recorder_core::BitDepth::Bit10;
+            diagnostics::AppLog::info(
+                QStringLiteral("record.hdr"),
+                QStringLiteral("mode=hdr10-native primaries=bt2020 transfer=pq bitdepth=10 range=limited"));
+        }
+    }
     config.output_path = output_path;
     config.split = split_settings_;
 

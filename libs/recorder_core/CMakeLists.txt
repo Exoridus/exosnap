@@ -262,7 +262,11 @@ add_library(recorder_core STATIC
     src/gpu_compositor.h
     src/gpu_hdr_tonemap.cpp
     src/gpu_hdr_tonemap.h
+    src/gpu_hdr_pq.cpp
+    src/gpu_hdr_pq.h
     src/hdr_tonemap.h
+    src/hdr_pq.h
+    include/recorder_core/hdr_native.h
     src/mixed_audio_src.cpp
     src/brickwall_limiter.cpp
     src/brickwall_limiter.h
@@ -672,6 +676,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
+
+# Native HDR10 (PQ / BT.2020 / P010) output: pure curve + matrix + Y'CbCr math,
+# effective-mode decision, and colour-metadata assembly. No GPU — the compute
+# shader (gpu_hdr_pq.*) replicates the same math.
+exosnap_add_gtest(
+    NAME test_hdr_pq
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_pq.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_hdr_pq PRIVATE src)
+target_compile_definitions(test_hdr_pq PRIVATE NOMINMAX)
 
 # Strand 3 slice 1 (WYSIWYG preview): pure NV12/P010 -> BGRA color-conversion
 # math. Self-contained (no D3D11/NVENC) -- also the bugfix validation for the

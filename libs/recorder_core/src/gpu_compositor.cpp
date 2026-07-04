@@ -43,6 +43,7 @@ SamplerState frameSamp : register(s0);
 cbuffer DrawConstants : register(b0) {
     float4 keyColor; // r, g, b, tolerance
     float4 params;   // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
+    float4 params2;  // x=hdrLinear, y=refWhiteScale, z=opacity, w=reserved
 };
 
 // BT.601 RGB->CbCr. Output range [0,1] with neutral at 0.5.
@@ -50,6 +51,13 @@ float2 RgbToCbCr(float3 c) {
     float cb = -0.169f * c.r - 0.331f * c.g + 0.500f * c.b + 0.5f;
     float cr =  0.500f * c.r - 0.419f * c.g - 0.081f * c.b + 0.5f;
     return float2(cb, cr);
+}
+
+// sRGB electro-optical transfer (gamma decode) -> linear light, component-wise.
+float3 SrgbToLinear(float3 c) {
+    float3 lo = c / 12.92f;
+    float3 hi = pow(max((c + 0.055f) / 1.055f, 0.0f), 2.4f);
+    return lerp(hi, lo, step(c, 0.04045f));
 }
 
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
@@ -103,6 +111,16 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
     }
     // else mode 0: cursor — preserve source alpha unchanged
 
+    // HDR-linear output: the background is linear scRGB (1.0 = 80 nits). Overlay
+    // sprites are sRGB-encoded, so decode to linear and scale to the HDR overlay
+    // reference white before the (linear-light) alpha blend, so soft chroma-keyed
+    // edges — which carry partial alpha — composite correctly. The overall overlay
+    // opacity is a computed blend factor (uniform, 1.0 today) applied to alpha.
+    if (params2.x > 0.5f) {
+        color.rgb = SrgbToLinear(color.rgb) * params2.y;
+    }
+    color.a *= params2.z;
+
     return color;
 }
 )";
@@ -113,6 +131,11 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
     err = buf;
 }
 
+// scRGB reference white (channel 1.0) and the HDR overlay reference white used to
+// place SDR overlay sprites on the HDR timeline (a diffuse-white paper level).
+constexpr float kScrgbReferenceWhiteNits = 80.0f;
+constexpr float kHdrOverlayReferenceWhiteNits = 203.0f;
+
 } // namespace
 
 bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
@@ -121,7 +144,8 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         err = "GpuCompositor::Init invalid arguments";
         return false;
     }
-    if (render_format != DXGI_FORMAT_B8G8R8A8_UNORM && render_format != DXGI_FORMAT_R10G10B10A2_UNORM) {
+    if (render_format != DXGI_FORMAT_B8G8R8A8_UNORM && render_format != DXGI_FORMAT_R10G10B10A2_UNORM &&
+        render_format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
         err = "GpuCompositor::Init unsupported render format";
         return false;
     }
@@ -131,6 +155,9 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     width_ = width;
     height_ = height;
     render_format_ = render_format;
+    // FP16 render target = the native HDR10 path: the background is linear scRGB,
+    // so overlay sprites are composited in linear light (see the pixel shader).
+    hdr_linear_ = (render_format == DXGI_FORMAT_R16G16B16A16_FLOAT);
 
     winrt::com_ptr<ID3DBlob> vs_blob;
     winrt::com_ptr<ID3DBlob> ps_blob;
@@ -172,7 +199,9 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     tex_desc.Format = render_format_; // matches the capture source's frame format
     tex_desc.SampleDesc.Count = 1;
     tex_desc.Usage = D3D11_USAGE_DEFAULT;
-    tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    // SHADER_RESOURCE so the composited surface can also feed the native HDR10
+    // PQ pass as an input; harmless for the SDR VideoProcessor path.
+    tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
     hr = device_->CreateTexture2D(&tex_desc, nullptr, composite_tex_.put());
     if (FAILED(hr)) {
@@ -344,6 +373,12 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     }
     pc.params[2] = chroma.spill_reduction;
     pc.params[3] = chroma.softness;
+    // HDR-linear compositing (native HDR10): decode overlay sprites to linear and
+    // scale to the overlay reference white (203 cd/m^2 in scRGB, where 1.0 = 80).
+    // Opacity is a computed blend factor (uniform), 1.0 today.
+    pc.params2[0] = hdr_linear_ ? 1.0f : 0.0f;
+    pc.params2[1] = kHdrOverlayReferenceWhiteNits / kScrgbReferenceWhiteNits;
+    pc.params2[2] = 1.0f;
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
     D3D11_VIEWPORT viewport{};

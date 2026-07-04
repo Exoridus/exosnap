@@ -109,6 +109,11 @@ class RecordPage : public QWidget {
     // Region = no single owning process → global attribution). ADR 0033 extra-checks.
     [[nodiscard]] uint32_t selectedTargetWindowPid() const;
 
+    // The currently selected capture target (Monitor/Window), or nullopt when
+    // nothing is selected. Used to resolve the target display's HDR status for
+    // the HDR10 pre-flight readiness check.
+    [[nodiscard]] std::optional<recorder_core::CaptureTarget> selectedCaptureTarget() const;
+
     // Apply a saved capture policy:
     //   - Empty key     → no stored preference: auto-pick primary/first target (OK).
     //   - Non-empty key, match found  → select it.

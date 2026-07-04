@@ -19,6 +19,7 @@ add_executable(probe_record
 target_link_libraries(probe_record PRIVATE
     recorder_core
     exosnap::warnings
+    dxgi.lib
 )
 
 target_compile_definitions(probe_record PRIVATE NOMINMAX)
