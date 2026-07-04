@@ -242,6 +242,34 @@ const EbmlNode* FindColourChild(const std::vector<EbmlNode>& colour, uint64_t id
     return nullptr;
 }
 
+// Descend into the KaxVideoColourMasterMeta (id 0x55D0) child of Colour, if
+// present, and return ITS children (the chromaticity/luminance float fields).
+std::vector<EbmlNode> MasterMetaChildren(const std::vector<EbmlNode>& colour, const std::vector<uint8_t>& d) {
+    constexpr uint64_t kIdMasterMeta = 0x55D0ULL;
+    for (const auto& c : colour) {
+        if (c.id == kIdMasterMeta) {
+            return ParseChildren(d, c.data_off, c.data_off + c.data_size);
+        }
+    }
+    return {};
+}
+
+// Read a big-endian IEEE-754 float (4 or 8 bytes) from a node's raw bytes.
+double ReadFloat(const std::vector<uint8_t>& d, const EbmlNode& n) {
+    uint64_t bits = 0;
+    for (uint64_t i = 0; i < n.data_size; ++i)
+        bits = (bits << 8) | d[n.data_off + static_cast<size_t>(i)];
+    if (n.data_size == 4) {
+        const auto bits32 = static_cast<uint32_t>(bits);
+        float v = 0.0f;
+        std::memcpy(&v, &bits32, sizeof(v));
+        return static_cast<double>(v);
+    }
+    double v = 0.0;
+    std::memcpy(&v, &bits, sizeof(v));
+    return v;
+}
+
 MatroskaStreamConfig MakeConfig(const std::string& path, bool h264, bool opus) {
     MatroskaStreamConfig c;
     c.output_path = path;
@@ -670,6 +698,84 @@ TEST_F(StreamWriterTest, WritesConfiguredColourValuesIncludingHdr) {
     EXPECT_EQ(ReadUInt(d, *bits), 10u);
     EXPECT_EQ(ReadUInt(d, *maxcll), 1000u);
     EXPECT_EQ(ReadUInt(d, *maxfall), 400u);
+    EXPECT_TRUE(MasterMetaChildren(colour, d).empty())
+        << "KaxVideoColourMasterMeta must be absent when has_mastering_display is not set, "
+           "even though other HDR fields (MaxCLL/MaxFALL) are present";
+}
+
+// Mastering display metadata (SMPTE ST 2086) round-trips into
+// KaxVideoColourMasterMeta when has_mastering_display is set. Uses
+// representative BT.2020 primaries + D65 white point. Independent of the
+// `hdr`/MaxCLL/MaxFALL gate — see the absence assertion in
+// WritesConfiguredColourValuesIncludingHdr above for the other half.
+TEST_F(StreamWriterTest, WritesMasteringDisplayMetadataWhenSet) {
+    auto cfg = MakeConfig(tmp_, /*h264=*/false, /*opus=*/true);
+    cfg.color.primaries = recorder_core::ColorPrimaries::Bt2020;
+    cfg.color.transfer = recorder_core::TransferCharacteristics::SmpteSt2084;
+    cfg.color.matrix = recorder_core::MatrixCoefficients::Bt2020Ncl;
+    cfg.color.bits_per_channel = 10;
+    cfg.color.hdr = true;
+    cfg.color.max_content_light_level = 1000;
+    cfg.color.max_frame_average_light_level = 400;
+    cfg.color.has_mastering_display = true;
+    cfg.color.mastering_display_primary_r_x = 0.708f;
+    cfg.color.mastering_display_primary_r_y = 0.292f;
+    cfg.color.mastering_display_primary_g_x = 0.170f;
+    cfg.color.mastering_display_primary_g_y = 0.797f;
+    cfg.color.mastering_display_primary_b_x = 0.131f;
+    cfg.color.mastering_display_primary_b_y = 0.046f;
+    cfg.color.mastering_display_white_point_x = 0.3127f;
+    cfg.color.mastering_display_white_point_y = 0.3290f;
+    cfg.color.mastering_display_max_luminance = 1000.0f;
+    cfg.color.mastering_display_min_luminance = 0.0001f;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg));
+    FeedSeconds(w, 1.0, 30, 64);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty()) << "video track has no Colour element";
+    const auto mdcv = MasterMetaChildren(colour, d);
+    ASSERT_FALSE(mdcv.empty()) << "KaxVideoColourMasterMeta must be present when has_mastering_display is set";
+
+    constexpr uint64_t kRx = 0x55D1ULL, kRy = 0x55D2ULL, kGx = 0x55D3ULL, kGy = 0x55D4ULL, kBx = 0x55D5ULL,
+                       kBy = 0x55D6ULL, kWx = 0x55D7ULL, kWy = 0x55D8ULL, kLumMax = 0x55D9ULL, kLumMin = 0x55DAULL;
+
+    const EbmlNode* rx = FindColourChild(mdcv, kRx);
+    const EbmlNode* ry = FindColourChild(mdcv, kRy);
+    const EbmlNode* gx = FindColourChild(mdcv, kGx);
+    const EbmlNode* gy = FindColourChild(mdcv, kGy);
+    const EbmlNode* bx = FindColourChild(mdcv, kBx);
+    const EbmlNode* by = FindColourChild(mdcv, kBy);
+    const EbmlNode* wx = FindColourChild(mdcv, kWx);
+    const EbmlNode* wy = FindColourChild(mdcv, kWy);
+    const EbmlNode* lmax = FindColourChild(mdcv, kLumMax);
+    const EbmlNode* lmin = FindColourChild(mdcv, kLumMin);
+    ASSERT_NE(rx, nullptr);
+    ASSERT_NE(ry, nullptr);
+    ASSERT_NE(gx, nullptr);
+    ASSERT_NE(gy, nullptr);
+    ASSERT_NE(bx, nullptr);
+    ASSERT_NE(by, nullptr);
+    ASSERT_NE(wx, nullptr);
+    ASSERT_NE(wy, nullptr);
+    ASSERT_NE(lmax, nullptr);
+    ASSERT_NE(lmin, nullptr);
+
+    constexpr double kTol = 1e-4;
+    EXPECT_NEAR(ReadFloat(d, *rx), 0.708, kTol);
+    EXPECT_NEAR(ReadFloat(d, *ry), 0.292, kTol);
+    EXPECT_NEAR(ReadFloat(d, *gx), 0.170, kTol);
+    EXPECT_NEAR(ReadFloat(d, *gy), 0.797, kTol);
+    EXPECT_NEAR(ReadFloat(d, *bx), 0.131, kTol);
+    EXPECT_NEAR(ReadFloat(d, *by), 0.046, kTol);
+    EXPECT_NEAR(ReadFloat(d, *wx), 0.3127, kTol);
+    EXPECT_NEAR(ReadFloat(d, *wy), 0.3290, kTol);
+    EXPECT_NEAR(ReadFloat(d, *lmax), 1000.0, 0.1);
+    EXPECT_NEAR(ReadFloat(d, *lmin), 0.0001, 1e-6);
 }
 
 // 9. Multi-cluster: a long recording splits into multiple clusters (2 s rule).

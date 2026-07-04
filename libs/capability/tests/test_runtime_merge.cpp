@@ -452,5 +452,92 @@ TEST(NvencCodecSupportTest, BuildEffective_HonorsProbeFlags) {
     EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264Nvenc)));
 }
 
+// -------------------------------------------------------------------------
+// Explicit per-codec HDR10-native (10-bit / P010) capability.
+// HEVC and AV1 carry HDR10; H.264 does not. This is a codec-format fact, not a
+// per-GPU probe (see the inference note in capability_builder.cpp).
+// -------------------------------------------------------------------------
+TEST(Hdr10CapabilityTest, HevcAndAv1AreHdr10Native_H264IsNot) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1Nvenc)))
+        << "AV1 must be annotated HDR10-native (10-bit/P010).";
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::HevcNvenc)))
+        << "HEVC must be annotated HDR10-native (10-bit/P010).";
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264Nvenc)))
+        << "H.264 must NOT be annotated HDR10-native (8-bit only).";
+    // The H.264 reason must be user-facing and point at the capable codecs.
+    const SupportAnnotation h264 = caps.QueryHdr10Native(VideoCodec::H264Nvenc);
+    EXPECT_NE(h264.reason.find("HEVC"), std::string::npos) << "reason: " << h264.reason;
+    EXPECT_NE(h264.reason.find("AV1"), std::string::npos) << "reason: " << h264.reason;
+}
+
+// The HDR10-native annotation is a codec-intrinsic format fact and must NOT be
+// coupled to the NVENC-absence downgrade (which governs encode availability, a
+// separate concern owned by QueryVideoCodec / rec.003).
+TEST(Hdr10CapabilityTest, Hdr10NativeIsIndependentOfNvencPresence) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_dll_present = false;
+    snap.nvidia.nvenc_api_version_valid = false;
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    // Encode availability is gone (rec.003 territory) …
+    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)));
+    // … but the format-capability annotation is unchanged.
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264Nvenc)));
+}
+
+// -------------------------------------------------------------------------
+// DisplayHdrFacts primaries/luminance + Display↔Capture mapping.
+// -------------------------------------------------------------------------
+TEST(DisplayHdrFactsTest, PrimariesDefaultToZero) {
+    const DisplayHdrFacts facts;
+    EXPECT_FLOAT_EQ(facts.red_primary_x, 0.0f);
+    EXPECT_FLOAT_EQ(facts.red_primary_y, 0.0f);
+    EXPECT_FLOAT_EQ(facts.green_primary_x, 0.0f);
+    EXPECT_FLOAT_EQ(facts.green_primary_y, 0.0f);
+    EXPECT_FLOAT_EQ(facts.blue_primary_x, 0.0f);
+    EXPECT_FLOAT_EQ(facts.blue_primary_y, 0.0f);
+    EXPECT_FLOAT_EQ(facts.white_point_x, 0.0f);
+    EXPECT_FLOAT_EQ(facts.white_point_y, 0.0f);
+    EXPECT_FLOAT_EQ(facts.max_luminance_nits, 0.0f);
+    EXPECT_FLOAT_EQ(facts.min_luminance_nits, 0.0f);
+    EXPECT_FLOAT_EQ(facts.max_full_frame_nits, 0.0f);
+}
+
+TEST(DisplayHdrFactsTest, FindDisplayByName_ReturnsMatchingEntryWithFacts) {
+    std::vector<DisplayHdrFacts> displays;
+    DisplayHdrFacts a;
+    a.name = "\\\\.\\DISPLAY1";
+    a.hdr_active = false;
+    displays.push_back(a);
+    DisplayHdrFacts b;
+    b.name = "\\\\.\\DISPLAY7";
+    b.hdr_active = true;
+    b.bits_per_color = 10;
+    b.red_primary_x = 0.680f;
+    b.max_luminance_nits = 1499.0f;
+    displays.push_back(b);
+
+    const DisplayHdrFacts* found = FindDisplayByName(displays, "\\\\.\\DISPLAY7");
+    ASSERT_NE(found, nullptr);
+    EXPECT_TRUE(found->hdr_active);
+    EXPECT_EQ(found->bits_per_color, 10u);
+    EXPECT_FLOAT_EQ(found->red_primary_x, 0.680f);
+    EXPECT_FLOAT_EQ(found->max_luminance_nits, 1499.0f);
+}
+
+TEST(DisplayHdrFactsTest, FindDisplayByName_ReturnsNullptrWhenAbsent) {
+    std::vector<DisplayHdrFacts> displays;
+    DisplayHdrFacts a;
+    a.name = "\\\\.\\DISPLAY1";
+    displays.push_back(a);
+
+    EXPECT_EQ(FindDisplayByName(displays, "\\\\.\\DISPLAY9"), nullptr);
+    EXPECT_EQ(FindDisplayByName({}, "\\\\.\\DISPLAY1"), nullptr);
+}
+
 } // namespace
 } // namespace exosnap::capability

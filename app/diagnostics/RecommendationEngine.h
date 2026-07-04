@@ -40,6 +40,16 @@ class RecommendationEngine {
         output_path_writable_ = writable;
     }
 
+    // Whether the selected capture target's display currently has Windows HDR ON
+    // (resolved by the caller from the selected target's HMONITOR ->
+    // DisplayHdrFacts via capability::FindDisplayByName). Feeds the H.264 + HDR10
+    // pre-flight blocker: on an SDR desktop the HDR10-native path never engages,
+    // so the blocker stays silent. Default false (SDR) mirrors the SetOutputPathWritable
+    // pattern — the engine stays pure and only emits when the caller supplies the fact.
+    void SetCaptureTargetHdrActive(bool active) {
+        capture_target_hdr_active_ = active;
+    }
+
     static std::vector<std::string> GetAllRecommendationCodes();
 
   private:
@@ -48,6 +58,7 @@ class RecommendationEngine {
     void checkCodecAvailability(DiagnosticChecklist& checklist) const;
     void checkRecommendedCodec(DiagnosticChecklist& checklist) const;
     void checkColorRange(DiagnosticChecklist& checklist) const;
+    void checkHdrH264Blocker(DiagnosticChecklist& checklist) const;
     void checkOutputDriveSpace(DiagnosticChecklist& checklist) const;
     void checkOutputFilesystem(DiagnosticChecklist& checklist) const;
     void checkProfileSupport(DiagnosticChecklist& checklist) const;
@@ -64,8 +75,9 @@ class RecommendationEngine {
     uint32_t monitor_refresh_rate_;
     uint64_t output_drive_free_bytes_;
     bool is_profile_supported_;
-    std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
-    bool output_path_writable_ = true;   // false => emit the not-writable blocker (set by caller)
+    std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
+    bool output_path_writable_ = true;       // false => emit the not-writable blocker (set by caller)
+    bool capture_target_hdr_active_ = false; // true => capture target's display has Windows HDR ON (set by caller)
 
     // Live present-cadence correlation (v0.8.0 / ADR 0033). Extracted from an optional live
     // RecordingDiagnosticsSnapshot; all false/neutral when no live measurement is available

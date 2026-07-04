@@ -64,4 +64,15 @@ enum class RateControlMode {
     Lossless,        // Not yet implemented for any encoder; capability-gated/hidden in UI
 };
 
+// HDR handling mode (config plumbing only for now). An HDR-capable desktop is
+// auto-detected elsewhere; this enum selects what the pipeline does once one
+// is found. Same enum is reused unchanged by capability::UserRecorderConfig,
+// RecorderConfig, and OutputSettingsModel (no per-layer duplication — mirrors
+// NvencPreset/FramePacingMode).
+enum class HdrMode {
+    Off,        // HDR handling disabled — legacy SDR-only behavior
+    TonemapSdr, // Default: an HDR-capable desktop is tone-mapped down to SDR
+    Hdr10,      // Expert opt-in: keep the native PQ/BT.2020 HDR10 signal
+};
+
 } // namespace recorder_core

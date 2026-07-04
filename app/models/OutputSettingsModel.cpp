@@ -215,6 +215,7 @@ void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& 
     live.bit_depth = incoming.bit_depth;
     live.color_range = incoming.color_range;
     live.nvenc_preset = incoming.nvenc_preset;
+    live.hdr_mode = incoming.hdr_mode;
     live.output_folder = incoming.output_folder;
     live.naming_pattern = incoming.naming_pattern;
     live.resolution = incoming.resolution;

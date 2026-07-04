@@ -256,6 +256,7 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     output.container = capability::Container::WebM;
     output.video_codec = capability::VideoCodec::Av1Nvenc;
     output.audio_codec = capability::AudioCodec::Opus;
+    output.hdr_mode = recorder_core::HdrMode::Hdr10;
 
     VideoSettingsModel video;
     video.cfr = false;
@@ -268,6 +269,10 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(config.frame_rate_num, 60u);
     EXPECT_EQ(config.frame_rate_den, 1u);
+    // hdr_mode must be carried at this seam; dropping it silently resets the
+    // Diagnostics config summary to TonemapSdr regardless of the actual selection.
+    EXPECT_EQ(config.hdr_mode, recorder_core::HdrMode::Hdr10)
+        << "UserConfigFromSettings must carry hdr_mode through like every other output field";
 }
 
 // 0.7.0 — S7: the selected video bit depth flows into UserRecorderConfig.bit_depth
@@ -909,8 +914,9 @@ TEST(RecommendationEngineTest, RecProfileCodec_WebmAv1OnlyConfiguredAv1_DoesNotF
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
     // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat); the
-    // color-range compatibility guard added rec.color.range — expect 11 codes now.
-    EXPECT_EQ(codes.size(), 11u);
+    // color-range compatibility guard added rec.color.range; the H.264 + HDR10-native
+    // blocker added rec.hdr.h264 — expect 12 codes now.
+    EXPECT_EQ(codes.size(), 12u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
@@ -919,6 +925,7 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.009"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.010"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.color.range"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.hdr.h264"), codes.end());
 }
 
 // --- rec.color.range: Full color range warns about players that render it too dark ---
@@ -1570,6 +1577,142 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
         return r.id == "rec.pacing.smooth";
     })) << "rec.pacing.smooth must NOT be emitted when pacing is already Smooth";
+}
+
+// --- H.264 + HDR10-native pre-flight blocker (rec.hdr.h264) ---
+
+namespace {
+// A default H.264 config on the primary MKV path; the HDR blocker only turns on
+// the additional (hdr_mode, target-display-HDR) gates.
+capability::UserRecorderConfig MakeH264Config() {
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::AacMf;
+    return config;
+}
+} // namespace
+
+TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplayRaisesBlocker) {
+    const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(true); // the capture-target display is HDR-active
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.hdr.h264"; });
+    ASSERT_NE(it, list.results.end()) << "H.264 + HDR10-native on an HDR display must block recording.";
+    EXPECT_EQ(it->severity, DiagnosticSeverity::Blocker);
+    EXPECT_TRUE(list.has_blocker);
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.hdr.codec.av1");
+    EXPECT_EQ(it->fix_action->label, "Switch to AV1");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+}
+
+// The fix must not hardcode AV1 — on a GPU with HEVC but no AV1 encode,
+// proposing AV1 would land the user in the codec-unavailable blocker. Both AV1
+// and HEVC are hdr10_native-capable, so prefer AV1 when it is
+// GPU-selectable, else fall back to HEVC.
+TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailableProposesHevc) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented,
+                                                           "AV1 NVENC not supported on this GPU"};
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(true);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.hdr.h264"; });
+    ASSERT_NE(it, list.results.end()) << "H.264 + HDR10-native on an HDR display must block recording.";
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.hdr.codec.hevc")
+        << "AV1 is unavailable on this GPU — the fix must propose HEVC, not AV1.";
+    EXPECT_EQ(it->fix_action->label, "Switch to HEVC");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+}
+
+// The codec pick must also respect container compatibility.
+// MP4 + H.264 + AAC is the Recommended MP4 path, so MP4 + Hdr10 is a legal config —
+// but MP4 + AV1 + AAC is Experimental, which ReconcileCodecs fixes back to H.264.
+// Proposing AV1 there would make the applied fix silently self-revert (user confirms
+// "H.264 -> AV1", ReconcileContainerCodecs undoes it, blocker re-fires). On MP4 the
+// fix must propose HEVC (MP4 + HEVC + AAC is Allowed) even when the GPU has AV1.
+TEST(RecommendationEngineTest, Hdr10PlusH264OnMp4ProposesHevcDespiteAv1CapableGpu) {
+    const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.container = capability::Container::Mp4;
+    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(true);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.hdr.h264"; });
+    ASSERT_NE(it, list.results.end()) << "H.264 + HDR10-native on an HDR display must block recording.";
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.hdr.codec.hevc")
+        << "MP4 + AV1 + AAC is Experimental (ReconcileCodecs reverts it) — the fix must propose HEVC.";
+    EXPECT_EQ(it->fix_action->label, "Switch to HEVC");
+}
+
+TEST(RecommendationEngineTest, Hdr10PlusH264OnSdrDisplayRaisesNoBlocker) {
+    // Auto-detect: on an SDR desktop the HDR10-native path never engages, so there
+    // is no real conflict — the calm-diagnostics line means no blocker.
+    const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(false); // SDR desktop
+    const DiagnosticChecklist list = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.hdr.h264";
+    })) << "No HDR10-native conflict on an SDR display.";
+}
+
+TEST(RecommendationEngineTest, TonemapSdrPlusH264OnActiveHdrDisplayRaisesNoBlocker) {
+    // H.264 + Tone-Map-to-SDR is explicitly NOT a conflict (SDR 8-bit output).
+    const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.hdr_mode = recorder_core::HdrMode::TonemapSdr;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(true);
+    const DiagnosticChecklist list = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.hdr.h264";
+    })) << "H.264 + Tone-Map-to-SDR is not a conflict.";
+}
+
+TEST(RecommendationEngineTest, Hdr10PlusAv1OrHevcOnActiveHdrDisplayRaisesNoBlocker) {
+    const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    for (const auto codec : {capability::VideoCodec::Av1Nvenc, capability::VideoCodec::HevcNvenc}) {
+        capability::UserRecorderConfig config;
+        config.container = capability::Container::Matroska;
+        config.video_codec = codec;
+        config.audio_codec = capability::AudioCodec::Opus;
+        config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+        RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+        engine.SetCaptureTargetHdrActive(true);
+        const DiagnosticChecklist list = engine.Generate();
+
+        EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(), [](const DiagnosticResult& r) {
+            return r.id == "rec.hdr.h264";
+        })) << "HDR10-native codecs (AV1/HEVC) must not trigger the H.264 blocker.";
+    }
 }
 
 } // namespace

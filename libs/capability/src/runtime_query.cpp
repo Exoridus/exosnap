@@ -303,6 +303,14 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
                     facts.hdr_active = (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
                                         d.ColorSpace == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
                     facts.bits_per_color = d.BitsPerColor;
+                    facts.red_primary_x = d.RedPrimary[0];
+                    facts.red_primary_y = d.RedPrimary[1];
+                    facts.green_primary_x = d.GreenPrimary[0];
+                    facts.green_primary_y = d.GreenPrimary[1];
+                    facts.blue_primary_x = d.BluePrimary[0];
+                    facts.blue_primary_y = d.BluePrimary[1];
+                    facts.white_point_x = d.WhitePoint[0];
+                    facts.white_point_y = d.WhitePoint[1];
                     facts.max_luminance_nits = d.MaxLuminance;
                     facts.min_luminance_nits = d.MinLuminance;
                     facts.max_full_frame_nits = d.MaxFullFrameLuminance;

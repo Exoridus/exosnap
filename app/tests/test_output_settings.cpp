@@ -1065,6 +1065,23 @@ TEST(OutputSettingsTest, MergeFormatSelection_CarriesNvencPreset) {
         << "MergeFormatSelection must carry a live encoder-preset edit into output_settings_";
 }
 
+// Same class of bug as MergeFormatSelection_CarriesNvencPreset. hdr_mode has
+// no UI control yet, but the model field must still survive MergeFormatSelection
+// so the future expert HDR control / preset-apply plumbing doesn't silently
+// drop it, same as every other output field.
+TEST(OutputSettingsTest, MergeFormatSelection_CarriesHdrMode) {
+    OutputSettingsModel live = OutputSettingsModel::Defaults();
+    live.hdr_mode = recorder_core::HdrMode::TonemapSdr;
+
+    OutputSettingsModel incoming = live;
+    incoming.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    MergeFormatSelection(live, incoming);
+
+    EXPECT_EQ(live.hdr_mode, recorder_core::HdrMode::Hdr10)
+        << "MergeFormatSelection must carry hdr_mode through like every other output field";
+}
+
 // Verifies the last-mile wiring from OutputSettingsModel into the engine's
 // RecorderConfig (RecordingCoordinator.cpp, ApplyOutputSettingsToRecorderConfig).
 // Without this line the combo could be wired end-to-end through the UI and

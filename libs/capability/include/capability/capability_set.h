@@ -40,6 +40,12 @@ struct CapabilitySet {
     std::unordered_map<ChromaSubsampling, SupportAnnotation> chroma_modes;
     std::unordered_map<BitDepth, SupportAnnotation> bit_depths;
 
+    // Explicit per-codec HDR10-native (10-bit / P010, PQ/BT.2020) capability.
+    // HEVC and AV1 carry HDR10; H.264 does not. This is a codec-format fact,
+    // so gate against it instead of comparing codec names (the H.264+HDR10
+    // pre-flight blocker, and a future expert HDR control).
+    std::unordered_map<VideoCodec, SupportAnnotation> hdr10_native;
+
     std::unordered_map<ComboKey, SupportAnnotation, ComboKeyHash> combo_overrides;
 
     ResolutionConstraint resolution_constraint;
@@ -51,6 +57,10 @@ struct CapabilitySet {
     SupportAnnotation QueryAudioCodec(AudioCodec a) const;
     SupportAnnotation QueryChroma(ChromaSubsampling cs) const;
     SupportAnnotation QueryBitDepth(BitDepth bd) const;
+
+    // Whether `v` can carry a native HDR10 (10-bit/P010) signal. Selectable for
+    // HEVC/AV1, NotImplemented for H.264.
+    SupportAnnotation QueryHdr10Native(VideoCodec v) const;
 
     // Query support for a canonical rate-control mode (ADR 0009).
     // Returns Available for CQ/VBR/CBR; NotImplemented for Lossless.

@@ -287,3 +287,69 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   remains the correct, intentional semantics — only the live-mirror gap is closed. Red-proof test:
   `SplitSizeSettingsTest.MergeFormatSelection_CarriesSplitSettings`
   (`app/tests/test_output_settings.cpp`).
+
+## Delivered — H.264 + HDR10-native pre-flight blocker (rec.hdr.h264, 2026-07-04)
+
+- **New Tier-1 check (blocker).** `RecommendationEngine::checkHdrH264Blocker` fires `rec.hdr.h264`
+  (Blocker) only when ALL three real-conflict gates hold: (1) `UserRecorderConfig::hdr_mode ==
+  HdrMode::Hdr10`, (2) the selected video codec is not HDR10-native, and (3) the capture target's
+  display currently has Windows HDR ON. H.264 has no 10-bit/HDR10 (P010, PQ/BT.2020) path, so an
+  HDR10-native recording with H.264 would be broken/silently-downgraded — a hard block, not a tip.
+  It ships an `Auto`, reversible FixAction (config-only: H.264 → AV1 or HEVC — see the
+  availability-aware pick below). Blocker propagation is generic — the blocker is counted in the
+  verdict and blocks recording start like any other Tier-1 check; nothing new was invented.
+- **Calm, not alarmist.** `H.264 + TonemapSdr` is explicitly NOT a conflict (that path outputs SDR
+  8-bit) and raises nothing. On an SDR desktop the `Hdr10` auto-detect path never engages, so the
+  blocker stays silent there too — gate (3) is the honesty gate.
+- **Gated on an explicit capability field, never a codec-name compare.** New
+  `CapabilitySet::hdr10_native` map + `QueryHdr10Native(VideoCodec)`, populated in
+  `BuildStaticValidatedBaseline`: HEVC/AV1 = Available, H.264 = NotImplemented. This is a
+  codec-format fact (kept independent of the NVENC-absence downgrade, which owns encode
+  availability / `rec.003`) and is *inferred*, not probed — a real `NV_ENC_CAPS_SUPPORT_10BIT_ENCODE`
+  probe is deferred; the inference (NVENC HEVC/AV1 implies Main10/10-bit) is the documented risk. A
+  future expert HDR control will gate on the same field.
+- **Display↔Capture mapping (pure).** `DisplayHdrFacts` gained the `DXGI_OUTPUT_DESC1` chromaticity
+  primaries + white point (luminance range already existed); `capability::FindDisplayByName` is a
+  pure lookup from a display device name to its facts. The engine stays pure: the caller resolves
+  the selected target's HMONITOR → device name → facts and supplies gate (3) via
+  `SetCaptureTargetHdrActive`, mirroring the existing `SetOutputPathWritable` seam.
+- **Known limitation (headless).** The production `DiagnosticsPage` caller does not yet
+  supply the capture target's HDR-active state (it also still hardcodes `monitor_refresh_hz = 0`),
+  so the blocker is fully implemented + unit-tested at the engine boundary but will not fire in the
+  running app until a later UI change wires the selected-target → display resolution. This is
+  intentional sequencing: the wiring lands together with the capture-target→display resolution
+  work, not a loosened condition — the firing condition was NOT broadened to "always fire" in the
+  absence of that wiring.
+
+### Follow-up hardening (2026-07-04)
+
+- **`hdr_mode` now reaches the resolved config at both settings→config seams.**
+  `UserConfigFromSettings` (`app/diagnostics/ConfigSummary.cpp`) and
+  `RecordingCoordinator::SetOutputSettings` (`app/services/RecordingCoordinator.cpp`) were copying
+  container/codecs/bit_depth/color_range into `UserRecorderConfig` but silently dropping
+  `hdr_mode`, so the Diagnostics config summary and the actual recording-start config always saw
+  `TonemapSdr` regardless of the user's HDR10 selection — the blocker above could never have fired
+  against a live config even once the UI wiring lands. Both seams now carry `hdr_mode` through.
+- **`fix.hdr.codec.*` now has an apply handler.** The Auto-fix dispatcher
+  (`app/MainWindow.cpp`) previously had no branch for the HDR codec fix, so confirming it was a
+  silent no-op. It now mirrors the `fix.color.range` pattern: sets `output_settings_.video_codec`
+  to the codec the FixAction proposed and runs `ReconcileContainerCodecs`.
+- **The fix no longer hardcodes AV1.** `checkHdrH264Blocker` used to always propose AV1 even when
+  the GPU only has HEVC encode, which would have applied a fix that just traded one blocker
+  (`rec.hdr.h264`) for another (`rec.003`, codec unavailable). It now proposes AV1 only when BOTH
+  hold, else HEVC (both are `hdr10_native`-capable per the gate above): (a) AV1 is GPU-selectable
+  (`IsSelectable(caps_.QueryVideoCodec(Av1Nvenc))`), and (b) AV1 forms a working combo in the
+  current container — Recommended/Allowed per
+  `ContainerCompatRegistry::Query(container, Av1Nvenc, audio_codec)`, the same criterion
+  `ReconcileCodecs` enforces. Gate (b) matters because the container is NOT constrained by the
+  blocker's three firing gates: MP4 + H.264 + AAC + Hdr10 is a legal config, and MP4 + AV1 + AAC is
+  Experimental — without the gate, applying the AV1 fix would be silently reverted to H.264 by the
+  handler's own `ReconcileContainerCodecs` and the blocker would re-fire. The fix id/label follow
+  the proposed codec (`fix.hdr.codec.av1` / `fix.hdr.codec.hevc`, "Switch to AV1" /
+  "Switch to HEVC"); the MainWindow handler keys off both ids so it applies exactly the codec the
+  FixAction proposed, never a blind AV1.
+- **Remaining dormancy cause.** With the three fixes above, the `hdr_mode` plumbing and the fix
+  path are both live end-to-end. The blocker still cannot fire in the running app for one reason
+  only: `DiagnosticsPage` does not yet call `SetCaptureTargetHdrActive` with the selected capture
+  target's real display HDR state (gate 3) — that capture-target→display HDR-active wiring is
+  deferred to a later UI change, unchanged from the note above.

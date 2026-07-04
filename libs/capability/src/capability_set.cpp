@@ -143,6 +143,10 @@ SupportAnnotation CapabilitySet::QueryBitDepth(BitDepth bd) const {
     return LookupAnnotation(bit_depths, bd, "bit depth");
 }
 
+SupportAnnotation CapabilitySet::QueryHdr10Native(VideoCodec v) const {
+    return LookupAnnotation(hdr10_native, v, "HDR10-native codec");
+}
+
 SupportAnnotation CapabilitySet::QueryRateControlMode(recorder_core::RateControlMode mode) const {
     // Static capability declaration for NVENC (ADR 0009).
     // CQ / VBR / CBR are implemented and available.

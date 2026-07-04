@@ -1799,6 +1799,11 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     // straight through (no reconcile) to UserRecorderConfig.color_range and on to
     // the engine's ColorMetadata.range.
     resolved_user_config_.color_range = output_settings_.color_range;
+    // HDR mode must be carried at this seam; dropping it silently resets the
+    // resolved config to TonemapSdr regardless of the actual OutputSettingsModel
+    // selection, so recording start would never carry the user's HDR10 choice
+    // into the engine.
+    resolved_user_config_.hdr_mode = output_settings_.hdr_mode;
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 
     // Translate the UI split policy into the engine settings applied at start.

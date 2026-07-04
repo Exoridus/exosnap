@@ -337,6 +337,59 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
 }
 
 // ===========================================================================
+// HDR handling mode persists (preset schema 20->21).
+// ===========================================================================
+
+TEST(RecordingPresetStore, HdrModePersists_DefaultTonemapSdr) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Default preset";
+    p.config = MakeDefaultPreset().config; // TonemapSdr by default
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, HdrModePersists_Hdr10) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "HDR10 preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::Hdr10);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
 // Schema v19 -> v20 colour-range migration (fix/color-range-signaling)
 //
 // Under schema <=19 "full" was the MATERIALIZED old code default, not an
@@ -436,7 +489,7 @@ QString MakeSinglePresetToml(int schema_version, const QString& color_range) {
 // ("missing key -> P4, no schema bump") holds against the real Load() code path.
 TEST(RecordingPresetStore, NvencPresetMissingKey_DefaultsToP4) {
     const QString path = UniqueTempPath();
-    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(20, QStringLiteral("limited"))));
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
@@ -452,7 +505,7 @@ TEST(RecordingPresetStore, NvencPresetMissingKey_DefaultsToP4) {
 // enum string in the loader.
 TEST(RecordingPresetStore, NvencPresetInvalidValue_DefaultsToP4_NoReset) {
     const QString path = UniqueTempPath();
-    QString toml = MakeSinglePresetToml(20, QStringLiteral("limited"));
+    QString toml = MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"));
     toml.replace(QStringLiteral("color_range = \"limited\"\n"),
                  QStringLiteral("color_range = \"limited\"\nnvenc_preset = \"p9\"\n"));
     ASSERT_TRUE(toml.contains(QStringLiteral("nvenc_preset = \"p9\"")));
@@ -463,6 +516,55 @@ TEST(RecordingPresetStore, NvencPresetInvalidValue_DefaultsToP4_NoReset) {
     EXPECT_FALSE(state.was_reset);
     ASSERT_EQ(state.presets.size(), 1u);
     EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+
+    CleanupFile(path);
+}
+
+// A schema-21 (current) file that never had an "hdr_mode" key leaves the field
+// at its struct default (TonemapSdr) instead of resetting the store — same
+// additive-TOML contract as NvencPresetMissingKey_DefaultsToP4 above.
+TEST(RecordingPresetStore, HdrModeMissingKey_DefaultsToTonemapSdr) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+
+    CleanupFile(path);
+}
+
+// A present-but-invalid value ("hdr9000" — not a real HdrMode) falls back to
+// the struct default (TonemapSdr) without resetting the store.
+TEST(RecordingPresetStore, HdrModeInvalidValue_DefaultsToTonemapSdr_NoReset) {
+    const QString path = UniqueTempPath();
+    QString toml = MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"));
+    toml.replace(QStringLiteral("color_range = \"limited\"\n"),
+                 QStringLiteral("color_range = \"limited\"\nhdr_mode = \"hdr9000\"\n"));
+    ASSERT_TRUE(toml.contains(QStringLiteral("hdr_mode = \"hdr9000\"")));
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+
+    CleanupFile(path);
+}
+
+// A schema-20 file — one version behind current — resets rather than
+// migrating, per pre-1.0 policy (no backward-compat acrobatics; only the
+// v19->v20 colour-range bump gets a targeted migration, documented above it).
+TEST(RecordingPresetStore, SchemaV20_OneVersionBehindCurrent_Resets) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion - 1, QStringLiteral("limited"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.was_reset);
 
     CleanupFile(path);
 }

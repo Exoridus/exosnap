@@ -99,6 +99,10 @@ struct OutputSettingsModel {
     // overridable — see ADR 0039). Takes effect from the next recording
     // (not applied live).
     recorder_core::NvencPreset nvenc_preset = recorder_core::NvencPreset::P4;
+    // HDR handling mode. Model only for now — no UI control yet; the expert
+    // HDR control will gate on capability::QueryHdr10Native(). Default
+    // TonemapSdr — see recorder_core::HdrMode.
+    recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 

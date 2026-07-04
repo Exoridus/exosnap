@@ -4282,6 +4282,16 @@ void MainWindow::buildDiagnosticsPage() {
                 // rec.color.range Notice: Full range is crushed/too dark in players that ignore
                 // the range flag (e.g. VLC). Switch to Limited, the compatible-everywhere choice.
                 output_settings_.color_range = capability::ColorRange::Limited;
+            } else if (fix_id == QStringLiteral("fix.hdr.codec.av1") ||
+                       fix_id == QStringLiteral("fix.hdr.codec.hevc")) {
+                // rec.hdr.h264 Blocker: H.264 has no HDR10-native (10-bit/P010, PQ/BT.2020) path.
+                // The engine picks whichever of AV1/HEVC is actually GPU-selectable (see
+                // RecommendationEngine::checkHdrH264Blocker) and keys the fix id off that choice
+                // so this handler applies the exact codec the FixAction proposed, never a blind AV1.
+                output_settings_.video_codec = fix_id == QStringLiteral("fix.hdr.codec.av1")
+                                                   ? capability::VideoCodec::Av1Nvenc
+                                                   : capability::VideoCodec::HevcNvenc;
+                ReconcileContainerCodecs(output_settings_);
             } else {
                 return; // unknown auto fix — no-op
             }

@@ -77,6 +77,27 @@ struct ColorMetadata {
     uint32_t max_content_light_level = 0;       // MaxCLL, cd/m^2
     uint32_t max_frame_average_light_level = 0; // MaxFALL, cd/m^2
 
+    // Mastering display metadata (SMPTE ST 2086), written into the Matroska
+    // KaxVideoColourMasterMeta element. Independent of `hdr`/MaxCLL/MaxFALL
+    // above — the container treats it as a separate optional child of
+    // Colour — so presence is gated by its own explicit flag rather than by
+    // 0-as-absent (a chromaticity coordinate of 0.0 is not a meaningful
+    // "unset" sentinel the way MaxCLL/MaxFALL's 0 is).
+    bool has_mastering_display = false;
+    // Display primaries chromaticity, CIE 1931 xy, normalized to [0, 1].
+    float mastering_display_primary_r_x = 0.0f;
+    float mastering_display_primary_r_y = 0.0f;
+    float mastering_display_primary_g_x = 0.0f;
+    float mastering_display_primary_g_y = 0.0f;
+    float mastering_display_primary_b_x = 0.0f;
+    float mastering_display_primary_b_y = 0.0f;
+    // White point chromaticity, CIE 1931 xy, normalized to [0, 1].
+    float mastering_display_white_point_x = 0.0f;
+    float mastering_display_white_point_y = 0.0f;
+    // Mastering display luminance range, cd/m^2 (nits).
+    float mastering_display_max_luminance = 0.0f;
+    float mastering_display_min_luminance = 0.0f;
+
     // SDR Rec.709, limited-range 8-bit (the default). Callers that want full
     // range override range to ColorRange::Full after constructing this.
     [[nodiscard]] static ColorMetadata Sdr709() noexcept {
