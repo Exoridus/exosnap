@@ -275,6 +275,12 @@ struct VisualScenario {
     // DevicePage::setAdaptersForTest); with device_empty_adapters=true the
     // injection is an empty list, rendering the honest empty state.
     bool device_empty_adapters = false;
+
+    // --- HDR handling control (expert-only Video/Quality section) ---
+    // Trailing field so existing positional initializers stay valid. Tone-map to
+    // SDR (default) / Record native HDR10, capability-gated on video_codec above
+    // (HEVC/AV1 only).
+    recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

@@ -220,6 +220,7 @@ class ConfigPage : public QWidget {
     void onVideoCodecChanged(int index);
     void onVideoBitDepthChanged(int index);
     void onVideoColorRangeChanged(int index);
+    void onVideoHdrModeChanged(int index);
     void onVideoEncoderPresetChanged(int index);
     void onAudioCodecChanged(int index);
     void onProfileSelectionChanged(int index);
@@ -255,6 +256,12 @@ class ConfigPage : public QWidget {
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
     void updateVideoColorRangeControl();
+    // Syncs the HDR-handling combo to the model and capability-gates the Hdr10 item
+    // (selectable only when capability::QueryHdr10Native(video_codec) is selectable,
+    // i.e. HEVC/AV1). Unlike bit depth, an Hdr10 selection is NEVER silently rewritten
+    // when the codec becomes incompatible — the live pre-flight blocker (rec.hdr.h264)
+    // owns that conflict at recording time; this control only disables + hints.
+    void updateVideoHdrModeControl();
     // Syncs the NVENC encoder-preset (P1..P7) combo to the model. NOT capability-
     // gated — every preset is valid for every codec; only the recording lock
     // disables it.
@@ -526,6 +533,11 @@ class ConfigPage : public QWidget {
     // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
     QWidget* video_color_range_row_ = nullptr;
     QComboBox* video_color_range_combo_ = nullptr;
+    // HDR handling: Tone-map to SDR (default) / Record native HDR10. Capability-gated
+    // on capability::QueryHdr10Native (HEVC/AV1 only); Off is intentionally not offered.
+    QWidget* video_hdr_mode_row_ = nullptr;
+    QComboBox* video_hdr_mode_combo_ = nullptr;
+    QLabel* video_hdr_mode_hint_ = nullptr; // calm inline hint, visible only when H.264 disables Hdr10
     // Encoder preset (NVENC P1..P7): speed/quality tradeoff. Never gated —
     // valid for every codec (H.264/HEVC/AV1) and every container.
     QWidget* video_encoder_preset_row_ = nullptr;
