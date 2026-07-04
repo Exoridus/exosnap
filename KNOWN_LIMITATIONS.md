@@ -84,13 +84,18 @@ Invalid combinations are not offered.
   as Limited, so Full-range recordings can look too dark in those players; Diagnostics surfaces
   a compatibility notice with a one-click fix when Full is selected.
 - **10-bit video output (P010)** is available for HEVC Main10 and AV1 in 10-bit
-  mode. This is **SDR-only**: no HDR10 transfer curve (PQ/HLG), no HDR metadata,
-  and no wide color gamut. The 10-bit path increases color precision in SDR
-  workflows that support it. See "Planned beyond 0.7.0" for true HDR.
+  mode. It serves two roles: higher color precision in SDR workflows, and the
+  mandatory pixel format for native HDR10 recording (below).
 - 4:2:0 chroma subsampling only. 4:2:2 and 4:4:4 are not available.
-- **No HDR10 output** in this build. Displays that are HDR-capable are identified
-  in Diagnostics, but recording does not use the HDR pipeline. Content is captured
-  and encoded in SDR (BT.709) regardless of the display's HDR state.
+- **HDR displays are detected automatically.** By default an HDR desktop is
+  recorded as tone-mapped SDR (BT.709) for universal playability. An expert
+  setting ("HDR handling") switches to **native HDR10 recording**: PQ/BT.2020,
+  P010 10-bit, limited range, with mastering-display metadata written to MKV and
+  carried into remuxed MP4. Native HDR10 requires HEVC or AV1; H.264 is blocked
+  by a pre-flight check with a one-click codec fix. Current boundaries: monitor
+  capture only (window capture stays SDR), the in-app recording preview shows an
+  approximate SDR tone-map, no HLG, and HDR metadata is container-level only —
+  no bitstream SEI yet, which some Apple players require.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -180,9 +185,9 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   launch. An MSI installer is provided in addition to the portable ZIP.
 - No Replay Buffer.
 - No built-in editor, trimming, or Quick Trim.
-- **No HDR10 output.** 10-bit video (HEVC Main10, AV1 10-bit) is available in SDR
-  only. True HDR recording (PQ/HLG transfer, HDR10 metadata) is planned for a
-  future release.
+- **HDR10-native recording covers monitor capture only** (expert opt-in;
+  tone-mapped SDR is the default for HDR desktops). Window capture remains SDR,
+  and HLG plus bitstream HDR metadata (SEI) are not available.
 - No 4:2:2 or 4:4:4 chroma subsampling (4:2:0 only).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
 - Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
@@ -234,6 +239,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 The following are intentionally deferred and are documented here only so the
 current boundary is unambiguous. They are **not** part of 0.7.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
-AMD and Intel hardware encoding, software encoding fallback, true HDR10 recording (PQ/HLG transfer
-curve, HDR10/HLG metadata, wide color gamut), 4:2:2/4:4:4 chroma subsampling, more-than-stereo
+AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut management
+beyond BT.2020 signaling (native HDR10/PQ has since shipped for monitor capture), HDR for window
+capture, bitstream HDR metadata (SEI), 4:2:2/4:4:4 chroma subsampling, more-than-stereo
 audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).
