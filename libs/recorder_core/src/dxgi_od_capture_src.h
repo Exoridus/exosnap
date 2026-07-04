@@ -14,6 +14,8 @@
 
 #include <winrt/base.h>
 
+#include <recorder_core/codec_types.h>
+
 namespace recorder_core {
 
 class DxgiOdCaptureSrc {
@@ -43,6 +45,20 @@ class DxgiOdCaptureSrc {
         return m_refresh_rate_hz;
     }
 
+    // True when the duplicated output is currently in an HDR colour space
+    // (DXGI_OUTPUT_DESC1.ColorSpace == RGB_FULL_G2084_NONE_P2020). Available
+    // after Open(). This gates use of the reported peak luminance: a display in
+    // SDR mode reports its EDID luminance caps, which are not the active tone-
+    // map reference.
+    bool HdrActive() const noexcept {
+        return m_hdr_active;
+    }
+    // Reported display peak luminance in cd/m^2 from IDXGIOutput6::GetDesc1
+    // (0 if unknown / not queryable). Only meaningful when HdrActive() is true.
+    float MaxLuminanceNits() const noexcept {
+        return m_max_luminance_nits;
+    }
+
     // Non-blocking (timeout_ms=0) or timed acquire.
     // On success: returns true; *out_texture is borrowed until ReleaseFrame().
     // On timeout: returns false, *out_hr == DXGI_ERROR_WAIT_TIMEOUT.
@@ -69,6 +85,8 @@ class DxgiOdCaptureSrc {
     uint32_t m_refresh_rate_hz = 0;
     DXGI_FORMAT m_format = DXGI_FORMAT_B8G8R8A8_UNORM;
     bool m_frame_held = false;
+    bool m_hdr_active = false;
+    float m_max_luminance_nits = 0.0f;
 };
 
 // Locate the IDXGIAdapter1 that owns hmonitor.
@@ -87,11 +105,28 @@ bool FindAdapterForMonitor(HMONITOR hmonitor, IDXGIAdapter1** out_adapter, std::
 // but hands out BGRA8 compatibility frames). Format decisions must therefore
 // be made from the acquired frame's texture desc, never from ModeDesc alone.
 
-// True for the frame formats the recording pipeline supports as OD input:
-// BGRA8 (8-bit SDR desktop) and R10G10B10A2 (10 bpc SDR desktop). The D3D11
-// VideoProcessor converts both to NV12/P010. HDR/FP16 is intentionally NOT
-// supported here (HDR capture is a separate pipeline — ADR 0032 scope note).
+// True for the frame formats the recording pipeline can consume as OD input:
+// BGRA8 (8-bit SDR desktop), R10G10B10A2 (10 bpc SDR desktop), and
+// R16G16B16A16_FLOAT (scRGB FP16 on an HDR/Advanced-Color desktop). The SDR
+// formats go straight to the D3D11 VideoProcessor (RGB->NV12/P010); FP16 is
+// first tone-mapped to an SDR BT.709 surface by the compute path and then
+// follows the same VideoProcessor route.
 bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept;
+
+// How a captured OD frame format is handled by the encode pipeline.
+enum class OdCaptureMode {
+    Sdr,        // BGRA8 / R10G10B10A2 desktop: straight to the VideoProcessor.
+    HdrToneMap, // scRGB FP16 HDR desktop: tone-mapped to SDR BT.709 first.
+};
+
+// Resolve how a first-frame OD capture format should be treated for the given
+// HDR handling mode. Returns false when the format cannot be recorded at all,
+// or when it is an HDR (FP16) desktop while HDR handling is Off (a defined
+// capture error, matching the pre-HDR behaviour). On success sets out_mode.
+//
+// Hdr10 currently resolves to HdrToneMap: the native HDR10 output path is not
+// yet implemented, so an HDR desktop is tone-mapped to SDR either way.
+bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, OdCaptureMode& out_mode) noexcept;
 
 // Short human-readable name for the formats OD capture can plausibly see.
 // Unknown values render as "DXGI_FORMAT(<n>)" into fallback_buf.

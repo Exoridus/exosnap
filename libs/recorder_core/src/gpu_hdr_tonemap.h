@@ -1,0 +1,51 @@
+#pragma once
+
+#include <d3d11.h>
+#include <winrt/base.h>
+
+#include <string>
+#include <unordered_map>
+
+namespace recorder_core {
+
+// scRGB FP16 -> SDR BT.709 tone-map render pass. Reads an FP16 shader-resource
+// texture (scRGB: linear, BT.709 primaries, 1.0 = 80 cd/m^2 reference white) and
+// writes a BGRA8 render target of identical dimensions, applying the documented
+// per-channel highlight roll-off + BT.709 OETF from hdr_tonemap.h. The result is
+// an ordinary SDR desktop surface that the existing VideoProcessor path converts
+// to NV12/P010 unchanged.
+//
+// Threading: all methods are VideoThread-exclusive (ADR-0009). The class does
+// not take ownership of the device/context and must not be used from UI code.
+class HdrToneMapper {
+  public:
+    // peak_scale: display peak luminance in reference-white multiples that maps
+    // to output 1.0 (see HdrPeakScale in hdr_tonemap.h).
+    bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
+              std::string& err);
+
+    // Tone-map src (FP16, must have D3D11_BIND_SHADER_RESOURCE) into dst (BGRA8,
+    // must have D3D11_BIND_RENDER_TARGET). Both must be width x height. SRVs and
+    // RTVs are created lazily and cached by texture pointer (the capture path
+    // reuses a small fixed set of source/destination textures per session).
+    bool Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::string& err);
+
+  private:
+    ID3D11ShaderResourceView* SrvFor(ID3D11Texture2D* tex, std::string& err);
+    ID3D11RenderTargetView* RtvFor(ID3D11Texture2D* tex, std::string& err);
+
+    ID3D11Device* device_ = nullptr;
+    ID3D11DeviceContext* context_ = nullptr;
+    UINT width_ = 0;
+    UINT height_ = 0;
+
+    winrt::com_ptr<ID3D11VertexShader> vertex_shader_;
+    winrt::com_ptr<ID3D11PixelShader> pixel_shader_;
+    winrt::com_ptr<ID3D11SamplerState> sampler_;
+    winrt::com_ptr<ID3D11Buffer> constants_;
+
+    std::unordered_map<ID3D11Texture2D*, winrt::com_ptr<ID3D11ShaderResourceView>> srv_cache_;
+    std::unordered_map<ID3D11Texture2D*, winrt::com_ptr<ID3D11RenderTargetView>> rtv_cache_;
+};
+
+} // namespace recorder_core

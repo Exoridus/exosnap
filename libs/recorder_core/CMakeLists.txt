@@ -260,6 +260,9 @@ add_library(recorder_core STATIC
     src/fdk_aac_encoder.cpp
     src/gpu_compositor.cpp
     src/gpu_compositor.h
+    src/gpu_hdr_tonemap.cpp
+    src/gpu_hdr_tonemap.h
+    src/hdr_tonemap.h
     src/mixed_audio_src.cpp
     src/brickwall_limiter.cpp
     src/brickwall_limiter.h
@@ -658,6 +661,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_compositor PRIVATE src)
 target_compile_definitions(test_gpu_compositor PRIVATE NOMINMAX)
+
+# HDR tone-map (scRGB FP16 -> SDR BT.709): pure curve math + OD capture-format x
+# HDR-mode negotiation. No GPU — the compute shader replicates the same math.
+exosnap_add_gtest(
+    NAME test_hdr_tonemap
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_tonemap.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_hdr_tonemap PRIVATE src)
+target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
 
 # Strand 3 slice 1 (WYSIWYG preview): pure NV12/P010 -> BGRA color-conversion
 # math. Self-contained (no D3D11/NVENC) -- also the bugfix validation for the

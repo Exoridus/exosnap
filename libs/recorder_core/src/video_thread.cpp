@@ -5,6 +5,8 @@
 #include "codec_private.h"
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
+#include "gpu_hdr_tonemap.h"
+#include "hdr_tonemap.h"
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
 #include "preview_staging_ring.h"
@@ -351,6 +353,10 @@ void VideoThread::Run() {
     DxgiOdCaptureSrc odSrc;
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
 
+    // scRGB->SDR tone-map knee, in reference-white multiples. Only an actively-
+    // HDR display's reported peak is trusted; otherwise the documented fallback
+    // is used (an SDR-mode display still reports inflated EDID luminance caps).
+    float hdrPeakScale = HdrPeakScale(false, 0.0f);
     if (useOdCapture) {
         std::string odErr;
         if (!odSrc.Open(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), odErr)) {
@@ -359,6 +365,7 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
+        hdrPeakScale = HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits());
     } else {
         try {
             auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
@@ -740,6 +747,14 @@ void VideoThread::Run() {
     winrt::com_ptr<ID3D11Texture2D> odCapturedTex;
     DXGI_FORMAT odFrameFormat = DXGI_FORMAT_UNKNOWN; // set when odCapturedTex is created
     bool odCapturedTexValid = false;
+
+    // HDR (scRGB FP16) capture: odCapturedTex/ring textures hold the raw FP16
+    // frames, and a per-emitted-frame tone-map pass converts them into hdrSdrTex
+    // (an SDR BGRA8 surface) that then follows the normal SDR VideoProcessor
+    // route. hdrToneMapActive is decided during first-frame negotiation.
+    bool hdrToneMapActive = false;
+    HdrToneMapper hdrToneMapper;
+    winrt::com_ptr<ID3D11Texture2D> hdrSdrTex;
     bool odCursorShapeValid = false;
     bool odCursorVisible = false;
     int32_t odCursorPosX = 0;
@@ -802,16 +817,25 @@ void VideoThread::Run() {
             return OdFrameCheck::Skip;
         }
 
-        if (!IsSupportedOdCaptureFormat(rawDesc.Format)) {
+        OdCaptureMode capMode = OdCaptureMode::Sdr;
+        if (!ResolveOdCaptureMode(rawDesc.Format, m_state.config.hdr_mode, capMode)) {
             char fmtBuf[32];
             std::ostringstream err;
             err << "DXGI OD: unsupported desktop capture format "
-                << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
-                << "; supported: B8G8R8A8_UNORM (8-bit SDR), R10G10B10A2_UNORM (10 bpc SDR). "
-                << "HDR desktops are not supported for monitor capture yet; preInit={" << diag.str() << "}";
+                << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf));
+            if (rawDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                // FP16 arrives only on an HDR desktop; the sole way to reach here
+                // is HdrMode::Off, where HDR handling is disabled by request.
+                err << "; the capture display is in HDR mode but HDR handling is off. "
+                    << "Enable HDR tone-mapping, or switch the display to SDR. preInit={" << diag.str() << "}";
+            } else {
+                err << "; supported: B8G8R8A8_UNORM (8-bit SDR), R10G10B10A2_UNORM (10 bpc SDR), "
+                    << "R16G16B16A16_FLOAT (HDR, tone-mapped). preInit={" << diag.str() << "}";
+            }
             m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
             return OdFrameCheck::Fatal;
         }
+        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap);
         if (rawDesc.Width != sourceWidth || rawDesc.Height != sourceHeight) {
             std::ostringstream err;
             err << "DXGI OD: capture frame size " << rawDesc.Width << "x" << rawDesc.Height
@@ -821,17 +845,19 @@ void VideoThread::Run() {
             return OdFrameCheck::Fatal;
         }
 
-        // The negotiated format must also be a supported VideoProcessor INPUT
-        // on this driver, or every CreateVideoProcessorInputView would fail
-        // per tick without a recorded failure — silent starvation again, just
-        // one stage later. Checked once here; fatal with the format named.
+        // The format fed to the VideoProcessor must be a supported VP INPUT on
+        // this driver, or every CreateVideoProcessorInputView would fail per tick
+        // without a recorded failure — silent starvation one stage later. For a
+        // tone-mapped HDR desktop the VP input is the BGRA8 tone-map output, not
+        // the FP16 capture format (the D3D11 VP cannot convert scRGB HDR at all).
         {
+            const DXGI_FORMAT vpInputFormat = toneMap ? DXGI_FORMAT_B8G8R8A8_UNORM : rawDesc.Format;
             UINT formatSupport = 0;
-            const HRESULT supHr = videoEnum->CheckVideoProcessorFormat(rawDesc.Format, &formatSupport);
+            const HRESULT supHr = videoEnum->CheckVideoProcessorFormat(vpInputFormat, &formatSupport);
             if (FAILED(supHr) || (formatSupport & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) == 0) {
                 char fmtBuf[32];
                 std::ostringstream err;
-                err << "DXGI OD: capture format " << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
+                err << "DXGI OD: capture format " << OdCaptureFormatName(vpInputFormat, fmtBuf, sizeof(fmtBuf))
                     << " is not a supported VideoProcessor input on this driver (CheckVideoProcessorFormat hr=0x"
                     << std::hex << static_cast<unsigned long>(supHr) << ", support=0x" << formatSupport << std::dec
                     << "); preInit={" << diag.str() << "}";
@@ -849,7 +875,10 @@ void VideoThread::Run() {
         desc.Format = rawDesc.Format; // negotiated from the actual frame, not ModeDesc
         desc.SampleDesc = {1, 0};
         desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        // SDR: the VP reads odCapturedTex directly (kept as a render target as
+        // before). HDR: the tone-map pass samples odCapturedTex/ring as a shader
+        // resource, so bind for SRV instead.
+        desc.BindFlags = toneMap ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
 
         HRESULT odHr = d3dDevice->CreateTexture2D(&desc, nullptr, odCapturedTex.put());
         if (FAILED(odHr)) {
@@ -860,12 +889,14 @@ void VideoThread::Run() {
             return OdFrameCheck::Fatal;
         }
         odFrameFormat = rawDesc.Format;
+        hdrToneMapActive = toneMap;
 
         char fmtBuf[32];
         char modeBuf[32];
         const logging::LogField fields[] = {
             {"frameFormat", OdCaptureFormatName(odFrameFormat, fmtBuf, sizeof(fmtBuf))},
-            {"modeDescFormat", OdCaptureFormatName(odSrc.Format(), modeBuf, sizeof(modeBuf))}};
+            {"modeDescFormat", OdCaptureFormatName(odSrc.Format(), modeBuf, sizeof(modeBuf))},
+            {"handling", toneMap ? "HDR scRGB -> SDR BT.709 tone-map" : "SDR"}};
         logging::log(logging::LogLevel::Info, "video_thread", "DXGI OD capture format negotiated",
                      std::span<const logging::LogField>(fields, std::size(fields)));
         return OdFrameCheck::Ok;
@@ -1090,6 +1121,22 @@ void VideoThread::Run() {
         return true;
     };
 
+    // scRGB FP16 -> SDR BT.709 for an HDR desktop. Runs once per emitted frame,
+    // replacing the FP16 capture texture with an SDR BGRA8 surface before
+    // compositing/VideoProcessor. A no-op (returns source unchanged) on SDR
+    // desktops. Returns nullptr and records the failure if the pass fails.
+    auto toneMapIfHdr = [&](ID3D11Texture2D* source) -> ID3D11Texture2D* {
+        if (!hdrToneMapActive || source == nullptr) {
+            return source;
+        }
+        std::string tmErr;
+        if (!hdrToneMapper.Convert(source, hdrSdrTex.get(), tmErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "HDR tone-map: " + tmErr);
+            return nullptr;
+        }
+        return hdrSdrTex.get();
+    };
+
     auto compositeFrameGpu = [&](ID3D11Texture2D* source, const WebcamOverlayLive& overlay) -> ID3D11Texture2D* {
         if (!gpuCompositorReady || source == nullptr) {
             return source;
@@ -1284,13 +1331,48 @@ void VideoThread::Run() {
         }
     }
 
+    // --- HDR tone-map init (deferred until the capture format is negotiated) ---
+    // On an HDR desktop the negotiated frames are scRGB FP16; convert each
+    // emitted frame to an SDR BGRA8 surface (hdrSdrTex) that the compositor and
+    // VideoProcessor then treat as an ordinary SDR desktop.
+    if (hdrToneMapActive) {
+        D3D11_TEXTURE2D_DESC sdrDesc{};
+        sdrDesc.Width = sourceWidth;
+        sdrDesc.Height = sourceHeight;
+        sdrDesc.MipLevels = 1;
+        sdrDesc.ArraySize = 1;
+        sdrDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        sdrDesc.SampleDesc = {1, 0};
+        sdrDesc.Usage = D3D11_USAGE_DEFAULT;
+        sdrDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        HRESULT sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+        std::string tmErr;
+        if (FAILED(sdrHr)) {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "CreateTexture2D(hdrSdrTex) failed 0x%08lX", static_cast<unsigned long>(sdrHr));
+            m_state.RecordFailure(sdrHr, ErrorPhase::Prepare, buf);
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale, tmErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+    }
+
     // --- GPU compositor init (deferred until the capture format is known) ---
     // WGC frames are always BGRA8 (frame pool format); OD frames use the format
     // negotiated from the first acquired frame above. If stop was requested
     // before the first OD frame arrived the format is unknown — skip init; the
     // encode loop below will not run.
     if (needsGpuCompositor && (!useOdCapture || odCapturedTex != nullptr)) {
-        const DXGI_FORMAT compositorFormat = useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM;
+        // An HDR desktop is composited after tone-mapping, so the compositor
+        // works on the SDR BGRA8 surface, not the FP16 capture format.
+        const DXGI_FORMAT compositorFormat =
+            hdrToneMapActive ? DXGI_FORMAT_B8G8R8A8_UNORM : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM);
         std::string compErr;
         if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
                                 compositorFormat)) {
@@ -2047,7 +2129,12 @@ void VideoThread::Run() {
                 if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
-                    ID3D11Texture2D* vpInput = compositeFrameGpu(rawSourceTex, overlay);
+                    ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(rawSourceTex);
+                    if (sdrSourceTex == nullptr) {
+                        nvenc.ReleaseSlot(slot);
+                        goto end_encode_loop;
+                    }
+                    ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, overlay);
                     const auto comp_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnCompositorSubmit(
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
@@ -2338,7 +2425,12 @@ void VideoThread::Run() {
                 if (slot >= 0) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
-                    ID3D11Texture2D* vpInput = compositeFrameGpu(latestTex.get(), overlay);
+                    ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
+                    if (sdrSourceTex == nullptr) {
+                        nvenc.ReleaseSlot(slot);
+                        goto end_encode_loop;
+                    }
+                    ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, overlay);
                     const auto comp_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnCompositorSubmit(
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),

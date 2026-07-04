@@ -338,8 +338,9 @@ void ExpectTexel10Near(const std::vector<uint32_t>& texels, int width, int x, in
 TEST(OdCaptureFormatPolicyTest, SupportedFormats) {
     EXPECT_TRUE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_B8G8R8A8_UNORM));
     EXPECT_TRUE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_R10G10B10A2_UNORM));
-    // HDR/FP16 is a separate pipeline — must be rejected (honest error, not a mux timeout).
-    EXPECT_FALSE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_R16G16B16A16_FLOAT));
+    // HDR/FP16 is now a consumable input (tone-mapped to SDR BT.709 before the
+    // VideoProcessor). Per-HDR-mode handling is covered by ResolveOdCaptureMode.
+    EXPECT_TRUE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_R16G16B16A16_FLOAT));
     EXPECT_FALSE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_R8G8B8A8_UNORM));
     EXPECT_FALSE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_NV12));
     EXPECT_FALSE(recorder_core::IsSupportedOdCaptureFormat(DXGI_FORMAT_UNKNOWN));
