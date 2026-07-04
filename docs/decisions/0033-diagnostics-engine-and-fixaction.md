@@ -287,3 +287,35 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   remains the correct, intentional semantics — only the live-mirror gap is closed. Red-proof test:
   `SplitSizeSettingsTest.MergeFormatSelection_CarriesSplitSettings`
   (`app/tests/test_output_settings.cpp`).
+
+## Delivered — Slice: H.264 + HDR10-native pre-flight blocker (`rec.hdr.h264`, H3 HDR wave, 2026-07-04)
+
+- **New Tier-1 check (blocker).** `RecommendationEngine::checkHdrH264Blocker` fires `rec.hdr.h264`
+  (Blocker) only when ALL three real-conflict gates hold: (1) `UserRecorderConfig::hdr_mode ==
+  HdrMode::Hdr10`, (2) the selected video codec is not HDR10-native, and (3) the capture target's
+  display currently has Windows HDR ON. H.264 has no 10-bit/HDR10 (P010, PQ/BT.2020) path, so an
+  HDR10-native recording with H.264 would be broken/silently-downgraded — a hard block, not a tip.
+  It ships an `Auto`, reversible `fix.hdr.codec.av1` FixAction (config-only: H.264 → AV1). Blocker
+  propagation is generic — the blocker is counted in the verdict and blocks recording start like any
+  other Tier-1 check; nothing new was invented.
+- **Calm, not alarmist.** `H.264 + TonemapSdr` is explicitly NOT a conflict (that path outputs SDR
+  8-bit) and raises nothing. On an SDR desktop the `Hdr10` auto-detect path never engages, so the
+  blocker stays silent there too — gate (3) is the honesty gate.
+- **Gated on an explicit capability field, never a codec-name compare.** New
+  `CapabilitySet::hdr10_native` map + `QueryHdr10Native(VideoCodec)`, populated in
+  `BuildStaticValidatedBaseline`: HEVC/AV1 = Available, H.264 = NotImplemented. This is a
+  codec-format fact (kept independent of the NVENC-absence downgrade, which owns encode
+  availability / `rec.003`) and is *inferred*, not probed — there is no
+  `NV_ENC_CAPS_SUPPORT_10BIT_ENCODE` query (documented risk in the H3 HDR plan; a real probe is
+  deferred). The Slice-5 Expert HDR control will gate on the same field.
+- **Display↔Capture mapping (pure).** `DisplayHdrFacts` gained the `DXGI_OUTPUT_DESC1` chromaticity
+  primaries + white point (luminance range already existed); `capability::FindDisplayByName` is a
+  pure lookup from a display device name to its facts. The engine stays pure: the caller resolves
+  the selected target's HMONITOR → device name → facts and supplies gate (3) via
+  `SetCaptureTargetHdrActive`, mirroring the existing `SetOutputPathWritable` seam.
+- **Known limitation (this headless slice).** The production `DiagnosticsPage` caller does not yet
+  supply the capture target's HDR-active state (it also still hardcodes `monitor_refresh_hz = 0`),
+  so the blocker is fully implemented + unit-tested at the engine boundary but will not fire in the
+  running app until a later (UI) slice wires the selected-target → display resolution. Per the H3
+  plan this is intentional slice sequencing, not a loosened condition — the firing condition was
+  NOT broadened to "always fire" in the absence of that wiring.

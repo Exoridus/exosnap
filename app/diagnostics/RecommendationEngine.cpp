@@ -75,6 +75,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkCodecAvailability(checklist);
     checkRecommendedCodec(checklist);
     checkColorRange(checklist);
+    checkHdrH264Blocker(checklist);
     checkOutputDriveSpace(checklist);
     checkOutputFilesystem(checklist);
     checkProfileSupport(checklist);
@@ -305,6 +306,50 @@ void RecommendationEngine::checkColorRange(DiagnosticChecklist& checklist) const
     fa.changes_summary = "Colour range: Full -> Limited";
     r.fix_action = fa;
     checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) const {
+    // rec.hdr.h264: HDR10-native recording requires a 10-bit codec. H.264 has no
+    // 10-bit/HDR10 path, so pairing it with HdrMode::Hdr10 would produce a broken
+    // or silently-downgraded HDR output. This is a real, hard conflict — a blocker.
+    //
+    // Three gates, ALL required (calm-diagnostics line — only a real problem fires):
+    //   1. HdrMode::Hdr10 selected (H.264 + TonemapSdr is explicitly NOT a conflict:
+    //      that path outputs SDR 8-bit, which H.264 handles fine).
+    //   2. The chosen codec is not HDR10-native — gated on the explicit capability
+    //      annotation (caps_.QueryHdr10Native), never a codec-name compare.
+    //   3. The capture target's display is HDR-active. HDR10 auto-detects: on an SDR
+    //      desktop the native path never engages, so there is no real conflict. The
+    //      caller supplies this via SetCaptureTargetHdrActive (default false).
+    if (config_.hdr_mode != recorder_core::HdrMode::Hdr10) {
+        return;
+    }
+    if (capability::IsSelectable(caps_.QueryHdr10Native(config_.video_codec).level)) {
+        return; // codec can carry HDR10 (HEVC/AV1) — no conflict
+    }
+    if (!capture_target_hdr_active_) {
+        return; // SDR desktop — HDR10-native path does not engage
+    }
+
+    const std::string current_label(capability::VisibleVideoCodecLabel(config_.video_codec));
+    const std::string av1_label(capability::VisibleVideoCodecLabel(capability::VideoCodec::Av1Nvenc));
+    DiagnosticResult r = MakeResult(
+        "rec.hdr.h264", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+        current_label + " cannot record HDR10",
+        current_label + " has no 10-bit/HDR10 path. Switch to " + av1_label + " to record the HDR signal.",
+        "HDR10 recording is enabled and the capture target's display is in HDR, but " + current_label +
+            " is an 8-bit-only codec with no HDR10 (10-bit/P010, PQ/BT.2020) path. " + av1_label +
+            " and HEVC can carry the native HDR10 signal.",
+        "Video codec: " + current_label + ", HDR: HDR10 (native)", "Switch the video codec to " + av1_label + ".");
+    FixAction fa;
+    fa.id = "fix.hdr.codec.av1";
+    fa.label = "Switch to " + av1_label;
+    fa.safety = FixAction::Safety::Auto; // config-only, reversible
+    fa.reversible = true;
+    fa.changes_summary = "Video codec: " + current_label + " -> " + av1_label;
+    r.fix_action = fa;
+    checklist.has_blocker = true;
     checklist.results.push_back(std::move(r));
 }
 
@@ -678,8 +723,8 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
 }
 
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
-    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005",        "rec.006",
-            "rec.007", "rec.008", "rec.009", "rec.010", "rec.color.range"};
+    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005",         "rec.006",
+            "rec.007", "rec.008", "rec.009", "rec.010", "rec.color.range", "rec.hdr.h264"};
 }
 
 } // namespace exosnap::diagnostics
