@@ -39,8 +39,10 @@ class GpuCompositor {
               DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM);
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
+    // opacity: uniform overlay opacity [0,1] multiplied onto the sprite's alpha
+    // after chroma keying (1.0 = fully opaque). Values outside [0,1] are clamped.
     bool DrawWebcam(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, bool mirror,
-                    const ChromaKeyParams& chroma, std::string& err);
+                    const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f);
     bool DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
 
     [[nodiscard]] ID3D11Texture2D* Result() const noexcept {
@@ -66,7 +68,7 @@ class GpuCompositor {
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
                        std::string& err);
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
-                     const ChromaKeyParams& chroma, bool force_opaque, std::string& err);
+                     const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;

@@ -453,6 +453,77 @@ TEST(GpuCompositorTest, InitAcceptsFp16ForNativeHdr) {
     EXPECT_TRUE(err.empty()) << err;
 }
 
+TEST(GpuCompositorTest, OpacityBlendsWebcamOverBackground) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 2, SolidBgra(2, 2, 0, 0, 0));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    auto webcam = SolidBgra(1, 1, 200, 200, 200);
+    GpuCompositor::ChromaKeyParams chroma;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 2, 2}, false, chroma, err, 0.5f))
+        << err;
+
+    // 50 % of 200 over black = ~100 on every channel; alpha stays opaque in the target.
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 2, 0, 0, 100, 100, 100, 255, 3);
+    ExpectPixelNear(pixels, 2, 1, 1, 100, 100, 100, 255, 3);
+}
+
+TEST(GpuCompositorTest, OpacityZeroLeavesBackgroundUntouched) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 2, SolidBgra(2, 2, 10, 20, 30));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    auto webcam = SolidBgra(1, 1, 200, 200, 200);
+    GpuCompositor::ChromaKeyParams chroma;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 2, 2}, false, chroma, err, 0.0f))
+        << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 2, 0, 0, 10, 20, 30, 255);
+}
+
+TEST(GpuCompositorTest, OpacityCombinesWithChromaKey) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 1, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 1, SolidBgra(2, 1, 10, 20, 30));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    // Left pixel = pure green (keyed away), right pixel = pure red (far outside
+    // the key's chroma soft zone -> fully kept, then faded to 50 %). Do NOT use
+    // gray/white here: their CbCr sits ~0.53 from the green key, inside the
+    // default tolerance+softness soft zone (0.55), which yields partial alpha.
+    std::vector<uint8_t> webcam = {
+        0, 255, 0,   255, // green left (BGRA)
+        0, 0,   255, 255, // red right (BGRA)
+    };
+    GpuCompositor::ChromaKeyParams chroma;
+    chroma.enabled = true;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 2, 1, WebcamPixelRect{0, 0, 2, 1}, false, chroma, err, 0.5f))
+        << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 2, 0, 0, 10, 20, 30, 255, 3); // keyed: background survives
+    ExpectPixelNear(pixels, 2, 1, 0, 5, 10, 143, 255, 3); // 0.5*{0,0,255} + 0.5*{10,20,30}
+}
+
 TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay) {
     SessionState state;
     state.config.webcam.enabled = true;
