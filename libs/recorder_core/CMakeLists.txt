@@ -214,44 +214,26 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_annexb_to_hvcc PRIVATE src)
 
-    add_executable(test_mp4_remuxer tests/test_mp4_remuxer.cpp)
-    target_link_libraries(test_mp4_remuxer PRIVATE
-        GTest::gtest_main
-        exosnap::warnings
-        recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+    # test_mp4_remuxer / test_remux_trim: go through the shared helper like every
+    # other binary so they get the same FFmpeg+Qt DLL staging and a single
+    # per-binary CTest entry. (Previously hand-rolled with add_executable +
+    # POST_BUILD DLL copy + gtest_discover_tests.)
+    exosnap_add_gtest(
+        NAME test_mp4_remuxer
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_mp4_remuxer.cpp
+        LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
     )
     target_include_directories(test_mp4_remuxer PRIVATE src)
-    # Copy FFmpeg DLLs next to the test binary so it can start.
-    foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-        add_custom_command(TARGET test_mp4_remuxer POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_ffmpeg_dll}"
-                "$<TARGET_FILE_DIR:test_mp4_remuxer>"
-            VERBATIM
-        )
-    endforeach()
-    include(GoogleTest)
-    # DLL copies above are registered before discovery, so the build-time
-    # discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
-    gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
 
     # 0.9.0 S1: TrimRange stream-copy + ExtractKeyframeTimestamps tests.
-    add_executable(test_remux_trim tests/test_remux_trim.cpp)
-    target_link_libraries(test_remux_trim PRIVATE
-        GTest::gtest_main
-        exosnap::warnings
-        recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+    exosnap_add_gtest(
+        NAME test_remux_trim
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_remux_trim.cpp
+        LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
     )
     target_include_directories(test_remux_trim PRIVATE src)
-    foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-        add_custom_command(TARGET test_remux_trim POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_ffmpeg_dll}"
-                "$<TARGET_FILE_DIR:test_remux_trim>"
-            VERBATIM
-        )
-    endforeach()
-    gtest_discover_tests(test_remux_trim TEST_PREFIX "recorder_core.")
 
     return()
 endif()
@@ -761,48 +743,26 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 
-# test_mp4_remuxer: needs FFmpeg DLLs at runtime for both test discovery and
-# CTest execution.  We copy the four mux-only DLLs next to the test binary via
-# a POST_BUILD command so the exe always finds them regardless of PATH.
-# PRE_TEST discovery defers test enumeration to ctest time so the DLL copy
-# runs first.
-add_executable(test_mp4_remuxer tests/test_mp4_remuxer.cpp)
-target_link_libraries(test_mp4_remuxer PRIVATE
-    GTest::gtest_main
-    exosnap::warnings
-    recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+# test_mp4_remuxer: needs FFmpeg DLLs at runtime for CTest execution. The shared
+# helper stages the mux DLLs (and Qt) next to the binary and registers a single
+# per-binary CTest entry, so the hand-rolled add_executable + POST_BUILD DLL copy
+# + gtest_discover_tests is no longer needed.
+exosnap_add_gtest(
+    NAME test_mp4_remuxer
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mp4_remuxer.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
 )
 target_include_directories(test_mp4_remuxer PRIVATE src)
-foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-    add_custom_command(TARGET test_mp4_remuxer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_ffmpeg_dll}"
-            "$<TARGET_FILE_DIR:test_mp4_remuxer>"
-        VERBATIM
-    )
-endforeach()
-include(GoogleTest)
-# DLL copies above are registered before discovery, so the build-time
-# discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
-gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
 
 # 0.9.0 S1: TrimRange stream-copy + ExtractKeyframeTimestamps tests.
-add_executable(test_remux_trim tests/test_remux_trim.cpp)
-target_link_libraries(test_remux_trim PRIVATE
-    GTest::gtest_main
-    exosnap::warnings
-    recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+exosnap_add_gtest(
+    NAME test_remux_trim
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_remux_trim.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
 )
 target_include_directories(test_remux_trim PRIVATE src)
-foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-    add_custom_command(TARGET test_remux_trim POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_ffmpeg_dll}"
-            "$<TARGET_FILE_DIR:test_remux_trim>"
-        VERBATIM
-    )
-endforeach()
-gtest_discover_tests(test_remux_trim TEST_PREFIX "recorder_core.")
 
 # ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
 exosnap_add_gtest(
