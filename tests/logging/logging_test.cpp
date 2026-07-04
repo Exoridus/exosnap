@@ -2,7 +2,9 @@
 #include <nlohmann/json.hpp>
 #include <recorder_core/logging/logging.h>
 
+#include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 
 namespace {
@@ -26,7 +28,15 @@ class LoggingTest : public ::testing::Test {
     }
 
     std::filesystem::path makeTempPath() {
-        auto name = "exosnap_test_" + std::to_string(counter_++) + ".jsonl";
+        // A per-process random token disambiguates concurrent processes and
+        // worktrees that share the one system temp dir; without it, a fixed
+        // `exosnap_test_<n>.jsonl` name races (both truncate + write the same
+        // file, corrupting the JSON one side reads back).
+        static const unsigned token = [] {
+            std::random_device rd;
+            return rd();
+        }();
+        auto name = "exosnap_logtest_" + std::to_string(token) + "_" + std::to_string(counter_++) + ".jsonl";
         auto path = std::filesystem::temp_directory_path() / name;
         tempFiles_.push_back(path);
         return path;

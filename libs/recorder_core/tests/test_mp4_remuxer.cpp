@@ -31,6 +31,7 @@ static inline const char* av_err2str_cpp_test(int errnum) noexcept {
 
 #include "matroska_stream_writer.h"
 #include "recorder_core/mp4_remuxer.h"
+#include "test_unique_temp.h"
 
 #include <algorithm>
 #include <atomic>
@@ -285,17 +286,13 @@ bool MoovBeforeMdat(const std::string& path) {
 // Test fixture
 // ---------------------------------------------------------------------------
 
-// Build a temp path unique to the currently-running test. ctest runs each test
-// in its own process (a separate --gtest_filter invocation), so a fixed filename
-// collides between test processes that ctest -j schedules concurrently — both
-// open the same MKV/MP4 and race, producing flaky failures. Folding the test name
-// into the path makes them disjoint and the suite order/parallelism-independent.
+// Build a temp path unique across processes/worktrees and calls. A fixed
+// filename collides between concurrent processes (ctest -j, or different
+// worktrees sharing the system temp dir) — both open the same MKV/MP4 and race,
+// producing flaky failures. The shared helper folds a per-process random token,
+// a counter, and the running test name into the path (see test_unique_temp.h).
 static std::string UniqueRemuxTempPath(const char* suffix) {
-    auto tmp = std::filesystem::temp_directory_path();
-    std::string name = "anon";
-    if (const ::testing::TestInfo* info = ::testing::UnitTest::GetInstance()->current_test_info())
-        name = info->name();
-    return (tmp / ("exosnap_remux_" + name + "_" + suffix)).string();
+    return exosnap_test::UniqueTempPathStr(std::string("remux_") + suffix);
 }
 
 class RemuxerTest : public ::testing::Test {

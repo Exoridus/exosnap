@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "matroska_stream_writer.h"
+#include "test_unique_temp.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -296,7 +297,7 @@ void FeedSeconds(MatroskaStreamWriter& w, double seconds, int gop, size_t payloa
 class StreamWriterTest : public ::testing::Test {
   protected:
     void SetUp() override {
-        tmp_ = (std::filesystem::temp_directory_path() / "exosnap_stream_writer_test.mkv").string();
+        tmp_ = exosnap_test::UniqueTempPathStr("stream_writer.mkv");
         std::remove(tmp_.c_str());
     }
     void TearDown() override {
