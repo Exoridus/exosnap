@@ -1741,6 +1741,17 @@ void VideoThread::Run() {
     // Callback type alias — must precede the lambda that uses it.
     using SnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
 
+    // Native HDR10 monitoring decode (PQ/BT.2020 P010 -> tone-mapped SDR BGRA),
+    // shared by the snapshot readback and the live preview tap. Its transfer
+    // tables depend only on the session display peak, so it is built once on
+    // first use and reused for every frame. Never engaged on SDR sessions.
+    std::optional<P010PqMonitorConverter> hdrMonitorConverter;
+    auto hdrMonitorConvert = [&](const PlanarYuv420Frame& yuvSrc, uint8_t* out_bgra, uint32_t out_stride_bytes) {
+        if (!hdrMonitorConverter)
+            hdrMonitorConverter.emplace(hdrPeakScale);
+        hdrMonitorConverter->Convert(yuvSrc, out_bgra, out_stride_bytes);
+    };
+
     // Perform a one-shot NV12→BGRA readback for the current slot if a snapshot is pending.
     // Called only on real frames (not duplicates) to ensure non-stale data.
     // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
@@ -1829,7 +1840,7 @@ void VideoThread::Run() {
             // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode and
             // tone-map to SDR for on-screen monitoring (approximate; see
             // hdr_preview.h) at the session display peak.
-            ConvertP010PqToMonitorBgra(yuvSrc, hdrPeakScale, bgra.data(), encodeWidth * 4u);
+            hdrMonitorConvert(yuvSrc, bgra.data(), encodeWidth * 4u);
         } else {
             YuvToBgraParams colorParams;
             colorParams.matrix = m_state.config.color.matrix;
@@ -1925,7 +1936,7 @@ void VideoThread::Run() {
                 // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode
                 // and tone-map to SDR for the live preview (approximate; see
                 // hdr_preview.h) at the session display peak.
-                ConvertP010PqToMonitorBgra(yuvSrc, hdrPeakScale, previewFrame.bgra.data(), previewFrame.stride_bytes);
+                hdrMonitorConvert(yuvSrc, previewFrame.bgra.data(), previewFrame.stride_bytes);
             } else {
                 YuvToBgraParams colorParams;
                 colorParams.matrix = m_state.config.color.matrix;

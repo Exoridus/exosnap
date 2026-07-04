@@ -113,7 +113,8 @@ TEST(HdrPreview, FrameConverterMatchesReferenceForNeutralPatch) {
     src.bits_per_sample = 10;
 
     std::vector<uint8_t> out(static_cast<size_t>(w) * h * 4u, 0);
-    ConvertP010PqToMonitorBgra(src, kPeak1000, out.data(), w * 4u);
+    const P010PqMonitorConverter converter(kPeak1000);
+    converter.Convert(src, out.data(), w * 4u);
 
     const MonitorBgr ref = P010PqPixelToMonitorBgr(rw.y, rw.cb, rw.cr, kPeak1000);
     for (uint32_t p = 0; p < w * h; ++p) {
@@ -128,12 +129,13 @@ TEST(HdrPreview, FrameConverterMatchesReferenceForNeutralPatch) {
 TEST(HdrPreview, FrameConverterIgnoresDegenerateInput) {
     std::vector<uint8_t> out(16, 7);
     PlanarYuv420Frame src; // all-zero: null planes / zero size
-    ConvertP010PqToMonitorBgra(src, kPeak1000, out.data(), 8);
+    const P010PqMonitorConverter converter(kPeak1000);
+    converter.Convert(src, out.data(), 8);
     for (uint8_t b : out)
         EXPECT_EQ(b, 7); // untouched
 }
 
-// ---- m1: native HDR10 requires a 10-bit encode target ----------------------
+// ---- Native HDR10 requires a 10-bit encode target — guard fails fast --------
 
 TEST(HdrPreview, NativeHdr10BitDepthGuard) {
     // Native expected + 8-bit => inconsistency (guard fires).

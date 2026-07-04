@@ -1,40 +1,13 @@
 #include "hdr_preview.h"
 
-#include <array>
 #include <cstdint>
 
 namespace recorder_core {
 
 namespace {
 
-// Table resolution for the per-channel transfer stages. 1024 entries is ample
-// for an 8-bit monitoring output and keeps both tables in L1/L2.
-constexpr int kLutSize = 1024;
-constexpr float kLutMaxIndex = static_cast<float>(kLutSize - 1);
-
-struct MonitorLuts {
-    // PQ signal [0, 1] -> normalised linear PQ luminance [0, 1] (PqEotf).
-    std::array<float, kLutSize> eotf{};
-    // BT.709 linear (normalised, clamped [0, 1]) -> tone-mapped SDR byte.
-    std::array<uint8_t, kLutSize> sdr{};
-};
-
-MonitorLuts BuildLuts(float peak_scale) {
-    MonitorLuts luts;
-    for (int i = 0; i < kLutSize; ++i) {
-        const float t = static_cast<float>(i) / kLutMaxIndex;
-        luts.eotf[static_cast<size_t>(i)] = PqEotf(t);
-        float v = Bt709LinearToSdrChannel(t, peak_scale) * 255.0f + 0.5f;
-        if (v < 0.0f) {
-            v = 0.0f;
-        }
-        if (v > 255.0f) {
-            v = 255.0f;
-        }
-        luts.sdr[static_cast<size_t>(i)] = static_cast<uint8_t>(v);
-    }
-    return luts;
-}
+constexpr int kLutMaxIndexInt = 1023; // P010PqMonitorConverter::kLutSize - 1
+constexpr float kLutMaxIndex = static_cast<float>(kLutMaxIndexInt);
 
 inline float ClampUnit(float v) {
     if (v < 0.0f) {
@@ -46,25 +19,38 @@ inline float ClampUnit(float v) {
     return v;
 }
 
-inline int LutIndex(float unit_value) {
+inline size_t LutIndex(float unit_value) {
     const int idx = static_cast<int>(unit_value * kLutMaxIndex + 0.5f);
     if (idx < 0) {
         return 0;
     }
-    if (idx > kLutSize - 1) {
-        return kLutSize - 1;
+    if (idx > kLutMaxIndexInt) {
+        return static_cast<size_t>(kLutMaxIndexInt);
     }
-    return idx;
+    return static_cast<size_t>(idx);
 }
 
 } // namespace
 
-void ConvertP010PqToMonitorBgra(const PlanarYuv420Frame& src, float peak_scale, uint8_t* out_bgra,
-                                uint32_t out_stride_bytes) {
+P010PqMonitorConverter::P010PqMonitorConverter(float peak_scale) {
+    static_assert(kLutSize == kLutMaxIndexInt + 1);
+    for (int i = 0; i < kLutSize; ++i) {
+        const float t = static_cast<float>(i) / kLutMaxIndex;
+        eotf_lut_[static_cast<size_t>(i)] = PqEotf(t);
+        float v = Bt709LinearToSdrChannel(t, peak_scale) * 255.0f + 0.5f;
+        if (v < 0.0f) {
+            v = 0.0f;
+        }
+        if (v > 255.0f) {
+            v = 255.0f;
+        }
+        sdr_lut_[static_cast<size_t>(i)] = static_cast<uint8_t>(v);
+    }
+}
+
+void P010PqMonitorConverter::Convert(const PlanarYuv420Frame& src, uint8_t* out_bgra, uint32_t out_stride_bytes) const {
     if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.uv_plane == nullptr || out_bgra == nullptr)
         return;
-
-    const MonitorLuts luts = BuildLuts(peak_scale);
 
     // Chroma constants for the inverse Y'CbCr (BT.2020 NCL) recombination.
     constexpr float kCrToR = 2.0f * (1.0f - kKr2020);
@@ -97,16 +83,15 @@ void ConvertP010PqToMonitorBgra(const PlanarYuv420Frame& src, float peak_scale, 
                 const float bp = yv + cb_b;
                 const float gp = yv + g_chroma;
                 // PQ EOTF -> BT.2020 normalised linear.
-                const LinearRgb lin2020{luts.eotf[static_cast<size_t>(LutIndex(ClampUnit(rp)))],
-                                        luts.eotf[static_cast<size_t>(LutIndex(ClampUnit(gp)))],
-                                        luts.eotf[static_cast<size_t>(LutIndex(ClampUnit(bp)))]};
+                const LinearRgb lin2020{eotf_lut_[LutIndex(ClampUnit(rp))], eotf_lut_[LutIndex(ClampUnit(gp))],
+                                        eotf_lut_[LutIndex(ClampUnit(bp))]};
                 // Gamut to BT.709 linear, then tone-map + OETF via the SDR table.
                 const LinearRgb lin709 = Bt2020ToBt709(lin2020);
                 uint8_t* px = out_row + static_cast<size_t>(p) * 4u;
-                px[0] = luts.sdr[static_cast<size_t>(LutIndex(ClampUnit(lin709.b)))]; // B
-                px[1] = luts.sdr[static_cast<size_t>(LutIndex(ClampUnit(lin709.g)))]; // G
-                px[2] = luts.sdr[static_cast<size_t>(LutIndex(ClampUnit(lin709.r)))]; // R
-                px[3] = 255u;                                                         // A
+                px[0] = sdr_lut_[LutIndex(ClampUnit(lin709.b))]; // B
+                px[1] = sdr_lut_[LutIndex(ClampUnit(lin709.g))]; // G
+                px[2] = sdr_lut_[LutIndex(ClampUnit(lin709.r))]; // R
+                px[3] = 255u;                                    // A
             }
         }
     }

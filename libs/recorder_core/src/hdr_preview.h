@@ -27,6 +27,7 @@
 #include "hdr_tonemap.h"
 #include "yuv_to_bgra.h"
 
+#include <array>
 #include <cstdint>
 
 namespace recorder_core {
@@ -76,19 +77,35 @@ inline MonitorBgr P010PqPixelToMonitorBgr(uint16_t y10, uint16_t cb10, uint16_t 
     return MonitorBgr{to_byte(lin709.b), to_byte(lin709.g), to_byte(lin709.r)};
 }
 
-// Converts one native-HDR10 P010 frame (PQ / BT.2020, 10-bit limited range) to
+// Converts native-HDR10 P010 frames (PQ / BT.2020, 10-bit limited range) to
 // top-down BGRA8888 (B, G, R, A; alpha always 255) tone-mapped to SDR BT.709 for
 // on-screen monitoring. peak_scale is the session display peak in reference-white
-// multiples (HdrPeakScale, >= 1.0). For speed the per-channel transfer stages are
-// evaluated through session-constant lookup tables sampled from the reference
-// chain above (the per-pixel PQ EOTF / tone-map / OETF are otherwise pow()-bound
-// and too slow at 4K on the preview thread); the result matches
+// multiples (HdrPeakScale, >= 1.0) — session-constant, so the per-channel
+// transfer stages are baked into lookup tables once at construction and reused
+// for every frame (the per-pixel PQ EOTF / tone-map / OETF are otherwise
+// pow()-bound and too slow at 4K on the preview thread). Convert() matches
 // P010PqPixelToMonitorBgr within table quantisation.
-//
-// out_bgra must have at least height * out_stride_bytes bytes; out_stride_bytes
-// must be >= src.width * 4. Does nothing if src has zero size, a null plane, or a
-// null output. src.bits_per_sample is assumed 10 (P010).
-void ConvertP010PqToMonitorBgra(const PlanarYuv420Frame& src, float peak_scale, uint8_t* out_bgra,
-                                uint32_t out_stride_bytes);
+class P010PqMonitorConverter {
+  public:
+    // Samples the transfer tables from the reference chain above for the given
+    // session display peak.
+    explicit P010PqMonitorConverter(float peak_scale);
+
+    // out_bgra must have at least height * out_stride_bytes bytes;
+    // out_stride_bytes must be >= src.width * 4. Does nothing if src has zero
+    // size, a null plane, or a null output. src.bits_per_sample is assumed 10
+    // (P010).
+    void Convert(const PlanarYuv420Frame& src, uint8_t* out_bgra, uint32_t out_stride_bytes) const;
+
+  private:
+    // Table resolution for the per-channel transfer stages. 1024 entries is
+    // ample for an 8-bit monitoring output and keeps both tables in L1/L2.
+    static constexpr int kLutSize = 1024;
+
+    // PQ signal [0, 1] -> normalised linear PQ luminance [0, 1] (PqEotf).
+    std::array<float, kLutSize> eotf_lut_{};
+    // BT.709 linear (normalised, clamped [0, 1]) -> tone-mapped SDR byte.
+    std::array<uint8_t, kLutSize> sdr_lut_{};
+};
 
 } // namespace recorder_core
