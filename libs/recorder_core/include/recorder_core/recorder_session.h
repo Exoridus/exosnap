@@ -54,6 +54,10 @@ struct WebcamConfig {
     // No vertical flip is performed.  Must match the Record-preview mirror state.
     bool mirror = false;
 
+    // Uniform overlay opacity [0,1]; 1.0 = fully opaque. Applied to the sprite's
+    // alpha after chroma keying, so keyed edges and overall fade compose correctly.
+    float opacity = 1.0f;
+
     // Chroma key. chroma_r/g/b hold the resolved active key color (caller
     // computes this from WebcamChromaKeySettings::active_color() before handing
     // config to the engine; the engine never needs to know the color mode).
@@ -75,6 +79,9 @@ struct WebcamOverlayLive {
     float overlay_w_norm = 0.25f;
     float overlay_h_norm = 0.25f;
     bool mirror = false;
+    // Uniform overlay opacity [0,1]; 1.0 = fully opaque. Applied to the sprite's
+    // alpha after chroma keying, so keyed edges and overall fade compose correctly.
+    float opacity = 1.0f;
     // chroma_r/g/b carry the resolved active key color (not the raw mode enum).
     bool chroma_key_enabled = false;
     uint8_t chroma_r = 0;

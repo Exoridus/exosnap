@@ -532,12 +532,14 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     state.config.webcam.overlay_w_norm = 0.50f;
     state.config.webcam.overlay_h_norm = 0.25f;
     state.config.webcam.mirror = true;
+    state.config.webcam.opacity = 0.4f;
     state.SeedWebcamOverlayFromConfig();
 
     WebcamOverlayLive seeded = state.SnapshotWebcamOverlay();
     EXPECT_TRUE(seeded.enabled);
     EXPECT_TRUE(seeded.mirror);
     EXPECT_LE(seeded.overlay_x_norm + seeded.overlay_w_norm, 1.0f);
+    EXPECT_FLOAT_EQ(seeded.opacity, 0.4f);
 
     WebcamOverlayLive live;
     live.enabled = false;
@@ -547,6 +549,7 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     live.overlay_h_norm = 0.0f;
     live.chroma_tolerance = std::nanf("");
     live.chroma_softness = 2.0f;
+    live.opacity = 7.0f;
     state.UpdateWebcamOverlay(live);
 
     const WebcamOverlayLive updated = state.SnapshotWebcamOverlay();
@@ -558,6 +561,12 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     EXPECT_FLOAT_EQ(updated.chroma_tolerance, 0.40f); // NaN → fallback default
     EXPECT_FLOAT_EQ(updated.chroma_softness, 1.0f);   // 2.0 clamped to 1.0
     EXPECT_FLOAT_EQ(updated.chroma_spill_reduction, 0.30f);
+    EXPECT_FLOAT_EQ(updated.opacity, 1.0f); // 7.0 clamped to 1.0
+
+    live.opacity = std::nanf("");
+    state.UpdateWebcamOverlay(live);
+    const WebcamOverlayLive nanUpdated = state.SnapshotWebcamOverlay();
+    EXPECT_FLOAT_EQ(nanUpdated.opacity, 1.0f); // NaN → fallback default
 }
 
 } // namespace

@@ -1068,7 +1068,8 @@ void VideoThread::Run() {
         chroma.spill_reduction = overlay.chroma_spill_reduction;
 
         std::string compErr;
-        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr)) {
+        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr,
+                                      overlay.opacity)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU webcam composite: " + compErr);
             return false;
         }
