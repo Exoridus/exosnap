@@ -665,6 +665,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (std::abs(a.webcam.overlay.h_norm - b.webcam.overlay.h_norm) > kPipTol) {
         return false;
     }
+    if (std::abs(a.webcam.opacity - b.webcam.opacity) > kPipTol) {
+        return false;
+    }
 
     // Chroma key
     if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
@@ -926,6 +929,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.webcam.overlay.h_norm - b.webcam.overlay.h_norm) > kPipTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.opacity - b.webcam.opacity) > kPipTol) {
         return false;
     }
 

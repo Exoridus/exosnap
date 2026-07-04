@@ -372,6 +372,13 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingWebcam_IsDirty) {
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingWebcamOpacity_IsDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.webcam.opacity = 0.5f;
+    EXPECT_TRUE(reg.IsSelectedDirty(live));
+}
+
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingOutput_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
