@@ -64,17 +64,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Resolve paths relative to the repo root (this script lives in scripts/).
+# Resolve paths relative to the repo root (this script lives in scripts/)
+# without Set-Location, so an in-session caller keeps its working directory.
 $repoRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $repoRoot
+if (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
+    $BuildDir = Join-Path $repoRoot $BuildDir
+}
 
 if ($Jobs -le 0) {
     $Jobs = [Environment]::ProcessorCount
     if ($Jobs -le 0) { $Jobs = 4 }
 }
 
+# Write-Host, not Write-Error: with ErrorActionPreference=Stop a Write-Error
+# throws immediately, which would skip the intended exit code (and further down
+# the config-dir cleanup).
 if (-not (Test-Path $BuildDir -PathType Container)) {
-    Write-Error "Build dir '$BuildDir' does not exist. Configure it first (cmake --preset ...) or pass -BuildDir."
+    Write-Host "Build dir '$BuildDir' does not exist. Configure it first (cmake --preset ...) or pass -BuildDir." -ForegroundColor Red
     exit 2
 }
 
@@ -99,9 +105,10 @@ if ($Build) {
     Write-Host "Building all targets in $BuildDir ($Config)..." -ForegroundColor Cyan
     & cmake --build $BuildDir --config $Config
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Build failed (exit $LASTEXITCODE)."
+        $buildExit = $LASTEXITCODE
+        Write-Host "Build failed (exit $buildExit)." -ForegroundColor Red
         Remove-Item -Recurse -Force $configDir -ErrorAction SilentlyContinue
-        exit $LASTEXITCODE
+        exit $buildExit
     }
 }
 
