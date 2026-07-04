@@ -250,7 +250,9 @@ Behavior:
   metadata, and the on-screen monitoring preview is an SDR approximation of the HDR signal.
 - SDR overlay sprites (webcam PiP, cursor) are placed at the captured display's Windows SDR-content
   brightness level (`DISPLAYCONFIG_SDR_WHITE_LEVEL`) so the PiP matches SDR windows on the same
-  screen; 203 cd/m² is the fallback when the level cannot be read.
+  screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
+  the recording starts — moving the Windows SDR-brightness slider afterward does not retune an
+  active recording.
 - **HDR scope for 1.0:** native HDR10 recording applies to **monitor (duplication) capture only**.
   Windows Graphics Capture (WGC) window/game capture stays SDR for now, and there is no HLG or
   wide-gamut generalization. Extending HDR to WGC capture via an FP16 frame pool is technically
