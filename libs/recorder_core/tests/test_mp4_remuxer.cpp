@@ -15,8 +15,10 @@
 
 // libavformat
 extern "C" {
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/mastering_display_metadata.h>
 #include <libavutil/pixfmt.h>
 }
 
@@ -628,6 +630,196 @@ TEST_F(RemuxerTest, Mp4HevcTaggedHvc1) {
     EXPECT_EQ(video_st->codecpar->codec_tag, hvc1)
         << "Expected 'hvc1' FourCC (" << hvc1 << "); got " << video_st->codecpar->codec_tag
         << (video_st->codecpar->codec_tag == hev1 ? " ('hev1' — libav default; Apple-incompatible)" : "");
+
+    avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Build a source MKV that carries HDR10 colour signalling (BT.2020 / PQ /
+// BT.2020-NCL / limited range) plus SMPTE ST 2086 mastering-display metadata,
+// on a HEVC video track — the exact shape mux_thread writes for a native HDR10
+// recording. No content-light-level is set (our captures have none).
+// ---------------------------------------------------------------------------
+static ColorMetadata Hdr10ColorWithMastering() {
+    ColorMetadata color;
+    color.primaries = recorder_core::ColorPrimaries::Bt2020;
+    color.transfer = recorder_core::TransferCharacteristics::SmpteSt2084;
+    color.matrix = recorder_core::MatrixCoefficients::Bt2020Ncl;
+    color.range = ColorRange::Limited;
+    color.bits_per_channel = 10;
+    color.hdr = true;
+    // Deliberately no MaxCLL / MaxFALL — our recordings do not carry them.
+    color.has_mastering_display = true;
+    color.mastering_display_primary_r_x = 0.708f;
+    color.mastering_display_primary_r_y = 0.292f;
+    color.mastering_display_primary_g_x = 0.170f;
+    color.mastering_display_primary_g_y = 0.797f;
+    color.mastering_display_primary_b_x = 0.131f;
+    color.mastering_display_primary_b_y = 0.046f;
+    color.mastering_display_white_point_x = 0.3127f;
+    color.mastering_display_white_point_y = 0.3290f;
+    color.mastering_display_max_luminance = 1000.0f;
+    color.mastering_display_min_luminance = 0.0001f;
+    return color;
+}
+
+static std::string BuildTestHdrHevcMkv(const std::string& path) {
+    MatroskaStreamWriter w;
+    auto cfg = MakeHevcConfig(path);
+    cfg.color = Hdr10ColorWithMastering();
+    if (!w.Open(cfg))
+        return {};
+    FeedSeconds(w, 2.0, /*gop=*/60, /*payload=*/256);
+    if (!w.Finalize())
+        return {};
+    return path;
+}
+
+// ---------------------------------------------------------------------------
+// Test: HDR10 colour identity survives the MP4 remux. A source MKV tagged
+// BT.2020 / PQ / BT.2020-NCL / limited range with mastering-display metadata
+// must produce an MP4 whose video stream carries the same colr signalling and
+// an mdcv (mastering-display) side-data entry — and NO content-light-level
+// side data (absent is correct; an empty clli box is a conformance defect).
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, Mp4HdrColorAndMasteringPassthrough) {
+    ASSERT_FALSE(BuildTestHdrHevcMkv(mkv_path_).empty()) << "Failed to build HDR10 HEVC MKV fixture";
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+    ASSERT_TRUE(result.success) << "HDR remux failed: " << result.message << " (av_err=" << result.av_error_code << ")";
+
+    AVFormatContext* ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(ctx, nullptr), 0);
+
+    AVStream* video_st = FindVideoStream(ctx);
+    ASSERT_NE(video_st, nullptr) << "No video stream in remuxed HDR MP4";
+
+    // colr passthrough — the exact HDR10 CICP code points must survive.
+    EXPECT_EQ(video_st->codecpar->color_primaries, AVCOL_PRI_BT2020)
+        << "Expected BT.2020 primaries (9); got " << static_cast<int>(video_st->codecpar->color_primaries);
+    EXPECT_EQ(video_st->codecpar->color_trc, AVCOL_TRC_SMPTE2084)
+        << "Expected SMPTE ST 2084 / PQ transfer (16); got " << static_cast<int>(video_st->codecpar->color_trc);
+    EXPECT_EQ(video_st->codecpar->color_space, AVCOL_SPC_BT2020_NCL)
+        << "Expected BT.2020 non-constant-luminance matrix (9); got "
+        << static_cast<int>(video_st->codecpar->color_space);
+    EXPECT_EQ(video_st->codecpar->color_range, AVCOL_RANGE_MPEG)
+        << "Expected limited/tv range (1); got " << static_cast<int>(video_st->codecpar->color_range);
+
+    // Sample entry must still be hvc1 (Apple-compatible), not hev1.
+    EXPECT_EQ(video_st->codecpar->codec_tag, MKTAG('h', 'v', 'c', '1')) << "HDR HEVC MP4 lost the hvc1 sample entry";
+
+    // mdcv — mastering-display metadata must be present as stream coded side data.
+    const AVPacketSideData* mdcv =
+        av_packet_side_data_get(video_st->codecpar->coded_side_data, video_st->codecpar->nb_coded_side_data,
+                                AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+    ASSERT_NE(mdcv, nullptr) << "Mastering-display (mdcv) side data missing from remuxed HDR MP4";
+    ASSERT_GE(mdcv->size, sizeof(AVMasteringDisplayMetadata));
+    const auto* md = reinterpret_cast<const AVMasteringDisplayMetadata*>(mdcv->data);
+    EXPECT_TRUE(md->has_primaries) << "mdcv primaries flag not set";
+    EXPECT_TRUE(md->has_luminance) << "mdcv luminance flag not set";
+    // Max luminance round-trips as 1000 cd/m^2 (stored in 0.0001-nit units in MKV,
+    // exposed as an AVRational here).
+    EXPECT_NEAR(av_q2d(md->max_luminance), 1000.0, 1.0) << "mdcv max luminance mismatch";
+
+    // clli — content-light-level side data must be ABSENT (we set no MaxCLL/MaxFALL).
+    const AVPacketSideData* clli = av_packet_side_data_get(
+        video_st->codecpar->coded_side_data, video_st->codecpar->nb_coded_side_data, AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+    EXPECT_EQ(clli, nullptr) << "Unexpected content-light-level side data — no empty clli must be emitted";
+
+    avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Test: the BT.709 fallback for unspecified CICP fields must NOT fire when the
+// stream carries mastering-display metadata. Fixture: an HDR source with the
+// matrix left Unspecified (2) but mastering-display set — no production writer
+// emits this shape (recordings are always fully tagged), so this pins the
+// guard's branch directly: stamping SDR BT.709 onto such a stream would desync
+// the colr box from the mdcv box.
+//
+// Empirical mov-muxer behaviour (verified against the vendored avformat 62):
+// the colr box is all-or-nothing — it is written only when primaries AND
+// transfer AND matrix are all specified. With the matrix unspecified the muxer
+// omits colr entirely, so every CICP field reads back UNSPECIFIED from the
+// output. The pinned contract is therefore: no field is BT.709-stamped (in
+// particular no bt709 colr desynced from mdcv), and mdcv is still carried.
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, Mp4Bt709FallbackSuppressedWhenMasteringPresent) {
+    ColorMetadata color = Hdr10ColorWithMastering();
+    color.matrix = recorder_core::MatrixCoefficients::Unspecified;
+
+    {
+        MatroskaStreamWriter w;
+        auto cfg = MakeHevcConfig(mkv_path_);
+        cfg.color = color;
+        ASSERT_TRUE(w.Open(cfg)) << "Failed to open partial-CICP HDR MKV fixture";
+        FeedSeconds(w, 2.0, /*gop=*/60, /*payload=*/256);
+        ASSERT_TRUE(w.Finalize()) << "Failed to finalize partial-CICP HDR MKV fixture";
+    }
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+    ASSERT_TRUE(result.success) << "Remux failed: " << result.message << " (av_err=" << result.av_error_code << ")";
+
+    AVFormatContext* ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(ctx, nullptr), 0);
+
+    AVStream* video_st = FindVideoStream(ctx);
+    ASSERT_NE(video_st, nullptr) << "No video stream in remuxed MP4";
+
+    // Nothing may be BT.709-stamped: with the fallback suppressed the muxer
+    // omits colr (all-or-nothing), so every field reads back UNSPECIFIED. If
+    // the guard's condition were inverted or removed, the matrix (and range)
+    // would read back bt709/tv here and desync from the mdcv box.
+    EXPECT_EQ(video_st->codecpar->color_space, AVCOL_SPC_UNSPECIFIED)
+        << "Unspecified matrix was overwritten (got " << static_cast<int>(video_st->codecpar->color_space)
+        << ") — the BT.709 fallback fired despite mastering-display metadata";
+    EXPECT_EQ(video_st->codecpar->color_primaries, AVCOL_PRI_UNSPECIFIED)
+        << "Expected no colr box (all-or-nothing with unspecified matrix); got primaries "
+        << static_cast<int>(video_st->codecpar->color_primaries);
+    EXPECT_EQ(video_st->codecpar->color_trc, AVCOL_TRC_UNSPECIFIED)
+        << "Expected no colr box (all-or-nothing with unspecified matrix); got transfer "
+        << static_cast<int>(video_st->codecpar->color_trc);
+    EXPECT_EQ(video_st->codecpar->color_range, AVCOL_RANGE_UNSPECIFIED)
+        << "Range must not be tv-stamped when the fallback is suppressed; got "
+        << static_cast<int>(video_st->codecpar->color_range);
+
+    // mdcv must still be carried.
+    const AVPacketSideData* mdcv =
+        av_packet_side_data_get(video_st->codecpar->coded_side_data, video_st->codecpar->nb_coded_side_data,
+                                AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+    EXPECT_NE(mdcv, nullptr) << "Mastering-display (mdcv) side data lost in partial-CICP remux";
+
+    avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Test: SDR remux carries NO mastering-display metadata. A plain BT.709 source
+// (the default recording) must remux to an MP4 with bt709 colr and no mdcv
+// side data — the HDR passthrough must not leak into SDR output.
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, Mp4SdrHasNoMasteringMetadata) {
+    ASSERT_FALSE(BuildTestMkv(mkv_path_).empty()) << "Failed to build SDR MKV fixture";
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+    ASSERT_TRUE(result.success) << "SDR remux failed: " << result.message;
+
+    AVFormatContext* ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(ctx, nullptr), 0);
+
+    AVStream* video_st = FindVideoStream(ctx);
+    ASSERT_NE(video_st, nullptr) << "No video stream in remuxed SDR MP4";
+
+    EXPECT_EQ(video_st->codecpar->color_primaries, AVCOL_PRI_BT709);
+    EXPECT_EQ(video_st->codecpar->color_trc, AVCOL_TRC_BT709);
+    EXPECT_EQ(video_st->codecpar->color_space, AVCOL_SPC_BT709);
+
+    const AVPacketSideData* mdcv =
+        av_packet_side_data_get(video_st->codecpar->coded_side_data, video_st->codecpar->nb_coded_side_data,
+                                AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+    EXPECT_EQ(mdcv, nullptr) << "SDR MP4 must not carry mastering-display metadata";
 
     avformat_close_input(&ctx);
 }
