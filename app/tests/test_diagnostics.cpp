@@ -269,8 +269,8 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(config.frame_rate_num, 60u);
     EXPECT_EQ(config.frame_rate_den, 1u);
-    // H3 HDR review fix: hdr_mode was silently dropped at this seam — the Diagnostics
-    // config summary always saw TonemapSdr regardless of the actual selection.
+    // hdr_mode must be carried at this seam; dropping it silently resets the
+    // Diagnostics config summary to TonemapSdr regardless of the actual selection.
     EXPECT_EQ(config.hdr_mode, recorder_core::HdrMode::Hdr10)
         << "UserConfigFromSettings must carry hdr_mode through like every other output field";
 }
@@ -914,8 +914,8 @@ TEST(RecommendationEngineTest, RecProfileCodec_WebmAv1OnlyConfiguredAv1_DoesNotF
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
     // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat); the
-    // color-range compatibility guard added rec.color.range; the H3 HDR wave added rec.hdr.h264
-    // (H.264 + HDR10-native blocker) — expect 12 codes now.
+    // color-range compatibility guard added rec.color.range; the H.264 + HDR10-native
+    // blocker added rec.hdr.h264 — expect 12 codes now.
     EXPECT_EQ(codes.size(), 12u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
@@ -1579,7 +1579,7 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
     })) << "rec.pacing.smooth must NOT be emitted when pacing is already Smooth";
 }
 
-// --- H3 HDR Slice 2: H.264 + HDR10-native pre-flight blocker (rec.hdr.h264) ---
+// --- H.264 + HDR10-native pre-flight blocker (rec.hdr.h264) ---
 
 namespace {
 // A default H.264 config on the primary MKV path; the HDR blocker only turns on
@@ -1614,9 +1614,9 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplayRaisesBlocker) {
     EXPECT_TRUE(it->fix_action->reversible);
 }
 
-// Final-review fix (Finding 3): the fix must not hardcode AV1 — on a GPU with HEVC
-// but no AV1 encode, proposing AV1 would land the user in the codec-unavailable
-// blocker. Both AV1 and HEVC are hdr10_native-capable, so prefer AV1 when it is
+// The fix must not hardcode AV1 — on a GPU with HEVC but no AV1 encode,
+// proposing AV1 would land the user in the codec-unavailable blocker. Both AV1
+// and HEVC are hdr10_native-capable, so prefer AV1 when it is
 // GPU-selectable, else fall back to HEVC.
 TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailableProposesHevc) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
@@ -1640,7 +1640,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailablePro
     EXPECT_TRUE(it->fix_action->reversible);
 }
 
-// Final-review follow-up: the codec pick must also respect container compatibility.
+// The codec pick must also respect container compatibility.
 // MP4 + H.264 + AAC is the Recommended MP4 path, so MP4 + Hdr10 is a legal config —
 // but MP4 + AV1 + AAC is Experimental, which ReconcileCodecs fixes back to H.264.
 // Proposing AV1 there would make the applied fix silently self-revert (user confirms

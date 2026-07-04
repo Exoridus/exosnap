@@ -78,11 +78,11 @@ struct ColorMetadata {
     uint32_t max_frame_average_light_level = 0; // MaxFALL, cd/m^2
 
     // Mastering display metadata (SMPTE ST 2086), written into the Matroska
-    // KaxVideoColourMasterMeta element (H3 HDR wave, slice 1). Independent of
-    // `hdr`/MaxCLL/MaxFALL above — the container treats it as a separate
-    // optional child of Colour — so presence is gated by its own explicit
-    // flag rather than by 0-as-absent (a chromaticity coordinate of 0.0 is not
-    // a meaningful "unset" sentinel the way MaxCLL/MaxFALL's 0 is).
+    // KaxVideoColourMasterMeta element. Independent of `hdr`/MaxCLL/MaxFALL
+    // above — the container treats it as a separate optional child of
+    // Colour — so presence is gated by its own explicit flag rather than by
+    // 0-as-absent (a chromaticity coordinate of 0.0 is not a meaningful
+    // "unset" sentinel the way MaxCLL/MaxFALL's 0 is).
     bool has_mastering_display = false;
     // Display primaries chromaticity, CIE 1931 xy, normalized to [0, 1].
     float mastering_display_primary_r_x = 0.0f;

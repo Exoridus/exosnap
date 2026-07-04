@@ -40,10 +40,10 @@ struct CapabilitySet {
     std::unordered_map<ChromaSubsampling, SupportAnnotation> chroma_modes;
     std::unordered_map<BitDepth, SupportAnnotation> bit_depths;
 
-    // Explicit per-codec HDR10-native (10-bit / P010, PQ/BT.2020) capability
-    // (H3 HDR wave). HEVC and AV1 carry HDR10; H.264 does not. This is a
-    // codec-format fact, so gate against it instead of comparing codec names
-    // (the H.264+HDR10 pre-flight blocker, and the Slice-5 Expert HDR control).
+    // Explicit per-codec HDR10-native (10-bit / P010, PQ/BT.2020) capability.
+    // HEVC and AV1 carry HDR10; H.264 does not. This is a codec-format fact,
+    // so gate against it instead of comparing codec names (the H.264+HDR10
+    // pre-flight blocker, and a future expert HDR control).
     std::unordered_map<VideoCodec, SupportAnnotation> hdr10_native;
 
     std::unordered_map<ComboKey, SupportAnnotation, ComboKeyHash> combo_overrides;

@@ -30,11 +30,11 @@ struct UserRecorderConfig {
     uint32_t frame_rate_den = 1;
     // CFR frame pacing mode (ADR 0035). Smooth = phase-correct (default); Newest = lowest-latency.
     recorder_core::FramePacingMode frame_pacing = recorder_core::FramePacingMode::Smooth;
-    // HDR handling mode (H3 HDR wave, slice 1 — config plumbing only). Default
-    // TonemapSdr — see recorder_core::HdrMode for full semantics. Passed
-    // straight through to RecorderConfig by ToRecorderCoreConfig; this slice
-    // does not yet derive BT.2020/PQ ColorMetadata from it (needs runtime
-    // display facts from a later slice).
+    // HDR handling mode (config plumbing only for now). Default TonemapSdr —
+    // see recorder_core::HdrMode for full semantics. Passed straight through
+    // to RecorderConfig by ToRecorderCoreConfig; does not yet derive
+    // BT.2020/PQ ColorMetadata from it (needs runtime display facts, still to
+    // be wired up).
     recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr;
 };
 

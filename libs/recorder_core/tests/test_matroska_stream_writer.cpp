@@ -703,8 +703,8 @@ TEST_F(StreamWriterTest, WritesConfiguredColourValuesIncludingHdr) {
            "even though other HDR fields (MaxCLL/MaxFALL) are present";
 }
 
-// Mastering display metadata (SMPTE ST 2086, H3 HDR wave slice 1) round-trips
-// into KaxVideoColourMasterMeta when has_mastering_display is set. Uses
+// Mastering display metadata (SMPTE ST 2086) round-trips into
+// KaxVideoColourMasterMeta when has_mastering_display is set. Uses
 // representative BT.2020 primaries + D65 white point. Independent of the
 // `hdr`/MaxCLL/MaxFALL gate — see the absence assertion in
 // WritesConfiguredColourValuesIncludingHdr above for the other half.

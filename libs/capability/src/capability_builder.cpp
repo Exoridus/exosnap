@@ -54,14 +54,15 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                                               "(SDR BT.709); not yet validated on recording hardware. "
                                               "Requires HEVC or AV1; H.264 is 8-bit only."});
 
-    // Explicit per-codec HDR10-native (10-bit / P010) capability (H3 HDR wave).
+    // Explicit per-codec HDR10-native (10-bit / P010) capability.
     // HEVC (Main10) and AV1 (Main 10-bit) carry a native PQ/BT.2020 HDR10 signal;
     // H.264 has no 10-bit NVENC path, so it cannot. This is a codec-format fact,
     // NOT a per-GPU probe: like the Bit10 annotation above it is inferred from
-    // "NVENC can HEVC/AV1", not from an NV_ENC_CAPS_SUPPORT_10BIT_ENCODE query
-    // (documented risk in the H3 HDR plan; a real probe is deferred). Kept
-    // independent of the NVENC-absence downgrade below: encode availability is a
-    // separate concern owned by video_codecs / the codec-availability blocker.
+    // "NVENC can HEVC/AV1", not from an NV_ENC_CAPS_SUPPORT_10BIT_ENCODE query —
+    // a real probe is deferred; the inference (NVENC HEVC/AV1 implies
+    // Main10/10-bit) is the documented risk. Kept independent of the
+    // NVENC-absence downgrade below: encode availability is a separate concern
+    // owned by video_codecs / the codec-availability blocker.
     caps.hdr10_native.emplace(
         VideoCodec::Av1Nvenc,
         SupportAnnotation{SupportLevel::Available, "AV1 carries native HDR10 (10-bit/P010, PQ/BT.2020)."});

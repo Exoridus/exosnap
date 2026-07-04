@@ -746,10 +746,9 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
             out.nvenc_preset = *np;
     }
     {
-        // H3 HDR wave, slice 1: missing/invalid key (schema-20-and-older files,
-        // which reset before reaching here anyway — see kPresetSchemaVersion —
-        // or a hand-edited/corrupt value) leaves out.hdr_mode at its struct
-        // default (TonemapSdr).
+        // A missing/invalid key (schema-20-and-older files, which reset before
+        // reaching here anyway — see kPresetSchemaVersion — or a hand-edited/
+        // corrupt value) leaves out.hdr_mode at its struct default (TonemapSdr).
         const auto hm = HdrModeFromString(QString::fromStdString(TomlStr(tbl["output"]["hdr_mode"])));
         if (hm.has_value())
             out.hdr_mode = *hm;

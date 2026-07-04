@@ -185,10 +185,10 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                             static_cast<uint64_t>(m_config.color.max_frame_average_light_level));
                     }
                 }
-                // Mastering display metadata (SMPTE ST 2086, H3 HDR wave slice 1).
-                // Independent of the `hdr`/MaxCLL/MaxFALL gate above — written
-                // whenever has_mastering_display is set, omitted entirely otherwise
-                // (no empty/zeroed KaxVideoColourMasterMeta element).
+                // Mastering display metadata (SMPTE ST 2086). Independent of the
+                // `hdr`/MaxCLL/MaxFALL gate above — written whenever
+                // has_mastering_display is set, omitted entirely otherwise (no
+                // empty/zeroed KaxVideoColourMasterMeta element).
                 if (m_config.color.has_mastering_display) {
                     auto& mdcv = libebml::GetChild<libmatroska::KaxVideoColourMasterMeta>(colour);
                     libebml::GetChild<libmatroska::KaxVideoRChromaX>(mdcv).SetValue(

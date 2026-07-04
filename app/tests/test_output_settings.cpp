@@ -1065,10 +1065,10 @@ TEST(OutputSettingsTest, MergeFormatSelection_CarriesNvencPreset) {
         << "MergeFormatSelection must carry a live encoder-preset edit into output_settings_";
 }
 
-// H3 HDR wave, slice 1: same class of bug as MergeFormatSelection_CarriesNvencPreset.
-// hdr_mode has no UI control yet (Slice 5), but the model field must still survive
-// MergeFormatSelection so a later slice's preset-apply/format-editor plumbing
-// doesn't silently drop it, same as every other output field.
+// Same class of bug as MergeFormatSelection_CarriesNvencPreset. hdr_mode has
+// no UI control yet, but the model field must still survive MergeFormatSelection
+// so the future expert HDR control / preset-apply plumbing doesn't silently
+// drop it, same as every other output field.
 TEST(OutputSettingsTest, MergeFormatSelection_CarriesHdrMode) {
     OutputSettingsModel live = OutputSettingsModel::Defaults();
     live.hdr_mode = recorder_core::HdrMode::TonemapSdr;

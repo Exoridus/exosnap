@@ -337,7 +337,7 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
 }
 
 // ===========================================================================
-// HDR handling mode persists (H3 HDR wave, slice 1 — preset schema 20->21).
+// HDR handling mode persists (preset schema 20->21).
 // ===========================================================================
 
 TEST(RecordingPresetStore, HdrModePersists_DefaultTonemapSdr) {
@@ -555,7 +555,7 @@ TEST(RecordingPresetStore, HdrModeInvalidValue_DefaultsToTonemapSdr_NoReset) {
     CleanupFile(path);
 }
 
-// A schema-20 (pre-H3) file — one version behind current — resets rather than
+// A schema-20 file — one version behind current — resets rather than
 // migrating, per pre-1.0 policy (no backward-compat acrobatics; only the
 // v19->v20 colour-range bump gets a targeted migration, documented above it).
 TEST(RecordingPresetStore, SchemaV20_OneVersionBehindCurrent_Resets) {

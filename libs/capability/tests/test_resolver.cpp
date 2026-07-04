@@ -286,12 +286,12 @@ TEST(TranslationTest, ToRecorderCoreConfigMapsColorRange) {
     }
 }
 
-// H3 HDR wave, slice 1: HdrMode passes straight through to RecorderConfig
-// unchanged — capability::UserRecorderConfig and recorder_core::RecorderConfig
-// reuse the SAME recorder_core::HdrMode enum (no per-layer duplication, same
-// pattern as NvencPreset/FramePacingMode). Default is TonemapSdr; Off and
-// Hdr10 both round-trip too. No BT.2020/PQ ColorMetadata is derived here —
-// that needs runtime display facts from a later slice.
+// HdrMode passes straight through to RecorderConfig unchanged —
+// capability::UserRecorderConfig and recorder_core::RecorderConfig reuse the
+// SAME recorder_core::HdrMode enum (no per-layer duplication, same pattern as
+// NvencPreset/FramePacingMode). Default is TonemapSdr; Off and Hdr10 both
+// round-trip too. No BT.2020/PQ ColorMetadata is derived here — that needs
+// runtime display facts, still to be wired up.
 TEST(TranslationTest, ToRecorderCoreConfigMapsHdrMode) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
@@ -311,8 +311,8 @@ TEST(TranslationTest, ToRecorderCoreConfigMapsHdrMode) {
         EXPECT_TRUE(validation.succeeded);
         EXPECT_EQ(translated.hdr_mode, recorder_core::HdrMode::Off);
     }
-    // Hdr10 (expert opt-in) — passes through; ColorMetadata is untouched by
-    // this slice (still BT.709 SDR defaults).
+    // Hdr10 (expert opt-in) — passes through; ColorMetadata is untouched for
+    // now (still BT.709 SDR defaults).
     {
         UserRecorderConfig config;
         config.hdr_mode = recorder_core::HdrMode::Hdr10;

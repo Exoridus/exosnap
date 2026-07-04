@@ -453,7 +453,7 @@ TEST(NvencCodecSupportTest, BuildEffective_HonorsProbeFlags) {
 }
 
 // -------------------------------------------------------------------------
-// H3 HDR Slice 2: explicit per-codec HDR10-native (10-bit / P010) capability.
+// Explicit per-codec HDR10-native (10-bit / P010) capability.
 // HEVC and AV1 carry HDR10; H.264 does not. This is a codec-format fact, not a
 // per-GPU probe (see the inference note in capability_builder.cpp).
 // -------------------------------------------------------------------------
@@ -490,7 +490,7 @@ TEST(Hdr10CapabilityTest, Hdr10NativeIsIndependentOfNvencPresence) {
 }
 
 // -------------------------------------------------------------------------
-// H3 HDR Slice 2: DisplayHdrFacts primaries/luminance + Display↔Capture mapping.
+// DisplayHdrFacts primaries/luminance + Display↔Capture mapping.
 // -------------------------------------------------------------------------
 TEST(DisplayHdrFactsTest, PrimariesDefaultToZero) {
     const DisplayHdrFacts facts;

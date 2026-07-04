@@ -98,11 +98,10 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     // Primaries/transfer/matrix stay BT.709 SDR (the ColorMetadata defaults).
     core_config.color.range = (final_config.color_range == ColorRange::Limited) ? recorder_core::ColorRange::Limited
                                                                                 : recorder_core::ColorRange::Full;
-    // HDR mode (H3 HDR wave, slice 1): passes straight through — the same
-    // recorder_core::HdrMode enum is shared by UserRecorderConfig and
-    // RecorderConfig, so there is no per-value mapping to do. No BT.2020/PQ
-    // ColorMetadata is derived here yet; that needs runtime display facts from
-    // a later slice.
+    // HDR mode passes straight through — the same recorder_core::HdrMode enum
+    // is shared by UserRecorderConfig and RecorderConfig, so there is no
+    // per-value mapping to do. No BT.2020/PQ ColorMetadata is derived here
+    // yet; that needs runtime display facts, still to be wired up.
     core_config.hdr_mode = final_config.hdr_mode;
     core_config.frame_rate_num = final_config.frame_rate_num;
     core_config.frame_rate_den = final_config.frame_rate_den;

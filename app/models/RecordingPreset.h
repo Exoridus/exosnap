@@ -16,7 +16,7 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 //
-// v21 (H3 HDR wave, slice 1): adds output.hdr_mode (Off/TonemapSdr/Hdr10).
+// v21: adds output.hdr_mode (Off/TonemapSdr/Hdr10).
 // Pre-1.0 policy: schema-20-and-older files are NOT migrated — they reset to
 // the default preset via the ordinary version-mismatch path below, same as
 // every bump except the v19->v20 colour-range exception documented below.

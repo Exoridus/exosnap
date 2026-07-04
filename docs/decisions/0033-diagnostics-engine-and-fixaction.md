@@ -288,7 +288,7 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   `SplitSizeSettingsTest.MergeFormatSelection_CarriesSplitSettings`
   (`app/tests/test_output_settings.cpp`).
 
-## Delivered — Slice: H.264 + HDR10-native pre-flight blocker (`rec.hdr.h264`, H3 HDR wave, 2026-07-04)
+## Delivered — H.264 + HDR10-native pre-flight blocker (rec.hdr.h264, 2026-07-04)
 
 - **New Tier-1 check (blocker).** `RecommendationEngine::checkHdrH264Blocker` fires `rec.hdr.h264`
   (Blocker) only when ALL three real-conflict gates hold: (1) `UserRecorderConfig::hdr_mode ==
@@ -305,22 +305,23 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   `CapabilitySet::hdr10_native` map + `QueryHdr10Native(VideoCodec)`, populated in
   `BuildStaticValidatedBaseline`: HEVC/AV1 = Available, H.264 = NotImplemented. This is a
   codec-format fact (kept independent of the NVENC-absence downgrade, which owns encode
-  availability / `rec.003`) and is *inferred*, not probed — there is no
-  `NV_ENC_CAPS_SUPPORT_10BIT_ENCODE` query (documented risk in the H3 HDR plan; a real probe is
-  deferred). The Slice-5 Expert HDR control will gate on the same field.
+  availability / `rec.003`) and is *inferred*, not probed — a real `NV_ENC_CAPS_SUPPORT_10BIT_ENCODE`
+  probe is deferred; the inference (NVENC HEVC/AV1 implies Main10/10-bit) is the documented risk. A
+  future expert HDR control will gate on the same field.
 - **Display↔Capture mapping (pure).** `DisplayHdrFacts` gained the `DXGI_OUTPUT_DESC1` chromaticity
   primaries + white point (luminance range already existed); `capability::FindDisplayByName` is a
   pure lookup from a display device name to its facts. The engine stays pure: the caller resolves
   the selected target's HMONITOR → device name → facts and supplies gate (3) via
   `SetCaptureTargetHdrActive`, mirroring the existing `SetOutputPathWritable` seam.
-- **Known limitation (this headless slice).** The production `DiagnosticsPage` caller does not yet
+- **Known limitation (headless).** The production `DiagnosticsPage` caller does not yet
   supply the capture target's HDR-active state (it also still hardcodes `monitor_refresh_hz = 0`),
   so the blocker is fully implemented + unit-tested at the engine boundary but will not fire in the
-  running app until a later (UI) slice wires the selected-target → display resolution. Per the H3
-  plan this is intentional slice sequencing, not a loosened condition — the firing condition was
-  NOT broadened to "always fire" in the absence of that wiring.
+  running app until a later UI change wires the selected-target → display resolution. This is
+  intentional sequencing: the wiring lands together with the capture-target→display resolution
+  work, not a loosened condition — the firing condition was NOT broadened to "always fire" in the
+  absence of that wiring.
 
-### Final-review fixes (same slice, 2026-07-04)
+### Follow-up hardening (2026-07-04)
 
 - **`hdr_mode` now reaches the resolved config at both settings→config seams.**
   `UserConfigFromSettings` (`app/diagnostics/ConfigSummary.cpp`) and
@@ -351,4 +352,4 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   path are both live end-to-end. The blocker still cannot fire in the running app for one reason
   only: `DiagnosticsPage` does not yet call `SetCaptureTargetHdrActive` with the selected capture
   target's real display HDR state (gate 3) — that capture-target→display HDR-active wiring is
-  deferred to a later (UI) slice, unchanged from the note above.
+  deferred to a later UI change, unchanged from the note above.

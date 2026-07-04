@@ -12,8 +12,9 @@ namespace exosnap::capability {
 //
 // The chromaticity primaries + luminance range mirror DXGI_OUTPUT_DESC1 exactly.
 // They are the display's *capabilities*, not the content's mastering values; a
-// later slice feeds them into the container mastering-display metadata (the usual
-// approximation — see the H3 HDR plan). This slice only captures them.
+// future change feeds them into the container mastering-display metadata (the
+// display's capabilities are the usual approximation for the content's
+// mastering values). This only captures them for now.
 struct DisplayHdrFacts {
     std::string name;            // device name, e.g. "\\.\DISPLAY7"
     bool hdr_active = false;     // Windows HDR currently ON (PQ/BT.2020 colour space)
