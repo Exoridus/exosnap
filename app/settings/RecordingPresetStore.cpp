@@ -198,6 +198,29 @@ std::optional<recorder_core::NvencPreset> NvencPresetFromString(QStringView s) {
     return std::nullopt;
 }
 
+QString HdrModeToString(recorder_core::HdrMode v) {
+    switch (v) {
+    case recorder_core::HdrMode::Off:
+        return QStringLiteral("off");
+    case recorder_core::HdrMode::TonemapSdr:
+        return QStringLiteral("tonemap_sdr");
+    case recorder_core::HdrMode::Hdr10:
+        return QStringLiteral("hdr10");
+    }
+    return QStringLiteral("tonemap_sdr");
+}
+
+std::optional<recorder_core::HdrMode> HdrModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("off"))
+        return recorder_core::HdrMode::Off;
+    if (n == QStringLiteral("tonemap_sdr"))
+        return recorder_core::HdrMode::TonemapSdr;
+    if (n == QStringLiteral("hdr10"))
+        return recorder_core::HdrMode::Hdr10;
+    return std::nullopt;
+}
+
 QString RateControlModeToString(recorder_core::RateControlMode v) {
     switch (v) {
     case recorder_core::RateControlMode::ConstantQuality:
@@ -546,6 +569,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     out_tbl.emplace("bit_depth", VideoBitDepthToString(out.bit_depth).toStdString());
     out_tbl.emplace("color_range", ColorRangeToString(out.color_range).toStdString());
     out_tbl.emplace("nvenc_preset", NvencPresetToString(out.nvenc_preset).toStdString());
+    out_tbl.emplace("hdr_mode", HdrModeToString(out.hdr_mode).toStdString());
     out_tbl.emplace("audio_codec", AudioCodecToString(out.audio_codec).toStdString());
     out_tbl.emplace("resolution_mode", OutputResolutionModeToString(out.resolution.mode).toStdString());
     out_tbl.emplace("custom_width", static_cast<int64_t>(out.resolution.custom_width));
@@ -720,6 +744,15 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         const auto np = NvencPresetFromString(QString::fromStdString(TomlStr(tbl["output"]["nvenc_preset"])));
         if (np.has_value())
             out.nvenc_preset = *np;
+    }
+    {
+        // H3 HDR wave, slice 1: missing/invalid key (schema-20-and-older files,
+        // which reset before reaching here anyway — see kPresetSchemaVersion —
+        // or a hand-edited/corrupt value) leaves out.hdr_mode at its struct
+        // default (TonemapSdr).
+        const auto hm = HdrModeFromString(QString::fromStdString(TomlStr(tbl["output"]["hdr_mode"])));
+        if (hm.has_value())
+            out.hdr_mode = *hm;
     }
     {
         const auto c = AudioCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["audio_codec"])));

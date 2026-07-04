@@ -16,6 +16,11 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 //
+// v21 (H3 HDR wave, slice 1): adds output.hdr_mode (Off/TonemapSdr/Hdr10).
+// Pre-1.0 policy: schema-20-and-older files are NOT migrated — they reset to
+// the default preset via the ordinary version-mismatch path below, same as
+// every bump except the v19->v20 colour-range exception documented below.
+//
 // v20 (fix/color-range-signaling): default colour range flipped Full ->
 // Limited. Schema-19 files are NOT reset — they load through a targeted
 // field migration: color_range=="full" is rewritten to "limited", because
@@ -25,7 +30,7 @@ namespace exosnap {
 // selection could not exist). A schema-20 file with explicit "full" is a
 // deliberate post-flip opt-in and is respected. See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 20;
+inline constexpr int kPresetSchemaVersion = 21;
 
 // Highest schema version that loads via targeted migration instead of a full
 // reset (see RecordingPresetStore::Load). Files older than this still reset.

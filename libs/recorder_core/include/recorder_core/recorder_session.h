@@ -271,6 +271,15 @@ struct RecorderConfig {
     // fields stay unset until the HDR slice.
     ColorMetadata color = ColorMetadata::Sdr709();
 
+    // HDR handling mode (H3 HDR wave, slice 1 — config plumbing only). An
+    // HDR-capable desktop is auto-detected by a later slice; Default
+    // TonemapSdr tone-maps it down to SDR, Hdr10 is an expert opt-in that
+    // keeps the native PQ/BT.2020 signal, Off disables HDR handling entirely
+    // (legacy SDR-only behavior). This slice only threads the mode through the
+    // config pipeline — no BT.2020/PQ values are derived into `color` above
+    // yet (needs runtime display facts from a later slice).
+    HdrMode hdr_mode = HdrMode::TonemapSdr;
+
     // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
     NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
 
