@@ -106,30 +106,69 @@ TEST(OdCaptureFormat, Fp16IsNowSupported) {
     EXPECT_FALSE(IsSupportedOdCaptureFormat(DXGI_FORMAT_R8G8B8A8_UNORM));
 }
 
-TEST(OdCaptureMode, SdrFormatsAlwaysSdr) {
+// Convenience wrappers: default the newer parameters for the common cases.
+namespace {
+bool Resolve(DXGI_FORMAT fmt, HdrMode hdr, bool hdr_active, bool hdr10_ok, OdCaptureMode& m) {
+    return ResolveOdCaptureMode(fmt, hdr, hdr_active, hdr10_ok, m);
+}
+} // namespace
+
+TEST(OdCaptureMode, Bgra8AlwaysSdr) {
     OdCaptureMode mode{};
     for (HdrMode hdr : {HdrMode::Off, HdrMode::TonemapSdr, HdrMode::Hdr10}) {
-        EXPECT_TRUE(ResolveOdCaptureMode(DXGI_FORMAT_B8G8R8A8_UNORM, hdr, mode));
-        EXPECT_EQ(mode, OdCaptureMode::Sdr);
-        EXPECT_TRUE(ResolveOdCaptureMode(DXGI_FORMAT_R10G10B10A2_UNORM, hdr, mode));
-        EXPECT_EQ(mode, OdCaptureMode::Sdr);
+        for (bool active : {false, true}) {
+            EXPECT_TRUE(Resolve(DXGI_FORMAT_B8G8R8A8_UNORM, hdr, active, true, mode));
+            EXPECT_EQ(mode, OdCaptureMode::Sdr);
+        }
     }
 }
 
-TEST(OdCaptureMode, Fp16TonemapsUnlessOff) {
+TEST(OdCaptureMode, Rgb10SdrDesktopUnchanged) {
+    // An SDR 10 bpc desktop (hdr_active=false) stays SDR in every mode — the
+    // existing behaviour must not change.
     OdCaptureMode mode{};
-    EXPECT_TRUE(ResolveOdCaptureMode(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::TonemapSdr, mode));
+    for (HdrMode hdr : {HdrMode::Off, HdrMode::TonemapSdr, HdrMode::Hdr10}) {
+        EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, hdr, /*hdr_active=*/false, /*hdr10_ok=*/true, mode));
+        EXPECT_EQ(mode, OdCaptureMode::Sdr);
+    }
+    // An HDR-active 10 bpc desktop that is NOT requested as native Hdr10 (or on a
+    // non-HDR10 codec) also keeps SDR handling (unchanged legacy behaviour).
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, HdrMode::TonemapSdr, /*hdr_active=*/true, true, mode));
+    EXPECT_EQ(mode, OdCaptureMode::Sdr);
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, HdrMode::Hdr10, /*hdr_active=*/true, /*hdr10_ok=*/false, mode));
+    EXPECT_EQ(mode, OdCaptureMode::Sdr);
+}
+
+TEST(OdCaptureMode, Rgb10Hdr10DesktopIsNative) {
+    // An HDR-active 10 bpc desktop, native requested, HDR10-capable codec.
+    OdCaptureMode mode{};
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R10G10B10A2_UNORM, HdrMode::Hdr10, /*hdr_active=*/true, /*hdr10_ok=*/true, mode));
+    EXPECT_EQ(mode, OdCaptureMode::HdrNative);
+}
+
+TEST(OdCaptureMode, Fp16NativeWhenHdr10AndCapable) {
+    OdCaptureMode mode{};
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Hdr10, true, /*hdr10_ok=*/true, mode));
+    EXPECT_EQ(mode, OdCaptureMode::HdrNative);
+}
+
+TEST(OdCaptureMode, Fp16TonemapsForSdrModesAndH264) {
+    OdCaptureMode mode{};
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::TonemapSdr, true, true, mode));
     EXPECT_EQ(mode, OdCaptureMode::HdrToneMap);
-    // Hdr10 falls back to tone-map in this build (no native HDR10 output yet).
-    EXPECT_TRUE(ResolveOdCaptureMode(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Hdr10, mode));
+    // Hdr10 requested but codec cannot encode HDR10 (H.264) -> tone-map to SDR.
+    EXPECT_TRUE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Hdr10, true, /*hdr10_ok=*/false, mode));
     EXPECT_EQ(mode, OdCaptureMode::HdrToneMap);
-    // Off: HDR desktop is a defined capture error, not recordable.
-    EXPECT_FALSE(ResolveOdCaptureMode(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Off, mode));
+}
+
+TEST(OdCaptureMode, Fp16OffIsCaptureError) {
+    OdCaptureMode mode{};
+    EXPECT_FALSE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Off, true, true, mode));
 }
 
 TEST(OdCaptureMode, UnknownFormatRejected) {
     OdCaptureMode mode{};
-    EXPECT_FALSE(ResolveOdCaptureMode(DXGI_FORMAT_R8G8B8A8_UNORM, HdrMode::TonemapSdr, mode));
+    EXPECT_FALSE(Resolve(DXGI_FORMAT_R8G8B8A8_UNORM, HdrMode::TonemapSdr, false, true, mode));
 }
 
 } // namespace

@@ -5,13 +5,16 @@
 #include "codec_private.h"
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
+#include "gpu_hdr_pq.h"
 #include "gpu_hdr_tonemap.h"
 #include "hdr_tonemap.h"
+
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
 #include "preview_staging_ring.h"
 #include "session_internal.h"
 #include "yuv_to_bgra.h"
+#include <recorder_core/hdr_native.h>
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -357,6 +360,12 @@ void VideoThread::Run() {
     // HDR display's reported peak is trusted; otherwise the documented fallback
     // is used (an SDR-mode display still reports inflated EDID luminance caps).
     float hdrPeakScale = HdrPeakScale(false, 0.0f);
+    // Native HDR10 output is expected when HDR10 handling is selected, the
+    // captured display is HDR-active, and the codec can encode HDR10. The
+    // session colour metadata (BT.2020/PQ + mastering) and 10-bit pinning are
+    // assembled by the caller before the session starts; this flag only drives
+    // the capture-conversion path and is kept consistent by the same rule.
+    bool expectNativeHdr = false;
     if (useOdCapture) {
         std::string odErr;
         if (!odSrc.Open(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), odErr)) {
@@ -366,6 +375,8 @@ void VideoThread::Run() {
             return;
         }
         hdrPeakScale = HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits());
+        expectNativeHdr =
+            IsHdr10NativeEffective(m_state.config.hdr_mode, odSrc.HdrActive(), m_state.config.video_codec);
     } else {
         try {
             auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
@@ -755,6 +766,16 @@ void VideoThread::Run() {
     bool hdrToneMapActive = false;
     HdrToneMapper hdrToneMapper;
     winrt::com_ptr<ID3D11Texture2D> hdrSdrTex;
+
+    // Native HDR10 (PQ/BT.2020 -> P010) capture: the captured HDR surface is
+    // converted straight into the P010 encode slot, bypassing the SDR compositor
+    // and the VideoProcessor (which cannot convert HDR colour spaces). Decided at
+    // first-frame negotiation.
+    bool hdrNativeActive = false;
+    bool hdrPqInputIsPq = false; // true when the source is an already-PQ HDR10 R10G10B10A2 desktop
+    DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    HdrPqConverter hdrPqConverter;
+
     bool odCursorShapeValid = false;
     bool odCursorVisible = false;
     int32_t odCursorPosX = 0;
@@ -782,9 +803,31 @@ void VideoThread::Run() {
     //           an opaque "codec private data" mux error at stop).
     enum class OdFrameCheck { Ok, Skip, Fatal };
     bool odForeignFrameLogged = false;
+    // On an HDR-active display, OD hands out BGRA8 SDR compatibility ("seed")
+    // frames interleaved with the real scRGB FP16 desktop frames — reliably so
+    // right after DuplicateOutput1. When HDR handling is on, the session must
+    // negotiate its format from a real HDR frame, not lock onto an SDR seed, or
+    // an HDR desktop would silently record as DWM-tone-mapped SDR (and native
+    // HDR10 could never engage). Skip a bounded number of leading SDR frames
+    // while waiting for the HDR format; if none arrives, fall through to normal
+    // negotiation (SDR for tone-map; the native guard then reports honestly).
+    int odHdrSeedSkips = 0;
+    bool odHdrSeedLogged = false;
+    constexpr int kMaxHdrSeedSkips = 240;
     auto checkOdFrame = [&](ID3D11Texture2D* rawTex) -> OdFrameCheck {
         D3D11_TEXTURE2D_DESC rawDesc{};
         rawTex->GetDesc(&rawDesc);
+
+        if (odCapturedTex == nullptr && odSrc.HdrActive() && m_state.config.hdr_mode != HdrMode::Off &&
+            rawDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM && odHdrSeedSkips < kMaxHdrSeedSkips) {
+            ++odHdrSeedSkips;
+            if (!odHdrSeedLogged) {
+                odHdrSeedLogged = true;
+                logging::log(logging::LogLevel::Info, "video_thread",
+                             "HDR display delivered an SDR seed frame; waiting for the scRGB HDR format", {});
+            }
+            return OdFrameCheck::Skip;
+        }
 
         if (odCapturedTex != nullptr) {
             if (rawDesc.Format == odFrameFormat && rawDesc.Width == sourceWidth && rawDesc.Height == sourceHeight) {
@@ -818,7 +861,9 @@ void VideoThread::Run() {
         }
 
         OdCaptureMode capMode = OdCaptureMode::Sdr;
-        if (!ResolveOdCaptureMode(rawDesc.Format, m_state.config.hdr_mode, capMode)) {
+        const bool hdr10OutputSupported = CodecSupportsHdr10Native(m_state.config.video_codec);
+        if (!ResolveOdCaptureMode(rawDesc.Format, m_state.config.hdr_mode, odSrc.HdrActive(), hdr10OutputSupported,
+                                  capMode)) {
             char fmtBuf[32];
             std::ostringstream err;
             err << "DXGI OD: unsupported desktop capture format "
@@ -830,12 +875,32 @@ void VideoThread::Run() {
                     << "Enable HDR tone-mapping, or switch the display to SDR. preInit={" << diag.str() << "}";
             } else {
                 err << "; supported: B8G8R8A8_UNORM (8-bit SDR), R10G10B10A2_UNORM (10 bpc SDR), "
-                    << "R16G16B16A16_FLOAT (HDR, tone-mapped). preInit={" << diag.str() << "}";
+                    << "R16G16B16A16_FLOAT (HDR, tone-mapped or native HDR10). preInit={" << diag.str() << "}";
             }
             m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
             return OdFrameCheck::Fatal;
         }
         const bool toneMap = (capMode == OdCaptureMode::HdrToneMap);
+        const bool nativeHdr = (capMode == OdCaptureMode::HdrNative);
+        // The caller committed BT.2020/PQ colour metadata + 10-bit for a native
+        // session; if the display instead delivered a surface that resolves to
+        // something else (e.g. an SDR compatibility surface because Advanced-Color
+        // duplication was unavailable), the tags would not match the pixels. Fail
+        // explicitly rather than encode a mislabelled stream.
+        if (expectNativeHdr && !nativeHdr) {
+            char fmtBuf[32];
+            std::ostringstream err;
+            err << "DXGI OD: native HDR10 output was configured but the display delivered a "
+                << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
+                << " surface that cannot carry it (Advanced-Color duplication unavailable). "
+                << "preInit={" << diag.str() << "}";
+            m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
+            return OdFrameCheck::Fatal;
+        }
+        // scRGB FP16 tone-map and native HDR10 both sample the capture texture as
+        // a shader resource; only the plain SDR path feeds the VideoProcessor
+        // directly from a render-target texture.
+        const bool needsSrvSource = toneMap || nativeHdr;
         if (rawDesc.Width != sourceWidth || rawDesc.Height != sourceHeight) {
             std::ostringstream err;
             err << "DXGI OD: capture frame size " << rawDesc.Width << "x" << rawDesc.Height
@@ -850,7 +915,8 @@ void VideoThread::Run() {
         // without a recorded failure — silent starvation one stage later. For a
         // tone-mapped HDR desktop the VP input is the BGRA8 tone-map output, not
         // the FP16 capture format (the D3D11 VP cannot convert scRGB HDR at all).
-        {
+        // The native HDR10 path never touches the VP, so it skips this check.
+        if (!nativeHdr) {
             const DXGI_FORMAT vpInputFormat = toneMap ? DXGI_FORMAT_B8G8R8A8_UNORM : rawDesc.Format;
             UINT formatSupport = 0;
             const HRESULT supHr = videoEnum->CheckVideoProcessorFormat(vpInputFormat, &formatSupport);
@@ -876,9 +942,9 @@ void VideoThread::Run() {
         desc.SampleDesc = {1, 0};
         desc.Usage = D3D11_USAGE_DEFAULT;
         // SDR: the VP reads odCapturedTex directly (kept as a render target as
-        // before). HDR: the tone-map pass samples odCapturedTex/ring as a shader
-        // resource, so bind for SRV instead.
-        desc.BindFlags = toneMap ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
+        // before). Tone-map and native HDR10: the shader pass samples
+        // odCapturedTex/ring as a shader resource, so bind for SRV instead.
+        desc.BindFlags = needsSrvSource ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
 
         HRESULT odHr = d3dDevice->CreateTexture2D(&desc, nullptr, odCapturedTex.put());
         if (FAILED(odHr)) {
@@ -890,13 +956,17 @@ void VideoThread::Run() {
         }
         odFrameFormat = rawDesc.Format;
         hdrToneMapActive = toneMap;
+        hdrNativeActive = nativeHdr;
+        hdrPqInputIsPq = (rawDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
+        hdrPqSrcFormat = rawDesc.Format;
 
         char fmtBuf[32];
         char modeBuf[32];
         const logging::LogField fields[] = {
             {"frameFormat", OdCaptureFormatName(odFrameFormat, fmtBuf, sizeof(fmtBuf))},
             {"modeDescFormat", OdCaptureFormatName(odSrc.Format(), modeBuf, sizeof(modeBuf))},
-            {"handling", toneMap ? "HDR scRGB -> SDR BT.709 tone-map" : "SDR"}};
+            {"handling",
+             nativeHdr ? "native HDR10 PQ/BT.2020 -> P010" : (toneMap ? "HDR scRGB -> SDR BT.709 tone-map" : "SDR")}};
         logging::log(logging::LogLevel::Info, "video_thread", "DXGI OD capture format negotiated",
                      std::span<const logging::LogField>(fields, std::size(fields)));
         return OdFrameCheck::Ok;
@@ -1137,6 +1207,19 @@ void VideoThread::Run() {
         return hdrSdrTex.get();
     };
 
+    // Native HDR10: convert the captured HDR surface straight into the P010
+    // encode slot texture (colour + crop/scale/letterbox), replacing the
+    // tone-map + compositor + VideoProcessor route. Records the failure and
+    // returns false on error.
+    auto encodeNativeHdrSlot = [&](ID3D11Texture2D* source, int32_t slot) -> bool {
+        std::string pqErr;
+        if (!hdrPqConverter.Convert(source, nv12Textures[slot].get(), pqErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "HDR10 native convert: " + pqErr);
+            return false;
+        }
+        return true;
+    };
+
     auto compositeFrameGpu = [&](ID3D11Texture2D* source, const WebcamOverlayLive& overlay) -> ID3D11Texture2D* {
         if (!gpuCompositorReady || source == nullptr) {
             return source;
@@ -1363,16 +1446,60 @@ void VideoThread::Run() {
         }
     }
 
+    // --- Native HDR10 converter init (deferred until the capture format is
+    // negotiated) --- The captured HDR surface is converted directly to a
+    // PQ/BT.2020 P010 encode frame (colour + crop / contain-fit scale /
+    // letterbox), bypassing the SDR compositor and VideoProcessor.
+    if (hdrNativeActive) {
+        HdrPqConverter::Geometry geom;
+        geom.src_crop_x = hasCrop ? static_cast<uint32_t>(cropX) : 0u;
+        geom.src_crop_y = hasCrop ? static_cast<uint32_t>(cropY) : 0u;
+        geom.src_crop_w = sourceContentWidth;
+        geom.src_crop_h = sourceContentHeight;
+        geom.src_width = sourceWidth;
+        geom.src_height = sourceHeight;
+        geom.content_x = static_cast<uint32_t>(contentRect.x);
+        geom.content_y = static_cast<uint32_t>(contentRect.y);
+        geom.content_w = static_cast<uint32_t>(contentRect.width);
+        geom.content_h = static_cast<uint32_t>(contentRect.height);
+        geom.encode_width = encodeWidth;
+        geom.encode_height = encodeHeight;
+        std::string pqErr;
+        if (!hdrPqConverter.Init(d3dDevice.get(), d3dContext.get(), geom, hdrPqInputIsPq, hdrPqSrcFormat, pqErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR10 native converter init: " + pqErr);
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+        // Webcam PiP + cursor are composited in linear scRGB FP16 before the PQ
+        // conversion (see the compositor init below), so soft chroma-keyed edges
+        // blend correctly. The already-PQ R10G10B10A2 desktop variant is the
+        // exception — its surface is non-linear, so linear compositing does not
+        // apply and overlays are omitted for that (rare) sub-path.
+        if (hdrPqInputIsPq && needsGpuCompositor) {
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "native HDR10 from an already-PQ 10-bit desktop: webcam PiP and cursor overlay are omitted "
+                         "(the surface is non-linear, so linear-light compositing does not apply)",
+                         {});
+        }
+    }
+
     // --- GPU compositor init (deferred until the capture format is known) ---
     // WGC frames are always BGRA8 (frame pool format); OD frames use the format
     // negotiated from the first acquired frame above. If stop was requested
     // before the first OD frame arrived the format is unknown — skip init; the
     // encode loop below will not run.
-    if (needsGpuCompositor && (!useOdCapture || odCapturedTex != nullptr)) {
-        // An HDR desktop is composited after tone-mapping, so the compositor
-        // works on the SDR BGRA8 surface, not the FP16 capture format.
+    // The already-PQ R10G10B10A2 native sub-path composites nothing (non-linear
+    // surface); every other path gets a compositor matched to its working format.
+    const bool nativeOverlaysUnsupported = hdrNativeActive && hdrPqInputIsPq;
+    if (needsGpuCompositor && !nativeOverlaysUnsupported && (!useOdCapture || odCapturedTex != nullptr)) {
+        // Native HDR10 (FP16): overlays are composited in linear scRGB FP16 before
+        // the PQ conversion. Tone-mapped HDR: composited on the SDR BGRA8 surface.
+        // Plain SDR: the negotiated capture format.
         const DXGI_FORMAT compositorFormat =
-            hdrToneMapActive ? DXGI_FORMAT_B8G8R8A8_UNORM : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM);
+            hdrNativeActive ? DXGI_FORMAT_R16G16B16A16_FLOAT
+                            : (hdrToneMapActive ? DXGI_FORMAT_B8G8R8A8_UNORM
+                                                : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM));
         std::string compErr;
         if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
                                 compositorFormat)) {
@@ -2126,7 +2253,41 @@ void VideoThread::Run() {
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
-                if (rawSourceTex != nullptr) {
+                if (rawSourceTex != nullptr && hdrNativeActive) {
+                    // Native HDR10: composite webcam/cursor in linear scRGB FP16,
+                    // then convert straight into the P010 slot (colour + geometry).
+                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    const auto comp_t0 = std::chrono::steady_clock::now();
+                    ID3D11Texture2D* nativeSrc = compositeFrameGpu(rawSourceTex, overlay);
+                    const auto comp_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnCompositorSubmit(
+                        comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
+                        needsGpuCompositor);
+                    if (nativeSrc == nullptr) {
+                        nvenc.ReleaseSlot(slot);
+                        goto end_encode_loop;
+                    }
+                    if (useOdCapture) {
+                        odCapturedTexValid = false;
+                    } else {
+                        pendingWgcTex = nullptr;
+                    }
+                    const auto conv_t0 = std::chrono::steady_clock::now();
+                    if (!encodeNativeHdrSlot(nativeSrc, slot)) {
+                        nvenc.ReleaseSlot(slot);
+                        goto end_encode_loop;
+                    }
+                    const auto conv_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnVpbltSubmit(
+                        conv_t1, std::chrono::duration<double, std::milli>(conv_t1 - conv_t0).count());
+                    if (refNv12 != nullptr) {
+                        d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
+                        refNv12Valid = true;
+                    }
+                    performSnapshotIfRequested(slot);
+                    publishPreviewIfDue(slot, pts_ns);
+                    frameWritten = true;
+                } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(rawSourceTex);
@@ -2422,7 +2583,53 @@ void VideoThread::Run() {
                 // Acquire a free input slot
                 int32_t slot = nvenc.AcquireFreeSlot();
 
-                if (slot >= 0) {
+                if (slot >= 0 && hdrNativeActive) {
+                    // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
+                    // FP16, then convert straight into the P010 slot.
+                    const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    const auto comp_t0 = std::chrono::steady_clock::now();
+                    ID3D11Texture2D* nativeSrc = compositeFrameGpu(latestTex.get(), overlay);
+                    const auto comp_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnCompositorSubmit(
+                        comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
+                        needsGpuCompositor);
+                    if (nativeSrc == nullptr) {
+                        nvenc.ReleaseSlot(slot);
+                        goto end_encode_loop;
+                    }
+                    if (useOdCapture) {
+                        odCapturedTexValid = false;
+                    }
+                    const auto conv_t0 = std::chrono::steady_clock::now();
+                    if (!encodeNativeHdrSlot(nativeSrc, slot)) {
+                        nvenc.ReleaseSlot(slot);
+                        goto end_encode_loop;
+                    }
+                    const auto conv_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnVpbltSubmit(
+                        conv_t1, std::chrono::duration<double, std::milli>(conv_t1 - conv_t0).count());
+                    latestTex = nullptr;
+
+                    performSnapshotIfRequested(slot);
+                    publishPreviewIfDue(slot, framePts_ns);
+                    maybeArmSplit(framePts_ns);
+
+                    EncodedVideoPacket pkt;
+                    std::string encErr;
+                    m_state.diagnostics.OnEncodeSubmitted();
+                    const auto enc_t0 = std::chrono::steady_clock::now();
+                    bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                    const auto enc_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnEncodeLatency(
+                        enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                    if (!encOk) {
+                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
+                        break;
+                    }
+                    ++videoFramesCaptured;
+                    if (!routePacket(std::move(pkt)))
+                        goto end_encode_loop;
+                } else if (slot >= 0) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());

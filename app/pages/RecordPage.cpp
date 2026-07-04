@@ -1370,6 +1370,14 @@ uint32_t RecordPage::selectedTargetWindowPid() const {
     return 0;
 }
 
+std::optional<recorder_core::CaptureTarget> RecordPage::selectedCaptureTarget() const {
+    const int idx = view_model_.selected_target_index;
+    if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size())) {
+        return std::nullopt;
+    }
+    return view_model_.targets[static_cast<std::size_t>(idx)];
+}
+
 void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
     applying_external_config_ = true;
     // ---- RAII clear of the flag on all exit paths ----

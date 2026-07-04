@@ -15,6 +15,7 @@
 #include <winrt/base.h>
 
 #include <recorder_core/codec_types.h>
+#include <recorder_core/hdr_native.h>
 
 namespace recorder_core {
 
@@ -59,6 +60,14 @@ class DxgiOdCaptureSrc {
         return m_max_luminance_nits;
     }
 
+    // Full HDR facts of the duplicated display (DXGI_OUTPUT_DESC1: hdr_active,
+    // chromaticity primaries, white point, luminance range). Available after
+    // Open(). Feeds native HDR10 mastering-display metadata; the primaries /
+    // luminance are only meaningful when hdr_active is true.
+    const HdrDisplayFacts& DisplayFacts() const noexcept {
+        return m_hdr_facts;
+    }
+
     // Non-blocking (timeout_ms=0) or timed acquire.
     // On success: returns true; *out_texture is borrowed until ReleaseFrame().
     // On timeout: returns false, *out_hr == DXGI_ERROR_WAIT_TIMEOUT.
@@ -87,6 +96,7 @@ class DxgiOdCaptureSrc {
     bool m_frame_held = false;
     bool m_hdr_active = false;
     float m_max_luminance_nits = 0.0f;
+    HdrDisplayFacts m_hdr_facts;
 };
 
 // Locate the IDXGIAdapter1 that owns hmonitor.
@@ -115,8 +125,10 @@ bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept;
 
 // How a captured OD frame format is handled by the encode pipeline.
 enum class OdCaptureMode {
-    Sdr,        // BGRA8 / R10G10B10A2 desktop: straight to the VideoProcessor.
+    Sdr,        // BGRA8 / SDR R10G10B10A2 desktop: straight to the VideoProcessor.
     HdrToneMap, // scRGB FP16 HDR desktop: tone-mapped to SDR BT.709 first.
+    HdrNative,  // HDR desktop kept as native HDR10: PQ/BT.2020 P010 (scRGB FP16
+                // is transferred to PQ; an HDR10 R10G10B10A2 desktop is already PQ).
 };
 
 // Resolve how a first-frame OD capture format should be treated for the given
@@ -124,9 +136,12 @@ enum class OdCaptureMode {
 // or when it is an HDR (FP16) desktop while HDR handling is Off (a defined
 // capture error, matching the pre-HDR behaviour). On success sets out_mode.
 //
-// Hdr10 currently resolves to HdrToneMap: the native HDR10 output path is not
-// yet implemented, so an HDR desktop is tone-mapped to SDR either way.
-bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, OdCaptureMode& out_mode) noexcept;
+// hdr_active disambiguates an HDR10 R10G10B10A2 desktop from an SDR 10 bpc one
+// (the format is identical). hdr10_output_supported is true only for codecs that
+// can encode HDR10 (HEVC/AV1); when false an HDR desktop requested as Hdr10 is
+// tone-mapped to SDR instead of kept native.
+bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active, bool hdr10_output_supported,
+                          OdCaptureMode& out_mode) noexcept;
 
 // Short human-readable name for the formats OD capture can plausibly see.
 // Unknown values render as "DXGI_FORMAT(<n>)" into fallback_buf.

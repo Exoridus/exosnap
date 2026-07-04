@@ -438,8 +438,19 @@ TEST(GpuCompositorTest, InitRejectsUnsupportedRenderFormat) {
 
     GpuCompositor compositor;
     std::string err;
-    EXPECT_FALSE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err, DXGI_FORMAT_R16G16B16A16_FLOAT));
+    EXPECT_FALSE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err, DXGI_FORMAT_R8G8B8A8_UNORM));
     EXPECT_FALSE(err.empty());
+}
+
+TEST(GpuCompositorTest, InitAcceptsFp16ForNativeHdr) {
+    // FP16 is the native HDR10 compositing target (linear-light overlay blend).
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    EXPECT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 4, err, DXGI_FORMAT_R16G16B16A16_FLOAT));
+    EXPECT_TRUE(err.empty()) << err;
 }
 
 TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay) {

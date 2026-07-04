@@ -5,6 +5,7 @@
 #include <capability/resolver.h>
 #include <recorder_core/pipeline_diagnostics.h>
 #include <recorder_core/pipeline_health.h>
+#include <recorder_core/recorder_session.h>
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 class QLabel;
 class QPushButton;
@@ -52,6 +54,11 @@ class DiagnosticsPage : public QWidget {
                            const VideoSettingsModel& video, const capability::AudioUiState& audio,
                            const std::string& profile_name, const std::string& hotkeys_summary,
                            const std::string& settings_path, bool hotkeys_ok);
+
+    // The currently selected capture target, used to resolve the target display's
+    // HDR status for the HDR10 + H.264 pre-flight blocker (rec.hdr.h264). Set by
+    // the owner whenever the selection changes; nullopt = no selection / SDR.
+    void setSelectedCaptureTarget(const std::optional<recorder_core::CaptureTarget>& target);
 
     // Live recording-pipeline telemetry, delivered on the UI thread (~5 Hz while
     // recording, plus one final frozen snapshot). Safe to call when idle.
@@ -203,6 +210,7 @@ class DiagnosticsPage : public QWidget {
     bool hotkeys_ok_ = false;
     bool data_ready_ = false;
     bool expert_mode_enabled_ = false;
+    std::optional<recorder_core::CaptureTarget> selected_capture_target_;
     capability::UserRecorderConfig active_user_config_{};
     capability::ResolveResult profile_validation_;
 

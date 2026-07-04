@@ -313,13 +313,14 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   pure lookup from a display device name to its facts. The engine stays pure: the caller resolves
   the selected target's HMONITOR → device name → facts and supplies gate (3) via
   `SetCaptureTargetHdrActive`, mirroring the existing `SetOutputPathWritable` seam.
-- **Known limitation (headless).** The production `DiagnosticsPage` caller does not yet
-  supply the capture target's HDR-active state (it also still hardcodes `monitor_refresh_hz = 0`),
-  so the blocker is fully implemented + unit-tested at the engine boundary but will not fire in the
-  running app until a later UI change wires the selected-target → display resolution. This is
-  intentional sequencing: the wiring lands together with the capture-target→display resolution
-  work, not a loosened condition — the firing condition was NOT broadened to "always fire" in the
-  absence of that wiring.
+- **Capture-target → display wiring (live).** `DiagnosticsPage` now supplies the capture target's
+  HDR-active state: it takes the selected `CaptureTarget` (`setSelectedCaptureTarget`, fed by
+  `MainWindow` from `RecordPage::selectedCaptureTarget`), resolves the monitor's HMONITOR → Windows
+  display-device-name → `capability::FindDisplayByName(caps_.runtime.displays, …)`, and passes the
+  result through `SetCaptureTargetHdrActive` in `refreshOverview` — right beside the existing
+  `SetOutputPathWritable` call. Window/region targets resolve to SDR (their WGC capture never
+  engages HDR10). With this, gate (3) is real and the `rec.hdr.h264` blocker fires in the running
+  app on an HDR-active desktop.
 
 ### Follow-up hardening (2026-07-04)
 
@@ -348,8 +349,6 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   the proposed codec (`fix.hdr.codec.av1` / `fix.hdr.codec.hevc`, "Switch to AV1" /
   "Switch to HEVC"); the MainWindow handler keys off both ids so it applies exactly the codec the
   FixAction proposed, never a blind AV1.
-- **Remaining dormancy cause.** With the three fixes above, the `hdr_mode` plumbing and the fix
-  path are both live end-to-end. The blocker still cannot fire in the running app for one reason
-  only: `DiagnosticsPage` does not yet call `SetCaptureTargetHdrActive` with the selected capture
-  target's real display HDR state (gate 3) — that capture-target→display HDR-active wiring is
-  deferred to a later UI change, unchanged from the note above.
+- **Dormancy resolved.** With the `hdr_mode` plumbing, the fix path, and the capture-target →
+  display HDR-active wiring (above) all in place, `rec.hdr.h264` is live end-to-end: it fires in the
+  running app when HDR10 handling is selected on an HDR-active desktop with a non-HDR10 codec.
