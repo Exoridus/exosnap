@@ -75,6 +75,8 @@ exosnap_add_gtest(
   TEST_PREFIX capability.
   SOURCES tests/test_runtime_merge.cpp
   LIBRARIES exosnap_capability
+  # BuildFromHardwareQuery() issues a live GPU/encoder capability query.
+  LABELS live
 )
 
 exosnap_add_gtest(
@@ -96,6 +98,9 @@ exosnap_add_gtest(
   TEST_PREFIX capability.
   SOURCES tests/test_adapter_enum.cpp
   LIBRARIES exosnap_capability
+  # EnumerateAdapters() is a live DXGI call; the "at least one real adapter"
+  # assertions GTEST_SKIP on GPU-less/headless runners (see 9e3bfe4).
+  LABELS live
 )
 
 exosnap_add_gtest(

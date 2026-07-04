@@ -23,6 +23,7 @@ static inline const char* av_err2str_trim_test(int errnum) noexcept {
 
 #include "matroska_stream_writer.h"
 #include "recorder_core/mp4_remuxer.h"
+#include "test_unique_temp.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -122,14 +123,11 @@ static std::string BuildTrimMkv(const std::string& path, double seconds = 6.0, i
     return path;
 }
 
-// Build a temp path unique to the currently-running test (same pattern as
-// test_mp4_remuxer.cpp to avoid collisions with parallel ctest processes).
+// Build a temp path unique across processes/worktrees and calls (folds a
+// per-process random token + counter + the running test name; see
+// test_unique_temp.h).
 static std::string UniqueTrimTempPath(const char* suffix) {
-    auto tmp = std::filesystem::temp_directory_path();
-    std::string name = "anon";
-    if (const ::testing::TestInfo* info = ::testing::UnitTest::GetInstance()->current_test_info())
-        name = info->name();
-    return (tmp / ("exosnap_trim_" + name + "_" + suffix)).string();
+    return exosnap_test::UniqueTempPathStr(std::string("trim_") + suffix);
 }
 
 // ---------------------------------------------------------------------------

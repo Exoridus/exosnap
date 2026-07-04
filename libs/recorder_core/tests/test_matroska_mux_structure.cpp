@@ -35,6 +35,8 @@
 #include <string>
 #include <vector>
 
+#include "test_unique_temp.h"
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -421,7 +423,7 @@ static bool WriteTestMkv(const std::string& path, const std::vector<uint8_t>& vi
 class MatroskaMuxStructureTest : public ::testing::Test {
   protected:
     void SetUp() override {
-        tmp_ = (std::filesystem::temp_directory_path() / "exosnap_mux_struct_test.mkv").string();
+        tmp_ = exosnap_test::UniqueTempPathStr("mux_struct.mkv");
     }
     void TearDown() override {
         std::remove(tmp_.c_str());

@@ -2,8 +2,8 @@ include_guard(GLOBAL)
 
 function(exosnap_add_gtest)
   set(options)
-  set(one_value_args NAME TEST_PREFIX)
-  set(multi_value_args SOURCES LIBRARIES)
+  set(one_value_args NAME TEST_PREFIX TIMEOUT)
+  set(multi_value_args SOURCES LIBRARIES LABELS)
 
   cmake_parse_arguments(
     ARG
@@ -29,14 +29,13 @@ function(exosnap_add_gtest)
     ${ARG_LIBRARIES}
   )
 
-  # Stage the FFmpeg + core Qt runtime DLLs next to the test binary so the
-  # default (POST_BUILD) gtest discovery can launch it at build time without Qt
-  # or FFmpeg on PATH — otherwise it fails to start (0xc0000135) on clean CI
-  # runners. FFmpeg in particular is never on PATH (it lives under _deps/).
-  # NOTE: do not switch discovery to DISCOVERY_MODE PRE_TEST — the CI presets
-  # use the Visual Studio multi-config generator and ctest runs without a
-  # configuration, which makes PRE_TEST include files resolve to an empty
-  # tests-file name ("include could not find requested file").
+  # Stage the FFmpeg + core Qt runtime DLLs next to the test binary so it can be
+  # launched at CTest time without Qt or FFmpeg on PATH — otherwise it fails to
+  # start (0xc0000135) on clean CI runners. FFmpeg in particular is never on
+  # PATH (it lives under _deps/). The test exe target depends on the stage
+  # target below, so building the tests always refreshes the staged DLLs even
+  # though we no longer launch the exe at build time (see the add_test note near
+  # the end of this function — one CTest entry per binary, no discovery run).
   #
   # CONCURRENCY: every exosnap_add_gtest target in a given CMakeLists lands its
   # exe in the SAME output directory (e.g. all of libs/update/tests, or the 84
@@ -95,20 +94,47 @@ function(exosnap_add_gtest)
   endif()
   add_dependencies(${ARG_NAME} ${_exosnap_stage_target})
 
-  include(GoogleTest)
-  # The post-build discovery launches the freshly-built binary to enumerate its
-  # tests. On clean/cold CI runners the first launch pays for loading the staged
-  # Qt + FFmpeg DLLs, which can exceed CTest's 5 s DISCOVERY_TIMEOUT default and
-  # produce a spurious "process terminated due to timeout" failure (observed as a
-  # transient, re-run-green flake during the 0.6.0 wave). Raise the ceiling well
-  # above any real cold-start cost; it only bounds enumeration, not test runtime.
-  set(_exosnap_discovery_timeout 60)
-  if(ARG_TEST_PREFIX)
-    gtest_discover_tests(${ARG_NAME}
-      TEST_PREFIX "${ARG_TEST_PREFIX}"
-      DISCOVERY_TIMEOUT ${_exosnap_discovery_timeout})
+  # Register ONE CTest entry per test BINARY (not per gtest case). We deliberately
+  # do NOT use gtest_discover_tests here:
+  #   * Discovery launched the freshly-built exe at BUILD time to enumerate its
+  #     ~N gtest cases into individual CTest entries. Across ~176 binaries that
+  #     produced ~2900 entries — i.e. ~2900 process spawns + QApplication inits
+  #     at `ctest` time, which dominated total test wall-clock, and one extra exe
+  #     launch per binary at build time.
+  #   * One entry per binary keeps the runtime cost to ~176 spawns. gtest_main
+  #     still runs every case inside the process and `--output-on-failure` prints
+  #     the exact failing `Suite.Case` line, so failure diagnosis is unchanged.
+  #   * It also sidesteps the multi-config discovery trap: the CI presets use a
+  #     multi-config generator (Visual Studio locally; Ninja Multi-Config-style
+  #     invocation via `ctest -C <cfg>`), where POST_TEST/PRE_TEST discovery
+  #     files could resolve to an empty config name.
+  #
+  # `add_test(... COMMAND <target>)` expands <target> to its built exe path via a
+  # generator expression, so on multi-config generators `ctest` still needs
+  # `-C <config>` (already the case in every preset and CI invocation).
+  #
+  # TEST_PREFIX semantics are preserved by folding the prefix into the single
+  # entry name, e.g. TEST_PREFIX "recorder_core." + NAME "test_mp4_remuxer"
+  # -> CTest entry "recorder_core.test_mp4_remuxer".
+  set(_exosnap_test_name "${ARG_TEST_PREFIX}${ARG_NAME}")
+  add_test(NAME "${_exosnap_test_name}" COMMAND ${ARG_NAME})
+
+  # Per-binary timeout. Default 300 s is comfortably above any current binary
+  # (the slowest run a handful of seconds); override via TIMEOUT for a binary
+  # that legitimately needs longer. Because the whole binary is one entry, this
+  # bounds the sum of its cases, not a single case.
+  if(ARG_TIMEOUT)
+    set(_exosnap_timeout ${ARG_TIMEOUT})
   else()
-    gtest_discover_tests(${ARG_NAME}
-      DISCOVERY_TIMEOUT ${_exosnap_discovery_timeout})
+    set(_exosnap_timeout 300)
+  endif()
+  set_tests_properties("${_exosnap_test_name}" PROPERTIES TIMEOUT ${_exosnap_timeout})
+
+  # Optional CTest labels. `live` marks binaries that issue real hardware queries
+  # (DXGI adapter enumeration, NVENC/WASAPI probes) and therefore behave
+  # differently — or only GTEST_SKIP — on GPU-/device-less runners. `ctest -LE
+  # live` then runs the fully-deterministic subset with no hardware present.
+  if(ARG_LABELS)
+    set_tests_properties("${_exosnap_test_name}" PROPERTIES LABELS "${ARG_LABELS}")
   endif()
 endfunction()

@@ -104,6 +104,24 @@ During implementation, workers should use the smallest sufficient validation:
 
 Canonical principle: `Minimal validation during development; complete validation once at the final gate.`
 
+### Running tests
+
+`scripts/run-tests.ps1` is the standard entry point for running the suite — use
+it instead of invoking `ctest` directly. It sets the required environment (a
+throwaway `EXOSNAP_CONFIG_DIR`, `QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH`, Qt
+on `PATH`), writes the full log to `<BuildDir>/Testing/last-run.log`, and prints
+only a compact summary plus the exact failing gtest cases.
+
+- Whole suite: `pwsh scripts/run-tests.ps1`
+- Focused: `pwsh scripts/run-tests.ps1 -Filter <regex>` (matches test **binary**
+  names, e.g. `recorder_core.` — each CTest entry is one binary, not one gtest
+  case; gtest_main runs all cases in-process and still prints the exact failing
+  `Suite.Case`).
+- No-GPU host: `pwsh scripts/run-tests.ps1 -ExcludeLabel live` skips binaries
+  that issue real hardware queries (DXGI adapter enumeration, GPU capability
+  probes).
+- Build first: add `-Build` to do a full build before testing.
+
 ### Final validation
 
 Run once after the integrated branch is complete:

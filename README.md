@@ -157,10 +157,32 @@ Final gate:
 scripts\check-format.ps1
 git diff --check
 cmake --build --preset windows-x64-debug
-ctest --preset windows-x64-debug --output-on-failure
+scripts\run-tests.ps1
 scripts\check-quality.ps1 -StaticOnly
 cmake --build --preset windows-x64-release-exosnap
 ```
+
+### Running the tests
+
+`scripts\run-tests.ps1` is the standard way to run the suite. It sets the
+environment every test binary needs (a throwaway `EXOSNAP_CONFIG_DIR`,
+`QT_QPA_PLATFORM=offscreen`, `QT_PLUGIN_PATH`, Qt on `PATH`), writes the full
+log to `<BuildDir>/Testing/last-run.log`, and prints only a compact summary plus
+the exact failing gtest cases.
+
+```powershell
+scripts\run-tests.ps1                      # whole suite (build/windows-x64-debug)
+scripts\run-tests.ps1 -Filter recorder_core.   # one lib (ctest -R on binary name)
+scripts\run-tests.ps1 -Build               # full build first, then test
+scripts\run-tests.ps1 -ExcludeLabel live   # skip binaries that query real GPU/hardware
+```
+
+Each CTest entry is one test **binary** (not one gtest case): gtest_main runs
+every case inside the process and `--output-on-failure` still prints the exact
+failing `Suite.Case`. So `-R`/`-Filter` matches binary names (e.g.
+`recorder_core.`, `capability.`), and binaries that touch real hardware carry
+the `live` label. Raw ctest still works:
+`ctest --preset windows-x64-debug --output-on-failure`.
 
 `scripts\check-quality.ps1` keeps its default configure/build/test behavior for humans and hooks.
 Use `-StaticOnly` after a full build and CTest have already run, so final validation does not rebuild

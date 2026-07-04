@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "test_unique_temp.h"
+
 // These tests exercise the SPLIT-RECORDING-R1 engine primitives that are
 // testable without a live GPU session:
 //   - DeriveSegmentPath: naming + collision policy (pure function)
@@ -245,7 +247,7 @@ TEST(DeriveSegmentPathTest, PreservesExtensionAndStemWithDots) {
 
 TEST(DeriveSegmentPathTest, CollisionAppendsDisambiguator) {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "exosnap_split_collision";
+    const fs::path dir = exosnap_test::UniqueTempPath("splitdir");
     fs::remove_all(dir);
     fs::create_directories(dir);
     const fs::path base = dir / "rec.mkv";
@@ -267,7 +269,7 @@ TEST(DeriveSegmentPathTest, CollisionAppendsDisambiguator) {
 
 TEST(SplitSegmentTest, ThreeSegmentsEachIndependentlyValid) {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "exosnap_split_three";
+    const fs::path dir = exosnap_test::UniqueTempPath("splitdir");
     fs::remove_all(dir);
     fs::create_directories(dir);
     const fs::path base = dir / "session.mkv";
@@ -304,7 +306,7 @@ TEST(SplitSegmentTest, ThreeSegmentsEachIndependentlyValid) {
 
 TEST(SplitSegmentTest, FailureOnLaterSegmentLeavesEarlierIntact) {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "exosnap_split_fail";
+    const fs::path dir = exosnap_test::UniqueTempPath("splitdir");
     fs::remove_all(dir);
     fs::create_directories(dir);
     const fs::path base = dir / "session.mkv";
@@ -377,7 +379,7 @@ TEST(RecordingSplitSettingsTest, EqualityChecksAllFields) {
 
 TEST(SplitSizeTriggerTest, BytesWrittenGrowsAcrossPackets) {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "exosnap_size_split_bytes";
+    const fs::path dir = exosnap_test::UniqueTempPath("splitdir");
     fs::remove_all(dir);
     fs::create_directories(dir);
     const fs::path path = dir / "size_test.mkv";
