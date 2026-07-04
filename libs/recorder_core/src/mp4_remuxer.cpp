@@ -230,30 +230,45 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             out_st->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
         }
 
-        // Color tags — ensure the MP4 output carries a colour description (colr
-        // box + VUI signalling). avcodec_parameters_copy already copies the
-        // color_primaries / color_trc / color_space / color_range fields from
-        // the input AVCodecParameters, so if the source MKV was written with
-        // KaxVideoColour tags (ADR 0032) libavformat's Matroska demuxer will
-        // have populated them and the copy suffices. For older files or
-        // truncated containers where the demuxer returns UNSPECIFIED (0 / 2),
-        // apply the SDR Rec.709 limited-range fallback so the output MP4 is
-        // always explicitly tagged and players never have to guess.
+        // Color description — the MP4 output must carry the source's colour
+        // identity, not a hardcoded SDR one. avcodec_parameters_copy copies the
+        // color_primaries / color_trc / color_space / color_range CICP fields
+        // AND the coded_side_data array from the input AVCodecParameters. So a
+        // source MKV written with KaxVideoColour tags (ADR 0032) — SDR BT.709 or
+        // HDR10 BT.2020/PQ — round-trips verbatim: the mov muxer emits the colr
+        // (nclx) box from the CICP fields and, for HDR sources that carry
+        // KaxVideoColourMasterMeta, the mdcv (mastering-display) box from the
+        // copied AV_PKT_DATA_MASTERING_DISPLAY_METADATA side data. Content-light-
+        // level is only emitted when the source carries it; our recordings set no
+        // MaxCLL/MaxFALL, so no clli box is written (absent is correct — an empty
+        // clli would be a conformance defect).
+        //
+        // For older or truncated files where the demuxer returns UNSPECIFIED
+        // (0 / 2), apply the SDR Rec.709 limited-range fallback so the output is
+        // always explicitly tagged. The fallback is suppressed when the stream
+        // carries mastering-display metadata: an HDR file with a partially
+        // UNSPECIFIED CICP field must not have SDR BT.709 primaries stamped over
+        // it, which would desync the colr box from the mdcv box.
         if (out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            if (out_st->codecpar->color_primaries == AVCOL_PRI_UNSPECIFIED ||
-                out_st->codecpar->color_primaries == AVCOL_PRI_RESERVED0) {
-                out_st->codecpar->color_primaries = AVCOL_PRI_BT709;
-            }
-            if (out_st->codecpar->color_trc == AVCOL_TRC_UNSPECIFIED ||
-                out_st->codecpar->color_trc == AVCOL_TRC_RESERVED0) {
-                out_st->codecpar->color_trc = AVCOL_TRC_BT709;
-            }
-            if (out_st->codecpar->color_space == AVCOL_SPC_UNSPECIFIED ||
-                out_st->codecpar->color_space == AVCOL_SPC_RESERVED) {
-                out_st->codecpar->color_space = AVCOL_SPC_BT709;
-            }
-            if (out_st->codecpar->color_range == AVCOL_RANGE_UNSPECIFIED) {
-                out_st->codecpar->color_range = AVCOL_RANGE_MPEG;
+            const bool has_mastering_display =
+                av_packet_side_data_get(out_st->codecpar->coded_side_data, out_st->codecpar->nb_coded_side_data,
+                                        AV_PKT_DATA_MASTERING_DISPLAY_METADATA) != nullptr;
+            if (!has_mastering_display) {
+                if (out_st->codecpar->color_primaries == AVCOL_PRI_UNSPECIFIED ||
+                    out_st->codecpar->color_primaries == AVCOL_PRI_RESERVED0) {
+                    out_st->codecpar->color_primaries = AVCOL_PRI_BT709;
+                }
+                if (out_st->codecpar->color_trc == AVCOL_TRC_UNSPECIFIED ||
+                    out_st->codecpar->color_trc == AVCOL_TRC_RESERVED0) {
+                    out_st->codecpar->color_trc = AVCOL_TRC_BT709;
+                }
+                if (out_st->codecpar->color_space == AVCOL_SPC_UNSPECIFIED ||
+                    out_st->codecpar->color_space == AVCOL_SPC_RESERVED) {
+                    out_st->codecpar->color_space = AVCOL_SPC_BT709;
+                }
+                if (out_st->codecpar->color_range == AVCOL_RANGE_UNSPECIFIED) {
+                    out_st->codecpar->color_range = AVCOL_RANGE_MPEG;
+                }
             }
         }
     }
