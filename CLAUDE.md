@@ -8,11 +8,11 @@ Read:
 
 1. `README.md`
 2. `AGENTS.md`
-3. `.workspace/product/exosnap-1.0-end-spec.md`
+3. `docs/product-spec.md` — the tracked product specification (durable source for user-visible behavior)
 4. `.workspace/architecture/system-overview.md`
 5. Any document directly related to the task
 
-## Product decisions (authoritative source: `.workspace/product/exosnap-1.0-end-spec.md`)
+## Product decisions (authoritative source: `docs/product-spec.md`)
 
 - Dark mode by default
 - Default audio source order: `APP`, `SYS`, `MIC`
