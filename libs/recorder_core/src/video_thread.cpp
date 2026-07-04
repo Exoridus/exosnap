@@ -7,6 +7,7 @@
 #include "gpu_compositor.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_hdr_tonemap.h"
+#include "hdr_preview.h"
 #include "hdr_tonemap.h"
 
 #include "nvenc_video_encoder.h"
@@ -75,6 +76,26 @@ const char* TargetKindName(CaptureTarget::Kind kind) noexcept {
 
 const char* BoolText(bool value) noexcept {
     return value ? "true" : "false";
+}
+
+// Stable name for the process's effective DPI-awareness context. Per-monitor
+// awareness is what keeps capture geometry at native pixels; if it were lost
+// (e.g. a manifest/regression dropping to System-aware or Unaware) the OS would
+// hand back virtualized/legacy-scaled surfaces. Logged once at capture start so
+// such a regression is a visible log fact rather than mysterious scaling.
+const char* DpiAwarenessName() noexcept {
+    const DPI_AWARENESS_CONTEXT ctx = GetThreadDpiAwarenessContext();
+    if (AreDpiAwarenessContextsEqual(ctx, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+        return "PerMonitorV2";
+    if (AreDpiAwarenessContextsEqual(ctx, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE))
+        return "PerMonitor";
+    if (AreDpiAwarenessContextsEqual(ctx, DPI_AWARENESS_CONTEXT_SYSTEM_AWARE))
+        return "System";
+    if (AreDpiAwarenessContextsEqual(ctx, DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED))
+        return "UnawareGdiScaled";
+    if (AreDpiAwarenessContextsEqual(ctx, DPI_AWARENESS_CONTEXT_UNAWARE))
+        return "Unaware";
+    return "Unknown";
 }
 
 int RectWidth(const RECT& r) noexcept {
@@ -237,8 +258,10 @@ void VideoThread::Run() {
 
     {
         const char* backend = useOdCapture ? "dxgi_od" : "wgc";
-        logging::LogField fields[] = {
-            {"backend", backend}, {"target_kind", TargetKindName(target.kind)}, {"target_desc", target.description}};
+        logging::LogField fields[] = {{"backend", backend},
+                                      {"target_kind", TargetKindName(target.kind)},
+                                      {"target_desc", target.description},
+                                      {"dpi_awareness", DpiAwarenessName()}};
         logging::log(logging::LogLevel::Info, "video_thread", "capture session starting",
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
@@ -589,6 +612,21 @@ void VideoThread::Run() {
     // BT.709 (no HDR/BT.2020 here — that is a later slice).
     const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
     const DXGI_FORMAT encodeFormat = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+
+    // Native HDR10 (PQ/BT.2020) requires a 10-bit P010 encode target. The caller
+    // assembles BT.2020/PQ colour metadata and pins 10-bit together (see the HDR10
+    // metadata assembly). If a future caller engages the native HDR path without
+    // pinning 10-bit, the PQ converter would bind an 8-bit NV12 render target and
+    // fail cryptically at RTV creation — catch the inconsistency up front instead.
+    if (NativeHdr10BitDepthViolation(expectNativeHdr, m_state.config.bit_depth)) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
+                              "native HDR10 output requires 10-bit (P010) but the session bit depth is 8-bit; "
+                              "pin 10-bit bit depth for HDR10 capture");
+        if (com_inited)
+            CoUninitialize();
+        return;
+    }
+
     static constexpr int32_t kSlotCount = 8;
     winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
@@ -1481,6 +1519,9 @@ void VideoThread::Run() {
                          "native HDR10 from an already-PQ 10-bit desktop: webcam PiP and cursor overlay are omitted "
                          "(the surface is non-linear, so linear-light compositing does not apply)",
                          {});
+            // Also surface this calmly through live diagnostics (not a fault).
+            std::lock_guard lk(m_state.stats_mutex);
+            m_state.stats.webcam_overlay_omitted = true;
         }
     }
 
@@ -1700,6 +1741,17 @@ void VideoThread::Run() {
     // Callback type alias — must precede the lambda that uses it.
     using SnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
 
+    // Native HDR10 monitoring decode (PQ/BT.2020 P010 -> tone-mapped SDR BGRA),
+    // shared by the snapshot readback and the live preview tap. Its transfer
+    // tables depend only on the session display peak, so it is built once on
+    // first use and reused for every frame. Never engaged on SDR sessions.
+    std::optional<P010PqMonitorConverter> hdrMonitorConverter;
+    auto hdrMonitorConvert = [&](const PlanarYuv420Frame& yuvSrc, uint8_t* out_bgra, uint32_t out_stride_bytes) {
+        if (!hdrMonitorConverter)
+            hdrMonitorConverter.emplace(hdrPeakScale);
+        hdrMonitorConverter->Convert(yuvSrc, out_bgra, out_stride_bytes);
+    };
+
     // Perform a one-shot NV12→BGRA readback for the current slot if a snapshot is pending.
     // Called only on real frames (not duplicates) to ensure non-stale data.
     // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
@@ -1784,11 +1836,17 @@ void VideoThread::Run() {
         yuvSrc.height = encodeHeight;
         yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
 
-        YuvToBgraParams colorParams;
-        colorParams.matrix = m_state.config.color.matrix;
-        colorParams.range = m_state.config.color.range;
-
-        ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+        if (hdrNativeActive) {
+            // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode and
+            // tone-map to SDR for on-screen monitoring (approximate; see
+            // hdr_preview.h) at the session display peak.
+            hdrMonitorConvert(yuvSrc, bgra.data(), encodeWidth * 4u);
+        } else {
+            YuvToBgraParams colorParams;
+            colorParams.matrix = m_state.config.color.matrix;
+            colorParams.range = m_state.config.color.range;
+            ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+        }
 
         d3dContext->Unmap(snapshotStagingTex.get(), 0);
 
@@ -1874,11 +1932,17 @@ void VideoThread::Run() {
             yuvSrc.height = encodeHeight;
             yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
 
-            YuvToBgraParams colorParams;
-            colorParams.matrix = m_state.config.color.matrix;
-            colorParams.range = m_state.config.color.range;
-
-            ConvertYuv420ToBgra(yuvSrc, colorParams, previewFrame.bgra.data(), previewFrame.stride_bytes);
+            if (hdrNativeActive) {
+                // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode
+                // and tone-map to SDR for the live preview (approximate; see
+                // hdr_preview.h) at the session display peak.
+                hdrMonitorConvert(yuvSrc, previewFrame.bgra.data(), previewFrame.stride_bytes);
+            } else {
+                YuvToBgraParams colorParams;
+                colorParams.matrix = m_state.config.color.matrix;
+                colorParams.range = m_state.config.color.range;
+                ConvertYuv420ToBgra(yuvSrc, colorParams, previewFrame.bgra.data(), previewFrame.stride_bytes);
+            }
 
             m_state.preview_frame_callback(previewFrame);
         } catch (...) {

@@ -342,10 +342,12 @@ void LivePipelinePanel::applySnapshot(const RecordingDiagnosticsSnapshot& s) {
 
     // ---- Compositor / Encoder ----
     const CompositorDiagnostics& comp = s.compositor;
-    setValue(QStringLiteral("liveCompositor"),
-             comp.active
-                 ? QStringLiteral("%1 avg · %2 peak (CPU submit)").arg(fmtMs(comp.average_ms), fmtMs(comp.peak_ms))
-                 : QStringLiteral("Inactive (no overlay)"));
+    QString compositor_text =
+        comp.active ? QStringLiteral("%1 avg · %2 peak (CPU submit)").arg(fmtMs(comp.average_ms), fmtMs(comp.peak_ms))
+                    : QStringLiteral("Inactive (no overlay)");
+    if (comp.overlay_omitted)
+        compositor_text += QStringLiteral(" · Webcam overlay not recorded in this HDR mode");
+    setValue(QStringLiteral("liveCompositor"), compositor_text);
 
     const EncoderDiagnostics& enc = s.video_encoder;
     setValue(QStringLiteral("liveEncoder"),

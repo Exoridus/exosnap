@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hdr_reference_white.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -16,8 +18,8 @@
 
 namespace recorder_core {
 
-// scRGB reference white: channel value 1.0 corresponds to this luminance.
-inline constexpr float kHdrReferenceWhiteNits = 80.0f;
+// scRGB reference white (kHdrReferenceWhiteNits) is defined in
+// hdr_reference_white.h so this header and hdr_pq.h can be included together.
 
 // Fallback display peak used when the capture display's active peak luminance is
 // unknown (the display is not reporting an active HDR colour space). 1000 cd/m^2
