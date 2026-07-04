@@ -102,6 +102,33 @@ std::vector<uint8_t> SolidBgra(int width, int height, uint8_t b, uint8_t g, uint
     return pixels;
 }
 
+float HalfToFloat(uint16_t h) {
+    const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1Fu;
+    uint32_t mant = h & 0x3FFu;
+    uint32_t bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            bits = sign;
+        } else {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x400u) == 0) {
+                mant <<= 1;
+                --exp;
+            }
+            mant &= 0x3FFu;
+            bits = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        bits = sign | 0x7F800000u | (mant << 13);
+    } else {
+        bits = sign | ((exp - 15 + 127) << 23) | (mant << 13);
+    }
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
 TEST(GpuCompositorTest, InitAndOpaquePaste) {
     auto d3d = CreateWarpDevice();
     ASSERT_TRUE(d3d.device);
@@ -451,6 +478,60 @@ TEST(GpuCompositorTest, InitAcceptsFp16ForNativeHdr) {
     std::string err;
     EXPECT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 4, err, DXGI_FORMAT_R16G16B16A16_FLOAT));
     EXPECT_TRUE(err.empty()) << err;
+}
+
+TEST(GpuCompositorTest, HdrLinearScalesOverlayToConfiguredRefWhite) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    // 160 nits ref white on the FP16 (linear scRGB) target: sRGB white (255)
+    // must land at linear 160/80 = 2.0 in every colour channel.
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err, DXGI_FORMAT_R16G16B16A16_FLOAT, 160.0f))
+        << err;
+
+    // FP16 background (zeros).
+    D3D11_TEXTURE2D_DESC bg_desc{};
+    bg_desc.Width = 1;
+    bg_desc.Height = 1;
+    bg_desc.MipLevels = 1;
+    bg_desc.ArraySize = 1;
+    bg_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    bg_desc.SampleDesc.Count = 1;
+    bg_desc.Usage = D3D11_USAGE_DEFAULT;
+    std::vector<uint16_t> zeros(4, 0);
+    D3D11_SUBRESOURCE_DATA init{};
+    init.pSysMem = zeros.data();
+    init.SysMemPitch = 8;
+    winrt::com_ptr<ID3D11Texture2D> background;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&bg_desc, &init, background.put())));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    auto webcam = SolidBgra(1, 1, 255, 255, 255);
+    GpuCompositor::ChromaKeyParams chroma;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 1, 1}, false, chroma, err)) << err;
+
+    // Staging readback of the FP16 composite.
+    D3D11_TEXTURE2D_DESC desc{};
+    compositor.Result()->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    winrt::com_ptr<ID3D11Texture2D> staging;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, nullptr, staging.put())));
+    d3d.context->CopyResource(staging.get(), compositor.Result());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    ASSERT_TRUE(SUCCEEDED(d3d.context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)));
+    const auto* halfs = static_cast<const uint16_t*>(mapped.pData);
+    const float r = HalfToFloat(halfs[0]);
+    const float g = HalfToFloat(halfs[1]);
+    const float b = HalfToFloat(halfs[2]);
+    d3d.context->Unmap(staging.get(), 0);
+
+    EXPECT_NEAR(r, 2.0f, 0.02f);
+    EXPECT_NEAR(g, 2.0f, 0.02f);
+    EXPECT_NEAR(b, 2.0f, 0.02f);
 }
 
 TEST(GpuCompositorTest, OpacityBlendsWebcamOverBackground) {

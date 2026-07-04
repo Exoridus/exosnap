@@ -1,5 +1,6 @@
 #pragma once
 
+#include <recorder_core/sdr_white_level.h>
 #include <recorder_core/webcam_placement.h>
 
 #include <d3d11.h>
@@ -35,8 +36,11 @@ class GpuCompositor {
     // scaled to the HDR overlay reference white). The overlay shader samples
     // normalized floats and writes through the RTV; webcam/cursor upload textures
     // stay BGRA8 regardless.
+    // overlay_reference_white_nits: the linear-light level SDR overlay sprites
+    // are scaled to on the FP16 native-HDR path (ignored for SDR formats).
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
-              DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM);
+              DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM,
+              float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits);
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
     // opacity: uniform overlay opacity [0,1] multiplied onto the sprite's alpha
@@ -76,6 +80,7 @@ class GpuCompositor {
     UINT height_ = 0;
     DXGI_FORMAT render_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
     bool hdr_linear_ = false; // true for the FP16 native-HDR path (linear-light compositing)
+    float overlay_ref_white_nits_ = kDefaultSdrWhiteLevelNits;
 
     winrt::com_ptr<ID3D11Texture2D> composite_tex_;
     winrt::com_ptr<ID3D11RenderTargetView> composite_rtv_;

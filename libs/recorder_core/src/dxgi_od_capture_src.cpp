@@ -1,9 +1,12 @@
 #include "dxgi_od_capture_src.h"
 
+#include <recorder_core/sdr_white_level.h>
+
 #include <dxgi1_6.h>
 
 #include <cstdio>
 #include <iterator>
+#include <vector>
 
 namespace recorder_core {
 
@@ -50,6 +53,56 @@ bool FindAdapterForMonitor(HMONITOR hmonitor, IDXGIAdapter1** out_adapter, std::
 
 DxgiOdCaptureSrc::~DxgiOdCaptureSrc() {
     Close();
+}
+
+// Queries the OS "SDR content brightness" reference white of the monitor, in
+// nits (DISPLAYCONFIG_SDR_WHITE_LEVEL; raw 1000 == 80 nits). Returns 0.0f when
+// the monitor cannot be matched or any DisplayConfig call fails — callers
+// treat 0 as unknown and fall back to the 203-nit default.
+static float QuerySdrWhiteLevelNits(HMONITOR hmonitor) {
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(hmonitor, &mi) == FALSE) {
+        return 0.0f;
+    }
+
+    UINT32 pathCount = 0;
+    UINT32 modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) {
+        return 0.0f;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) !=
+        ERROR_SUCCESS) {
+        return 0.0f;
+    }
+    paths.resize(pathCount);
+
+    for (const auto& path : paths) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) {
+            continue;
+        }
+        if (wcscmp(source.viewGdiDeviceName, mi.szDevice) != 0) {
+            continue;
+        }
+
+        DISPLAYCONFIG_SDR_WHITE_LEVEL white{};
+        white.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+        white.header.size = sizeof(white);
+        white.header.adapterId = path.targetInfo.adapterId;
+        white.header.id = path.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&white.header) != ERROR_SUCCESS) {
+            return 0.0f;
+        }
+        return SdrWhiteLevelRawToNits(white.SDRWhiteLevel);
+    }
+    return 0.0f;
 }
 
 bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string& out_error) {
@@ -102,6 +155,7 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     m_hdr_active = false;
     m_max_luminance_nits = 0.0f;
     m_hdr_facts = HdrDisplayFacts{};
+    m_hdr_facts.sdr_white_level_nits = QuerySdrWhiteLevelNits(hmonitor);
     if (winrt::com_ptr<IDXGIOutput6> output6 = matchedOutput.try_as<IDXGIOutput6>()) {
         DXGI_OUTPUT_DESC1 desc1{};
         if (SUCCEEDED(output6->GetDesc1(&desc1))) {

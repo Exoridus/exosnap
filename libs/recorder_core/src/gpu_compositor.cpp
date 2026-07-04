@@ -132,15 +132,16 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
     err = buf;
 }
 
-// scRGB reference white (channel 1.0) and the HDR overlay reference white used to
-// place SDR overlay sprites on the HDR timeline (a diffuse-white paper level).
+// scRGB reference white (channel 1.0). The HDR overlay reference white used to
+// place SDR overlay sprites on the HDR timeline (a diffuse-white paper level)
+// is caller-supplied to Init (overlay_ref_white_nits_), defaulting to
+// kDefaultSdrWhiteLevelNits.
 constexpr float kScrgbReferenceWhiteNits = 80.0f;
-constexpr float kHdrOverlayReferenceWhiteNits = 203.0f;
 
 } // namespace
 
 bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
-                         DXGI_FORMAT render_format) {
+                         DXGI_FORMAT render_format, float overlay_reference_white_nits) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "GpuCompositor::Init invalid arguments";
         return false;
@@ -159,6 +160,7 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     // FP16 render target = the native HDR10 path: the background is linear scRGB,
     // so overlay sprites are composited in linear light (see the pixel shader).
     hdr_linear_ = (render_format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+    overlay_ref_white_nits_ = EffectiveOverlayReferenceWhiteNits(overlay_reference_white_nits);
 
     winrt::com_ptr<ID3DBlob> vs_blob;
     winrt::com_ptr<ID3DBlob> ps_blob;
@@ -375,12 +377,14 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     pc.params[2] = chroma.spill_reduction;
     pc.params[3] = chroma.softness;
     // HDR-linear compositing (native HDR10): decode overlay sprites to linear and
-    // scale to the overlay reference white (203 cd/m^2 in scRGB, where 1.0 = 80).
+    // scale to the configured overlay reference white (in scRGB, where 1.0 = 80
+    // nits) — the display's SDR content brightness when known, else the 203
+    // cd/m^2 fallback (see GpuCompositor::Init / EffectiveOverlayReferenceWhiteNits).
     // opacity is the caller-supplied uniform overlay opacity, clamped to [0,1];
     // non-finite input (e.g. NaN) falls back to fully opaque.
     const float safe_opacity = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
     pc.params2[0] = hdr_linear_ ? 1.0f : 0.0f;
-    pc.params2[1] = kHdrOverlayReferenceWhiteNits / kScrgbReferenceWhiteNits;
+    pc.params2[1] = overlay_ref_white_nits_ / kScrgbReferenceWhiteNits;
     pc.params2[2] = safe_opacity;
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
