@@ -423,6 +423,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // ---- Compositor (CPU submission timing only) ----
     const RollingTimeWindow::Aggregate comp = compositor_window_.Compute(now);
     s.compositor.active = compositor_active_;
+    s.compositor.overlay_omitted = stats.webcam_overlay_omitted;
     s.compositor.latest_ms = comp.latest;
     s.compositor.average_ms = comp.average;
     s.compositor.peak_ms = comp.peak;

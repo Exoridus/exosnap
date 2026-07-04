@@ -266,6 +266,9 @@ add_library(recorder_core STATIC
     src/gpu_hdr_pq.h
     src/hdr_tonemap.h
     src/hdr_pq.h
+    src/hdr_reference_white.h
+    src/hdr_preview.h
+    src/hdr_preview.cpp
     include/recorder_core/hdr_native.h
     src/mixed_audio_src.cpp
     src/brickwall_limiter.cpp
@@ -688,6 +691,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_hdr_pq PRIVATE src)
 target_compile_definitions(test_hdr_pq PRIVATE NOMINMAX)
+
+# On-screen monitoring decode for native HDR10 (P010 PQ/BT.2020 -> tone-mapped
+# SDR BGRA): pure curve/matrix math shared with the encode reference, plus the
+# 10-bit native-HDR guard. No GPU.
+exosnap_add_gtest(
+    NAME test_hdr_preview
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_preview.cpp
+            src/hdr_preview.cpp
+)
+target_include_directories(test_hdr_preview PRIVATE src include)
+target_compile_definitions(test_hdr_preview PRIVATE NOMINMAX)
 
 # Strand 3 slice 1 (WYSIWYG preview): pure NV12/P010 -> BGRA color-conversion
 # math. Self-contained (no D3D11/NVENC) -- also the bugfix validation for the

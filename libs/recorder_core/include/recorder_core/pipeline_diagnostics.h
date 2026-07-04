@@ -142,6 +142,11 @@ struct CompositorDiagnostics {
     double vpblt_average_ms = 0.0;
     double vpblt_peak_ms = 0.0;
     MetricAvailability vpblt_availability = MetricAvailability::Unavailable;
+
+    // A requested webcam PiP / cursor overlay is not being recorded in the active
+    // mode (native HDR10 from an already-PQ 10-bit desktop composites nothing —
+    // the surface is non-linear). Calm notice, not a fault.
+    bool overlay_omitted = false;
 };
 
 struct EncoderDiagnostics {

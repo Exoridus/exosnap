@@ -35,6 +35,11 @@ struct SessionStats {
     // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.
     std::array<float, 3> per_track_rms{};
     bool source_loss = false;
+    // Set once when a requested webcam PiP / cursor overlay cannot be recorded in
+    // the active mode (native HDR10 from an already-PQ 10-bit desktop composites
+    // nothing — the surface is non-linear). Surfaced as a calm diagnostics notice,
+    // never a blocker.
+    bool webcam_overlay_omitted = false;
 };
 
 // Lightweight RMS snapshot for high-cadence meter updates (~30 Hz).

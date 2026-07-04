@@ -45,6 +45,14 @@ struct HdrDisplayFacts {
     return mode == HdrMode::Hdr10 && display_hdr_active && CodecSupportsHdr10Native(codec);
 }
 
+// Guard for a faulty caller: native HDR10 output (PQ/BT.2020) is a 10-bit-only
+// format packed into P010. Engaging the native path with an 8-bit bit depth is a
+// caller inconsistency — the encode ring would be NV12 and the PQ converter's
+// render target creation would fail cryptically. True == that inconsistency.
+[[nodiscard]] inline bool NativeHdr10BitDepthViolation(bool native_hdr_expected, BitDepth bit_depth) noexcept {
+    return native_hdr_expected && bit_depth != BitDepth::Bit10;
+}
+
 // Assemble the HDR10 colour description for a native session from the captured
 // display's HDR facts: BT.2020 primaries, PQ (SMPTE ST 2084) transfer, BT.2020
 // non-constant-luminance matrix, limited range, 10-bit. Mastering-display

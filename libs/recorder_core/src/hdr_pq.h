@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hdr_reference_white.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -32,8 +34,9 @@
 
 namespace recorder_core {
 
-// scRGB reference white: channel value 1.0 corresponds to this luminance.
-inline constexpr float kHdrReferenceWhiteNits = 80.0f;
+// scRGB reference white (kHdrReferenceWhiteNits) is defined in
+// hdr_reference_white.h so this header and hdr_tonemap.h can be included
+// together (the monitoring chain needs both).
 
 // PQ (SMPTE ST 2084) encodes absolute luminance up to this ceiling; 1.0 on the
 // PQ curve is 10 000 cd/m^2. Content brighter than this is clamped.
@@ -59,6 +62,25 @@ inline float PqOetf(float linear_normalized) {
     }
     const float lm1 = std::pow(l, kPqM1);
     return std::pow((kPqC1 + kPqC2 * lm1) / (1.0f + kPqC3 * lm1), kPqM2);
+}
+
+// PQ electro-optical transfer function (ST 2084 EOTF): non-linear signal in
+// [0, 1] -> normalised linear luminance in [0, 1] (1.0 = 10 000 cd/m^2). Exact
+// inverse of PqOetf; clamps its input to the valid range. Used by the on-screen
+// monitoring decode (hdr_preview.h), not by the encode path.
+inline float PqEotf(float signal) {
+    float n = signal;
+    if (n < 0.0f) {
+        n = 0.0f;
+    }
+    if (n > 1.0f) {
+        n = 1.0f;
+    }
+    const float np = std::pow(n, 1.0f / kPqM2);
+    const float num = np - kPqC1;
+    const float den = kPqC2 - kPqC3 * np;
+    float base = (num > 0.0f && den > 0.0f) ? (num / den) : 0.0f;
+    return std::pow(base, 1.0f / kPqM1);
 }
 
 // scRGB linear channel value (1.0 = reference white = 80 cd/m^2) -> normalised
@@ -93,6 +115,17 @@ inline LinearRgb Bt709ToBt2020(const LinearRgb& c) {
     };
 }
 
+// BT.2020 -> BT.709 gamut conversion in linear light (inverse of Bt709ToBt2020,
+// Rec. BT.2087). Applied by the monitoring decode after the PQ EOTF; results can
+// fall slightly outside [0, 1] for colours outside the BT.709 gamut.
+inline LinearRgb Bt2020ToBt709(const LinearRgb& c) {
+    return LinearRgb{
+        1.6604910023f * c.r - 0.5876411389f * c.g - 0.0728498633f * c.b,
+        -0.1245504746f * c.r + 1.1328998971f * c.g - 0.0083494226f * c.b,
+        -0.0181507634f * c.r - 0.1005788980f * c.g + 1.1187296614f * c.b,
+    };
+}
+
 struct Ycbcr {
     float y;  // [0, 1]
     float cb; // [-0.5, 0.5]
@@ -114,6 +147,24 @@ inline Ycbcr PqRgbToYcbcr(float rp, float gp, float bp) {
         (bp - y) / (2.0f * (1.0f - kKb2020)),
         (rp - y) / (2.0f * (1.0f - kKr2020)),
     };
+}
+
+// Non-linear Y'CbCr BT.2020 NCL -> R'G'B' (PQ-encoded, [0, 1] nominal). Exact
+// inverse of PqRgbToYcbcr; used by the monitoring decode. Cb/Cr are in
+// [-0.5, 0.5].
+inline void YcbcrToPqRgb(const Ycbcr& c, float& rp, float& gp, float& bp) {
+    rp = c.y + c.cr * (2.0f * (1.0f - kKr2020));
+    bp = c.y + c.cb * (2.0f * (1.0f - kKb2020));
+    gp = (c.y - kKr2020 * rp - kKb2020 * bp) / kKg2020;
+}
+
+// Dequantise a 10-bit limited ("studio") range code to normalised Y' [0, 1] /
+// C' [-0.5, 0.5] (inverse of QuantizeYcbcr10Limited).
+inline float DequantY10Limited(uint16_t code) {
+    return (static_cast<float>(code) - 64.0f) / 876.0f;
+}
+inline float DequantC10Limited(uint16_t code) {
+    return (static_cast<float>(code) - 512.0f) / 896.0f;
 }
 
 struct P010Codes {
