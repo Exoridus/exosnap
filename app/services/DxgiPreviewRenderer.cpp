@@ -172,7 +172,7 @@ void DxgiPreviewRenderer::GetSourceSize(uint32_t& outWidth, uint32_t& outHeight)
 }
 
 void DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh,
-                                                bool mirror) {
+                                                bool mirror, float opacity) {
     std::lock_guard lock(overlayMutex_);
     overlayEnabled_ = enabled;
     overlaySelected_ = selected;
@@ -180,6 +180,7 @@ void DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, flo
     overlayNy_ = ny;
     overlayNw_ = nw;
     overlayNh_ = nh;
+    overlayOpacity_ = opacity;
     if (overlayMirror_ != mirror) {
         overlayMirror_ = mirror;
         overlayDirty_ = true; // re-upload with the new flip
@@ -328,6 +329,23 @@ bool DxgiPreviewRenderer::InitShaders() {
     sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
 
     hr = d3dDevice_->CreateSamplerState(&sampDesc, samplerState_.GetAddressOf());
+    if (FAILED(hr))
+        return false;
+
+    // Constant-colour blend for the webcam PiP quad: BLEND_FACTOR set per-draw via
+    // OMSetBlendState carries the current overlay opacity, so this single state
+    // covers every opacity value without per-frame pipeline-state churn.
+    D3D11_BLEND_DESC bd{};
+    bd.RenderTarget[0].BlendEnable = TRUE;
+    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_BLEND_FACTOR;
+    bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+    hr = d3dDevice_->CreateBlendState(&bd, overlayBlendState_.GetAddressOf());
     if (FAILED(hr))
         return false;
 
@@ -662,8 +680,16 @@ void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int co
         d3dContext_->Draw(3, 0);
     };
 
-    // PiP video (stretched to the rect — same as the recording compositor).
-    drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
+    // PiP video (stretched to the rect — same as the recording compositor). Blended
+    // toward the frame beneath it when opacity < 1; edit chrome always stays opaque.
+    if (overlayOpacity_ < 1.0f && overlayBlendState_) {
+        const float f[4] = {overlayOpacity_, overlayOpacity_, overlayOpacity_, overlayOpacity_};
+        d3dContext_->OMSetBlendState(overlayBlendState_.Get(), f, 0xffffffff);
+        drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
+        d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    } else {
+        drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
+    }
 
     // Edit chrome (border + corner handles) only while selected.
     if (overlaySelected_) {

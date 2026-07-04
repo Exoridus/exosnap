@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+
 #include <QApplication>
 #include <QCoreApplication>
 #include <QImage>
@@ -217,6 +219,34 @@ TEST_F(PreviewSurfaceWebcamTest, MirrorDoesNotChangePlacement) {
     surface_->setWebcamMirror(true);
     EXPECT_TRUE(surface_->webcamMirror());
     EXPECT_EQ(surface_->webcamOverlayRect(), before);
+}
+
+// 33. Opacity blends the PiP toward the underlying frame; edit chrome is unaffected.
+TEST_F(PreviewSurfaceWebcamTest, OpacityBlendsPipTowardBackground) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    surface_->setWebcamSelected(false);
+
+    surface_->setWebcamOpacity(1.0f);
+    const QImage full = surface_->grab().toImage();
+    const QPoint center = pipCenter().toPoint();
+    const QColor full_color = full.pixelColor(center);
+
+    surface_->setWebcamOpacity(0.5f);
+    const QImage half = surface_->grab().toImage();
+    const QColor half_color = half.pixelColor(center);
+
+    // Background colour at the PiP centre before compositing the webcam frame: the
+    // live frame fills the full 16:9 content rect in this fixture (see SetUp()).
+    const QColor bg_color(20, 24, 30);
+
+    const int full_channels[3] = {full_color.red(), full_color.green(), full_color.blue()};
+    const int half_channels[3] = {half_color.red(), half_color.green(), half_color.blue()};
+    const int bg_channels[3] = {bg_color.red(), bg_color.green(), bg_color.blue()};
+    for (int ch = 0; ch < 3; ++ch) {
+        const int expected_mid = (full_channels[ch] + bg_channels[ch]) / 2;
+        EXPECT_LE(std::abs(half_channels[ch] - expected_mid), 25) << "channel " << ch;
+    }
 }
 
 // Default placement sits in the bottom-right with a safe margin.

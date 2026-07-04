@@ -466,6 +466,16 @@ void PreviewSurface::setWebcamMirror(bool mirror) {
         update();
 }
 
+void PreviewSurface::setWebcamOpacity(float opacity) {
+    const float clamped = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
+    if (qFuzzyCompare(webcam_opacity_, clamped))
+        return;
+    webcam_opacity_ = clamped;
+    syncWebcamOverlayToDxgi();
+    if (webcam_enabled_)
+        update();
+}
+
 bool PreviewSurface::webcamEditingAllowed() const noexcept {
     return webcam_enabled_ && !webcam_edit_locked_;
 }
@@ -546,7 +556,8 @@ void PreviewSurface::syncWebcamOverlayToDxgi() {
     const bool selected = webcam_selected_ && webcamEditingAllowed();
     dxgi_renderer_->SetWebcamOverlayState(
         show, selected, static_cast<float>(webcam_rect_norm_.x()), static_cast<float>(webcam_rect_norm_.y()),
-        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_);
+        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_,
+        webcam_opacity_);
     if (show && !webcam_frame_.isNull()) {
         const QImage& img = webcam_frame_;
         dxgi_renderer_->SetWebcamOverlayFrame(img.constBits(), img.width(), img.height(),
@@ -1099,6 +1110,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         const bool show_chrome = webcam_selected_ && webcamEditingAllowed();
         if (!webcam_frame_.isNull()) {
             painter.save();
+            painter.setOpacity(webcam_opacity_);
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             const bool effective_aspect_lock = aspect_ratio_locked_ != drag_modifier_toggle_held_;
             QRectF draw_rect = cam_rect;
@@ -1123,6 +1135,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             painter.restore();
         } else {
             painter.save();
+            painter.setOpacity(webcam_opacity_);
             painter.setBrush(QColor(0, 0, 0, 160));
             painter.setPen(Qt::NoPen);
             painter.drawRect(cam_rect);

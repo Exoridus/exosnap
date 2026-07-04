@@ -85,6 +85,14 @@ class PreviewSurface : public QWidget {
         return webcam_mirror_;
     }
 
+    // PiP compositing opacity (0 = fully transparent, 1 = fully opaque). Applied to
+    // both the Qt paint path and the DXGI overlay so the record-page preview stays
+    // WYSIWYG with the recording compositor. Never applied to the edit chrome.
+    void setWebcamOpacity(float opacity);
+    [[nodiscard]] float webcamOpacity() const noexcept {
+        return webcam_opacity_;
+    }
+
     // Editing lock. When locked the PiP video stays visible but selection/drag/resize
     // and edit chrome are disabled and pointer events pass through. RecordPage
     // keeps this unlocked in states whose overlay edits are live-applied to the
@@ -155,6 +163,7 @@ class PreviewSurface : public QWidget {
     bool webcam_enabled_ = false;
     bool aspect_ratio_locked_ = true;
     bool webcam_mirror_ = false;
+    float webcam_opacity_ = 1.0f;
     bool webcam_selected_ = false;
     bool webcam_edit_locked_ = false;
     double webcam_aspect_ratio_ = 16.0 / 9.0;
