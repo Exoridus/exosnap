@@ -2864,6 +2864,7 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     output.container = scenario.container;
     output.video_codec = scenario.video_codec;
     output.audio_codec = scenario.audio_codec;
+    output.hdr_mode = scenario.hdr_mode;
     output.resolution.mode = scenario.output_resolution_mode;
     if (scenario.output_resolution_mode == OutputResolutionMode::Custom) {
         output.resolution.custom_width = static_cast<uint32_t>((std::max)(0, scenario.requested_width));

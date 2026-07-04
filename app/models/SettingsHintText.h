@@ -93,9 +93,12 @@ inline const QString kKeyframeInterval = QStringLiteral(
 inline const QString kEncoderPreset = QStringLiteral(
     "NVENC speed/quality tradeoff: P1 = fastest / lowest quality \xC2\xB7 P7 = slowest / best quality \xC2\xB7 "
     "default P4 (balanced). Applies from the next recording.");
+inline const QString kVideoHdrMode =
+    QStringLiteral("HDR-capable displays are detected automatically. Tone-map to SDR (default) is safest everywhere; "
+                   "Record native HDR10 keeps the original PQ/BT.2020 signal but needs HEVC or AV1. "
+                   "Has no effect when the display is not HDR.");
 
 // ---- Skipped (control does not exist in current UI) ----
-// kHdr10                 — HDR10 (0.7 wave)
 // kPerTrackGain          — per-track gain (0.6 wave)
 // kMute                  — per-track mute (0.6 wave)
 // kAudioCodecPcm         — PCM (0.6 wave)

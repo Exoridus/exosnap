@@ -36,6 +36,8 @@
 #include <QToolTip>
 #include <QVBoxLayout>
 
+#include <capability/capability_builder.h>
+
 #include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
 #include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
@@ -1405,6 +1407,55 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(ki_row);
         }
 
+        // --- HDR handling (expert-only) ---
+        // HDR-capable displays are auto-detected elsewhere; this control only selects
+        // what the pipeline does once one is found. Off is intentionally not offered —
+        // it has no user-facing value ("break my recording") and stays enum/config-
+        // internal. Hdr10 is selectable only when the chosen codec carries a native
+        // HDR10 signal (capability::QueryHdr10Native — HEVC/AV1; never H.264); the
+        // gating mirrors the bit-depth row but does NOT snap the stored value back to
+        // TonemapSdr when the codec changes — the live pre-flight blocker (rec.hdr.h264)
+        // owns that conflict at recording time (see updateVideoHdrModeControl()).
+        {
+            video_hdr_mode_row_ = new QWidget(fmt_expert_section_);
+            auto* hvl = new QVBoxLayout(video_hdr_mode_row_);
+            hvl->setContentsMargins(0, 0, 0, 0);
+            hvl->setSpacing(0);
+            auto* hrule = new QFrame(video_hdr_mode_row_);
+            hrule->setFrameShape(QFrame::HLine);
+            hrule->setProperty("frameRole", "sectionRuleLine");
+            hvl->addWidget(hrule);
+            auto* hhl = new QHBoxLayout();
+            hhl->setContentsMargins(0, 12, 0, 12);
+            hhl->setSpacing(14);
+            auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
+            hlbl->setProperty("labelRole", "settingsRowLabel");
+            hhl->addWidget(hlbl, 0);
+            hhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoHdrMode, video_hdr_mode_row_), 0,
+                           Qt::AlignVCenter);
+            hhl->addStretch(1);
+            video_hdr_mode_combo_ = new QComboBox(video_hdr_mode_row_);
+            video_hdr_mode_combo_->setObjectName(QStringLiteral("videoHdrModeCombo"));
+            video_hdr_mode_combo_->addItem(QStringLiteral("Tone-map to SDR"),
+                                           static_cast<int>(recorder_core::HdrMode::TonemapSdr));
+            video_hdr_mode_combo_->addItem(QStringLiteral("Record native HDR10"),
+                                           static_cast<int>(recorder_core::HdrMode::Hdr10));
+            video_hdr_mode_combo_->setFixedWidth(200);
+            video_hdr_mode_combo_->setProperty("settingsRowInput", true);
+            hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
+            hvl->addLayout(hhl);
+            video_hdr_mode_row_->setProperty("settingsRow", true);
+            video_hdr_mode_row_->setProperty("expertEdge", true); // P3: left accent edge
+            fes_layout->addWidget(video_hdr_mode_row_);
+
+            // Calm inline hint (never a warning colour) shown only while H.264 disables
+            // the Hdr10 item — mirrors the muted validation-hint idiom used elsewhere.
+            video_hdr_mode_hint_ = makeHint(
+                QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC."), fmt_expert_section_);
+            video_hdr_mode_hint_->setVisible(false);
+            fes_layout->addWidget(video_hdr_mode_hint_);
+        }
+
 #ifndef NDEBUG
         // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
         // These are real, enabled controls wired to nothing, used so the roadmap
@@ -1412,15 +1463,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // NOTE (0.7.0 — S7): the HEVC-codec and Bit-depth mockups were promoted to
         // real controls (Video codec combo + Video bit depth row above). The
         // encoder-preset mockup was promoted to a real control (NVENC-PRESET-R1,
-        // below). The rows left here are still placeholders for later waves:
-        // HDR10 (HDR slice) and chroma subsampling (no engine path yet).
+        // below). HDR handling was promoted to a real control above. The row left
+        // here is still a placeholder: chroma subsampling (no engine path yet).
         {
-            auto* hdr10_toggle = new ui::widgets::ExoToggle(fmt_expert_section_);
-            hdr10_toggle->setObjectName(QStringLiteral("roadmapDummy_hdr10"));
-            hdr10_toggle->setOn(false);
-            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("HDR10 + colour metadata"),
-                                                  nullptr, QString(), hdr10_toggle));
-
             auto* chroma_combo = new QComboBox(fmt_expert_section_);
             chroma_combo->setObjectName(QStringLiteral("roadmapDummy_chromaSubsampling"));
             chroma_combo->addItems({QStringLiteral("4:2:0"), QStringLiteral("4:2:2"), QStringLiteral("4:4:4")});
@@ -2167,6 +2212,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onVideoBitDepthChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
+    connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoHdrModeChanged);
     if (video_encoder_preset_combo_) {
         connect(video_encoder_preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                 &ConfigPage::onVideoEncoderPresetChanged);
@@ -2695,6 +2742,8 @@ void ConfigPage::updateVideoCodecChoices() {
 
     // Bit-depth selectability depends on the selected codec — refresh it here.
     updateVideoBitDepthControl();
+    // HDR10-native selectability depends on the selected codec — refresh it here too.
+    updateVideoHdrModeControl();
 }
 
 void ConfigPage::updateVideoBitDepthControl() {
@@ -2768,6 +2817,60 @@ void ConfigPage::updateVideoColorRangeControl() {
         video_color_range_combo_->setToolTip(QString());
         video_color_range_combo_->unsetCursor();
     }
+}
+
+void ConfigPage::updateVideoHdrModeControl() {
+    if (!video_hdr_mode_combo_ || !video_hdr_mode_row_)
+        return;
+
+    // HDR10-native support is a codec-format fact (HEVC/AV1 carry it, H.264 never
+    // does), not a per-GPU probe, so the static capability baseline is authoritative
+    // here — gate on capability::QueryHdr10Native rather than comparing codec names
+    // locally (same single source of truth the rec.hdr.h264 pre-flight blocker uses).
+    static const capability::CapabilitySet kHdrCaps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    const bool supports_hdr10 = capability::IsSelectable(kHdrCaps.QueryHdr10Native(format_settings_.video_codec));
+    const bool locked = controls_locked_;
+
+    // Unlike bit depth, an Hdr10 selection is NEVER snapped back to TonemapSdr here
+    // when the codec becomes incompatible (e.g. a container reconcile lands on
+    // H.264). The stored model value is left alone; the live pre-flight blocker
+    // (rec.hdr.h264) owns that conflict at recording time. This control only
+    // disables the item and shows a calm hint.
+
+    if (auto* model = qobject_cast<QStandardItemModel*>(video_hdr_mode_combo_->model())) {
+        const int hdr10_idx = video_hdr_mode_combo_->findData(static_cast<int>(recorder_core::HdrMode::Hdr10));
+        if (auto* item = (hdr10_idx >= 0) ? model->item(hdr10_idx) : nullptr) {
+            item->setEnabled(supports_hdr10);
+            item->setToolTip(supports_hdr10
+                                 ? QString()
+                                 : QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC"));
+        }
+    }
+
+    // Sync the combo selection to the model (signal-blocked). The model value may
+    // legitimately be Hdr10 while the item above is disabled (see comment above) —
+    // the combo still displays the stored selection rather than lying about it.
+    {
+        const QSignalBlocker b(video_hdr_mode_combo_);
+        const int idx = video_hdr_mode_combo_->findData(static_cast<int>(format_settings_.hdr_mode));
+        video_hdr_mode_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Tone-map to SDR */);
+    }
+
+    video_hdr_mode_combo_->setEnabled(!locked);
+    if (locked) {
+        video_hdr_mode_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        video_hdr_mode_combo_->setCursor(Qt::ForbiddenCursor);
+    } else if (!supports_hdr10) {
+        video_hdr_mode_combo_->setToolTip(
+            QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC"));
+        video_hdr_mode_combo_->unsetCursor();
+    } else {
+        video_hdr_mode_combo_->setToolTip(QString());
+        video_hdr_mode_combo_->unsetCursor();
+    }
+
+    if (video_hdr_mode_hint_)
+        video_hdr_mode_hint_->setVisible(!supports_hdr10);
 }
 
 void ConfigPage::updateVideoEncoderPresetControl() {
@@ -2929,6 +3032,10 @@ void ConfigPage::onVideoCodecChanged(int index) {
     // Codec change can invalidate a 10-bit selection — refresh the bit-depth gating
     // (also snaps the model back to 8-bit when the new codec can't carry 10-bit).
     updateVideoBitDepthControl();
+    // Codec change can also invalidate an Hdr10 selection — refresh the HDR gating
+    // live. Unlike bit depth this does NOT snap the stored value back (see
+    // updateVideoHdrModeControl()).
+    updateVideoHdrModeControl();
     emitCurrentFormatSettings();
 }
 
@@ -2954,6 +3061,22 @@ void ConfigPage::onVideoColorRangeChanged(int index) {
     format_settings_.color_range =
         static_cast<capability::ColorRange>(video_color_range_combo_->itemData(index).toInt());
     updateVideoColorRangeControl();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::onVideoHdrModeChanged(int index) {
+    if (index < 0 || !video_hdr_mode_combo_)
+        return;
+    const auto requested = static_cast<recorder_core::HdrMode>(video_hdr_mode_combo_->itemData(index).toInt());
+    // Guard: Hdr10 requires a codec that carries it natively (the disabled item
+    // should prevent this from a user click, but keep the model authoritative
+    // regardless of how the index changed — mirrors the bit-depth guard).
+    static const capability::CapabilitySet kHdrCaps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    const bool supports_hdr10 = capability::IsSelectable(kHdrCaps.QueryHdr10Native(format_settings_.video_codec));
+    format_settings_.hdr_mode = (requested == recorder_core::HdrMode::Hdr10 && !supports_hdr10)
+                                    ? recorder_core::HdrMode::TonemapSdr
+                                    : requested;
+    updateVideoHdrModeControl();
     emitCurrentFormatSettings();
 }
 
@@ -2994,6 +3117,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.bit_depth = settings.bit_depth;
     format_settings_.color_range = settings.color_range;
     format_settings_.nvenc_preset = settings.nvenc_preset;
+    format_settings_.hdr_mode = settings.hdr_mode;
     format_settings_.audio_codec = settings.audio_codec;
     format_settings_.output_folder = settings.output_folder;
     format_settings_.naming_pattern = settings.naming_pattern;
@@ -5242,6 +5366,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     updateVideoColorRangeControl();
     // NVENC-PRESET-R1: encoder-preset combo honours the recording lock (never codec-gated).
     updateVideoEncoderPresetControl();
+    // HDR-handling combo honours both the recording lock and codec gating.
+    updateVideoHdrModeControl();
     // ADR 0035 Slice 2: frame-pacing combo honours the recording lock (never codec-gated).
     updateFramePacingControl();
     // 0.9.0 S1: keyframe interval combo honours the recording lock.

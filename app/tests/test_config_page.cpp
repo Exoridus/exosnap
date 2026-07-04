@@ -2213,5 +2213,172 @@ TEST_F(ConfigPageTest, FramePacingSelectReflectsAndSetsModel) {
     EXPECT_EQ(emitted.frame_pacing, recorder_core::FramePacingMode::Smooth);
 }
 
+// ── HDR handling control (replaces roadmapDummy_hdr10) ──────────────────────
+
+// The real HDR-handling combo exists with exactly the two user-facing choices
+// (Tone-map to SDR default, Record native HDR10); HdrMode::Off is intentionally
+// never offered. The roadmap mockup is gone.
+TEST_F(ConfigPageTest, HdrModeControl_ExistsWithTonemapAndHdr10_NoOff) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_EQ(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("roadmapDummy_hdr10")), nullptr)
+        << "the HDR10 mockup toggle is superseded by the real HDR-handling combo";
+
+    auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(hdr, nullptr);
+    EXPECT_GE(hdr->findData(static_cast<int>(recorder_core::HdrMode::TonemapSdr)), 0);
+    EXPECT_GE(hdr->findData(static_cast<int>(recorder_core::HdrMode::Hdr10)), 0);
+    EXPECT_LT(hdr->findData(static_cast<int>(recorder_core::HdrMode::Off)), 0)
+        << "HdrMode::Off must never be offered in the UI";
+
+    // Default model has TonemapSdr; control must reflect that.
+    EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::TonemapSdr));
+}
+
+// Hdr10 is selectable only for HEVC / AV1 (capability::QueryHdr10Native); for
+// H.264 the item is disabled, mirroring the bit-depth disabled-item pattern.
+TEST_F(ConfigPageTest, HdrMode_DisabledForH264_EnabledForHevcAv1) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(hdr, nullptr);
+
+    const auto hdr10_item_enabled = [&]() -> bool {
+        auto* model = qobject_cast<QStandardItemModel*>(hdr->model());
+        EXPECT_NE(model, nullptr);
+        const int idx = hdr->findData(static_cast<int>(recorder_core::HdrMode::Hdr10));
+        EXPECT_GE(idx, 0);
+        return model->item(idx)->isEnabled();
+    };
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_FALSE(hdr10_item_enabled());
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(hdr10_item_enabled());
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    EXPECT_TRUE(hdr10_item_enabled());
+}
+
+// Selecting Record native HDR10 with a capable codec emits the model.
+TEST_F(ConfigPageTest, HdrMode_SelectingHdr10WithAv1_EmitsModel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted = output_defaults_;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(hdr, nullptr);
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    hdr->setCurrentIndex(hdr->findData(static_cast<int>(recorder_core::HdrMode::Hdr10)));
+    EXPECT_EQ(emitted.hdr_mode, recorder_core::HdrMode::Hdr10);
+
+    hdr->setCurrentIndex(hdr->findData(static_cast<int>(recorder_core::HdrMode::TonemapSdr)));
+    EXPECT_EQ(emitted.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+}
+
+// Unlike bit depth, switching the codec to H.264 while Hdr10 is selected must NOT
+// silently rewrite the stored setting back to TonemapSdr: the live pre-flight
+// blocker (rec.hdr.h264) owns that conflict at recording time. The control shows
+// the conflict (disabled item + calm inline hint) without discarding the choice.
+TEST_F(ConfigPageTest, HdrMode_CodecChangeToH264_DoesNotResetHdr10) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted = output_defaults_;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(hdr, nullptr);
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    hdr->setCurrentIndex(hdr->findData(static_cast<int>(recorder_core::HdrMode::Hdr10)));
+    ASSERT_EQ(emitted.hdr_mode, recorder_core::HdrMode::Hdr10);
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_EQ(emitted.hdr_mode, recorder_core::HdrMode::Hdr10)
+        << "HDR mode must survive a codec change to H.264 -- the pre-flight blocker "
+           "handles the conflict, the UI must not silently discard the choice";
+    EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));
+}
+
+// The calm inline hint ("Not available with H.264...") is visible only while
+// H.264 disables Hdr10, and hides again once a capable codec is selected.
+TEST_F(ConfigPageTest, HdrMode_H264Hint_VisibleOnlyWhenDisabled) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    ASSERT_NE(codec, nullptr);
+
+    // The page is never shown() in this headless test, so QWidget::isVisible()
+    // would be false regardless of the control's own setVisible() calls (it ANDs
+    // in ancestor/top-level shown state). isHidden() reflects only this widget's
+    // own explicit visibility flag, which is what updateVideoHdrModeControl() drives.
+    const auto hint_visible = [&]() {
+        for (const auto* label : page.findChildren<QLabel*>()) {
+            if (label->text().contains(QStringLiteral("Not available with H.264")))
+                return !label->isHidden();
+        }
+        return false;
+    };
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    EXPECT_FALSE(hint_visible());
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(hint_visible());
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(hint_visible());
+}
+
+// Hydrate-replay: a setting arriving via the constructor (before any lazy build
+// runs) must still be reflected once the widgets exist -- mirrors the historical
+// colour-range/encoder-preset hydration-bug class.
+TEST_F(ConfigPageTest, HdrMode_HydratesFromConstructorSettings) {
+    OutputSettingsModel initial = output_defaults_;
+    initial.video_codec = capability::VideoCodec::Av1Nvenc;
+    initial.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    ConfigPage page(initial, video_defaults_);
+    auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(hdr, nullptr);
+    EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));
+}
+
+// setOutputSettings() must carry hdr_mode through to the combo without emitting
+// formatSettingsChanged -- the same field-drop bug class MergeFormatSelection was
+// created to prevent (color_range / bit_depth / nvenc_preset all had it before).
+TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    int emit_count = 0;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged,
+                     [&emit_count](const OutputSettingsModel&) { ++emit_count; });
+
+    OutputSettingsModel incoming = output_defaults_;
+    incoming.video_codec = capability::VideoCodec::HevcNvenc;
+    incoming.hdr_mode = recorder_core::HdrMode::Hdr10;
+    page.setOutputSettings(incoming);
+
+    auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(hdr, nullptr);
+    EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));
+    EXPECT_EQ(emit_count, 0) << "setOutputSettings must not emit formatSettingsChanged";
+}
+
 } // namespace
 } // namespace exosnap
