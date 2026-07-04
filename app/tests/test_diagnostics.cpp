@@ -256,6 +256,7 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     output.container = capability::Container::WebM;
     output.video_codec = capability::VideoCodec::Av1Nvenc;
     output.audio_codec = capability::AudioCodec::Opus;
+    output.hdr_mode = recorder_core::HdrMode::Hdr10;
 
     VideoSettingsModel video;
     video.cfr = false;
@@ -268,6 +269,10 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(config.frame_rate_num, 60u);
     EXPECT_EQ(config.frame_rate_den, 1u);
+    // H3 HDR review fix: hdr_mode was silently dropped at this seam — the Diagnostics
+    // config summary always saw TonemapSdr regardless of the actual selection.
+    EXPECT_EQ(config.hdr_mode, recorder_core::HdrMode::Hdr10)
+        << "UserConfigFromSettings must carry hdr_mode through like every other output field";
 }
 
 // 0.7.0 — S7: the selected video bit depth flows into UserRecorderConfig.bit_depth
@@ -1605,6 +1610,32 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplayRaisesBlocker) {
     ASSERT_TRUE(it->fix_action.has_value());
     EXPECT_EQ(it->fix_action->id, "fix.hdr.codec.av1");
     EXPECT_EQ(it->fix_action->label, "Switch to AV1");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+}
+
+// Final-review fix (Finding 3): the fix must not hardcode AV1 — on a GPU with HEVC
+// but no AV1 encode, proposing AV1 would land the user in the codec-unavailable
+// blocker. Both AV1 and HEVC are hdr10_native-capable, so prefer AV1 when it is
+// GPU-selectable, else fall back to HEVC.
+TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailableProposesHevc) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented,
+                                                           "AV1 NVENC not supported on this GPU"};
+    capability::UserRecorderConfig config = MakeH264Config();
+    config.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetCaptureTargetHdrActive(true);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.hdr.h264"; });
+    ASSERT_NE(it, list.results.end()) << "H.264 + HDR10-native on an HDR display must block recording.";
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.hdr.codec.hevc")
+        << "AV1 is unavailable on this GPU — the fix must propose HEVC, not AV1.";
+    EXPECT_EQ(it->fix_action->label, "Switch to HEVC");
     EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
     EXPECT_TRUE(it->fix_action->reversible);
 }

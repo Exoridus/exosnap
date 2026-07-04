@@ -332,22 +332,32 @@ void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) c
         return; // SDR desktop — HDR10-native path does not engage
     }
 
+    // Prefer AV1 (best quality/efficiency); fall back to HEVC when AV1 is not
+    // GPU-selectable. Both are hdr10_native-capable per the QueryHdr10Native gate
+    // above, so either is a real fix — proposing an unavailable AV1 would just land
+    // the user in the codec-unavailable blocker (rec.003) instead of fixing anything.
+    const capability::VideoCodec proposed_codec =
+        capability::IsSelectable(caps_.QueryVideoCodec(capability::VideoCodec::Av1Nvenc))
+            ? capability::VideoCodec::Av1Nvenc
+            : capability::VideoCodec::HevcNvenc;
     const std::string current_label(capability::VisibleVideoCodecLabel(config_.video_codec));
-    const std::string av1_label(capability::VisibleVideoCodecLabel(capability::VideoCodec::Av1Nvenc));
+    const std::string proposed_label(capability::VisibleVideoCodecLabel(proposed_codec));
+    const std::string fix_id =
+        proposed_codec == capability::VideoCodec::Av1Nvenc ? "fix.hdr.codec.av1" : "fix.hdr.codec.hevc";
     DiagnosticResult r = MakeResult(
         "rec.hdr.h264", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
         current_label + " cannot record HDR10",
-        current_label + " has no 10-bit/HDR10 path. Switch to " + av1_label + " to record the HDR signal.",
+        current_label + " has no 10-bit/HDR10 path. Switch to " + proposed_label + " to record the HDR signal.",
         "HDR10 recording is enabled and the capture target's display is in HDR, but " + current_label +
-            " is an 8-bit-only codec with no HDR10 (10-bit/P010, PQ/BT.2020) path. " + av1_label +
-            " and HEVC can carry the native HDR10 signal.",
-        "Video codec: " + current_label + ", HDR: HDR10 (native)", "Switch the video codec to " + av1_label + ".");
+            " is an 8-bit-only codec with no HDR10 (10-bit/P010, PQ/BT.2020) path. AV1 and HEVC can "
+            "carry the native HDR10 signal.",
+        "Video codec: " + current_label + ", HDR: HDR10 (native)", "Switch the video codec to " + proposed_label + ".");
     FixAction fa;
-    fa.id = "fix.hdr.codec.av1";
-    fa.label = "Switch to " + av1_label;
+    fa.id = fix_id;
+    fa.label = "Switch to " + proposed_label;
     fa.safety = FixAction::Safety::Auto; // config-only, reversible
     fa.reversible = true;
-    fa.changes_summary = "Video codec: " + current_label + " -> " + av1_label;
+    fa.changes_summary = "Video codec: " + current_label + " -> " + proposed_label;
     r.fix_action = fa;
     checklist.has_blocker = true;
     checklist.results.push_back(std::move(r));

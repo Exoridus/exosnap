@@ -1799,6 +1799,10 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     // straight through (no reconcile) to UserRecorderConfig.color_range and on to
     // the engine's ColorMetadata.range.
     resolved_user_config_.color_range = output_settings_.color_range;
+    // HDR mode (H3 HDR wave review fix): was silently dropped at this seam — the resolved
+    // config always saw TonemapSdr regardless of the actual OutputSettingsModel selection,
+    // so recording start never carried the user's HDR10 choice into the engine.
+    resolved_user_config_.hdr_mode = output_settings_.hdr_mode;
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 
     // Translate the UI split policy into the engine settings applied at start.

@@ -41,6 +41,8 @@ struct DisplayHdrFacts {
 // (an HMONITOR) into its device name via GetMonitorInfoW; this lookup stays a pure,
 // UI-agnostic, thread-free query over the already-probed facts. Returns nullptr
 // when no display with that name is present.
+// Do not retain the returned pointer across a snapshot re-probe — it points into
+// `displays` and is invalidated when that vector is rebuilt/reassigned.
 [[nodiscard]] inline const DisplayHdrFacts* FindDisplayByName(const std::vector<DisplayHdrFacts>& displays,
                                                               std::string_view device_name) noexcept {
     for (const auto& d : displays) {
