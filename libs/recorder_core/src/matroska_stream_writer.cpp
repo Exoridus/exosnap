@@ -185,6 +185,33 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                             static_cast<uint64_t>(m_config.color.max_frame_average_light_level));
                     }
                 }
+                // Mastering display metadata (SMPTE ST 2086, H3 HDR wave slice 1).
+                // Independent of the `hdr`/MaxCLL/MaxFALL gate above — written
+                // whenever has_mastering_display is set, omitted entirely otherwise
+                // (no empty/zeroed KaxVideoColourMasterMeta element).
+                if (m_config.color.has_mastering_display) {
+                    auto& mdcv = libebml::GetChild<libmatroska::KaxVideoColourMasterMeta>(colour);
+                    libebml::GetChild<libmatroska::KaxVideoRChromaX>(mdcv).SetValue(
+                        m_config.color.mastering_display_primary_r_x);
+                    libebml::GetChild<libmatroska::KaxVideoRChromaY>(mdcv).SetValue(
+                        m_config.color.mastering_display_primary_r_y);
+                    libebml::GetChild<libmatroska::KaxVideoGChromaX>(mdcv).SetValue(
+                        m_config.color.mastering_display_primary_g_x);
+                    libebml::GetChild<libmatroska::KaxVideoGChromaY>(mdcv).SetValue(
+                        m_config.color.mastering_display_primary_g_y);
+                    libebml::GetChild<libmatroska::KaxVideoBChromaX>(mdcv).SetValue(
+                        m_config.color.mastering_display_primary_b_x);
+                    libebml::GetChild<libmatroska::KaxVideoBChromaY>(mdcv).SetValue(
+                        m_config.color.mastering_display_primary_b_y);
+                    libebml::GetChild<libmatroska::KaxVideoWhitePointChromaX>(mdcv).SetValue(
+                        m_config.color.mastering_display_white_point_x);
+                    libebml::GetChild<libmatroska::KaxVideoWhitePointChromaY>(mdcv).SetValue(
+                        m_config.color.mastering_display_white_point_y);
+                    libebml::GetChild<libmatroska::KaxVideoLuminanceMax>(mdcv).SetValue(
+                        m_config.color.mastering_display_max_luminance);
+                    libebml::GetChild<libmatroska::KaxVideoLuminanceMin>(mdcv).SetValue(
+                        m_config.color.mastering_display_min_luminance);
+                }
             }
 
             vid.SetGlobalTimecodeScale(kTimecodeScaleNs);
