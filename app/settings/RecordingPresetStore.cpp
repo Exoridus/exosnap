@@ -658,6 +658,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     wc_tbl.emplace("overlay_user_placed", wc.overlay_user_placed);
     wc_tbl.emplace("aspect_ratio_locked", wc.aspect_ratio_locked);
     wc_tbl.emplace("mirror", wc.mirror);
+    wc_tbl.emplace("opacity", static_cast<double>(wc.opacity));
 
     toml::table ck_tbl;
     ck_tbl.emplace("enabled", wc.chroma_key.enabled);
@@ -960,6 +961,7 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     wc.overlay_user_placed = TomlBool(tbl["webcam"]["overlay_user_placed"], false);
     wc.aspect_ratio_locked = TomlBool(tbl["webcam"]["aspect_ratio_locked"], true);
     wc.mirror = TomlBool(tbl["webcam"]["mirror"], false);
+    wc.opacity = static_cast<float>(TomlFloat(tbl["webcam"]["opacity"], 1.0));
     wc.chroma_key.enabled = TomlBool(tbl["webcam"]["chroma_key"]["enabled"], false);
     {
         const auto m = WebcamChromaKeyColorModeFromString(

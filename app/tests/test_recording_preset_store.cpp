@@ -109,6 +109,7 @@ RecordingPreset MakeWebcamPreset() {
     p.config.webcam.chroma_key.tolerance = 0.40f;
     p.config.webcam.chroma_key.softness = 0.10f;
     p.config.webcam.chroma_key.spill_reduction = 0.25f;
+    p.config.webcam.opacity = 0.35f;
     return p;
 }
 
@@ -162,6 +163,10 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
         EXPECT_TRUE(PresetsEqual(r1, *loaded_r1));
         EXPECT_TRUE(PresetsEqual(r2, *loaded_r2));
         EXPECT_TRUE(PresetsEqual(r3, *loaded_r3));
+
+        // Webcam PiP opacity — persisted explicitly since NormalizedConfigEquals
+        // is not the target of this proof; check the round-tripped value directly.
+        EXPECT_FLOAT_EQ(loaded_r3->config.webcam.opacity, 0.35f);
     }
 
     CleanupFile(path);
@@ -551,6 +556,23 @@ TEST(RecordingPresetStore, HdrModeInvalidValue_DefaultsToTonemapSdr_NoReset) {
     EXPECT_FALSE(state.was_reset);
     ASSERT_EQ(state.presets.size(), 1u);
     EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+
+    CleanupFile(path);
+}
+
+// Additive-load proof (mirrors HdrModeMissingKey_DefaultsToTonemapSdr above):
+// MakeSinglePresetToml() writes a [presets.webcam] table that never had an
+// "opacity" key (it predates this feature). Loading it must NOT reset the
+// store and must leave the field at its struct default (1.0f, fully opaque).
+TEST(RecordingPresetStore, WebcamOpacityMissingKey_DefaultsTo1) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_FLOAT_EQ(state.presets[0].config.webcam.opacity, 1.0f);
 
     CleanupFile(path);
 }
