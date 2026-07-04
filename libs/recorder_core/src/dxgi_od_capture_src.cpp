@@ -1,6 +1,6 @@
 #include "dxgi_od_capture_src.h"
 
-#include <dxgi1_5.h>
+#include <dxgi1_6.h>
 
 #include <cstdio>
 #include <iterator>
@@ -95,16 +95,18 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     }
 
     // Prefer IDXGIOutput5::DuplicateOutput1 (Win10 1703+): declaring the
-    // supported SDR formats lets DXGI hand us the desktop's native surface —
-    // BGRA8 on an 8-bit desktop, R10G10B10A2 on a 10 bpc SDR desktop — instead
-    // of relying on the legacy API's implicit 8-bit-only behavior. On desktops
-    // whose format is not in the list (e.g. FP16 HDR/Advanced Color),
-    // DuplicateOutput1 fails and we fall back to the legacy API below, which
-    // provides a tone-mapped BGRA8 compatibility surface.
+    // supported formats lets DXGI hand us the desktop's native surface — BGRA8
+    // on an 8-bit desktop, R10G10B10A2 on a 10 bpc SDR desktop, and scRGB FP16
+    // on an HDR/Advanced-Color desktop — instead of relying on the legacy API's
+    // implicit 8-bit-only behavior. Listing FP16 means an HDR desktop delivers
+    // its real linear signal for a controlled tone-map, rather than DWM's
+    // uncontrolled SDR compatibility surface. If none of the listed formats can
+    // be provided, DuplicateOutput1 fails and we fall back to the legacy API.
     winrt::com_ptr<IDXGIOutputDuplication> duplication;
     HRESULT dup1Hr = E_NOINTERFACE;
     if (winrt::com_ptr<IDXGIOutput5> output5 = matchedOutput.try_as<IDXGIOutput5>()) {
-        static constexpr DXGI_FORMAT kSupportedFormats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM};
+        static constexpr DXGI_FORMAT kSupportedFormats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
+                                                            DXGI_FORMAT_R16G16B16A16_FLOAT};
         dup1Hr = output5->DuplicateOutput1(device, 0, static_cast<UINT>(std::size(kSupportedFormats)),
                                            kSupportedFormats, duplication.put());
     }
@@ -137,6 +139,21 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
                             ? (desc.ModeDesc.RefreshRate.Numerator / desc.ModeDesc.RefreshRate.Denominator)
                             : 0u;
     m_frame_held = false;
+
+    // HDR facts of the active output (IDXGIOutput6::GetDesc1). The knee for the
+    // scRGB->SDR tone-map uses the display peak luminance, but only when the
+    // output is actually in an HDR colour space — an SDR-mode display still
+    // reports its EDID luminance caps via GetDesc1, which are not the active
+    // reference. Best-effort: absence leaves the tone-map on its fallback peak.
+    m_hdr_active = false;
+    m_max_luminance_nits = 0.0f;
+    if (winrt::com_ptr<IDXGIOutput6> output6 = matchedOutput.try_as<IDXGIOutput6>()) {
+        DXGI_OUTPUT_DESC1 desc1{};
+        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+            m_hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+            m_max_luminance_nits = desc1.MaxLuminance;
+        }
+    }
     return true;
 }
 
@@ -199,7 +216,28 @@ void DxgiOdCaptureSrc::ReleaseFrame() {
 // ---------------------------------------------------------------------------
 
 bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept {
-    return format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_R10G10B10A2_UNORM;
+    return format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_R10G10B10A2_UNORM ||
+           format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+
+bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, OdCaptureMode& out_mode) noexcept {
+    switch (format) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+        out_mode = OdCaptureMode::Sdr;
+        return true;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+        // scRGB FP16 HDR desktop. Off keeps the pre-HDR behaviour (a defined
+        // capture error); TonemapSdr and Hdr10 both tone-map to SDR here (the
+        // native HDR10 output path is not yet implemented).
+        if (hdr_mode == HdrMode::Off) {
+            return false;
+        }
+        out_mode = OdCaptureMode::HdrToneMap;
+        return true;
+    default:
+        return false;
+    }
 }
 
 const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept {
