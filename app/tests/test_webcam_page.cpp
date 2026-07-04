@@ -79,6 +79,8 @@ TEST_F(WebcamPageTest, NoVisibleOverlayOrMvpWording) {
         if (!label->isVisibleTo(&page))
             continue;
         const QString text = label->text();
+        if (text == QStringLiteral("Overlay Opacity"))
+            continue; // shipped, user-facing opacity control -- not MVP-excluded placement UI
         EXPECT_FALSE(text.contains(QStringLiteral("Overlay"), Qt::CaseInsensitive)) << text.toStdString();
         EXPECT_FALSE(text.contains(QStringLiteral("Lock aspect"), Qt::CaseInsensitive)) << text.toStdString();
         EXPECT_FALSE(text.contains(QStringLiteral("not available in this MVP"), Qt::CaseInsensitive))
@@ -201,6 +203,48 @@ TEST_F(WebcamPageTest, SettingsChanged_EmittedOnToleranceSliderChange) {
 
     EXPECT_GE(count, 1);
     EXPECT_FLOAT_EQ(last_tolerance, static_cast<float>(orig + 1) / 100.0f);
+}
+
+TEST_F(WebcamPageTest, OpacitySlider_DefaultsTo100) {
+    WebcamPage page;
+
+    auto* opacity = page.findChild<QSlider*>(QStringLiteral("webcamOpacitySlider"));
+    ASSERT_NE(opacity, nullptr);
+    EXPECT_EQ(opacity->value(), 100);
+}
+
+TEST_F(WebcamPageTest, SettingsChanged_EmittedOnOpacitySliderChange) {
+    WebcamPage page;
+
+    int count = 0;
+    float last_opacity = -1.0f;
+    QObject::connect(&page, &WebcamPage::settingsChanged, [&](const WebcamSettings& s) {
+        ++count;
+        last_opacity = s.opacity;
+    });
+
+    auto* opacity = page.findChild<QSlider*>(QStringLiteral("webcamOpacitySlider"));
+    ASSERT_NE(opacity, nullptr);
+    opacity->setValue(40);
+
+    EXPECT_GE(count, 1);
+    EXPECT_FLOAT_EQ(last_opacity, 0.4f);
+}
+
+TEST_F(WebcamPageTest, ApplySettings_SetsOpacitySliderWithoutEmitting) {
+    WebcamPage page;
+
+    int count = 0;
+    QObject::connect(&page, &WebcamPage::settingsChanged, [&](const WebcamSettings&) { ++count; });
+
+    WebcamSettings settings;
+    settings.opacity = 0.25f;
+    page.applySettings(settings);
+
+    auto* opacity = page.findChild<QSlider*>(QStringLiteral("webcamOpacitySlider"));
+    ASSERT_NE(opacity, nullptr);
+    EXPECT_EQ(opacity->value(), 25);
+    EXPECT_EQ(count, 0);
 }
 
 // -----------------------------------------------------------------------
