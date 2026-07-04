@@ -429,6 +429,7 @@ void DxgiPreviewRenderer::CleanupCapture() {
     vertexShader_.Reset();
     pixelShader_.Reset();
     samplerState_.Reset();
+    overlayBlendState_.Reset();
     {
         std::lock_guard lock(overlayMutex_);
         overlayTex_.Reset();
