@@ -52,10 +52,12 @@ GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(10);
 
-    auto* hint_label = new QLabel(hint_text, content);
-    hint_label->setWordWrap(true);
-    hint_label->setProperty("labelRole", "captureTargetPickerNote");
-    content_layout->addWidget(hint_label);
+    if (!hint_text.isEmpty()) {
+        auto* hint_label = new QLabel(hint_text, content);
+        hint_label->setWordWrap(true);
+        hint_label->setProperty("labelRole", "captureTargetPickerNote");
+        content_layout->addWidget(hint_label);
+    }
 
     auto* empty_label = new QLabel(empty_text, content);
     empty_label->setWordWrap(true);
@@ -200,9 +202,7 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     pages_ = new QStackedWidget(this);
     pages_->setObjectName("sourcePickerPages");
 
-    const auto screens_page =
-        makeScrollableCardGrid(pages_, QStringLiteral("Choose a display visually. Primary displays are marked."),
-                               QStringLiteral("No displays detected."));
+    const auto screens_page = makeScrollableCardGrid(pages_, QString(), QStringLiteral("No displays detected."));
     screens_grid_.scroll = screens_page.scroll;
     screens_grid_.content_layout = screens_page.content_layout;
     screens_grid_.host = screens_page.host;
