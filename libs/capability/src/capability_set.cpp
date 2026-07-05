@@ -78,8 +78,22 @@ SupportAnnotation StaticMatrixAnnotation(Container c, VideoCodec v, AudioCodec a
         return base;
     }
 
-    if (cs != ChromaSubsampling::Cs420) {
-        return {SupportLevel::NotImplemented, "Only 4:2:0 chroma is implemented for current validated paths."};
+    // 4:2:2 is unsupported everywhere (Ada NVENC has no 4:2:2).
+    if (cs == ChromaSubsampling::Cs422) {
+        return {SupportLevel::NotImplemented, "4:2:2 chroma is not implemented."};
+    }
+
+    // 4:4:4 is an 8-bit H.264/HEVC expert path (AYUV, NVENC High 4:4:4 / HEVC
+    // FREXT). AV1 NVENC is 4:2:0-only, and 4:4:4 + 10-bit is out of scope; both are
+    // rejected here so the resolver falls back or blocks. Per-codec/per-GPU 4:4:4
+    // availability is layered on via QueryChroma444 in QueryCombo.
+    if (cs == ChromaSubsampling::Cs444) {
+        if (v == VideoCodec::Av1Nvenc) {
+            return {SupportLevel::NotImplemented, "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."};
+        }
+        if (bd == BitDepth::Bit10) {
+            return {SupportLevel::NotImplemented, "4:4:4 is 8-bit only; 10-bit 4:4:4 is not implemented."};
+        }
     }
 
     // 8-bit is universal. 10-bit (HEVC Main10 / AV1 10-bit, P010, SDR BT.709 — 0.7.0 S5)
@@ -114,6 +128,13 @@ SupportAnnotation CapabilitySet::QueryCombo(Container c, VideoCodec v, AudioCode
     result = CombineAnnotations(result, QueryChroma(cs));
     result = CombineAnnotations(result, QueryBitDepth(bd));
 
+    // 4:4:4 additionally requires per-codec (and per-GPU, once probed) YUV444
+    // support — H.264/HEVC only, never AV1. Only consulted for the Cs444 mode so
+    // the 4:2:0 path is unaffected.
+    if (cs == ChromaSubsampling::Cs444) {
+        result = CombineAnnotations(result, QueryChroma444(v));
+    }
+
     const ComboKey key{c, v, a, cs, bd};
     const auto override_it = combo_overrides.find(key);
     if (override_it != combo_overrides.end()) {
@@ -145,6 +166,10 @@ SupportAnnotation CapabilitySet::QueryBitDepth(BitDepth bd) const {
 
 SupportAnnotation CapabilitySet::QueryHdr10Native(VideoCodec v) const {
     return LookupAnnotation(hdr10_native, v, "HDR10-native codec");
+}
+
+SupportAnnotation CapabilitySet::QueryChroma444(VideoCodec v) const {
+    return LookupAnnotation(chroma444, v, "4:4:4 codec");
 }
 
 SupportAnnotation CapabilitySet::QueryRateControlMode(recorder_core::RateControlMode mode) const {

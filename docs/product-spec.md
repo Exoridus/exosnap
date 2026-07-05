@@ -218,7 +218,16 @@ Newest, Diagnostics recommends switching to Smooth via a fix action.
 where the GPU supports it (H.264 stays 8-bit only). 10-bit is **SDR-only** — higher precision, no HDR
 transfer curve or wide gamut.
 
-**Chroma.** **4:2:0 only.** 4:2:2 and 4:4:4 are later expert features pending real hardware tests.
+**Chroma.** **4:2:0** is the default and is universal (all codecs, 8- and 10-bit). **4:4:4** is an
+Expert-mode option available for **H.264 and HEVC at 8-bit** (NVENC High 4:4:4 Predictive / HEVC
+Range Extensions) on GPUs that report YUV444 encode support; it keeps full colour resolution (sharper
+text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC AV1 is 4:2:0 only),
+**not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
+with an explanatory hint whenever the current codec/bit-depth cannot carry it, and an invalid stored
+selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
+4:2:2 path). While a recording runs in **4:4:4**, the **live preview and frame snapshots are
+unavailable** — the 4:4:4 encode path produces no composed BGRA frame to tap, so the CaptureFrame
+hotkey is rejected immediately rather than parked until the recording stops.
 
 **Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every
@@ -479,7 +488,7 @@ degrades gracefully.
 
 Settings uses a **Default / Expert split**: common controls are shown up front; expert controls (rate
 control, bitrate, frame-timing, NVENC preset, frame pacing, audio DSP, color range, HDR handling,
-keyframe interval, chroma placeholders) are hidden behind an **Expert** toggle. The Expert toggle is
+keyframe interval, chroma subsampling) are hidden behind an **Expert** toggle. The Expert toggle is
 a single global state shared with the Diagnostics page. Settings offers inline info hints (hover
 popovers on info-i icons and the countdown chevron) and search. Roadmap-only controls may appear as
 honest, disabled "planned" rows to communicate direction without enabling unimplemented behavior.
@@ -556,8 +565,9 @@ release binaries will be signed once the certificate is issued.
   (Quick Trim and markers are implemented and reachable; container chapter export is deliberately
   out of scope for the MVP); video preview playback inside the Edit/Output/Save overlay; HDR beyond
   BT.2020 (HDR handling now covers both monitor and WGC window/game capture via an FP16 frame pool;
-  no HLG/wide-gamut is the confirmed 1.0 scope); 4:2:2 / 4:4:4 chroma;
-  multi-vendor hardware encoding; the in-place dual-swap updater (designed, not shipped); immediate
+  no HLG/wide-gamut is the confirmed 1.0 scope); 4:2:2 chroma and 10-bit 4:4:4
+  (8-bit 4:4:4 for H.264/HEVC is implemented as an Expert option); multi-vendor hardware encoding; the
+  in-place dual-swap updater (designed, not shipped); immediate
   in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix.
 
 **Licensing.** ExoSnap is GPL-3.0-or-later and bundles FFmpeg as LGPL-2.1-or-later shared libraries

@@ -49,6 +49,27 @@ void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const Color
 GUID NvencPresetToGuid(NvencPreset preset) noexcept;
 
 // ---------------------------------------------------------------------------
+// Chroma / input-format helpers — pure, testable, no GPU/NVENC session.
+//
+// NvencInputFormat: the NVENC input buffer format for a bit depth + chroma.
+//   4:2:0  8-bit -> NV12 (semi-planar)
+//   4:2:0 10-bit -> YUV420_10BIT (P010, semi-planar 16 bpc)
+//   4:4:4  8-bit -> AYUV (packed A8Y8U8V8 — the DirectX 4:4:4 format NVENC
+//                   consumes; planar YUV444 has no single D3D11 texture form).
+//   4:4:4 10-bit is out of scope and never produced (blocked upstream).
+//
+// NvencChromaFormatIDC: the NV_ENC_CONFIG chromaFormatIDC value (1 = 4:2:0,
+//   3 = 4:4:4) — see nvEncodeAPI.h H.264/HEVC config fields.
+//
+// Nvenc444ProfileGuid: the profile GUID enabling 4:4:4 for a codec — H.264
+//   High 4:4:4 Predictive, HEVC Range Extensions (FREXT). Returns an all-zero
+//   GUID for AV1 (NVENC AV1 is 4:2:0-only); callers must not enable 4:4:4 then.
+// ---------------------------------------------------------------------------
+NV_ENC_BUFFER_FORMAT NvencInputFormat(BitDepth depth, ChromaSubsampling chroma) noexcept;
+uint32_t NvencChromaFormatIDC(ChromaSubsampling chroma) noexcept;
+GUID Nvenc444ProfileGuid(VideoCodec codec) noexcept;
+
+// ---------------------------------------------------------------------------
 // RcParams — pure value type for NVENC rate-control parameters.
 // Used by ComputeNvencRcParams (testable without GPU).
 // ---------------------------------------------------------------------------
@@ -106,6 +127,15 @@ class NvencEncoder {
         m_bitDepth = depth;
     }
 
+    // Set the chroma subsampling before calling Open()/FetchPresetConfig().
+    // Defaults to Cs420. Cs444 selects AYUV input, chromaFormatIDC=3, and the
+    // codec's 4:4:4 profile (H.264 High 4:4:4 / HEVC FREXT); it is valid only for
+    // HevcNvenc and H264Nvenc at 8-bit (validated upstream — AV1 and 10-bit are
+    // rejected before reaching the encoder).
+    void SetChroma(ChromaSubsampling chroma) noexcept {
+        m_chroma = chroma;
+    }
+
     // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
     // Only meaningful for ConstantQuality mode.
     void SetQualityPreset(NvencQualityPreset preset) noexcept {
@@ -155,6 +185,13 @@ class NvencEncoder {
 
     // Query HEVC (H.265) GUID and NV12 format support.
     bool QueryHevcNv12Support(std::string& out_error);
+
+    // Honest 4:4:4 gate for the current codec (call after Open(), before
+    // InitEncoder). Verifies the GPU advertises NV_ENC_CAPS_SUPPORT_YUV444_ENCODE
+    // and that the AYUV input format is enumerated for the codec. Only meaningful
+    // for H264Nvenc/HevcNvenc; fails honestly (out_error set) when 4:4:4 is
+    // unavailable so the session can refuse rather than mis-encode.
+    bool QueryYuv444Support(std::string& out_error);
 
     // Fetch preset config and set chromaFormatIDC=1 (YUV420).
     bool FetchPresetConfig(std::string& out_error);
@@ -220,6 +257,7 @@ class NvencEncoder {
 
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
     BitDepth m_bitDepth = BitDepth::Bit8;
+    ChromaSubsampling m_chroma = ChromaSubsampling::Cs420;
     NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;

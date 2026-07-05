@@ -22,7 +22,10 @@ enum class AudioCodec {
 };
 
 enum class ChromaSubsampling {
-    Cs420, // 4:2:0 — only supported value for M3.1
+    Cs420, // 4:2:0 — NV12/P010 input, universal (all codecs, 8- and 10-bit)
+    Cs444, // 4:4:4 — AYUV input, expert 8-bit H.264/HEVC only (NVENC High 4:4:4 / HEVC FREXT).
+           // AV1 NVENC has no 4:4:4; 4:4:4 + 10-bit is out of scope. 4:2:2 is unsupported
+           // (Ada NVENC has no 4:2:2) and intentionally absent here.
 };
 
 enum class BitDepth {

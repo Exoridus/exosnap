@@ -22,6 +22,12 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetBitDepth(depth);
     }
 
+    // Set chroma subsampling before Open()/Configure(). Cs444 (8-bit H.264/HEVC)
+    // selects AYUV input + the codec's 4:4:4 profile; defaults to Cs420.
+    void SetChroma(ChromaSubsampling chroma) noexcept {
+        m_nvenc.SetChroma(chroma);
+    }
+
     void SetQualityPreset(NvencQualityPreset preset) noexcept {
         m_nvenc.SetQualityPreset(preset);
     }

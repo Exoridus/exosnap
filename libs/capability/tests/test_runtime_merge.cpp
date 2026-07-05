@@ -434,6 +434,63 @@ TEST(NvencCodecSupportTest, ProbedAllSupported_NoDowngrade) {
     EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264Nvenc)));
 }
 
+// 4:4:4: baseline advertises H.264/HEVC as ValidUnvalidated and AV1 as
+// NotImplemented; a probe that reports HEVC-YUV444 unsupported downgrades only
+// HEVC 4:4:4 while H.264 4:4:4 stays selectable.
+TEST(NvencYuv444SupportTest, ProbedHevc444Unsupported_DowngradesOnlyHevc) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_codec_probed = true;
+    facts.nvenc_h264 = true;
+    facts.nvenc_hevc = true;
+    facts.nvenc_yuv444_h264 = true;
+    facts.nvenc_yuv444_hevc = false; // GPU cannot do HEVC 4:4:4
+
+    ApplyNvencYuv444Support(caps, facts);
+
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264Nvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::HevcNvenc)));
+    // AV1 is never selectable for 4:4:4.
+    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::Av1Nvenc)));
+}
+
+// Probe did not run -> keep the ValidUnvalidated 4:4:4 baseline (H.264/HEVC).
+TEST(NvencYuv444SupportTest, NotProbed_Keeps444Baseline) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_codec_probed = false;
+    facts.nvenc_yuv444_h264 = false; // ignored because not probed
+    facts.nvenc_yuv444_hevc = false;
+
+    ApplyNvencYuv444Support(caps, facts);
+
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::HevcNvenc)));
+}
+
+// End-to-end: a probe reporting no 4:4:4 support at all makes every 4:4:4 combo
+// non-selectable while 4:2:0 stays selectable.
+TEST(NvencYuv444SupportTest, BuildEffective_NoYuv444_Blocks444KeepsCs420) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_codec_probed = true;
+    snap.nvidia.nvenc_av1 = true;
+    snap.nvidia.nvenc_hevc = true;
+    snap.nvidia.nvenc_h264 = true;
+    snap.nvidia.nvenc_yuv444_h264 = false;
+    snap.nvidia.nvenc_yuv444_hevc = false;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                              ChromaSubsampling::Cs444, BitDepth::Bit8)));
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf,
+                                              ChromaSubsampling::Cs444, BitDepth::Bit8)));
+    EXPECT_TRUE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                             ChromaSubsampling::Cs420, BitDepth::Bit8)));
+}
+
 // BuildEffectiveCapabilities wires the probe through end-to-end: a favorable
 // snapshot that additionally reports AV1-unsupported via a real probe must yield
 // AV1 NotImplemented while the M3.2 prerequisites otherwise hold.

@@ -118,14 +118,43 @@ TEST(CapabilityMatrixTest, MP4_UnsupportedCombos_AreNotImplementedOrInvalid) {
 TEST(CapabilityMatrixTest, ChromaAndBitDepthUnsupportedPathsAreNotImplemented) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
-    // 4:4:4 chroma is still not implemented for any codec.
+    // 4:4:4 is never available for AV1 (NVENC AV1 is 4:2:0 only).
     EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs444,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::NotImplemented);
+
+    // 4:2:2 remains unimplemented for every codec (Ada NVENC has no 4:2:2).
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf, ChromaSubsampling::Cs422,
                               BitDepth::Bit8)
                   .level,
               SupportLevel::NotImplemented);
 
     // 10-bit with H.264 is not implemented (H.264 is 8-bit only).
     EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit10)
+                  .level,
+              SupportLevel::NotImplemented);
+}
+
+TEST(CapabilityMatrixTest, FourFourFourIsPerCodecEightBitOnly) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    // 4:4:4 8-bit is a real (not-yet-hardware-validated) path for H.264 and HEVC.
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs444,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::ValidUnvalidated);
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf, ChromaSubsampling::Cs444,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::ValidUnvalidated);
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::Av1Nvenc)));
+
+    // 4:4:4 + 10-bit is out of scope — not selectable for any codec.
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf, ChromaSubsampling::Cs444,
                               BitDepth::Bit10)
                   .level,
               SupportLevel::NotImplemented);

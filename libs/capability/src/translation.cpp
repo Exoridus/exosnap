@@ -28,9 +28,15 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     // request falls through to the rejection path.
     const bool is_hevc = final_config.video_codec == VideoCodec::HevcNvenc;
     const bool is_av1 = final_config.video_codec == VideoCodec::Av1Nvenc;
+    const bool is_h264 = final_config.video_codec == VideoCodec::H264Nvenc;
     const bool bit_depth_ok =
         final_config.bit_depth == BitDepth::Bit8 || (final_config.bit_depth == BitDepth::Bit10 && (is_hevc || is_av1));
-    const bool valid_chroma_depth = final_config.chroma == ChromaSubsampling::Cs420 && bit_depth_ok;
+    // 4:4:4 is an 8-bit H.264/HEVC expert path; AV1 and 4:4:4 + 10-bit are rejected
+    // (the resolver already downgrades those, but keep translation self-guarding).
+    const bool chroma_ok = final_config.chroma == ChromaSubsampling::Cs420 ||
+                           (final_config.chroma == ChromaSubsampling::Cs444 && (is_h264 || is_hevc) &&
+                            final_config.bit_depth == BitDepth::Bit8);
+    const bool valid_chroma_depth = chroma_ok && bit_depth_ok;
     const bool is_webm_av1_opus = final_config.container == Container::WebM &&
                                   final_config.video_codec == VideoCodec::Av1Nvenc &&
                                   final_config.audio_codec == AudioCodec::Opus && valid_chroma_depth;
@@ -81,8 +87,9 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
         failure.succeeded = false;
         failure.invalidity.push_back(InvalidReason{
             "translation", "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|PCM|FLAC), "
-                           "Matroska+HEVC+(AAC|Opus|PCM|FLAC), or MP4+(H264|HEVC)+AAC + 4:2:0 + 8-bit "
-                           "(or 10-bit with HEVC/AV1) can be translated to recorder_core."});
+                           "Matroska+HEVC+(AAC|Opus|PCM|FLAC), or MP4+(H264|HEVC)+AAC, with 4:2:0 8-bit "
+                           "(or 10-bit with HEVC/AV1) or 4:4:4 8-bit with H.264/HEVC, "
+                           "can be translated to recorder_core."});
         if (validation != nullptr) {
             *validation = failure;
         }
@@ -90,7 +97,8 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     }
 
     recorder_core::RecorderConfig core_config;
-    core_config.chroma = recorder_core::ChromaSubsampling::Cs420;
+    core_config.chroma = (final_config.chroma == ChromaSubsampling::Cs444) ? recorder_core::ChromaSubsampling::Cs444
+                                                                           : recorder_core::ChromaSubsampling::Cs420;
     core_config.bit_depth =
         (final_config.bit_depth == BitDepth::Bit10) ? recorder_core::BitDepth::Bit10 : recorder_core::BitDepth::Bit8;
     // Colour range (0.7.0): always valid for every codec/container, so it is NOT

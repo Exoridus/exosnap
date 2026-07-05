@@ -46,6 +46,14 @@ struct CapabilitySet {
     // pre-flight blocker, and a future expert HDR control).
     std::unordered_map<VideoCodec, SupportAnnotation> hdr10_native;
 
+    // Explicit per-codec 4:4:4 (YUV444, 8-bit) encode capability. NVENC supports
+    // 4:4:4 for H.264 (High 4:4:4 Predictive) and HEVC (Range Extensions), but
+    // NOT AV1 (NVENC AV1 is 4:2:0 Main only). The static baseline advertises
+    // H.264/HEVC as ValidUnvalidated and AV1 as NotImplemented; a real per-GPU
+    // NVENC probe (NV_ENC_CAPS_SUPPORT_YUV444_ENCODE) downgrades H.264/HEVC when
+    // the specific GPU cannot do it. Only consulted for the Cs444 chroma mode.
+    std::unordered_map<VideoCodec, SupportAnnotation> chroma444;
+
     std::unordered_map<ComboKey, SupportAnnotation, ComboKeyHash> combo_overrides;
 
     ResolutionConstraint resolution_constraint;
@@ -61,6 +69,11 @@ struct CapabilitySet {
     // Whether `v` can carry a native HDR10 (10-bit/P010) signal. Selectable for
     // HEVC/AV1, NotImplemented for H.264.
     SupportAnnotation QueryHdr10Native(VideoCodec v) const;
+
+    // Whether `v` can encode 8-bit 4:4:4 (YUV444). Selectable for H.264/HEVC when
+    // the GPU supports it; NotImplemented for AV1. Consulted by QueryCombo for the
+    // Cs444 chroma mode and by the expert chroma UI gate.
+    SupportAnnotation QueryChroma444(VideoCodec v) const;
 
     // Query support for a canonical rate-control mode (ADR 0009).
     // Returns Available for CQ/VBR/CBR; NotImplemented for Lossless.

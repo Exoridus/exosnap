@@ -24,4 +24,11 @@ class CapabilityBuilder {
 // DLL-presence gate. Exposed for headless unit testing.
 void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts);
 
+// Pure refinement: when a real per-GPU NVENC probe ran (facts.nvenc_codec_probed),
+// downgrade per-codec 4:4:4 (chroma444) to NotImplemented for any codec whose
+// NV_ENC_CAPS_SUPPORT_YUV444_ENCODE probe was false. AV1 is always NotImplemented
+// (no NVENC 4:4:4). When the probe did not run, the ValidUnvalidated baseline is
+// left untouched. Called by BuildEffectiveCapabilities. Exposed for unit testing.
+void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& facts);
+
 } // namespace exosnap::capability

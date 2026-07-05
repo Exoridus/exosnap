@@ -750,11 +750,19 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             hdr_facts.white_point_y = facts->white_point_y;
             hdr_facts.max_luminance_nits = facts->max_luminance_nits;
             hdr_facts.min_luminance_nits = facts->min_luminance_nits;
-            config.color = recorder_core::MakeHdr10ColorMetadata(hdr_facts);
-            config.bit_depth = recorder_core::BitDepth::Bit10;
+            // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
+            // 4:2:0 — 4:4:4 (AYUV) is 8-bit only, so a leftover Cs444 selection would
+            // otherwise reach Validate() as Cs444 + Bit10 and fail the recording start
+            // on any HDR-active display.
+            const bool chroma_snapped = recorder_core::ApplyHdr10NativeEncode(config, hdr_facts);
             diagnostics::AppLog::info(
                 QStringLiteral("record.hdr"),
                 QStringLiteral("mode=hdr10-native primaries=bt2020 transfer=pq bitdepth=10 range=limited"));
+            if (chroma_snapped) {
+                diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
+                                             QStringLiteral("field=chroma requested=4:4:4 effective=4:2:0 "
+                                                            "reason=\"HDR10 native is 10-bit; 4:4:4 is 8-bit only\""));
+            }
         }
     }
     config.output_path = output_path;
@@ -1832,6 +1840,16 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
         output_settings_.bit_depth = capability::BitDepth::Bit8;
     }
     resolved_user_config_.bit_depth = output_settings_.bit_depth;
+    // Chroma subsampling (expert): 4:4:4 is 8-bit H.264/HEVC only. Reset to 4:2:0
+    // when the resolved codec/bit-depth can't carry it (the resolver applies the
+    // same fallback); then carry it into UserRecorderConfig.chroma.
+    if (output_settings_.chroma_subsampling == capability::ChromaSubsampling::Cs444 &&
+        (output_settings_.bit_depth != capability::BitDepth::Bit8 ||
+         (output_settings_.video_codec != capability::VideoCodec::HevcNvenc &&
+          output_settings_.video_codec != capability::VideoCodec::H264Nvenc))) {
+        output_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
+    }
+    resolved_user_config_.chroma = output_settings_.chroma_subsampling;
     // Colour range (0.7.0): always valid for every codec/container, so it flows
     // straight through (no reconcile) to UserRecorderConfig.color_range and on to
     // the engine's ColorMetadata.range.

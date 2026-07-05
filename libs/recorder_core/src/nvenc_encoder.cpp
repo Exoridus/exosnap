@@ -61,15 +61,15 @@ bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, GUID code
     return true;
 }
 
-// Required NVENC input buffer format for a given bit depth.
-// 8-bit → NV12; 10-bit → P010 (semi-planar 16-bit, MSB-aligned 10-bit data).
-static NV_ENC_BUFFER_FORMAT RequiredInputFormat(BitDepth depth) noexcept {
-    return (depth == BitDepth::Bit10) ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
-}
-
 static const char* BufferFormatName(NV_ENC_BUFFER_FORMAT fmt) noexcept {
-    return (fmt == NV_ENC_BUFFER_FORMAT_YUV420_10BIT) ? "NV_ENC_BUFFER_FORMAT_YUV420_10BIT"
-                                                      : "NV_ENC_BUFFER_FORMAT_NV12";
+    switch (fmt) {
+    case NV_ENC_BUFFER_FORMAT_YUV420_10BIT:
+        return "NV_ENC_BUFFER_FORMAT_YUV420_10BIT";
+    case NV_ENC_BUFFER_FORMAT_AYUV:
+        return "NV_ENC_BUFFER_FORMAT_AYUV";
+    default:
+        return "NV_ENC_BUFFER_FORMAT_NV12";
+    }
 }
 
 // Codec label for init diagnostics (0=AV1, 1=H264, 2=HEVC)
@@ -82,7 +82,8 @@ static const char* CodecLabel(int codec_index) noexcept {
 }
 
 std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, int codec_index,
-                                bool have_caps, int w_min, int w_max, int h_min, int h_max, BitDepth bit_depth) {
+                                bool have_caps, int w_min, int w_max, int h_min, int h_max, BitDepth bit_depth,
+                                ChromaSubsampling chroma) {
     const bool isH264 = (codec_index == 1);
     const bool isHevc = (codec_index == 2);
     std::ostringstream oss;
@@ -91,7 +92,8 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
         << ", encodeWidth=" << p.encodeWidth << ", encodeHeight=" << p.encodeHeight << ", darWidth=" << p.darWidth
         << ", darHeight=" << p.darHeight << ", maxEncodeWidth=" << p.maxEncodeWidth
         << ", maxEncodeHeight=" << p.maxEncodeHeight << ", frameRateNum=" << p.frameRateNum
-        << ", frameRateDen=" << p.frameRateDen << ", bufferFormat=" << BufferFormatName(RequiredInputFormat(bit_depth))
+        << ", frameRateDen=" << p.frameRateDen
+        << ", bufferFormat=" << BufferFormatName(NvencInputFormat(bit_depth, chroma))
         << ", enablePTD=" << static_cast<int>(p.enablePTD)
         << ", rateControlMode=" << static_cast<uint32_t>(cfg.rcParams.rateControlMode)
         << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP;
@@ -202,6 +204,34 @@ GUID NvencPresetToGuid(NvencPreset preset) noexcept {
         return NV_ENC_PRESET_P7_GUID;
     }
     return NV_ENC_PRESET_P4_GUID;
+}
+
+// ---------------------------------------------------------------------------
+// Chroma / input-format helpers (pure, testable — see nvenc_encoder.h)
+// ---------------------------------------------------------------------------
+
+NV_ENC_BUFFER_FORMAT NvencInputFormat(BitDepth depth, ChromaSubsampling chroma) noexcept {
+    if (chroma == ChromaSubsampling::Cs444) {
+        // 8-bit 4:4:4 only; 10-bit 4:4:4 is out of scope and blocked upstream.
+        return NV_ENC_BUFFER_FORMAT_AYUV;
+    }
+    return (depth == BitDepth::Bit10) ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
+}
+
+uint32_t NvencChromaFormatIDC(ChromaSubsampling chroma) noexcept {
+    return (chroma == ChromaSubsampling::Cs444) ? 3u : 1u;
+}
+
+GUID Nvenc444ProfileGuid(VideoCodec codec) noexcept {
+    if (codec == VideoCodec::H264Nvenc) {
+        return NV_ENC_H264_PROFILE_HIGH_444_GUID;
+    }
+    if (codec == VideoCodec::HevcNvenc) {
+        // HEVC Range Extensions (FREXT) — the 4:2:2/4:4:4 8/10-bit profile.
+        return NV_ENC_HEVC_PROFILE_FREXT_GUID;
+    }
+    // AV1 NVENC has no 4:4:4 profile.
+    return GUID{};
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +398,7 @@ bool NvencEncoder::QueryAv1Nv12Support(std::string& out_error) {
         return false;
     }
 
-    const NV_ENC_BUFFER_FORMAT wantFmt = RequiredInputFormat(m_bitDepth);
+    const NV_ENC_BUFFER_FORMAT wantFmt = NvencInputFormat(m_bitDepth, m_chroma);
     bool fmtFound = false;
     for (uint32_t i = 0; i < got; ++i) {
         if (fmts[i] == wantFmt) {
@@ -489,7 +519,7 @@ bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
         return false;
     }
 
-    const NV_ENC_BUFFER_FORMAT wantFmt = RequiredInputFormat(m_bitDepth);
+    const NV_ENC_BUFFER_FORMAT wantFmt = NvencInputFormat(m_bitDepth, m_chroma);
     bool fmtFound = false;
     for (uint32_t i = 0; i < got; ++i) {
         if (fmts[i] == wantFmt) {
@@ -502,6 +532,60 @@ bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// QueryYuv444Support
+// ---------------------------------------------------------------------------
+
+bool NvencEncoder::QueryYuv444Support(std::string& out_error) {
+    GUID codecGuid;
+    const char* label;
+    if (m_codec == VideoCodec::H264Nvenc) {
+        codecGuid = NV_ENC_CODEC_H264_GUID;
+        label = "H264";
+    } else if (m_codec == VideoCodec::HevcNvenc) {
+        codecGuid = NV_ENC_CODEC_HEVC_GUID;
+        label = "HEVC";
+    } else {
+        // AV1 NVENC is 4:2:0 only — there is no 4:4:4 path to probe.
+        out_error = "AV1 NVENC does not support 4:4:4 encoding";
+        return false;
+    }
+
+    // Capability bit: NV_ENC_CAPS_SUPPORT_YUV444_ENCODE.
+    int yuv444Cap = 0;
+    std::string capsError;
+    if (!QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_SUPPORT_YUV444_ENCODE, yuv444Cap, capsError)) {
+        out_error = std::string(label) + " YUV444 caps query failed: " + capsError;
+        return false;
+    }
+    if (yuv444Cap == 0) {
+        out_error = std::string(label) + " reports NV_ENC_CAPS_SUPPORT_YUV444_ENCODE = 0";
+        return false;
+    }
+
+    // Input-format enumeration: AYUV must be accepted for this codec.
+    uint32_t count = 0;
+    NVENCSTATUS st = m_funcs.nvEncGetInputFormatCount(m_encoder, codecGuid, &count);
+    if (st != NV_ENC_SUCCESS || count == 0) {
+        out_error = std::string("nvEncGetInputFormatCount(") + label + "): " + NvencStatusName(st);
+        return false;
+    }
+    std::vector<NV_ENC_BUFFER_FORMAT> fmts(count);
+    uint32_t got = 0;
+    st = m_funcs.nvEncGetInputFormats(m_encoder, codecGuid, fmts.data(), count, &got);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncGetInputFormats(") + label + "): " + NvencStatusName(st);
+        return false;
+    }
+    for (uint32_t i = 0; i < got; ++i) {
+        if (fmts[i] == NV_ENC_BUFFER_FORMAT_AYUV) {
+            return true;
+        }
+    }
+    out_error = std::string("NV_ENC_BUFFER_FORMAT_AYUV not in ") + label + " input formats";
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -614,14 +698,25 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     const bool tenBit = (m_bitDepth == BitDepth::Bit10);
     const NV_ENC_BIT_DEPTH nvBitDepth = tenBit ? NV_ENC_BIT_DEPTH_10 : NV_ENC_BIT_DEPTH_8;
 
+    // Chroma: 1 = 4:2:0 (NV12/P010), 3 = 4:4:4 (AYUV). 4:4:4 is an 8-bit
+    // H.264/HEVC expert option; AV1 and 4:4:4 + 10-bit are rejected upstream, so
+    // this stays at 1 for AV1 and for every 4:2:0 session — keeping the 4:2:0
+    // bitstream byte-identical to before.
+    const uint32_t chromaIdc = NvencChromaFormatIDC(m_chroma);
+    const bool is444 = (m_chroma == ChromaSubsampling::Cs444);
+
     if (m_codec == VideoCodec::H264Nvenc) {
-        m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = 1; // YUV420/NV12
+        m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = chromaIdc;
+        if (is444)
+            m_encodeConfig.profileGUID = Nvenc444ProfileGuid(m_codec); // High 4:4:4 Predictive
     } else if (m_codec == VideoCodec::HevcNvenc) {
-        m_encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = 1; // YUV420/NV12 or P010
+        m_encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = chromaIdc; // YUV420/P010 or YUV444/AYUV
         m_encodeConfig.encodeCodecConfig.hevcConfig.inputBitDepth = nvBitDepth;
         m_encodeConfig.encodeCodecConfig.hevcConfig.outputBitDepth = nvBitDepth;
         if (tenBit)
             m_encodeConfig.profileGUID = NV_ENC_HEVC_PROFILE_MAIN10_GUID;
+        else if (is444)
+            m_encodeConfig.profileGUID = Nvenc444ProfileGuid(m_codec); // FREXT (Range Extensions)
     } else {
         m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12 or P010
         m_encodeConfig.encodeCodecConfig.av1Config.inputBitDepth = nvBitDepth;
@@ -783,7 +878,20 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
         !haveCaps || (height >= static_cast<uint32_t>(capHeightMin) && height <= static_cast<uint32_t>(capHeightMax));
 
     const std::string initDiag = BuildInitDiagString(p, m_encodeConfig, codec_index, haveCaps, capWidthMin, capWidthMax,
-                                                     capHeightMin, capHeightMax, m_bitDepth);
+                                                     capHeightMin, capHeightMax, m_bitDepth, m_chroma);
+
+    // Honest 4:4:4 gate: refuse before nvEncInitializeEncoder if the GPU does not
+    // advertise YUV444 encoding for this codec, so we fail with a clear message
+    // rather than mis-encoding. Only checked for the 4:4:4 path; the 4:2:0 path is
+    // untouched.
+    if (m_chroma == ChromaSubsampling::Cs444) {
+        std::string yuv444Err;
+        if (!QueryYuv444Support(yuv444Err)) {
+            out_error = std::string("NVENC ") + CodecLabel(codec_index) + " 4:4:4 unsupported: " + yuv444Err +
+                        "; init={" + initDiag + "}";
+            return false;
+        }
+    }
 
     if (!evenWidth || !evenHeight || !widthInRange || !heightInRange) {
         std::ostringstream oss;
@@ -853,7 +961,7 @@ bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* textur
     reg.resourceToRegister = texture;
     // 8-bit registers the NV12 D3D11 texture; 10-bit registers the P010 texture as
     // NV_ENC_BUFFER_FORMAT_YUV420_10BIT (both are semi-planar 4:2:0, P010 being 16 bpc).
-    reg.bufferFormat = RequiredInputFormat(m_bitDepth);
+    reg.bufferFormat = NvencInputFormat(m_bitDepth, m_chroma);
     reg.bufferUsage = NV_ENC_INPUT_IMAGE;
 
     NVENCSTATUS st = m_funcs.nvEncRegisterResource(m_encoder, &reg);

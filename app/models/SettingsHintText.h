@@ -72,6 +72,11 @@ inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression
 inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
 inline const QString kVideoBitDepth =
     QStringLiteral("8-bit is universal \xC2\xB7 10-bit needs HEVC or AV1 (smoother gradients, larger files)");
+inline const QString kChromaSubsampling =
+    QStringLiteral("4:2:0 is universal and the right choice for almost everything. 4:4:4 keeps full colour "
+                   "resolution (sharper text/UI, larger files) but needs 8-bit H.264 or HEVC \xE2\x80\x94 not "
+                   "available with AV1 or 10-bit. Live preview and frame snapshots are paused while recording "
+                   "in 4:4:4.");
 inline const QString kVideoColorRange =
     QStringLiteral("Limited is compatible with every player. Full keeps marginally more tonal detail, but some "
                    "common players (notably VLC) ignore the range flag and expand as Limited, so Full-range "

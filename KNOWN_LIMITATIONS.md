@@ -86,7 +86,17 @@ Invalid combinations are not offered.
 - **10-bit video output (P010)** is available for HEVC Main10 and AV1 in 10-bit
   mode. It serves two roles: higher color precision in SDR workflows, and the
   mandatory pixel format for native HDR10 recording (below).
-- 4:2:0 chroma subsampling only. 4:2:2 and 4:4:4 are not available.
+- **Chroma subsampling: 4:2:0 (default) or 4:4:4.** 4:2:0 is universal (all codecs, 8- and
+  10-bit). **4:4:4** is an Expert-mode option (Settings → Video), limited to **8-bit H.264 and
+  HEVC** (NVENC High 4:4:4 Predictive / HEVC Range Extensions) on GPUs that report YUV444 encode
+  support. Boundaries, all enforced by capability gating and the resolver:
+  - **No AV1 4:4:4** — NVENC AV1 is 4:2:0 (Main) only.
+  - **No 10-bit 4:4:4** — the 4:4:4 path is 8-bit only in this build.
+  - **No 4:4:4 with native HDR10** — HDR10 requires 10-bit, which excludes 4:4:4.
+  - **No 4:2:2** — the NVENC generation has no 4:2:2 encode path.
+  - On the 4:4:4 path the **live in-app preview and single-frame snapshot are disabled** (they
+    decode the 4:2:0 NV12/P010 layout, not the packed AYUV 4:4:4 surface); recording is unaffected.
+  - 4:4:4 uses the same BT.709 matrix and Full/Limited range selection as 4:2:0.
 - **HDR displays are detected automatically.** By default an HDR desktop is
   recorded as tone-mapped SDR (BT.709) for universal playability. An expert
   setting ("HDR handling") switches to **native HDR10 recording**: PQ/BT.2020,

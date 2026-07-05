@@ -265,9 +265,21 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
     // Lossy codecs (Opus, AAC): bit_depth is not applicable; no validation needed.
 
-    // Chroma: only Cs420 supported
-    if (config.chroma != ChromaSubsampling::Cs420) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only ChromaSubsampling::Cs420 is supported in M3.1");
+    // Chroma: Cs420 is universal. Cs444 (AYUV, NVENC High 4:4:4 / HEVC FREXT) is an
+    // 8-bit H.264/HEVC expert path — AV1 NVENC is 4:2:0 only, and 4:4:4 + 10-bit is
+    // out of scope.
+    if (config.chroma != ChromaSubsampling::Cs420 && config.chroma != ChromaSubsampling::Cs444) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Unsupported ChromaSubsampling; supported: Cs420, Cs444");
+    }
+    if (config.chroma == ChromaSubsampling::Cs444) {
+        if (config.video_codec != VideoCodec::H264Nvenc && config.video_codec != VideoCodec::HevcNvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                        "ChromaSubsampling::Cs444 requires VideoCodec::H264Nvenc or VideoCodec::HevcNvenc "
+                        "(AV1 NVENC is 4:2:0 only)");
+        }
+        if (config.bit_depth != BitDepth::Bit8) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare, "ChromaSubsampling::Cs444 is 8-bit only");
+        }
     }
 
     // Bit depth: Bit8 is universal. Bit10 (P010 → HEVC Main10 / AV1 10-bit, SDR BT.709,
@@ -385,6 +397,16 @@ void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
 void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback) {
     if (!m_impl->recording.load())
         return;
+    // 4:4:4 (AYUV) sessions have no composed-BGRA tap: the VideoProcessor output is a
+    // geometry-only intermediate the AYUV shader consumes, so performSnapshotIfRequested
+    // never runs and a parked request would sit pending until stop (repeat presses are
+    // swallowed by the already-pending guard). Fail fast so the UI/notification layer
+    // reacts to the press immediately instead of silently dropping it.
+    if (!FrameSnapshotSupported(m_impl->state.config.chroma)) {
+        if (callback)
+            callback(false, 0, 0, {}, "Frame snapshots are unavailable while recording in 4:4:4");
+        return;
+    }
     std::lock_guard lk(m_impl->state.snapshot_callback_mutex);
     if (m_impl->state.snapshot_requested.load())
         return; // already pending — ignore

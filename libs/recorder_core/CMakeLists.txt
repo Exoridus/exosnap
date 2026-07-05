@@ -264,6 +264,8 @@ add_library(recorder_core STATIC
     src/gpu_compositor.h
     src/gpu_hdr_tonemap.cpp
     src/gpu_hdr_tonemap.h
+    src/gpu_rgb_to_ayuv.cpp
+    src/gpu_rgb_to_ayuv.h
     src/gpu_hdr_pq.cpp
     src/gpu_hdr_pq.h
     src/hdr_tonemap.h
@@ -480,6 +482,17 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_color_config PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_chroma_config: pure unit tests for the NVENC chroma/input-format
+# helpers backing the 4:4:4 expert path (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_chroma_config
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_chroma_config.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_chroma_config PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 # test_hdr_bitstream_metadata: byte-exact unit tests for the in-band HDR10
 # metadata payload builders (HEVC SEI 137/144, AV1 MDCV/CLL OBU payloads). Pure
 # functions — no GPU/NVENC.
@@ -490,6 +503,17 @@ exosnap_add_gtest(
             src/hdr_bitstream_metadata.cpp
 )
 target_include_directories(test_hdr_bitstream_metadata PRIVATE src include)
+
+# test_hdr_native_reconcile: coordinator-seam tests for the native HDR10 encode
+# reconcile (ApplyHdr10NativeEncode) — pins 10-bit and snaps 4:4:4 -> 4:2:0 so an
+# HDR-active display never turns a valid UI selection into a Validate() failure.
+exosnap_add_gtest(
+    NAME test_hdr_native_reconcile
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_native_reconcile.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_hdr_native_reconcile PRIVATE src include)
 
 # test_nvenc_preset_guid: pure unit tests for NvencPresetToGuid (P1..P7 -> SDK
 # preset GUID mapping — no GPU needed).
@@ -704,6 +728,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_gpu_hdr_tonemap PRIVATE NOMINMAX)
+
+# RGB -> packed AYUV (4:4:4, 8-bit) conversion on the GPU: WARP-backed golden
+# proof that the compute shader emits the exact BT.709 limited/full-range AYUV
+# bytes NVENC consumes for YUV444 H.264/HEVC encoding.
+exosnap_add_gtest(
+    NAME test_gpu_rgb_to_ayuv
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_rgb_to_ayuv.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_rgb_to_ayuv PRIVATE src)
+target_compile_definitions(test_gpu_rgb_to_ayuv PRIVATE NOMINMAX)
 
 # Native HDR10 (PQ / BT.2020 / P010) output: pure curve + matrix + Y'CbCr math,
 # effective-mode decision, and colour-metadata assembly. No GPU — the compute
