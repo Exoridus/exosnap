@@ -225,12 +225,13 @@ Range Extensions) on GPUs that report YUV444 encode support; it keeps full colou
 text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC AV1 is 4:2:0 only),
 **not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
 with an explanatory hint whenever the current codec/bit-depth **or the active GPU** cannot carry it,
-and an invalid stored selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
-4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays available** (it shares
-the composited RGB frame with the preview before the AYUV conversion — see the live-preview note in
-Section 7), and **frame snapshots stay available** as in 4:2:0: the CaptureFrame hotkey reads back
-the packed AYUV encode surface and decodes it on the CPU with the exact inverse of the encoder's
-RGB→AYUV conversion (same BT.709 matrix and Full/Limited range as the recording).
+and an invalid stored selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the
+NVENC generation has no 4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays
+available** (it shares the composited RGB frame with the preview before the AYUV conversion — see
+the live-preview note in Section 7), and **frame snapshots stay available** as in 4:2:0: the
+CaptureFrame hotkey reads back the packed AYUV encode surface and decodes it on the CPU with the
+exact inverse of the encoder's RGB→AYUV conversion (same BT.709 matrix and Full/Limited range as
+the recording).
 
 **Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every

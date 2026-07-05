@@ -126,7 +126,16 @@ QWidget* makeFeatureRow(const QString& label, const QString& value, QWidget* par
 // system-wide feature rows, this reflects THIS adapter's probe
 // (cap.yuv444_h264 / cap.yuv444_hevc), so it uses the same row language as
 // makeFeatureRow but carries codec chips instead of a mono value string.
-QWidget* make444Row(bool h264_ok, bool hevc_ok, QWidget* parent, bool first_row) {
+//
+// A codec the adapter doesn't advertise at all (h264_advertised/hevc_advertised
+// == false) gets no chip here at all — mirroring the honesty rule the codec
+// chips themselves already follow (#6): the absence of the codec is already
+// stated by the codec chip row above, so a 4:4:4 chip for it would either
+// fabricate a positive claim or read as a redundant, confusing double-negative
+// ("codec unavailable" + "4:4:4 for that codec unavailable"). No codec ⇒ no
+// 4:4:4 statement about it, positive or negative.
+QWidget* make444Row(bool h264_advertised, bool h264_ok, bool hevc_advertised, bool hevc_ok, QWidget* parent,
+                    bool first_row) {
     auto* row = new QWidget(parent);
     row->setObjectName(QStringLiteral("diagTableRow"));
     row->setProperty("firstRow", first_row);
@@ -140,8 +149,12 @@ QWidget* make444Row(bool h264_ok, bool hevc_ok, QWidget* parent, bool first_row)
     row_layout->addWidget(name_label);
 
     const QString chip444 = QStringLiteral("deviceChroma444Chip");
-    row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::H264Nvenc), h264_ok, row, chip444));
-    row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::HevcNvenc), hevc_ok, row, chip444));
+    if (h264_advertised)
+        row_layout->addWidget(
+            makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::H264Nvenc), h264_ok, row, chip444));
+    if (hevc_advertised)
+        row_layout->addWidget(
+            makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::HevcNvenc), hevc_ok, row, chip444));
     row_layout->addStretch(1);
 
     return row;
@@ -661,9 +674,10 @@ void DevicePage::renderCapabilityMatrix() {
         }
         // Per-adapter 8-bit 4:4:4 (YUV444) encode support, from THIS adapter's
         // probe (cap.yuv444_h264 / cap.yuv444_hevc). Shown per codec that can
-        // carry 4:4:4; NVENC AV1 is 4:2:0 only, so it has no chip here.
-        feature_rows_layout_->addWidget(
-            make444Row(cap.yuv444_h264, cap.yuv444_hevc, feature_rows_layout_->parentWidget(), first_row));
+        // carry 4:4:4 AND that this adapter advertises at all (cap.h264 /
+        // cap.hevc); NVENC AV1 is 4:2:0 only, so it has no chip here.
+        feature_rows_layout_->addWidget(make444Row(cap.h264, cap.yuv444_h264, cap.hevc, cap.yuv444_hevc,
+                                                   feature_rows_layout_->parentWidget(), first_row));
         first_row = false;
     } else {
         feature_rows_layout_->addWidget(makeFeatureRow(QStringLiteral("Feature detail"), QStringLiteral("Not probed"),

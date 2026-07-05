@@ -306,6 +306,37 @@ TEST_F(DevicePageTest, MatrixShowsPerAdapter444SupportPerCodec) {
     EXPECT_EQ(matched, 2);
 }
 
+// A codec the adapter doesn't advertise at all (HEVC missing on this GPU)
+// must not get a 4:4:4 chip either way — no positive, no negative statement —
+// mirroring the honesty rule the codec chips themselves already follow (#6).
+// Only the advertised codec (H.264) gets a 4:4:4 chip.
+TEST_F(DevicePageTest, MatrixOmits444ChipForUnadvertisedCodec) {
+    DevicePage page;
+    page.setCapabilitySet(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
+
+    auto nvcap = MakeProbedNvencCap(/*h264=*/true, /*hevc=*/false, /*av1=*/false);
+    nvcap.yuv444_h264 = true; // this GPU does 4:4:4 for H.264
+    // yuv444_hevc left at its default (false) — irrelevant, since HEVC isn't
+    // advertised by this adapter at all.
+    page.setAdaptersForTest(
+        {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1),
+         MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
+        {nvcap, MakeUnwiredCap()});
+    FlushDeferredDeletes();
+
+    const auto chips = page.findChildren<QFrame*>(QStringLiteral("deviceChroma444Chip"));
+    ASSERT_EQ(chips.size(), 1); // no HEVC chip at all — neither available nor unavailable
+    QString name;
+    for (const auto* label : chips.first()->findChildren<QLabel*>()) {
+        if (!label->text().isEmpty()) {
+            name = label->text();
+            break;
+        }
+    }
+    EXPECT_EQ(name, QStringLiteral("H.264"));
+    EXPECT_EQ(chips.first()->property("chipState").toString(), QStringLiteral("available"));
+}
+
 // An unprobed adapter must NOT fabricate 4:4:4 chips — it gets the honest
 // "Not probed" row instead, exactly like the codec chips.
 TEST_F(DevicePageTest, UnprobedAdapterShowsNo444Chips) {
