@@ -188,9 +188,13 @@ TEST_F(PageHydrationControllerTest, StepOwnGuardIsRespectedAndNotDuplicated) {
         ++build_calls;
     };
 
+    int step_invocations = 0;
     std::vector<PageHydrationController::Step> steps;
     steps.push_back({QStringLiteral("config"), [] {}});
-    steps.push_back({QStringLiteral("device"), guarded_build});
+    steps.push_back({QStringLiteral("device"), [&step_invocations, &guarded_build] {
+                         ++step_invocations;
+                         guarded_build();
+                     }});
 
     // Simulate early navigation building the page before the chain reaches it.
     guarded_build();
@@ -198,10 +202,12 @@ TEST_F(PageHydrationControllerTest, StepOwnGuardIsRespectedAndNotDuplicated) {
 
     PageHydrationController controller(steps);
     controller.start();
-    PumpUntil([&build_calls] { return build_calls >= 1; }, 20);
+    PumpUntil([&step_invocations] { return step_invocations >= 1; }, 20);
 
-    // The guard inside the callback makes the controller's later invocation a
-    // harmless no-op — build_calls must still be 1.
+    // The controller must actually have invoked the deferred step; the guard
+    // inside the callback makes that invocation a harmless no-op — build_calls
+    // must still be 1.
+    ASSERT_EQ(step_invocations, 1);
     EXPECT_EQ(build_calls, 1);
 }
 
