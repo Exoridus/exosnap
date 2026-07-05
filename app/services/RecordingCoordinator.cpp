@@ -750,11 +750,19 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             hdr_facts.white_point_y = facts->white_point_y;
             hdr_facts.max_luminance_nits = facts->max_luminance_nits;
             hdr_facts.min_luminance_nits = facts->min_luminance_nits;
-            config.color = recorder_core::MakeHdr10ColorMetadata(hdr_facts);
-            config.bit_depth = recorder_core::BitDepth::Bit10;
+            // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
+            // 4:2:0 — 4:4:4 (AYUV) is 8-bit only, so a leftover Cs444 selection would
+            // otherwise reach Validate() as Cs444 + Bit10 and fail the recording start
+            // on any HDR-active display.
+            const bool chroma_snapped = recorder_core::ApplyHdr10NativeEncode(config, hdr_facts);
             diagnostics::AppLog::info(
                 QStringLiteral("record.hdr"),
                 QStringLiteral("mode=hdr10-native primaries=bt2020 transfer=pq bitdepth=10 range=limited"));
+            if (chroma_snapped) {
+                diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
+                                             QStringLiteral("field=chroma requested=4:4:4 effective=4:2:0 "
+                                                            "reason=\"HDR10 native is 10-bit; 4:4:4 is 8-bit only\""));
+            }
         }
     }
     config.output_path = output_path;

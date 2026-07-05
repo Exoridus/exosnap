@@ -504,6 +504,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_hdr_bitstream_metadata PRIVATE src include)
 
+# test_hdr_native_reconcile: coordinator-seam tests for the native HDR10 encode
+# reconcile (ApplyHdr10NativeEncode) — pins 10-bit and snaps 4:4:4 -> 4:2:0 so an
+# HDR-active display never turns a valid UI selection into a Validate() failure.
+exosnap_add_gtest(
+    NAME test_hdr_native_reconcile
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_native_reconcile.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_hdr_native_reconcile PRIVATE src include)
+
 # test_nvenc_preset_guid: pure unit tests for NvencPresetToGuid (P1..P7 -> SDK
 # preset GUID mapping — no GPU needed).
 exosnap_add_gtest(

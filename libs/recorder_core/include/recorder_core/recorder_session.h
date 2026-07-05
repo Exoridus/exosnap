@@ -6,6 +6,7 @@
 #include "codec_types.h"
 #include "error_types.h"
 #include "frame_pacing.h"
+#include "hdr_native.h"
 #include "output_geometry.h"
 #include "pipeline_diagnostics.h"
 #include "session_stats.h"
@@ -476,6 +477,33 @@ struct RecorderConfig {
     // Automatic/manual segment splitting. Default Off == single-file recording.
     RecordingSplitSettings split;
 };
+
+// Apply the native HDR10 (PQ/BT.2020) encode overrides to a base config once the
+// caller has established that the native path is effective (see
+// IsHdr10NativeEffective) and gathered the captured display's HdrDisplayFacts:
+//   * colour metadata derived from the display facts (BT.2020/PQ, mastering data),
+//   * bit depth pinned to 10-bit (HDR10 is 10-bit by definition), and
+//   * chroma snapped to 4:2:0 — 4:4:4 (AYUV) is an 8-bit-only path, so a leftover
+//     Cs444 selection would otherwise reach Validate() as Cs444 + Bit10 and fail
+//     the recording start. Returns true iff the chroma was snapped (the caller
+//     may log a reconcile line). Pure: no logging, no D3D.
+[[nodiscard]] inline bool ApplyHdr10NativeEncode(RecorderConfig& config, const HdrDisplayFacts& facts) noexcept {
+    config.color = MakeHdr10ColorMetadata(facts);
+    config.bit_depth = BitDepth::Bit10;
+    const bool chroma_snapped = config.chroma != ChromaSubsampling::Cs420;
+    config.chroma = ChromaSubsampling::Cs420;
+    return chroma_snapped;
+}
+
+// Frame snapshots (and the live preview) tap the composed BGRA surface produced
+// on the 4:2:0 encode path. The 4:4:4 (AYUV) path has no such tap — the
+// VideoProcessor output is a geometry-only intermediate the AYUV shader consumes
+// — so snapshots are unavailable for a 4:4:4 session. False == a snapshot request
+// must fail fast (fire its callback with success=false) instead of parking until
+// stop.
+[[nodiscard]] inline bool FrameSnapshotSupported(ChromaSubsampling chroma) noexcept {
+    return chroma != ChromaSubsampling::Cs444;
+}
 
 // Derive the on-disk path for segment `index` (0-based) from a base output path.
 // Segment 0 keeps the base name; later segments insert a "_part-NNN" suffix

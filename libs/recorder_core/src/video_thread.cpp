@@ -680,10 +680,13 @@ void VideoThread::Run() {
     // Encode texture registered with NVENC: NV12/P010 for 4:2:0, AYUV for 4:4:4.
     const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
 
+    // Number of pipelined capture/encode slots (shared by every per-slot texture array).
+    static constexpr int32_t kSlotCount = 8;
+
     // 4:4:4: the VideoProcessor output is a separate BGRA intermediate (RGB, geometry
     // only); the shader then writes AYUV into the encode textures. RgbToAyuvConverter
     // carries the BT.709 + range conversion the VideoProcessor does for 4:2:0.
-    winrt::com_ptr<ID3D11Texture2D> vpRgbTextures[8];
+    winrt::com_ptr<ID3D11Texture2D> vpRgbTextures[kSlotCount];
     RgbToAyuvConverter rgbToAyuv;
     if (chroma444) {
         const bool fullRange = m_state.config.color.range != ColorRange::Limited;
@@ -718,7 +721,6 @@ void VideoThread::Run() {
         return;
     }
 
-    static constexpr int32_t kSlotCount = 8;
     winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
     winrt::com_ptr<ID3D11VideoProcessor> videoProcessor;

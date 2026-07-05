@@ -225,7 +225,9 @@ text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC 
 **not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
 with an explanatory hint whenever the current codec/bit-depth cannot carry it, and an invalid stored
 selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
-4:2:2 path).
+4:2:2 path). While a recording runs in **4:4:4**, the **live preview and frame snapshots are
+unavailable** — the 4:4:4 encode path produces no composed BGRA frame to tap, so the CaptureFrame
+hotkey is rejected immediately rather than parked until the recording stops.
 
 **Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every

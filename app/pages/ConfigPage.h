@@ -254,10 +254,10 @@ class ConfigPage : public QWidget {
     // Syncs the video bit-depth combo to the model and capability-gates the 10-bit
     // item (selectable only for HEVC / AV1). Single source of truth: caps QueryCombo.
     void updateVideoBitDepthControl();
-    // Syncs the chroma-subsampling combo to the model and capability-gates the 4:4:4
-    // item (selectable only for H.264/HEVC at 8-bit, per caps QueryCombo /
-    // QueryChroma444). A 4:4:4 selection that becomes invalid is snapped back to
-    // 4:2:0 (mirrors bit depth / SanitizePresetConfig).
+    // Syncs the chroma-subsampling combo to the model and gates the 4:4:4 item by
+    // mirroring the static codec/bit-depth rule (selectable only for H.264/HEVC at
+    // 8-bit). Per-GPU capability gating is a follow-up. A 4:4:4 selection that becomes
+    // invalid is snapped back to 4:2:0 (mirrors bit depth / SanitizePresetConfig).
     void updateVideoChromaControl();
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
