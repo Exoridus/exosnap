@@ -2,6 +2,7 @@
 
 #include "../diagnostics/AppLog.h"
 #include "../diagnostics/StartupClock.h"
+#include "../ui/CodecLabels.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/LucideIcon.h"
@@ -74,9 +75,10 @@ QString AdapterDisplayTitle(const capability::AdapterInfo& adapter) {
     return QStringLiteral("%1 %2").arg(VendorDisplayName(adapter.vendor), QString::fromStdString(adapter.name));
 }
 
-QFrame* makeCodecChip(const QString& name, bool ok, QWidget* parent) {
+QFrame* makeCodecChip(const QString& name, bool ok, QWidget* parent,
+                      const QString& object_name = QStringLiteral("deviceCodecChip")) {
     auto* chip = new QFrame(parent);
-    chip->setObjectName(QStringLiteral("deviceCodecChip"));
+    chip->setObjectName(object_name);
     chip->setProperty("chipState", ok ? "available" : "unavailable");
     auto* layout = new QHBoxLayout(chip);
     layout->setContentsMargins(10, 5, 12, 5);
@@ -115,6 +117,32 @@ QWidget* makeFeatureRow(const QString& label, const QString& value, QWidget* par
     value_label->setProperty("labelRole", "mono");
     value_label->setWordWrap(true);
     row_layout->addWidget(value_label, 1);
+
+    return row;
+}
+
+// Per-adapter 8-bit 4:4:4 (YUV444) encode support, shown as one chip per codec
+// that can carry 4:4:4 (H.264 / HEVC — NVENC AV1 is 4:2:0 only). Unlike the
+// system-wide feature rows, this reflects THIS adapter's probe
+// (cap.yuv444_h264 / cap.yuv444_hevc), so it uses the same row language as
+// makeFeatureRow but carries codec chips instead of a mono value string.
+QWidget* make444Row(bool h264_ok, bool hevc_ok, QWidget* parent, bool first_row) {
+    auto* row = new QWidget(parent);
+    row->setObjectName(QStringLiteral("diagTableRow"));
+    row->setProperty("firstRow", first_row);
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
+    row_layout->setSpacing(M::kSpaceMd);
+
+    auto* name_label = new QLabel(QStringLiteral("4:4:4 encode (8-bit)"), row);
+    name_label->setProperty("labelRole", "body");
+    name_label->setMinimumWidth(160);
+    row_layout->addWidget(name_label);
+
+    const QString chip444 = QStringLiteral("deviceChroma444Chip");
+    row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::H264Nvenc), h264_ok, row, chip444));
+    row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::HevcNvenc), hevc_ok, row, chip444));
+    row_layout->addStretch(1);
 
     return row;
 }
@@ -631,6 +659,12 @@ void DevicePage::renderCapabilityMatrix() {
                 first_row = false;
             }
         }
+        // Per-adapter 8-bit 4:4:4 (YUV444) encode support, from THIS adapter's
+        // probe (cap.yuv444_h264 / cap.yuv444_hevc). Shown per codec that can
+        // carry 4:4:4; NVENC AV1 is 4:2:0 only, so it has no chip here.
+        feature_rows_layout_->addWidget(
+            make444Row(cap.yuv444_h264, cap.yuv444_hevc, feature_rows_layout_->parentWidget(), first_row));
+        first_row = false;
     } else {
         feature_rows_layout_->addWidget(makeFeatureRow(QStringLiteral("Feature detail"), QStringLiteral("Not probed"),
                                                        feature_rows_layout_->parentWidget(), first_row));

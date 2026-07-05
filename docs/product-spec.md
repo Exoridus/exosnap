@@ -46,8 +46,9 @@ Top-level navigation is **six items**, in order:
   the live runtime (technical) view while recording.
 - **Device** — encoder adapter selection plus the per-GPU capability matrix. One card per DXGI
   adapter (iGPU/dGPU); a per-adapter matrix shows codec support and provenance for the selected
-  adapter. Not-yet-wired backends (AMD/AMF, Intel/QSV, software x264/SVT-AV1) appear as honest
-  greyed-out "planned" rows — never fabricated probes.
+  adapter, including per-codec 8-bit 4:4:4 (YUV444) encode support probed on that specific GPU
+  (H.264 / HEVC — AV1 is 4:2:0 only). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
+  x264/SVT-AV1) appear as honest greyed-out "planned" rows — never fabricated probes.
 - **Settings** — unified recording configuration, hosting six embedded sections:
   **Video · Audio · Output · Webcam · Hotkeys · Advanced**. Advanced is expert-only and collapsible.
   Hotkeys is an embedded full-width card, not a separate nav item.

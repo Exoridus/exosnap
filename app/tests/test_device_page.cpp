@@ -266,6 +266,59 @@ TEST_F(DevicePageTest, MatrixShowsCodecChipsWithCorrectAvailability) {
     EXPECT_EQ(checked, 3);
 }
 
+// The 4:4:4 encode row is PER-ADAPTER (from this adapter's probe), unlike the
+// system-wide bit-depth / rate-control rows. It reports 4:4:4 support per codec:
+// here H.264 can carry it but HEVC cannot on this specific GPU.
+TEST_F(DevicePageTest, MatrixShowsPerAdapter444SupportPerCodec) {
+    DevicePage page;
+    page.setCapabilitySet(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
+
+    auto nvcap = MakeProbedNvencCap(true, true, false);
+    nvcap.yuv444_h264 = true;  // this GPU does 4:4:4 for H.264
+    nvcap.yuv444_hevc = false; // but NOT for HEVC
+    page.setAdaptersForTest(
+        {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1),
+         MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
+        {nvcap, MakeUnwiredCap()});
+    FlushDeferredDeletes();
+
+    const auto chips = page.findChildren<QFrame*>(QStringLiteral("deviceChroma444Chip"));
+    ASSERT_EQ(chips.size(), 2);
+    int matched = 0;
+    for (const QFrame* chip : chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        ASSERT_FALSE(name.isEmpty());
+        const QString state = chip->property("chipState").toString();
+        if (name == QStringLiteral("H.264")) {
+            EXPECT_EQ(state, QStringLiteral("available"));
+            ++matched;
+        } else if (name == QStringLiteral("HEVC")) {
+            EXPECT_EQ(state, QStringLiteral("unavailable"));
+            ++matched;
+        }
+    }
+    EXPECT_EQ(matched, 2);
+}
+
+// An unprobed adapter must NOT fabricate 4:4:4 chips — it gets the honest
+// "Not probed" row instead, exactly like the codec chips.
+TEST_F(DevicePageTest, UnprobedAdapterShowsNo444Chips) {
+    DevicePage page;
+    InjectTwoAdapters(page);
+    const auto cards = page.findChildren<DeviceAdapterCard*>();
+    ASSERT_EQ(cards.size(), 2);
+    emit cards[1]->clicked(); // Intel — unwired backend
+    FlushDeferredDeletes();
+
+    EXPECT_TRUE(page.findChildren<QFrame*>(QStringLiteral("deviceChroma444Chip")).isEmpty());
+}
+
 TEST_F(DevicePageTest, MatrixFeatureRowsAreLabeledSystemWideForProbedAdapter) {
     DevicePage page;
     page.setCapabilitySet(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
