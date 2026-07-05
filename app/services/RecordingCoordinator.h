@@ -191,6 +191,15 @@ class RecordingCoordinator {
     void SetSplitFeedbackCallback(SplitFeedbackCallback cb);
     void SetRemuxProgressCallback(RemuxProgressCallback cb);
 
+    // Register a callback fired (from the engine's video thread) once the shared
+    // WYSIWYG preview texture is ready. nt_handle is a Windows HANDLE passed as
+    // void*; ownership transfers to the callee (open then CloseHandle). Fires only
+    // for SDR / tone-map / 4:4:4 sessions, and only when the callback is set before
+    // StartRecording. The callback must return fast and must not make D3D calls on
+    // the calling thread.
+    using PreviewSharedHandleReadyCallback = std::function<void(void* nt_handle, uint32_t width, uint32_t height)>;
+    void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
+
     // Request cooperative cancellation of any in-progress remux job.
     // Safe to call from the Qt main thread at any time; no-op if no remux is running.
     void CancelRemux();
@@ -398,6 +407,7 @@ class RecordingCoordinator {
     AppMeterUpdatedCallback on_app_meter_updated_;
     RecordingMeterCallback on_recording_meter_updated_;
     FrameCapturedCallback on_frame_captured_;
+    PreviewSharedHandleReadyCallback on_preview_shared_handle_ready_;
     std::function<QImage()> ready_frame_source_;
 
     std::optional<std::string> mic_meter_device_id_;

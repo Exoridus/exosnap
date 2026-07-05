@@ -867,6 +867,15 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
     session_.SetDiagnosticsCallback(
         [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) { PostDiagnostics(snapshot); });
+    // Forward the shared WYSIWYG preview handle to whoever registered. Bridges the
+    // engine's uintptr_t handle to the app-facing void*; ownership transfers along.
+    if (on_preview_shared_handle_ready_) {
+        auto cb = on_preview_shared_handle_ready_;
+        session_.SetPreviewSharedHandleCallback(
+            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h) { cb(reinterpret_cast<void*>(nt_handle), w, h); });
+    } else {
+        session_.SetPreviewSharedHandleCallback(nullptr);
+    }
     // Show an "initializing" diagnostics state until the engine emits live snapshots.
     EmitInitializingDiagnostics();
     {
@@ -1910,6 +1919,10 @@ void RecordingCoordinator::SetRecordingMeterCallback(RecordingMeterCallback cb) 
 
 void RecordingCoordinator::SetFrameCapturedCallback(FrameCapturedCallback cb) {
     on_frame_captured_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb) {
+    on_preview_shared_handle_ready_ = std::move(cb);
 }
 
 void RecordingCoordinator::SetReadyFrameSource(std::function<QImage()> getter) {

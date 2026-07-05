@@ -2299,6 +2299,27 @@ void RecordPage::initCoordinator() {
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
 
+    // WYSIWYG preview during recording: when the engine publishes its shared,
+    // pre-encode source texture, switch the live DXGI preview to consume it (which
+    // also stops the preview's own WGC capture — no second capture). The engine
+    // callback fires on the video thread, so marshal onto the UI thread where the
+    // renderer handle is owned; only D3D-free atomic stores happen there. Ownership
+    // of the NT handle transfers to the renderer (which closes it); if no DXGI
+    // preview is active we close the handle on the UI thread instead (no leak).
+    coordinator_->SetPreviewSharedHandleReadyCallback([safeSurface](void* nt_handle, uint32_t w, uint32_t h) {
+        QPointer<ui::widgets::PreviewSurface> surface = safeSurface;
+        QObject* context = surface ? static_cast<QObject*>(surface.data()) : static_cast<QObject*>(qApp);
+        QMetaObject::invokeMethod(
+            context,
+            [surface, nt_handle, w, h]() {
+                if (surface && surface->isDxgiPreviewActive())
+                    surface->beginPushedSource(nt_handle, w, h);
+                else if (nt_handle != nullptr)
+                    CloseHandle(static_cast<HANDLE>(nt_handle));
+            },
+            Qt::QueuedConnection);
+    });
+
     // Deliver capabilities only when they are already available. When the async HW
     // probe hasn't landed yet, latch coordinator_awaiting_caps_ and deliver later from
     // setRuntimeCapabilities(); the synchronous fallback probe has been removed. The
@@ -2352,8 +2373,13 @@ void RecordPage::initCoordinator() {
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("recording paused"));
         else if (state == UiRecordingState::Stopping)
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("stopping"));
-        else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed)
+        else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed) {
+            // Leave pushed mode before startPreviewIfIdle tears the renderer down and
+            // restarts the preview's own WGC capture.
+            if (preview_surface_)
+                preview_surface_->endPushedSource();
             startPreviewIfIdle();
+        }
         refresh();
     });
     coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {
