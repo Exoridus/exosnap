@@ -1498,8 +1498,9 @@ void VideoThread::Run() {
         sdrDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         HRESULT sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
         // Graceful fallback: a device that rejects R10G10B10A2 as a render target
-        // reverts to BGRA8 rather than failing the recording. VP-input support for
-        // BGRA8 was already established during OD format negotiation.
+        // reverts to BGRA8 rather than failing the recording. BGRA8 VP-input support
+        // is assumed here (universal in practice), not re-checked: negotiation only
+        // probed BGRA8 when R10G10B10A2 was rejected as VP input.
         if (FAILED(sdrHr) && toneMapIntermediateFormat == DXGI_FORMAT_R10G10B10A2_UNORM) {
             logging::log(logging::LogLevel::Warn, "video_thread",
                          "10-bit tone-map intermediate (R10G10B10A2) could not be created as a render target on this "
