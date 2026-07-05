@@ -1950,7 +1950,8 @@ void VideoThread::Run() {
     };
 
     // --- Frame snapshot (CaptureFrame) ---
-    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for NV12→BGRA readback.
+    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for the
+    // NV12/P010/AYUV→BGRA readback (format follows encodeFormat).
     // Lives until the encode loop exits; reused across multiple snapshot requests.
     winrt::com_ptr<ID3D11Texture2D> snapshotStagingTex;
     // Callback type alias — must precede the lambda that uses it.
@@ -1967,7 +1968,8 @@ void VideoThread::Run() {
         hdrMonitorConverter->Convert(yuvSrc, out_bgra, out_stride_bytes);
     };
 
-    // Perform a one-shot NV12→BGRA readback for the current slot if a snapshot is pending.
+    // Perform a one-shot encode-surface→BGRA readback (NV12/P010/AYUV) for the
+    // current slot if a snapshot is pending.
     // Called only on real frames (not duplicates) to ensure non-stale data.
     // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
     //       it stalls the thread until the GPU completes the CopyResource, typically <1 ms.
@@ -1976,7 +1978,8 @@ void VideoThread::Run() {
             return;
 
         // Lazily allocate the staging texture on first use. Matches encodeFormat
-        // (NV12 for 8-bit, P010 for 10-bit) so both bit depths can snapshot.
+        // (NV12 for 8-bit, P010 for 10-bit, AYUV for 4:4:4) so every encode
+        // surface layout can snapshot.
         if (!snapshotStagingTex) {
             D3D11_TEXTURE2D_DESC sd{};
             sd.Width = encodeWidth;
@@ -2006,7 +2009,7 @@ void VideoThread::Run() {
             }
         }
 
-        // Copy the final NV12/P010 encode-ready frame to the staging texture.
+        // Copy the final encode-ready frame (NV12/P010/AYUV) to the staging texture.
         d3dContext->CopyResource(snapshotStagingTex.get(), nv12Textures[slot_idx].get());
 
         // Map for CPU read (synchronization point — stalls until GPU copy completes).
@@ -2029,38 +2032,60 @@ void VideoThread::Run() {
             return;
         }
 
-        // NV12/P010 layout:
-        //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes
-        //   Plane UV: rows height .. height+height/2-1, interleaved U V, same RowPitch
-        const auto* y_plane = static_cast<const uint8_t*>(mapped.pData);
-        const auto* uv_plane = y_plane + static_cast<size_t>(mapped.RowPitch) * encodeHeight;
-
         std::vector<uint8_t> bgra;
         bgra.resize(static_cast<size_t>(encodeWidth) * encodeHeight * 4u);
 
-        // Convert using the color space the session actually configured
-        // (see color_metadata.h / RecorderConfig::color) rather than a
-        // hard-coded assumption — the encoder always writes BT.709-tagged
-        // output with the user-selected range, so the readback must match.
-        PlanarYuv420Frame yuvSrc;
-        yuvSrc.y_plane = y_plane;
-        yuvSrc.y_stride_bytes = mapped.RowPitch;
-        yuvSrc.uv_plane = uv_plane;
-        yuvSrc.uv_stride_bytes = mapped.RowPitch;
-        yuvSrc.width = encodeWidth;
-        yuvSrc.height = encodeHeight;
-        yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
+        // The encode-surface layouts are mutually exclusive:
+        //   - 4:4:4 -> AYUV, single plane, 4 bytes/pixel [V, U, Y, A]; always
+        //     8-bit SDR (native HDR10 snaps chroma to 4:2:0, see
+        //     ApplyHdr10NativeEncode), so it never overlaps the HDR branch.
+        //   - 4:2:0 -> planar NV12 (8-bit) / P010 (10-bit), where native HDR10
+        //     P010 holds PQ/BT.2020 and needs the tone-mapping decode.
+        if (chroma444) {
+            // Decode the packed AYUV encode surface with the exact inverse of
+            // the RGB->AYUV shader, using the color space the session actually
+            // configured (see color_metadata.h / RecorderConfig::color).
+            PackedAyuvFrame ayuvSrc;
+            ayuvSrc.data = static_cast<const uint8_t*>(mapped.pData);
+            ayuvSrc.stride_bytes = mapped.RowPitch;
+            ayuvSrc.width = encodeWidth;
+            ayuvSrc.height = encodeHeight;
 
-        if (hdrNativeActive) {
-            // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode and
-            // tone-map to SDR for on-screen monitoring (approximate; see
-            // hdr_preview.h) at the session display peak.
-            hdrMonitorConvert(yuvSrc, bgra.data(), encodeWidth * 4u);
-        } else {
             YuvToBgraParams colorParams;
             colorParams.matrix = m_state.config.color.matrix;
             colorParams.range = m_state.config.color.range;
-            ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+            ConvertAyuvToBgra(ayuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+        } else {
+            // NV12/P010 layout:
+            //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes
+            //   Plane UV: rows height .. height+height/2-1, interleaved U V, same RowPitch
+            const auto* y_plane = static_cast<const uint8_t*>(mapped.pData);
+            const auto* uv_plane = y_plane + static_cast<size_t>(mapped.RowPitch) * encodeHeight;
+
+            PlanarYuv420Frame yuvSrc;
+            yuvSrc.y_plane = y_plane;
+            yuvSrc.y_stride_bytes = mapped.RowPitch;
+            yuvSrc.uv_plane = uv_plane;
+            yuvSrc.uv_stride_bytes = mapped.RowPitch;
+            yuvSrc.width = encodeWidth;
+            yuvSrc.height = encodeHeight;
+            yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
+
+            if (hdrNativeActive) {
+                // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode and
+                // tone-map to SDR for on-screen monitoring (approximate; see
+                // hdr_preview.h) at the session display peak.
+                hdrMonitorConvert(yuvSrc, bgra.data(), encodeWidth * 4u);
+            } else {
+                // Convert using the color space the session actually configured
+                // (see color_metadata.h / RecorderConfig::color) rather than a
+                // hard-coded assumption — the encoder always writes BT.709-tagged
+                // output with the user-selected range, so the readback must match.
+                YuvToBgraParams colorParams;
+                colorParams.matrix = m_state.config.color.matrix;
+                colorParams.range = m_state.config.color.range;
+                ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+            }
         }
 
         d3dContext->Unmap(snapshotStagingTex.get(), 0);
@@ -2575,13 +2600,8 @@ void VideoThread::Run() {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
                             }
-                            // Snapshot decode assumes NV12/P010; the 4:4:4 (AYUV) surface
-                            // would be misread, so snapshot only on the 4:2:0 path. (The
-                            // live preview tap runs on vpInput above and works for 4:4:4.)
-                            if (!chroma444) {
-                                // Capture frame snapshot on real (non-duplicate) frames.
-                                performSnapshotIfRequested(slot);
-                            }
+                            // Capture frame snapshot on real (non-duplicate) frames.
+                            performSnapshotIfRequested(slot);
                             frameWritten = true;
                         }
                     }
@@ -2925,12 +2945,8 @@ void VideoThread::Run() {
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {
-                            // Snapshot decode assumes NV12/P010; skip on the 4:4:4 (AYUV)
-                            // path (see CFR path). The preview tap runs on vpInput above.
-                            if (!chroma444) {
-                                // Capture frame snapshot on real frames (VFR path).
-                                performSnapshotIfRequested(slot);
-                            }
+                            // Capture frame snapshot on real frames (VFR path).
+                            performSnapshotIfRequested(slot);
 
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);

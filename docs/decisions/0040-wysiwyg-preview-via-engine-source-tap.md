@@ -78,6 +78,7 @@ preview through a GPU texture, and the preview **stops its own capture**.
   unaffected. The revert path likewise skips the WGC rebuild in that case (there is
   nothing to rebuild).
 - The old CPU/NV12 `PreviewFrameCallback` + staging-ring path is removed. The
-  frame-snapshot feature keeps its own NV12/P010 readback (yuv_to_bgra), which is
-  why single-frame snapshots remain unavailable on the 4:4:4 (AYUV) path.
+  frame-snapshot feature keeps its own encode-surface readback (yuv_to_bgra),
+  which has since gained a packed-AYUV decode, so single-frame snapshots work on
+  the 4:4:4 (AYUV) path as well.
 - Preview behavior while NOT recording is unchanged (its own WGC capture).

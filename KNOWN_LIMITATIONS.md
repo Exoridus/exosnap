@@ -94,9 +94,10 @@ Invalid combinations are not offered.
   - **No 10-bit 4:4:4** — the 4:4:4 path is 8-bit only in this build.
   - **No 4:4:4 with native HDR10** — HDR10 requires 10-bit, which excludes 4:4:4.
   - **No 4:2:2** — the NVENC generation has no 4:2:2 encode path.
-  - On the 4:4:4 path the **live in-app preview still works** (it shares the composited RGB frame
-    with the preview before the AYUV conversion), but the **single-frame snapshot is disabled**
-    (it would have to decode the packed AYUV 4:4:4 encode surface); recording is unaffected.
+  - On the 4:4:4 path the **live in-app preview works** (it shares the composited RGB frame
+    with the preview before the AYUV conversion) and the **single-frame snapshot works** as well
+    (the packed AYUV 4:4:4 encode surface is decoded on the CPU with the exact inverse of the
+    encoder's RGB→AYUV conversion).
   - 4:4:4 uses the same BT.709 matrix and Full/Limited range selection as 4:2:0.
 - **HDR displays are detected automatically.** By default an HDR desktop is
   recorded as tone-mapped SDR (BT.709) for universal playability. An expert
@@ -230,7 +231,8 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   Bitstream HDR10 static metadata (HEVC SEI / AV1 metadata OBUs) **is** written
   on every keyframe, in addition to the container-level metadata. HLG is not
   available.
-- No 4:2:2 or 4:4:4 chroma subsampling (4:2:0 only).
+- No 4:2:2 chroma subsampling (4:2:0 everywhere; 4:4:4 only on the 8-bit
+  H.264/HEVC path described above).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
 - Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
   which can be reassigned on a monitor topology change. A saved Region or Display
@@ -284,5 +286,5 @@ in-place auto-update with restart, immediate in-session crash reporter, automate
 AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut management
 beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and window/game
 capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level metadata),
-4:2:2/4:4:4 chroma subsampling, more-than-stereo
+4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
 audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).

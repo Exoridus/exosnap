@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "gpu_rgb_to_ayuv.h"
+#include "yuv_to_bgra.h"
 
 #include <d3d11.h>
 #include <winrt/base.h>
@@ -159,6 +160,43 @@ std::vector<Ayuv8> ConvertRow(D3DTestDevice& d3d, const std::vector<Rgb8>& pixel
     return out;
 }
 
+// Runs the full encode->decode round trip on WARP: BGRA source -> RGB->AYUV
+// compute shader -> read back raw AYUV bytes -> ConvertAyuvToBgra (the snapshot
+// decode). Returns the decoded RGB per pixel. The read-back 32-bit texel is
+// V | U<<8 | Y<<16 | A<<24, i.e. little-endian memory bytes [V, U, Y, A] — the
+// exact packed-AYUV layout ConvertAyuvToBgra expects, so the texel buffer is
+// fed straight in as the frame data.
+std::vector<Rgb8> RoundTrip(D3DTestDevice& d3d, const std::vector<Rgb8>& pixels, bool full_range) {
+    const int width = static_cast<int>(pixels.size());
+    auto src = CreateBgraSource(d3d.device.get(), pixels);
+    auto dst = CreateAyuvTarget(d3d.device.get(), width);
+    RgbToAyuvConverter conv;
+    std::string err;
+    EXPECT_TRUE(conv.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(width), 1, full_range, err)) << err;
+    EXPECT_TRUE(conv.Convert(src.get(), dst.get(), err)) << err;
+    const auto texels = Read32(d3d.device.get(), d3d.context.get(), dst.get());
+
+    recorder_core::PackedAyuvFrame frame;
+    frame.data = reinterpret_cast<const uint8_t*>(texels.data());
+    frame.stride_bytes = static_cast<uint32_t>(width) * 4u;
+    frame.width = static_cast<uint32_t>(width);
+    frame.height = 1;
+
+    recorder_core::YuvToBgraParams params;
+    params.matrix = recorder_core::MatrixCoefficients::Bt709;
+    params.range = full_range ? recorder_core::ColorRange::Full : recorder_core::ColorRange::Limited;
+
+    std::vector<uint8_t> bgra(static_cast<size_t>(width) * 4u, 0);
+    recorder_core::ConvertAyuvToBgra(frame, params, bgra.data(), static_cast<uint32_t>(width) * 4u);
+
+    std::vector<Rgb8> out(static_cast<size_t>(width));
+    for (int i = 0; i < width; ++i) {
+        const uint8_t* px = bgra.data() + static_cast<size_t>(i) * 4u;
+        out[static_cast<size_t>(i)] = Rgb8{px[2], px[1], px[0]}; // B,G,R -> R,G,B
+    }
+    return out;
+}
+
 const std::vector<Rgb8> kSwatches = {
     {0, 0, 0},       {255, 255, 255}, {255, 0, 0},    {0, 255, 0},    {0, 0, 255},
     {128, 128, 128}, {200, 50, 100},  {16, 200, 240}, {73, 145, 220}, {255, 128, 0},
@@ -234,6 +272,36 @@ TEST(GpuRgbToAyuv, FullRangeBlackWhiteAnchors) {
     EXPECT_EQ(got[1].y, 255);
     EXPECT_EQ(got[1].u, 128);
     EXPECT_EQ(got[1].v, 128);
+}
+
+// --- round trip: encoder shader -> snapshot decode is a consistent inverse ---
+// The core correctness proof of the 4:4:4 snapshot path. A known BGRA test
+// image is encoded to AYUV on WARP (the exact shader NVENC consumes), read
+// back, then decoded by ConvertAyuvToBgra (the snapshot path). The recovered
+// RGB must match the original within 2 codes: 4:4:4 has no chroma subsampling,
+// so the only loss is the 8-bit quantization on encode plus the two roundings
+// (encode floor(x+0.5), decode 16.16 fixed-point). Grey axis stays exact;
+// saturated primaries sit at the studio-range clamp edge, hence tolerance 2.
+void ExpectRoundTrip(D3DTestDevice& d3d, bool full_range) {
+    const auto got = RoundTrip(d3d, kSwatches, full_range);
+    ASSERT_EQ(got.size(), kSwatches.size());
+    for (size_t i = 0; i < kSwatches.size(); ++i) {
+        EXPECT_NEAR(got[i].r, kSwatches[i].r, 2) << "R at swatch " << i << (full_range ? " (full)" : " (limited)");
+        EXPECT_NEAR(got[i].g, kSwatches[i].g, 2) << "G at swatch " << i << (full_range ? " (full)" : " (limited)");
+        EXPECT_NEAR(got[i].b, kSwatches[i].b, 2) << "B at swatch " << i << (full_range ? " (full)" : " (limited)");
+    }
+}
+
+TEST(GpuRgbToAyuv, RoundTripLimitedRange) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    ExpectRoundTrip(d3d, /*full_range=*/false);
+}
+
+TEST(GpuRgbToAyuv, RoundTripFullRange) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    ExpectRoundTrip(d3d, /*full_range=*/true);
 }
 
 } // namespace
