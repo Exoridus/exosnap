@@ -90,6 +90,29 @@ std::optional<capability::BitDepth> VideoBitDepthFromString(QStringView s) {
     return std::nullopt;
 }
 
+QString ChromaSubsamplingToString(capability::ChromaSubsampling v) {
+    switch (v) {
+    case capability::ChromaSubsampling::Cs420:
+        return QStringLiteral("420");
+    case capability::ChromaSubsampling::Cs422:
+        return QStringLiteral("422");
+    case capability::ChromaSubsampling::Cs444:
+        return QStringLiteral("444");
+    }
+    return QStringLiteral("420");
+}
+
+std::optional<capability::ChromaSubsampling> ChromaSubsamplingFromString(QStringView s) {
+    const QString n = s.trimmed().toString();
+    if (n == QStringLiteral("420"))
+        return capability::ChromaSubsampling::Cs420;
+    if (n == QStringLiteral("422"))
+        return capability::ChromaSubsampling::Cs422;
+    if (n == QStringLiteral("444"))
+        return capability::ChromaSubsampling::Cs444;
+    return std::nullopt;
+}
+
 QString ColorRangeToString(capability::ColorRange v) {
     switch (v) {
     case capability::ColorRange::Full:
@@ -567,6 +590,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     out_tbl.emplace("container", ContainerToString(out.container).toStdString());
     out_tbl.emplace("video_codec", VideoCodecToString(out.video_codec).toStdString());
     out_tbl.emplace("bit_depth", VideoBitDepthToString(out.bit_depth).toStdString());
+    out_tbl.emplace("chroma_subsampling", ChromaSubsamplingToString(out.chroma_subsampling).toStdString());
     out_tbl.emplace("color_range", ColorRangeToString(out.color_range).toStdString());
     out_tbl.emplace("nvenc_preset", NvencPresetToString(out.nvenc_preset).toStdString());
     out_tbl.emplace("hdr_mode", HdrModeToString(out.hdr_mode).toStdString());
@@ -733,6 +757,14 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         const auto bd = VideoBitDepthFromString(QString::fromStdString(TomlStr(tbl["output"]["bit_depth"])));
         if (bd.has_value())
             out.bit_depth = *bd;
+    }
+    {
+        // Additive field — missing key (older preset files) leaves out.chroma_subsampling
+        // at its struct default (Cs420). No schema bump needed.
+        const auto cs =
+            ChromaSubsamplingFromString(QString::fromStdString(TomlStr(tbl["output"]["chroma_subsampling"])));
+        if (cs.has_value())
+            out.chroma_subsampling = *cs;
     }
     {
         const auto cr = ColorRangeFromString(QString::fromStdString(TomlStr(tbl["output"]["color_range"])));

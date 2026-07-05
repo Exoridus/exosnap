@@ -1832,6 +1832,16 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
         output_settings_.bit_depth = capability::BitDepth::Bit8;
     }
     resolved_user_config_.bit_depth = output_settings_.bit_depth;
+    // Chroma subsampling (expert): 4:4:4 is 8-bit H.264/HEVC only. Reset to 4:2:0
+    // when the resolved codec/bit-depth can't carry it (the resolver applies the
+    // same fallback); then carry it into UserRecorderConfig.chroma.
+    if (output_settings_.chroma_subsampling == capability::ChromaSubsampling::Cs444 &&
+        (output_settings_.bit_depth != capability::BitDepth::Bit8 ||
+         (output_settings_.video_codec != capability::VideoCodec::HevcNvenc &&
+          output_settings_.video_codec != capability::VideoCodec::H264Nvenc))) {
+        output_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
+    }
+    resolved_user_config_.chroma = output_settings_.chroma_subsampling;
     // Colour range (0.7.0): always valid for every codec/container, so it flows
     // straight through (no reconcile) to UserRecorderConfig.color_range and on to
     // the engine's ColorMetadata.range.

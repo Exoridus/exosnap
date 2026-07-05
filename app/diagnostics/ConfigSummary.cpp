@@ -128,7 +128,7 @@ capability::UserRecorderConfig UserConfigFromSettings(const OutputSettingsModel&
     config.container = output.container;
     config.video_codec = output.video_codec;
     config.audio_codec = output.audio_codec;
-    config.chroma = capability::ChromaSubsampling::Cs420;
+    config.chroma = output.chroma_subsampling;
     config.bit_depth = output.bit_depth;
     config.color_range = output.color_range;
     config.hdr_mode = output.hdr_mode;

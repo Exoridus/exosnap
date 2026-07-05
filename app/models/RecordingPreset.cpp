@@ -203,6 +203,21 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         }
     }
 
+    // Chroma subsampling: 4:4:4 is an 8-bit H.264/HEVC-only expert path (AV1 NVENC
+    // is 4:2:0 only; 4:4:4 + 10-bit is out of scope). Reset to 4:2:0 when the stored
+    // combination is no longer valid — mirrors the resolver's chroma fallback and
+    // translation.cpp. (Runs after the bit-depth reconcile so an 8-bit-adjusted
+    // session can still keep 4:4:4.)
+    {
+        const auto codec = config.output.video_codec;
+        const bool supports_444 =
+            codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+        if (config.output.chroma_subsampling == capability::ChromaSubsampling::Cs444 &&
+            (!supports_444 || config.output.bit_depth != capability::BitDepth::Bit8)) {
+            config.output.chroma_subsampling = capability::ChromaSubsampling::Cs420;
+        }
+    }
+
     // Video: reset frame rate if degenerate (either numerator or denominator is zero).
     if (config.video.frame_rate_num == 0 || config.video.frame_rate_den == 0) {
         config.video.frame_rate_num = 60;
@@ -460,6 +475,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (a.output.bit_depth != b.output.bit_depth) {
+        return false;
+    }
+    if (a.output.chroma_subsampling != b.output.chroma_subsampling) {
         return false;
     }
     if (a.output.color_range != b.output.color_range) {
@@ -726,6 +744,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.bit_depth != b.output.bit_depth) {
+        return false;
+    }
+    if (a.output.chroma_subsampling != b.output.chroma_subsampling) {
         return false;
     }
     if (a.output.color_range != b.output.color_range) {
