@@ -11,6 +11,8 @@
 //   --vcodec  av1|h264|hevc
 //   --acodec  opus|aac|pcm|flac|none
 //   --bitdepth 8|10        encoder bit depth (default 8; 10 = HEVC Main10 / AV1 10-bit, P010)
+//   --chroma  420|444      chroma subsampling (default 420; 444 = 8-bit H.264/HEVC only,
+//                          AYUV input + High 4:4:4 / HEVC FREXT profile)
 //   --range   full|limited Y'CbCr quantization range (default limited = 16-235; full = 0-255)
 //   --hdrmode off|tonemap|hdr10  HDR handling (default tonemap). hdr10 keeps the native
 //                          PQ/BT.2020 signal when the target display is HDR-active + the
@@ -252,6 +254,7 @@ int main(int argc, char* argv[]) {
     std::string hdr_s = "tonemap";
     int seconds = 4;
     int bitdepth = 8;
+    int chroma = 420;
     size_t target_idx = 0;
     bool list = false;
 
@@ -270,6 +273,8 @@ int main(int argc, char* argv[]) {
             seconds = std::atoi(next().c_str());
         else if (a == "--bitdepth")
             bitdepth = std::atoi(next().c_str());
+        else if (a == "--chroma")
+            chroma = std::atoi(next().c_str());
         else if (a == "--range")
             range_s = next();
         else if (a == "--hdrmode" || a == "--hdr")
@@ -343,6 +348,12 @@ int main(int argc, char* argv[]) {
     cfg.audio_codec = acodec;
     cfg.record_audio = record_audio;
     cfg.bit_depth = (bitdepth == 10) ? BitDepth::Bit10 : BitDepth::Bit8;
+    if (chroma == 444) {
+        cfg.chroma = ChromaSubsampling::Cs444; // 8-bit H.264/HEVC only; Validate() enforces
+    } else if (chroma != 420) {
+        fprintf(stderr, "[probe_record] ERROR: bad --chroma (use 420|444)\n");
+        return 64;
+    }
     if (range_s == "limited" || range_s == "tv") {
         cfg.color.range = ColorRange::Limited; // engine default (fix/color-range-signaling)
     } else if (range_s == "full" || range_s == "pc") {

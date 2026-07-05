@@ -2612,6 +2612,7 @@ void VideoThread::Run() {
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
                             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                            nvenc.ReleaseSlot(slot);
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {
@@ -2963,6 +2964,7 @@ void VideoThread::Run() {
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
                             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                            nvenc.ReleaseSlot(slot);
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {

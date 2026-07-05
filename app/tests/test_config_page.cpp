@@ -2090,6 +2090,72 @@ TEST_F(ConfigPageTest, S7_CodecChangeToH264_ResetsTenBitToEight) {
     EXPECT_EQ(depth->currentData().toInt(), static_cast<int>(capability::BitDepth::Bit8));
 }
 
+// Chroma subsampling: the debug placeholder is superseded by a real expert combo
+// with 4:2:0 (default) and 4:4:4 items; 4:2:2 is intentionally absent.
+TEST_F(ConfigPageTest, ChromaControl_ExistsAndPlaceholderRemoved) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("roadmapDummy_chromaSubsampling")), nullptr)
+        << "the chroma mockup row is superseded by the real chroma combo";
+
+    auto* chroma = page.findChild<QComboBox*>(QStringLiteral("videoChromaCombo"));
+    ASSERT_NE(chroma, nullptr);
+    EXPECT_GE(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs420)), 0);
+    EXPECT_GE(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)), 0);
+    EXPECT_EQ(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs422)), -1)
+        << "4:2:2 must not be offered (no NVENC 4:2:2 path)";
+    // Default is 4:2:0.
+    EXPECT_EQ(chroma->currentData().toInt(), static_cast<int>(capability::ChromaSubsampling::Cs420));
+}
+
+// 4:4:4 is selectable only for 8-bit H.264/HEVC: the item is disabled for AV1 and
+// for 10-bit, and a stored 4:4:4 selection snaps back to 4:2:0 in the emitted model
+// when the codec/bit-depth stops supporting it.
+TEST_F(ConfigPageTest, Chroma444_GatedPerCodecAndBitDepth_SnapsBack) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted = output_defaults_;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* depth = page.findChild<QComboBox*>(QStringLiteral("videoBitDepthCombo"));
+    auto* chroma = page.findChild<QComboBox*>(QStringLiteral("videoChromaCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(depth, nullptr);
+    ASSERT_NE(chroma, nullptr);
+
+    const auto item444_enabled = [&]() -> bool {
+        auto* model = qobject_cast<QStandardItemModel*>(chroma->model());
+        EXPECT_NE(model, nullptr);
+        const int idx = chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
+        EXPECT_GE(idx, 0);
+        return model->item(idx)->isEnabled();
+    };
+
+    // H.264 8-bit → 4:4:4 selectable; selecting it reaches the model.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(item444_enabled());
+    chroma->setCurrentIndex(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)));
+    EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs444);
+
+    // Switch to AV1 → item disabled and the selection snaps back to 4:2:0.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    EXPECT_FALSE(item444_enabled());
+    EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs420);
+    EXPECT_EQ(chroma->currentData().toInt(), static_cast<int>(capability::ChromaSubsampling::Cs420));
+
+    // HEVC 8-bit → selectable again; then 10-bit disables it and snaps back.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(item444_enabled());
+    chroma->setCurrentIndex(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)));
+    EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs444);
+    depth->setCurrentIndex(depth->findData(static_cast<int>(capability::BitDepth::Bit10)));
+    EXPECT_FALSE(item444_enabled());
+    EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs420);
+}
+
 // Colour range: the combo exists with Full / Limited items and defaults to
 // Limited (fix/color-range-signaling — common consumer players ignore the
 // range flag and always expand limited->full, so Full looked permanently
