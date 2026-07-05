@@ -772,8 +772,7 @@ void EditExportPage::setPhase(Phase phase) {
 
 void EditExportPage::refreshPhase() {
     // ---- Stepper highlight ----
-    // Map phases to the logical stepper step (Review/Edit → "Review" active,
-    // Output/Exporting → "Output" active, Done/Failed → "Output" stays active).
+    // Each phase highlights its own step; Exporting/Done/Failed keep "Output" active.
     const auto stepStyle = [&](bool active) -> QString {
         return active ? QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; "
                                        "border-bottom: 2px solid %1; padding-bottom:2px; }")
