@@ -219,6 +219,7 @@ class ConfigPage : public QWidget {
     void onContainerChanged(int id);
     void onVideoCodecChanged(int index);
     void onVideoBitDepthChanged(int index);
+    void onVideoChromaChanged(int index);
     void onVideoColorRangeChanged(int index);
     void onVideoHdrModeChanged(int index);
     void onVideoEncoderPresetChanged(int index);
@@ -253,6 +254,11 @@ class ConfigPage : public QWidget {
     // Syncs the video bit-depth combo to the model and capability-gates the 10-bit
     // item (selectable only for HEVC / AV1). Single source of truth: caps QueryCombo.
     void updateVideoBitDepthControl();
+    // Syncs the chroma-subsampling combo to the model and capability-gates the 4:4:4
+    // item (selectable only for H.264/HEVC at 8-bit, per caps QueryCombo /
+    // QueryChroma444). A 4:4:4 selection that becomes invalid is snapped back to
+    // 4:2:0 (mirrors bit depth / SanitizePresetConfig).
+    void updateVideoChromaControl();
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
     void updateVideoColorRangeControl();
@@ -530,6 +536,11 @@ class ConfigPage : public QWidget {
     // Video bit depth (0.7.0 — S7): 8-bit / 10-bit selector, capability-gated.
     QWidget* video_bit_depth_row_ = nullptr;
     QComboBox* video_bit_depth_combo_ = nullptr;
+    // Chroma subsampling (expert): 4:2:0 (default) / 4:4:4 selector, capability-gated
+    // (4:4:4 = 8-bit H.264/HEVC only).
+    QWidget* video_chroma_row_ = nullptr;
+    QComboBox* video_chroma_combo_ = nullptr;
+    QLabel* video_chroma_hint_ = nullptr; // calm inline hint, visible when 4:4:4 is unavailable
     // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
     QWidget* video_color_range_row_ = nullptr;
     QComboBox* video_color_range_combo_ = nullptr;

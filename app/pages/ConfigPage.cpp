@@ -1456,23 +1456,49 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(video_hdr_mode_hint_);
         }
 
-#ifndef NDEBUG
-        // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
-        // These are real, enabled controls wired to nothing, used so the roadmap
-        // layout can be designed and captured on pixels.  Gate: #ifndef NDEBUG.
-        // NOTE (0.7.0 — S7): the HEVC-codec and Bit-depth mockups were promoted to
-        // real controls (Video codec combo + Video bit depth row above). The
-        // encoder-preset mockup was promoted to a real control (NVENC-PRESET-R1,
-        // below). HDR handling was promoted to a real control above. The row left
-        // here is still a placeholder: chroma subsampling (no engine path yet).
+        // --- Chroma subsampling (expert): 4:2:0 default / 4:4:4 gated ---
+        // Real control: 4:4:4 is an 8-bit H.264/HEVC-only path (AYUV, NVENC High
+        // 4:4:4 / HEVC FREXT). The 4:4:4 item is capability-gated per selected
+        // codec/bit-depth; 4:2:2 is not offered (Ada NVENC has no 4:2:2).
         {
-            auto* chroma_combo = new QComboBox(fmt_expert_section_);
-            chroma_combo->setObjectName(QStringLiteral("roadmapDummy_chromaSubsampling"));
-            chroma_combo->addItems({QStringLiteral("4:2:0"), QStringLiteral("4:2:2"), QStringLiteral("4:4:4")});
-            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("Chroma subsampling"), nullptr,
-                                                  QString(), chroma_combo));
+            video_chroma_row_ = new QWidget(fmt_expert_section_);
+            auto* cvl = new QVBoxLayout(video_chroma_row_);
+            cvl->setContentsMargins(0, 0, 0, 0);
+            cvl->setSpacing(0);
+            auto* crule = new QFrame(video_chroma_row_);
+            crule->setFrameShape(QFrame::HLine);
+            crule->setProperty("frameRole", "sectionRuleLine");
+            cvl->addWidget(crule);
+            auto* chl = new QHBoxLayout();
+            chl->setContentsMargins(0, 12, 0, 12);
+            chl->setSpacing(14);
+            auto* clbl = new QLabel(QStringLiteral("Chroma subsampling"), video_chroma_row_);
+            clbl->setProperty("labelRole", "settingsRowLabel");
+            chl->addWidget(clbl, 0);
+            chl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kChromaSubsampling, video_chroma_row_), 0,
+                           Qt::AlignVCenter);
+            chl->addStretch(1);
+            video_chroma_combo_ = new QComboBox(video_chroma_row_);
+            video_chroma_combo_->setObjectName(QStringLiteral("videoChromaCombo"));
+            video_chroma_combo_->addItem(QStringLiteral("4:2:0"),
+                                         static_cast<int>(capability::ChromaSubsampling::Cs420));
+            video_chroma_combo_->addItem(QStringLiteral("4:4:4"),
+                                         static_cast<int>(capability::ChromaSubsampling::Cs444));
+            video_chroma_combo_->setFixedWidth(160);
+            video_chroma_combo_->setProperty("settingsRowInput", true);
+            chl->addWidget(video_chroma_combo_, 0, Qt::AlignVCenter);
+            cvl->addLayout(chl);
+            video_chroma_row_->setProperty("settingsRow", true);
+            video_chroma_row_->setProperty("expertEdge", true);
+            fes_layout->addWidget(video_chroma_row_);
+
+            video_chroma_hint_ =
+                makeHint(QStringLiteral("4:4:4 needs 8-bit H.264 or HEVC \xE2\x80\x94 not available with the current "
+                                        "codec or bit depth."),
+                         fmt_expert_section_);
+            video_chroma_hint_->setVisible(false);
+            fes_layout->addWidget(video_chroma_hint_);
         }
-#endif // NDEBUG
 
         // Container & codecs expert rows (Bit depth, Colour range, roadmap) append
         // to the codecs card; the Quality card's rate section is inserted just before
@@ -2210,6 +2236,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onVideoCodecChanged);
     connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoBitDepthChanged);
+    connect(video_chroma_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoChromaChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
     connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -2744,6 +2772,8 @@ void ConfigPage::updateVideoCodecChoices() {
     updateVideoBitDepthControl();
     // HDR10-native selectability depends on the selected codec — refresh it here too.
     updateVideoHdrModeControl();
+    // 4:4:4 selectability depends on the selected codec — refresh it here too.
+    updateVideoChromaControl();
 }
 
 void ConfigPage::updateVideoBitDepthControl() {
@@ -2792,6 +2822,61 @@ void ConfigPage::updateVideoBitDepthControl() {
     } else {
         video_bit_depth_combo_->setToolTip(QString());
         video_bit_depth_combo_->unsetCursor();
+    }
+}
+
+void ConfigPage::updateVideoChromaControl() {
+    if (!video_chroma_combo_ || !video_chroma_row_)
+        return;
+
+    // 4:4:4 (AYUV, NVENC High 4:4:4 / HEVC FREXT) is an 8-bit H.264/HEVC-only expert
+    // path — AV1 NVENC is 4:2:0 only and 4:4:4 + 10-bit is out of scope. Mirror the
+    // engine/translation rule so the UI stays the single source of truth.
+    const auto codec = format_settings_.video_codec;
+    const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+    const bool eight_bit = format_settings_.bit_depth == capability::BitDepth::Bit8;
+    const bool supports_444 = codec_ok && eight_bit;
+    const bool locked = controls_locked_;
+
+    // Snap the model back to 4:2:0 when 4:4:4 is no longer valid (mirrors bit depth /
+    // SanitizePresetConfig / RecordingCoordinator reconcile).
+    if (!supports_444 && format_settings_.chroma_subsampling == capability::ChromaSubsampling::Cs444) {
+        format_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
+    }
+
+    const QString reason = eight_bit ? QStringLiteral("4:4:4 requires H.264 or HEVC")
+                                     : QStringLiteral("4:4:4 requires 8-bit H.264 or HEVC");
+
+    // Enable/disable the 4:4:4 item per codec/bit-depth.
+    if (auto* model = qobject_cast<QStandardItemModel*>(video_chroma_combo_->model())) {
+        const int idx444 = video_chroma_combo_->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
+        if (auto* item = (idx444 >= 0) ? model->item(idx444) : nullptr) {
+            item->setEnabled(supports_444);
+            item->setToolTip(supports_444 ? QString() : reason);
+        }
+    }
+
+    // Sync the combo selection to the model (signal-blocked).
+    {
+        const QSignalBlocker b(video_chroma_combo_);
+        const int idx = video_chroma_combo_->findData(static_cast<int>(format_settings_.chroma_subsampling));
+        video_chroma_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 4:2:0 */);
+    }
+
+    video_chroma_combo_->setEnabled(!locked);
+    if (!supports_444) {
+        video_chroma_combo_->setToolTip(reason);
+        video_chroma_combo_->setCursor(Qt::ForbiddenCursor);
+    } else if (locked) {
+        video_chroma_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        video_chroma_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        video_chroma_combo_->setToolTip(QString());
+        video_chroma_combo_->unsetCursor();
+    }
+
+    if (video_chroma_hint_) {
+        video_chroma_hint_->setVisible(!supports_444);
     }
 }
 
@@ -3036,6 +3121,8 @@ void ConfigPage::onVideoCodecChanged(int index) {
     // live. Unlike bit depth this does NOT snap the stored value back (see
     // updateVideoHdrModeControl()).
     updateVideoHdrModeControl();
+    // 4:4:4 depends on the codec (H.264/HEVC only) — refresh + snap back if needed.
+    updateVideoChromaControl();
     emitCurrentFormatSettings();
 }
 
@@ -3051,6 +3138,25 @@ void ConfigPage::onVideoBitDepthChanged(int index) {
                                      ? capability::BitDepth::Bit10
                                      : capability::BitDepth::Bit8;
     updateVideoBitDepthControl();
+    // 4:4:4 is 8-bit only — a 10-bit switch must snap chroma back to 4:2:0.
+    updateVideoChromaControl();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::onVideoChromaChanged(int index) {
+    if (index < 0 || !video_chroma_combo_)
+        return;
+    const auto requested = static_cast<capability::ChromaSubsampling>(video_chroma_combo_->itemData(index).toInt());
+    // Guard: 4:4:4 is only honored for 8-bit H.264/HEVC (the disabled item should
+    // prevent this, but keep the model authoritative regardless of how the index
+    // changed).
+    const bool supports_444 = (format_settings_.video_codec == capability::VideoCodec::HevcNvenc ||
+                               format_settings_.video_codec == capability::VideoCodec::H264Nvenc) &&
+                              format_settings_.bit_depth == capability::BitDepth::Bit8;
+    format_settings_.chroma_subsampling = (requested == capability::ChromaSubsampling::Cs444 && supports_444)
+                                              ? capability::ChromaSubsampling::Cs444
+                                              : capability::ChromaSubsampling::Cs420;
+    updateVideoChromaControl();
     emitCurrentFormatSettings();
 }
 
@@ -3115,6 +3221,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.container = settings.container;
     format_settings_.video_codec = settings.video_codec;
     format_settings_.bit_depth = settings.bit_depth;
+    format_settings_.chroma_subsampling = settings.chroma_subsampling;
     format_settings_.color_range = settings.color_range;
     format_settings_.nvenc_preset = settings.nvenc_preset;
     format_settings_.hdr_mode = settings.hdr_mode;
@@ -4927,6 +5034,9 @@ void ConfigPage::updateExpertModeVisibility() {
     // 0.7.0 — S7: sync the video bit-depth combo + 10-bit gating when the section shows.
     if (expert_mode_enabled_)
         updateVideoBitDepthControl();
+    // Sync the chroma combo (4:2:0 / gated 4:4:4) when the section shows.
+    if (expert_mode_enabled_)
+        updateVideoChromaControl();
     // 0.7.0: sync the colour-range combo (Full/Limited) when the section shows.
     if (expert_mode_enabled_)
         updateVideoColorRangeControl();
@@ -5362,6 +5472,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     audio_codec_combo_->setEnabled(enabled);
     // 0.7.0 — S7: bit-depth combo honours both the recording lock and codec gating.
     updateVideoBitDepthControl();
+    // Chroma combo honours both the recording lock and codec/bit-depth gating.
+    updateVideoChromaControl();
     // 0.7.0: colour-range combo honours the recording lock (never codec-gated).
     updateVideoColorRangeControl();
     // NVENC-PRESET-R1: encoder-preset combo honours the recording lock (never codec-gated).
