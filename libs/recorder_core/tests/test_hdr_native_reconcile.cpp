@@ -111,12 +111,10 @@ TEST(HdrNativeReconcileTest, Cs420SessionReportsNoSnap) {
     EXPECT_EQ(cfg.bit_depth, BitDepth::Bit10);
 }
 
-// Frame-snapshot fail-fast: RequestFrameSnapshot rejects a 4:4:4 session at
-// request time (FrameSnapshotSupported == false) instead of parking the request
-// until stop, so the CaptureFrame hotkey / notification layer reacts immediately.
-TEST(HdrNativeReconcileTest, FrameSnapshotUnavailableFor444) {
-    EXPECT_FALSE(recorder_core::FrameSnapshotSupported(ChromaSubsampling::Cs444));
-    EXPECT_TRUE(recorder_core::FrameSnapshotSupported(ChromaSubsampling::Cs420));
-}
+// NOTE: frame snapshots are available on every chroma mode (4:2:0 via the
+// planar NV12/P010 readback, 4:4:4 via the packed-AYUV decode), so the former
+// per-chroma availability predicate (FrameSnapshotSupported) is gone. The
+// 4:4:4 decode correctness is proven by the encode/decode round-trip in
+// test_gpu_rgb_to_ayuv.cpp.
 
 } // namespace

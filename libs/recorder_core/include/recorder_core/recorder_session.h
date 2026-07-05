@@ -481,16 +481,6 @@ struct RecorderConfig {
     return chroma_snapped;
 }
 
-// Frame snapshots (and the live preview) tap the composed BGRA surface produced
-// on the 4:2:0 encode path. The 4:4:4 (AYUV) path has no such tap — the
-// VideoProcessor output is a geometry-only intermediate the AYUV shader consumes
-// — so snapshots are unavailable for a 4:4:4 session. False == a snapshot request
-// must fail fast (fire its callback with success=false) instead of parking until
-// stop.
-[[nodiscard]] inline bool FrameSnapshotSupported(ChromaSubsampling chroma) noexcept {
-    return chroma != ChromaSubsampling::Cs444;
-}
-
 // Derive the on-disk path for segment `index` (0-based) from a base output path.
 // Segment 0 keeps the base name; later segments insert a "_part-NNN" suffix
 // before the extension (recording.mkv -> recording_part-002.mkv). If the derived
