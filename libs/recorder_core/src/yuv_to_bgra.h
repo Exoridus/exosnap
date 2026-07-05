@@ -73,11 +73,11 @@ struct PackedAyuvFrame {
 };
 
 // Converts one packed 4:4:4 AYUV frame to top-down BGRA8888 (B, G, R, A byte
-// order; alpha always 255/opaque). Uses the same 8-bit BT.709 matrix and
-// Full/Limited range semantics as ConvertYuv420ToBgra — it is the exact inverse
-// of the RGB->AYUV encoder shader — but with no chroma upsampling: each pixel
-// carries its own V, U, Y. The source alpha byte is ignored. Pure, thread-safe,
-// no GPU dependency.
+// order; alpha always 255/opaque). Uses the same 8-bit matrix/range semantics
+// as ConvertYuv420ToBgra (with BT.709 and the session's range this is the exact
+// inverse of the RGB->AYUV encoder shader) but with no chroma upsampling: each
+// pixel carries its own V, U, Y. The source alpha byte is ignored. Pure,
+// thread-safe, no GPU dependency.
 //
 // out_bgra must have at least `height * out_stride_bytes` bytes available;
 // out_stride_bytes must be >= src.width * 4. Does nothing if src.width,
