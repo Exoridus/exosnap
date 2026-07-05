@@ -253,6 +253,27 @@ class NvencEncoder {
     // One-shot forced-IDR request consumed by the next EncodeFrame submission.
     bool m_forceIdrNext = false;
 
+    // In-band HDR10 metadata (HEVC SEI / AV1 metadata OBU) injected on every
+    // keyframe. Built once by BuildHdrBitstreamPayloads() when the session is
+    // HDR10-native; the payload byte buffers and the NVENC payload-descriptor
+    // array are owned members so their pointers stay valid across the
+    // synchronous NvEncEncodePicture call (NVENC reads them during that call).
+    // Empty / count 0 for SDR and tone-map-SDR sessions, so their bitstream is
+    // byte-identical to before this feature.
+    std::vector<uint8_t> m_hdrMdcvPayload;
+    std::vector<uint8_t> m_hdrCllPayload;
+    std::array<NV_ENC_SEI_PAYLOAD, 2> m_hdrPayloadEntries{};
+    uint32_t m_hdrPayloadCount = 0;
+    // Deterministic IDR cadence tracking (gopLength; no B-frames / no lookahead,
+    // so IDRs land on submission indices 0, gopLength, 2*gopLength, ... and each
+    // forced IDR resets the phase). Used to attach HDR metadata on keyframes.
+    uint32_t m_gopLength = 0;
+    uint32_t m_frameInGop = 0;
+
+    // Build the per-keyframe HDR metadata payloads for the current codec + color.
+    // No-op (clears state) unless the session is HDR10-native on HEVC/AV1.
+    void BuildHdrBitstreamPayloads();
+
     // Lock one bitstream and return an EncodedVideoPacket.
     // Also releases the associated input slot (unmap + mark free).
     bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error);

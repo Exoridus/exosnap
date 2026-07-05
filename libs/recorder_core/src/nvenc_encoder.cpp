@@ -1,5 +1,6 @@
 #include "nvenc_encoder.h"
 
+#include <recorder_core/hdr_bitstream_metadata.h>
 #include <recorder_core/packet_types.h>
 
 #include <cstdio>
@@ -657,6 +658,50 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
+// BuildHdrBitstreamPayloads
+// ---------------------------------------------------------------------------
+//
+// Precompute the per-keyframe in-band HDR10 metadata once, so EncodeFrame only
+// has to point NVENC at owned, stable buffers. HEVC uses SEI messages
+// (seiPayloadArray, payloadType 137/144); AV1 uses metadata OBUs
+// (obuPayloadArray, payloadType = AV1 metadata_type 2/1). For both codecs NVENC
+// consumes the same NV_ENC_SEI_PAYLOAD descriptor: {payloadSize, payloadType,
+// payload}. We supply the payload *content* only; NVENC frames it (SEI NAL +
+// emulation prevention for HEVC; OBU header + leb128 size + metadata_type +
+// byte alignment for AV1). See recorder_core/hdr_bitstream_metadata.h.
+void NvencEncoder::BuildHdrBitstreamPayloads() {
+    m_hdrPayloadCount = 0;
+    m_hdrMdcvPayload.clear();
+    m_hdrCllPayload.clear();
+
+    // H.264 never carries HDR10-native (blocked upstream); only HEVC/AV1 do.
+    if (m_codec != VideoCodec::HevcNvenc && m_codec != VideoCodec::Av1Nvenc) {
+        return;
+    }
+    if (!hdr_meta::ShouldEmitHdrBitstreamMetadata(m_color)) {
+        return;
+    }
+    const bool av1 = (m_codec == VideoCodec::Av1Nvenc);
+
+    if (hdr_meta::HasMasteringDisplayData(m_color)) {
+        m_hdrMdcvPayload = av1 ? hdr_meta::BuildAv1MasteringDisplayObuPayload(m_color)
+                               : hdr_meta::BuildHevcMasteringDisplaySeiPayload(m_color);
+        NV_ENC_SEI_PAYLOAD& e = m_hdrPayloadEntries[m_hdrPayloadCount++];
+        e.payloadSize = static_cast<uint32_t>(m_hdrMdcvPayload.size());
+        e.payloadType = av1 ? hdr_meta::kAv1MetadataTypeHdrMdcv : hdr_meta::kHevcSeiPayloadTypeMasteringDisplay;
+        e.payload = m_hdrMdcvPayload.data();
+    }
+    if (hdr_meta::HasContentLightLevelData(m_color)) {
+        m_hdrCllPayload = av1 ? hdr_meta::BuildAv1ContentLightLevelObuPayload(m_color)
+                              : hdr_meta::BuildHevcContentLightLevelSeiPayload(m_color);
+        NV_ENC_SEI_PAYLOAD& e = m_hdrPayloadEntries[m_hdrPayloadCount++];
+        e.payloadSize = static_cast<uint32_t>(m_hdrCllPayload.size());
+        e.payloadType = av1 ? hdr_meta::kAv1MetadataTypeHdrCll : hdr_meta::kHevcSeiPayloadTypeContentLightLevel;
+        e.payload = m_hdrCllPayload.data();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // InitEncoder
 // ---------------------------------------------------------------------------
 
@@ -671,6 +716,12 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
                                     0.5f)
             : 120u;
     m_encodeConfig.gopLength = kGopFrames;
+    // Remember the IDR cadence and (re)build the HDR metadata payloads for this
+    // session. m_frameInGop starts at 0 so the first submitted frame — always an
+    // IDR — carries the metadata.
+    m_gopLength = kGopFrames;
+    m_frameInGop = 0;
+    BuildHdrBitstreamPayloads();
     if (m_codec == VideoCodec::H264Nvenc) {
         m_encodeConfig.encodeCodecConfig.h264Config.idrPeriod = kGopFrames;
     } else if (m_codec == VideoCodec::HevcNvenc) {
@@ -939,12 +990,39 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     pic.bufferFmt = mapRes.mappedBufferFmt;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.encodePicFlags = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
-    if (m_forceIdrNext) {
+    const bool forcedIdr = m_forceIdrNext;
+    if (forcedIdr) {
         // Force an IDR at a segment boundary: the first frame of the new segment
         // must be a self-contained keyframe carrying fresh SPS/PPS so no dependent
         // frame precedes it. Consume the one-shot request.
         pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR;
         m_forceIdrNext = false;
+    }
+
+    // Deterministic keyframe (IDR) detection. With no B-frames and no lookahead
+    // (enforced in FetchPresetConfig), output order == submission order and IDRs
+    // land on submission indices 0, gopLength, 2*gopLength, ...; a forced IDR
+    // resets the GOP phase. Advance the phase and decide before submitting.
+    const bool isKeyframe = forcedIdr || (m_frameInGop == 0);
+    if (isKeyframe) {
+        m_frameInGop = 0;
+    }
+    ++m_frameInGop;
+    if (m_gopLength > 0 && m_frameInGop >= m_gopLength) {
+        m_frameInGop = 0;
+    }
+
+    // Attach the precomputed in-band HDR10 metadata on every keyframe, so each
+    // segment/split file and mid-stream join point carries it. The payload
+    // buffers are owned members that outlive this synchronous encode call.
+    if (isKeyframe && m_hdrPayloadCount > 0) {
+        if (m_codec == VideoCodec::Av1Nvenc) {
+            pic.codecPicParams.av1PicParams.obuPayloadArray = m_hdrPayloadEntries.data();
+            pic.codecPicParams.av1PicParams.obuPayloadArrayCnt = m_hdrPayloadCount;
+        } else {
+            pic.codecPicParams.hevcPicParams.seiPayloadArray = m_hdrPayloadEntries.data();
+            pic.codecPicParams.hevcPicParams.seiPayloadArrayCnt = m_hdrPayloadCount;
+        }
     }
     pic.inputTimeStamp = m_frameIdx++;
 
