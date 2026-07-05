@@ -171,6 +171,46 @@ TEST(OdCaptureMode, UnknownFormatRejected) {
     EXPECT_FALSE(Resolve(DXGI_FORMAT_R8G8B8A8_UNORM, HdrMode::TonemapSdr, false, true, mode));
 }
 
+// --- WGC (window) frame-pool plan ------------------------------------------
+
+TEST(WgcCapturePlan, SdrDesktopKeepsBgra8) {
+    // No HDR on the display: BGRA8 pool, plain SDR — byte-identical to the
+    // historic window-capture path, in every HDR-handling mode.
+    for (HdrMode hdr : {HdrMode::Off, HdrMode::TonemapSdr, HdrMode::Hdr10}) {
+        const WgcCapturePlan plan = ResolveWgcCapturePlan(/*hdr_active=*/false, hdr, /*hdr10_ok=*/true);
+        EXPECT_EQ(plan.frame_pool_format, DXGI_FORMAT_B8G8R8A8_UNORM);
+        EXPECT_EQ(plan.mode, OdCaptureMode::Sdr);
+    }
+}
+
+TEST(WgcCapturePlan, HdrDisplayButHandlingOffKeepsBgra8) {
+    // HDR-active display but the user disabled HDR handling: keep BGRA8 (DWM
+    // tone-maps the window to SDR), matching HdrMode::Off elsewhere.
+    const WgcCapturePlan plan = ResolveWgcCapturePlan(/*hdr_active=*/true, HdrMode::Off, /*hdr10_ok=*/true);
+    EXPECT_EQ(plan.frame_pool_format, DXGI_FORMAT_B8G8R8A8_UNORM);
+    EXPECT_EQ(plan.mode, OdCaptureMode::Sdr);
+}
+
+TEST(WgcCapturePlan, HdrDisplayTonemapUsesFp16) {
+    const WgcCapturePlan plan = ResolveWgcCapturePlan(/*hdr_active=*/true, HdrMode::TonemapSdr, /*hdr10_ok=*/true);
+    EXPECT_EQ(plan.frame_pool_format, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    EXPECT_EQ(plan.mode, OdCaptureMode::HdrToneMap);
+}
+
+TEST(WgcCapturePlan, HdrDisplayNativeWhenHdr10AndCapable) {
+    const WgcCapturePlan plan = ResolveWgcCapturePlan(/*hdr_active=*/true, HdrMode::Hdr10, /*hdr10_ok=*/true);
+    EXPECT_EQ(plan.frame_pool_format, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    EXPECT_EQ(plan.mode, OdCaptureMode::HdrNative);
+}
+
+TEST(WgcCapturePlan, Hdr10OnIncapableCodecTonemaps) {
+    // Hdr10 requested but the codec cannot encode HDR10 (H.264): FP16 pool, but
+    // tone-map to SDR (mirrors the OD FP16 rule).
+    const WgcCapturePlan plan = ResolveWgcCapturePlan(/*hdr_active=*/true, HdrMode::Hdr10, /*hdr10_ok=*/false);
+    EXPECT_EQ(plan.frame_pool_format, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    EXPECT_EQ(plan.mode, OdCaptureMode::HdrToneMap);
+}
+
 // --- Tone-map intermediate format choice -----------------------------------
 
 TEST(ToneMapIntermediateFormat, TenBitEncodeUsesR10) {

@@ -143,6 +143,35 @@ enum class OdCaptureMode {
 bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active, bool hdr10_output_supported,
                           OdCaptureMode& out_mode) noexcept;
 
+// The frame-pool pixel format and capture mode chosen for a WGC (window) target.
+struct WgcCapturePlan {
+    DXGI_FORMAT frame_pool_format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    OdCaptureMode mode = OdCaptureMode::Sdr;
+};
+
+// Decide the WGC frame-pool format + capture mode for a window target given the
+// hosting display's HDR state, the requested HDR handling mode, and whether the
+// codec can carry HDR10. Unlike the OD path (which negotiates the format from real
+// frames), WGC lets us *request* the frame-pool format, so this is a pure up-front
+// decision. An FP16 (scRGB) pool is requested only when the display is HDR-active
+// AND HDR handling is on; otherwise BGRA8 exactly as before, so an SDR desktop (or
+// HDR handling Off) records byte-identically to the historic window-capture path.
+// FP16 then feeds the same tone-map / native-HDR10 machinery as the OD FP16 route:
+//   - Hdr10 + HDR10-capable codec -> HdrNative (PQ/BT.2020 P010)
+//   - otherwise (TonemapSdr, or Hdr10 on H.264) -> HdrToneMap (scRGB -> SDR BT.709)
+[[nodiscard]] WgcCapturePlan ResolveWgcCapturePlan(bool hdr_active, HdrMode hdr_mode,
+                                                   bool hdr10_output_supported) noexcept;
+
+// Query the HDR facts of the display containing hmonitor (IDXGIOutput6::GetDesc1
+// primaries/luminance/colour space + DISPLAYCONFIG_SDR_WHITE_LEVEL), the same
+// facts the OD backend reads at Open(). Shared by the WGC (window) capture path,
+// which resolves its hosting monitor via MonitorFromWindow at session start.
+// Enumerates DXGI outputs via a fresh factory to find the matching output; on any
+// failure out_facts is left with hdr_active == false (sdr_white_level_nits is still
+// filled from DisplayConfig when available, 0 == unknown). Returns true when the
+// monitor was matched to a DXGI output (regardless of HDR state).
+bool QueryDisplayHdrFacts(HMONITOR hmonitor, HdrDisplayFacts& out_facts);
+
 // Short human-readable name for the formats OD capture can plausibly see.
 // Unknown values render as "DXGI_FORMAT(<n>)" into fallback_buf.
 const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept;

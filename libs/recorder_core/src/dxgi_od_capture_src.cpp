@@ -105,6 +105,67 @@ static float QuerySdrWhiteLevelNits(HMONITOR hmonitor) {
     return 0.0f;
 }
 
+// Fill HDR facts from an already-matched DXGI output + its monitor. Mirrors the
+// exact ordering used at Open() below: the SDR white level is read first (it is
+// the OS SDR-content reference, independent of the HDR colour-space gate), then
+// the primaries/luminance/hdr_active are read from IDXGIOutput6::GetDesc1 when the
+// output exposes it. Shared by Open() (OD path) and QueryDisplayHdrFacts (WGC path)
+// so both paths derive the identical facts.
+static void FillHdrFactsFromOutput(IDXGIOutput* output, HMONITOR hmonitor, HdrDisplayFacts& facts) {
+    facts = HdrDisplayFacts{};
+    facts.sdr_white_level_nits = QuerySdrWhiteLevelNits(hmonitor);
+    if (output == nullptr) {
+        return;
+    }
+    winrt::com_ptr<IDXGIOutput> outputPtr;
+    outputPtr.copy_from(output);
+    if (winrt::com_ptr<IDXGIOutput6> output6 = outputPtr.try_as<IDXGIOutput6>()) {
+        DXGI_OUTPUT_DESC1 desc1{};
+        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+            facts.hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+            facts.red_primary_x = desc1.RedPrimary[0];
+            facts.red_primary_y = desc1.RedPrimary[1];
+            facts.green_primary_x = desc1.GreenPrimary[0];
+            facts.green_primary_y = desc1.GreenPrimary[1];
+            facts.blue_primary_x = desc1.BluePrimary[0];
+            facts.blue_primary_y = desc1.BluePrimary[1];
+            facts.white_point_x = desc1.WhitePoint[0];
+            facts.white_point_y = desc1.WhitePoint[1];
+            facts.max_luminance_nits = desc1.MaxLuminance;
+            facts.min_luminance_nits = desc1.MinLuminance;
+        }
+    }
+}
+
+bool QueryDisplayHdrFacts(HMONITOR hmonitor, HdrDisplayFacts& out_facts) {
+    out_facts = HdrDisplayFacts{};
+    if (!hmonitor) {
+        return false;
+    }
+    // The SDR white level does not depend on finding a DXGI output, so seed it even
+    // if the enumeration below fails to match (matches the OD ordering).
+    out_facts.sdr_white_level_nits = QuerySdrWhiteLevelNits(hmonitor);
+
+    winrt::com_ptr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put())))) {
+        return false;
+    }
+    winrt::com_ptr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND; ++i) {
+        winrt::com_ptr<IDXGIOutput> output;
+        for (UINT j = 0; adapter->EnumOutputs(j, output.put()) != DXGI_ERROR_NOT_FOUND; ++j) {
+            DXGI_OUTPUT_DESC desc{};
+            if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == hmonitor) {
+                FillHdrFactsFromOutput(output.get(), hmonitor, out_facts);
+                return true;
+            }
+            output = nullptr;
+        }
+        adapter = nullptr;
+    }
+    return false;
+}
+
 bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string& out_error) {
     if (!device || !hmonitor) {
         out_error = "null argument";
@@ -152,31 +213,13 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     // hdr_active is only true in a PQ/BT.2020 colour space — an SDR-mode display
     // still reports its EDID luminance caps here, which are not the active
     // reference; consumers gate their use of the luminance/primaries on it.
-    m_hdr_active = false;
-    m_max_luminance_nits = 0.0f;
-    m_hdr_facts = HdrDisplayFacts{};
-    m_hdr_facts.sdr_white_level_nits = QuerySdrWhiteLevelNits(hmonitor);
-    if (winrt::com_ptr<IDXGIOutput6> output6 = matchedOutput.try_as<IDXGIOutput6>()) {
-        DXGI_OUTPUT_DESC1 desc1{};
-        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
-            m_hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
-            m_max_luminance_nits = desc1.MaxLuminance;
-            // Full facts for native HDR10 mastering-display metadata. The
-            // primaries/luminance are the display's capabilities (the usual
-            // approximation for content mastering values).
-            m_hdr_facts.hdr_active = m_hdr_active;
-            m_hdr_facts.red_primary_x = desc1.RedPrimary[0];
-            m_hdr_facts.red_primary_y = desc1.RedPrimary[1];
-            m_hdr_facts.green_primary_x = desc1.GreenPrimary[0];
-            m_hdr_facts.green_primary_y = desc1.GreenPrimary[1];
-            m_hdr_facts.blue_primary_x = desc1.BluePrimary[0];
-            m_hdr_facts.blue_primary_y = desc1.BluePrimary[1];
-            m_hdr_facts.white_point_x = desc1.WhitePoint[0];
-            m_hdr_facts.white_point_y = desc1.WhitePoint[1];
-            m_hdr_facts.max_luminance_nits = desc1.MaxLuminance;
-            m_hdr_facts.min_luminance_nits = desc1.MinLuminance;
-        }
-    }
+    // Full facts (hdr_active, chromaticity primaries, luminance range, SDR white
+    // level) for native HDR10 mastering-display metadata and tone-map peak. The
+    // primaries/luminance are the display's capabilities (the usual approximation
+    // for content mastering values). Shared with the WGC path via the same helper.
+    FillHdrFactsFromOutput(matchedOutput.get(), hmonitor, m_hdr_facts);
+    m_hdr_active = m_hdr_facts.hdr_active;
+    m_max_luminance_nits = m_hdr_facts.max_luminance_nits;
 
     // Prefer IDXGIOutput5::DuplicateOutput1 (Win10 1703+): declaring the
     // supported formats lets DXGI hand us the desktop's native surface — BGRA8
@@ -333,6 +376,20 @@ bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active,
     default:
         return false;
     }
+}
+
+WgcCapturePlan ResolveWgcCapturePlan(bool hdr_active, HdrMode hdr_mode, bool hdr10_output_supported) noexcept {
+    // SDR desktop, or HDR handling disabled: keep the historic BGRA8 window path
+    // byte-identical (DWM tone-maps an HDR window down to SDR into this pool).
+    if (!hdr_active || hdr_mode == HdrMode::Off) {
+        return WgcCapturePlan{DXGI_FORMAT_B8G8R8A8_UNORM, OdCaptureMode::Sdr};
+    }
+    // HDR-active display + HDR handling on: request a scRGB FP16 pool so the real
+    // HDR signal reaches the pipeline instead of DWM's SDR tone-map. Native HDR10
+    // when the codec can carry it; otherwise tone-map to SDR BT.709.
+    const OdCaptureMode mode =
+        (hdr_mode == HdrMode::Hdr10 && hdr10_output_supported) ? OdCaptureMode::HdrNative : OdCaptureMode::HdrToneMap;
+    return WgcCapturePlan{DXGI_FORMAT_R16G16B16A16_FLOAT, mode};
 }
 
 const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept {
