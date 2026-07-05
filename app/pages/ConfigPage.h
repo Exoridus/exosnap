@@ -2,6 +2,7 @@
 #include <QWidget>
 
 #include "../../../libs/capability/include/capability/audio_ui_state.h"
+#include "../../../libs/capability/include/capability/capability_set.h"
 #include "../../../libs/recorder_core/include/recorder_core/audio_input_device.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
@@ -70,6 +71,11 @@ class ConfigPage : public QWidget {
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
     void setReadinessStatus(const QString& status_label);
+    // Delivers the async-probed runtime capabilities so the expert 4:4:4 chroma
+    // gate can consult the ACTIVE GPU's real YUV444 support (per codec) instead
+    // of only the static codec/bit-depth rule. Stores a copy and re-evaluates the
+    // chroma control. Before this arrives, the static rule stands (pre-probe).
+    void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     // Preset card contract: options = presets (id + label); selected_id = active preset;
     // default_id = startup-default preset (shown with a badge); dirty = unsaved changes.
     void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
@@ -255,9 +261,11 @@ class ConfigPage : public QWidget {
     // item (selectable only for HEVC / AV1). Single source of truth: caps QueryCombo.
     void updateVideoBitDepthControl();
     // Syncs the chroma-subsampling combo to the model and gates the 4:4:4 item by
-    // mirroring the static codec/bit-depth rule (selectable only for H.264/HEVC at
-    // 8-bit). Per-GPU capability gating is a follow-up. A 4:4:4 selection that becomes
-    // invalid is snapped back to 4:2:0 (mirrors bit depth / SanitizePresetConfig).
+    // the static codec/bit-depth rule (selectable only for H.264/HEVC at 8-bit)
+    // AND, once runtime capabilities have been delivered (setRuntimeCapabilities),
+    // the ACTIVE GPU's probed YUV444 support for the current codec. A 4:4:4
+    // selection that becomes invalid is snapped back to 4:2:0 (mirrors bit depth /
+    // SanitizePresetConfig).
     void updateVideoChromaControl();
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
@@ -325,6 +333,11 @@ class ConfigPage : public QWidget {
 
     OutputSettingsModel format_settings_;
     VideoSettingsModel video_settings_;
+    // Async-probed runtime capabilities for the active GPU. runtime_caps_set_
+    // stays false until setRuntimeCapabilities() delivers them; while false the
+    // 4:4:4 gate uses only the static codec/bit-depth rule.
+    capability::CapabilitySet runtime_caps_;
+    bool runtime_caps_set_ = false;
     QString active_profile_name_;
     std::vector<ProfileOption> profile_options_;
     QString active_preset_id_;

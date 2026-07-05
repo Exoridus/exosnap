@@ -46,6 +46,16 @@ TEST(ProbeAdapterEncoderCapability, AmdAdapterIsHonestlyUnprobed) {
     EXPECT_FALSE(cap.h264);
     EXPECT_FALSE(cap.hevc);
     EXPECT_FALSE(cap.av1);
+    EXPECT_FALSE(cap.yuv444_h264);
+    EXPECT_FALSE(cap.yuv444_hevc);
+}
+
+// Default construction must leave the 4:4:4 flags at their honest false default —
+// no codec claims 4:4:4 support until a real probe proves it.
+TEST(AdapterEncoderCapability, DefaultConstructionHasNoYuv444Support) {
+    AdapterEncoderCapability cap;
+    EXPECT_FALSE(cap.yuv444_h264);
+    EXPECT_FALSE(cap.yuv444_hevc);
 }
 
 TEST(ProbeAdapterEncoderCapability, IntelAdapterIsHonestlyUnprobed) {
@@ -58,6 +68,8 @@ TEST(ProbeAdapterEncoderCapability, IntelAdapterIsHonestlyUnprobed) {
     EXPECT_FALSE(cap.probed);
     EXPECT_TRUE(cap.backend_label.empty());
     EXPECT_FALSE(cap.provenance.empty());
+    EXPECT_FALSE(cap.yuv444_h264);
+    EXPECT_FALSE(cap.yuv444_hevc);
 }
 
 TEST(ProbeAdapterEncoderCapability, OtherVendorAdapterIsHonestlyUnprobed) {
@@ -68,6 +80,8 @@ TEST(ProbeAdapterEncoderCapability, OtherVendorAdapterIsHonestlyUnprobed) {
     const auto cap = ProbeAdapterEncoderCapability(adapter);
     EXPECT_FALSE(cap.probed);
     EXPECT_TRUE(cap.backend_label.empty());
+    EXPECT_FALSE(cap.yuv444_h264);
+    EXPECT_FALSE(cap.yuv444_hevc);
 }
 
 // NVIDIA path touches real hardware/driver state (DXGI re-enumeration + an
@@ -90,6 +104,8 @@ TEST(ProbeAdapterEncoderCapability, NvidiaAdapterNeverFabricatesResultWhenUnprob
         EXPECT_FALSE(cap.h264);
         EXPECT_FALSE(cap.hevc);
         EXPECT_FALSE(cap.av1);
+        EXPECT_FALSE(cap.yuv444_h264);
+        EXPECT_FALSE(cap.yuv444_hevc);
     }
 }
 

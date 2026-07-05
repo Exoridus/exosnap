@@ -46,8 +46,9 @@ Top-level navigation is **six items**, in order:
   the live runtime (technical) view while recording.
 - **Device** — encoder adapter selection plus the per-GPU capability matrix. One card per DXGI
   adapter (iGPU/dGPU); a per-adapter matrix shows codec support and provenance for the selected
-  adapter. Not-yet-wired backends (AMD/AMF, Intel/QSV, software x264/SVT-AV1) appear as honest
-  greyed-out "planned" rows — never fabricated probes.
+  adapter, including per-codec 8-bit 4:4:4 (YUV444) encode support probed on that specific GPU
+  (H.264 / HEVC — AV1 is 4:2:0 only). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
+  x264/SVT-AV1) appear as honest greyed-out "planned" rows — never fabricated probes.
 - **Settings** — unified recording configuration, hosting six embedded sections:
   **Video · Audio · Output · Webcam · Hotkeys · Advanced**. Advanced is expert-only and collapsible.
   Hotkeys is an embedded full-width card, not a separate nav item.
@@ -223,13 +224,14 @@ Expert-mode option available for **H.264 and HEVC at 8-bit** (NVENC High 4:4:4 P
 Range Extensions) on GPUs that report YUV444 encode support; it keeps full colour resolution (sharper
 text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC AV1 is 4:2:0 only),
 **not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
-with an explanatory hint whenever the current codec/bit-depth cannot carry it, and an invalid stored
-selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
-4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays available** (it shares
-the composited RGB frame with the preview before the AYUV conversion — see the live-preview note in
-Section 7), and **frame snapshots stay available** as in 4:2:0: the CaptureFrame hotkey reads back
-the packed AYUV encode surface and decodes it on the CPU with the exact inverse of the encoder's
-RGB→AYUV conversion (same BT.709 matrix and Full/Limited range as the recording).
+with an explanatory hint whenever the current codec/bit-depth **or the active GPU** cannot carry it,
+and an invalid stored selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the
+NVENC generation has no 4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays
+available** (it shares the composited RGB frame with the preview before the AYUV conversion — see
+the live-preview note in Section 7), and **frame snapshots stay available** as in 4:2:0: the
+CaptureFrame hotkey reads back the packed AYUV encode surface and decodes it on the CPU with the
+exact inverse of the encoder's RGB→AYUV conversion (same BT.709 matrix and Full/Limited range as
+the recording).
 
 **Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every
