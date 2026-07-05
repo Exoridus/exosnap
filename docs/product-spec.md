@@ -225,9 +225,11 @@ text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC 
 **not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
 with an explanatory hint whenever the current codec/bit-depth cannot carry it, and an invalid stored
 selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
-4:2:2 path). While a recording runs in **4:4:4**, the **live preview and frame snapshots are
-unavailable** — the 4:4:4 encode path produces no composed BGRA frame to tap, so the CaptureFrame
-hotkey is rejected immediately rather than parked until the recording stops.
+4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays available** (it shares
+the composited RGB frame with the preview before the AYUV conversion — see the live-preview note in
+Section 7), but **frame snapshots are unavailable**: the CaptureFrame hotkey is rejected immediately
+(the AYUV encode surface has no directly readable BGRA form) rather than parked until the recording
+stops.
 
 **Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every
@@ -289,6 +291,18 @@ Three capture targets:
 
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
+
+**Live preview (WYSIWYG during recording).** Before recording, the Record-page preview runs its own
+lightweight capture of the selected target. **Once recording starts, the preview shows exactly the
+frame the engine is encoding** — the composited, pre-encode source (cursor and webcam PiP already
+baked in) is shared to the preview through a GPU texture, and the preview's own capture stops. There
+is no second capture running alongside the recording, and the preview reflects what is actually being
+recorded (so a black-screen or swap-chain problem is visible in the preview, not hidden by an
+independent capture). During the pre-record countdown the preview holds its last live image until the
+first recorded frame arrives, so there is no black flash. The one exception is **native HDR10**
+recording: it has no SDR intermediate to share cheaply, so during a native-HDR10 recording the
+preview keeps its own capture and shows the same SDR approximation used elsewhere for HDR monitoring
+(see KNOWN_LIMITATIONS).
 
 **Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a

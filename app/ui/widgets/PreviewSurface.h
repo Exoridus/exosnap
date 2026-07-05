@@ -60,6 +60,13 @@ class PreviewSurface : public QWidget {
     [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
     void repositionDxgiPreview();
 
+    // Switch the active DXGI preview to the engine's shared source texture during
+    // recording (WYSIWYG). No-op if no DXGI preview is running. Ownership of the NT
+    // handle transfers to the renderer. See DxgiPreviewRenderer::BeginPushedSource.
+    void beginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    // Revert to the DXGI preview's own WGC capture. No-op if no renderer exists.
+    void endPushedSource();
+
     void setTopMetaText(const QString& text);
     // Help text shown under the branded empty-state placeholder (no live preview).
     // Empty => the default "No source selected — choose one to preview" prompt.

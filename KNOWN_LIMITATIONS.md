@@ -94,8 +94,9 @@ Invalid combinations are not offered.
   - **No 10-bit 4:4:4** — the 4:4:4 path is 8-bit only in this build.
   - **No 4:4:4 with native HDR10** — HDR10 requires 10-bit, which excludes 4:4:4.
   - **No 4:2:2** — the NVENC generation has no 4:2:2 encode path.
-  - On the 4:4:4 path the **live in-app preview and single-frame snapshot are disabled** (they
-    decode the 4:2:0 NV12/P010 layout, not the packed AYUV 4:4:4 surface); recording is unaffected.
+  - On the 4:4:4 path the **live in-app preview still works** (it shares the composited RGB frame
+    with the preview before the AYUV conversion), but the **single-frame snapshot is disabled**
+    (it would have to decode the packed AYUV 4:4:4 encode surface); recording is unaffected.
   - 4:4:4 uses the same BT.709 matrix and Full/Limited range selection as 4:2:0.
 - **HDR displays are detected automatically.** By default an HDR desktop is
   recorded as tone-mapped SDR (BT.709) for universal playability. An expert
@@ -115,8 +116,12 @@ Invalid combinations are not offered.
   ignore container-level HDR metadata (notably some Apple players) still receive
   it. Content-light (MaxCLL/MaxFALL) metadata is only emitted when present; the
   current native path fills mastering-display data but leaves MaxCLL/MaxFALL
-  absent (no per-frame content-light analysis). Current boundaries: the in-app
-  recording preview shows an approximate SDR tone-map, and no HLG.
+  absent (no per-frame content-light analysis). Current boundaries: no HLG, and
+  the in-app recording preview shows an approximate SDR tone-map. That last point
+  is also the one exception to the WYSIWYG-during-recording preview (below): for
+  **native HDR10** the engine has no SDR intermediate to share, so during a
+  native-HDR10 recording the Record-page preview keeps its own capture and shows
+  the same approximate SDR tone-map rather than the exact encoded frame.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -199,6 +204,15 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 
 ## Other current limitations
 
+- **Live preview during recording is WYSIWYG** for SDR, HDR-tone-map, and 4:4:4
+  sessions: the preview shares the engine's composited pre-encode frame over a GPU
+  texture and stops its own capture, so there is no second capture and the preview
+  reflects the actual encoded content. **Native HDR10 is the exception** — the
+  preview keeps its own capture and shows an approximate SDR tone-map there (see
+  the HDR section above). Cross-GPU handle sharing is not supported: if the
+  preview and engine devices resolve to different adapters the shared frame cannot
+  be opened, so the preview never switches sources and simply keeps running its own
+  live WGC capture (recording is unaffected).
 - Update checking is **notify-only**: the official build checks GitHub Releases and points you to
   the releases page. There is no in-place download, no auto-install, and no silent restart (see the
   Crash reporting and updates section below).

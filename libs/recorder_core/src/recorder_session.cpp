@@ -87,7 +87,7 @@ struct RecorderSession::Impl {
     StatsCallback stats_callback;
     MeterCallback meter_callback;
     DiagnosticsCallback diagnostics_callback;
-    PreviewFrameCallback preview_frame_callback;
+    PreviewSharedHandleCallback preview_shared_handle_callback;
     uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
 };
@@ -128,8 +128,8 @@ void RecorderSession::SetDiagnosticsCallback(DiagnosticsCallback cb) {
     m_impl->diagnostics_callback = std::move(cb);
 }
 
-void RecorderSession::SetPreviewFrameCallback(PreviewFrameCallback cb) {
-    m_impl->preview_frame_callback = std::move(cb);
+void RecorderSession::SetPreviewSharedHandleCallback(PreviewSharedHandleCallback cb) {
+    m_impl->preview_shared_handle_callback = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -499,7 +499,15 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.stats_callback = m_impl->stats_callback;
         st.meter_callback = m_impl->meter_callback;
         st.diagnostics_callback = m_impl->diagnostics_callback;
-        st.preview_frame_callback = m_impl->preview_frame_callback;
+        // Bridge the public uintptr_t handle callback to the internal HANDLE-typed one.
+        if (m_impl->preview_shared_handle_callback) {
+            auto pub_cb = m_impl->preview_shared_handle_callback;
+            st.preview_shared_handle_cb = [pub_cb](HANDLE h, uint32_t w, uint32_t ht) {
+                pub_cb(reinterpret_cast<uintptr_t>(h), w, ht);
+            };
+        } else {
+            st.preview_shared_handle_cb = nullptr;
+        }
         st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(engine_config));
     }
 
