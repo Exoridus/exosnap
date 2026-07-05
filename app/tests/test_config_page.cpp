@@ -15,7 +15,10 @@
 #include <QStandardItemModel>
 #include <QToolButton>
 
+#include <capability/capability_builder.h>
+#include <capability/capability_set.h>
 #include <capability/config_types.h>
+#include <capability/support_level.h>
 
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
@@ -2154,6 +2157,84 @@ TEST_F(ConfigPageTest, Chroma444_GatedPerCodecAndBitDepth_SnapsBack) {
     depth->setCurrentIndex(depth->findData(static_cast<int>(capability::BitDepth::Bit10)));
     EXPECT_FALSE(item444_enabled());
     EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs420);
+}
+
+// Once probed runtime capabilities arrive, the 4:4:4 gate consults the per-GPU
+// CapabilitySet: a GPU that cannot do H.264 4:4:4 disables the item (naming the
+// GPU as the reason) and snaps a previously-valid 4:4:4 selection back to 4:2:0.
+TEST_F(ConfigPageTest, Chroma444_GatedByProbedGpuSupport_SnapsBackWithGpuReason) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* chroma = page.findChild<QComboBox*>(QStringLiteral("videoChromaCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(chroma, nullptr);
+
+    auto* model = qobject_cast<QStandardItemModel*>(chroma->model());
+    ASSERT_NE(model, nullptr);
+    const int idx444 = chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
+    ASSERT_GE(idx444, 0);
+    const auto item444 = [&]() { return model->item(idx444); };
+
+    // H.264 8-bit: 4:4:4 selectable under the static rule; select it.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(item444()->isEnabled());
+    chroma->setCurrentIndex(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)));
+    EXPECT_EQ(chroma->currentData().toInt(), static_cast<int>(capability::ChromaSubsampling::Cs444));
+
+    // Probe result: this GPU cannot encode H.264 4:4:4.
+    auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.chroma444[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, "GPU lacks YUV444"};
+    page.setRuntimeCapabilities(caps);
+
+    // Item is disabled, the tooltip names the GPU, and the selection snapped back.
+    EXPECT_FALSE(item444()->isEnabled());
+    EXPECT_TRUE(item444()->toolTip().contains(QStringLiteral("GPU")));
+    EXPECT_EQ(chroma->currentData().toInt(), static_cast<int>(capability::ChromaSubsampling::Cs420));
+}
+
+// A GPU that DOES support 4:4:4 for the current codec keeps the item enabled,
+// exactly as the static rule would.
+TEST_F(ConfigPageTest, Chroma444_EnabledWhenProbedGpuSupportsIt) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* chroma = page.findChild<QComboBox*>(QStringLiteral("videoChromaCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(chroma, nullptr);
+    auto* model = qobject_cast<QStandardItemModel*>(chroma->model());
+    ASSERT_NE(model, nullptr);
+    const int idx444 = chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
+    ASSERT_GE(idx444, 0);
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+
+    // Baseline advertises HEVC 4:4:4 as ValidUnvalidated → IsSelectable → enabled.
+    auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    page.setRuntimeCapabilities(caps);
+    EXPECT_TRUE(model->item(idx444)->isEnabled());
+}
+
+// Before any probe arrives, the gate falls back to the static codec/bit-depth
+// rule unchanged: H.264 8-bit → 4:4:4 selectable.
+TEST_F(ConfigPageTest, Chroma444_StaticRuleAppliesBeforeProbe) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* chroma = page.findChild<QComboBox*>(QStringLiteral("videoChromaCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(chroma, nullptr);
+    auto* model = qobject_cast<QStandardItemModel*>(chroma->model());
+    ASSERT_NE(model, nullptr);
+    const int idx444 = chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
+    ASSERT_GE(idx444, 0);
+
+    // No setRuntimeCapabilities() call — pre-probe behavior.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(model->item(idx444)->isEnabled());
 }
 
 // Colour range: the combo exists with Full / Limited items and defaults to

@@ -37,6 +37,7 @@
 #include <QVBoxLayout>
 
 #include <capability/capability_builder.h>
+#include <capability/support_level.h>
 
 #include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
 #include "../diagnostics/AppLog.h"
@@ -2835,7 +2836,11 @@ void ConfigPage::updateVideoChromaControl() {
     const auto codec = format_settings_.video_codec;
     const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
     const bool eight_bit = format_settings_.bit_depth == capability::BitDepth::Bit8;
-    const bool supports_444 = codec_ok && eight_bit;
+    // Once the async probe has delivered runtime capabilities, consult the ACTIVE
+    // GPU's real per-codec YUV444 support; before that, gpu_ok is true so the
+    // static codec/bit-depth rule stands unchanged (pre-probe behavior).
+    const bool gpu_ok = !runtime_caps_set_ || capability::IsSelectable(runtime_caps_.QueryChroma444(codec));
+    const bool supports_444 = codec_ok && eight_bit && gpu_ok;
     const bool locked = controls_locked_;
 
     // Snap the model back to 4:2:0 when 4:4:4 is no longer valid (mirrors bit depth /
@@ -2844,8 +2849,13 @@ void ConfigPage::updateVideoChromaControl() {
         format_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
     }
 
-    const QString reason = eight_bit ? QStringLiteral("4:4:4 requires H.264 or HEVC")
-                                     : QStringLiteral("4:4:4 requires 8-bit H.264 or HEVC");
+    // Reason string is three-tiered: bit-depth/codec first, then the per-GPU
+    // downgrade when codec+bit-depth are fine but the active GPU can't carry it.
+    QString reason = eight_bit ? QStringLiteral("4:4:4 requires H.264 or HEVC")
+                               : QStringLiteral("4:4:4 requires 8-bit H.264 or HEVC");
+    if (codec_ok && eight_bit && !gpu_ok) {
+        reason = QStringLiteral("4:4:4 is not supported by this GPU");
+    }
 
     // Enable/disable the 4:4:4 item per codec/bit-depth.
     if (auto* model = qobject_cast<QStandardItemModel*>(video_chroma_combo_->model())) {
@@ -3147,12 +3157,13 @@ void ConfigPage::onVideoChromaChanged(int index) {
     if (index < 0 || !video_chroma_combo_)
         return;
     const auto requested = static_cast<capability::ChromaSubsampling>(video_chroma_combo_->itemData(index).toInt());
-    // Guard: 4:4:4 is only honored for 8-bit H.264/HEVC (the disabled item should
-    // prevent this, but keep the model authoritative regardless of how the index
-    // changed).
-    const bool supports_444 = (format_settings_.video_codec == capability::VideoCodec::HevcNvenc ||
-                               format_settings_.video_codec == capability::VideoCodec::H264Nvenc) &&
-                              format_settings_.bit_depth == capability::BitDepth::Bit8;
+    // Guard: 4:4:4 is only honored for 8-bit H.264/HEVC AND (once probed) a GPU
+    // that supports it. The disabled item should prevent this, but keep the model
+    // authoritative regardless of how the index changed. Mirrors updateVideoChromaControl.
+    const auto codec = format_settings_.video_codec;
+    const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+    const bool gpu_ok = !runtime_caps_set_ || capability::IsSelectable(runtime_caps_.QueryChroma444(codec));
+    const bool supports_444 = codec_ok && format_settings_.bit_depth == capability::BitDepth::Bit8 && gpu_ok;
     format_settings_.chroma_subsampling = (requested == capability::ChromaSubsampling::Cs444 && supports_444)
                                               ? capability::ChromaSubsampling::Cs444
                                               : capability::ChromaSubsampling::Cs420;
@@ -5407,6 +5418,14 @@ void ConfigPage::applyVisualPresetSaveError(bool show) {
         visual_preset_error_label_->setVisible(show);
 }
 #endif
+
+void ConfigPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
+    runtime_caps_ = caps;
+    runtime_caps_set_ = true;
+    // Re-evaluate the 4:4:4 gate now that the active GPU's real YUV444 support is
+    // known (may disable + snap back a selection the static rule had allowed).
+    updateVideoChromaControl();
+}
 
 void ConfigPage::setReadinessStatus(const QString& status_label) {
     if (!readiness_badge_label_)

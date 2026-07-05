@@ -1074,6 +1074,8 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
         record_page_->setRuntimeCapabilities(runtime_caps_); // delivers caps to coordinator (A1 gate)
     if (device_page_)
         device_page_->setCapabilitySet(runtime_caps_); // static bit-depth/rate-control facts for the matrix
+    if (config_page_)
+        config_page_->setRuntimeCapabilities(runtime_caps_); // per-GPU 4:4:4 chroma gate
     refreshPresetUi();
     refreshDiagnosticsData();
     startDeviceNotifiers();
@@ -2778,6 +2780,8 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
             dgpu_cap.h264 = true;
             dgpu_cap.hevc = true;
             dgpu_cap.av1 = true;
+            dgpu_cap.yuv444_h264 = true;
+            dgpu_cap.yuv444_hevc = true;
 
             capability::AdapterInfo igpu;
             igpu.name = "UHD Graphics 770";
@@ -4126,6 +4130,12 @@ void MainWindow::buildConfigPage() {
         if (runtime_caps_ready_ && !runtime_caps_.mf_webcam_available)
             setup_panel->setMfUnavailable(true);
     }
+
+    // Deliver probed capabilities to the expert 4:4:4 chroma gate if the async
+    // probe already resolved before this (lazily built) page existed; otherwise
+    // onRuntimeCapsReady() applies them once they arrive.
+    if (runtime_caps_ready_)
+        config_page_->setRuntimeCapabilities(runtime_caps_);
 
     // ---- Notification toasts wiring (moved from initNotificationToasts()) ----
     // initNotificationToasts() runs before buildConfigPage() so config_page_ was null there.

@@ -224,8 +224,8 @@ Expert-mode option available for **H.264 and HEVC at 8-bit** (NVENC High 4:4:4 P
 Range Extensions) on GPUs that report YUV444 encode support; it keeps full colour resolution (sharper
 text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC AV1 is 4:2:0 only),
 **not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
-with an explanatory hint whenever the current codec/bit-depth cannot carry it, and an invalid stored
-selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
+with an explanatory hint whenever the current codec/bit-depth **or the active GPU** cannot carry it,
+and an invalid stored selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
 4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays available** (it shares
 the composited RGB frame with the preview before the AYUV conversion — see the live-preview note in
 Section 7), and **frame snapshots stay available** as in 4:2:0: the CaptureFrame hotkey reads back
