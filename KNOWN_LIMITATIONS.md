@@ -92,10 +92,17 @@ Invalid combinations are not offered.
   setting ("HDR handling") switches to **native HDR10 recording**: PQ/BT.2020,
   P010 10-bit, limited range, with mastering-display metadata written to MKV and
   carried into remuxed MP4. Native HDR10 requires HEVC or AV1; H.264 is blocked
-  by a pre-flight check with a one-click codec fix. Current boundaries: monitor
-  capture only (window capture stays SDR), the in-app recording preview shows an
-  approximate SDR tone-map, no HLG, and HDR metadata is container-level only —
-  no bitstream SEI yet, which some Apple players require.
+  by a pre-flight check with a one-click codec fix. HDR10 static metadata is
+  written **both** at the container level **and in-band in the bitstream** —
+  HEVC Mastering Display Colour Volume (SEI type 137) and Content Light Level
+  Info (SEI type 144) messages, and AV1 HDR MDCV / HDR CLL metadata OBUs —
+  emitted on every keyframe, so players that ignore container-level HDR metadata
+  (notably some Apple players) still receive it. Content-light (MaxCLL/MaxFALL)
+  metadata is only emitted when present; the current native path fills
+  mastering-display data but leaves MaxCLL/MaxFALL absent (no per-frame
+  content-light analysis). Current boundaries: monitor capture only (window
+  capture stays SDR), the in-app recording preview shows an approximate SDR
+  tone-map, and no HLG.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -187,7 +194,9 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - No built-in editor, trimming, or Quick Trim.
 - **HDR10-native recording covers monitor capture only** (expert opt-in;
   tone-mapped SDR is the default for HDR desktops). Window capture remains SDR,
-  and HLG plus bitstream HDR metadata (SEI) are not available.
+  and HLG is not available. Bitstream HDR10 static metadata (HEVC SEI / AV1
+  metadata OBUs) **is** written on every keyframe, in addition to the
+  container-level metadata.
 - No 4:2:2 or 4:4:4 chroma subsampling (4:2:0 only).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
 - Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
@@ -240,6 +249,7 @@ The following are intentionally deferred and are documented here only so the
 current boundary is unambiguous. They are **not** part of 0.7.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
 AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut management
-beyond BT.2020 signaling (native HDR10/PQ has since shipped for monitor capture), HDR for window
-capture, bitstream HDR metadata (SEI), 4:2:2/4:4:4 chroma subsampling, more-than-stereo
+beyond BT.2020 signaling (native HDR10/PQ has since shipped for monitor capture, now with in-band
+HEVC SEI / AV1 metadata OBUs in addition to container-level metadata), HDR for window
+capture, 4:2:2/4:4:4 chroma subsampling, more-than-stereo
 audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).

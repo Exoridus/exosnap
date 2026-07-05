@@ -246,8 +246,12 @@ Behavior:
   fix action ("Switch to AV1" / "Switch to HEVC", availability-aware). It fires only when HDR10 mode
   is selected, the codec cannot carry HDR10, and the display's HDR is currently on; H.264 + SDR
   tone-map is explicitly not a conflict.
-- For native HDR10, the pipeline pins **limited range** and **10-bit**, writes HDR10 container/MP4
-  metadata, and the on-screen monitoring preview is an SDR approximation of the HDR signal.
+- For native HDR10, the pipeline pins **limited range** and **10-bit**, writes HDR10 metadata **both
+  at the container level** (MKV Colour / MasterMetadata, MP4 colr/mdcv on remux) **and in-band in the
+  bitstream** — HEVC Mastering Display Colour Volume (SEI 137) and Content Light Level Info (SEI 144)
+  messages, AV1 HDR MDCV / HDR CLL metadata OBUs, emitted on every keyframe so players that ignore
+  container-level HDR metadata (notably some Apple players) still receive it. The on-screen monitoring
+  preview is an SDR approximation of the HDR signal.
 - SDR overlay sprites (webcam PiP, cursor) are placed at the captured display's Windows SDR-content
   brightness level (`DISPLAYCONFIG_SDR_WHITE_LEVEL`) so the PiP matches SDR windows on the same
   screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
