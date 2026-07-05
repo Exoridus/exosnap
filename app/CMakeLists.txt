@@ -241,6 +241,8 @@ qt_add_executable(exosnap WIN32
     services/RecordingCoordinator.cpp
     services/RecordingCountdownController.h
     services/RecordingCountdownController.cpp
+    services/PageHydrationController.h
+    services/PageHydrationController.cpp
     services/RecoveryService.h
     services/RecoveryService.cpp
     services/CrashIssueReport.h
@@ -651,6 +653,18 @@ exosnap_add_gtest(
         services/RecordingCountdownController.cpp
 )
 target_include_directories(recording_countdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME page_hydration_controller_tests
+    TEST_PREFIX hydration.
+    SOURCES
+        tests/test_page_hydration_controller.cpp
+        services/PageHydrationController.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core
+)
+set_target_properties(page_hydration_controller_tests PROPERTIES AUTOMOC ON)
+target_include_directories(page_hydration_controller_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME region_geometry_tests

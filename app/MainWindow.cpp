@@ -3899,69 +3899,32 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 // ---- Staged post-show page hydration (PERF-B1) ----
 
 void MainWindow::hydrateSecondaryPages() {
-    // Build one deferred page per event-loop tick so the UI can paint and respond
-    // between constructors. Order: ConfigPage first — it is the heaviest and the
-    // most commonly visited item; then DevicePage (construction only — the adapter
-    // scan runs async on its first showEvent), HotkeysPage, DiagnosticsPage,
-    // LogsPage, AboutPage, EditExportOverlay (not a stack page — see
-    // EDIT-OVERLAY-R1), WebcamPage, OutputPage.
+    // Register one deferred page builder per event-loop tick so the UI can paint
+    // and respond between constructors. Order: ConfigPage first — it is the
+    // heaviest and the most commonly visited item; then DevicePage (construction
+    // only — the adapter scan runs async on its first showEvent), HotkeysPage,
+    // DiagnosticsPage, LogsPage, AboutPage, EditExportOverlay (not a stack page —
+    // see EDIT-OVERLAY-R1), WebcamPage, OutputPage.
     // Webcam/Output come last because their fan-out replay depends on stable
     // live_webcam_ and the preset registry, both settled before the ctor exits.
     //
-    // PERF-MEASURE: logPerf brackets every step with a "<name> <elapsed> ms" pair
-    // (same convention as first-paint / preview-live) so a later optimization slice
-    // has a per-page cost baseline (see .workspace/refactor-2.md Phase 1). It is a
-    // stateless lambda (no captures of its own), so copying it into each nested
-    // QTimer::singleShot capture list below is trivial.
-    auto logPerf = [](const QString& name) {
-        diagnostics::AppLog::info(QStringLiteral("perf"),
-                                  QStringLiteral("%1 %2 ms").arg(name).arg(diagnostics::StartupClock().elapsed()));
-    };
+    // PageHydrationController owns the singleShot(0) staging and the "perf"
+    // AppLog milestone bracketing (same "<name> <elapsed> ms" convention as
+    // first-paint / preview-live) so a later optimization slice has a per-page
+    // cost baseline; this method only supplies the ordered list of page builders.
+    std::vector<PageHydrationController::Step> steps;
+    steps.push_back({QStringLiteral("config"), [this] { buildConfigPage(); }});
+    steps.push_back({QStringLiteral("device"), [this] { buildDevicePage(); }});
+    steps.push_back({QStringLiteral("hotkeys"), [this] { buildHotkeysPage(); }});
+    steps.push_back({QStringLiteral("diagnostics"), [this] { buildDiagnosticsPage(); }});
+    steps.push_back({QStringLiteral("logs"), [this] { buildLogsPage(); }});
+    steps.push_back({QStringLiteral("about"), [this] { buildAboutPage(); }});
+    steps.push_back({QStringLiteral("edit-export"), [this] { buildEditExportOverlay(); }});
+    steps.push_back({QStringLiteral("webcam"), [this] { buildWebcamPage(); }});
+    steps.push_back({QStringLiteral("output"), [this] { buildOutputPage(); }});
 
-    logPerf(QStringLiteral("hydrate-config-start"));
-    buildConfigPage();
-    logPerf(QStringLiteral("hydrate-config-end"));
-    QTimer::singleShot(0, this, [this, logPerf]() {
-        logPerf(QStringLiteral("hydrate-page-start:device"));
-        buildDevicePage();
-        logPerf(QStringLiteral("hydrate-page-end:device"));
-        QTimer::singleShot(0, this, [this, logPerf]() {
-            logPerf(QStringLiteral("hydrate-page-start:hotkeys"));
-            buildHotkeysPage();
-            logPerf(QStringLiteral("hydrate-page-end:hotkeys"));
-            QTimer::singleShot(0, this, [this, logPerf]() {
-                logPerf(QStringLiteral("hydrate-page-start:diagnostics"));
-                buildDiagnosticsPage();
-                logPerf(QStringLiteral("hydrate-page-end:diagnostics"));
-                QTimer::singleShot(0, this, [this, logPerf]() {
-                    logPerf(QStringLiteral("hydrate-page-start:logs"));
-                    buildLogsPage();
-                    logPerf(QStringLiteral("hydrate-page-end:logs"));
-                    QTimer::singleShot(0, this, [this, logPerf]() {
-                        logPerf(QStringLiteral("hydrate-page-start:about"));
-                        buildAboutPage();
-                        logPerf(QStringLiteral("hydrate-page-end:about"));
-                        QTimer::singleShot(0, this, [this, logPerf]() {
-                            logPerf(QStringLiteral("hydrate-page-start:edit-export"));
-                            buildEditExportOverlay();
-                            logPerf(QStringLiteral("hydrate-page-end:edit-export"));
-                            QTimer::singleShot(0, this, [this, logPerf]() {
-                                logPerf(QStringLiteral("hydrate-page-start:webcam"));
-                                buildWebcamPage();
-                                logPerf(QStringLiteral("hydrate-page-end:webcam"));
-                                QTimer::singleShot(0, this, [this, logPerf]() {
-                                    logPerf(QStringLiteral("hydrate-page-start:output"));
-                                    buildOutputPage();
-                                    logPerf(QStringLiteral("hydrate-page-end:output"));
-                                    logPerf(QStringLiteral("hydrate-all-end"));
-                                });
-                            });
-                        });
-                    });
-                });
-            });
-        });
-    });
+    page_hydration_controller_ = new PageHydrationController(std::move(steps), this);
+    page_hydration_controller_->start();
 }
 
 void MainWindow::buildConfigPage() {

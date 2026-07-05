@@ -21,6 +21,7 @@
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
 #include "services/GlobalHotkeyService.h"
+#include "services/PageHydrationController.h"
 #include "services/RecoveryService.h"
 #include "services/WebcamDeviceNotifier.h"
 #include "settings/AppSettingsStore.h"
@@ -391,6 +392,10 @@ class MainWindow : public QMainWindow {
     // Rebindable global hotkey service. Owns binding model + Win32 registration.
     GlobalHotkeyService* hotkey_service_ = nullptr;
     std::unique_ptr<IHotkeyRegistrar> win32_hotkey_registrar_;
+
+    // Owns the staged post-first-paint hydration of the secondary pages (see
+    // hydrateSecondaryPages()). Parented to `this`, so Qt handles its lifetime.
+    PageHydrationController* page_hydration_controller_ = nullptr;
 
     bool recording_active_ = false;
     // ADR-0014: true while the MP4 remux job is running after the engine stopped.
