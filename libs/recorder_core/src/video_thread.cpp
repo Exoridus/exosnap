@@ -7,6 +7,7 @@
 #include "gpu_compositor.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_hdr_tonemap.h"
+#include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
 
@@ -633,6 +634,7 @@ void VideoThread::Run() {
     {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetBitDepth(m_state.config.bit_depth);
+        nvenc.SetChroma(m_state.config.chroma);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
         nvenc.SetPreset(m_state.config.nvenc_preset);
@@ -668,7 +670,31 @@ void VideoThread::Run() {
     // reference texture use DXGI_FORMAT_P010. The output color space stays studio
     // BT.709 (no HDR/BT.2020 here — that is a later slice).
     const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
-    const DXGI_FORMAT encodeFormat = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+
+    // Expert 4:4:4 (8-bit H.264/HEVC): the VideoProcessor cannot emit 4:4:4, so it
+    // performs geometry (crop/scale/letterbox) into a full-range BGRA intermediate,
+    // and a compute shader converts that into the packed AYUV surface NVENC
+    // consumes (NV_ENC_BUFFER_FORMAT_AYUV). The 4:2:0 path is untouched. 4:4:4 is
+    // 8-bit only and mutually exclusive with 10-bit / native HDR (blocked upstream).
+    const bool chroma444 = (m_state.config.chroma == ChromaSubsampling::Cs444);
+    // Encode texture registered with NVENC: NV12/P010 for 4:2:0, AYUV for 4:4:4.
+    const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
+
+    // 4:4:4: the VideoProcessor output is a separate BGRA intermediate (RGB, geometry
+    // only); the shader then writes AYUV into the encode textures. RgbToAyuvConverter
+    // carries the BT.709 + range conversion the VideoProcessor does for 4:2:0.
+    winrt::com_ptr<ID3D11Texture2D> vpRgbTextures[8];
+    RgbToAyuvConverter rgbToAyuv;
+    if (chroma444) {
+        const bool fullRange = m_state.config.color.range != ColorRange::Limited;
+        std::string ayuvErr;
+        if (!rgbToAyuv.Init(d3dDevice.get(), d3dContext.get(), encodeWidth, encodeHeight, fullRange, ayuvErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "RGB->AYUV shader init: " + ayuvErr);
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+    }
 
     // HDR->SDR tone-map intermediate depth follows the encode target: a 10-bit
     // encode (P010) tone-maps into R10G10B10A2 so the extra depth survives the
@@ -728,34 +754,60 @@ void VideoThread::Run() {
             return;
         }
 
-        // Create NV12 textures and output views for each slot
+        // Create the encode textures + VideoProcessor output views for each slot.
+        // 4:2:0: the VP output view targets the NV12/P010 encode texture directly.
+        // 4:4:4: the VP output view targets a BGRA intermediate (geometry only); the
+        //        shader converts it into the AYUV encode texture registered below.
         for (int32_t i = 0; i < kSlotCount; ++i) {
             D3D11_TEXTURE2D_DESC desc{};
             desc.Width = encodeWidth;
             desc.Height = encodeHeight;
             desc.MipLevels = 1;
             desc.ArraySize = 1;
-            desc.Format = encodeFormat; // NV12 (8-bit) or P010 (10-bit)
+            desc.Format = encodeFormat; // NV12 (8-bit) / P010 (10-bit) / AYUV (4:4:4)
             desc.SampleDesc = {1, 0};
             desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            // AYUV encode textures are written by the compute shader (UAV) and copied
+            // for frame duplication; NV12/P010 are VideoProcessorBlt render targets.
+            desc.BindFlags = chroma444 ? D3D11_BIND_UNORDERED_ACCESS : D3D11_BIND_RENDER_TARGET;
 
             hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
             if (FAILED(hr)) {
                 char buf[96];
-                snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX", tenBit ? "P010" : "NV12",
-                         static_cast<int>(i), static_cast<unsigned long>(hr));
+                snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX",
+                         chroma444 ? "AYUV" : (tenBit ? "P010" : "NV12"), static_cast<int>(i),
+                         static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
                 if (com_inited)
                     CoUninitialize();
                 return;
             }
 
+            // The VideoProcessor output view target: BGRA intermediate for 4:4:4,
+            // else the encode texture itself.
+            ID3D11Texture2D* vpOutTex = nv12Textures[i].get();
+            if (chroma444) {
+                D3D11_TEXTURE2D_DESC rgbDesc = desc;
+                rgbDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                rgbDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                hr = d3dDevice->CreateTexture2D(&rgbDesc, nullptr, vpRgbTextures[i].put());
+                if (FAILED(hr)) {
+                    char buf[96];
+                    snprintf(buf, sizeof(buf), "CreateTexture2D(vpRgb[%d]) failed 0x%08lX", static_cast<int>(i),
+                             static_cast<unsigned long>(hr));
+                    m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
+                    if (com_inited)
+                        CoUninitialize();
+                    return;
+                }
+                vpOutTex = vpRgbTextures[i].get();
+            }
+
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovDesc{};
             ovDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
             ovDesc.Texture2D.MipSlice = 0;
 
-            hr = videoDevice->CreateVideoProcessorOutputView(nv12Textures[i].get(), videoEnum.get(), &ovDesc,
+            hr = videoDevice->CreateVideoProcessorOutputView(vpOutTex, videoEnum.get(), &ovDesc,
                                                              videoOutputViews[i].put());
             if (FAILED(hr)) {
                 char buf[80];
@@ -801,7 +853,24 @@ void VideoThread::Run() {
         // is read from the live config, not hardcoded, so it always follows
         // the current default/selection automatically.
         const bool fullRange = m_state.config.color.range != ColorRange::Limited;
-        if (videoContext1) {
+        if (chroma444) {
+            // 4:4:4: the VideoProcessor does geometry only, emitting full-range BGRA
+            // (no chroma subsampling); the RGB->AYUV shader applies BT.709 + the
+            // selected quantization range. Input and output are both full-range RGB.
+            if (videoContext1) {
+                videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
+                                                                  DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
+                                                                  DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            } else {
+                D3D11_VIDEO_PROCESSOR_COLOR_SPACE rgbColorSpace{};
+                rgbColorSpace.Usage = 0;
+                rgbColorSpace.RGB_Range = 0; // full-range RGB (0-255)
+                rgbColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+                videoContext->VideoProcessorSetStreamColorSpace(videoProcessor.get(), 0, &rgbColorSpace);
+                videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &rgbColorSpace);
+            }
+        } else if (videoContext1) {
             // Preferred path: explicit DXGI colour spaces. Input is the desktop's
             // full-range BT.709 RGB; output is BT.709 YUV in the selected range.
             // Drivers honour the quantization range here, so the encoded NV12/P010
@@ -1732,6 +1801,17 @@ void VideoThread::Run() {
     // this single arming point; manual implicitly resets the auto interval because
     // the threshold is recomputed off the new segment start when the boundary
     // actually lands (in routePacket).
+    // 4:4:4: after the VideoProcessorBlt produced the geometry-corrected BGRA
+    // intermediate for `slot`, convert it into the AYUV encode texture the encoder
+    // registered. No-op (returns true) for the 4:2:0 path, which keeps writing the
+    // NV12/P010 texture directly. Called right after each successful Blt, before the
+    // reference-save and encode.
+    auto finalizeEncodeSurface = [&](int32_t slot, std::string& err) -> bool {
+        if (!chroma444)
+            return true;
+        return rgbToAyuv.Convert(vpRgbTextures[slot].get(), nv12Textures[slot].get(), err);
+    };
+
     auto maybeArmSplit = [&](uint64_t pts_ns) {
         if (split_armed)
             return; // a boundary is already pending; coalesce further requests
@@ -2529,21 +2609,30 @@ void VideoThread::Run() {
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
                         inputView = nullptr;
 
+                        std::string ayuvErr;
+                        if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                            goto end_encode_loop;
+                        }
                         if (SUCCEEDED(hr)) {
-                            // Save NV12 as reference for future duplicate frames
+                            // Save the encode surface as reference for future duplicate frames
                             if (refNv12 != nullptr) {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
                             }
-                            // Capture frame snapshot on real (non-duplicate) frames.
-                            performSnapshotIfRequested(slot);
-                            // Live preview tap on real (non-duplicate) frames (throttled internally).
-                            publishPreviewIfDue(slot, pts_ns);
+                            // Snapshot/preview decode assumes NV12/P010; the 4:4:4 (AYUV)
+                            // surface would be misread, so tap only on the 4:2:0 path.
+                            if (!chroma444) {
+                                // Capture frame snapshot on real (non-duplicate) frames.
+                                performSnapshotIfRequested(slot);
+                                // Live preview tap on real (non-duplicate) frames (throttled internally).
+                                publishPreviewIfDue(slot, pts_ns);
+                            }
                             frameWritten = true;
                         }
                     }
                 } else if (refNv12Valid) {
-                    // Duplicate: copy reference NV12 into this slot
+                    // Duplicate: copy the reference encode surface into this slot
                     d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
                     frameWritten = true;
                     ++duplicatedFrames;
@@ -2871,11 +2960,20 @@ void VideoThread::Run() {
                         inputView = nullptr;
                         latestTex = nullptr;
 
+                        std::string ayuvErr;
+                        if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                            goto end_encode_loop;
+                        }
                         if (SUCCEEDED(hr)) {
-                            // Capture frame snapshot on real frames (VFR path).
-                            performSnapshotIfRequested(slot);
-                            // Live preview tap on real frames (VFR path; throttled internally).
-                            publishPreviewIfDue(slot, framePts_ns);
+                            // Snapshot/preview decode assumes NV12/P010; skip on the
+                            // 4:4:4 (AYUV) path (see CFR path).
+                            if (!chroma444) {
+                                // Capture frame snapshot on real frames (VFR path).
+                                performSnapshotIfRequested(slot);
+                                // Live preview tap on real frames (VFR path; throttled internally).
+                                publishPreviewIfDue(slot, framePts_ns);
+                            }
 
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);
