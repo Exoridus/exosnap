@@ -56,6 +56,13 @@ struct PushedSourceState {
     [[nodiscard]] bool ShouldStopWgcGraph() const noexcept {
         return active && !wgc_stopped;
     }
+    // When recording ends the preview reverts to its own WGC capture. The graph must
+    // be rebuilt only if it was actually torn down when pushed mode began. If the
+    // shared handle never opened (e.g. cross-GPU OpenSharedResource1 failure) the WGC
+    // graph was never stopped and is still running — there is nothing to rebuild.
+    [[nodiscard]] bool NeedsWgcRebuildOnRevert() const noexcept {
+        return wgc_stopped;
+    }
 };
 
 } // namespace exosnap

@@ -57,8 +57,13 @@ preview through a GPU texture, and the preview **stops its own capture**.
   to the renderer. The render thread then opens it, **closes the preview's WGC
   capture graph** (device/swap chain stay alive), and renders the engine frames.
   Until the first pushed frame arrives the preview **holds its last WGC image** (no
-  black flash on countdown). On stop the renderer is torn down and the normal WGC
-  preview restarts via the existing `startPreviewIfIdle` machinery.
+  black flash on countdown). On stop the renderer **reverts in place**: `EndPushedSource`
+  signals the render thread to release the shared resources and **rebuild its own WGC
+  capture graph** (still no device/swap-chain teardown — the exact inverse of the
+  switch-in). The render loop stays alive throughout, so the revert must be driven
+  from inside it; a caller-side teardown alone would leave the preview frozen on the
+  engine's last frame. `startPreviewIfIdle` then no-ops via its idempotency guard
+  unless the selected target actually changed.
 
 ## Consequences
 
@@ -67,8 +72,11 @@ preview through a GPU texture, and the preview **stops its own capture**.
 - WYSIWYG preview during **4:4:4** recording is restored (previously disabled).
 - **Native HDR10** preview stays approximate (independent capture); documented.
 - **Cross-GPU** handle sharing is unsupported: if the preview and engine devices
-  resolve to different adapters, `OpenSharedResource1` fails and the preview holds
-  its last live image. Recording is unaffected.
+  resolve to different adapters, `OpenSharedResource1` fails. Because the preview's
+  own WGC capture is stopped only after a successful open, on failure it was never
+  stopped — the preview simply stays fully live on its own capture. Recording is
+  unaffected. The revert path likewise skips the WGC rebuild in that case (there is
+  nothing to rebuild).
 - The old CPU/NV12 `PreviewFrameCallback` + staging-ring path is removed. The
   frame-snapshot feature keeps its own NV12/P010 readback (yuv_to_bgra), which is
   why single-frame snapshots remain unavailable on the 4:4:4 (AYUV) path.

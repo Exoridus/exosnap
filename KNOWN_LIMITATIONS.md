@@ -210,8 +210,9 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   reflects the actual encoded content. **Native HDR10 is the exception** — the
   preview keeps its own capture and shows an approximate SDR tone-map there (see
   the HDR section above). Cross-GPU handle sharing is not supported: if the
-  preview and engine devices resolve to different adapters the pushed frame cannot
-  open and the preview holds its last live image (recording is unaffected).
+  preview and engine devices resolve to different adapters the shared frame cannot
+  be opened, so the preview never switches sources and simply keeps running its own
+  live WGC capture (recording is unaffected).
 - Update checking is **notify-only**: the official build checks GitHub Releases and points you to
   the releases page. There is no in-place download, no auto-install, and no silent restart (see the
   Crash reporting and updates section below).

@@ -75,9 +75,12 @@ class DxgiPreviewRenderer {
     // the render thread (no D3D on the caller's thread). Until the first shared
     // frame arrives the preview holds its last WGC image (no black flash).
     void BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
-    // Revert to the normal WGC preview path and drain any un-opened handle. In this
-    // app the renderer is torn down + recreated on stop, so this mainly guards the
-    // handle lifetime; safe to call when not in pushed mode.
+    // Revert to the normal WGC preview path. Signals the render thread to release the
+    // engine's shared resources and rebuild its OWN WGC capture graph IN PLACE — the
+    // D3D device, swap chain and shaders stay alive, so there is no teardown and no
+    // black flash (BeginPushedSource's exact inverse). Also drains any handle that was
+    // signalled but never opened. May be called from any thread; safe to call when
+    // not in pushed mode (a no-op there). The revert itself runs on the render thread.
     void EndPushedSource();
 
   private:
@@ -99,6 +102,11 @@ class DxgiPreviewRenderer {
     // Adopt a pending pushed-source handle: open it on the render device, allocate
     // the private copy target, and activate pushed rendering. Render-thread only.
     void AdoptPendingPushedSource();
+    // Return the preview to its own WGC capture after recording stops: release the
+    // engine's shared resources and rebuild the WGC capture graph in place (no
+    // device/swap-chain teardown). The inverse of AdoptPendingPushedSource +
+    // StopCaptureGraph. Render-thread only.
+    void RevertToWgcCapture(const recorder_core::CaptureTarget& target);
     // Non-blocking: acquire the shared keyed mutex, copy the latest engine frame
     // into the private local texture, release. Render-thread only.
     void ConsumePushedFrame();
@@ -184,6 +192,10 @@ class DxgiPreviewRenderer {
     std::atomic<uint32_t> pushedPendingWidth_{0};
     std::atomic<uint32_t> pushedPendingHeight_{0};
     std::atomic<bool> pushedRequested_{false};
+    // Set by EndPushedSource (any thread); consumed by the render thread, which then
+    // reverts to its own WGC capture. A fresh BeginPushedSource clears it so a pending
+    // revert never cancels a new recording's handoff.
+    std::atomic<bool> pushedEndRequested_{false};
     // Render-thread-owned (no lock; only touched on the render thread).
     Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedSharedTex_;         // opened shared surface
     Microsoft::WRL::ComPtr<IDXGIKeyedMutex> pushedMutex_;             // keyed mutex on the shared surface

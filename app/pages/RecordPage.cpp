@@ -57,6 +57,7 @@
 
 #include <exception>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -73,6 +74,25 @@
 
 namespace exosnap {
 namespace {
+
+// RAII owner for a preview-shared NT handle in flight to the UI thread. The
+// shared-handle callback queues a lambda that either hands the handle to the
+// renderer (which then owns + closes it) or, if no DXGI preview is active, closes
+// it itself. If the queued lambda is dropped before it runs (the target QObject is
+// destroyed first), this destructor closes the handle so it never leaks. Handing
+// the handle on is a "claim": the lambda nulls `handle` first so the destructor
+// does not double-close it.
+struct QueuedSharedHandle {
+    void* handle = nullptr;
+    explicit QueuedSharedHandle(void* h) noexcept : handle(h) {
+    }
+    ~QueuedSharedHandle() {
+        if (handle != nullptr)
+            CloseHandle(static_cast<HANDLE>(handle));
+    }
+    QueuedSharedHandle(const QueuedSharedHandle&) = delete;
+    QueuedSharedHandle& operator=(const QueuedSharedHandle&) = delete;
+};
 
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
@@ -2309,13 +2329,24 @@ void RecordPage::initCoordinator() {
     coordinator_->SetPreviewSharedHandleReadyCallback([safeSurface](void* nt_handle, uint32_t w, uint32_t h) {
         QPointer<ui::widgets::PreviewSurface> surface = safeSurface;
         QObject* context = surface ? static_cast<QObject*>(surface.data()) : static_cast<QObject*>(qApp);
+        // Self-closing handle owner: if the queued lambda is ever dropped (the target
+        // QObject is destroyed before delivery) the owner's destructor closes the NT
+        // handle, so it never leaks. When the lambda runs and hands the handle to the
+        // renderer it "claims" the handle (nulls the owner) first, so the destructor
+        // does not double-close what the renderer now owns.
+        auto handle_owner = std::make_shared<QueuedSharedHandle>(nt_handle);
         QMetaObject::invokeMethod(
             context,
-            [surface, nt_handle, w, h]() {
-                if (surface && surface->isDxgiPreviewActive())
-                    surface->beginPushedSource(nt_handle, w, h);
-                else if (nt_handle != nullptr)
-                    CloseHandle(static_cast<HANDLE>(nt_handle));
+            [surface, handle_owner, w, h]() {
+                void* raw = handle_owner->handle;
+                if (raw == nullptr)
+                    return;
+                if (surface && surface->isDxgiPreviewActive()) {
+                    handle_owner->handle = nullptr; // claim: renderer now owns + closes it
+                    surface->beginPushedSource(raw, w, h);
+                }
+                // Otherwise the owner's destructor closes the handle when this lambda
+                // returns (no active preview to hand it to).
             },
             Qt::QueuedConnection);
     });
@@ -2373,9 +2404,13 @@ void RecordPage::initCoordinator() {
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("recording paused"));
         else if (state == UiRecordingState::Stopping)
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("stopping"));
-        else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed) {
-            // Leave pushed mode before startPreviewIfIdle tears the renderer down and
-            // restarts the preview's own WGC capture.
+        else if (ShouldRevertPreviewFromPushedMode(state)) {
+            // Ready / Completed / Failed: leave pushed mode so the preview returns to
+            // its own live WGC capture. endPushedSource signals the renderer to revert
+            // IN PLACE (rebuilds its WGC graph); a failed recording must revert too or
+            // the preview stays frozen on the engine's last frame behind the error
+            // state. startPreviewIfIdle then no-ops via its idempotency guard unless
+            // the target actually changed.
             if (preview_surface_)
                 preview_surface_->endPushedSource();
             startPreviewIfIdle();

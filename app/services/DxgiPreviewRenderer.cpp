@@ -239,6 +239,8 @@ void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uin
     // thread reads the handle with acquire ordering and then the dimensions.
     pushedPendingWidth_.store(width, std::memory_order_relaxed);
     pushedPendingHeight_.store(height, std::memory_order_relaxed);
+    // A fresh handoff cancels any pending revert from the previous recording.
+    pushedEndRequested_.store(false, std::memory_order_release);
     // If a prior pending handle was never adopted, close it before overwriting.
     void* prior = pushedPendingHandle_.exchange(nt_handle, std::memory_order_acq_rel);
     if (prior != nullptr && prior != nt_handle)
@@ -249,11 +251,15 @@ void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uin
 void DxgiPreviewRenderer::EndPushedSource() {
     pushedRequested_.store(false, std::memory_order_release);
     // Drain a pending handle that the render thread never adopted (e.g. recording
-    // ended before the first engine frame). The render thread releases the opened
-    // resources itself via ReleasePushedResources on teardown.
+    // ended before the first engine frame).
     void* stale = pushedPendingHandle_.exchange(nullptr, std::memory_order_acq_rel);
     if (stale != nullptr)
         CloseHandle(static_cast<HANDLE>(stale));
+    // Signal the render thread to leave pushed mode and rebuild its own WGC capture
+    // in place. This is what actually un-freezes the preview after recording: the
+    // render loop stays alive in pushed mode, so a caller-side teardown alone would
+    // never restart the WGC graph.
+    pushedEndRequested_.store(true, std::memory_order_release);
 }
 
 void DxgiPreviewRenderer::StopCaptureGraph() {
@@ -289,15 +295,28 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
     // Opening a new handle supersedes any previously opened one (session restart).
     ReleasePushedResources();
 
+    // Track the actual failing stage + HRESULT so the log points at the real cause
+    // (opening the shared handle vs. creating the local texture/SRV), not always at
+    // OpenSharedResource1.
     bool opened = false;
+    HRESULT failHr = E_FAIL;
+    const char* failStage = "device-query";
     Microsoft::WRL::ComPtr<ID3D11Device1> dev1;
-    if (d3dDevice_ && SUCCEEDED(d3dDevice_->QueryInterface(IID_PPV_ARGS(dev1.GetAddressOf())))) {
+    HRESULT devHr = d3dDevice_ ? d3dDevice_->QueryInterface(IID_PPV_ARGS(dev1.GetAddressOf())) : E_POINTER;
+    if (SUCCEEDED(devHr) && dev1) {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTex;
         HRESULT openHr =
             dev1->OpenSharedResource1(static_cast<HANDLE>(pending), IID_PPV_ARGS(sharedTex.GetAddressOf()));
-        if (SUCCEEDED(openHr) && sharedTex) {
+        if (FAILED(openHr) || !sharedTex) {
+            failStage = "OpenSharedResource1";
+            failHr = FAILED(openHr) ? openHr : E_POINTER;
+        } else {
             Microsoft::WRL::ComPtr<IDXGIKeyedMutex> km;
-            if (SUCCEEDED(sharedTex->QueryInterface(IID_PPV_ARGS(km.GetAddressOf())))) {
+            HRESULT kmHr = sharedTex->QueryInterface(IID_PPV_ARGS(km.GetAddressOf()));
+            if (FAILED(kmHr)) {
+                failStage = "keyed-mutex-query";
+                failHr = kmHr;
+            } else {
                 D3D11_TEXTURE2D_DESC td{};
                 sharedTex->GetDesc(&td);
                 // Private copy target (default usage, shader-readable) so the
@@ -308,13 +327,21 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
                 ld.Usage = D3D11_USAGE_DEFAULT;
                 ld.BindFlags = D3D11_BIND_SHADER_RESOURCE;
                 Microsoft::WRL::ComPtr<ID3D11Texture2D> localTex;
-                if (SUCCEEDED(d3dDevice_->CreateTexture2D(&ld, nullptr, localTex.GetAddressOf()))) {
+                HRESULT texHr = d3dDevice_->CreateTexture2D(&ld, nullptr, localTex.GetAddressOf());
+                if (FAILED(texHr)) {
+                    failStage = "local-texture";
+                    failHr = texHr;
+                } else {
                     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
                     srvDesc.Format = td.Format;
                     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                     srvDesc.Texture2D.MipLevels = 1;
                     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
-                    if (SUCCEEDED(d3dDevice_->CreateShaderResourceView(localTex.Get(), &srvDesc, srv.GetAddressOf()))) {
+                    HRESULT srvHr = d3dDevice_->CreateShaderResourceView(localTex.Get(), &srvDesc, srv.GetAddressOf());
+                    if (FAILED(srvHr)) {
+                        failStage = "local-srv";
+                        failHr = srvHr;
+                    } else {
                         pushedSharedTex_ = sharedTex;
                         pushedMutex_ = km;
                         pushedLocalTex_ = localTex;
@@ -330,15 +357,51 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
                 }
             }
         }
-        if (!opened) {
-            diagnostics::AppLog::warning(
-                QStringLiteral("dxgi-preview"),
-                QStringLiteral("pushed source: OpenSharedResource1 failed 0x%1 (adapter mismatch or cross-GPU?)")
-                    .arg(static_cast<unsigned long>(openHr), 8, 16, QChar('0')));
-        }
+    } else {
+        failStage = "device-query";
+        failHr = devHr;
+    }
+    if (!opened) {
+        // The adapter-mismatch hint only applies to the handle-open stage; a
+        // texture/SRV failure is a local allocation problem, not a cross-GPU one.
+        const QString hint = (std::strcmp(failStage, "OpenSharedResource1") == 0)
+                                 ? QStringLiteral(" (adapter mismatch or cross-GPU?)")
+                                 : QString{};
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("pushed source: %1 failed 0x%2%3")
+                                         .arg(QLatin1String(failStage))
+                                         .arg(static_cast<unsigned long>(failHr), 8, 16, QChar('0'))
+                                         .arg(hint));
     }
     // Ownership was handed to this thread; always close the NT handle.
     CloseHandle(static_cast<HANDLE>(pending));
+}
+
+void DxgiPreviewRenderer::RevertToWgcCapture(const recorder_core::CaptureTarget& target) {
+    // Symmetric inverse of AdoptPendingPushedSource + StopCaptureGraph: after
+    // recording stops, drop the engine's shared resources and bring the preview's
+    // OWN WGC capture back — in place, without tearing down the D3D device/swap
+    // chain (no black flash). Render-thread only.
+    const bool needsWgcRebuild = pushed_.NeedsWgcRebuildOnRevert();
+    ReleasePushedResources(); // releases shared/local textures and resets pushed_
+
+    if (!needsWgcRebuild)
+        return; // pushed mode never stopped the WGC graph (e.g. open failed) — it is
+                // still running, so there is nothing to rebuild.
+
+    // The WGC graph was closed when pushed mode began; rebuild it. latestFrame_ still
+    // holds the last WGC image, so the preview shows that until the first fresh WGC
+    // frame lands (no black flash). Clear the stale source-lost flag first so the
+    // render loop keeps running against the rebuilt graph.
+    sourceLost_.store(false);
+    if (!InitCaptureItem(target) || !InitFramePool()) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("dxgi-preview"),
+            QStringLiteral("pushed revert: WGC capture rebuild failed; preview holds last frame"));
+    } else {
+        diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
+                                   QStringLiteral("pushed revert: WGC capture rebuilt in place"));
+    }
 }
 
 void DxgiPreviewRenderer::ConsumePushedFrame() {
@@ -1006,6 +1069,13 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
             uint32_t rh = requestedHeight_.load();
             ResizeSwapChainInternal(rw, rh);
             resizeRequested_.store(false);
+        }
+
+        // Recording stopped: leave pushed mode and rebuild the preview's own WGC
+        // capture in place. Handled before the begin-request so a stale revert never
+        // runs after a fresh handoff (BeginPushedSource clears the end flag anyway).
+        if (pushedEndRequested_.exchange(false, std::memory_order_acq_rel)) {
+            RevertToWgcCapture(target);
         }
 
         if (pushedRequested_.load(std::memory_order_acquire)) {
