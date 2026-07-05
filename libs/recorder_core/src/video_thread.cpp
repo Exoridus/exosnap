@@ -205,6 +205,28 @@ int ScaleCoordinateToSource(LONG screen_delta, int source_pixels, int bounds_pix
     return static_cast<int>(rounded / bounds_pixels);
 }
 
+// A 10-bit R10G10B10A2 tone-map intermediate must be a supported VideoProcessor
+// *input* on this driver, or every CreateVideoProcessorInputView call for it
+// would fail per tick with no recorded failure — silent frame starvation. This
+// demotes to BGRA8 (with a WARN log) when the check fails, and is a no-op for
+// any other format. Shared by the OD first-frame negotiation and the WGC HDR
+// tone-map init, since both choose the same toneMapIntermediateFormat and are
+// exposed to the same driver limitation.
+DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerator* video_enum,
+                                                    DXGI_FORMAT tone_map_intermediate_format) {
+    if (tone_map_intermediate_format != DXGI_FORMAT_R10G10B10A2_UNORM)
+        return tone_map_intermediate_format;
+    UINT support = 0;
+    const HRESULT hr = video_enum->CheckVideoProcessorFormat(tone_map_intermediate_format, &support);
+    if (SUCCEEDED(hr) && (support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) != 0)
+        return tone_map_intermediate_format;
+    logging::log(logging::LogLevel::Warn, "video_thread",
+                 "10-bit tone-map intermediate (R10G10B10A2) is not a supported VideoProcessor input on "
+                 "this driver; falling back to BGRA8 (8-bit tone-map precision)",
+                 {});
+    return DXGI_FORMAT_B8G8R8A8_UNORM;
+}
+
 } // namespace
 
 VideoThread::VideoThread(SessionState& state) : m_state(state) {
@@ -380,6 +402,15 @@ void VideoThread::Run() {
     DxgiOdCaptureSrc odSrc;
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
 
+    // WGC (window) path: HDR facts of the window's hosting monitor, resolved once
+    // at session start via MonitorFromWindow. A mid-session move to another monitor
+    // keeps this initial decision (documented limitation). Unused on the OD path,
+    // which reads its facts from odSrc.DisplayFacts() instead.
+    HdrDisplayFacts wgcHdrFacts;
+    // WGC frame-pool format + capture mode. Defaults keep the historic BGRA8 / SDR
+    // window path; recomputed from wgcHdrFacts below when the target is a window.
+    WgcCapturePlan wgcPlan;
+
     // scRGB->SDR tone-map knee, in reference-white multiples. Only an actively-
     // HDR display's reported peak is trusted; otherwise the documented fallback
     // is used (an SDR-mode display still reports inflated EDID luminance caps).
@@ -416,6 +447,31 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
+
+        // Resolve the hosting monitor's HDR facts once, then decide the frame-pool
+        // format + capture mode the same way the OD path does for a monitor. On an
+        // HDR desktop this negotiates an FP16 pool so the real scRGB signal reaches
+        // the shared tone-map / native-HDR10 machinery instead of DWM's SDR
+        // tone-map; on an SDR desktop the plan stays BGRA8 / SDR (unchanged).
+        const HMONITOR wgcMonitor =
+            MonitorFromWindow(reinterpret_cast<HWND>(target.native_id), MONITOR_DEFAULTTONEAREST);
+        QueryDisplayHdrFacts(wgcMonitor, wgcHdrFacts);
+        wgcPlan = ResolveWgcCapturePlan(wgcHdrFacts.hdr_active, m_state.config.hdr_mode,
+                                        CodecSupportsHdr10Native(m_state.config.video_codec));
+        hdrPeakScale = HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits);
+        expectNativeHdr =
+            IsHdr10NativeEffective(m_state.config.hdr_mode, wgcHdrFacts.hdr_active, m_state.config.video_codec);
+
+        char wgcFmtBuf[32];
+        const logging::LogField wgcFields[] = {
+            {"hdr_active", BoolText(wgcHdrFacts.hdr_active)},
+            {"framePoolFormat", OdCaptureFormatName(wgcPlan.frame_pool_format, wgcFmtBuf, sizeof(wgcFmtBuf))},
+            {"handling",
+             wgcPlan.mode == OdCaptureMode::HdrNative
+                 ? "native HDR10 PQ/BT.2020 -> P010"
+                 : (wgcPlan.mode == OdCaptureMode::HdrToneMap ? "HDR scRGB -> SDR BT.709 tone-map" : "SDR")}};
+        logging::log(logging::LogLevel::Info, "video_thread", "WGC capture plan resolved",
+                     std::span<const logging::LogField>(wgcFields, std::size(wgcFields)));
     }
 
     // Capture dimensions
@@ -823,6 +879,16 @@ void VideoThread::Run() {
     DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     HdrPqConverter hdrPqConverter;
 
+    // WGC (window) path decides its HDR handling up front from wgcPlan (the frame
+    // pool format is *requested*, not negotiated from frames). A WGC FP16 pool is
+    // always scRGB linear — never an already-PQ desktop — so hdrPqInputIsPq stays
+    // false and hdrPqSrcFormat stays FP16 (the defaults above). The OD path leaves
+    // these untouched here and sets them during first-frame negotiation instead.
+    if (!useOdCapture) {
+        hdrToneMapActive = (wgcPlan.mode == OdCaptureMode::HdrToneMap);
+        hdrNativeActive = (wgcPlan.mode == OdCaptureMode::HdrNative);
+    }
+
     bool odCursorShapeValid = false;
     bool odCursorVisible = false;
     int32_t odCursorPosX = 0;
@@ -976,14 +1042,10 @@ void VideoThread::Run() {
             // Graceful fallback: a driver that rejects the 10-bit R10G10B10A2
             // tone-map intermediate as a VP input keeps recording at BGRA8 (the
             // historic default, universally supported) rather than failing.
-            if (toneMap && vpInputFormat == DXGI_FORMAT_R10G10B10A2_UNORM &&
-                !vpInputSupported(vpInputFormat, supHr, formatSupport)) {
-                logging::log(logging::LogLevel::Warn, "video_thread",
-                             "10-bit tone-map intermediate (R10G10B10A2) is not a supported VideoProcessor input on "
-                             "this driver; falling back to BGRA8 (8-bit tone-map precision)",
-                             {});
-                toneMapIntermediateFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
-                vpInputFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            // Shared with the WGC HDR init path — see DemoteToneMapFormatIfUnsupportedVpInput.
+            if (toneMap) {
+                vpInputFormat = DemoteToneMapFormatIfUnsupportedVpInput(videoEnum.get(), vpInputFormat);
+                toneMapIntermediateFormat = vpInputFormat;
             }
             if (!vpInputSupported(vpInputFormat, supHr, formatSupport)) {
                 char fmtBuf[32];
@@ -1329,8 +1391,15 @@ void VideoThread::Run() {
             auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
 
             auto capSz = item.Size();
-            framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
-                d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
+            // BGRA8 for the SDR window path (unchanged); scRGB FP16 when the hosting
+            // display is HDR-active and HDR handling is on (wgcPlan). FP16 delivers
+            // the real HDR signal instead of DWM's silent SDR tone-map.
+            const auto wgcPoolFormat =
+                (wgcPlan.frame_pool_format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+                    ? winrt::Windows::Graphics::DirectX::DirectXPixelFormat::R16G16B16A16Float
+                    : winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized;
+            framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(d3dWinRTDev,
+                                                                                              wgcPoolFormat, 3, capSz);
 
             captureSession = framePool.CreateCaptureSession(item);
             captureSession.IsBorderRequired(false);
@@ -1487,6 +1556,15 @@ void VideoThread::Run() {
     // R10G10B10A2 for a 10-bit encode (preserving tone-map precision into P010)
     // or BGRA8 for an 8-bit encode / after a device-capability fallback.
     if (hdrToneMapActive) {
+        // Probe the VP input support for the chosen tone-map intermediate before
+        // using it. The OD path performs this same check as part of its
+        // first-frame negotiation (see the vpInputSupported lambda above); WGC
+        // has no equivalent negotiation step, so without this check a driver
+        // that rejects R10G10B10A2 as a VideoProcessor input would fail
+        // CreateVideoProcessorInputView on every tick with no recorded failure
+        // — frames dropping silently instead of falling back to BGRA8.
+        toneMapIntermediateFormat = DemoteToneMapFormatIfUnsupportedVpInput(videoEnum.get(), toneMapIntermediateFormat);
+
         D3D11_TEXTURE2D_DESC sdrDesc{};
         sdrDesc.Width = sourceWidth;
         sdrDesc.Height = sourceHeight;
@@ -1570,10 +1648,10 @@ void VideoThread::Run() {
     }
 
     // --- GPU compositor init (deferred until the capture format is known) ---
-    // WGC frames are always BGRA8 (frame pool format); OD frames use the format
-    // negotiated from the first acquired frame above. If stop was requested
-    // before the first OD frame arrived the format is unknown — skip init; the
-    // encode loop below will not run.
+    // WGC frames use the requested frame-pool format (BGRA8 on SDR, scRGB FP16 when
+    // wgcPlan chose HDR); OD frames use the format negotiated from the first
+    // acquired frame above. If stop was requested before the first OD frame arrived
+    // the format is unknown — skip init; the encode loop below will not run.
     // The already-PQ R10G10B10A2 native sub-path composites nothing (non-linear
     // surface); every other path gets a compositor matched to its working format.
     const bool nativeOverlaysUnsupported = hdrNativeActive && hdrPqInputIsPq;
@@ -1589,9 +1667,12 @@ void VideoThread::Run() {
                                                 : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM));
         // Only the native-HDR FP16 path uses the SDR white level (linear-light
         // overlay compositing); every other path keeps the 203-nit default,
-        // which Init ignores for non-FP16 render formats anyway.
+        // which Init ignores for non-FP16 render formats anyway. The facts come
+        // from the capture path's own source: odSrc for a monitor, the window's
+        // hosting-monitor facts for WGC.
         const float overlayRefWhiteNits =
-            hdrNativeActive ? EffectiveOverlayReferenceWhiteNits(odSrc.DisplayFacts().sdr_white_level_nits)
+            hdrNativeActive ? EffectiveOverlayReferenceWhiteNits(
+                                  (useOdCapture ? odSrc.DisplayFacts() : wgcHdrFacts).sdr_white_level_nits)
                             : kDefaultSdrWhiteLevelNits;
         std::string compErr;
         if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,

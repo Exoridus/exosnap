@@ -92,17 +92,21 @@ Invalid combinations are not offered.
   setting ("HDR handling") switches to **native HDR10 recording**: PQ/BT.2020,
   P010 10-bit, limited range, with mastering-display metadata written to MKV and
   carried into remuxed MP4. Native HDR10 requires HEVC or AV1; H.264 is blocked
-  by a pre-flight check with a one-click codec fix. HDR10 static metadata is
-  written **both** at the container level **and in-band in the bitstream** —
-  HEVC Mastering Display Colour Volume (SEI type 137) and Content Light Level
-  Info (SEI type 144) messages, and AV1 HDR MDCV / HDR CLL metadata OBUs —
-  emitted on every keyframe, so players that ignore container-level HDR metadata
-  (notably some Apple players) still receive it. Content-light (MaxCLL/MaxFALL)
-  metadata is only emitted when present; the current native path fills
-  mastering-display data but leaves MaxCLL/MaxFALL absent (no per-frame
-  content-light analysis). Current boundaries: monitor capture only (window
-  capture stays SDR), the in-app recording preview shows an approximate SDR
-  tone-map, and no HLG.
+  by a pre-flight check with a one-click codec fix. HDR handling applies to both
+  **monitor (duplication) capture and window/game capture** (Windows Graphics
+  Capture): a window on an HDR display negotiates a scRGB FP16 frame pool and
+  gets the same tone-map / native-HDR10 handling and the same H.264 blocker. The
+  window's hosting display is resolved once at recording start — moving the
+  window to a different monitor mid-recording keeps the session's initial HDR
+  decision. HDR10 static metadata is written **both** at the container level
+  **and in-band in the bitstream** — HEVC Mastering Display Colour Volume (SEI
+  type 137) and Content Light Level Info (SEI type 144) messages, and AV1 HDR
+  MDCV / HDR CLL metadata OBUs — emitted on every keyframe, so players that
+  ignore container-level HDR metadata (notably some Apple players) still receive
+  it. Content-light (MaxCLL/MaxFALL) metadata is only emitted when present; the
+  current native path fills mastering-display data but leaves MaxCLL/MaxFALL
+  absent (no per-frame content-light analysis). Current boundaries: the in-app
+  recording preview shows an approximate SDR tone-map, and no HLG.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -194,11 +198,14 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - The built-in editor (Review → Edit → Output overlay, opened from a completed recording) supports
   keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). There is no
   video preview playback in the overlay yet, and there is no chapter/container-metadata export.
-- **HDR10-native recording covers monitor capture only** (expert opt-in;
-  tone-mapped SDR is the default for HDR desktops). Window capture remains SDR,
-  and HLG is not available. Bitstream HDR10 static metadata (HEVC SEI / AV1
-  metadata OBUs) **is** written on every keyframe, in addition to the
-  container-level metadata.
+- **HDR handling covers both monitor and window/game capture** (expert opt-in
+  for native HDR10; tone-mapped SDR is the default for HDR desktops). A window on
+  an HDR display captures via a scRGB FP16 frame pool and follows the same HDR
+  path as a monitor, keyed to the window's hosting display resolved at recording
+  start (a mid-recording move to another monitor keeps the initial decision).
+  Bitstream HDR10 static metadata (HEVC SEI / AV1 metadata OBUs) **is** written
+  on every keyframe, in addition to the container-level metadata. HLG is not
+  available.
 - No 4:2:2 or 4:4:4 chroma subsampling (4:2:0 only).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
 - Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
@@ -251,7 +258,7 @@ The following are intentionally deferred and are documented here only so the
 current boundary is unambiguous. They are **not** part of 0.7.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
 AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut management
-beyond BT.2020 signaling (native HDR10/PQ has since shipped for monitor capture, now with in-band
-HEVC SEI / AV1 metadata OBUs in addition to container-level metadata), HDR for window
-capture, 4:2:2/4:4:4 chroma subsampling, more-than-stereo
+beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and window/game
+capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level metadata),
+4:2:2/4:4:4 chroma subsampling, more-than-stereo
 audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).

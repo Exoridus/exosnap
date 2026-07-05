@@ -259,10 +259,13 @@ Behavior:
   screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
   the recording starts — moving the Windows SDR-brightness slider afterward does not retune an
   active recording.
-- **HDR scope for 1.0:** native HDR10 recording applies to **monitor (duplication) capture only**.
-  Windows Graphics Capture (WGC) window/game capture stays SDR for now, and there is no HLG or
-  wide-gamut generalization. Extending HDR to WGC capture via an FP16 frame pool is technically
-  feasible and planned as a later wave.
+- **HDR scope for 1.0:** HDR handling (both tone-map-to-SDR and native HDR10) applies to **monitor
+  (duplication) capture** and to **window/game capture** (Windows Graphics Capture). When the window's
+  hosting display is HDR-active and HDR handling is on, WGC negotiates a scRGB FP16 frame pool and
+  feeds the same tone-map / native-HDR10 machinery as the monitor path (so the same H.264+HDR10
+  blocker and expert control apply to a window on an HDR display). The hosting display is resolved
+  once at recording start; moving the window to a different monitor mid-recording keeps the session's
+  initial HDR decision. There is still no HLG or wide-gamut generalization beyond BT.2020.
 
 ---
 
@@ -552,8 +555,8 @@ release binaries will be signed once the certificate is issued.
 - Not present in current builds: Replay Buffer; chapter export from the Edit/Output/Save surface
   (Quick Trim and markers are implemented and reachable; container chapter export is deliberately
   out of scope for the MVP); video preview playback inside the Edit/Output/Save overlay; HDR beyond
-  the native-HDR10 monitor-capture path (WGC capture stays SDR; no HLG/wide-gamut — the confirmed 1.0
-  scope, with WGC HDR via FP16 frame pool planned as a later wave); 4:2:2 / 4:4:4 chroma;
+  BT.2020 (HDR handling now covers both monitor and WGC window/game capture via an FP16 frame pool;
+  no HLG/wide-gamut is the confirmed 1.0 scope); 4:2:2 / 4:4:4 chroma;
   multi-vendor hardware encoding; the in-place dual-swap updater (designed, not shipped); immediate
   in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix.
 
