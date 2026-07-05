@@ -2,6 +2,8 @@
 
 #include "hdr_reference_white.h"
 
+#include <dxgiformat.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -79,6 +81,18 @@ inline float Bt709Oetf(float linear) {
 // Full per-channel scRGB (HDR, linear) -> BT.709 SDR non-linear signal.
 inline float ScrgbToSdr709Channel(float scrgb_linear, float peak_scale) {
     return Bt709Oetf(HdrToneMapChannel(scrgb_linear, peak_scale));
+}
+
+// Pixel format for the HDR->SDR tone-map intermediate: the surface the tone-map
+// shader renders the SDR BT.709 result into, and which the GPU compositor and
+// VideoProcessor then consume. A 10-bit encode target (P010) gets an
+// R10G10B10A2 intermediate so the extra depth survives the RGB->P010 conversion
+// instead of being crushed at an 8-bit hop; an 8-bit encode keeps BGRA8. This is
+// the pure format choice only — runtime device-capability fallback (a driver
+// that rejects R10G10B10A2 for the render target or VideoProcessor input) is the
+// call site's responsibility.
+inline DXGI_FORMAT ToneMapIntermediateFormat(bool encode_is_10bit) {
+    return encode_is_10bit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
 }
 
 } // namespace recorder_core
