@@ -184,7 +184,9 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - No code signing (portable ZIP and MSI are both unsigned); Windows SmartScreen may warn on first
   launch. An MSI installer is provided in addition to the portable ZIP.
 - No Replay Buffer.
-- No built-in editor, trimming, or Quick Trim.
+- The built-in editor (Review → Edit → Output overlay, opened from a completed recording) supports
+  keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). There is no
+  video preview playback in the overlay yet, and there is no chapter/container-metadata export.
 - **HDR10-native recording covers monitor capture only** (expert opt-in;
   tone-mapped SDR is the default for HDR desktops). Window capture remains SDR,
   and HLG plus bitstream HDR metadata (SEI) are not available.
