@@ -13,7 +13,7 @@
 
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
-#include "preview_staging_ring.h"
+#include "preview_shared_texture.h"
 #include "session_internal.h"
 #include "yuv_to_bgra.h"
 #include <recorder_core/hdr_native.h>
@@ -2069,107 +2069,53 @@ void VideoThread::Run() {
             pending_cb(true, encodeWidth, encodeHeight, std::move(bgra), {});
     };
 
-    // --- Live WYSIWYG preview tap (Strand 3 slice 1) ---
-    // Throttled to ~30 Hz and zero-cost when no callback is registered (a
-    // single std::function bool-check before any GPU work). The staging ring
-    // (see preview_staging_ring.h) lets Map() read back a copy submitted on
-    // the PREVIOUS publish tick, so it resolves immediately instead of
-    // stalling on the newest, possibly still in-flight copy; the published
-    // frame therefore carries the ring's per-slot timestamp (one tick old),
-    // never the current tick's PTS.
+    // --- Live WYSIWYG preview tap: shared GPU texture ---
+    // The preview shows exactly what the encoder receives by sharing the
+    // composited, pre-encode source frame (vpInput) with the preview renderer via
+    // an NT-handle + keyed-mutex texture. Zero CPU copies; the encode path is never
+    // stalled (0 ms keyed-mutex acquire, drop on contention). Zero cost when no
+    // consumer registered the callback.
     //
-    // The CPU YUV->BGRA conversion runs inline on VideoThread rather than on
-    // a separate worker thread. Deliberate, pragmatic choice: the conversion
-    // is integer fixed-point (see yuv_to_bgra.cpp) and the destination
-    // buffer is reused across ticks, so at the ~30 Hz throttle rate this is
-    // a small, bounded, measured per-tick cost (see the slice benchmark).
-    // Handing it to a worker thread would remove that cost from VideoThread
-    // entirely, but adds cross-thread lifetime/synchronization for the
-    // source buffer that this throttled cadence does not need.
-    PreviewStagingRing previewStagingRing;
-    bool previewStagingReady = false;
-    int previewInitFailures = 0;
-    constexpr int kPreviewMaxInitFailures = 3; // give up for the session after this many
-    bool previewCallbackFaulted = false;       // one-shot log guard for throwing callbacks
+    // The shared texture is created lazily from the FIRST composited vpInput so it
+    // matches that surface's exact format (B8G8R8A8 for SDR/tone-map, R10G10B10A2
+    // for 10-bit). The NT handle is handed to the consumer once, on creation.
+    //
+    // Native HDR10 sessions never reach this tap: they encode straight from an FP16
+    // scRGB surface (no vpInput / SDR intermediate), so the preview keeps its own
+    // WGC capture there. See product-spec / KNOWN_LIMITATIONS.
+    PreviewSharedTexture previewSharedTex;
+    bool previewSharedInitFailed = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
-    PreviewFrame previewFrame; // persistent: bgra buffer reused across ticks
 
-    auto publishPreviewIfDue = [&](int32_t slot_idx, uint64_t pts_ns) {
-        if (!m_state.preview_frame_callback)
-            return; // unregistered -- zero cost beyond this check
-        if (previewInitFailures >= kPreviewMaxInitFailures)
-            return; // staging init failed repeatedly -- preview disabled for this session
-
-        if (!previewGate.ShouldPublish(pts_ns))
+    auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
+        if (!m_state.preview_shared_handle_cb)
+            return; // no consumer registered -- zero cost beyond this check
+        if (previewSharedInitFailed || vpInput == nullptr || hdrNativeActive)
             return;
+        if (!previewGate.ShouldPublish(pts_ns))
+            return; // throttle to ~30 Hz
 
-        if (!previewStagingReady) {
+        if (!previewSharedTex.Valid()) {
             D3D11_TEXTURE2D_DESC srcDesc{};
-            nv12Textures[slot_idx]->GetDesc(&srcDesc);
-            previewStagingReady = previewStagingRing.Initialize(d3dDevice.get(), srcDesc);
-            if (!previewStagingReady) {
-                ++previewInitFailures;
-                if (previewInitFailures == kPreviewMaxInitFailures) {
-                    logging::log(logging::LogLevel::Warn, "video_thread",
-                                 "preview staging ring init failed repeatedly; preview disabled for this session", {});
-                }
+            vpInput->GetDesc(&srcDesc);
+            HANDLE ntHandle = nullptr;
+            std::string err;
+            if (!previewSharedTex.Create(d3dDevice.get(), srcDesc.Width, srcDesc.Height, srcDesc.Format, &ntHandle,
+                                         err)) {
+                previewSharedInitFailed = true;
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "preview shared texture init failed; preview tap disabled for this session: " + err, {});
                 return;
             }
+            // One-shot: ownership of the NT handle transfers to the consumer, which
+            // opens it on its render device and CloseHandle's it. Must return fast
+            // and must not touch D3D on this (video) thread.
+            m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height);
         }
 
-        previewStagingRing.Submit(d3dContext.get(), nv12Textures[slot_idx].get(), pts_ns);
-
-        const uint8_t* mapped_data = nullptr;
-        uint32_t mapped_pitch = 0;
-        uint64_t mapped_pts_ns = 0;
-        if (!previewStagingRing.TryReadReady(d3dContext.get(), &mapped_data, &mapped_pitch, &mapped_pts_ns))
-            return; // ring not primed / copy still in flight -- next tick will have data
-
-        // RAII: the slot is unmapped even if buffer sizing or the app
-        // callback throws (otherwise the preview would be dead for the rest
-        // of the session, or the exception would escape VideoThread::Run and
-        // std::terminate).
-        PreviewRingReadGuard readGuard(previewStagingRing, d3dContext.get());
-
-        try {
-            previewFrame.width = encodeWidth;
-            previewFrame.height = encodeHeight;
-            previewFrame.stride_bytes = encodeWidth * 4u;
-            previewFrame.timestamp_ns = mapped_pts_ns; // one-tick-old frame => its own PTS
-            previewFrame.bgra.resize(static_cast<size_t>(previewFrame.stride_bytes) * encodeHeight);
-
-            PlanarYuv420Frame yuvSrc;
-            yuvSrc.y_plane = mapped_data;
-            yuvSrc.y_stride_bytes = mapped_pitch;
-            yuvSrc.uv_plane = mapped_data + static_cast<size_t>(mapped_pitch) * encodeHeight;
-            yuvSrc.uv_stride_bytes = mapped_pitch;
-            yuvSrc.width = encodeWidth;
-            yuvSrc.height = encodeHeight;
-            yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
-
-            if (hdrNativeActive) {
-                // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode
-                // and tone-map to SDR for the live preview (approximate; see
-                // hdr_preview.h) at the session display peak.
-                hdrMonitorConvert(yuvSrc, previewFrame.bgra.data(), previewFrame.stride_bytes);
-            } else {
-                YuvToBgraParams colorParams;
-                colorParams.matrix = m_state.config.color.matrix;
-                colorParams.range = m_state.config.color.range;
-                ConvertYuv420ToBgra(yuvSrc, colorParams, previewFrame.bgra.data(), previewFrame.stride_bytes);
-            }
-
-            m_state.preview_frame_callback(previewFrame);
-        } catch (...) {
-            // The callback contract says it must not throw (see
-            // recorder_session.h); a bad_alloc from resize lands here too.
-            // Drop this frame; recording continues unaffected.
-            if (!previewCallbackFaulted) {
-                previewCallbackFaulted = true;
-                logging::log(logging::LogLevel::Warn, "video_thread",
-                             "preview publish threw (callback or allocation); frame dropped", {});
-            }
-        }
+        // Non-blocking publish of the composited frame (observation-only; the encode
+        // path continues regardless of whether the preview picked up this frame).
+        previewSharedTex.TryPublish(d3dContext.get(), vpInput);
     };
 
     if (m_state.config.cfr) {
@@ -2564,7 +2510,8 @@ void VideoThread::Run() {
                         refNv12Valid = true;
                     }
                     performSnapshotIfRequested(slot);
-                    publishPreviewIfDue(slot, pts_ns);
+                    // Native HDR10 has no SDR vpInput to share; the preview keeps its
+                    // own WGC capture (see product-spec / KNOWN_LIMITATIONS).
                     frameWritten = true;
                 } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
@@ -2588,6 +2535,11 @@ void VideoThread::Run() {
                     } else {
                         pendingWgcTex = nullptr;
                     }
+
+                    // Live WYSIWYG preview tap: share the composited pre-encode frame.
+                    // Works for 4:2:0/4:2:2 AND 4:4:4 (tapped before RGB->AYUV). Throttled
+                    // and non-blocking; never stalls the encode below.
+                    tapPreviewSource(vpInput, pts_ns);
 
                     // Convert RGB frame to NV12/P010 via VideoProcessorBlt
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
@@ -2623,13 +2575,12 @@ void VideoThread::Run() {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
                             }
-                            // Snapshot/preview decode assumes NV12/P010; the 4:4:4 (AYUV)
-                            // surface would be misread, so tap only on the 4:2:0 path.
+                            // Snapshot decode assumes NV12/P010; the 4:4:4 (AYUV) surface
+                            // would be misread, so snapshot only on the 4:2:0 path. (The
+                            // live preview tap runs on vpInput above and works for 4:4:4.)
                             if (!chroma444) {
                                 // Capture frame snapshot on real (non-duplicate) frames.
                                 performSnapshotIfRequested(slot);
-                                // Live preview tap on real (non-duplicate) frames (throttled internally).
-                                publishPreviewIfDue(slot, pts_ns);
                             }
                             frameWritten = true;
                         }
@@ -2900,7 +2851,7 @@ void VideoThread::Run() {
                     latestTex = nullptr;
 
                     performSnapshotIfRequested(slot);
-                    publishPreviewIfDue(slot, framePts_ns);
+                    // Native HDR10 has no SDR vpInput to share (see CFR path / spec).
                     maybeArmSplit(framePts_ns);
 
                     EncodedVideoPacket pkt;
@@ -2939,6 +2890,10 @@ void VideoThread::Run() {
                         odCapturedTexValid = false;
                     }
 
+                    // Live WYSIWYG preview tap: share the composited pre-encode frame
+                    // (works for 4:4:4 too; non-blocking, never stalls the encode below).
+                    tapPreviewSource(vpInput, framePts_ns);
+
                     // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's view
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
@@ -2970,13 +2925,11 @@ void VideoThread::Run() {
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {
-                            // Snapshot/preview decode assumes NV12/P010; skip on the
-                            // 4:4:4 (AYUV) path (see CFR path).
+                            // Snapshot decode assumes NV12/P010; skip on the 4:4:4 (AYUV)
+                            // path (see CFR path). The preview tap runs on vpInput above.
                             if (!chroma444) {
                                 // Capture frame snapshot on real frames (VFR path).
                                 performSnapshotIfRequested(slot);
-                                // Live preview tap on real frames (VFR path; throttled internally).
-                                publishPreviewIfDue(slot, framePts_ns);
                             }
 
                             // Arm a split boundary for this submission (see CFR path).

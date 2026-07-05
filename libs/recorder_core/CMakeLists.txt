@@ -307,8 +307,8 @@ add_library(recorder_core STATIC
     src/yuv_to_bgra.h
     src/yuv_to_bgra.cpp
     src/preview_publish_gate.h
-    src/preview_staging_ring.h
-    src/preview_staging_ring.cpp
+    src/preview_shared_texture.h
+    src/preview_shared_texture.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
     src/matroska_stream_writer.cpp
@@ -797,8 +797,8 @@ exosnap_add_gtest(
 )
 target_include_directories(test_yuv_to_bgra_bench PRIVATE src include)
 
-# Strand 3 slice 1: pure throttle/dirty state machine for the live preview
-# tap. Header-only logic; no clock/D3D11/threads needed to test it.
+# Pure throttle/dirty state machine for the live preview tap. Header-only
+# logic; no clock/D3D11/threads needed to test it.
 exosnap_add_gtest(
     NAME test_preview_publish_gate
     TEST_PREFIX recorder_core.
@@ -806,18 +806,19 @@ exosnap_add_gtest(
 )
 target_include_directories(test_preview_publish_gate PRIVATE src)
 
-# Strand 3 slice 1: two-slot staging-texture ring that lets VideoThread read
-# back composed frames without Map() stalling on the newest, possibly
-# in-flight copy. WARP-backed (see test_gpu_compositor above), deterministic.
+# Producer-side shared GPU texture for the WYSIWYG preview tap: create the
+# NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on
+# a second D3D11 device and verify the pixels round-trip; plus the non-blocking
+# drop discipline. WARP-backed (see test_gpu_compositor above), deterministic.
 exosnap_add_gtest(
-    NAME test_preview_staging_ring
+    NAME test_preview_shared_texture
     TEST_PREFIX recorder_core.
-    SOURCES tests/test_preview_staging_ring.cpp
-            src/preview_staging_ring.cpp
+    SOURCES tests/test_preview_shared_texture.cpp
+            src/preview_shared_texture.cpp
     LIBRARIES d3d11.lib dxgi.lib
 )
-target_include_directories(test_preview_staging_ring PRIVATE src)
-target_compile_definitions(test_preview_staging_ring PRIVATE NOMINMAX)
+target_include_directories(test_preview_shared_texture PRIVATE src)
+target_compile_definitions(test_preview_shared_texture PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME test_matroska_mux_structure

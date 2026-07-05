@@ -212,10 +212,12 @@ struct SessionState {
     PipelineDiagnosticsAggregator diagnostics;
     DiagnosticsCallback diagnostics_callback;
 
-    // Live WYSIWYG preview-frame callback (set before Record(); see
-    // RecorderSession::SetPreviewFrameCallback). VideoThread reads this once
-    // per composed frame; unset == disabled at zero cost (plain bool check).
-    PreviewFrameCallback preview_frame_callback;
+    // WYSIWYG preview shared-texture callback (set before Record(); bridged from
+    // RecorderSession::SetPreviewSharedHandleCallback). VideoThread fires it once
+    // when the shared preview texture is ready, passing the NT handle whose
+    // ownership transfers to the consumer. Unset == the tap is disabled at zero
+    // cost (the shared texture is never created).
+    std::function<void(HANDLE, uint32_t, uint32_t)> preview_shared_handle_cb;
 
     // Record config captured at Record() time
     RecorderConfig config;
