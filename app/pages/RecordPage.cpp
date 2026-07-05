@@ -144,6 +144,7 @@ EditContext MakeEditContext(const CompletedRecording& rec) {
     ctx.output_path = rec.file_path;
     ctx.mkv_master_path = rec.file_path; // best-effort fallback (may not be correct for MP4)
     ctx.duration = QString::fromStdWString(RecordViewModel::FormatElapsed(rec.totalDurationSeconds()));
+    ctx.duration_seconds = rec.totalDurationSeconds();
     ctx.size = rec.totalSizeBytes() > 0
                    ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.totalSizeBytes())))
                    : QString{};

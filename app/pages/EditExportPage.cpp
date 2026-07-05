@@ -334,16 +334,13 @@ void EditExportPage::buildUi() {
     add_marker_btn_->setProperty("role", "ghost");
     add_marker_btn_->setEnabled(false);
 
-    split_chapter_btn_ = new QPushButton(QStringLiteral("Split Chapter"), edit_controls_);
-    split_chapter_btn_->setObjectName(QStringLiteral("editExportSplitChapterBtn"));
-    split_chapter_btn_->setProperty("role", "ghost");
-    split_chapter_btn_->setEnabled(false);
+    // Split Chapter is deliberately out of scope (ADR 0022): markers are an
+    // edit-view-only concept and are never written as container chapters.
 
     edit_ctrl_layout->addWidget(duration_label_);
     edit_ctrl_layout->addStretch();
     edit_ctrl_layout->addWidget(trim_btn_);
     edit_ctrl_layout->addWidget(add_marker_btn_);
-    edit_ctrl_layout->addWidget(split_chapter_btn_);
 
     left_layout->addWidget(edit_controls_);
 
@@ -364,13 +361,16 @@ void EditExportPage::buildUi() {
     timeline_layout->setContentsMargins(M::kSpaceSm, 4, M::kSpaceSm, 4);
     timeline_layout->setSpacing(4);
 
-    // Mini waveform simulation: 36 small frames
-    auto* waveform_row = new QWidget(timeline_frame_);
-    auto* waveform_layout = new QHBoxLayout(waveform_row);
+    // Mini waveform simulation: 36 small frames. This row also doubles as the
+    // marker-pin container: its full width is the 0%..100% duration reference
+    // (matching the In/Out labels below, which anchor to the same span).
+    timeline_waveform_row_ = new QWidget(timeline_frame_);
+    timeline_waveform_row_->setObjectName(QStringLiteral("editTimelineWaveformRow"));
+    auto* waveform_layout = new QHBoxLayout(timeline_waveform_row_);
     waveform_layout->setContentsMargins(0, 0, 0, 0);
     waveform_layout->setSpacing(2);
     for (int i = 0; i < 36; ++i) {
-        auto* bar = new QFrame(waveform_row);
+        auto* bar = new QFrame(timeline_waveform_row_);
         bar->setFixedWidth(3);
         // Varying heights to simulate waveform
         const int height = 6 + ((i * 7 + 3) % 16);
@@ -380,6 +380,7 @@ void EditExportPage::buildUi() {
         waveform_layout->addWidget(bar);
     }
     waveform_layout->addStretch();
+    timeline_waveform_row_->installEventFilter(this);
 
     auto* timeline_labels_row = new QWidget(timeline_frame_);
     auto* tl_labels_layout = new QHBoxLayout(timeline_labels_row);
@@ -395,7 +396,7 @@ void EditExportPage::buildUi() {
     tl_labels_layout->addStretch();
     tl_labels_layout->addWidget(timeline_out_label_);
 
-    timeline_layout->addWidget(waveform_row);
+    timeline_layout->addWidget(timeline_waveform_row_);
     timeline_layout->addWidget(timeline_labels_row);
 
     left_layout->addWidget(timeline_frame_);
@@ -438,7 +439,10 @@ void EditExportPage::buildUi() {
                                      QStringLiteral("overwrite"));
     output_panel_layout->addWidget(output_save_mode_combo_);
 
-    // Destination row
+    // Destination row. The save mode above fully determines the destination
+    // (new file = beside the source; overwrite = the source's own location) —
+    // there is no user-choosable destination folder in this model, so this row
+    // is informational only (no Browse button; see ADR 0022).
     auto* dest_row = new QWidget(output_panel_);
     auto* dest_layout = new QHBoxLayout(dest_row);
     dest_layout->setContentsMargins(0, 0, 0, 0);
@@ -452,13 +456,8 @@ void EditExportPage::buildUi() {
     dest_folder_label_->setStyleSheet(
         QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ThemeText1Color(ActiveTheme())));
 
-    browse_dest_btn_ = new QPushButton(QStringLiteral("Browse…"), dest_row);
-    browse_dest_btn_->setProperty("role", "ghost");
-    browse_dest_btn_->setEnabled(false);
-
     dest_layout->addWidget(dest_lbl_title);
     dest_layout->addWidget(dest_folder_label_, 1);
-    dest_layout->addWidget(browse_dest_btn_);
 
     output_panel_layout->addWidget(dest_row);
 
@@ -623,6 +622,12 @@ void EditExportPage::buildUi() {
     connect(back_btn_, &QPushButton::clicked, this, &EditExportPage::onBackClicked);
     connect(primary_action_btn_, &QPushButton::clicked, this, [this]() {
         switch (phase_) {
+        case Phase::Review:
+            setPhase(Phase::Edit);
+            break;
+        case Phase::Edit:
+            setPhase(Phase::Output);
+            break;
         case Phase::Output:
             onExportClicked();
             break;
@@ -634,9 +639,6 @@ void EditExportPage::buildUi() {
             break;
         case Phase::Failed:
             onRetryExportClicked();
-            break;
-        default:
-            setPhase(Phase::Output);
             break;
         }
     });
@@ -712,6 +714,7 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     }
 
     // --- Load markers from sidecar (falls back to session markers) ---
+    duration_seconds_ = ctx_.duration_seconds;
     loadMarkers();
 }
 
@@ -805,6 +808,12 @@ void EditExportPage::refreshPhase() {
         edit_controls_->setVisible(show_edit);
     if (timeline_frame_)
         timeline_frame_->setVisible(show_timeline);
+    if (show_timeline) {
+        // Re-derive pin positions now that the timeline is (becoming) visible —
+        // its width may not have been final the last time markers were loaded.
+        // The resize eventFilter on the waveform row keeps them correct after.
+        renderMarkerPins();
+    }
     if (output_panel_)
         output_panel_->setVisible(show_output);
     if (exporting_panel_)
@@ -826,7 +835,7 @@ void EditExportPage::refreshPhase() {
 
     switch (phase_) {
     case Phase::Review:
-        primary_action_btn_->setText(QStringLiteral("Continue to output"));
+        primary_action_btn_->setText(QStringLiteral("Continue to edit"));
         primary_action_btn_->setProperty("role", "ghost");
         break;
     case Phase::Edit:
@@ -870,8 +879,12 @@ void EditExportPage::refreshPhase() {
             result_title_label_->setStyleSheet(
                 QStringLiteral("QLabel { color:%1; font-weight:600; font-size:16px; }").arg(ActiveTheme().success));
         }
-        if (result_detail_label_)
-            result_detail_label_->setText(QStringLiteral("Sprint-demo.mp4 \xc2\xb7 stream-copy \xc2\xb7 lossless"));
+        if (result_detail_label_) {
+            const QString file_name = !export_output_path_.empty()
+                                          ? QString::fromStdWString(export_output_path_.filename().wstring())
+                                          : QStringLiteral("Export");
+            result_detail_label_->setText(QStringLiteral("%1 \xc2\xb7 stream-copy \xc2\xb7 lossless").arg(file_name));
+        }
         break;
     case Phase::Failed:
         primary_action_btn_->setText(QStringLiteral("Retry export"));
@@ -897,8 +910,10 @@ void EditExportPage::refreshPhase() {
             result_title_label_->setStyleSheet(
                 QStringLiteral("QLabel { color:%1; font-weight:600; font-size:16px; }").arg(ActiveTheme().error));
         }
-        if (result_detail_label_)
-            result_detail_label_->setText(QStringLiteral("Export failed — disk full"));
+        if (result_detail_label_) {
+            const QString reason = last_export_error_.isEmpty() ? QStringLiteral("unknown error") : last_export_error_;
+            result_detail_label_->setText(QStringLiteral("Export failed \xe2\x80\x94 %1").arg(reason));
+        }
         break;
     }
 
@@ -917,12 +932,29 @@ bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
         if (target > 0 && player_frame_->height() != target)
             player_frame_->setFixedHeight(target);
     }
+    // The waveform row is the marker-pin container: its width is the 100% (full
+    // duration) reference for proportional pin positions, so a resize requires
+    // re-laying-out the pins.
+    if (obj == timeline_waveform_row_ && event->type() == QEvent::Resize)
+        renderMarkerPins();
     return QWidget::eventFilter(obj, event);
 }
 
 // ---- Slots ----
 
 void EditExportPage::onBackClicked() {
+    // Three-step flow (ADR 0022): Back steps to the previous phase for Edit and
+    // Output. Review is the first step, so its Back keeps closing the overlay.
+    switch (phase_) {
+    case Phase::Edit:
+        setPhase(Phase::Review);
+        return;
+    case Phase::Output:
+        setPhase(Phase::Edit);
+        return;
+    default:
+        break;
+    }
     emit backRequested();
 }
 
@@ -1058,6 +1090,7 @@ void EditExportPage::onAddMarkerClicked() {
     m.label = "Marker";
     markers_.push_back(m);
     saveMarkers();
+    renderMarkerPins();
 }
 
 // ---- Marker sidecar I/O ----
@@ -1072,11 +1105,57 @@ void EditExportPage::loadMarkers() {
         std::error_code ec;
         if (std::filesystem::exists(sidecar, ec)) {
             markers_ = ReadMarkerSidecar(sidecar);
+            renderMarkerPins();
             return;
         }
     }
     // No sidecar on disk: fall back to the markers carried in the result.
     markers_ = ctx_.markers;
+    renderMarkerPins();
+}
+
+// Render one thin vertical pin per marker at its proportional position
+// (marker timestamp / recording duration) over the timeline's waveform row.
+// Uses the accent color (Studio Mint) at full opacity so pins read clearly
+// against the waveform bars, which use the same accent at low (0.35) alpha —
+// amber/coral stay reserved for real caution/error states elsewhere in the app.
+void EditExportPage::renderMarkerPins() {
+    if (!timeline_waveform_row_)
+        return;
+
+    // Direct delete (not deleteLater): renderMarkerPins() is never invoked from
+    // a pin's own event handler, and deferred deletion would leave stale pins in
+    // the widget tree until the event loop drains its DeferredDelete queue.
+    for (auto* pin : marker_pin_widgets_)
+        delete pin;
+    marker_pin_widgets_.clear();
+
+    // Unknown/zero duration: no reference span to place pins against. Render
+    // none rather than guessing — this must never crash.
+    if (duration_seconds_ <= 0.0)
+        return;
+
+    const int row_width = timeline_waveform_row_->width();
+    const int row_height = timeline_waveform_row_->height();
+    if (row_width <= 0 || row_height <= 0)
+        return;
+
+    constexpr int kPinWidth = 2;
+    const QString pin_color = themeColor(ActiveTheme().ac).name(QColor::HexRgb);
+
+    for (const auto& marker : markers_) {
+        const double fraction =
+            std::clamp((static_cast<double>(marker.time_ms) / 1000.0) / duration_seconds_, 0.0, 1.0);
+        const int x = std::clamp(static_cast<int>(fraction * row_width), 0, row_width - kPinWidth);
+
+        auto* pin = new QFrame(timeline_waveform_row_);
+        pin->setObjectName(QStringLiteral("editTimelineMarkerPin"));
+        pin->setStyleSheet(QStringLiteral("QFrame { background: %1; border: none; }").arg(pin_color));
+        pin->setGeometry(x, 0, kPinWidth, row_height);
+        pin->show();
+        pin->raise();
+        marker_pin_widgets_.push_back(pin);
+    }
 }
 
 void EditExportPage::saveMarkers() {
@@ -1102,9 +1181,8 @@ void EditExportPage::runExport() {
     const bool to_mp4 = (container_key == QStringLiteral("mp4"));
 
     if (ctx_.mkv_master_path.isEmpty()) {
+        last_export_error_ = QStringLiteral("No edit master available for export.");
         setPhase(Phase::Failed);
-        if (result_detail_label_)
-            result_detail_label_->setText(QStringLiteral("No edit master available for export."));
         return;
     }
 
@@ -1177,16 +1255,17 @@ void EditExportPage::runExport() {
             [this, ok, err_msg, output_path]() {
                 export_output_path_ = output_path;
                 if (ok) {
+                    // refreshPhase() derives the Done detail text from
+                    // export_output_path_ (set just above) — the real output
+                    // filename, not a placeholder.
                     setPhase(Phase::Done);
-                    if (result_detail_label_) {
-                        result_detail_label_->setText(QString::fromStdWString(output_path.filename().wstring()) +
-                                                      QStringLiteral(" \xc2\xb7 stream-copy \xc2\xb7 lossless"));
-                    }
                     emit exportCompleted(QString::fromStdWString(output_path.wstring()));
                 } else {
+                    // refreshPhase() derives the Failed detail text from
+                    // last_export_error_ (set just below) — the real remuxer
+                    // error, not a hardcoded placeholder.
+                    last_export_error_ = QString::fromStdString(err_msg);
                     setPhase(Phase::Failed);
-                    if (result_detail_label_)
-                        result_detail_label_->setText(QString::fromStdString(err_msg));
                 }
             },
             Qt::QueuedConnection);
