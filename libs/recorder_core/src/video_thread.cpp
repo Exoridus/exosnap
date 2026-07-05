@@ -614,6 +614,14 @@ void VideoThread::Run() {
     const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
     const DXGI_FORMAT encodeFormat = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
 
+    // HDR->SDR tone-map intermediate depth follows the encode target: a 10-bit
+    // encode (P010) tone-maps into R10G10B10A2 so the extra depth survives the
+    // RGB->P010 conversion; 8-bit encodes keep BGRA8, byte-identical to before.
+    // This is the pure choice; it may fall back to BGRA8 at runtime if the device
+    // rejects R10G10B10A2 as a VideoProcessor input (OD format negotiation below)
+    // or as a render target (tone-map texture creation below).
+    DXGI_FORMAT toneMapIntermediateFormat = ToneMapIntermediateFormat(tenBit);
+
     // Native HDR10 (PQ/BT.2020) requires a 10-bit P010 encode target. The caller
     // assembles BT.2020/PQ colour metadata and pins 10-bit together (see the HDR10
     // metadata assembly). If a future caller engages the native HDR path without
@@ -952,14 +960,32 @@ void VideoThread::Run() {
         // The format fed to the VideoProcessor must be a supported VP INPUT on
         // this driver, or every CreateVideoProcessorInputView would fail per tick
         // without a recorded failure — silent starvation one stage later. For a
-        // tone-mapped HDR desktop the VP input is the BGRA8 tone-map output, not
-        // the FP16 capture format (the D3D11 VP cannot convert scRGB HDR at all).
-        // The native HDR10 path never touches the VP, so it skips this check.
+        // tone-mapped HDR desktop the VP input is the tone-map output (BGRA8, or
+        // R10G10B10A2 for a 10-bit encode), not the FP16 capture format (the D3D11
+        // VP cannot convert scRGB HDR at all). The native HDR10 path never touches
+        // the VP, so it skips this check.
         if (!nativeHdr) {
-            const DXGI_FORMAT vpInputFormat = toneMap ? DXGI_FORMAT_B8G8R8A8_UNORM : rawDesc.Format;
+            auto vpInputSupported = [&](DXGI_FORMAT fmt, HRESULT& hr, UINT& support) {
+                support = 0;
+                hr = videoEnum->CheckVideoProcessorFormat(fmt, &support);
+                return SUCCEEDED(hr) && (support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) != 0;
+            };
+            DXGI_FORMAT vpInputFormat = toneMap ? toneMapIntermediateFormat : rawDesc.Format;
+            HRESULT supHr = S_OK;
             UINT formatSupport = 0;
-            const HRESULT supHr = videoEnum->CheckVideoProcessorFormat(vpInputFormat, &formatSupport);
-            if (FAILED(supHr) || (formatSupport & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) == 0) {
+            // Graceful fallback: a driver that rejects the 10-bit R10G10B10A2
+            // tone-map intermediate as a VP input keeps recording at BGRA8 (the
+            // historic default, universally supported) rather than failing.
+            if (toneMap && vpInputFormat == DXGI_FORMAT_R10G10B10A2_UNORM &&
+                !vpInputSupported(vpInputFormat, supHr, formatSupport)) {
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "10-bit tone-map intermediate (R10G10B10A2) is not a supported VideoProcessor input on "
+                             "this driver; falling back to BGRA8 (8-bit tone-map precision)",
+                             {});
+                toneMapIntermediateFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+                vpInputFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            }
+            if (!vpInputSupported(vpInputFormat, supHr, formatSupport)) {
                 char fmtBuf[32];
                 std::ostringstream err;
                 err << "DXGI OD: capture format " << OdCaptureFormatName(vpInputFormat, fmtBuf, sizeof(fmtBuf))
@@ -1456,19 +1482,34 @@ void VideoThread::Run() {
 
     // --- HDR tone-map init (deferred until the capture format is negotiated) ---
     // On an HDR desktop the negotiated frames are scRGB FP16; convert each
-    // emitted frame to an SDR BGRA8 surface (hdrSdrTex) that the compositor and
-    // VideoProcessor then treat as an ordinary SDR desktop.
+    // emitted frame to an SDR surface (hdrSdrTex) that the compositor and
+    // VideoProcessor then treat as an ordinary SDR desktop. The surface is
+    // R10G10B10A2 for a 10-bit encode (preserving tone-map precision into P010)
+    // or BGRA8 for an 8-bit encode / after a device-capability fallback.
     if (hdrToneMapActive) {
         D3D11_TEXTURE2D_DESC sdrDesc{};
         sdrDesc.Width = sourceWidth;
         sdrDesc.Height = sourceHeight;
         sdrDesc.MipLevels = 1;
         sdrDesc.ArraySize = 1;
-        sdrDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        sdrDesc.Format = toneMapIntermediateFormat;
         sdrDesc.SampleDesc = {1, 0};
         sdrDesc.Usage = D3D11_USAGE_DEFAULT;
         sdrDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         HRESULT sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+        // Graceful fallback: a device that rejects R10G10B10A2 as a render target
+        // reverts to BGRA8 rather than failing the recording. VP-input support for
+        // BGRA8 was already established during OD format negotiation.
+        if (FAILED(sdrHr) && toneMapIntermediateFormat == DXGI_FORMAT_R10G10B10A2_UNORM) {
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "10-bit tone-map intermediate (R10G10B10A2) could not be created as a render target on this "
+                         "device; falling back to BGRA8 (8-bit tone-map precision)",
+                         {});
+            toneMapIntermediateFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            sdrDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            hdrSdrTex = nullptr;
+            sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+        }
         std::string tmErr;
         if (FAILED(sdrHr)) {
             char buf[80];
@@ -1537,11 +1578,13 @@ void VideoThread::Run() {
     const bool nativeOverlaysUnsupported = hdrNativeActive && hdrPqInputIsPq;
     if (needsGpuCompositor && !nativeOverlaysUnsupported && (!useOdCapture || odCapturedTex != nullptr)) {
         // Native HDR10 (FP16): overlays are composited in linear scRGB FP16 before
-        // the PQ conversion. Tone-mapped HDR: composited on the SDR BGRA8 surface.
+        // the PQ conversion. Tone-mapped HDR: composited on the SDR tone-map
+        // surface (R10G10B10A2 for a 10-bit encode, else BGRA8). The compositor
+        // background CopyResource requires this to match hdrSdrTex exactly.
         // Plain SDR: the negotiated capture format.
         const DXGI_FORMAT compositorFormat =
             hdrNativeActive ? DXGI_FORMAT_R16G16B16A16_FLOAT
-                            : (hdrToneMapActive ? DXGI_FORMAT_B8G8R8A8_UNORM
+                            : (hdrToneMapActive ? toneMapIntermediateFormat
                                                 : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM));
         // Only the native-HDR FP16 path uses the SDR white level (linear-light
         // overlay compositing); every other path keeps the 203-nit default,
