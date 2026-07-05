@@ -209,6 +209,26 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
             }
             // Only now is the per-codec result authoritative.
             nvidia.nvenc_codec_probed = true;
+
+            // Per-codec 4:4:4 (YUV444, 8-bit) support via
+            // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Only queried for the codecs the
+            // GPU actually advertised; a failed/absent query leaves the flag
+            // false (no 4:4:4 claimed beyond the static baseline).
+            if (funcs.nvEncGetEncodeCaps != nullptr) {
+                auto query_yuv444 = [&funcs, encoder](const GUID& codec) -> bool {
+                    NV_ENC_CAPS_PARAM capsParam{};
+                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
+                    capsParam.capsToQuery = NV_ENC_CAPS_SUPPORT_YUV444_ENCODE;
+                    int value = 0;
+                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS && value != 0;
+                };
+                if (nvidia.nvenc_h264) {
+                    nvidia.nvenc_yuv444_h264 = query_yuv444(NV_ENC_CODEC_H264_GUID);
+                }
+                if (nvidia.nvenc_hevc) {
+                    nvidia.nvenc_yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
+                }
+            }
         }
     }
 

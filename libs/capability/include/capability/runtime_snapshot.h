@@ -70,6 +70,14 @@ struct NvidiaRuntimeFacts {
     bool nvenc_av1 = false;
     bool nvenc_hevc = false;
     bool nvenc_h264 = false;
+
+    // Per-GPU 4:4:4 (YUV444, 8-bit) encode support, probed via
+    // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE on the matched H.264/HEVC codec GUIDs.
+    // Only meaningful when nvenc_codec_probed is true. AV1 has no 4:4:4 path so no
+    // flag exists for it. Default false so a GPU that is not probed never claims
+    // 4:4:4 beyond the ValidUnvalidated static baseline.
+    bool nvenc_yuv444_h264 = false;
+    bool nvenc_yuv444_hevc = false;
 };
 
 struct MfAacRuntimeFacts {

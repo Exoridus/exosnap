@@ -44,8 +44,31 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                               SupportAnnotation{SupportLevel::Available, "Validated chroma mode."});
     caps.chroma_modes.emplace(ChromaSubsampling::Cs422,
                               SupportAnnotation{SupportLevel::NotImplemented, "4:2:2 path is not implemented."});
-    caps.chroma_modes.emplace(ChromaSubsampling::Cs444,
-                              SupportAnnotation{SupportLevel::NotImplemented, "4:4:4 path is not implemented."});
+    // 4:4:4 is a real 8-bit H.264/HEVC expert path (AYUV input, NVENC High 4:4:4 /
+    // HEVC FREXT). This dimension-level annotation only states the path EXISTS
+    // (mirroring the 10-bit Bit10 entry); the per-codec truth (H.264/HEVC only,
+    // never AV1, never 10-bit) lives in chroma444 + the static matrix.
+    caps.chroma_modes.emplace(
+        ChromaSubsampling::Cs444,
+        SupportAnnotation{SupportLevel::ValidUnvalidated,
+                          "4:4:4 (8-bit H.264/HEVC) implemented; not yet validated on recording hardware."});
+
+    // Per-codec 4:4:4 (YUV444, 8-bit) capability. H.264 (High 4:4:4 Predictive) and
+    // HEVC (Range Extensions) carry 4:4:4; AV1 NVENC is 4:2:0 Main only. Baseline is
+    // ValidUnvalidated for H.264/HEVC (implemented, not hardware-validated) and
+    // NotImplemented for AV1; a real per-GPU probe downgrades H.264/HEVC when the
+    // specific GPU cannot do it (ApplyNvencYuv444Support).
+    caps.chroma444.emplace(
+        VideoCodec::H264Nvenc,
+        SupportAnnotation{SupportLevel::ValidUnvalidated,
+                          "H.264 High 4:4:4 Predictive (8-bit); not yet validated on recording hardware."});
+    caps.chroma444.emplace(
+        VideoCodec::HevcNvenc,
+        SupportAnnotation{SupportLevel::ValidUnvalidated,
+                          "HEVC Range Extensions 4:4:4 (8-bit); not yet validated on recording hardware."});
+    caps.chroma444.emplace(
+        VideoCodec::Av1Nvenc,
+        SupportAnnotation{SupportLevel::NotImplemented, "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."});
 
     caps.bit_depths.emplace(BitDepth::Bit8, SupportAnnotation{SupportLevel::Available, "Validated bit depth."});
     caps.bit_depths.emplace(BitDepth::Bit10,
@@ -164,6 +187,7 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // encode (e.g. AV1 on pre-Ada hardware) that the static baseline optimistically
     // advertised.
     ApplyNvencCodecSupport(caps, snapshot.nvidia);
+    ApplyNvencYuv444Support(caps, snapshot.nvidia);
 
     return caps;
 }
@@ -194,6 +218,31 @@ void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts
                              "This GPU does not support HEVC (H.265) NVENC encoding.");
     downgrade_if_unsupported(VideoCodec::H264Nvenc, facts.nvenc_h264,
                              "This GPU does not support H.264 NVENC encoding.");
+}
+
+void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {
+    // Without an authoritative probe, keep the ValidUnvalidated baseline (AV1 stays
+    // NotImplemented via the baseline map). Never regress headless CI to "no 4:4:4".
+    if (!facts.nvenc_codec_probed) {
+        return;
+    }
+
+    auto downgrade_if_unsupported = [&caps](VideoCodec codec, bool supported, const std::string& reason) {
+        if (supported) {
+            return; // GPU encodes 4:4:4 for this codec — keep the baseline annotation.
+        }
+        const auto it = caps.chroma444.find(codec);
+        if (it == caps.chroma444.end() || IsSelectable(it->second.level)) {
+            caps.chroma444[codec] = SupportAnnotation{SupportLevel::NotImplemented, reason};
+        }
+    };
+
+    downgrade_if_unsupported(VideoCodec::H264Nvenc, facts.nvenc_yuv444_h264,
+                             "This GPU does not support H.264 4:4:4 (YUV444) NVENC encoding.");
+    downgrade_if_unsupported(VideoCodec::HevcNvenc, facts.nvenc_yuv444_hevc,
+                             "This GPU does not support HEVC 4:4:4 (YUV444) NVENC encoding.");
+    // AV1 is not probed for 4:4:4 — it has no NVENC 4:4:4 path and stays
+    // NotImplemented from the baseline.
 }
 
 CapabilitySet CapabilityBuilder::BuildFromHardwareQuery() {
