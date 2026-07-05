@@ -680,6 +680,18 @@ exosnap_add_gtest(
 target_include_directories(test_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
 
+# HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
+# the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)
+# intermediates, and that the 10-bit target preserves precision the 8-bit loses.
+exosnap_add_gtest(
+    NAME test_gpu_hdr_tonemap
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_hdr_tonemap.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_hdr_tonemap PRIVATE src)
+target_compile_definitions(test_gpu_hdr_tonemap PRIVATE NOMINMAX)
+
 # Native HDR10 (PQ / BT.2020 / P010) output: pure curve + matrix + Y'CbCr math,
 # effective-mode decision, and colour-metadata assembly. No GPU — the compute
 # shader (gpu_hdr_pq.*) replicates the same math.

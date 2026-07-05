@@ -171,4 +171,17 @@ TEST(OdCaptureMode, UnknownFormatRejected) {
     EXPECT_FALSE(Resolve(DXGI_FORMAT_R8G8B8A8_UNORM, HdrMode::TonemapSdr, false, true, mode));
 }
 
+// --- Tone-map intermediate format choice -----------------------------------
+
+TEST(ToneMapIntermediateFormat, TenBitEncodeUsesR10) {
+    // A 10-bit encode (P010) tone-maps into R10G10B10A2 so the extra depth
+    // survives the RGB->P010 hop instead of being crushed at 8 bits.
+    EXPECT_EQ(ToneMapIntermediateFormat(/*encode_is_10bit=*/true), DXGI_FORMAT_R10G10B10A2_UNORM);
+}
+
+TEST(ToneMapIntermediateFormat, EightBitEncodeKeepsBgra8) {
+    // 8-bit encodes are byte-identical to the historic path: BGRA8 intermediate.
+    EXPECT_EQ(ToneMapIntermediateFormat(/*encode_is_10bit=*/false), DXGI_FORMAT_B8G8R8A8_UNORM);
+}
+
 } // namespace
