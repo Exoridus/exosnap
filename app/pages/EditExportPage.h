@@ -44,6 +44,10 @@ struct EditContext {
     // Markers pre-loaded from the recording session (fallback if sidecar cannot be read)
     std::vector<RecordingMarker> markers;
     QString marker_sidecar_path; // companion .markers.json path
+
+    // Total recording duration in seconds (0.0 = unknown). Used to place marker
+    // pins proportionally on the Edit timeline; unknown duration renders no pins.
+    double duration_seconds = 0.0;
 };
 
 // Edit/Export-Surface: Review (post-flight report), Edit (keyframe-accurate trim),
@@ -100,6 +104,7 @@ class EditExportPage : public QWidget {
     void loadMarkers();
     void saveMarkers();
     void runExport();
+    void renderMarkerPins();
 
     Phase phase_ = Phase::Review;
 
@@ -130,11 +135,13 @@ class EditExportPage : public QWidget {
     std::vector<RecordingMarker> markers_;
     int64_t trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
     int64_t trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    double duration_seconds_ = 0.0; // total recording duration; 0 = unknown (no marker pins)
 
     // Export thread + output path tracking
     std::thread export_thread_;
     std::atomic<bool> export_cancel_{false};
     std::filesystem::path export_output_path_;
+    QString last_export_error_; // real error message from the last failed export
 
     // Mode-Bar
     QPushButton* back_btn_ = nullptr;
@@ -158,18 +165,18 @@ class EditExportPage : public QWidget {
     QWidget* edit_controls_ = nullptr;
     QPushButton* trim_btn_ = nullptr;
     QPushButton* add_marker_btn_ = nullptr;
-    QPushButton* split_chapter_btn_ = nullptr;
     QLabel* duration_label_ = nullptr;
 
     // Timeline (visual, disabled)
     QFrame* timeline_frame_ = nullptr;
+    QWidget* timeline_waveform_row_ = nullptr; // marker pins are positioned over this row
+    std::vector<QFrame*> marker_pin_widgets_;
     QLabel* timeline_in_label_ = nullptr;
     QLabel* timeline_out_label_ = nullptr;
 
     // Output-Panel
     QWidget* output_panel_ = nullptr;
     QLabel* dest_folder_label_ = nullptr;
-    QPushButton* browse_dest_btn_ = nullptr;
 
     // Exporting-Panel
     QWidget* exporting_panel_ = nullptr;

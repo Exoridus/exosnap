@@ -200,6 +200,27 @@ TEST_F(EditExportOverlayTest, BackdropClick_DoesNotClose_WhenExporting) {
     EXPECT_TRUE(overlay.isOpen()) << "Backdrop click must not dismiss the overlay mid-export";
 }
 
+TEST_F(EditExportOverlayTest, BackButton_FromEditPhase_StepsToReviewWithoutClosingOverlay) {
+    // The three-step flow's Back navigation is internal to EditExportPage for
+    // Edit/Output; only Review's Back closes the overlay (ADR 0022).
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
+    overlay.page()->setPhase(EditExportPage::Phase::Edit);
+    overlay.openOverlay();
+
+    bool closed_fired = false;
+    QObject::connect(&overlay, &ui::dialogs::EditExportOverlay::closed, [&]() { closed_fired = true; });
+
+    auto* back_btn = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
+    ASSERT_NE(back_btn, nullptr);
+    back_btn->click();
+
+    EXPECT_EQ(overlay.page()->phase(), EditExportPage::Phase::Review);
+    EXPECT_FALSE(closed_fired);
+    EXPECT_TRUE(overlay.isOpen());
+}
+
 TEST_F(EditExportOverlayTest, IsDismissBlocked_TrueOnlyDuringExportingPhase) {
     ui::dialogs::EditExportOverlay overlay;
 

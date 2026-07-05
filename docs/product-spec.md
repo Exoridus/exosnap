@@ -57,10 +57,12 @@ Top-level navigation is **six items**, in order:
 - **About** — application identity, build metadata, and links.
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
-recording stops, the surface opens over Record (dimmed backdrop) and is stepped in three linear
-phases — **Review → Edit → Output** — with a top stepper; **Back** (or Escape / backdrop click,
-except while exporting) returns to Record. The Review step consumes the post-flight diagnostic
-report produced during recording.
+recording stops, the surface opens over Record (dimmed backdrop) on the Review step and is stepped
+forward in three linear phases — **Review → Edit → Output** — one at a time via the primary button,
+with a top stepper that always highlights the current phase. **Back** steps back one phase at a time
+(Output → Edit → Review); from Review, Back (or Escape / backdrop click, except while exporting)
+closes the overlay and returns to Record. The Review step consumes the post-flight diagnostic report
+produced during recording.
 
 The default theme is **dark mode**.
 
@@ -362,16 +364,27 @@ recordings, segments finalized before an interruption remain usable; an interrup
 may not be recoverable.
 
 **Edit / Output / Save (post-stop surface).** The three-phase Review → Edit → Output overlay lets the
-user trim and export without leaving the app. The intended model is **keyframe-accurate, lossless
-trim** (stream copy, no re-encode); Output offers container **MKV / MP4** and a save mode of new file
-(`<name>_edit.<ext>`) or overwrite-original (atomic rename). A **keyframe interval** selector
-(Settings → Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim
-accuracy. The original recording is never mutated during export; not-yet-exported edits are discarded
-on dismiss.
+user trim and export without leaving the app. The primary button steps forward one phase at a time
+(Review → Edit → Output); Back steps back one phase at a time (Output → Edit → Review) before
+finally closing the overlay from Review. The stepper always highlights the current phase.
 
-**Current boundary:** the overlay surface — the Review → Edit → Output stepper shown after stop — is
-shipped. The editing engine behind it (Quick Trim stream-copy, marker display, chapter export) is not
-yet implemented and remains a planned wave.
+Trim is **keyframe-accurate and lossless** (stream copy, no re-encode): a spin-box dialog snaps
+entered cut points to the nearest keyframe and, within 50 ms, to the nearest marker. Markers placed
+during or after a recording render as thin pins on the Edit timeline, positioned proportionally
+between the recording's start and its total duration (a recording with unknown duration shows no
+pins rather than guessing). Markers are edit-view only — they are never written as container
+chapters, and chapter export (Split Chapter) remains out of scope for the MVP.
+
+Output offers container **MKV / MP4** (both stream-copy, lossless) and a save mode of new file
+(`<name>_edit.<ext>`, saved beside the source) or overwrite-original (atomic rename in place). The
+save mode alone determines the destination — there is no separate destination-folder picker, since
+the model leaves nothing else for the user to choose. A **keyframe interval** selector (Settings →
+Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
+original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
+
+**Current boundary:** trim, markers, and stream-copy export are implemented and reachable end to end.
+Video preview playback inside the overlay and the Split Chapter action remain deferred to a later
+release (0.11 per ADR 0022).
 
 ---
 
@@ -532,9 +545,10 @@ release binaries will be signed once the certificate is issued.
 - Requires the **Microsoft Visual C++ 2022 x64 Redistributable** (bundled as a declared dependency by
   the WinGet package; not bundled by MSI, portable ZIP, Chocolatey, or Scoop).
 - Distributed as portable ZIP and MSI (both unsigned for now).
-- Not present in current builds: Replay Buffer; the editing engine behind the Edit/Output/Save
-  surface (Quick Trim, markers, chapter export — the surface itself ships); HDR beyond the
-  native-HDR10 monitor-capture path (WGC capture stays SDR; no HLG/wide-gamut — the confirmed 1.0
+- Not present in current builds: Replay Buffer; chapter export from the Edit/Output/Save surface
+  (Quick Trim and markers are implemented and reachable; container chapter export is deliberately
+  out of scope for the MVP); video preview playback inside the Edit/Output/Save overlay; HDR beyond
+  the native-HDR10 monitor-capture path (WGC capture stays SDR; no HLG/wide-gamut — the confirmed 1.0
   scope, with WGC HDR via FP16 frame pool planned as a later wave); 4:2:2 / 4:4:4 chroma;
   multi-vendor hardware encoding; the in-place dual-swap updater (designed, not shipped); immediate
   in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix.
