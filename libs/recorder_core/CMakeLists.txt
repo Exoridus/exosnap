@@ -264,6 +264,8 @@ add_library(recorder_core STATIC
     src/gpu_compositor.h
     src/gpu_hdr_tonemap.cpp
     src/gpu_hdr_tonemap.h
+    src/gpu_rgb_to_ayuv.cpp
+    src/gpu_rgb_to_ayuv.h
     src/gpu_hdr_pq.cpp
     src/gpu_hdr_pq.h
     src/hdr_tonemap.h
@@ -704,6 +706,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_gpu_hdr_tonemap PRIVATE NOMINMAX)
+
+# RGB -> packed AYUV (4:4:4, 8-bit) conversion on the GPU: WARP-backed golden
+# proof that the compute shader emits the exact BT.709 limited/full-range AYUV
+# bytes NVENC consumes for YUV444 H.264/HEVC encoding.
+exosnap_add_gtest(
+    NAME test_gpu_rgb_to_ayuv
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_rgb_to_ayuv.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_rgb_to_ayuv PRIVATE src)
+target_compile_definitions(test_gpu_rgb_to_ayuv PRIVATE NOMINMAX)
 
 # Native HDR10 (PQ / BT.2020 / P010) output: pure curve + matrix + Y'CbCr math,
 # effective-mode decision, and colour-metadata assembly. No GPU — the compute
