@@ -1274,6 +1274,16 @@ exosnap_add_gtest(
 )
 target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Pure switch-over state machine for the WYSIWYG preview during recording
+# (pushed engine source vs the preview's own WGC capture). Header-only logic.
+exosnap_add_gtest(
+    NAME pushed_source_state_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_pushed_source_state.cpp
+)
+target_include_directories(pushed_source_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 exosnap_add_gtest(
     NAME region_preview_crop_tests
     TEST_PREFIX preview.

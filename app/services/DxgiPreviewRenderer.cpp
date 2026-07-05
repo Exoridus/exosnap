@@ -30,6 +30,14 @@ namespace {
 
 constexpr const wchar_t* kChildWindowClass = L"ExoSnapDxgiPreviewChild";
 
+// Keyed-mutex key contract shared with the engine producer (see
+// recorder_core/src/preview_shared_texture.h). The mutex starts on the producer
+// key; the producer releases to the consumer key ("frame ready") and the consumer
+// releases back to the producer key ("free to write"). 0 ms acquires on both
+// sides mean neither party ever blocks.
+constexpr UINT64 kPushedProducerKey = 0;
+constexpr UINT64 kPushedConsumerKey = 1;
+
 const char* kVertexShaderSrc = R"(
 struct VS_OUTPUT {
     float4 position : SV_POSITION;
@@ -211,6 +219,7 @@ void DxgiPreviewRenderer::SetWebcamOverlayFrame(const uint8_t* bgra, int width, 
 }
 
 void DxgiPreviewRenderer::Shutdown() {
+    EndPushedSource();
     StopCapture();
 
     if (childHwnd_) {
@@ -219,6 +228,139 @@ void DxgiPreviewRenderer::Shutdown() {
     }
 
     initialized_.store(false);
+}
+
+// --- Pushed source mode ---
+
+void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height) {
+    if (nt_handle == nullptr || width == 0 || height == 0)
+        return;
+    // Store dimensions first, then the handle with release ordering: the render
+    // thread reads the handle with acquire ordering and then the dimensions.
+    pushedPendingWidth_.store(width, std::memory_order_relaxed);
+    pushedPendingHeight_.store(height, std::memory_order_relaxed);
+    // If a prior pending handle was never adopted, close it before overwriting.
+    void* prior = pushedPendingHandle_.exchange(nt_handle, std::memory_order_acq_rel);
+    if (prior != nullptr && prior != nt_handle)
+        CloseHandle(static_cast<HANDLE>(prior));
+    pushedRequested_.store(true, std::memory_order_release);
+}
+
+void DxgiPreviewRenderer::EndPushedSource() {
+    pushedRequested_.store(false, std::memory_order_release);
+    // Drain a pending handle that the render thread never adopted (e.g. recording
+    // ended before the first engine frame). The render thread releases the opened
+    // resources itself via ReleasePushedResources on teardown.
+    void* stale = pushedPendingHandle_.exchange(nullptr, std::memory_order_acq_rel);
+    if (stale != nullptr)
+        CloseHandle(static_cast<HANDLE>(stale));
+}
+
+void DxgiPreviewRenderer::StopCaptureGraph() {
+    if (captureSession_) {
+        captureSession_.Close();
+        captureSession_ = nullptr;
+    }
+    if (framePool_) {
+        framePool_.Close();
+        framePool_ = nullptr;
+    }
+    if (captureItem_) {
+        captureItem_.Closed(closedToken_);
+        closedToken_ = {};
+        captureItem_ = nullptr;
+    }
+    // A stale source-lost flag from the closed graph must not end the render loop
+    // while pushed mode is running.
+    sourceLost_.store(false);
+}
+
+void DxgiPreviewRenderer::AdoptPendingPushedSource() {
+    void* pending = pushedPendingHandle_.load(std::memory_order_acquire);
+    if (pending == nullptr)
+        return;
+    // Claim it (CAS guards against a concurrent EndPushedSource drain).
+    if (!pushedPendingHandle_.compare_exchange_strong(pending, nullptr, std::memory_order_acq_rel))
+        return;
+
+    const uint32_t w = pushedPendingWidth_.load(std::memory_order_relaxed);
+    const uint32_t h = pushedPendingHeight_.load(std::memory_order_relaxed);
+
+    // Opening a new handle supersedes any previously opened one (session restart).
+    ReleasePushedResources();
+
+    bool opened = false;
+    Microsoft::WRL::ComPtr<ID3D11Device1> dev1;
+    if (d3dDevice_ && SUCCEEDED(d3dDevice_->QueryInterface(IID_PPV_ARGS(dev1.GetAddressOf())))) {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTex;
+        HRESULT openHr =
+            dev1->OpenSharedResource1(static_cast<HANDLE>(pending), IID_PPV_ARGS(sharedTex.GetAddressOf()));
+        if (SUCCEEDED(openHr) && sharedTex) {
+            Microsoft::WRL::ComPtr<IDXGIKeyedMutex> km;
+            if (SUCCEEDED(sharedTex->QueryInterface(IID_PPV_ARGS(km.GetAddressOf())))) {
+                D3D11_TEXTURE2D_DESC td{};
+                sharedTex->GetDesc(&td);
+                // Private copy target (default usage, shader-readable) so the
+                // present cadence is decoupled from the producer's write cadence.
+                D3D11_TEXTURE2D_DESC ld = td;
+                ld.MiscFlags = 0;
+                ld.CPUAccessFlags = 0;
+                ld.Usage = D3D11_USAGE_DEFAULT;
+                ld.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> localTex;
+                if (SUCCEEDED(d3dDevice_->CreateTexture2D(&ld, nullptr, localTex.GetAddressOf()))) {
+                    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+                    srvDesc.Format = td.Format;
+                    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                    srvDesc.Texture2D.MipLevels = 1;
+                    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+                    if (SUCCEEDED(d3dDevice_->CreateShaderResourceView(localTex.Get(), &srvDesc, srv.GetAddressOf()))) {
+                        pushedSharedTex_ = sharedTex;
+                        pushedMutex_ = km;
+                        pushedLocalTex_ = localTex;
+                        pushedLocalSRV_ = srv;
+                        pushedWidth_ = w;
+                        pushedHeight_ = h;
+                        pushed_.OnSourceOpened();
+                        opened = true;
+                        diagnostics::AppLog::debug(
+                            QStringLiteral("dxgi-preview"),
+                            QStringLiteral("pushed source active %1x%2 on preview device").arg(w).arg(h));
+                    }
+                }
+            }
+        }
+        if (!opened) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("dxgi-preview"),
+                QStringLiteral("pushed source: OpenSharedResource1 failed 0x%1 (adapter mismatch or cross-GPU?)")
+                    .arg(static_cast<unsigned long>(openHr), 8, 16, QChar('0')));
+        }
+    }
+    // Ownership was handed to this thread; always close the NT handle.
+    CloseHandle(static_cast<HANDLE>(pending));
+}
+
+void DxgiPreviewRenderer::ConsumePushedFrame() {
+    if (!pushedMutex_ || !pushedLocalTex_ || !pushedSharedTex_)
+        return;
+    // 0 ms acquire: if the producer currently holds the mutex we keep the last
+    // local copy for this present tick rather than stall the render thread.
+    if (pushedMutex_->AcquireSync(kPushedConsumerKey, 0) == S_OK) {
+        d3dContext_->CopyResource(pushedLocalTex_.Get(), pushedSharedTex_.Get());
+        pushedMutex_->ReleaseSync(kPushedProducerKey);
+        pushed_.OnFrameConsumed();
+    }
+}
+
+void DxgiPreviewRenderer::ReleasePushedResources() {
+    pushedLocalSRV_.Reset();
+    pushedLocalTex_.Reset();
+    pushedMutex_.Reset();
+    pushedSharedTex_.Reset();
+    pushedWidth_ = 0;
+    pushedHeight_ = 0;
+    pushed_.Reset();
 }
 
 LRESULT CALLBACK DxgiPreviewRenderer::ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -441,6 +583,13 @@ void DxgiPreviewRenderer::CleanupCapture() {
         chromeTex_.Reset();
         chromeSRV_.Reset();
     }
+    // Pushed-source resources live on this device; release before the device.
+    ReleasePushedResources();
+    // Drain any handle that was signalled but never adopted (avoid a handle leak).
+    void* stalePushed = pushedPendingHandle_.exchange(nullptr, std::memory_order_acq_rel);
+    if (stalePushed != nullptr)
+        CloseHandle(static_cast<HANDLE>(stalePushed));
+
     d3dContext_.Reset();
     d3dDevice_.Reset();
     latestFrame_.Reset();
@@ -737,42 +886,54 @@ void DxgiPreviewRenderer::RenderFrame() {
     // PiP overlay is placed relative to this so it never lands in letterbox margins.
     LONG contentX = 0, contentY = 0, contentW = 0, contentH = 0;
 
-    {
+    // While a pushed engine frame is available, that frame is the background (it
+    // already contains the cursor + webcam PiP exactly as recorded). Until the
+    // first pushed frame lands we fall back to the last WGC image (no black flash).
+    const bool drawPushed = pushed_.DrawsPushedBackground() && pushedLocalSRV_ && pushedWidth_ > 0 && pushedHeight_ > 0;
+
+    auto drawSource = [&](ID3D11ShaderResourceView* srv, uint32_t srcW, uint32_t srcH) {
+        LONG dx = 0, dy = 0, dw = static_cast<LONG>(bbDesc.Width), dh = static_cast<LONG>(bbDesc.Height);
+        ComputeContainFitRect(static_cast<LONG>(bbDesc.Width), static_cast<LONG>(bbDesc.Height),
+                              static_cast<LONG>(srcW), static_cast<LONG>(srcH), dx, dy, dw, dh);
+        if (dw <= 0 || dh <= 0)
+            return;
+        contentX = dx;
+        contentY = dy;
+        contentW = dw;
+        contentH = dh;
+
+        D3D11_VIEWPORT vp{};
+        vp.TopLeftX = static_cast<float>(dx);
+        vp.TopLeftY = static_cast<float>(dy);
+        vp.Width = static_cast<float>(dw);
+        vp.Height = static_cast<float>(dh);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+        d3dContext_->RSSetViewports(1, &vp);
+
+        d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+        d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+        d3dContext_->PSSetShaderResources(0, 1, &srv);
+        d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+        d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        d3dContext_->Draw(3, 0);
+    };
+
+    if (drawPushed) {
+        drawSource(pushedLocalSRV_.Get(), pushedWidth_, pushedHeight_);
+    } else {
         std::lock_guard lock(frameMutex_);
-        if (latestFrame_ && srcWidth_ > 0 && srcHeight_ > 0) {
-            LONG dx = 0, dy = 0, dw = static_cast<LONG>(bbDesc.Width), dh = static_cast<LONG>(bbDesc.Height);
-            ComputeContainFitRect(static_cast<LONG>(bbDesc.Width), static_cast<LONG>(bbDesc.Height),
-                                  static_cast<LONG>(srcWidth_), static_cast<LONG>(srcHeight_), dx, dy, dw, dh);
-
-            if (dw > 0 && dh > 0) {
-                contentX = dx;
-                contentY = dy;
-                contentW = dw;
-                contentH = dh;
-
-                D3D11_VIEWPORT vp{};
-                vp.TopLeftX = static_cast<float>(dx);
-                vp.TopLeftY = static_cast<float>(dy);
-                vp.Width = static_cast<float>(dw);
-                vp.Height = static_cast<float>(dh);
-                vp.MinDepth = 0.0f;
-                vp.MaxDepth = 1.0f;
-                d3dContext_->RSSetViewports(1, &vp);
-
-                d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
-                d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
-                d3dContext_->PSSetShaderResources(0, 1, latestFrameSRV_.GetAddressOf());
-                d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
-                d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-                d3dContext_->Draw(3, 0);
-            }
-        }
+        if (latestFrame_ && latestFrameSRV_ && srcWidth_ > 0 && srcHeight_ > 0)
+            drawSource(latestFrameSRV_.Get(), srcWidth_, srcHeight_);
     }
 
-    // Composite the webcam PiP (+ chrome) over the main frame's content rect.
-    RenderWebcamOverlay(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
-                        static_cast<int>(contentH));
+    // Composite the webcam PiP (+ chrome) over the main frame's content rect — but
+    // NOT when drawing a pushed engine frame, which already has the PiP baked in
+    // (drawing it again would double the overlay).
+    if (!drawPushed) {
+        RenderWebcamOverlay(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
+                            static_cast<int>(contentH));
+    }
 
     swapChain_->Present(1, 0);
 }
@@ -837,7 +998,9 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
     QueryPerformanceCounter(&nextDeadline);
     const LONGLONG intervalTicks = static_cast<LONGLONG>(frame_interval_ms) * qpcFreq.QuadPart / 1000;
 
-    while (!stop_token.stop_requested() && !sourceLost_.load()) {
+    // Pushed mode keeps the loop alive even though the WGC graph (and its
+    // source-lost signal) has been torn down.
+    while (!stop_token.stop_requested() && (!sourceLost_.load() || pushed_.active)) {
         if (resizeRequested_.load()) {
             uint32_t rw = requestedWidth_.load();
             uint32_t rh = requestedHeight_.load();
@@ -845,7 +1008,19 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
             resizeRequested_.store(false);
         }
 
-        PollAndProcessFrames();
+        if (pushedRequested_.load(std::memory_order_acquire)) {
+            AdoptPendingPushedSource();
+            if (pushed_.ShouldStopWgcGraph()) {
+                // The engine is now the source of truth — stop the second capture.
+                StopCaptureGraph();
+                pushed_.OnWgcGraphStopped();
+            }
+        }
+
+        if (pushed_.PollsWgc())
+            PollAndProcessFrames();
+        else
+            ConsumePushedFrame();
         RenderFrame();
 
         nextDeadline.QuadPart += intervalTicks;

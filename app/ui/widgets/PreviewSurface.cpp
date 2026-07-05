@@ -300,6 +300,16 @@ bool PreviewSurface::isDxgiPreviewActive() const noexcept {
     return dxgi_active_ && dxgi_renderer_ && dxgi_renderer_->IsActive();
 }
 
+void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height) {
+    if (dxgi_renderer_)
+        dxgi_renderer_->BeginPushedSource(nt_handle, width, height);
+}
+
+void PreviewSurface::endPushedSource() {
+    if (dxgi_renderer_)
+        dxgi_renderer_->EndPushedSource();
+}
+
 void PreviewSurface::repositionDxgiPreview() {
     applyDxgiPreviewResize();
 }

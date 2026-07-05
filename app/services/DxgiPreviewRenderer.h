@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PreviewHelpers.h"
+#include "PushedSourceState.h"
 
 #include <atomic>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <recorder_core/recorder_session.h>
 
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <windows.h>
 
@@ -59,6 +61,25 @@ class DxgiPreviewRenderer {
 
     void Shutdown();
 
+    // --- Pushed source mode (WYSIWYG preview during recording) ---
+    // During recording the engine shares its composited, pre-encode frame via an
+    // NT-handle keyed-mutex texture. BeginPushedSource switches the preview to
+    // sample that shared texture instead of running its own WGC capture: the
+    // render thread opens the handle, STOPS the WGC capture graph (no second
+    // capture), and renders the engine's frames (which already contain the webcam
+    // PiP, so the renderer's own overlay is suppressed to avoid a double draw).
+    //
+    // nt_handle: the shared NT handle; ownership transfers to the renderer, which
+    // opens it via OpenSharedResource1 on its render thread and CloseHandle's it.
+    // Thread-safe: may be called from any thread; only stashes the handle + signals
+    // the render thread (no D3D on the caller's thread). Until the first shared
+    // frame arrives the preview holds its last WGC image (no black flash).
+    void BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    // Revert to the normal WGC preview path and drain any un-opened handle. In this
+    // app the renderer is torn down + recreated on stop, so this mainly guards the
+    // handle lifetime; safe to call when not in pushed mode.
+    void EndPushedSource();
+
   private:
     static LRESULT CALLBACK ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -71,6 +92,17 @@ class DxgiPreviewRenderer {
     bool InitCaptureItem(const recorder_core::CaptureTarget& target);
     bool InitFramePool();
     void CleanupCapture();
+    // Close only the WGC capture graph (session/frame pool/item) while keeping the
+    // D3D device, swap chain and shaders alive — used when entering pushed mode so
+    // the preview's own capture truly stops. Render-thread only.
+    void StopCaptureGraph();
+    // Adopt a pending pushed-source handle: open it on the render device, allocate
+    // the private copy target, and activate pushed rendering. Render-thread only.
+    void AdoptPendingPushedSource();
+    // Non-blocking: acquire the shared keyed mutex, copy the latest engine frame
+    // into the private local texture, release. Render-thread only.
+    void ConsumePushedFrame();
+    void ReleasePushedResources();
     void PollAndProcessFrames();
     void RenderFrame();
     void ResizeSwapChainInternal(uint32_t width, uint32_t height);
@@ -144,6 +176,23 @@ class DxgiPreviewRenderer {
     int overlayTexH_ = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> chromeTex_; // 1x1 amber for edit chrome
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> chromeSRV_;
+
+    // --- Pushed source mode state ---
+    // Handoff from any thread (BeginPushedSource) to the render thread. The render
+    // thread exchanges the handle out, opens it, and CloseHandle's it.
+    std::atomic<void*> pushedPendingHandle_{nullptr};
+    std::atomic<uint32_t> pushedPendingWidth_{0};
+    std::atomic<uint32_t> pushedPendingHeight_{0};
+    std::atomic<bool> pushedRequested_{false};
+    // Render-thread-owned (no lock; only touched on the render thread).
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedSharedTex_;         // opened shared surface
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> pushedMutex_;             // keyed mutex on the shared surface
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedLocalTex_;          // private copy (decoupled cadence)
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> pushedLocalSRV_; // SRV over the private copy
+    uint32_t pushedWidth_ = 0;
+    uint32_t pushedHeight_ = 0;
+    // Pure switch-over state (active / has-frame / wgc-stopped); render-thread-owned.
+    PushedSourceState pushed_;
 };
 
 } // namespace exosnap
