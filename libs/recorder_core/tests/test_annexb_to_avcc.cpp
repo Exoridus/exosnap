@@ -125,6 +125,213 @@ TEST(AnnexBTest, BuildAvcc_SpsProfileBytesMatchAvccHeader) {
 }
 
 // ---------------------------------------------------------------------------
+// ISO/IEC 14496-15 5.3.3.1 high-profile extension trailer
+// ---------------------------------------------------------------------------
+//
+// Non-Baseline/Main/Extended (profile_idc not in {66,77,88}) avcC records must
+// carry a 4-byte trailer: chroma_format_idc, bit_depth_luma_minus8,
+// bit_depth_chroma_minus8, numOfSequenceParameterSetExt. These fields come
+// from the SPS RBSP, which is bit-packed (Exp-Golomb ue(v)). SpsBitWriter below
+// is ported from the SpsBitWriter in test_annexb_to_hvcc.cpp (same MSB-first /
+// Exp-Golomb packing rules apply to H.264 and HEVC RBSPs alike).
+
+// Minimal MSB-first bit writer for synthesizing a real H.264 SPS RBSP.
+class SpsBitWriter {
+  public:
+    void PutBit(uint32_t bit) {
+        cur_ = static_cast<uint8_t>((cur_ << 1u) | (bit & 0x1u));
+        if (++nbits_ == 8u) {
+            bytes_.push_back(cur_);
+            cur_ = 0;
+            nbits_ = 0;
+        }
+    }
+    void PutBits(uint32_t value, uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i)
+            PutBit((value >> (count - 1u - i)) & 0x1u);
+    }
+    // Exp-Golomb ue(v): n leading zeros, a 1, then n suffix bits.
+    void PutUe(uint32_t value) {
+        const uint32_t code = value + 1u;
+        uint32_t n = 0;
+        while ((1u << (n + 1u)) <= code)
+            ++n;
+        for (uint32_t i = 0; i < n; ++i)
+            PutBit(0u);
+        for (int32_t i = static_cast<int32_t>(n); i >= 0; --i)
+            PutBit((code >> i) & 0x1u);
+    }
+    std::vector<uint8_t> Finish() {
+        // rbsp_stop_one_bit then byte alignment.
+        PutBit(1u);
+        while (nbits_ != 0u)
+            PutBit(0u);
+        return bytes_;
+    }
+    // Flush any partial byte with zero padding, WITHOUT the rbsp_stop_one_bit.
+    // Used to synthesize a deliberately truncated RBSP: the reader must run
+    // out of real data (not spuriously decode zero padding as a valid
+    // Exp-Golomb code) while parsing the next field.
+    std::vector<uint8_t> FinishTruncated() {
+        while (nbits_ != 0u)
+            PutBit(0u);
+        return bytes_;
+    }
+
+  private:
+    std::vector<uint8_t> bytes_;
+    uint8_t cur_ = 0;
+    uint32_t nbits_ = 0;
+};
+
+// Build a real, parseable H.264 SPS NAL: NAL header byte 0x67, then
+// profile_idc/profile_compatibility/level_idc as byte-aligned raw values,
+// then the bit-packed RBSP prefix the avcC builder parses for High-family
+// profiles: ue(sps_id), ue(chroma_format_idc), (separate_colour_plane_flag
+// when chroma==3), ue(bit_depth_luma_minus8), ue(bit_depth_chroma_minus8).
+// The remainder of the real SPS syntax is irrelevant to the parser, which
+// only reads this prefix.
+static std::vector<uint8_t> MakeH264SpsNal(uint8_t profile_idc, uint32_t chroma_format_idc = 1u,
+                                           uint32_t bit_depth_luma_minus8 = 0u, uint32_t bit_depth_chroma_minus8 = 0u,
+                                           bool with_chroma_block = true) {
+    SpsBitWriter w;
+    w.PutBits(profile_idc, 8u); // profile_idc
+    w.PutBits(0x00u, 8u);       // profile_compatibility / constraint flags
+    w.PutBits(0x28u, 8u);       // level_idc
+    w.PutUe(0u);                // seq_parameter_set_id
+    if (with_chroma_block) {
+        w.PutUe(chroma_format_idc);
+        if (chroma_format_idc == 3u)
+            w.PutBit(0u); // separate_colour_plane_flag
+        w.PutUe(bit_depth_luma_minus8);
+        w.PutUe(bit_depth_chroma_minus8);
+    }
+    const std::vector<uint8_t> rbsp = w.Finish();
+    std::vector<uint8_t> nal = {0x67u}; // SPS NAL header (type 7)
+    nal.insert(nal.end(), rbsp.begin(), rbsp.end());
+    return nal;
+}
+
+// A High-profile SPS NAL truncated right after ue(sps_id) — chroma_format_idc
+// and the bit-depth fields are entirely missing. No rbsp_stop_one_bit is
+// written, so the parser must run out of real data while reading
+// chroma_format_idc and report a parse failure (not a spuriously-decoded
+// all-zero value).
+static std::vector<uint8_t> MakeH264SpsNalTruncatedAfterSpsId(uint8_t profile_idc) {
+    SpsBitWriter w;
+    w.PutBits(profile_idc, 8u);
+    w.PutBits(0x00u, 8u);
+    w.PutBits(0x28u, 8u);
+    w.PutUe(0u); // seq_parameter_set_id — nothing else follows
+    const std::vector<uint8_t> rbsp = w.FinishTruncated();
+    std::vector<uint8_t> nal = {0x67u};
+    nal.insert(nal.end(), rbsp.begin(), rbsp.end());
+    return nal;
+}
+
+// Wrap an SPS NAL and a short synthetic PPS NAL into the start-code-separated
+// layout BuildAvccFromAnnexBSpsAndPps expects.
+static std::vector<uint8_t> WrapSpsPps(const std::vector<uint8_t>& sps_nal) {
+    static const std::vector<uint8_t> kPps = {0x68u, 0xCEu, 0x38u, 0x80u}; // PPS (type=8)
+    std::vector<uint8_t> bs;
+    bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01});
+    bs.insert(bs.end(), sps_nal.begin(), sps_nal.end());
+    bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01});
+    bs.insert(bs.end(), kPps.begin(), kPps.end());
+    return bs;
+}
+
+TEST(AnnexBTest, BuildAvcc_BaselineProfile_NoTrailer) {
+    // profile_idc 66 (Baseline): avcC ends exactly after the PPS bytes — no
+    // ISO 14496-15 extension trailer for Baseline/Main/Extended profiles.
+    const auto sps = MakeH264SpsNal(/*profile_idc=*/66u, /*chroma=*/1u, /*bd_luma=*/0u, /*bd_chroma=*/0u,
+                                    /*with_chroma_block=*/false);
+    const auto sps_pps = WrapSpsPps(sps);
+
+    std::vector<uint8_t> avcc;
+    ASSERT_TRUE(BuildAvccFromAnnexBSpsAndPps(sps_pps, avcc));
+
+    // Pre-trailer size: 6-byte fixed header + 2-byte spsLen + sps + 1-byte
+    // numPPS + 2-byte ppsLen + pps.
+    constexpr size_t kPpsLen = 4u;
+    EXPECT_EQ(avcc.size(), 11u + sps.size() + kPpsLen);
+    EXPECT_EQ(avcc.back(), 0x80u); // last PPS byte, not a trailer byte
+}
+
+TEST(AnnexBTest, BuildAvcc_HighProfile420_TrailerChroma1Depth8) {
+    // profile_idc 100 (High), chroma_format_idc 1 (4:2:0), 8-bit depths.
+    const auto sps = MakeH264SpsNal(/*profile_idc=*/100u, /*chroma=*/1u, /*bd_luma=*/0u, /*bd_chroma=*/0u);
+    const auto sps_pps = WrapSpsPps(sps);
+
+    std::vector<uint8_t> avcc;
+    ASSERT_TRUE(BuildAvccFromAnnexBSpsAndPps(sps_pps, avcc));
+
+    constexpr size_t kPpsLen = 4u;
+    ASSERT_EQ(avcc.size(), 11u + sps.size() + kPpsLen + 4u);
+    // Header fields (numSPS/numPPS) untouched by the trailer addition.
+    EXPECT_EQ(avcc[4], 0xFFu); // lengthSizeMinusOne
+    EXPECT_EQ(avcc[5], 0xE1u); // numSPS = 1
+
+    const size_t n = avcc.size();
+    EXPECT_EQ(avcc[n - 4], 0xFDu); // reserved(6b) | chroma_format_idc(1)
+    EXPECT_EQ(avcc[n - 3], 0xF8u); // reserved(5b) | bit_depth_luma_minus8(0)
+    EXPECT_EQ(avcc[n - 2], 0xF8u); // reserved(5b) | bit_depth_chroma_minus8(0)
+    EXPECT_EQ(avcc[n - 1], 0x00u); // numOfSequenceParameterSetExt
+}
+
+TEST(AnnexBTest, BuildAvcc_High444Pred_TrailerChroma3) {
+    // profile_idc 244 (High 4:4:4 Predictive), chroma_format_idc 3 (4:4:4,
+    // separate_colour_plane_flag=0), 8-bit depths.
+    const auto sps = MakeH264SpsNal(/*profile_idc=*/244u, /*chroma=*/3u, /*bd_luma=*/0u, /*bd_chroma=*/0u);
+    const auto sps_pps = WrapSpsPps(sps);
+
+    std::vector<uint8_t> avcc;
+    ASSERT_TRUE(BuildAvccFromAnnexBSpsAndPps(sps_pps, avcc));
+
+    const size_t n = avcc.size();
+    ASSERT_GE(n, 4u);
+    EXPECT_EQ(avcc[n - 4], 0xFFu); // reserved(6b) | chroma_format_idc(3)
+    EXPECT_EQ(avcc[n - 3], 0xF8u);
+    EXPECT_EQ(avcc[n - 2], 0xF8u);
+    EXPECT_EQ(avcc[n - 1], 0x00u);
+}
+
+TEST(AnnexBTest, BuildAvcc_High10_TrailerTenBitDepths) {
+    // profile_idc 110 (High 10), chroma_format_idc 1, 10-bit depths
+    // (bit_depth_*_minus8 = 2).
+    const auto sps = MakeH264SpsNal(/*profile_idc=*/110u, /*chroma=*/1u, /*bd_luma=*/2u, /*bd_chroma=*/2u);
+    const auto sps_pps = WrapSpsPps(sps);
+
+    std::vector<uint8_t> avcc;
+    ASSERT_TRUE(BuildAvccFromAnnexBSpsAndPps(sps_pps, avcc));
+
+    const size_t n = avcc.size();
+    ASSERT_GE(n, 4u);
+    EXPECT_EQ(avcc[n - 4], 0xFDu);
+    EXPECT_EQ(avcc[n - 3], 0xFAu); // bit_depth_luma_minus8 = 2 → 10-bit
+    EXPECT_EQ(avcc[n - 2], 0xFAu); // bit_depth_chroma_minus8 = 2 → 10-bit
+    EXPECT_EQ(avcc[n - 1], 0x00u);
+}
+
+TEST(AnnexBTest, BuildAvcc_HighProfileTruncatedSps_FallsBackTo420Depth8) {
+    // profile_idc 100, but the SPS RBSP is truncated right after ue(sps_id).
+    // Build must still succeed and fall back to the conservative 4:2:0/8-bit
+    // trailer defaults, mirroring the hvcC parser's graceful-fallback design.
+    const auto sps = MakeH264SpsNalTruncatedAfterSpsId(/*profile_idc=*/100u);
+    const auto sps_pps = WrapSpsPps(sps);
+
+    std::vector<uint8_t> avcc;
+    ASSERT_TRUE(BuildAvccFromAnnexBSpsAndPps(sps_pps, avcc));
+
+    const size_t n = avcc.size();
+    ASSERT_GE(n, 4u);
+    EXPECT_EQ(avcc[n - 4], 0xFDu); // fallback: chroma_format_idc = 1
+    EXPECT_EQ(avcc[n - 3], 0xF8u); // fallback: bit_depth_luma_minus8 = 0
+    EXPECT_EQ(avcc[n - 2], 0xF8u); // fallback: bit_depth_chroma_minus8 = 0
+    EXPECT_EQ(avcc[n - 1], 0x00u);
+}
+
+// ---------------------------------------------------------------------------
 // ConvertAnnexBToAvcc tests
 // ---------------------------------------------------------------------------
 

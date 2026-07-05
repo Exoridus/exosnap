@@ -1,6 +1,10 @@
 #include "annexb_to_avcc.h"
 
+#include "rbsp_bit_reader.h"
+
+#include <algorithm>
 #include <cstdio>
+#include <iterator>
 
 namespace recorder_core::annexb {
 
@@ -51,6 +55,60 @@ static void EnumerateNals(const uint8_t* data, size_t size, std::vector<NalSpan>
 
         i = payloadEnd;
     }
+}
+
+// ---------------------------------------------------------------------------
+// H.264 SPS RBSP parser (for the avcC ISO 14496-15 §5.3.3.1 extension trailer)
+// ---------------------------------------------------------------------------
+//
+// Non-Baseline/Main/Extended (profile_idc not in {66,77,88}) avcC records must
+// append chroma_format_idc, bit_depth_luma_minus8, bit_depth_chroma_minus8 and
+// numOfSequenceParameterSetExt after the SPS/PPS. The first three come from
+// the SPS RBSP (ITU-T H.264 7.3.2.1.1), which is bit-packed (Exp-Golomb ue(v))
+// and only carries this block for the "High" profile family. We reuse the
+// same emulation-prevention-stripping bit reader as the HEVC hvcC path.
+
+struct H264SpsChromaInfo {
+    uint32_t chroma_format_idc = 1u;     // spec default: 4:2:0
+    uint32_t bit_depth_luma_minus8 = 0u; // spec default: 8-bit
+    uint32_t bit_depth_chroma_minus8 = 0u;
+};
+
+// sps points at the NAL type byte (0x67); sps_len covers the whole NAL.
+// Returns false on parse failure or when the profile's SPS doesn't carry the
+// chroma/bit-depth block — `out` keeps the 4:2:0/8-bit defaults then.
+bool ParseH264SpsChromaInfo(const uint8_t* sps, size_t sps_len, H264SpsChromaInfo& out) {
+    if (sps_len < 4)
+        return false;
+    const uint8_t profile_idc = sps[1];
+    // Profiles whose SPS carries the chroma/bit-depth block (ISO 14496-10 §7.3.2.1.1).
+    static constexpr uint8_t kHighFamily[] = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135};
+    const bool has_block =
+        std::find(std::begin(kHighFamily), std::end(kHighFamily), profile_idc) != std::end(kHighFamily);
+    if (!has_block)
+        return true; // defaults apply
+
+    // RBSP starts right after the NAL type byte, so emulation-prevention
+    // stripping sees the full NAL payload (profile/compat/level + RBSP bits).
+    detail::RbspBitReader r(sps + 1, sps_len - 1);
+    uint32_t skip = 0;
+    if (!r.ReadBits(24u, skip)) // profile_idc(8) + profile_compatibility(8) + level_idc(8)
+        return false;
+    uint32_t sps_id = 0;
+    if (!r.ReadUe(sps_id))
+        return false;
+    if (!r.ReadUe(out.chroma_format_idc))
+        return false;
+    if (out.chroma_format_idc == 3u) {
+        uint32_t separate_colour_plane_flag = 0;
+        if (!r.ReadBit(separate_colour_plane_flag))
+            return false;
+    }
+    if (!r.ReadUe(out.bit_depth_luma_minus8))
+        return false;
+    if (!r.ReadUe(out.bit_depth_chroma_minus8))
+        return false;
+    return true;
 }
 
 } // namespace
@@ -160,6 +218,17 @@ bool BuildAvccFromAnnexBSpsAndPps(const std::vector<uint8_t>& sps_pps_annexb, st
     out_avcc.push_back(static_cast<uint8_t>((pps_len >> 8u) & 0xFFu)); // ppsLength high
     out_avcc.push_back(static_cast<uint8_t>(pps_len & 0xFFu));         // ppsLength low
     out_avcc.insert(out_avcc.end(), pps, pps + pps_len);
+
+    // ISO/IEC 14496-15 §5.3.3.1: non-Baseline/Main/Extended profiles carry the
+    // chroma-format / bit-depth extension parsed from the SPS RBSP.
+    if (profile_idc != 66u && profile_idc != 77u && profile_idc != 88u) {
+        H264SpsChromaInfo info;
+        ParseH264SpsChromaInfo(sps, sps_len, info); // graceful 4:2:0/8-bit fallback
+        out_avcc.push_back(0xFCu | static_cast<uint8_t>(info.chroma_format_idc & 0x03u));
+        out_avcc.push_back(0xF8u | static_cast<uint8_t>(info.bit_depth_luma_minus8 & 0x07u));
+        out_avcc.push_back(0xF8u | static_cast<uint8_t>(info.bit_depth_chroma_minus8 & 0x07u));
+        out_avcc.push_back(0x00u); // numOfSequenceParameterSetExt
+    }
 
     return true;
 }

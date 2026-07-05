@@ -1,5 +1,7 @@
 #include "annexb_to_hvcc.h"
 
+#include "rbsp_bit_reader.h"
+
 #include <cstdio>
 
 namespace recorder_core::annexb {
@@ -85,72 +87,10 @@ struct ParsedHevcSps {
     uint32_t bit_depth_chroma_minus8 = 0;
 };
 
-// Minimal MSB-first bit reader over an RBSP with emulation-prevention removal.
-class RbspBitReader {
-  public:
-    RbspBitReader(const uint8_t* data, size_t size) : data_(data), size_(size) {
-    }
-
-    bool ReadBit(uint32_t& out) {
-        if (byte_pos_ >= size_)
-            return false;
-        const uint8_t byte = data_[byte_pos_];
-        out = (byte >> (7u - bit_pos_)) & 0x1u;
-        if (++bit_pos_ == 8u) {
-            bit_pos_ = 0u;
-            ++byte_pos_;
-            // Skip the emulation_prevention_three_byte: 0x00 0x00 0x03 → the 0x03
-            // is not part of the RBSP payload. Detect when the next byte is 0x03
-            // and the two bytes before it (within the NAL) were both 0x00.
-            if (byte_pos_ >= 2u && byte_pos_ < size_ && data_[byte_pos_] == 0x03u && data_[byte_pos_ - 1u] == 0x00u &&
-                data_[byte_pos_ - 2u] == 0x00u) {
-                ++byte_pos_;
-            }
-        }
-        return true;
-    }
-
-    bool ReadBits(uint32_t count, uint32_t& out) {
-        out = 0u;
-        for (uint32_t i = 0; i < count; ++i) {
-            uint32_t bit = 0;
-            if (!ReadBit(bit))
-                return false;
-            out = (out << 1u) | bit;
-        }
-        return true;
-    }
-
-    // Exp-Golomb unsigned: count leading zero bits n, then read n more bits.
-    bool ReadUe(uint32_t& out) {
-        uint32_t zeros = 0;
-        uint32_t bit = 0;
-        while (true) {
-            if (!ReadBit(bit))
-                return false;
-            if (bit == 1u)
-                break;
-            if (++zeros > 31u)
-                return false; // malformed / out of range
-        }
-        uint32_t suffix = 0;
-        if (zeros > 0u && !ReadBits(zeros, suffix))
-            return false;
-        out = (1u << zeros) - 1u + suffix;
-        return true;
-    }
-
-  private:
-    const uint8_t* data_ = nullptr;
-    size_t size_ = 0;
-    size_t byte_pos_ = 0;
-    uint32_t bit_pos_ = 0;
-};
-
 // Parse profile_tier_level() for the general layer plus, when present, skip the
 // sub-layer PTL. Returns false on truncation. profilePresentFlag is assumed 1
 // (always the case for the SPS top-level PTL).
-static bool ParseProfileTierLevel(RbspBitReader& r, uint32_t max_sub_layers_minus1, ParsedHevcSps& out) {
+static bool ParseProfileTierLevel(detail::RbspBitReader& r, uint32_t max_sub_layers_minus1, ParsedHevcSps& out) {
     uint32_t v = 0;
     if (!r.ReadBits(2u, v))
         return false;
@@ -218,7 +158,7 @@ static bool ParseHevcSps(const uint8_t* sps_nal, size_t sps_len, ParsedHevcSps& 
     if (sps_nal == nullptr || sps_len < 3u)
         return false;
     // Skip the 2-byte NAL header; the RBSP starts at sps_nal[2].
-    RbspBitReader r(sps_nal + 2u, sps_len - 2u);
+    detail::RbspBitReader r(sps_nal + 2u, sps_len - 2u);
 
     uint32_t v = 0;
     if (!r.ReadBits(4u, v)) // sps_video_parameter_set_id
