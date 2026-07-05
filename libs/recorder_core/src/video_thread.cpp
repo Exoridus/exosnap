@@ -1950,7 +1950,8 @@ void VideoThread::Run() {
     };
 
     // --- Frame snapshot (CaptureFrame) ---
-    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for NV12→BGRA readback.
+    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for the
+    // NV12/P010/AYUV→BGRA readback (format follows encodeFormat).
     // Lives until the encode loop exits; reused across multiple snapshot requests.
     winrt::com_ptr<ID3D11Texture2D> snapshotStagingTex;
     // Callback type alias — must precede the lambda that uses it.
@@ -2008,7 +2009,7 @@ void VideoThread::Run() {
             }
         }
 
-        // Copy the final NV12/P010 encode-ready frame to the staging texture.
+        // Copy the final encode-ready frame (NV12/P010/AYUV) to the staging texture.
         d3dContext->CopyResource(snapshotStagingTex.get(), nv12Textures[slot_idx].get());
 
         // Map for CPU read (synchronization point — stalls until GPU copy completes).
