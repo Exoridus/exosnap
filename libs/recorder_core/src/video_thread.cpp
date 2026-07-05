@@ -205,6 +205,28 @@ int ScaleCoordinateToSource(LONG screen_delta, int source_pixels, int bounds_pix
     return static_cast<int>(rounded / bounds_pixels);
 }
 
+// A 10-bit R10G10B10A2 tone-map intermediate must be a supported VideoProcessor
+// *input* on this driver, or every CreateVideoProcessorInputView call for it
+// would fail per tick with no recorded failure — silent frame starvation. This
+// demotes to BGRA8 (with a WARN log) when the check fails, and is a no-op for
+// any other format. Shared by the OD first-frame negotiation and the WGC HDR
+// tone-map init, since both choose the same toneMapIntermediateFormat and are
+// exposed to the same driver limitation.
+DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerator* video_enum,
+                                                    DXGI_FORMAT tone_map_intermediate_format) {
+    if (tone_map_intermediate_format != DXGI_FORMAT_R10G10B10A2_UNORM)
+        return tone_map_intermediate_format;
+    UINT support = 0;
+    const HRESULT hr = video_enum->CheckVideoProcessorFormat(tone_map_intermediate_format, &support);
+    if (SUCCEEDED(hr) && (support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) != 0)
+        return tone_map_intermediate_format;
+    logging::log(logging::LogLevel::Warn, "video_thread",
+                 "10-bit tone-map intermediate (R10G10B10A2) is not a supported VideoProcessor input on "
+                 "this driver; falling back to BGRA8 (8-bit tone-map precision)",
+                 {});
+    return DXGI_FORMAT_B8G8R8A8_UNORM;
+}
+
 } // namespace
 
 VideoThread::VideoThread(SessionState& state) : m_state(state) {
@@ -439,6 +461,17 @@ void VideoThread::Run() {
         hdrPeakScale = HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits);
         expectNativeHdr =
             IsHdr10NativeEffective(m_state.config.hdr_mode, wgcHdrFacts.hdr_active, m_state.config.video_codec);
+
+        char wgcFmtBuf[32];
+        const logging::LogField wgcFields[] = {
+            {"hdr_active", BoolText(wgcHdrFacts.hdr_active)},
+            {"framePoolFormat", OdCaptureFormatName(wgcPlan.frame_pool_format, wgcFmtBuf, sizeof(wgcFmtBuf))},
+            {"handling",
+             wgcPlan.mode == OdCaptureMode::HdrNative
+                 ? "native HDR10 PQ/BT.2020 -> P010"
+                 : (wgcPlan.mode == OdCaptureMode::HdrToneMap ? "HDR scRGB -> SDR BT.709 tone-map" : "SDR")}};
+        logging::log(logging::LogLevel::Info, "video_thread", "WGC capture plan resolved",
+                     std::span<const logging::LogField>(wgcFields, std::size(wgcFields)));
     }
 
     // Capture dimensions
@@ -1009,14 +1042,10 @@ void VideoThread::Run() {
             // Graceful fallback: a driver that rejects the 10-bit R10G10B10A2
             // tone-map intermediate as a VP input keeps recording at BGRA8 (the
             // historic default, universally supported) rather than failing.
-            if (toneMap && vpInputFormat == DXGI_FORMAT_R10G10B10A2_UNORM &&
-                !vpInputSupported(vpInputFormat, supHr, formatSupport)) {
-                logging::log(logging::LogLevel::Warn, "video_thread",
-                             "10-bit tone-map intermediate (R10G10B10A2) is not a supported VideoProcessor input on "
-                             "this driver; falling back to BGRA8 (8-bit tone-map precision)",
-                             {});
-                toneMapIntermediateFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
-                vpInputFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            // Shared with the WGC HDR init path — see DemoteToneMapFormatIfUnsupportedVpInput.
+            if (toneMap) {
+                vpInputFormat = DemoteToneMapFormatIfUnsupportedVpInput(videoEnum.get(), vpInputFormat);
+                toneMapIntermediateFormat = vpInputFormat;
             }
             if (!vpInputSupported(vpInputFormat, supHr, formatSupport)) {
                 char fmtBuf[32];
@@ -1527,6 +1556,15 @@ void VideoThread::Run() {
     // R10G10B10A2 for a 10-bit encode (preserving tone-map precision into P010)
     // or BGRA8 for an 8-bit encode / after a device-capability fallback.
     if (hdrToneMapActive) {
+        // Probe the VP input support for the chosen tone-map intermediate before
+        // using it. The OD path performs this same check as part of its
+        // first-frame negotiation (see the vpInputSupported lambda above); WGC
+        // has no equivalent negotiation step, so without this check a driver
+        // that rejects R10G10B10A2 as a VideoProcessor input would fail
+        // CreateVideoProcessorInputView on every tick with no recorded failure
+        // — frames dropping silently instead of falling back to BGRA8.
+        toneMapIntermediateFormat = DemoteToneMapFormatIfUnsupportedVpInput(videoEnum.get(), toneMapIntermediateFormat);
+
         D3D11_TEXTURE2D_DESC sdrDesc{};
         sdrDesc.Width = sourceWidth;
         sdrDesc.Height = sourceHeight;
