@@ -227,9 +227,9 @@ with an explanatory hint whenever the current codec/bit-depth cannot carry it, a
 selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no
 4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays available** (it shares
 the composited RGB frame with the preview before the AYUV conversion — see the live-preview note in
-Section 7), but **frame snapshots are unavailable**: the CaptureFrame hotkey is rejected immediately
-(the AYUV encode surface has no directly readable BGRA form) rather than parked until the recording
-stops.
+Section 7), and **frame snapshots stay available** as in 4:2:0: the CaptureFrame hotkey reads back
+the packed AYUV encode surface and decodes it on the CPU with the exact inverse of the encoder's
+RGB→AYUV conversion (same BT.709 matrix and Full/Limited range as the recording).
 
 **Color range and metadata.** **BT.709 color metadata** is written to every MKV and MP4 output. The
 **Y'CbCr color range** (Full or Limited) is selectable behind Expert mode and is valid for every
