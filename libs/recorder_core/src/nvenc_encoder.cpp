@@ -718,7 +718,11 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     m_encodeConfig.gopLength = kGopFrames;
     // Remember the IDR cadence and (re)build the HDR metadata payloads for this
     // session. m_frameInGop starts at 0 so the first submitted frame — always an
-    // IDR — carries the metadata.
+    // IDR — carries the metadata. The submission-side keyframe prediction in
+    // EncodeFrame relies on this cadence AND on frameIntervalP = 1 / no lookahead
+    // / no adaptive I: enabling any of those desynchronizes the predicted GOP
+    // phase from NVENC's real IDR placement (metadata would land on non-IDR
+    // frames — legal but off-cadence). Revisit the prediction if that changes.
     m_gopLength = kGopFrames;
     m_frameInGop = 0;
     BuildHdrBitstreamPayloads();
