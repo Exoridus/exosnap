@@ -134,6 +134,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         // an in-window overlay over Record — only how MainWindow applies them
         // (open the overlay instead of a stack swap) changed, not the scenario data.
         QStringLiteral("edit-review"),
+        QStringLiteral("edit-edit"),
         QStringLiteral("edit-output"),
         QStringLiteral("edit-done"),
     };

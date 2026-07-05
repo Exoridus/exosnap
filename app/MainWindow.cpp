@@ -3856,10 +3856,27 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     if (!edit_export_overlay_)
         buildEditExportOverlay();
     setCurrentPage(kRecordPageIndex);
-    edit_export_overlay_->page()->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
-                                                   scenario.edit_export_size, scenario.edit_export_resolution,
-                                                   scenario.edit_export_fps, scenario.edit_export_video_codec,
-                                                   scenario.edit_export_audio_codec, scenario.edit_export_container);
+
+    // setEditContext() (rather than the legacy setRecordingInfo() shim) so the
+    // deterministic duration/markers below flow through the same path real
+    // recordings use — this is what drives the Edit-phase timeline marker pins.
+    EditContext ctx;
+    ctx.output_path = scenario.edit_export_file_path;
+    ctx.duration = scenario.edit_export_duration;
+    ctx.size = scenario.edit_export_size;
+    ctx.resolution = scenario.edit_export_resolution;
+    ctx.fps = scenario.edit_export_fps;
+    ctx.video_codec = scenario.edit_export_video_codec;
+    ctx.audio_codec = scenario.edit_export_audio_codec;
+    ctx.container = scenario.edit_export_container;
+    ctx.duration_seconds = scenario.edit_export_duration_seconds;
+    for (const uint64_t time_ms : scenario.edit_export_marker_times_ms) {
+        RecordingMarker marker;
+        marker.time_ms = time_ms;
+        ctx.markers.push_back(marker);
+    }
+    edit_export_overlay_->page()->setEditContext(ctx);
+
     EditExportPage::Phase phase = EditExportPage::Phase::Review;
     if (scenario.edit_export_phase == QStringLiteral("edit"))
         phase = EditExportPage::Phase::Edit;
