@@ -239,6 +239,7 @@ qt_add_executable(exosnap WIN32
     services/WebcamService.cpp
     services/RecordingCoordinator.h
     services/RecordingCoordinator.cpp
+    services/TargetDisplayFacts.h
     services/RecordingCountdownController.h
     services/RecordingCountdownController.cpp
     services/RecoveryService.h

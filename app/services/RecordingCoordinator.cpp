@@ -1,5 +1,7 @@
 #include "RecordingCoordinator.h"
 
+#include "services/TargetDisplayFacts.h"
+
 #include "../../../libs/recorder_core/src/loopback_meter_service.h"
 #include "../../../libs/recorder_core/src/mic_meter_service.h"
 
@@ -57,29 +59,6 @@ static std::wstring ToWide(const std::string& s) {
     std::wstring w(static_cast<size_t>(n), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
     return w;
-}
-
-// Resolve the HDR facts of the display a monitor capture target is on. The
-// impure HMONITOR -> Windows display-device-name step lives here; the pure
-// lookup over the already-probed facts is capability::FindDisplayByName. Returns
-// nullopt for window targets or when the display cannot be matched.
-static const capability::DisplayHdrFacts* FindTargetDisplayFacts(const recorder_core::CaptureTarget& target,
-                                                                 const capability::CapabilitySet& caps) {
-    if (target.kind != recorder_core::CaptureTarget::Kind::Monitor) {
-        return nullptr;
-    }
-    MONITORINFOEXW mi{};
-    mi.cbSize = sizeof(mi);
-    if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &mi) == FALSE) {
-        return nullptr;
-    }
-    const int len = WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 1) {
-        return nullptr;
-    }
-    std::string device_name(static_cast<size_t>(len - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, device_name.data(), len, nullptr, nullptr);
-    return capability::FindDisplayByName(caps.runtime.displays, device_name);
 }
 
 static std::string TrimAscii(const std::string& value) {
@@ -757,7 +736,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // 10-bit. HDR10 is 10-bit by definition — PQ in 8-bit bands severely — so the
     // 8-bit setting is deliberately overridden here for the native path. H.264 is
     // excluded (it cannot encode HDR10; the pre-flight blocker catches it).
-    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, caps_)) {
+    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, caps_.runtime.displays)) {
         if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
             recorder_core::HdrDisplayFacts hdr_facts;
             hdr_facts.hdr_active = facts->hdr_active;
