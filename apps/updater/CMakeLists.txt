@@ -94,6 +94,31 @@ if(WIN32)
     target_sources(exosnap_updater PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/updater.rc")
 endif()
 
+# The updater is a shipped component of the app package, not an optional extra:
+# it installs next to exosnap.exe and the ZIP/MSI derive from that install tree.
+# Couple it to the app target so every build entry point that produces a
+# packageable exosnap.exe — the release build preset (targets: exosnap), CI, and
+# `cmake --build --target exosnap` — also builds exosnap-updater.exe, keeping the
+# install tree complete (the install rule below hard-fails if the exe is absent).
+if(TARGET exosnap)
+    add_dependencies(exosnap exosnap_updater)
+endif()
+
+# ---- Install: ship exosnap-updater.exe flat next to exosnap.exe ----
+# The swap-updater is a real shipped runtime component: the app stages it (plus
+# the shared Qt runtime) into a temp dir and launches it to perform the download/
+# verify/close/swap/verify/relaunch flow. Without this rule the exe never lands in
+# the CMake install tree, so neither the portable ZIP nor the MSI (both derived
+# from that tree) contain it, and the update feature is non-functional in packaged
+# builds. It installs to the prefix root exactly like exosnap.exe; the MSI
+# auto-harvest and the ZIP both pick it up automatically from the staging tree.
+# No separate Qt deploy is needed — windeployqt (driven by the exosnap target)
+# already stages Qt6Core/Gui/Widgets and plugins/platforms flat in the same tree,
+# which is exactly the runtime the updater links.
+if(WIN32)
+    install(TARGETS exosnap_updater RUNTIME DESTINATION .)
+endif()
+
 # ---- Dev convenience: stage the Qt runtime next to the build-tree exe ----
 # The build-tree exosnap-updater.exe links Qt DLLs that live in Qt's bin dir, not
 # next to the exe. windeployqt copies the Qt runtime + platform plugins so the

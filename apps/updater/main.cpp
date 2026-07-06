@@ -109,6 +109,14 @@ int main(int argc, char** argv) {
 
     const QStringList arguments = QCoreApplication::arguments();
 
+    // Packaging-smoke short-circuit: auto-quit ~2 s after the window paints so a
+    // release-pipeline launch (staged temp-dir copy per UpdaterStagingFileList)
+    // proves the exe + its Qt runtime load and render without hanging the gate.
+    // Only meaningful alongside --preview-state (no engine work); see
+    // scripts/build-release-artifacts.ps1.
+    const bool previewSmoke = arguments.contains(QStringLiteral("--preview-smoke"));
+    constexpr int kPreviewSmokeCloseMs = 2000;
+
     // Dev preview short-circuit: render a canned state and skip engine work.
     const int previewIdx = arguments.indexOf(QStringLiteral("--preview-state"));
     if (previewIdx >= 0) {
@@ -126,6 +134,9 @@ int main(int argc, char** argv) {
         window.render(*state);
         window.show();
         CenterOnScreen(window);
+        if (previewSmoke) {
+            QTimer::singleShot(kPreviewSmokeCloseMs, &app, &QCoreApplication::quit);
+        }
         return app.exec();
     }
 

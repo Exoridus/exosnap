@@ -109,6 +109,36 @@ application is pending as of this writing). Until then official builds ship unsi
 0.3.0 did, and the broader installer/reputation work remains a later-version concern per the
 roadmap.
 
+## Amendment (0.9.0 — portable in-place swap)
+
+The "Portable vs. installed distinction" table above described the portable ZIP as **update
+check only — notifies user of a new version; does not modify files in place**. That is superseded.
+As of 0.9.0 the portable path performs an **in-place swap via an external sidecar**
+(`exosnap-updater.exe`), not a notify-only link. The distinction between installed and portable is
+now only the *swap agent*, not whether a swap happens:
+
+| Mode | Update behavior (0.9.0) |
+|---|---|
+| Installed (MSI) | Dedicated updater launches `msiexec /qn` elevated (one UAC) to apply the upgrade |
+| Portable ZIP | Dedicated updater performs a **staged rename** swap (rename live → backup, move verified new → live) with **restore on failure**; no UAC when the install dir is user-writable |
+
+The **security contract is unchanged** and is what makes an unattended portable swap acceptable:
+
+- **Signature before fields.** The updater verifies the manifest ed25519 signature *before reading
+  any field from it* (unchanged from above).
+- **Hash mismatch is a hard stop.** The downloaded package SHA-256 is verified before it is used;
+  a mismatch aborts the swap and retains no partial binary. Nothing is swapped until verification
+  passes.
+- **No silent restart.** The swap+relaunch happens only after the user clicked **Update**; the app
+  never restarts itself unprompted. The recording/finalization block (above) still gates the whole
+  flow, and the swap window disables interruption during Install/Verify/Restart.
+- **Reversible.** A verification failure after the swap restores the previous version (rollback);
+  the failure UI always names the version that is safe to run.
+
+MOTW is stripped only *after* signature+hash verification passes, so self-verification — not
+SmartScreen — is the trust root for the portable path. See [[0034-in-app-update-and-dual-swap]] for
+the full mechanics.
+
 ## Consequences
 
 - No update-related secret is ever present in the client binary or configuration file.
