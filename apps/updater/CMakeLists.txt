@@ -44,6 +44,30 @@ target_link_libraries(exosnap_updater_logic
     PRIVATE exosnap::warnings
 )
 
+# ---- Widget UI library (QtWidgets) ----
+# The updater window and its two custom widgets. Split into a static library so
+# the GUI executable and the widget smoke test share one AUTOMOC/AUTORCC build
+# (the fonts qrc references the app's bundled ttf faces by relative path — the
+# same binaries, never copied). Kept separate from exosnap_updater_logic so the
+# headless controller/arg tests stay Qt-Core-only.
+add_library(exosnap_updater_ui STATIC
+    ProgressRing.cpp
+    ProgressRing.h
+    StepListWidget.cpp
+    StepListWidget.h
+    UpdaterWindow.cpp
+    UpdaterWindow.h
+    UpdaterTheme.h
+    assets/updater_fonts.qrc
+)
+set_target_properties(exosnap_updater_ui PROPERTIES AUTOMOC ON AUTORCC ON)
+target_include_directories(exosnap_updater_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(exosnap_updater_ui PUBLIC NOMINMAX)
+target_link_libraries(exosnap_updater_ui
+    PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets exosnap_updater_logic
+    PRIVATE exosnap::warnings
+)
+
 # ---- GUI executable ----
 qt_add_executable(exosnap_updater WIN32
     main.cpp
@@ -53,6 +77,7 @@ target_compile_definitions(exosnap_updater PRIVATE NOMINMAX)
 target_link_libraries(exosnap_updater PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
     exosnap_updater_logic
+    exosnap_updater_ui
     exosnap::warnings
 )
 

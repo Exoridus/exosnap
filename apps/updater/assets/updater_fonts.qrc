@@ -1,0 +1,13 @@
+<!-- Reuse the app's bundled UI + mono faces (Hanken Grotesk / IBM Plex Mono).
+     Paths are relative to this .qrc file; the SAME ttf binaries are referenced,
+     never copied. -->
+<RCC>
+    <qresource prefix="/updater/fonts">
+        <file alias="IBMPlexMono-Regular.ttf">../../../app/assets/fonts/IBMPlexMono-Regular.ttf</file>
+        <file alias="IBMPlexMono-Medium.ttf">../../../app/assets/fonts/IBMPlexMono-Medium.ttf</file>
+        <file alias="HankenGrotesk-Regular.ttf">../../../app/assets/fonts/HankenGrotesk-Regular.ttf</file>
+        <file alias="HankenGrotesk-Medium.ttf">../../../app/assets/fonts/HankenGrotesk-Medium.ttf</file>
+        <file alias="HankenGrotesk-SemiBold.ttf">../../../app/assets/fonts/HankenGrotesk-SemiBold.ttf</file>
+        <file alias="HankenGrotesk-Bold.ttf">../../../app/assets/fonts/HankenGrotesk-Bold.ttf</file>
+    </qresource>
+</RCC>
