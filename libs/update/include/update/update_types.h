@@ -101,7 +101,7 @@ struct UpdateManifest {
 
 enum class InstallMode : uint8_t {
     Installed = 0, // installed via installer -> full update flow
-    Portable = 1,  // extracted ZIP -> notify-only
+    Portable = 1,  // extracted ZIP -> staged swap via external updater
 };
 
 // ---------------------------------------------------------------------------

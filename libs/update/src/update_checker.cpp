@@ -126,7 +126,14 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
 
     // Select the newest qualifying release for the channel. The channel/draft
     // filtering and asset extraction live once in LocateRelease (DRY).
-    auto release = LocateRelease(*body, params.channel);
+    std::string parse_error;
+    auto release = LocateRelease(*body, params.channel, &parse_error);
+    if (!release && !parse_error.empty()) {
+        UpdateCheckResult r{};
+        r.check_failed = true;
+        r.error_message = "JSON parse error from GitHub releases API";
+        return r;
+    }
 
     UpdateCheckResult r{};
     r.check_failed = false;

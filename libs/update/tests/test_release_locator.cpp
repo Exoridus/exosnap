@@ -32,6 +32,20 @@ TEST(ReleaseLocator, PreviewPicksPrerelease) {
     EXPECT_EQ(r->manifest_url, "https://dl/mrc.json");
 }
 
+TEST(ReleaseLocator, MalformedJsonSetsParseError) {
+    std::string parse_error;
+    auto r = LocateRelease("not json", UpdateChannel::Stable, &parse_error);
+    EXPECT_FALSE(r.has_value());
+    EXPECT_FALSE(parse_error.empty());
+}
+
+TEST(ReleaseLocator, ValidEmptyArrayLeavesParseErrorEmpty) {
+    std::string parse_error;
+    auto r = LocateRelease("[]", UpdateChannel::Stable, &parse_error);
+    EXPECT_FALSE(r.has_value());
+    EXPECT_TRUE(parse_error.empty());
+}
+
 TEST(ReleaseLocator, SelectPackageByInstallMode) {
     UpdateManifest m;
     m.packages = {{PackageKind::Installer, "https://dl/i.msi", "aa"},

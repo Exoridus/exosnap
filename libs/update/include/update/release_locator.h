@@ -24,7 +24,13 @@ struct ReleaseAssets {
 // Parse the GitHub /releases JSON array (exact payload UpdateChecker fetches) and pick
 // the newest release for `channel` (Stable = non-prerelease, Preview = prerelease) that
 // carries an update-manifest.json asset. nullopt when none qualifies.
-[[nodiscard]] std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, UpdateChannel channel);
+//
+// If `parse_error` is non-null, it is set to a non-empty message when the JSON body
+// could not be parsed or had an unexpected shape (i.e. LocateRelease could not read
+// it at all). It is left untouched when the JSON is well-formed but simply contains
+// no qualifying release for `channel`.
+[[nodiscard]] std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, UpdateChannel channel,
+                                                         std::string* parse_error = nullptr);
 
 // Installed -> PackageKind::Installer, Portable -> PackageKind::Portable; nullptr if absent.
 [[nodiscard]] const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode);

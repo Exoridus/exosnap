@@ -23,7 +23,8 @@ bool EndsWith(std::string_view s, std::string_view suffix) noexcept {
 
 } // namespace
 
-std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, UpdateChannel channel) {
+std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, UpdateChannel channel,
+                                           std::string* parse_error) {
     ReleaseAssets best{};
     bool have_best = false;
 
@@ -73,7 +74,13 @@ std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, Updat
                 have_best = true;
             }
         }
+    } catch (const std::exception& e) {
+        if (parse_error)
+            *parse_error = std::string("JSON parse error: ") + e.what();
+        return std::nullopt;
     } catch (...) {
+        if (parse_error)
+            *parse_error = "JSON parse error";
         return std::nullopt;
     }
 
