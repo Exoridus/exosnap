@@ -3818,20 +3818,13 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
                                                        : ui::dialogs::UpdateUiState::UpToDate);
     }
     if (config_page_) {
-        QString card_state;
-        if (!result.update_available) {
-            card_state = QStringLiteral("uptodate");
-        } else if (UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath())) {
-            // Scoop owns the update; the card is notify-only.
-            card_state = QStringLiteral("scoop");
-        } else if (!persisted_settings_.applied_version.isEmpty() &&
-                   available_version == persisted_settings_.applied_version) {
-            // Loop guard: the updater already ran for this version — a stale
-            // releases-API cache is re-offering it. Show "Restart pending".
-            card_state = QStringLiteral("pending");
-        } else {
-            card_state = QStringLiteral("available");
-        }
+        // Loop-guard / recovery semantics live in the pure ResolveUpdateCardState
+        // helper. A manual check clears applied_version before the check runs, so a
+        // stuck "Restart pending" re-arms to "available" for a still-applicable
+        // version; automatic checks keep available==applied pinned to "pending".
+        const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
+        const QString card_state = exosnap::ResolveUpdateCardState(
+            result.update_available, is_scoop, persisted_settings_.applied_version, available_version);
         config_page_->setUpdateStatus(card_state, available_version, model.last_checked);
     }
 
@@ -4147,9 +4140,29 @@ void MainWindow::buildConfigPage() {
     config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
     connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
         manual_update_check_ = true;
+        // Recovery: a user-initiated check clears any persisted "Restart pending"
+        // stamp so the card can re-arm to "Update to vX.Y" if the updater launched
+        // earlier but never completed the swap. Automatic startup checks keep the
+        // loop-guard semantics (available==applied stays "pending").
+        if (!persisted_settings_.applied_version.isEmpty()) {
+            persisted_settings_.applied_version.clear();
+            settings_store_.Save(persisted_settings_);
+        }
         triggerUpdateCheck();
     });
     connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
+        // App-layer recording guard (belt): UpdateService holds a nullptr coordinator,
+        // so its engine guard always returns NotBlocked. Never stage/launch the swap
+        // updater while a recording or MP4 finalize is in flight — mirror how
+        // triggerUpdateCheck() gates the check path.
+        if (recording_active_ || remuxing_active_) {
+            if (config_page_)
+                config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(),
+                                              QStringLiteral("Finish the recording before updating."));
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update launch skipped — recording/finalizing in progress"));
+            return;
+        }
         // Scoop installs are notify-only: the primary button opens the releases
         // page (today's behavior); the staged swap must not touch a Scoop tree.
         if (UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath())) {

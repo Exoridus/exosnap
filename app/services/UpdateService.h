@@ -51,9 +51,11 @@ class UpdateService final : public QObject {
     //     launch failure (missing runtime file, spawn failure).
     void LaunchUpdater();
 
-    // Notify-only Scoop detection: true when app_dir_path sits under a Scoop
-    // "…/scoop/apps/…" tree (case-insensitive, both path separators). Scoop
-    // installs are updated via `scoop update exosnap`, not the staged swap.
+    // Notify-only Scoop detection (case-insensitive, both path separators): true
+    // when app_dir_path sits under a Scoop tree — either the default
+    // "…/scoop/apps/…" layout, or a relocated $env:SCOOP root that still uses the
+    // "…/apps/<name>/current" junction layout. Scoop installs are updated via
+    // `scoop update exosnap`, not the staged swap.
     [[nodiscard]] static bool IsScoopManagedInstall(const QString& app_dir_path);
 
     // Handoff: launch the verified installer. User must confirm in UI first.
@@ -90,5 +92,19 @@ class UpdateService final : public QObject {
 // updater. Round-trips through ParseUpdaterArgs.
 [[nodiscard]] QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir,
                                            quint32 pid, const QString& current_version);
+
+// Resolve the Settings updates-card state string from a completed check. Pure so
+// the loop-guard / recovery semantics can be unit-tested headless:
+//   * !update_available                        -> "uptodate"
+//   * is_scoop                                 -> "scoop"   (notify-only)
+//   * available_version == applied_version     -> "pending" (loop guard: the
+//                                                 updater already ran for this
+//                                                 version; awaiting restart)
+//   * otherwise                                -> "available"
+// Recovery from a stuck "Restart pending": a user-initiated (manual) check clears
+// the persisted applied_version BEFORE the check, so applied_version is empty here
+// and the same still-applicable version resolves to "available" again.
+[[nodiscard]] QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
+                                             const QString& available_version);
 
 } // namespace exosnap

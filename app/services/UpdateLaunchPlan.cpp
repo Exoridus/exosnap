@@ -40,12 +40,43 @@ QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QStri
     return args;
 }
 
+QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
+                               const QString& available_version) {
+    if (!update_available)
+        return QStringLiteral("uptodate");
+    if (is_scoop)
+        return QStringLiteral("scoop");
+    // Loop guard: the updater already ran for this version (a stale releases-API
+    // cache is re-offering it). A manual check clears applied_version upstream so a
+    // still-applicable version re-arms to "available".
+    if (!applied_version.isEmpty() && available_version == applied_version)
+        return QStringLiteral("pending");
+    return QStringLiteral("available");
+}
+
 bool UpdateService::IsScoopManagedInstall(const QString& app_dir_path) {
     // Scoop lays apps out under "<scoop root>/apps/<name>/current". Normalise
-    // separators and case, then look for the "/scoop/apps/" marker segment.
+    // separators and case first.
     QString normalised = app_dir_path;
     normalised.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    return normalised.contains(QStringLiteral("/scoop/apps/"), Qt::CaseInsensitive);
+
+    // Default layout under %USERPROFILE%\scoop (or the shell-global root): the path
+    // carries a literal "/scoop/apps/" marker segment.
+    if (normalised.contains(QStringLiteral("/scoop/apps/"), Qt::CaseInsensitive))
+        return true;
+
+    // Relocated root ($env:SCOOP): "<root>/apps/<name>/current" has no "scoop"
+    // segment, but still uses Scoop's "apps" + "current" junction layout. Require
+    // both an "/apps/" segment and a "current" path component so plain "/apps/"
+    // trees (e.g. "D:/apps/ExoSnap") don't match.
+    if (normalised.contains(QStringLiteral("/apps/"), Qt::CaseInsensitive)) {
+        const QStringList parts = normalised.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        for (const QString& part : parts) {
+            if (part.compare(QStringLiteral("current"), Qt::CaseInsensitive) == 0)
+                return true;
+        }
+    }
+    return false;
 }
 
 } // namespace exosnap

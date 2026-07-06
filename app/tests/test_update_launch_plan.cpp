@@ -98,4 +98,69 @@ TEST(IsScoopManagedInstall, FalseForPortableToolsDir) {
     EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/Tools/ExoSnap")));
 }
 
+// Relocated Scoop root ($env:SCOOP): "<root>/apps/<name>/current" carries no
+// literal "scoop" segment but still uses the apps/current junction layout.
+TEST(IsScoopManagedInstall, TrueForRelocatedRootWithAppsAndCurrent) {
+    EXPECT_TRUE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/tools/myscoop/apps/exosnap/current")));
+}
+
+TEST(IsScoopManagedInstall, FalseForProgramFilesNoAppsNoCurrent) {
+    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/Program Files/Codexo/ExoSnap")));
+}
+
+// An "/apps/" segment alone (no "current" component) must not match — that's a
+// generic portable layout, not Scoop's junction tree.
+TEST(IsScoopManagedInstall, FalseForAppsDirWithoutCurrent) {
+    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/apps/ExoSnap")));
+}
+
+// -- ResolveUpdateCardState (loop guard + stuck-pending recovery) -----------
+
+TEST(ResolveUpdateCardState, UpToDateWhenNoUpdate) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/false, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("2.0.0")),
+              QStringLiteral("uptodate"));
+}
+
+TEST(ResolveUpdateCardState, ScoopWinsOverAvailable) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/true, QString(),
+                                              QStringLiteral("2.0.0")),
+              QStringLiteral("scoop"));
+}
+
+TEST(ResolveUpdateCardState, AvailableWhenNoStamp) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("2.0.0")),
+              QStringLiteral("available"));
+}
+
+// Loop guard (automatic startup check): the updater already launched for this
+// version (applied_version stamp == available), so the card stays "pending".
+TEST(ResolveUpdateCardState, PendingWhenStampMatchesAvailable) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
+                                              QStringLiteral("2.0.0")),
+              QStringLiteral("pending"));
+}
+
+// A newer version than the stamped one is offered normally.
+TEST(ResolveUpdateCardState, AvailableWhenStampIsOlderVersion) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
+                                              QStringLiteral("2.1.0")),
+              QStringLiteral("available"));
+}
+
+// Recovery: a stuck "Restart pending" (updater launched but never swapped) is
+// cleared by a manual check clearing applied_version BEFORE the check runs. With
+// an empty stamp, the same still-applicable version re-arms to "available".
+TEST(ResolveUpdateCardState, RearmsToAvailableAfterManualCheckClearsStamp) {
+    // Automatic re-check with the stamp still set -> pending.
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
+                                              QStringLiteral("2.0.0")),
+              QStringLiteral("pending"));
+    // Manual check clears the stamp upstream; resolver now sees an empty stamp.
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("2.0.0")),
+              QStringLiteral("available"));
+}
+
 } // namespace

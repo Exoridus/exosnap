@@ -20,6 +20,7 @@
 #include <QMetaObject>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QString>
 #include <QStringList>
@@ -217,28 +218,15 @@ void UpdateService::LaunchUpdater() {
     const QStringList flags =
         BuildUpdaterArgs(impl_->state, app_dir, pid, QString::fromLatin1(exosnap::build::kVersion));
 
-    // Build a single quoted command line for CreateProcessW.
-    QString command_line = QStringLiteral("\"%1\"").arg(QDir::toNativeSeparators(staged_exe));
-    for (const QString& arg : flags)
-        command_line += QStringLiteral(" \"%1\"").arg(arg);
-
-    std::wstring exe_w = QDir::toNativeSeparators(staged_exe).toStdWString();
-    std::wstring cmd_w = command_line.toStdWString();
-    std::wstring cwd_w = QDir::toNativeSeparators(staging_dir).toStdWString();
-
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-
-    const BOOL ok =
-        ::CreateProcessW(exe_w.c_str(), cmd_w.data(), nullptr, nullptr, FALSE, 0, nullptr, cwd_w.c_str(), &si, &pi);
+    // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
+    // ready to swap. QProcess applies the correct Windows argument-quoting rules so
+    // paths/args with spaces or quotes are passed through safely.
+    const bool ok =
+        QProcess::startDetached(QDir::toNativeSeparators(staged_exe), flags, QDir::toNativeSeparators(staging_dir));
     if (!ok) {
         emit updateError(upd::VerifyResult::PackageNotFound, QStringLiteral("Failed to launch the updater."));
         return;
     }
-    // The app does not wait: the updater sends WM_CLOSE when it is ready to swap.
-    ::CloseHandle(pi.hThread);
-    ::CloseHandle(pi.hProcess);
     emit updaterLaunched();
 #else
     emit updateError(upd::VerifyResult::PackageNotFound, QStringLiteral("The updater is only available on Windows."));
