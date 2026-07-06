@@ -29,3 +29,9 @@ exosnap_add_gtest(
     SOURCES test_zip_extract.cpp
     LIBRARIES exosnap::update exosnap_miniz
 )
+
+exosnap_add_gtest(
+    NAME    test_http_download
+    SOURCES test_http_download.cpp
+    LIBRARIES exosnap::update
+)

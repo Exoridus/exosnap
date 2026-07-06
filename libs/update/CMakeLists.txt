@@ -74,6 +74,7 @@ add_library(exosnap_update STATIC
     src/package_verifier.cpp
     src/install_mode_detector.cpp
     src/zip_extract.cpp
+    src/http_download.cpp
 )
 add_library(exosnap::update ALIAS exosnap_update)
 
