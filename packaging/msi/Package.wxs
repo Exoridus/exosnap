@@ -60,6 +60,11 @@
                        Name="installed"
                        Value="1"
                        Type="integer" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\Codexo\ExoSnap"
+                       Name="InstallPath"
+                       Value="[INSTALLFOLDER]"
+                       Type="string" />
       </Component>
     </StandardDirectory>
 

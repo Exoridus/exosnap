@@ -35,3 +35,9 @@ exosnap_add_gtest(
     SOURCES test_http_download.cpp
     LIBRARIES exosnap::update
 )
+
+exosnap_add_gtest(
+    NAME    test_release_locator
+    SOURCES test_release_locator.cpp
+    LIBRARIES exosnap::update
+)
