@@ -6,11 +6,13 @@
 # JSON manifest, signs it with ed25519 (RFC 8032, verified client-side by
 # Monocypher), and uploads the signed manifest as a CI artifact.
 #
-# NOTE: 0.4.0's shipping update feature (check + notify) does NOT consume this
-# manifest — it compares versions via the public GitHub Releases API. The signed
-# manifest is forward-looking for the deferred in-place updater (Update C), which
-# verifies it against the embedded public key. Running this is therefore optional
-# for the 0.4.0 release.
+# MANDATORY from 0.9.0 on. The in-app update checker only surfaces a release that
+# carries an update-manifest.json asset (verified against the embedded public key
+# before any field is read); a release published without it is invisible to in-app
+# updates forever. release-candidate.yml calls this as a required job on a version-
+# tag push for official builds, and update-manifest.json must be published as a
+# GitHub release asset alongside the ZIP + MSI. (0.4.0–0.8.x shipped check+notify
+# only and did not consume this manifest; it was optional then.)
 #
 # The PRIVATE KEY is NEVER committed to the repository.
 # The corresponding PUBLIC KEY (32 bytes) is embedded in the binary at

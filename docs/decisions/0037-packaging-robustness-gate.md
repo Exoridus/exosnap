@@ -94,10 +94,42 @@ connect() string form, moc-generated headers (Q_OBJECT), and callback factories 
 expected to generate false-positives in all five clang-tidy checks and in cppcheck
 unusedFunction. No finding should be acted on without a human triage pass.
 
+### E. Updater smoke (build-release-artifacts.ps1) — 0.9.0
+
+The swap-updater (`exosnap-updater.exe`, ADR 0034) is a shipped runtime component, so the packaging
+gate now proves it loads. `exosnap-updater.exe` is added to the required-files presence list and is
+covered automatically by the dumpbin import audit (which globs every staged `*.exe`/`*.dll`). Beyond
+presence, a dedicated smoke reproduces the exact staging the app performs at update time
+(`UpdaterStagingFileList` + the `[Paths] Plugins = plugins` qt.conf the app writes): it copies that
+minimal runtime subset from the packaged tree into an isolated temp dir and launches
+`exosnap-updater.exe --preview-state progress --preview-smoke`. The new `--preview-smoke` flag
+auto-closes the window after ~2 s, so a clean exit proves the exe and its staged Qt runtime (Core/
+Gui/Widgets + the windows platform plugin) load and render. `STATUS_DLL_NOT_FOUND`, a hard-error /
+platform-plugin dialog (sentinel), or any non-zero exit fails the gate. Gated by the same
+`-SkipSmoke` switch and reuses the shared `SmokeNative` helpers.
+
+### F. Signed update manifest as a required release job — 0.9.0
+
+The 0.9+ in-app updater only surfaces a release that carries an `update-manifest.json` asset
+(verified against the embedded public key before any field is read); a release published without it
+is invisible to in-app updates forever (ADR 0012 amendment). `sign-manifest.yml` is therefore wired
+into `release-candidate.yml` as a required job (`needs: build`) that runs on a version-tag push for
+official builds (the `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` repo variable present). It binds the built
+portable + MSI SHA-256 hashes (read from the sidecars as job outputs) and the canonical
+GitHub-release asset URLs for the tag, and uploads the signed `update-manifest.json`. Publishing that
+manifest as a GitHub release asset is a mandatory checklist step for every release from 0.9.0 on (see
+`docs/release-checklist.md`).
+
 ## Consequences
 
 - A missing-DLL defect in the MSI is now caught by three layers: dumpbin audit (import
   classification), content assertion (binary presence), and MSI smoke (actual load).
+- The shipped `exosnap-updater.exe` is present in both artifacts (its install rule lands it flat in
+  the CMake install tree, harvested into the MSI and zipped) and is proven to load via the updater
+  smoke — the update feature can never silently ship non-functional in a packaged build.
+- Every official release from 0.9.0 on produces a signed `update-manifest.json`; forgetting to
+  publish it (which would make the release invisible to in-app updates) is now a wired, required CI
+  job rather than a manual afterthought.
 - A hand-maintained file-list regression in Package.wxs is caught in every PR in under
   1 second.
 - The release-gate contract is explicit: no `-SkipSmoke` or `-SkipMsi` flags in CI.

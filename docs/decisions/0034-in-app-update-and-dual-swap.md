@@ -2,14 +2,43 @@
 
 ## Status
 
-Proposed. Phase A (in-app check → notify → deep-link → "Update available · vX.Y") is small,
-low-risk wiring over existing primitives and ships first. Phase B (the actual in-place download →
-verify → swap → restart for **both** portable and MSI) is a separate, security- and
-correctness-critical slice gated on this ADR. Builds on the existing `UpdateService`
-(`RequestUpdateCheck`, `RequestDownloadAndVerify`, `packageReadyForInstall`, `HandoffToInstaller`,
-signature verification), `NotificationManager` (`NotificationType::UpdateAvailable`,
-`NotificationAction::OpenUpdate`), the Settings deep-link (`ConfigPage::scrollToSection("settings/updates")`),
-and `UpdateSettingsPanel`/`UpdateUiState`. Relates to [[0017-crash-reporting-architecture]].
+Accepted. Phase A (in-app check → notify → deep-link → "Update available · vX.Y") shipped as
+low-risk wiring over existing primitives. Phase B (the actual in-place download → verify → swap →
+restart for **both** portable and MSI) has now landed behind the dedicated `exosnap-updater.exe`
+sidecar; see the amendment below for how the shipped flow differs from the original sketch. Builds on
+the existing `UpdateService` (`RequestUpdateCheck`, `RequestDownloadAndVerify`,
+`packageReadyForInstall`, `HandoffToInstaller`, signature verification), `NotificationManager`
+(`NotificationType::UpdateAvailable`, `NotificationAction::OpenUpdate`), the Settings deep-link
+(`ConfigPage::scrollToSection("settings/updates")`), and `UpdateSettingsPanel`/`UpdateUiState`.
+Relates to [[0017-crash-reporting-architecture]].
+
+## Amendment (0.9.0 — shipped dual-swap updater)
+
+The implemented flow moves **download + verify INTO the updater process**, not the main app. One
+window owns every step end to end, so the main app stays fully usable while the update runs and there
+is a single owner of progress, failure, and rollback state. The canonical step list the updater
+renders is exactly five:
+
+1. **Downloading update** — fetch the package for the resolved release (determinate %).
+2. **Closing ExoSnap** — wait for the main process (`--app-pid`) to exit; the running image is locked.
+3. **Installing update** — the swap. Portable: staged rename (rename live → backup, move verified new
+   → live). MSI: `msiexec /qn` (elevated, one UAC).
+4. **Verifying installation** — confirm the swapped-in build is the expected version.
+5. **Restarting ExoSnap** — relaunch on the new version; on a healthy start the backup is deleted, on
+   failure it is restored (rollback).
+
+The main app's only remaining role is to **stage** the updater runtime subset (`exosnap-updater.exe`
+plus the shared Qt Core/Gui/Widgets DLLs and the windows platform plugin — see
+`UpdaterStagingFileList`) into a per-user temp copy and launch that copy, then exit. Running the
+updater from a staged copy is what lets the app replace the *original* `exosnap-updater.exe` on a
+future updater-version bump (a running image cannot overwrite itself). A persisted **loop guard**
+("applied version" stamp) ensures a completed update is never re-applied from a stale releases-API
+cache. The **recording guard** is layered: ADR 0012 blocks download/install during an active
+recording or finalization at the service layer, and the updater window itself disables its close
+affordance during Install/Verify/Restart so the swap cannot be interrupted mid-flight.
+
+The three terminal failure variants (amber / red / green) each always name the version that is safe
+to run — see product-spec §13 and the failure matrix behind `FailureCase` / `RetryEntryStep`.
 
 ## Context
 

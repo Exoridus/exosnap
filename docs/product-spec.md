@@ -523,16 +523,30 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
   finalization, and the app never restarts silently.
 - **UI home:** the update UI lives on the **Settings update card**, plus a **dedicated updater
   window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded.
-- **Target flow (designed):** the automatic update check finds a new version → an "update available"
-  notification deep-links to the Settings update card → clicking **Update** opens the dedicated
-  updater, a separate process that performs every step itself — download, verify download (signature
-  and hash), wait for the app to close, install/swap the new files, verify the installation — and
-  then restarts the app on the new version. The swap is **staged and reversible** (dual-swap): a
-  failure before the swap leaves the current version intact and retryable; a verification failure
-  after installing restores the previous version. Nothing is swapped until verification passes.
-- **Current shipped behavior:** check + notify + manual download. The update card shows
-  "Available · Update to vX.Y" and opens the releases page; the app does not yet download or install
-  the update itself.
+- **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
+  available" notification deep-links to the Settings update card → clicking **Update** opens the
+  dedicated updater, a separate process that performs every step itself, in this order:
+  1. **Downloading update** — fetches the package (progress %).
+  2. **Verifying download** — checks the ed25519 manifest signature *and* the package SHA-256; a
+     mismatch aborts and keeps nothing.
+  3. **Closing ExoSnap** — waits for the app to exit (the running image is locked).
+  4. **Installing update** — swaps the files in place: portable does a staged rename (old → backup,
+     verified new → live); an installed build runs `msiexec` (one UAC prompt).
+  5. **Verifying installation, then restarting** — confirms the new version and relaunches the app on
+     it; on a healthy start the backup is discarded.
+
+  The swap is **staged and reversible** (dual-swap) and nothing is swapped until verification passes.
+  Failure is shown as one of three variants, each of which **always names the version that is safe to
+  run right now**:
+  - **Amber (before the swap):** download/verify or the pre-swap step failed; the **current** version
+    is intact and the step is retryable.
+  - **Red (verification failed after installing):** the previous version was restored; the updater
+    names the restored, safe-to-run version.
+  - **Green (installed and verified, only the auto-relaunch didn't start):** the **new** version is
+    live and safe — the updater offers a manual start rather than presenting it as an error.
+
+  Two moments are unavoidably not fully in-app: the UAC prompt (installed builds only) and the brief
+  window while the app is closed for the swap.
 - **What's new (shipped).** Release notes are surfaced from the GitHub release bodies already present
   in the `/releases` payload the update check fetches — no extra network call. One in-window overlay
   lists the notes for **every version in the gap `(installed, target]`**, newest first, with the newest

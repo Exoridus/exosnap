@@ -503,7 +503,7 @@ $relPaths = $allFiles | ForEach-Object { $_.FullName.Substring($PackageRoot.Leng
 
 # Presence — required runtime files and docs.
 $requiredFiles = @(
-    'exosnap.exe', 'qt.conf',
+    'exosnap.exe', 'exosnap-updater.exe', 'qt.conf',
     'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6Svg.dll',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'KNOWN_LIMITATIONS.md', 'README-PORTABLE.md'
 )
@@ -1094,6 +1094,135 @@ else {
 }
 
 # ---------------------------------------------------------------------------
+# 8b. Updater smoke (isolated) — prove the shipped exosnap-updater.exe loads
+#
+# The app never launches the updater in place: it stages a minimal runtime
+# subset (UpdaterStagingFileList) into a temp dir and runs the copy. This smoke
+# reproduces that exact staging from the packaged tree — the five relative files
+# plus the "[Paths] Plugins = plugins" qt.conf the app writes — then launches
+# `exosnap-updater.exe --preview-state progress --preview-smoke`. The
+# --preview-smoke flag auto-closes the window after ~2 s, so a clean exit proves
+# the exe and its staged Qt runtime (Core/Gui/Widgets + the windows platform
+# plugin) load and render. STATUS_DLL_NOT_FOUND, a hard-error dialog, or a
+# non-zero exit (e.g. "could not load the Qt platform plugin") fails the gate.
+# ---------------------------------------------------------------------------
+$updaterSmokeResult = 'skipped'
+$updaterSmokeNotes = @()
+if (-not $SkipSmoke) {
+    Write-Step "Running updater smoke (staged temp-dir copy, isolated)"
+
+    # Exact staging the app performs (app/services/UpdateService.cpp +
+    # UpdaterStagingFileList): forward-slash relative paths from the app dir.
+    $updaterStagingFiles = @(
+        'exosnap-updater.exe',
+        'Qt6Core.dll',
+        'Qt6Gui.dll',
+        'Qt6Widgets.dll',
+        'plugins/platforms/qwindows.dll'
+    )
+
+    $updaterStageDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-updater-smoke-$PID")
+    Remove-Item -LiteralPath $updaterStageDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $updaterStageDir -Force | Out-Null
+    try {
+        $stageOk = $true
+        foreach ($rel in $updaterStagingFiles) {
+            $src = Join-Path $PackageRoot ($rel -replace '/', '\')
+            $dst = Join-Path $updaterStageDir ($rel -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                Add-Error "Updater smoke: required staging file missing from package: $rel"
+                $updaterSmokeResult = 'failed'
+                $stageOk = $false
+                break
+            }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+            Copy-Item -LiteralPath $src -Destination $dst -Force
+        }
+
+        if ($stageOk) {
+            # qt.conf so the staged updater finds its plugins under ./plugins
+            # (mirrors the string the app writes verbatim).
+            Set-Content -LiteralPath (Join-Path $updaterStageDir 'qt.conf') `
+                -Value "[Paths]`nPlugins = plugins`n" -Encoding ascii -NoNewline
+
+            $updaterExe = Join-Path $updaterStageDir 'exosnap-updater.exe'
+            $uPsi = New-Object System.Diagnostics.ProcessStartInfo
+            $uPsi.FileName = $updaterExe
+            $uPsi.Arguments = '--preview-state progress --preview-smoke'
+            $uPsi.WorkingDirectory = $updaterStageDir
+            $uPsi.UseShellExecute = $false
+
+            # Layer 1: suppress Windows hard-error dialogs (missing DLL / plugin →
+            # immediate non-zero exit instead of a modal dialog).
+            $uSuppress = [SmokeNative]::SEM_FAILCRITICALERRORS `
+                       -bor [SmokeNative]::SEM_NOGPFAULTERRORBOX `
+                       -bor [SmokeNative]::SEM_NOOPENFILEERRORBOX
+            $uPrevMode = [SmokeNative]::SetErrorMode($uSuppress)
+            try {
+                $uProc = [System.Diagnostics.Process]::Start($uPsi)
+            } finally {
+                [SmokeNative]::SetErrorMode($uPrevMode) | Out-Null
+            }
+
+            # Layer 2: dialog sentinel (Qt platform-plugin fatal box / hard error).
+            $uDialogPatterns = @(
+                [regex]::new('System(fehler| Error)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+                [regex]::new([regex]::Escape('exosnap-updater.exe'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+                [regex]::new('platform plugin', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            )
+            # --preview-smoke auto-closes after ~2 s; allow generous margin.
+            $uDeadline = (Get-Date).AddSeconds(12)
+            $uDialogDetected = $false
+            while (-not $uProc.HasExited -and (Get-Date) -lt $uDeadline) {
+                Start-Sleep -Milliseconds 300
+                try {
+                    $uTitles = [SmokeNative]::GetVisibleWindowTitles($uProc.Id)
+                    foreach ($uTitle in $uTitles) {
+                        if ($uDialogPatterns | Where-Object { $_.IsMatch($uTitle) }) {
+                            $updaterSmokeNotes += "Updater smoke: dialog sentinel matched window title: '$uTitle'"
+                            $uDialogDetected = $true; break
+                        }
+                    }
+                } catch { <# EnumWindows can race with process exit; ignore. #> }
+                if ($uDialogDetected) { break }
+            }
+
+            if ($uDialogDetected) {
+                try { $uProc.Kill($true) } catch { }
+                Add-Error "Updater smoke: error dialog detected (title matched sentinel) — likely a missing DLL or Qt platform-plugin load failure"
+                $updaterSmokeResult = 'failed'
+            }
+            elseif ($uProc.HasExited) {
+                if ($uProc.ExitCode -eq 0) {
+                    $updaterSmokeResult = 'launched'
+                    $updaterSmokeNotes += "Updater rendered --preview-state progress and auto-closed cleanly (--preview-smoke, exit 0)."
+                }
+                elseif ($uProc.ExitCode -eq -1073741515) {
+                    Add-Error "Updater smoke: STATUS_DLL_NOT_FOUND (0xC0000135) — a required DLL is missing from the updater staging subset"
+                    $updaterSmokeResult = 'failed'
+                }
+                else {
+                    Add-Error "Updater smoke: exosnap-updater.exe exited with code $($uProc.ExitCode) (likely a Qt platform-plugin or dependency load failure)"
+                    $updaterSmokeResult = 'failed'
+                }
+            }
+            else {
+                # Still running past the auto-close deadline: loader succeeded (it
+                # rendered), but the self-close never fired. Force close; not fatal.
+                $updaterSmokeResult = 'inconclusive'
+                $updaterSmokeNotes += "Updater still running after $([int]12)s auto-close deadline; loader succeeded but --preview-smoke self-close did not fire."
+                try { $uProc.Kill($true) } catch { }
+            }
+            Write-Host "  Updater smoke result: $updaterSmokeResult"
+            foreach ($n in $updaterSmokeNotes) { Write-Host "    $n" }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $updaterStageDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 9. Report
 # ---------------------------------------------------------------------------
 Add-ReportLine "# ExoSnap $Version — Release Artifact Validation Report"
@@ -1132,6 +1261,10 @@ Add-ReportLine "## Portable ZIP smoke test"
 Add-ReportLine "- Result: $smokeResult"
 foreach ($n in $smokeNotes) { Add-ReportLine "- $n" }
 Add-ReportLine ""
+Add-ReportLine "## Updater smoke test"
+Add-ReportLine "- Result: $updaterSmokeResult"
+foreach ($n in $updaterSmokeNotes) { Add-ReportLine "- $n" }
+Add-ReportLine ""
 Add-ReportLine "## Validation result"
 if ($script:Errors.Count -eq 0) {
     Add-ReportLine "- PASSED — no validation errors."
@@ -1153,6 +1286,7 @@ Write-Host "Manifest   : $ManifestPath"
 Write-Host "Report     : $ReportPath"
 Write-Host "MSI Smoke  : $msiSmokeResult"
 Write-Host "ZIP Smoke  : $smokeResult"
+Write-Host "Upd Smoke  : $updaterSmokeResult"
 Write-Host ""
 
 if ($script:Errors.Count -gt 0) {

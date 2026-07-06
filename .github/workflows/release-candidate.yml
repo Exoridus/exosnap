@@ -17,6 +17,10 @@ jobs:
   build:
     name: Build Release Artifacts
     runs-on: windows-2022
+    outputs:
+      version: ${{ steps.artifact.outputs.version }}
+      portable_sha256: ${{ steps.shas.outputs.portable_sha256 }}
+      msi_sha256: ${{ steps.shas.outputs.msi_sha256 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -154,6 +158,24 @@ jobs:
           "dir=.workspace/release/$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         shell: pwsh
 
+      # Expose the portable + MSI SHA-256 hashes as job outputs so the
+      # sign-manifest job can bind them into the signed update-manifest.json.
+      # The sidecars are written by build-release-artifacts.ps1 as
+      # "<hash>  <filename>"; take the first whitespace-delimited token.
+      - name: Read artifact SHA-256 hashes
+        id: shas
+        run: |
+          $dir = "${{ steps.artifact.outputs.dir }}"
+          $ver = "${{ steps.artifact.outputs.version }}"
+          $portableSha = (Get-Content -LiteralPath (Join-Path $dir "ExoSnap-$ver-windows-x64-portable.sha256") -Raw).Trim().Split(' ')[0]
+          $msiShaFile = Join-Path $dir "ExoSnap-$ver-windows-x64.msi.sha256"
+          $msiSha = if (Test-Path -LiteralPath $msiShaFile) { (Get-Content -LiteralPath $msiShaFile -Raw).Trim().Split(' ')[0] } else { '' }
+          "portable_sha256=$portableSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "msi_sha256=$msiSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "portable_sha256=$portableSha"
+          Write-Host "msi_sha256=$msiSha"
+        shell: pwsh
+
       - name: Upload all release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -166,3 +188,25 @@ jobs:
             ${{ steps.artifact.outputs.dir }}/artifact-manifest.json
             ${{ steps.artifact.outputs.dir }}/validation-report.md
           if-no-files-found: error
+
+  # Sign the update manifest for the in-app updater. MANDATORY for every official
+  # release from 0.9.0 on: the 0.9+ update checker only surfaces a release that
+  # carries an update-manifest.json asset — a release published without it is
+  # invisible to in-app updates forever. Runs on a version-tag push (the tag names
+  # the release the asset URLs point at) when the signing key is provisioned
+  # (EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable present = official build). Forks
+  # without the key skip it rather than hard-failing. The asset URLs are the
+  # canonical GitHub Release download paths for this tag; publish update-manifest.json
+  # as a release asset alongside the ZIP + MSI so the signed URLs resolve.
+  sign-manifest:
+    name: Sign Update Manifest
+    needs: build
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX != '' }}
+    uses: ./.github/workflows/sign-manifest.yml
+    with:
+      version: ${{ needs.build.outputs.version }}
+      installer_sha256: ${{ needs.build.outputs.msi_sha256 }}
+      portable_sha256: ${{ needs.build.outputs.portable_sha256 }}
+      installer_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64.msi
+      portable_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64-portable.zip
+    secrets: inherit
