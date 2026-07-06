@@ -57,10 +57,19 @@ constexpr const wchar_t* kExeName = L"exosnap.exe";
 // ---------------------------------------------------------------------------
 
 SwapPlan MakeSwapPlan(const std::wstring& install_dir, SemVer target) {
+    // Trim trailing separators before deriving the ".new"/".old" siblings. The
+    // MSI's [INSTALLFOLDER] registry value always ends with a backslash; without
+    // this, "<install>\" + ".new" would place the staging tree *inside* the
+    // install dir ("<install>\.new") instead of beside it.
+    std::wstring normalized = install_dir;
+    while (!normalized.empty() && (normalized.back() == L'\\' || normalized.back() == L'/')) {
+        normalized.pop_back();
+    }
+
     SwapPlan plan;
-    plan.install_dir = install_dir;
-    plan.staging_dir = install_dir + L".new";
-    plan.backup_dir = install_dir + L".old";
+    plan.install_dir = normalized;
+    plan.staging_dir = normalized + L".new";
+    plan.backup_dir = normalized + L".old";
     plan.target_version = target;
     return plan;
 }
@@ -71,20 +80,22 @@ SwapPlan MakeSwapPlan(const std::wstring& install_dir, SemVer target) {
 
 SwapError StageRename(const SwapPlan& plan) {
     // 1. Staging must exist and carry an exosnap.exe, otherwise there is
-    //    nothing valid to promote -- reject with the install untouched (B2).
+    //    nothing valid to promote -- reject with nothing touched, old install
+    //    intact.
     if (!FileExists(plan.staging_dir) || !FileExists((fs::path(plan.staging_dir) / kExeName).wstring())) {
         return SwapError::StagingMissing;
     }
 
     // 2. A stale backup from an aborted earlier swap must be cleared first, or
-    //    the install->backup rename would collide. Failure here is still B2:
-    //    nothing has been moved yet.
+    //    the install->backup rename would collide. Failure here still means
+    //    nothing has been moved yet -- old install intact.
     if (FileExists(plan.backup_dir) && !RemoveTree(plan.backup_dir)) {
         return SwapError::BackupCollision;
     }
 
     // 3. install -> backup. The old version now lives at backup_dir; the
-    //    install path is free. Failure leaves the old install in place (B2).
+    //    install path is free. Failure leaves the old install in place,
+    //    untouched.
     if (!RenameDir(plan.install_dir, plan.backup_dir)) {
         return SwapError::RenameOldFailed;
     }
@@ -93,8 +104,9 @@ SwapError StageRename(const SwapPlan& plan) {
     if (!RenameDir(plan.staging_dir, plan.install_dir)) {
         // Compensate: put the old version back where it belongs. The install
         // path is free again (step 3 emptied it), so this rename should
-        // succeed; if it does the old version is live (B3). If even this
-        // fails we are in the worst case and must report red with paths.
+        // succeed; if it does the old install is restored and live again. If
+        // even this fails we are in the worst case and must report red with
+        // paths.
         if (!RenameDir(plan.backup_dir, plan.install_dir)) {
             return SwapError::RestoreFailed;
         }
@@ -168,30 +180,122 @@ bool VerifyInstalledVersion(const SwapPlan& plan) {
 // Process / mutex waits
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Clamp a millisecond duration into the DWORD range accepted by the Win32 wait
+// APIs. A negative count must not wrap into a near-INFINITE timeout, and we cap
+// at MAXDWORD-1 so we never accidentally pass INFINITE (0xFFFFFFFF).
+[[nodiscard]] DWORD ClampTimeoutMs(std::chrono::milliseconds timeout) noexcept {
+    const auto count = timeout.count();
+    if (count <= 0) {
+        return 0;
+    }
+    constexpr long long kMax = static_cast<long long>(MAXDWORD) - 1;
+    if (count > kMax) {
+        return static_cast<DWORD>(kMax);
+    }
+    return static_cast<DWORD>(count);
+}
+
+// Poll GetExitCodeProcess on an already-open handle until the process reports a
+// real exit code or the deadline passes. Returns true only on observed exit.
+[[nodiscard]] bool PollExitCode(HANDLE proc, std::chrono::steady_clock::time_point deadline) noexcept {
+    for (;;) {
+        DWORD code = 0;
+        if (::GetExitCodeProcess(proc, &code) != 0 && code != STILL_ACTIVE) {
+            return true;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
+// Poll OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) until the pid can no
+// longer be opened because it is gone (ERROR_INVALID_PARAMETER), or the
+// deadline passes. Any other open/failure state keeps polling.
+[[nodiscard]] bool PollUntilPidGone(DWORD pid, std::chrono::steady_clock::time_point deadline) noexcept {
+    for (;;) {
+        HANDLE probe = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (probe != nullptr) {
+            ::CloseHandle(probe);
+        } else if (::GetLastError() == ERROR_INVALID_PARAMETER) {
+            return true; // pid no longer refers to any process
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
+} // namespace
+
 bool WaitForProcessExit(uint32_t pid, std::chrono::milliseconds timeout) {
-    HANDLE proc = ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
-    if (proc == nullptr) {
-        // No handle: the pid is invalid/gone (ERROR_INVALID_PARAMETER) or the
-        // object is inaccessible (ERROR_ACCESS_DENIED). In every case we cannot
-        // -- and need not -- wait on it: it is not an exosnap instance holding
-        // our files. Treat as already exited.
+    // SYNCHRONIZE is the ideal access -- it lets WaitForSingleObject block on
+    // the process object directly. But an elevated old app + a non-elevated
+    // updater cannot be granted SYNCHRONIZE on that process, and we must NOT
+    // treat that access failure as "already exited": starting the swap while
+    // the old, still-running exe image is locked on disk would fail the rename.
+    // So we fall back to lower-privilege probes that survive the elevation gap.
+    const DWORD dwpid = static_cast<DWORD>(pid);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+    HANDLE proc = ::OpenProcess(SYNCHRONIZE, FALSE, dwpid);
+    if (proc != nullptr) {
+        const DWORD r = ::WaitForSingleObject(proc, ClampTimeoutMs(timeout));
+        ::CloseHandle(proc);
+        return r == WAIT_OBJECT_0;
+    }
+
+    const DWORD err = ::GetLastError();
+    if (err == ERROR_INVALID_PARAMETER) {
+        // The pid does not refer to any live process -- it is genuinely gone.
         return true;
     }
-    const DWORD ms = static_cast<DWORD>(timeout.count());
-    const DWORD r = ::WaitForSingleObject(proc, ms);
-    ::CloseHandle(proc);
-    return r == WAIT_OBJECT_0;
+    if (err != ERROR_ACCESS_DENIED) {
+        // Some other unexpected failure: be conservative and treat the process
+        // as still present rather than racing the swap against a locked image.
+        return false;
+    }
+
+    // Access denied under SYNCHRONIZE. PROCESS_QUERY_LIMITED_INFORMATION is
+    // grantable across the elevation boundary, so retry with it.
+    HANDLE query = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwpid);
+    if (query != nullptr) {
+        const bool exited = PollExitCode(query, deadline);
+        ::CloseHandle(query);
+        return exited;
+    }
+
+    if (::GetLastError() == ERROR_INVALID_PARAMETER) {
+        return true; // gone between the two opens
+    }
+
+    // Even the limited-information open was denied. Fall back to polling the
+    // open itself until the pid stops resolving to any process.
+    return PollUntilPidGone(dwpid, deadline);
 }
 
 bool WaitForInstanceMutex(const wchar_t* mutex_name, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     for (;;) {
         HANDLE m = ::OpenMutexW(SYNCHRONIZE, FALSE, mutex_name);
-        if (m == nullptr) {
-            // The named object no longer exists -> no instance holds it.
+        if (m != nullptr) {
+            ::CloseHandle(m);
+            return true; // an instance holds it -> the new app is up
+        }
+        const DWORD err = ::GetLastError();
+        if (err == ERROR_ACCESS_DENIED) {
+            // The mutex EXISTS but in another security context (e.g. the new
+            // app runs elevated, this updater does not). Existence is what we
+            // are testing for, so treat it as present -> the new app is up.
             return true;
         }
-        ::CloseHandle(m);
+        // Only ERROR_FILE_NOT_FOUND (or any other transient failure) means the
+        // mutex is not there yet -- the new instance has not come up. Keep
+        // polling until it appears or the deadline passes.
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
         }

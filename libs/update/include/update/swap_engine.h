@@ -35,18 +35,21 @@ struct SwapPlan {
 [[nodiscard]] SwapPlan MakeSwapPlan(const std::wstring& install_dir, SemVer target);
 
 // ---------------------------------------------------------------------------
-// Swap errors -- mapped to the brief's error table (B2 = nothing lost / old
-// intact; B3 = new rename failed but backup auto-restored; RestoreFailed =
-// worst case, report red with paths).
+// Swap errors. Each records how far the swap progressed so the caller knows
+// which install tree is live: "nothing touched" means the old install is
+// untouched and running; "old install restored and live again" means the
+// second rename failed but the compensating rename put the old version back;
+// "worst case" means even the restore failed and the old tree is stranded in
+// the backup dir.
 // ---------------------------------------------------------------------------
 
 enum class SwapError : uint8_t {
     None = 0,
-    StagingMissing,  // staging_dir absent or has no exosnap.exe -> B2 (nothing touched)
-    BackupCollision, // backup_dir already exists and can't be cleared -> B2
-    RenameOldFailed, // install->backup failed -> B2 (old intact)
-    RenameNewFailed, // staging->install failed; backup auto-restored -> B3
-    RestoreFailed,   // restore itself failed (worst case; report red + paths)
+    StagingMissing,  // staging_dir absent or has no exosnap.exe -> nothing touched, old install intact
+    BackupCollision, // backup_dir already exists and can't be cleared -> nothing touched, old install intact
+    RenameOldFailed, // install->backup failed -> nothing touched, old install intact
+    RenameNewFailed, // staging->install failed -> old install restored and live again
+    RestoreFailed,   // restore itself failed -> worst case: old tree stranded in backup dir, report red + paths
 };
 
 // ---------------------------------------------------------------------------
@@ -55,12 +58,17 @@ enum class SwapError : uint8_t {
 // mutex.
 // ---------------------------------------------------------------------------
 
-// True once the process is gone (or was never running / is inaccessible and
-// no longer exists). False if it is still alive when the timeout elapses.
+// True once the process is gone (or was never running). Access failures under
+// SYNCHRONIZE do NOT count as "gone": the wait falls back to lower-privilege
+// probes so an elevated old app cannot fool a non-elevated updater into
+// starting the swap while its exe image is still locked. False if the process
+// is still alive when the timeout elapses.
 [[nodiscard]] bool WaitForProcessExit(uint32_t pid, std::chrono::milliseconds timeout);
 
-// True once the named mutex is no longer held (polled every 250 ms). False if
-// it is still held when the timeout elapses.
+// True once the named single-instance mutex exists (the new app has come up),
+// polled every 250 ms. A mutex openable only in another security context
+// (ERROR_ACCESS_DENIED) still counts as present. False if it never appears
+// before the timeout elapses.
 [[nodiscard]] bool WaitForInstanceMutex(const wchar_t* mutex_name, std::chrono::milliseconds timeout);
 
 // ---------------------------------------------------------------------------
