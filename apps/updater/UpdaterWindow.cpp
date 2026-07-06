@@ -189,7 +189,12 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
                        "QPushButton:hover:enabled{background:%1;border-radius:8px;}")
             .arg(rgba(line())));
     {
-        QPixmap px(20, 20);
+        // Render at the window's actual device pixel ratio so the glyph stays
+        // crisp on HiDPI instead of being upscaled from a 20x20 logical bitmap.
+        const qreal dpr = devicePixelRatioF();
+        const int side = qRound(20 * dpr);
+        QPixmap px(side, side);
+        px.setDevicePixelRatio(dpr);
         px.fill(Qt::transparent);
         QPainter pp(&px);
         pp.setRenderHint(QPainter::Antialiasing, true);
@@ -303,7 +308,10 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     else if (state.variant == TerminalVariant::Green)
         failColor = success();
     steps_->setFailColor(failColor);
-    steps_->setSteps(state.steps);
+    // Green is a soft-success terminal: a Failed step there is the auto-relaunch
+    // that didn't happen, not a real error, so the row reads as "manual" rather
+    // than "failed" (display-only -- the controller's StepStatus is untouched).
+    steps_->setSteps(state.steps, state.variant == TerminalVariant::Green);
 
     // Status line
     auto* icon = static_cast<GlyphWidget*>(status_icon_);
@@ -330,7 +338,7 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
         case TerminalVariant::Green:
             ico = Ico::Check;
             toneCol = success();
-            headline = QStringLiteral("Update complete");
+            headline = QStringLiteral("Update complete — version %1 is ready").arg(state.to_version);
             break;
         case TerminalVariant::Success:
             ico = Ico::Check;
@@ -426,28 +434,9 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
                                 .arg(mut().name()));
     box->addWidget(sentence);
 
-    // Keep-on note appears only on Amber (per brief).
-    if (state.variant == TerminalVariant::Amber) {
-        auto* noteRow = new QWidget(card);
-        noteRow->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
-        auto* nr = new QHBoxLayout(noteRow);
-        nr->setContentsMargins(0, 0, 0, 0);
-        nr->setSpacing(8);
-        auto* shield = new GlyphWidget(15, noteRow);
-        shield->set(Ico::ShieldCheck, success());
-        shield->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
-        nr->addWidget(shield, 0, Qt::AlignTop);
-        auto* note = new QLabel(noteRow);
-        note->setWordWrap(true);
-        note->setFont(ui(12, QFont::Medium));
-        note->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;")
-                                .arg(ink().name()));
-        note->setText(QStringLiteral("Keep your computer on. ExoSnap reopens on %1 automatically "
-                                     "when the swap finishes.")
-                          .arg(state.to_version));
-        nr->addWidget(note, 1);
-        box->addWidget(noteRow);
-    }
+    // The "keep your computer on" note is an in-progress affordance only (see the
+    // !terminal branch above); terminal Amber already told the user the current
+    // version is safe via footer_text, so it does not repeat the keep-on note.
 
     // Action buttons, right-aligned: primary (filled) then secondary (outline).
     auto* actions = new QWidget(card);

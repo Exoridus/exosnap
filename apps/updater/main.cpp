@@ -57,11 +57,11 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
         c.onStepDone(UpStep::Verify);
         c.onStepStarted(UpStep::Launch);
         c.onFailure(FailureCase::LaunchFailed, QString());
-        UpdaterUiState s = c.state();
-        // Green is a soft success: present every step as done and the ring full.
-        s.steps[size_t(UpStep::Launch)] = StepStatus::Done;
-        s.ring = 1.0;
-        return s;
+        // Green is the real controller output after a failed auto-relaunch: the
+        // Launch step stays Failed and the ring stays wherever onFailure left it.
+        // The widget layer (not the state) is responsible for presenting that
+        // failed Launch row as a "manual start" affordance rather than an error.
+        return c.state();
     }
     return std::nullopt;
 }

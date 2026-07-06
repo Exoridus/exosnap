@@ -5,6 +5,13 @@
 // right-aligned mono tag (done | working | queued | failed). The failed-row
 // tint follows the window's terminal variant (amber vs red), set via
 // setFailColor() before setSteps().
+//
+// On the Green terminal variant a Failed step (the auto-relaunch) is not a
+// real error -- the update itself succeeded, only the automatic relaunch
+// didn't -- so callers pass failedIsManual=true to setSteps() and the row
+// renders as a "manual" affordance (hollow ring, "manual" tag) instead of a
+// cross/"failed". This is display-only; UpdaterController's StepStatus stays
+// Failed either way.
 
 #include <QColor>
 #include <QWidget>
@@ -19,7 +26,7 @@ class StepListWidget : public QWidget {
   public:
     explicit StepListWidget(QWidget* parent = nullptr);
 
-    void setSteps(const std::array<StepStatus, 5>& steps);
+    void setSteps(const std::array<StepStatus, 5>& steps, bool failedIsManual = false);
     void setFailColor(const QColor& color);
 
     // The five fixed canon labels, top to bottom.

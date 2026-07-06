@@ -132,4 +132,56 @@ TEST_F(UpdaterWindowTest, InProgressStateHasNoFooterButtons) {
     EXPECT_TRUE(window.footerButtonLabels().isEmpty());
 }
 
+// Green is a soft success (the update installed fine; only the auto-relaunch
+// didn't happen), so the Launch row must read as an action to take ("manual"),
+// never as an error ("failed"). Red/Amber variants are real failures and must
+// keep the "failed" tag.
+TEST_F(UpdaterWindowTest, GreenVariantRendersLaunchRowTagAsManual) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::LaunchFailed));
+
+    QStringList seen;
+    for (auto* label : window.findChildren<QLabel*>())
+        seen << label->text();
+    EXPECT_TRUE(seen.contains(QStringLiteral("manual")));
+    EXPECT_FALSE(seen.contains(QStringLiteral("failed")));
+}
+
+TEST_F(UpdaterWindowTest, RedVariantRendersFailedRowTagAsFailed) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::VerifyInstallFailed));
+
+    QStringList seen;
+    for (auto* label : window.findChildren<QLabel*>())
+        seen << label->text();
+    EXPECT_TRUE(seen.contains(QStringLiteral("failed")));
+    EXPECT_FALSE(seen.contains(QStringLiteral("manual")));
+}
+
+TEST_F(UpdaterWindowTest, AmberVariantRendersFailedRowTagAsFailed) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::InstallFailed));
+
+    QStringList seen;
+    for (auto* label : window.findChildren<QLabel*>())
+        seen << label->text();
+    EXPECT_TRUE(seen.contains(QStringLiteral("failed")));
+    EXPECT_FALSE(seen.contains(QStringLiteral("manual")));
+}
+
+// Terminal Amber must not repeat the "keep your computer on" note -- that is
+// an in-progress-only affordance, and the terminal footer sentence already
+// says the current version is safe.
+TEST_F(UpdaterWindowTest, TerminalAmberHasNoKeepOnNote) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::InstallFailed));
+
+    QStringList seen;
+    for (auto* label : window.findChildren<QLabel*>())
+        seen << label->text();
+    for (const QString& text : seen)
+        EXPECT_FALSE(text.contains(QStringLiteral("Keep your computer on")))
+            << text.toStdString();
+}
+
 } // namespace

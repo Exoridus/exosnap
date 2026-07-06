@@ -47,9 +47,10 @@ class StepRow : public QWidget {
         applyStatus();
     }
 
-    void setStatus(StepStatus status, const QColor& failColor) {
+    void setStatus(StepStatus status, const QColor& failColor, bool manual = false) {
         status_ = status;
         fail_color_ = failColor;
+        manual_ = manual;
         applyStatus();
         update();
     }
@@ -75,10 +76,19 @@ class StepRow : public QWidget {
             break;
         }
         case StepStatus::Failed: {
-            p.setPen(QPen(statusBorder(fail_color_), 1.0));
-            p.setBrush(statusDim(fail_color_));
-            p.drawEllipse(g);
-            paintCross(p, g.adjusted(5, 5, -5, -5), fail_color_, 2.2);
+            if (manual_) {
+                // Green-variant manual affordance: the update succeeded, only the
+                // auto-relaunch didn't, so this reads as "start it yourself" --
+                // a hollow ring in the (green) tint, no cross.
+                p.setPen(QPen(fail_color_, 1.6));
+                p.setBrush(Qt::NoBrush);
+                p.drawEllipse(g.adjusted(1, 1, -1, -1));
+            } else {
+                p.setPen(QPen(statusBorder(fail_color_), 1.0));
+                p.setBrush(statusDim(fail_color_));
+                p.drawEllipse(g);
+                paintCross(p, g.adjusted(5, 5, -5, -5), fail_color_, 2.2);
+            }
             break;
         }
         case StepStatus::Working: {
@@ -111,7 +121,10 @@ class StepRow : public QWidget {
         switch (status_) {
         case StepStatus::Done: text = QStringLiteral("done"); tagColor = mut(); break;
         case StepStatus::Working: text = QStringLiteral("working"); tagColor = mint(); break;
-        case StepStatus::Failed: text = QStringLiteral("failed"); tagColor = fail_color_; break;
+        case StepStatus::Failed:
+            text = manual_ ? QStringLiteral("manual") : QStringLiteral("failed");
+            tagColor = fail_color_;
+            break;
         case StepStatus::Queued:
         default: text = QStringLiteral("queued"); tagColor = dim(); break;
         }
@@ -125,6 +138,7 @@ class StepRow : public QWidget {
     }
 
     bool first_ = false;
+    bool manual_ = false;
     StepStatus status_ = StepStatus::Queued;
     QColor fail_color_ = updater_theme::caution();
     QLabel* label_ = nullptr;
@@ -150,9 +164,9 @@ void StepListWidget::setFailColor(const QColor& color) {
     fail_color_ = color;
 }
 
-void StepListWidget::setSteps(const std::array<StepStatus, 5>& steps) {
+void StepListWidget::setSteps(const std::array<StepStatus, 5>& steps, bool failedIsManual) {
     for (int i = 0; i < 5; ++i)
-        rows_[i]->setStatus(steps[i], fail_color_);
+        rows_[i]->setStatus(steps[i], fail_color_, failedIsManual);
     update();
 }
 
