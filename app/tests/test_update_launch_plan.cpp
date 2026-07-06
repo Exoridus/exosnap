@@ -114,6 +114,16 @@ TEST(IsScoopManagedInstall, FalseForAppsDirWithoutCurrent) {
     EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/apps/ExoSnap")));
 }
 
+// "apps" and "current" both present but not in Scoop's "apps/<name>/current"
+// adjacency (current isn't exactly two components after apps) must not match.
+TEST(IsScoopManagedInstall, FalseForAppsAndCurrentWrongAdjacency) {
+    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/apps/current/ExoSnap")));
+}
+
+TEST(IsScoopManagedInstall, FalseForCurrentBeforeApps) {
+    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/Media/current/apps/")));
+}
+
 // -- ResolveUpdateCardState (loop guard + stuck-pending recovery) -----------
 
 TEST(ResolveUpdateCardState, UpToDateWhenNoUpdate) {

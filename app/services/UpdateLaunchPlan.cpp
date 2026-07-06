@@ -67,12 +67,14 @@ bool UpdateService::IsScoopManagedInstall(const QString& app_dir_path) {
 
     // Relocated root ($env:SCOOP): "<root>/apps/<name>/current" has no "scoop"
     // segment, but still uses Scoop's "apps" + "current" junction layout. Require
-    // both an "/apps/" segment and a "current" path component so plain "/apps/"
-    // trees (e.g. "D:/apps/ExoSnap") don't match.
+    // a "current" component sitting exactly two components after an "apps"
+    // component (i.e. "apps/<name>/current"), not just anywhere in the path, so
+    // trees like "C:/apps/current/ExoSnap" or "D:/Media/current/apps/" don't match.
     if (normalised.contains(QStringLiteral("/apps/"), Qt::CaseInsensitive)) {
         const QStringList parts = normalised.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-        for (const QString& part : parts) {
-            if (part.compare(QStringLiteral("current"), Qt::CaseInsensitive) == 0)
+        for (int i = 0; i < parts.size(); ++i) {
+            if (parts[i].compare(QStringLiteral("apps"), Qt::CaseInsensitive) == 0 && i + 2 < parts.size() &&
+                parts[i + 2].compare(QStringLiteral("current"), Qt::CaseInsensitive) == 0)
                 return true;
         }
     }
