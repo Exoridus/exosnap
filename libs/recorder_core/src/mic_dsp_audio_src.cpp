@@ -153,6 +153,10 @@ const std::string& MicDspAudioSrc::EndpointName() const {
     return inner_->EndpointName();
 }
 
+int32_t MicDspAudioSrc::LastCaptureHresult() const {
+    return inner_ ? inner_->LastCaptureHresult() : 0;
+}
+
 void MicDspAudioSrc::Shutdown() {
     inner_->Shutdown();
     initialized_ = false;

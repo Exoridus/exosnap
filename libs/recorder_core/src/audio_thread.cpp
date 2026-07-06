@@ -217,7 +217,8 @@ void AudioThread::Run() {
                 std::string captureErr;
                 if (!source_->AcquireBuffer(raw, captureErr)) {
                     if (!captureErr.empty()) {
-                        m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
+                        const int32_t captureHr = source_->LastCaptureHresult();
+                        m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
                                               "Audio source AcquireBuffer failed: " + captureErr);
                         goto end_opus_loop;
                     }
@@ -375,7 +376,8 @@ void AudioThread::Run() {
                 std::string captureErr;
                 if (!source_->AcquireBuffer(raw, captureErr)) {
                     if (!captureErr.empty()) {
-                        m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
+                        const int32_t captureHr = source_->LastCaptureHresult();
+                        m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
                                               "Audio source AcquireBuffer failed: " + captureErr);
                         goto end_pcm_loop;
                     }
@@ -535,7 +537,8 @@ void AudioThread::Run() {
                 std::string captureErr;
                 if (!source_->AcquireBuffer(raw, captureErr)) {
                     if (!captureErr.empty()) {
-                        m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
+                        const int32_t captureHr = source_->LastCaptureHresult();
+                        m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
                                               "Audio source AcquireBuffer failed: " + captureErr);
                         goto end_flac_loop;
                     }
@@ -699,7 +702,8 @@ void AudioThread::Run() {
             std::string captureErr;
             if (!source_->AcquireBuffer(raw, captureErr)) {
                 if (!captureErr.empty()) {
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
+                    const int32_t captureHr = source_->LastCaptureHresult();
+                    m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
                                           "Audio source AcquireBuffer failed: " + captureErr);
                     goto end_audio_loop;
                 }

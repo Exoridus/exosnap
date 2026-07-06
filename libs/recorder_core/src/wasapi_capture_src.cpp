@@ -225,6 +225,20 @@ MicChannelMode EffectiveAutoMode(const AutoModeState& state) {
 
 } // namespace mic_channel_detail
 
+WasapiAcquireFailAction ClassifyWasapiAcquireFailure(HRESULT hr) noexcept {
+    switch (hr) {
+    case S_OK:
+    case AUDCLNT_S_BUFFER_EMPTY:
+        // No data-carrying failure this poll tick — normal, keep draining.
+        return WasapiAcquireFailAction::Idle;
+    default:
+        // AUDCLNT_E_DEVICE_INVALIDATED / AUDCLNT_E_SERVICE_NOT_RUNNING and every
+        // other unexpected HRESULT: fail closed — end the recording cleanly
+        // rather than loop through a dead endpoint.
+        return WasapiAcquireFailAction::Fail;
+    }
+}
+
 WasapiCaptureSrc::WasapiCaptureSrc(MicChannelMode channel_mode, std::optional<std::string> device_id)
     : requested_channel_mode_(channel_mode), device_id_(std::move(device_id)) {
 }
@@ -407,6 +421,7 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         (selectedKind == AcceptedSampleKind::Pcm16) ? AudioSampleFormat::Int16 : AudioSampleFormat::Float32;
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
+    last_capture_hr_ = 0;
     auto_mode_locked_ = false;
     auto_resolved_mode_ = MicChannelMode::MonoMix;
     auto_detect_frames_ = 0;
@@ -423,7 +438,7 @@ uint32_t WasapiCaptureSrc::PendingFrameCount() {
 
     UINT32 frames = 0;
     HRESULT hr = capture_client_->GetNextPacketSize(&frames);
-    if (FAILED(hr)) {
+    if (ClassifyWasapiAcquireFailure(hr) == WasapiAcquireFailAction::Fail) {
         char buf[160];
         if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
             snprintf(buf, sizeof(buf),
@@ -433,8 +448,11 @@ uint32_t WasapiCaptureSrc::PendingFrameCount() {
             snprintf(buf, sizeof(buf), "IAudioCaptureClient::GetNextPacketSize failed 0x%08lX",
                      static_cast<unsigned long>(hr));
         }
+        last_capture_hr_ = static_cast<int32_t>(hr);
         pending_capture_error_ = true;
         pending_capture_error_msg_ = buf;
+        // Return a non-zero pending count so the drain enters AcquireBuffer, which
+        // reports the pending error and ends the recording cleanly.
         return 1;
     }
 
@@ -469,20 +487,30 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     UINT64 devicePos = 0;
     UINT64 qpcPos = 0;
     HRESULT hr = capture_client_->GetBuffer(&data, &numFrames, &captureFlags, &devicePos, &qpcPos);
-    if (hr == AUDCLNT_S_BUFFER_EMPTY) {
-        out_error.clear();
-        return false;
-    }
-    if (FAILED(hr)) {
-        char buf[160];
-        if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
-            snprintf(buf, sizeof(buf), "IAudioCaptureClient::GetBuffer failed: AUDCLNT_E_DEVICE_INVALIDATED (0x%08lX)",
-                     static_cast<unsigned long>(hr));
-        } else {
-            snprintf(buf, sizeof(buf), "IAudioCaptureClient::GetBuffer failed 0x%08lX", static_cast<unsigned long>(hr));
+    if (hr != S_OK) {
+        // S_OK with data is the normal path (handled below). Any other result is
+        // either a benign empty tick or a fatal endpoint loss — the classifier
+        // pins the recording-loss policy.
+        switch (ClassifyWasapiAcquireFailure(hr)) {
+        case WasapiAcquireFailAction::Idle:
+            // AUDCLNT_S_BUFFER_EMPTY: no packet this tick — not an error.
+            out_error.clear();
+            return false;
+        case WasapiAcquireFailAction::Fail: {
+            char buf[160];
+            if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
+                snprintf(buf, sizeof(buf),
+                         "IAudioCaptureClient::GetBuffer failed: AUDCLNT_E_DEVICE_INVALIDATED (0x%08lX)",
+                         static_cast<unsigned long>(hr));
+            } else {
+                snprintf(buf, sizeof(buf), "IAudioCaptureClient::GetBuffer failed 0x%08lX",
+                         static_cast<unsigned long>(hr));
+            }
+            last_capture_hr_ = static_cast<int32_t>(hr);
+            out_error = buf;
+            return false;
         }
-        out_error = buf;
-        return false;
+        }
     }
     if (numFrames == 0) {
         out_error.clear();
@@ -596,6 +624,10 @@ AudioSampleFormat WasapiCaptureSrc::SampleFormat() const {
 
 const std::string& WasapiCaptureSrc::EndpointName() const {
     return endpoint_name_;
+}
+
+int32_t WasapiCaptureSrc::LastCaptureHresult() const {
+    return last_capture_hr_;
 }
 
 void WasapiCaptureSrc::UpdateAutoModeFromBuffer(const uint8_t* data, uint32_t num_frames, bool silent) {
