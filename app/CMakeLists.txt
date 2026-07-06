@@ -1482,6 +1482,7 @@ exosnap_add_gtest(
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
         diagnostics/AppLog.cpp
+        ui/brand/BrandMarkWidget.cpp
         # THEME-SLICE-2C: RecoveryOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core FFmpeg::mux
@@ -1805,6 +1806,7 @@ exosnap_add_gtest(
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
         diagnostics/AppLog.cpp
+        ui/brand/BrandMarkWidget.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/exosnap_theme.qrc
         assets/fonts/exosnap_fonts.qrc

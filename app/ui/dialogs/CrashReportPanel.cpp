@@ -72,7 +72,10 @@ class BulletDot : public QWidget {
   public:
     BulletDot(const QColor& color, QWidget* parent) : QWidget(parent), color_(color) {
         // Box is one text-line tall so a top-aligned dot centres on the first line.
-        setFixedSize(6, 17);
+        // The box is wider than the painted circle (10px vs 6px) so the circle's
+        // edges never land on the widget boundary; at some DPRs a 6px-wide box
+        // clipped the antialiased edge of a 6px circle into a flattened nub.
+        setFixedSize(10, 17);
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setStyleSheet(QStringLiteral("background:transparent; border:none;"));
     }
@@ -83,8 +86,9 @@ class BulletDot : public QWidget {
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setPen(Qt::NoPen);
         p.setBrush(color_);
-        // Centred 6px circle within the line-tall box.
-        const QRectF dot(0.0, (height() - 6) / 2.0, 6.0, 6.0);
+        // 6px circle centred in the (wider) box, both horizontally and within
+        // the line-tall box vertically.
+        const QRectF dot((width() - 6) / 2.0, (height() - 6) / 2.0, 6.0, 6.0);
         p.drawEllipse(dot);
     }
 
@@ -125,7 +129,9 @@ QWidget* makeTransparencyColumn(const QString& icon_name, const QString& heading
         auto* row = new QWidget(col);
         auto* row_layout = new QHBoxLayout(row);
         row_layout->setContentsMargins(0, 0, 0, 0);
-        row_layout->setSpacing(8);
+        // Bullet box widened 6px->10px (see BulletDot); spacing trimmed 8->4 so
+        // the item text keeps its original x-position (10+4 == 6+8).
+        row_layout->setSpacing(4);
         auto* bullet = makeBullet(color_base, row);
         row_layout->addWidget(bullet, 0, Qt::AlignTop);
         auto* text = new QLabel(item, row);

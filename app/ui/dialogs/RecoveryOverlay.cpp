@@ -1,5 +1,6 @@
 #include "RecoveryOverlay.h"
 
+#include "ui/brand/BrandMarkWidget.h"
 #include "ui/theme/ExoSnapTheme.h"
 
 #include <QColor>
@@ -361,10 +362,9 @@ QFrame* RecoveryOverlay::buildCard() {
     chrome_layout->setContentsMargins(15, 0, 12, 0);
     chrome_layout->setSpacing(9);
 
-    auto* brand_dot = new QFrame(chrome);
-    brand_dot->setFixedSize(11, 11);
-    brand_dot->setStyleSheet(QStringLiteral("background:%1; border-radius:5px;").arg(tok(ActiveTheme().ac)));
-    chrome_layout->addWidget(brand_dot, 0, Qt::AlignVCenter);
+    auto* brand_mark = new ui::brand::BrandMarkWidget(chrome);
+    brand_mark->setFixedSize(15, 15);
+    chrome_layout->addWidget(brand_mark, 0, Qt::AlignVCenter);
 
     auto* brand = new QLabel(QStringLiteral("ExoSnap"), chrome);
     brand->setStyleSheet(QStringLiteral("font-size:12px; font-weight:600; color:%1; background:transparent;")
