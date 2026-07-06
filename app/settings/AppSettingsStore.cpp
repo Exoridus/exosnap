@@ -89,6 +89,8 @@ PersistedAppSettings AppSettingsStore::Load() const {
     // Pre-1.0: no migration; missing keys default to Stable / true.
     persisted.update_channel = settings.value(QStringLiteral("channel"), QStringLiteral("Stable")).toString();
     persisted.check_updates_on_start = settings.value(QStringLiteral("check_updates_on_start"), true).toBool();
+    // Loop guard for the staged swap updater; empty when no swap is pending.
+    persisted.applied_version = settings.value(QStringLiteral("applied_version"), QString()).toString();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
@@ -185,6 +187,7 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     // UPDATE-WIRE-R1: update channel + auto-check-on-start.
     settings.setValue(QStringLiteral("channel"), settings_snapshot.update_channel);
     settings.setValue(QStringLiteral("check_updates_on_start"), settings_snapshot.check_updates_on_start);
+    settings.setValue(QStringLiteral("applied_version"), settings_snapshot.applied_version);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));

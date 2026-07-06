@@ -489,6 +489,36 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
     connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
 
+    // The staged swap updater has been launched: stamp the loop guard so a stale
+    // releases-API cache can't re-offer the same version, and flip the card to the
+    // "Restart pending" state. The updater will send WM_CLOSE when it is ready to
+    // swap; the app then closes normally.
+    connect(update_service_, &UpdateService::updaterLaunched, this, [this]() {
+        persisted_settings_.applied_version = last_available_version_;
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+        diagnostics::AppLog::info(
+            QStringLiteral("update"),
+            QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
+    });
+    // Any staging/launch failure surfaces on the Settings card as an error.
+    connect(update_service_, &UpdateService::updateError, this,
+            [this](exosnap::update::VerifyResult /*result*/, const QString& detail) {
+                if (config_page_)
+                    config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), detail);
+                diagnostics::AppLog::warning(QStringLiteral("update"),
+                                             QStringLiteral("Updater launch failed: %1").arg(detail));
+            });
+
+    // Loop guard: once the running build equals a pending applied_version, the swap
+    // completed — clear the stamp so future checks work normally.
+    if (!persisted_settings_.applied_version.isEmpty() &&
+        persisted_settings_.applied_version == QString::fromLatin1(exosnap::build::kVersion)) {
+        persisted_settings_.applied_version.clear();
+        settings_store_.Save(persisted_settings_);
+    }
+
     // ---- Load preset store ----
     PersistedPresetState loaded_presets = preset_store_.Load();
     if (loaded_presets.was_reset) {
@@ -3750,6 +3780,7 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
 
     const QString available_version =
         result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString();
+    last_available_version_ = available_version;
 
     ui::dialogs::UpdateUiModel model;
     model.current_version = current_version;
@@ -3787,9 +3818,14 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
                                                        : ui::dialogs::UpdateUiState::UpToDate);
     }
     if (config_page_) {
-        config_page_->setUpdateStatus(result.update_available ? QStringLiteral("available")
-                                                              : QStringLiteral("uptodate"),
-                                      available_version, model.last_checked);
+        // Loop-guard / recovery semantics live in the pure ResolveUpdateCardState
+        // helper. A manual check clears applied_version before the check runs, so a
+        // stuck "Restart pending" re-arms to "available" for a still-applicable
+        // version; automatic checks keep available==applied pinned to "pending".
+        const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
+        const QString card_state = exosnap::ResolveUpdateCardState(
+            result.update_available, is_scoop, persisted_settings_.applied_version, available_version);
+        config_page_->setUpdateStatus(card_state, available_version, model.last_checked);
     }
 
     diagnostics::AppLog::info(
@@ -4104,13 +4140,42 @@ void MainWindow::buildConfigPage() {
     config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
     connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
         manual_update_check_ = true;
+        // Recovery: a user-initiated check clears any persisted "Restart pending"
+        // stamp so the card can re-arm to "Update to vX.Y" if the updater launched
+        // earlier but never completed the swap. Automatic startup checks keep the
+        // loop-guard semantics (available==applied stays "pending").
+        if (!persisted_settings_.applied_version.isEmpty()) {
+            persisted_settings_.applied_version.clear();
+            settings_store_.Save(persisted_settings_);
+        }
         triggerUpdateCheck();
     });
     connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
-        const QString url = last_update_releases_url_.isEmpty()
-                                ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                : last_update_releases_url_;
-        QDesktopServices::openUrl(QUrl(url));
+        // App-layer recording guard (belt): UpdateService holds a nullptr coordinator,
+        // so its engine guard always returns NotBlocked. Never stage/launch the swap
+        // updater while a recording or MP4 finalize is in flight — mirror how
+        // triggerUpdateCheck() gates the check path.
+        if (recording_active_ || remuxing_active_) {
+            if (config_page_)
+                config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(),
+                                              QStringLiteral("Finish the recording before updating."));
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update launch skipped — recording/finalizing in progress"));
+            return;
+        }
+        // Scoop installs are notify-only: the primary button opens the releases
+        // page (today's behavior); the staged swap must not touch a Scoop tree.
+        if (UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath())) {
+            const QString url = last_update_releases_url_.isEmpty()
+                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                    : last_update_releases_url_;
+            QDesktopServices::openUrl(QUrl(url));
+            return;
+        }
+        // Otherwise stage + launch the swap updater. The app keeps running and
+        // exits normally when the updater sends WM_CLOSE.
+        if (update_service_)
+            update_service_->LaunchUpdater();
     });
     connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
         persisted_settings_.check_updates_on_start = enabled;

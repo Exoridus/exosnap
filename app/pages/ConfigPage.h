@@ -525,6 +525,10 @@ class ConfigPage : public QWidget {
     QLabel* updates_status_label_ = nullptr;
     QPushButton* updates_action_btn_ = nullptr;
     QString updates_available_version_; // last advertised "vX.Y" (Available state)
+    // State-derived enabled value for the updates action button, independent of the
+    // recording lock. The effective enabled state is (this && !controls_locked_) so a
+    // recording lock disables the button without a later setUpdateStatus re-enabling it.
+    bool updates_action_intrinsically_enabled_ = true;
 
     // v10 split: the old "Format & encoding" mega-card is split into
     // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).
