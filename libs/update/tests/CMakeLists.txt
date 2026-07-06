@@ -41,3 +41,9 @@ exosnap_add_gtest(
     SOURCES test_release_locator.cpp
     LIBRARIES exosnap::update
 )
+
+exosnap_add_gtest(
+    NAME    test_swap_engine
+    SOURCES test_swap_engine.cpp
+    LIBRARIES exosnap::update
+)

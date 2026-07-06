@@ -76,6 +76,7 @@ add_library(exosnap_update STATIC
     src/install_mode_detector.cpp
     src/zip_extract.cpp
     src/http_download.cpp
+    src/swap_engine.cpp
 )
 add_library(exosnap::update ALIAS exosnap_update)
 
@@ -94,6 +95,7 @@ target_link_libraries(exosnap_update
         winhttp    # WinHTTP.lib (Windows SDK)
         bcrypt     # BCrypt.lib  (Windows SDK, SHA-256)
         shell32    # ShellExecuteW
+        version    # Version.lib (GetFileVersionInfoW / VerQueryValueW)
 )
 
 # ---------------------------------------------------------------------------
