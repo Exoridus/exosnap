@@ -1,6 +1,6 @@
 // update_checker.cpp -- GitHub Releases API update check (WinHTTP).
 
-#include <nlohmann/json.hpp>
+#include <update/release_locator.h>
 #include <update/update_checker.h>
 
 // WinHTTP is available on all supported Windows versions (Vista+).
@@ -10,7 +10,6 @@
 #pragma comment(lib, "winhttp.lib")
 
 #include <optional>
-#include <sstream>
 #include <string>
 
 namespace exosnap::update {
@@ -82,14 +81,6 @@ std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view pa
     return body;
 }
 
-// Parse a tag name like "v1.2.3" or "1.2.3" into SemVer.
-std::optional<SemVer> TagToSemVer(const std::string& tag) noexcept {
-    std::string_view sv = tag;
-    if (!sv.empty() && sv[0] == 'v')
-        sv.remove_prefix(1);
-    return ParseSemVer(sv);
-}
-
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -133,45 +124,16 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         return r;
     }
 
-    // Parse JSON array
-    std::optional<SemVer> best_ver;
-    std::optional<std::string> best_html_url;
-
-    try {
-        auto releases = nlohmann::json::parse(*body);
-        for (const auto& rel : releases) {
-            bool is_prerelease = rel.value("prerelease", false);
-            bool is_draft = rel.value("draft", false);
-            if (is_draft)
-                continue;
-
-            bool channel_match = (params.channel == UpdateChannel::Preview) ? is_prerelease : !is_prerelease;
-            if (!channel_match)
-                continue;
-
-            auto tag = rel.value("tag_name", std::string{});
-            auto sv = TagToSemVer(tag);
-            if (!sv)
-                continue;
-
-            if (!best_ver || *sv > *best_ver) {
-                best_ver = sv;
-                best_html_url = rel.value("html_url", std::string{});
-            }
-        }
-    } catch (...) {
-        UpdateCheckResult r{};
-        r.check_failed = true;
-        r.error_message = "JSON parse error from GitHub releases API";
-        return r;
-    }
+    // Select the newest qualifying release for the channel. The channel/draft
+    // filtering and asset extraction live once in LocateRelease (DRY).
+    auto release = LocateRelease(*body, params.channel);
 
     UpdateCheckResult r{};
     r.check_failed = false;
-    if (best_ver && *best_ver > params.current_version) {
+    if (release && release->version > params.current_version) {
         r.update_available = true;
-        r.available_version = best_ver;
-        r.releases_page_url = best_html_url;
+        r.available_version = release->version;
+        r.releases_page_url = release->releases_page_url;
     }
     return r;
 }

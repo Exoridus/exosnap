@@ -75,7 +75,7 @@ struct SemVer {
 
 enum class PackageKind : uint8_t {
     Installer = 0, // NSIS/WiX .exe or .msi
-    Portable = 1,  // ZIP -- notify-only
+    Portable = 1,  // ZIP -- staged swap
 };
 
 struct PackageEntry {
