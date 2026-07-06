@@ -119,6 +119,14 @@ pipeline (ADR 0032 scope note).
 - No OS capture indicator for monitor recording.
 - Direct GPU pipeline: `IDXGIOutputDuplication` → `ID3D11Texture2D` → VideoProcessorBlt →
   NVENC NV12.
-- Access loss (`DXGI_ERROR_ACCESS_LOST`) on desktop lock/session switch terminates the recording
-  session (same behavior as WGC `item.Closed`).
+- Access loss (`DXGI_ERROR_ACCESS_LOST`) on a mode/topology change (desktop lock/session switch,
+  refresh/HDR switch, or a shared monitor re-negotiating when another display wakes) is transient:
+  the D3D device is still alive, so the duplication is rebuilt in place and the **same encode session
+  and output file continue**, leaving only a gap the size of the blackout. The rebuild polls for the
+  output under a bounded recovery budget (a few seconds); if the output never comes back within it,
+  the recording ends cleanly (source-loss → finalise), the historic behaviour. If the fresh
+  duplication returns a different frame size or format, the per-frame guard ends the recording
+  cleanly rather than reconfiguring the encoder mid-session (documented limitation). Unrecoverable
+  losses (`DXGI_ERROR_DEVICE_REMOVED`/`_HUNG`/`_RESET` or any unexpected HRESULT) still terminate the
+  session immediately with the HRESULT surfaced to the app log.
 - Cursor compositing requires a small per-frame CPU pass (cursor region only, typically 32–64 px).

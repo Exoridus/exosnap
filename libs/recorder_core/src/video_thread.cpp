@@ -1450,19 +1450,53 @@ void VideoThread::Run() {
 
     // --- WGC frame pool and session (Window-only path) ---
     bool sourceLost = false;
+    // How long to keep polling Reopen() before giving up on a recoverable OD
+    // acquire loss, and how long to wait between attempts. The output can be
+    // briefly absent while the topology renegotiation that caused the loss settles
+    // (an attached display waking, EDID/HPD re-negotiation blacks the desktop for a
+    // moment); a few seconds of polling covers the common case without stalling a
+    // genuinely gone source.
+    constexpr auto kOdReopenBudget = std::chrono::milliseconds{8000};
+    constexpr auto kOdReopenPollDelay = std::chrono::milliseconds{250};
     // React to a DXGI OD TryAcquireFrame() failure HRESULT. ACCESS_LOST is a
-    // transient loss (mode/topology change, device alive): clean stop — live
-    // re-duplication to continue is a follow-up. DEVICE_REMOVED / any unexpected
-    // HRESULT is unrecoverable: record a failure carrying the HRESULT so it reaches
-    // the app log ([record.failure]) — recorder_core's logging::log only feeds the
-    // ring buffer. Either way the segment is still finalised, so footage is kept.
+    // transient loss (mode/topology change, device alive): rebuild the duplication
+    // and continue the SAME encode session and output file, leaving a gap the size
+    // of the blackout; if it does not come back within kOdReopenBudget, fall back to
+    // a clean stop. DEVICE_REMOVED / any unexpected HRESULT is unrecoverable: record
+    // a failure carrying the HRESULT so it reaches the app log ([record.failure]) —
+    // recorder_core's logging::log only feeds the ring buffer. Either way the segment
+    // is still finalised, so footage is kept.
     const auto HandleOdAcquireFailure = [&](HRESULT hr) {
         switch (ClassifyOdAcquireFailure(hr)) {
         case OdAcquireFailAction::Idle:
             break; // no frame available this poll — normal
-        case OdAcquireFailAction::Recover:
-            sourceLost = true;
+        case OdAcquireFailAction::Recover: {
+            // Poll Reopen() under the pure retry/timeout policy. On recovery the
+            // drain resumes on the fresh duplication (same session, same file). A
+            // user stop mid-recovery ends the loop immediately.
+            const auto loss_t0 = std::chrono::steady_clock::now();
+            for (;;) {
+                if (m_state.stop_requested.load())
+                    break;
+                std::string reopenErr;
+                const bool reopened =
+                    odSrc.Reopen(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), reopenErr);
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - loss_t0);
+                const OdReopenDecision decision =
+                    DecideOdReopen(reopened, elapsed, kOdReopenBudget, kOdReopenPollDelay);
+                if (decision.action == OdReopenAction::Continue)
+                    break; // duplication live again — resume the same session
+                if (decision.action == OdReopenAction::GiveUp) {
+                    // Output never returned within budget: clean stop (source-loss
+                    // -> EOS -> finalise), the historic ACCESS_LOST behaviour.
+                    sourceLost = true;
+                    break;
+                }
+                Sleep(static_cast<DWORD>(decision.retry_delay.count())); // RetryAfter
+            }
             break;
+        }
         case OdAcquireFailAction::Fail: {
             char msg[96];
             snprintf(msg, sizeof(msg), "DXGI OD frame acquire lost: hr=0x%08X", static_cast<unsigned>(hr));
