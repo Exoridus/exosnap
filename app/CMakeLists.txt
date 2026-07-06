@@ -1482,6 +1482,7 @@ exosnap_add_gtest(
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
         diagnostics/AppLog.cpp
+        ui/brand/BrandMarkWidget.cpp
         # THEME-SLICE-2C: RecoveryOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core FFmpeg::mux
@@ -1781,6 +1782,39 @@ exosnap_add_gtest(
 )
 target_include_directories(tray_presence_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(tray_presence_tests PROPERTIES AUTOMOC ON)
+
+# Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
+# label mapping). Dependency-light: QString only.
+exosnap_add_gtest(
+    NAME recording_error_detail_text_tests
+    TEST_PREFIX record.error.detail.
+    SOURCES
+        tests/test_recording_error_detail_text.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
+
+# Offscreen render of the startup Recovery card. Applies the real ExoSnap theme;
+# produces .workspace/screenshots/recovery-overlay.png for visual verification.
+exosnap_add_gtest(
+    NAME recovery_overlay_visual_proof_tests
+    TEST_PREFIX recovery.proof.
+    SOURCES
+        tests/recovery_overlay_visual_proof.cpp
+        ui/dialogs/RecoveryOverlay.cpp
+        settings/RecoveryManifestStore.cpp
+        services/RecoveryService.cpp
+        diagnostics/AppLog.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core FFmpeg::mux
+)
+target_include_directories(recovery_overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recovery_overlay_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(recovery_overlay_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # ---------------------------------------------------------------------------
 # Install / windeployqt
