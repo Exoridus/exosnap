@@ -292,6 +292,15 @@ void DxgiOdCaptureSrc::Close() {
     m_refresh_rate_hz = 0;
 }
 
+bool DxgiOdCaptureSrc::Reopen(ID3D11Device* device, HMONITOR hmonitor, std::string& out_error) {
+    // Drop any held frame and the stale duplication, then rebuild it against the
+    // same monitor on the still-alive device. Open() re-reads size/format/HDR
+    // facts and resets m_frame_held; on failure it leaves the source closed so a
+    // subsequent poll attempt can try again.
+    Close();
+    return Open(device, hmonitor, out_error);
+}
+
 bool DxgiOdCaptureSrc::TryAcquireFrame(uint32_t timeout_ms, ID3D11Texture2D** out_texture,
                                        DXGI_OUTDUPL_FRAME_INFO* out_info, HRESULT* out_hr) {
     if (!m_duplication || m_frame_held) {
@@ -424,6 +433,25 @@ OdAcquireFailAction ClassifyOdAcquireFailure(HRESULT hr) noexcept {
         // HRESULT: fail closed — end the recording cleanly rather than loop.
         return OdAcquireFailAction::Fail;
     }
+}
+
+OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed, std::chrono::milliseconds budget,
+                                std::chrono::milliseconds poll_delay) noexcept {
+    if (reopened) {
+        // The duplication is live again — resume the same encode session. A late
+        // success past the budget still continues: recovered footage beats a
+        // strict deadline.
+        return {OdReopenAction::Continue, std::chrono::milliseconds{0}};
+    }
+    if (elapsed >= budget) {
+        // The output did not come back within the recovery budget: end cleanly.
+        return {OdReopenAction::GiveUp, std::chrono::milliseconds{0}};
+    }
+    // Still within budget: wait, then retry. Clamp the wait to the remaining
+    // budget so the loop cannot sleep past the deadline and stall the give-up.
+    const std::chrono::milliseconds remaining = budget - elapsed;
+    const std::chrono::milliseconds delay = poll_delay < remaining ? poll_delay : remaining;
+    return {OdReopenAction::RetryAfter, delay};
 }
 
 bool DxgiOdCaptureSrc::GetFramePointerShape(DXGI_OUTDUPL_POINTER_SHAPE_INFO* out_shape_info,
