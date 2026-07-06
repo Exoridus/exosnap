@@ -4,7 +4,7 @@
 
 namespace {
 
-// Ring weights: canon suite-updater.jsx:15-18 scaled onto the 5 steps. The ring
+// Ring weights: the design canon's four-step weights scaled onto the 5 steps. The ring
 // value snaps to the END weight of each completed step; within Download it
 // scales linearly with byte progress.
 constexpr std::array<double, size_t(UpStep::Count)> kStepEndWeight = {
