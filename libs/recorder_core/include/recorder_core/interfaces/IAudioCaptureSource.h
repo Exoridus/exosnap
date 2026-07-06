@@ -37,6 +37,15 @@ class IAudioCaptureSource {
     virtual AudioSampleFormat SampleFormat() const = 0;
     virtual const std::string& EndpointName() const = 0;
 
+    // Raw platform HRESULT of the last fatal acquire failure (e.g. a WASAPI
+    // endpoint that was invalidated mid-recording), or 0 (S_OK) when the source
+    // does not track one / none has occurred. Lets the drain surface the real
+    // capture-loss code to the app log instead of a generic failure code.
+    // Decorators forward their inner source's value; the default is 0.
+    virtual int32_t LastCaptureHresult() const {
+        return 0;
+    }
+
     virtual void Shutdown() = 0;
 };
 

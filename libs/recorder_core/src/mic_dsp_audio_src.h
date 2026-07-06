@@ -66,6 +66,7 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
     uint32_t Channels() const override;
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
+    int32_t LastCaptureHresult() const override;
 
     void Shutdown() override;
 

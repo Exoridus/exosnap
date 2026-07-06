@@ -739,6 +739,18 @@ exosnap_add_gtest(
 target_include_directories(test_od_acquire_failure_classify PRIVATE src)
 target_compile_definitions(test_od_acquire_failure_classify PRIVATE NOMINMAX)
 
+# WASAPI acquire-failure classifier: pure recording-loss policy for the audio
+# drain (endpoint invalidated / audio service down / unexpected HRESULT ->
+# fail-closed; benign empty tick -> keep draining). No audio hardware.
+exosnap_add_gtest(
+    NAME test_wasapi_acquire_failure_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_wasapi_acquire_failure_classify.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_wasapi_acquire_failure_classify PRIVATE src)
+target_compile_definitions(test_wasapi_acquire_failure_classify PRIVATE NOMINMAX)
+
 # HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
 # the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)
 # intermediates, and that the 10-bit target preserves precision the 8-bit loses.
