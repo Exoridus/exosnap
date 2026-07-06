@@ -17,6 +17,7 @@
 #include <optional>
 #include <update/update_service_interface.h>
 #include <update/update_types.h>
+#include <vector>
 
 namespace exosnap {
 class RecordingCoordinator;
@@ -63,6 +64,12 @@ class UpdateService final : public QObject {
 
     // Snapshot of the current state (for UI initialisation).
     exosnap::update::UpdateState CurrentState() const;
+
+    // WHATS-NEW: the gap-aware release notes (versions in (installed, target],
+    // newest first) from the most recent completed check. Empty when the last
+    // check found no update. Drives the Settings card "What's new" link and the
+    // pending payload persisted by LaunchUpdater.
+    std::vector<exosnap::update::ReleaseNote> LastGapNotes() const;
 
   signals:
     void updateCheckComplete(exosnap::update::UpdateCheckResult result);

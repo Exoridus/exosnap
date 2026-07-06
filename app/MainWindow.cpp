@@ -31,6 +31,7 @@
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
+#include "ui/dialogs/WhatsNewOverlay.h"
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
@@ -1078,6 +1079,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         checkAndShowRecoveryOverlay();
         // CRASH-WIRE-R1: next-launch crash dialog (deferred behind recovery).
         checkAndShowCrashReportOverlay();
+        // WHATS-NEW: one-time post-update overlay (deferred behind recovery/crash).
+        checkAndShowWhatsNewOverlay();
 
         // UPDATE-WIRE-R1 (ADR 0012): auto-check for updates on startup, guarded so we
         // never contact the update server while a recording/finalize is in flight.
@@ -1207,6 +1210,72 @@ void MainWindow::checkAndShowRecoveryOverlay() {
     connect(recovery_overlay_, &ui::dialogs::RecoveryOverlay::continueRequested, record_page_,
             &RecordPage::armFromRecovery);
     recovery_overlay_->openOverlay();
+}
+
+void MainWindow::openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool post_update_mode) {
+    if (notes.isEmpty())
+        return;
+
+    // One overlay at a time; replace any existing instance.
+    if (whats_new_overlay_ != nullptr) {
+        whats_new_overlay_->closeOverlay();
+        whats_new_overlay_->deleteLater();
+        whats_new_overlay_ = nullptr;
+    }
+
+    const QString releases_url = last_update_releases_url_.isEmpty()
+                                     ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                     : last_update_releases_url_;
+
+    auto* central = centralWidget();
+    whats_new_overlay_ = new ui::dialogs::WhatsNewOverlay(notes, post_update_mode, releases_url, central);
+    whats_new_overlay_->hide();
+    connect(whats_new_overlay_, &ui::dialogs::WhatsNewOverlay::closed, this, [this]() {
+        whats_new_overlay_->deleteLater();
+        whats_new_overlay_ = nullptr;
+    });
+    // Post-update mode: the suppress checkbox persists whats_new_suppressed.
+    connect(whats_new_overlay_, &ui::dialogs::WhatsNewOverlay::suppressToggled, this, [this](bool suppressed) {
+        persisted_settings_.whats_new_suppressed = suppressed;
+        settings_store_.Save(persisted_settings_);
+    });
+    whats_new_overlay_->openOverlay();
+}
+
+void MainWindow::checkAndShowWhatsNewOverlay() {
+    // Consume the pending payload written by LaunchUpdater. It only shows when the
+    // running build equals the payload's target and notices aren't suppressed —
+    // first install / downgrade / manual-ZIP update leave no matching payload, so
+    // in every one of those cases the stale payload is simply cleared without a UI.
+    const QString payload_path = WhatsNewPayloadPath();
+    const auto payload = ReadWhatsNewPayload(payload_path);
+    if (!payload.has_value())
+        return;
+
+    const QString running_version = QString::fromLatin1(exosnap::build::kVersion);
+    const bool show = ShouldShowWhatsNew(payload, running_version, persisted_settings_.whats_new_suppressed);
+
+    // One-time: always clear the payload once we've decided (shown or stale).
+    DeleteWhatsNewPayload(payload_path);
+    if (!show)
+        return;
+
+    QVector<WhatsNewNote> notes = payload->notes;
+    // Defer behind any recovery/crash overlay so nothing double-stacks: if one is
+    // open, show once it closes; otherwise show now.
+    if (recovery_overlay_ != nullptr && recovery_overlay_->isOpen()) {
+        connect(
+            recovery_overlay_, &ui::dialogs::RecoveryOverlay::closed, this,
+            [this, notes]() { openWhatsNewOverlay(notes, /*post_update_mode=*/true); }, Qt::SingleShotConnection);
+        return;
+    }
+    if (crash_overlay_ != nullptr) {
+        connect(
+            crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this,
+            [this, notes]() { openWhatsNewOverlay(notes, /*post_update_mode=*/true); }, Qt::SingleShotConnection);
+        return;
+    }
+    openWhatsNewOverlay(notes, /*post_update_mode=*/true);
 }
 
 namespace {
@@ -4176,6 +4245,22 @@ void MainWindow::buildConfigPage() {
         // exits normally when the updater sends WM_CLOSE.
         if (update_service_)
             update_service_->LaunchUpdater();
+    });
+    // WHATS-NEW: card "What's new in vX.Y" link -> overlay with the last check's
+    // gap notes (pre-update mode; no suppress checkbox). Never gated by the
+    // suppress setting.
+    connect(config_page_, &ConfigPage::whatsNewRequested, this, [this]() {
+        if (!update_service_)
+            return;
+        QVector<WhatsNewNote> notes;
+        for (const auto& n : update_service_->LastGapNotes()) {
+            WhatsNewNote note;
+            note.version = QString::fromStdString(n.version.ToString());
+            note.body = QString::fromStdString(n.body_markdown);
+            note.html_url = QString::fromStdString(n.html_url);
+            notes.push_back(note);
+        }
+        openWhatsNewOverlay(notes, /*post_update_mode=*/false);
     });
     connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
         persisted_settings_.check_updates_on_start = enabled;

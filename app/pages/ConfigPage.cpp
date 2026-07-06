@@ -2176,6 +2176,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 emit updatePrimaryActionRequested();
         });
 
+        // WHATS-NEW: "What's new in vX.Y" link — shown only in the available state
+        // (setUpdateStatus toggles visibility). Opens the gap-aware notes overlay.
+        updates_whats_new_link_ = new QPushButton(updates_panel_);
+        updates_whats_new_link_->setObjectName(QStringLiteral("updatesWhatsNewLink"));
+        updates_whats_new_link_->setProperty("cardTextLink", true);
+        updates_whats_new_link_->setFlat(true);
+        updates_whats_new_link_->setCursor(Qt::PointingHandCursor);
+        updates_whats_new_link_->setVisible(false);
+        updates_layout->addWidget(updates_whats_new_link_, 0, Qt::AlignLeft);
+        connect(updates_whats_new_link_, &QPushButton::clicked, this, &ConfigPage::whatsNewRequested);
+
         // updates_panel_ added to right_layout in the consolidation block below.
     }
 
@@ -5631,6 +5642,16 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
     // A recording/finalizing lock always wins: never allow the swap/check action to
     // fire while a recording is in flight (belt to the MainWindow handler guard).
     updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && !controls_locked_);
+
+    // WHATS-NEW: the "What's new in vX.Y" link appears only in the available state.
+    // The suppress setting never hides this link (it only gates the post-update
+    // auto-show).
+    if (updates_whats_new_link_) {
+        const bool show_link = (state == QStringLiteral("available")) && !available_version.isEmpty();
+        updates_whats_new_link_->setVisible(show_link);
+        if (show_link)
+            updates_whats_new_link_->setText(QStringLiteral("What's new in %1").arg(available_version));
+    }
 
     // Accent CTA styling only in the available state (QSS [updatesCta="true"]).
     updates_action_btn_->setProperty("updatesCta", state == QStringLiteral("available"));

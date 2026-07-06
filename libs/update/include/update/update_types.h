@@ -119,12 +119,32 @@ enum class UpdateBlockReason : uint8_t {
 // Check result
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Release note -- one GitHub release's changelog body, for the What's-new UI.
+//
+// Defined here (rather than in release_locator.h) because UpdateCheckResult
+// carries a vector of these and update_types.h is the base header the locator
+// includes — putting it here keeps the include direction acyclic.
+// ---------------------------------------------------------------------------
+
+struct ReleaseNote {
+    SemVer version;            // parsed from tag_name
+    std::string body_markdown; // GitHub release "body" (Markdown)
+    std::string html_url;      // release page URL
+
+    [[nodiscard]] bool operator==(const ReleaseNote&) const noexcept = default;
+};
+
 struct UpdateCheckResult {
     bool update_available = false;
     std::optional<SemVer> available_version;
     std::optional<std::string> releases_page_url;
     std::optional<std::string> error_message;
     bool check_failed = false;
+
+    // Release notes for every version in the gap (current, best], newest first,
+    // for the same channel the check ran on. Empty unless an update is available.
+    std::vector<ReleaseNote> gap_notes;
 };
 
 // ---------------------------------------------------------------------------

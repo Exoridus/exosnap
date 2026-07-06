@@ -186,6 +186,9 @@ class ConfigPage : public QWidget {
     // Primary action while an update is available ("Update to vX.Y"). Phase A
     // hands off to the releases page; Phase B starts the in-app download.
     void updatePrimaryActionRequested();
+    // WHATS-NEW: "What's new in vX.Y" card link (available state only). Opens the
+    // gap-aware release-notes overlay. Never suppressed.
+    void whatsNewRequested();
     // "Check for updates automatically" toggle changed.
     void autoUpdateCheckToggled(bool enabled);
 
@@ -524,7 +527,8 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* updates_auto_toggle_ = nullptr;
     QLabel* updates_status_label_ = nullptr;
     QPushButton* updates_action_btn_ = nullptr;
-    QString updates_available_version_; // last advertised "vX.Y" (Available state)
+    QPushButton* updates_whats_new_link_ = nullptr; // WHATS-NEW: "What's new in vX.Y" (available only)
+    QString updates_available_version_;             // last advertised "vX.Y" (Available state)
     // State-derived enabled value for the updates action button, independent of the
     // recording lock. The effective enabled state is (this && !controls_locked_) so a
     // recording lock disables the button without a later setUpdateStatus re-enabling it.

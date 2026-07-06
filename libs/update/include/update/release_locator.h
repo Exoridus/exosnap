@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <update/update_types.h>
+#include <vector>
 
 namespace exosnap::update {
 
@@ -31,6 +32,23 @@ struct ReleaseAssets {
 // no qualifying release for `channel`.
 [[nodiscard]] std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, UpdateChannel channel,
                                                          std::string* parse_error = nullptr);
+
+// Collect the release notes for every non-draft release whose version lies in
+// the half-open/closed range (`above`, `up_to`] for `channel`, newest first.
+//
+// Parses the exact GitHub /releases JSON array UpdateChecker fetches — the same
+// payload LocateRelease reads — so no extra network call is needed to populate
+// the What's-new overlay. A release's Markdown changelog is its "body" field and
+// its page link is "html_url".
+//
+// Channel rule (mirrors the product's channel semantics):
+//   * Stable  -> prereleases are excluded.
+//   * Preview -> prereleases are included (alongside stable releases).
+// Drafts are always skipped. Releases whose tag does not parse to a SemVer, or
+// that fall outside the range, are skipped. On a malformed JSON body the result
+// is an empty vector (the What's-new UI simply shows nothing).
+[[nodiscard]] std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, const SemVer& above,
+                                                           const SemVer& up_to, UpdateChannel channel);
 
 // Installed -> PackageKind::Installer, Portable -> PackageKind::Portable; nullptr if absent.
 [[nodiscard]] const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode);

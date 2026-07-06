@@ -94,6 +94,8 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
     ui/dialogs/RecoveryOverlay.cpp
+    ui/dialogs/WhatsNewOverlay.h
+    ui/dialogs/WhatsNewOverlay.cpp
     ui/dialogs/SourcePickerPanel.h
     ui/dialogs/SourcePickerPanel.cpp
     ui/dialogs/SourcePickerDialog.h
@@ -251,6 +253,8 @@ qt_add_executable(exosnap WIN32
     services/UpdateService.h
     services/UpdateService.cpp
     services/UpdateLaunchPlan.cpp
+    services/WhatsNewPayload.h
+    services/WhatsNewPayload.cpp
     services/ElevatedRelaunch.h
     services/ElevatedRelaunch.cpp
     models/WebcamSettings.h
@@ -1503,6 +1507,33 @@ exosnap_add_gtest(
 target_include_directories(recovery_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(recovery_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(recovery_overlay_tests PROPERTIES AUTOMOC ON)
+
+# WHATS-NEW: pending-payload persistence round-trip + show decision (headless).
+exosnap_add_gtest(
+    NAME whats_new_payload_tests
+    TEST_PREFIX whats_new.
+    SOURCES
+        tests/test_whats_new_payload.cpp
+        services/WhatsNewPayload.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(whats_new_payload_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# WHATS-NEW: overlay smoke (sections render, checkbox only post-update, Esc/close).
+exosnap_add_gtest(
+    NAME whats_new_overlay_tests
+    TEST_PREFIX whats_new.
+    SOURCES
+        tests/test_whats_new_overlay.cpp
+        ui/dialogs/WhatsNewOverlay.cpp
+        services/WhatsNewPayload.cpp
+        ui/widgets/ExoCheckBox.cpp
+        ui/theme/ExoSnapTheme.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(whats_new_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(whats_new_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(whats_new_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME audio_device_notifier_tests

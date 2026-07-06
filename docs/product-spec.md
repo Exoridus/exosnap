@@ -533,8 +533,20 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
 - **Current shipped behavior:** check + notify + manual download. The update card shows
   "Available · Update to vX.Y" and opens the releases page; the app does not yet download or install
   the update itself.
-- **Planned:** after a completed update, a **"what's new" window/overlay** is shown on the first
-  launch of the new version, with a checkbox to suppress it for future updates.
+- **What's new (shipped).** Release notes are surfaced from the GitHub release bodies already present
+  in the `/releases` payload the update check fetches — no extra network call. One in-window overlay
+  lists the notes for **every version in the gap `(installed, target]`**, newest first, with the newest
+  expanded and older entries collapsed (click to expand); bodies are Markdown, and a footer **"All
+  releases"** link opens the releases page. It has two entry points:
+  - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"What's new in
+    vX.Y"** link opens the overlay with the gap notes from the last check.
+  - **Post-update (one-time):** clicking **Update** persists the gap notes as a pending payload; on the
+    first launch of the new build — when the payload's target equals the running version and the
+    suppress setting is off — the overlay is shown once and the payload is cleared. This mode carries a
+    **"Don't show this after updates"** checkbox (default off = notices shown) persisting
+    `whats_new_suppressed`; that setting only gates the post-update auto-show and never hides the card
+    link. First install, downgrade, and manual-ZIP updates leave no matching payload, so no overlay
+    appears.
 
 **Crash reporting.**
 
