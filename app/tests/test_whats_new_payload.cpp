@@ -72,6 +72,43 @@ TEST(WhatsNewPayload, DeleteRemovesFile) {
     EXPECT_FALSE(QFile::exists(path));
 }
 
+TEST(WhatsNewPayload, DeleteOnMissingFileIsNoop) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    ASSERT_FALSE(QFile::exists(path));
+    DeleteWhatsNewPayload(path); // must not throw/crash on an absent file
+    EXPECT_FALSE(QFile::exists(path));
+}
+
+// ---------------------------------------------------------------------------
+// Corrupt-payload lifecycle: MainWindow::checkAndShowWhatsNewOverlay() deletes
+// the payload file whenever ReadWhatsNewPayload() returns nullopt (corrupt JSON
+// or absent file) rather than leaving a corrupt file to be re-read (and re-fail
+// to parse) on every subsequent launch. The MainWindow startup path itself isn't
+// unit-testable headless, so this exercises the same read-then-delete sequence
+// the caller runs, directly against the pure helpers.
+// ---------------------------------------------------------------------------
+
+TEST(WhatsNewPayload, CorruptFileParsesToNulloptAndCallerDeletesIt) {
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = PayloadPath(dir);
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("not json {");
+    f.close();
+    ASSERT_TRUE(QFile::exists(path));
+
+    // Mirrors MainWindow::checkAndShowWhatsNewOverlay(): read, and on nullopt,
+    // delete regardless of whether the file existed (best-effort delete is a
+    // no-op when absent).
+    const auto payload = ReadWhatsNewPayload(path);
+    ASSERT_FALSE(payload.has_value());
+    DeleteWhatsNewPayload(path);
+    EXPECT_FALSE(QFile::exists(path));
+}
+
 // ---------------------------------------------------------------------------
 // ShouldShowWhatsNew (pure decision)
 // ---------------------------------------------------------------------------

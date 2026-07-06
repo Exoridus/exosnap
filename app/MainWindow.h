@@ -264,6 +264,13 @@ class MainWindow : public QMainWindow {
     // payload matches the running build (and notices aren't suppressed), then
     // clear the payload. Deferred behind recovery/crash so nothing double-stacks.
     void checkAndShowWhatsNewOverlay();
+    // WHATS-NEW: second half of the startup ordering decision — called once the
+    // recovery overlay (if any) has closed, and once one more event-loop tick has
+    // passed so checkAndShowCrashReportOverlay's own recovery-closed continuation
+    // (connected before ours; see checkAndShowWhatsNewOverlay) has had a chance to
+    // run and populate crash_overlay_. Defers behind crash_overlay_ if it is now
+    // open; otherwise opens directly.
+    void showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& notes);
     // WHATS-NEW: open the (shared) overlay with the given notes. post_update_mode
     // shows the suppress checkbox; pre-update (card link) does not.
     void openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool post_update_mode);

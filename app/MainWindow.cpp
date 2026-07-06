@@ -1216,11 +1216,18 @@ void MainWindow::openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool po
     if (notes.isEmpty())
         return;
 
-    // One overlay at a time; replace any existing instance.
+    // One overlay at a time; replace any existing instance. closeOverlay() emits
+    // closed() synchronously, and the closed-handler connected below reads the
+    // whats_new_overlay_ *member* (not a captured pointer) to null it out. So:
+    // take a local pointer first, null the member, then disconnect the old
+    // overlay's signals (so its own closed-handler can't fire against the
+    // now-null member) before closing + deleting it through the local pointer.
     if (whats_new_overlay_ != nullptr) {
-        whats_new_overlay_->closeOverlay();
-        whats_new_overlay_->deleteLater();
+        auto* old_overlay = whats_new_overlay_;
         whats_new_overlay_ = nullptr;
+        old_overlay->disconnect(this);
+        old_overlay->closeOverlay();
+        old_overlay->deleteLater();
     }
 
     const QString releases_url = last_update_releases_url_.isEmpty()
@@ -1249,13 +1256,19 @@ void MainWindow::checkAndShowWhatsNewOverlay() {
     // in every one of those cases the stale payload is simply cleared without a UI.
     const QString payload_path = WhatsNewPayloadPath();
     const auto payload = ReadWhatsNewPayload(payload_path);
-    if (!payload.has_value())
+    if (!payload.has_value()) {
+        // File exists but doesn't parse (or is absent). Best-effort delete is a
+        // no-op when there's nothing there, and clears a corrupt payload so it
+        // isn't re-read (and re-fail) on every subsequent launch.
+        DeleteWhatsNewPayload(payload_path);
         return;
+    }
 
     const QString running_version = QString::fromLatin1(exosnap::build::kVersion);
     const bool show = ShouldShowWhatsNew(payload, running_version, persisted_settings_.whats_new_suppressed);
 
-    // One-time: always clear the payload once we've decided (shown or stale).
+    // One-time: always clear the payload once we've decided (shown or stale, e.g.
+    // target-version mismatch).
     DeleteWhatsNewPayload(payload_path);
     if (!show)
         return;
@@ -1263,12 +1276,38 @@ void MainWindow::checkAndShowWhatsNewOverlay() {
     QVector<WhatsNewNote> notes = payload->notes;
     // Defer behind any recovery/crash overlay so nothing double-stacks: if one is
     // open, show once it closes; otherwise show now.
+    //
+    // Startup call order (see the ctor): checkAndShowRecoveryOverlay(), then
+    // checkAndShowCrashReportOverlay(), then this function. When recovery is NOT
+    // open, checkAndShowCrashReportOverlay() has already run synchronously by the
+    // time we get here, so crash_overlay_ below already reflects its final state.
+    //
+    // When recovery IS open, checkAndShowCrashReportOverlay() couldn't make its
+    // own decision yet either — it deferred to recovery_overlay_::closed too, and
+    // its connection was made before ours (it runs first). So on recovery.closed,
+    // Qt invokes the crash continuation first, then ours. If our continuation
+    // opened the What's New overlay directly at that point, it would race the
+    // crash continuation: both overlays could end up open at once (crash_overlay_
+    // may not be fully constructed as the whats-new slot begins running, or a
+    // future refactor could reorder the connects). To make the ordering
+    // guarantee explicit rather than implicit-via-connect-order, hop one more
+    // event-loop tick with QTimer::singleShot(0) before re-checking crash_overlay_
+    // in showWhatsNewAfterStartupOverlays() — that guarantees the crash
+    // continuation has fully run (overlay constructed and shown, or decided not
+    // to run at all) before we decide whether to stack behind it.
     if (recovery_overlay_ != nullptr && recovery_overlay_->isOpen()) {
         connect(
             recovery_overlay_, &ui::dialogs::RecoveryOverlay::closed, this,
-            [this, notes]() { openWhatsNewOverlay(notes, /*post_update_mode=*/true); }, Qt::SingleShotConnection);
+            [this, notes]() {
+                QTimer::singleShot(0, this, [this, notes]() { showWhatsNewAfterStartupOverlays(notes); });
+            },
+            Qt::SingleShotConnection);
         return;
     }
+    showWhatsNewAfterStartupOverlays(notes);
+}
+
+void MainWindow::showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& notes) {
     if (crash_overlay_ != nullptr) {
         connect(
             crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this,
