@@ -41,6 +41,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
@@ -2019,6 +2020,13 @@ void RecordPage::openOutputFolder() {
 
     if (!result_path.isEmpty()) {
         QFileInfo info(result_path);
+        if (info.exists() && info.isFile()) {
+            // Reveal AND highlight the file in Explorer. QDesktopServices::openUrl
+            // only opens the containing folder without selecting the file.
+            QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                    {QStringLiteral("/select,") + QDir::toNativeSeparators(info.absoluteFilePath())});
+            return;
+        }
         folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
     } else if (!last_output_folder_.empty()) {
         folder = QString::fromStdWString(last_output_folder_.wstring());
