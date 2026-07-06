@@ -525,23 +525,27 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
   window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
-  dedicated updater, a separate process that performs every step itself, in this order:
-  1. **Downloading update** — fetches the package (progress %).
-  2. **Verifying download** — checks the ed25519 manifest signature *and* the package SHA-256; a
-     mismatch aborts and keeps nothing.
-  3. **Closing ExoSnap** — waits for the app to exit (the running image is locked).
-  4. **Installing update** — swaps the files in place: portable does a staged rename (old → backup,
-     verified new → live); an installed build runs `msiexec` (one UAC prompt).
-  5. **Verifying installation, then restarting** — confirms the new version and relaunches the app on
-     it; on a healthy start the backup is discarded.
+  dedicated updater, a separate process that performs every step itself. Its step list (as
+  rendered) is:
+  1. **Downloading update** — fetches the signed manifest and the package (progress %); the ed25519
+     manifest signature and the package SHA-256 are verified within this step, and a mismatch
+     aborts and keeps nothing.
+  2. **Closing previous version** — waits for the app to exit (the running image is locked).
+  3. **Installing new files** — swaps the files in place: portable does a staged rename (old →
+     backup, verified new → live); an installed build runs `msiexec` (one UAC prompt).
+  4. **Verifying installation** — confirms the installed version; on failure the backup is restored.
+  5. **Launching ExoSnap** — relaunches the app on the new version; on a healthy start the backup
+     is discarded.
 
   The swap is **staged and reversible** (dual-swap) and nothing is swapped until verification passes.
   Failure is shown as one of three variants, each of which **always names the version that is safe to
   run right now**:
-  - **Amber (before the swap):** download/verify or the pre-swap step failed; the **current** version
-    is intact and the step is retryable.
-  - **Red (verification failed after installing):** the previous version was restored; the updater
-    names the restored, safe-to-run version.
+  - **Amber (retryable):** a pre-swap step failed (download, app would not close, install could not
+    start) or elevation was declined; the **current** version is intact and the step is retryable.
+  - **Red (hard stop):** the card names the safe state explicitly — a failed download verification
+    stops before anything is installed ("nothing was installed"); a failed installation
+    verification restores the backup ("your previous version was restored"); a failed `msiexec`
+    run reports the installer's own result ("your previous version is still usable").
   - **Green (installed and verified, only the auto-relaunch didn't start):** the **new** version is
     live and safe — the updater offers a manual start rather than presenting it as an error.
 
