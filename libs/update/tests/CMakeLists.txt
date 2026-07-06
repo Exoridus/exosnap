@@ -23,3 +23,27 @@ exosnap_add_gtest(
     SOURCES test_update_manifest.cpp
     LIBRARIES exosnap::update
 )
+
+exosnap_add_gtest(
+    NAME    test_zip_extract
+    SOURCES test_zip_extract.cpp
+    LIBRARIES exosnap::update exosnap_miniz
+)
+
+exosnap_add_gtest(
+    NAME    test_http_download
+    SOURCES test_http_download.cpp
+    LIBRARIES exosnap::update
+)
+
+exosnap_add_gtest(
+    NAME    test_release_locator
+    SOURCES test_release_locator.cpp
+    LIBRARIES exosnap::update
+)
+
+exosnap_add_gtest(
+    NAME    test_swap_engine
+    SOURCES test_swap_engine.cpp
+    LIBRARIES exosnap::update
+)

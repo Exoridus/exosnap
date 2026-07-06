@@ -523,18 +523,48 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
   finalization, and the app never restarts silently.
 - **UI home:** the update UI lives on the **Settings update card**, plus a **dedicated updater
   window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded.
-- **Target flow (designed):** the automatic update check finds a new version → an "update available"
-  notification deep-links to the Settings update card → clicking **Update** opens the dedicated
-  updater, a separate process that performs every step itself — download, verify download (signature
-  and hash), wait for the app to close, install/swap the new files, verify the installation — and
-  then restarts the app on the new version. The swap is **staged and reversible** (dual-swap): a
-  failure before the swap leaves the current version intact and retryable; a verification failure
-  after installing restores the previous version. Nothing is swapped until verification passes.
-- **Current shipped behavior:** check + notify + manual download. The update card shows
-  "Available · Update to vX.Y" and opens the releases page; the app does not yet download or install
-  the update itself.
-- **Planned:** after a completed update, a **"what's new" window/overlay** is shown on the first
-  launch of the new version, with a checkbox to suppress it for future updates.
+- **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
+  available" notification deep-links to the Settings update card → clicking **Update** opens the
+  dedicated updater, a separate process that performs every step itself. Its step list (as
+  rendered) is:
+  1. **Downloading update** — fetches the signed manifest and the package (progress %); the ed25519
+     manifest signature and the package SHA-256 are verified within this step, and a mismatch
+     aborts and keeps nothing.
+  2. **Closing previous version** — waits for the app to exit (the running image is locked).
+  3. **Installing new files** — swaps the files in place: portable does a staged rename (old →
+     backup, verified new → live); an installed build runs `msiexec` (one UAC prompt).
+  4. **Verifying installation** — confirms the installed version; on failure the backup is restored.
+  5. **Launching ExoSnap** — relaunches the app on the new version; on a healthy start the backup
+     is discarded.
+
+  The swap is **staged and reversible** (dual-swap) and nothing is swapped until verification passes.
+  Failure is shown as one of three variants, each of which **always names the version that is safe to
+  run right now**:
+  - **Amber (retryable):** a pre-swap step failed (download, app would not close, install could not
+    start) or elevation was declined; the **current** version is intact and the step is retryable.
+  - **Red (hard stop):** the card names the safe state explicitly — a failed download verification
+    stops before anything is installed ("nothing was installed"); a failed installation
+    verification restores the backup ("your previous version was restored"); a failed `msiexec`
+    run reports the installer's own result ("your previous version is still usable").
+  - **Green (installed and verified, only the auto-relaunch didn't start):** the **new** version is
+    live and safe — the updater offers a manual start rather than presenting it as an error.
+
+  Two moments are unavoidably not fully in-app: the UAC prompt (installed builds only) and the brief
+  window while the app is closed for the swap.
+- **What's new (shipped).** Release notes are surfaced from the GitHub release bodies already present
+  in the `/releases` payload the update check fetches — no extra network call. One in-window overlay
+  lists the notes for **every version in the gap `(installed, target]`**, newest first, with the newest
+  expanded and older entries collapsed (click to expand); bodies are Markdown, and a footer **"All
+  releases"** link opens the releases page. It has two entry points:
+  - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"What's new in
+    vX.Y"** link opens the overlay with the gap notes from the last check.
+  - **Post-update (one-time):** clicking **Update** persists the gap notes as a pending payload; on the
+    first launch of the new build — when the payload's target equals the running version and the
+    suppress setting is off — the overlay is shown once and the payload is cleared. This mode carries a
+    **"Don't show this after updates"** checkbox (default off = notices shown) persisting
+    `whats_new_suppressed`; that setting only gates the post-update auto-show and never hides the card
+    link. First install, downgrade, and manual-ZIP updates leave no matching payload, so no overlay
+    appears.
 
 **Crash reporting.**
 

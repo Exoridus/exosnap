@@ -153,6 +153,15 @@ class RecordPage : public QWidget {
     // is triggered (i.e. before first show). Pointer is stored; the store must
     // outlive this page.
     void setRecoveryManifestStore(RecoveryManifestStore* store);
+
+    // F1 hardening (feat/updater-swap): exposes the coordinator so MainWindow can
+    // wire it into UpdateService's recording guard once it exists. The coordinator
+    // is built asynchronously by initCoordinator() (after runtime capability
+    // probing completes), so this returns nullptr until coordinatorInitialized()
+    // fires; MainWindow re-reads it from that signal handler.
+    [[nodiscard]] RecordingCoordinator* recordingCoordinator() const noexcept {
+        return coordinator_.get();
+    }
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif

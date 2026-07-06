@@ -2176,6 +2176,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 emit updatePrimaryActionRequested();
         });
 
+        // WHATS-NEW: "What's new in vX.Y" link — shown only in the available state
+        // (setUpdateStatus toggles visibility). Opens the gap-aware notes overlay.
+        updates_whats_new_link_ = new QPushButton(updates_panel_);
+        updates_whats_new_link_->setObjectName(QStringLiteral("updatesWhatsNewLink"));
+        updates_whats_new_link_->setProperty("cardTextLink", true);
+        updates_whats_new_link_->setFlat(true);
+        updates_whats_new_link_->setCursor(Qt::PointingHandCursor);
+        updates_whats_new_link_->setVisible(false);
+        updates_layout->addWidget(updates_whats_new_link_, 0, Qt::AlignLeft);
+        connect(updates_whats_new_link_, &QPushButton::clicked, this, &ConfigPage::whatsNewRequested);
+
         // updates_panel_ added to right_layout in the consolidation block below.
     }
 
@@ -5535,6 +5546,12 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     browse_btn_->setEnabled(enabled);
     naming_edit_->setEnabled(enabled);
 
+    // The updates action (Check / Update to vX.Y / swap-launch) must not fire while a
+    // recording or MP4 finalize is in flight. On unlock, restore the state-derived
+    // enabled value so a "pending"/"checking" state stays correctly disabled.
+    if (updates_action_btn_)
+        updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && enabled);
+
     if (lock_note_label_)
         lock_note_label_->setVisible(locked);
 
@@ -5585,25 +5602,55 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
                                  const QString& detail) {
     if (!updates_status_label_ || !updates_action_btn_)
         return;
-    updates_available_version_ = (state == QStringLiteral("available")) ? available_version : QString();
+    // The button's primary action (open releases vs. launch the swap updater) is
+    // decided by MainWindow when updatePrimaryActionRequested fires; here it only
+    // needs a non-empty version to route to that signal instead of a re-check.
+    updates_available_version_ =
+        (state == QStringLiteral("available") || state == QStringLiteral("scoop")) ? available_version : QString();
 
     if (state == QStringLiteral("checking")) {
         updates_status_label_->setText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
         updates_action_btn_->setText(QStringLiteral("Check for updates"));
-        updates_action_btn_->setEnabled(false);
+        updates_action_intrinsically_enabled_ = false;
     } else if (state == QStringLiteral("available")) {
         updates_status_label_->setText(QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
         updates_action_btn_->setText(QStringLiteral("Update to %1").arg(available_version));
-        updates_action_btn_->setEnabled(true);
+        updates_action_intrinsically_enabled_ = true;
+    } else if (state == QStringLiteral("scoop")) {
+        // Notify-only: Scoop owns the update; we never run the staged swap here.
+        updates_status_label_->setText(
+            QStringLiteral("Managed by Scoop \xe2\x80\x94 update with 'scoop update exosnap'"));
+        updates_action_btn_->setText(QStringLiteral("Open releases page"));
+        updates_action_intrinsically_enabled_ = true;
+    } else if (state == QStringLiteral("pending")) {
+        // Loop guard: the updater is staged/launched for this version. Restart is
+        // pending; don't re-offer the Update CTA.
+        updates_status_label_->setText(QStringLiteral("Restart pending\xe2\x80\xa6 finishing the update"));
+        updates_action_btn_->setText(QStringLiteral("Restart pending"));
+        updates_action_intrinsically_enabled_ = false;
     } else if (state == QStringLiteral("error")) {
         updates_status_label_->setText(detail.isEmpty() ? QStringLiteral("Couldn't check for updates") : detail);
         updates_action_btn_->setText(QStringLiteral("Retry"));
-        updates_action_btn_->setEnabled(true);
+        updates_action_intrinsically_enabled_ = true;
     } else { // "uptodate"
         const QString suffix = last_checked.isEmpty() ? QString() : QStringLiteral(" \xc2\xb7 %1").arg(last_checked);
         updates_status_label_->setText(QStringLiteral("\xe2\x9c\x93 Up to date%1").arg(suffix));
         updates_action_btn_->setText(QStringLiteral("Check for updates"));
-        updates_action_btn_->setEnabled(true);
+        updates_action_intrinsically_enabled_ = true;
+    }
+
+    // A recording/finalizing lock always wins: never allow the swap/check action to
+    // fire while a recording is in flight (belt to the MainWindow handler guard).
+    updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && !controls_locked_);
+
+    // WHATS-NEW: the "What's new in vX.Y" link appears only in the available state.
+    // The suppress setting never hides this link (it only gates the post-update
+    // auto-show).
+    if (updates_whats_new_link_) {
+        const bool show_link = (state == QStringLiteral("available")) && !available_version.isEmpty();
+        updates_whats_new_link_->setVisible(show_link);
+        if (show_link)
+            updates_whats_new_link_->setText(QStringLiteral("What's new in %1").arg(available_version));
     }
 
     // Accent CTA styling only in the available state (QSS [updatesCta="true"]).

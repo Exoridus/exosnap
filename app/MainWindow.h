@@ -24,6 +24,7 @@
 #include "services/PageHydrationController.h"
 #include "services/RecoveryService.h"
 #include "services/WebcamDeviceNotifier.h"
+#include "services/WhatsNewPayload.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
 #include "settings/RecoveryManifestStore.h"
@@ -61,6 +62,7 @@ class CrashReportOverlay;
 class EditExportOverlay;
 class PresetManageOverlay;
 class RecoveryOverlay;
+class WhatsNewOverlay;
 class SourcePickerOverlay;
 class RecordingErrorOverlay;
 struct RecordingErrorModel;
@@ -258,6 +260,20 @@ class MainWindow : public QMainWindow {
     // the user is never double-prompted.
     void checkAndShowCrashReportOverlay();
     void openCrashReportOverlay();
+    // WHATS-NEW: on startup, show the one-time post-update overlay when a pending
+    // payload matches the running build (and notices aren't suppressed), then
+    // clear the payload. Deferred behind recovery/crash so nothing double-stacks.
+    void checkAndShowWhatsNewOverlay();
+    // WHATS-NEW: second half of the startup ordering decision — called once the
+    // recovery overlay (if any) has closed, and once one more event-loop tick has
+    // passed so checkAndShowCrashReportOverlay's own recovery-closed continuation
+    // (connected before ours; see checkAndShowWhatsNewOverlay) has had a chance to
+    // run and populate crash_overlay_. Defers behind crash_overlay_ if it is now
+    // open; otherwise opens directly.
+    void showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& notes);
+    // WHATS-NEW: open the (shared) overlay with the given notes. post_update_mode
+    // shows the suppress checkbox; pre-update (card link) does not.
+    void openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool post_update_mode);
     // RECORDING-ERROR-MODAL-R1: show the modal recording-failure dialog. Decides
     // can_send_report from crash_capture availability and wires the report/logs
     // actions. Replaces any existing error overlay.
@@ -320,6 +336,7 @@ class MainWindow : public QMainWindow {
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::PresetManageOverlay* preset_manage_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
+    ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
@@ -342,6 +359,9 @@ class MainWindow : public QMainWindow {
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
     QString last_update_releases_url_;
+    // Last check's available version string (empty when up to date). Used to stamp
+    // the loop-guard applied_version when the staged updater is launched.
+    QString last_available_version_;
     // ADR 0034 Phase A: true while a user-initiated check is in flight, so an
     // available result updates the Settings card but does NOT also raise a toast.
     bool manual_update_check_ = false;

@@ -130,6 +130,7 @@ add_subdirectory(libs/recorder_facade)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
 add_subdirectory(app)
+add_subdirectory(apps/updater)
 add_subdirectory(tests)
 
 # crashpad_handler.exe staging lives in app/CMakeLists.txt, where the exosnap

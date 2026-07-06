@@ -10,15 +10,27 @@
 
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion (generated from PROJECT_VERSION)
 #include "RecordingCoordinator.h"
+#include "WhatsNewPayload.h"
 
 #include "../viewmodels/RecordViewModel.h" // for UiRecordingState
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QMetaObject>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QString>
+#include <QStringList>
 #include <QThread>
 #include <atomic>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace exosnap {
 
@@ -34,9 +46,19 @@ class UpdateService::Impl {
     std::atomic<bool> checking{false};
     mutable QMutex mutex;
 
+    // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
+    std::vector<exosnap::update::ReleaseNote> gap_notes;
+
     // Build the recording guard from the RecordingCoordinator's public API.
+    // Reads `coordinator` under `mutex` since SetRecordingCoordinator() (called from
+    // MainWindow on the UI thread once RecordPage finishes its deferred init) can
+    // race with RequestUpdateCheck()'s background worker thread capturing the guard.
     exosnap::update::RecordingGuardFn MakeGuard() const {
-        RecordingCoordinator* coord = coordinator;
+        RecordingCoordinator* coord;
+        {
+            QMutexLocker lk(&mutex);
+            coord = coordinator;
+        }
         return [coord]() -> exosnap::update::UpdateBlockReason {
             if (!coord)
                 return exosnap::update::UpdateBlockReason::NotBlocked;
@@ -66,6 +88,11 @@ UpdateService::~UpdateService() {
     delete impl_;
 }
 
+void UpdateService::SetRecordingCoordinator(RecordingCoordinator* coordinator) {
+    QMutexLocker lk(&impl_->mutex);
+    impl_->coordinator = coordinator;
+}
+
 exosnap::update::UpdateChannel UpdateService::Channel() const {
     return impl_->channel;
 }
@@ -84,6 +111,11 @@ exosnap::update::UpdateBlockReason UpdateService::CurrentBlockReason() const {
 exosnap::update::UpdateState UpdateService::CurrentState() const {
     QMutexLocker lk(&impl_->mutex);
     return impl_->state;
+}
+
+std::vector<exosnap::update::ReleaseNote> UpdateService::LastGapNotes() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->gap_notes;
 }
 
 void UpdateService::RequestUpdateCheck() {
@@ -111,6 +143,7 @@ void UpdateService::RequestUpdateCheck() {
             impl->state.available_version = result.available_version;
             if (result.error_message)
                 impl->state.last_error = *result.error_message;
+            impl->gap_notes = result.gap_notes;
         }
 
         QMetaObject::invokeMethod(
@@ -130,14 +163,125 @@ void UpdateService::RequestUpdateCheck() {
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
 }
 
-void UpdateService::RequestDownloadAndVerify() {
-    if (impl_->install_mode != exosnap::update::InstallMode::Installed) {
-        emit updateError(exosnap::update::VerifyResult::PackageNotFound, "Download not available in portable mode");
+void UpdateService::LaunchUpdater() {
+    namespace upd = exosnap::update;
+
+    // Recording guard: never start a swap while a capture or MP4 remux is in
+    // flight (same policy as the check path). The UI keeps the button disabled,
+    // but guard defensively here too.
+    if (CurrentBlockReason() != upd::UpdateBlockReason::NotBlocked) {
+        emit updateError(upd::VerifyResult::PackageNotFound,
+                         QStringLiteral("Can't update while recording or finalizing."));
         return;
     }
-    // TODO(Update-C): implement download via WinHTTP + temp file +
-    //   VerifyPackage() + emit packageReadyForInstall or updateError.
-    //   This stub satisfies the UI seam contract; implementation follows in Update-C slice.
+
+    const QString app_dir = QCoreApplication::applicationDirPath();
+
+    // Stage into %LOCALAPPDATA%\<org>\ExoSnap\updater\ (AppLocalDataLocation +
+    // "/updater"). Running the updater from a separate directory lets it replace
+    // the app's own files while the app is still shutting down.
+    const QString local_data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (local_data.isEmpty()) {
+        emit updateError(upd::VerifyResult::PackageNotFound,
+                         QStringLiteral("Can't locate a staging directory for the updater."));
+        return;
+    }
+    const QString staging_dir = QDir(local_data).filePath(QStringLiteral("updater"));
+
+    // Wipe any prior staging and recreate a clean tree.
+    QDir staging(staging_dir);
+    if (staging.exists())
+        staging.removeRecursively();
+    if (!QDir().mkpath(staging_dir)) {
+        emit updateError(upd::VerifyResult::PackageNotFound,
+                         QStringLiteral("Can't create the updater staging directory."));
+        return;
+    }
+
+    // Copy the mandatory runtime subset; a missing entry is a hard failure.
+    for (const QString& rel : UpdaterStagingFileList()) {
+        const QString src = QDir(app_dir).filePath(rel);
+        const QString dst = QDir(staging_dir).filePath(rel);
+        if (!QFileInfo::exists(src)) {
+            emit updateError(upd::VerifyResult::PackageNotFound,
+                             QStringLiteral("Updater runtime file missing: %1").arg(rel));
+            return;
+        }
+        QDir().mkpath(QFileInfo(dst).absolutePath());
+        if (!QFile::copy(src, dst)) {
+            emit updateError(upd::VerifyResult::PackageNotFound,
+                             QStringLiteral("Failed to stage updater file: %1").arg(rel));
+            return;
+        }
+    }
+
+    // Best-effort: copy the styles plugin(s) if present (optional).
+    const QDir styles_src(QDir(app_dir).filePath(QStringLiteral("plugins/styles")));
+    if (styles_src.exists()) {
+        const QString styles_dst_dir = QDir(staging_dir).filePath(QStringLiteral("plugins/styles"));
+        QDir().mkpath(styles_dst_dir);
+        for (const QFileInfo& fi : styles_src.entryInfoList(QStringList{QStringLiteral("*.dll")}, QDir::Files))
+            QFile::copy(fi.absoluteFilePath(), QDir(styles_dst_dir).filePath(fi.fileName()));
+    }
+
+    // qt.conf so the staged updater finds its plugins under ./plugins.
+    {
+        QFile qt_conf(QDir(staging_dir).filePath(QStringLiteral("qt.conf")));
+        if (qt_conf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            qt_conf.write("[Paths]\nPlugins = plugins\n");
+            qt_conf.close();
+        }
+    }
+
+    const QString staged_exe = QDir(staging_dir).filePath(QStringLiteral("exosnap-updater.exe"));
+
+    // WHATS-NEW: persist the gap notes as a pending payload BEFORE launching, so
+    // the one-time "What's new" overlay can show on the first launch of the new
+    // build. Only meaningful when the last check produced notes for the target
+    // version. If there is nothing to show, clear any stale payload instead.
+    {
+        std::vector<upd::ReleaseNote> notes;
+        std::optional<upd::SemVer> target;
+        {
+            QMutexLocker lk(&impl_->mutex);
+            notes = impl_->gap_notes;
+            target = impl_->state.available_version;
+        }
+        const QString payload_path = WhatsNewPayloadPath();
+        if (target && !notes.empty()) {
+            WhatsNewPendingPayload payload;
+            payload.target_version = QString::fromStdString(target->ToString());
+            for (const auto& n : notes) {
+                WhatsNewNote note;
+                note.version = QString::fromStdString(n.version.ToString());
+                note.body = QString::fromStdString(n.body_markdown);
+                note.html_url = QString::fromStdString(n.html_url);
+                payload.notes.push_back(note);
+            }
+            WriteWhatsNewPayload(payload_path, payload);
+        } else {
+            DeleteWhatsNewPayload(payload_path);
+        }
+    }
+
+#if defined(_WIN32)
+    const quint32 pid = static_cast<quint32>(::GetCurrentProcessId());
+    const QStringList flags =
+        BuildUpdaterArgs(impl_->state, app_dir, pid, QString::fromLatin1(exosnap::build::kVersion));
+
+    // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
+    // ready to swap. QProcess applies the correct Windows argument-quoting rules so
+    // paths/args with spaces or quotes are passed through safely.
+    const bool ok =
+        QProcess::startDetached(QDir::toNativeSeparators(staged_exe), flags, QDir::toNativeSeparators(staging_dir));
+    if (!ok) {
+        emit updateError(upd::VerifyResult::PackageNotFound, QStringLiteral("Failed to launch the updater."));
+        return;
+    }
+    emit updaterLaunched();
+#else
+    emit updateError(upd::VerifyResult::PackageNotFound, QStringLiteral("The updater is only available on Windows."));
+#endif
 }
 
 void UpdateService::HandoffToInstaller(const QString& installer_path) {

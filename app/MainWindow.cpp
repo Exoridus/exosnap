@@ -31,6 +31,7 @@
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
+#include "ui/dialogs/WhatsNewOverlay.h"
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
@@ -482,12 +483,46 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     initHotkeyService();
 
     // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
-    // Pass nullptr for the coordinator: the recording guard is enforced at the app
-    // layer in this slice (triggerUpdateCheck()/auto-check gate on recording_active_),
-    // so the engine guard intentionally returns NotBlocked.
+    // Constructed with nullptr here because record_page_ (and its RecordingCoordinator)
+    // does not exist yet at this point in the constructor -- RecordPage is built
+    // further down, and its coordinator is itself only built later still, asynchronously,
+    // once runtime capability probing completes. UpdateService::SetRecordingCoordinator()
+    // wires the real coordinator in once RecordPage::coordinatorInitialized() fires (see
+    // below), so the engine-layer guard (LaunchUpdater's multi-state check) is live; the
+    // app-layer guard (recording_active_ || remuxing_active_) stays as belt-and-suspenders.
     update_service_ = new UpdateService(nullptr, this);
     update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
     connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
+
+    // The staged swap updater has been launched: stamp the loop guard so a stale
+    // releases-API cache can't re-offer the same version, and flip the card to the
+    // "Restart pending" state. The updater will send WM_CLOSE when it is ready to
+    // swap; the app then closes normally.
+    connect(update_service_, &UpdateService::updaterLaunched, this, [this]() {
+        persisted_settings_.applied_version = last_available_version_;
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+        diagnostics::AppLog::info(
+            QStringLiteral("update"),
+            QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
+    });
+    // Any staging/launch failure surfaces on the Settings card as an error.
+    connect(update_service_, &UpdateService::updateError, this,
+            [this](exosnap::update::VerifyResult /*result*/, const QString& detail) {
+                if (config_page_)
+                    config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), detail);
+                diagnostics::AppLog::warning(QStringLiteral("update"),
+                                             QStringLiteral("Updater launch failed: %1").arg(detail));
+            });
+
+    // Loop guard: once the running build equals a pending applied_version, the swap
+    // completed — clear the stamp so future checks work normally.
+    if (!persisted_settings_.applied_version.isEmpty() &&
+        persisted_settings_.applied_version == QString::fromLatin1(exosnap::build::kVersion)) {
+        persisted_settings_.applied_version.clear();
+        settings_store_.Save(persisted_settings_);
+    }
 
     // ---- Load preset store ----
     PersistedPresetState loaded_presets = preset_store_.Load();
@@ -790,6 +825,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::coordinatorInitialized, this,
             [this]() { applyPresetConfig(preset_registry_.SelectedSavedConfig()); });
 
+    // F1 hardening (feat/updater-swap): wire the real RecordingCoordinator into
+    // UpdateService now that RecordPage has built it, so LaunchUpdater's
+    // recording/paused/preparing/countdown/armed-from-recovery/saving/stopping
+    // guard actually enforces (it was dead code while nullptr was passed above).
+    connect(record_page_, &RecordPage::coordinatorInitialized, this, [this]() {
+        if (update_service_ && record_page_)
+            update_service_->SetRecordingCoordinator(record_page_->recordingCoordinator());
+    });
+
     // NOTE: config_page_ diagnosticsRequested + webcamDetailsRequested connects wired in buildConfigPage().
     // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
     // are wired in buildDiagnosticsPage() after deferred construction.
@@ -1048,6 +1092,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         checkAndShowRecoveryOverlay();
         // CRASH-WIRE-R1: next-launch crash dialog (deferred behind recovery).
         checkAndShowCrashReportOverlay();
+        // WHATS-NEW: one-time post-update overlay (deferred behind recovery/crash).
+        checkAndShowWhatsNewOverlay();
 
         // UPDATE-WIRE-R1 (ADR 0012): auto-check for updates on startup, guarded so we
         // never contact the update server while a recording/finalize is in flight.
@@ -1177,6 +1223,111 @@ void MainWindow::checkAndShowRecoveryOverlay() {
     connect(recovery_overlay_, &ui::dialogs::RecoveryOverlay::continueRequested, record_page_,
             &RecordPage::armFromRecovery);
     recovery_overlay_->openOverlay();
+}
+
+void MainWindow::openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool post_update_mode) {
+    if (notes.isEmpty())
+        return;
+
+    // One overlay at a time; replace any existing instance. closeOverlay() emits
+    // closed() synchronously, and the closed-handler connected below reads the
+    // whats_new_overlay_ *member* (not a captured pointer) to null it out. So:
+    // take a local pointer first, null the member, then disconnect the old
+    // overlay's signals (so its own closed-handler can't fire against the
+    // now-null member) before closing + deleting it through the local pointer.
+    if (whats_new_overlay_ != nullptr) {
+        auto* old_overlay = whats_new_overlay_;
+        whats_new_overlay_ = nullptr;
+        old_overlay->disconnect(this);
+        old_overlay->closeOverlay();
+        old_overlay->deleteLater();
+    }
+
+    const QString releases_url = last_update_releases_url_.isEmpty()
+                                     ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                     : last_update_releases_url_;
+
+    auto* central = centralWidget();
+    whats_new_overlay_ = new ui::dialogs::WhatsNewOverlay(notes, post_update_mode, releases_url, central);
+    whats_new_overlay_->hide();
+    connect(whats_new_overlay_, &ui::dialogs::WhatsNewOverlay::closed, this, [this]() {
+        whats_new_overlay_->deleteLater();
+        whats_new_overlay_ = nullptr;
+    });
+    // Post-update mode: the suppress checkbox persists whats_new_suppressed.
+    connect(whats_new_overlay_, &ui::dialogs::WhatsNewOverlay::suppressToggled, this, [this](bool suppressed) {
+        persisted_settings_.whats_new_suppressed = suppressed;
+        settings_store_.Save(persisted_settings_);
+    });
+    whats_new_overlay_->openOverlay();
+}
+
+void MainWindow::checkAndShowWhatsNewOverlay() {
+    // Consume the pending payload written by LaunchUpdater. It only shows when the
+    // running build equals the payload's target and notices aren't suppressed —
+    // first install / downgrade / manual-ZIP update leave no matching payload, so
+    // in every one of those cases the stale payload is simply cleared without a UI.
+    const QString payload_path = WhatsNewPayloadPath();
+    const auto payload = ReadWhatsNewPayload(payload_path);
+    if (!payload.has_value()) {
+        // File exists but doesn't parse (or is absent). Best-effort delete is a
+        // no-op when there's nothing there, and clears a corrupt payload so it
+        // isn't re-read (and re-fail) on every subsequent launch.
+        DeleteWhatsNewPayload(payload_path);
+        return;
+    }
+
+    const QString running_version = QString::fromLatin1(exosnap::build::kVersion);
+    const bool show = ShouldShowWhatsNew(payload, running_version, persisted_settings_.whats_new_suppressed);
+
+    // One-time: always clear the payload once we've decided (shown or stale, e.g.
+    // target-version mismatch).
+    DeleteWhatsNewPayload(payload_path);
+    if (!show)
+        return;
+
+    QVector<WhatsNewNote> notes = payload->notes;
+    // Defer behind any recovery/crash overlay so nothing double-stacks: if one is
+    // open, show once it closes; otherwise show now.
+    //
+    // Startup call order (see the ctor): checkAndShowRecoveryOverlay(), then
+    // checkAndShowCrashReportOverlay(), then this function. When recovery is NOT
+    // open, checkAndShowCrashReportOverlay() has already run synchronously by the
+    // time we get here, so crash_overlay_ below already reflects its final state.
+    //
+    // When recovery IS open, checkAndShowCrashReportOverlay() couldn't make its
+    // own decision yet either — it deferred to recovery_overlay_::closed too, and
+    // its connection was made before ours (it runs first). So on recovery.closed,
+    // Qt invokes the crash continuation first, then ours. If our continuation
+    // opened the What's New overlay directly at that point, it would race the
+    // crash continuation: both overlays could end up open at once (crash_overlay_
+    // may not be fully constructed as the whats-new slot begins running, or a
+    // future refactor could reorder the connects). To make the ordering
+    // guarantee explicit rather than implicit-via-connect-order, hop one more
+    // event-loop tick with QTimer::singleShot(0) before re-checking crash_overlay_
+    // in showWhatsNewAfterStartupOverlays() — that guarantees the crash
+    // continuation has fully run (overlay constructed and shown, or decided not
+    // to run at all) before we decide whether to stack behind it.
+    if (recovery_overlay_ != nullptr && recovery_overlay_->isOpen()) {
+        connect(
+            recovery_overlay_, &ui::dialogs::RecoveryOverlay::closed, this,
+            [this, notes]() {
+                QTimer::singleShot(0, this, [this, notes]() { showWhatsNewAfterStartupOverlays(notes); });
+            },
+            Qt::SingleShotConnection);
+        return;
+    }
+    showWhatsNewAfterStartupOverlays(notes);
+}
+
+void MainWindow::showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& notes) {
+    if (crash_overlay_ != nullptr) {
+        connect(
+            crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this,
+            [this, notes]() { openWhatsNewOverlay(notes, /*post_update_mode=*/true); }, Qt::SingleShotConnection);
+        return;
+    }
+    openWhatsNewOverlay(notes, /*post_update_mode=*/true);
 }
 
 namespace {
@@ -3750,6 +3901,7 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
 
     const QString available_version =
         result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString();
+    last_available_version_ = available_version;
 
     ui::dialogs::UpdateUiModel model;
     model.current_version = current_version;
@@ -3787,9 +3939,14 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
                                                        : ui::dialogs::UpdateUiState::UpToDate);
     }
     if (config_page_) {
-        config_page_->setUpdateStatus(result.update_available ? QStringLiteral("available")
-                                                              : QStringLiteral("uptodate"),
-                                      available_version, model.last_checked);
+        // Loop-guard / recovery semantics live in the pure ResolveUpdateCardState
+        // helper. A manual check clears applied_version before the check runs, so a
+        // stuck "Restart pending" re-arms to "available" for a still-applicable
+        // version; automatic checks keep available==applied pinned to "pending".
+        const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
+        const QString card_state = exosnap::ResolveUpdateCardState(
+            result.update_available, is_scoop, persisted_settings_.applied_version, available_version);
+        config_page_->setUpdateStatus(card_state, available_version, model.last_checked);
     }
 
     diagnostics::AppLog::info(
@@ -4104,13 +4261,58 @@ void MainWindow::buildConfigPage() {
     config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
     connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
         manual_update_check_ = true;
+        // Recovery: a user-initiated check clears any persisted "Restart pending"
+        // stamp so the card can re-arm to "Update to vX.Y" if the updater launched
+        // earlier but never completed the swap. Automatic startup checks keep the
+        // loop-guard semantics (available==applied stays "pending").
+        if (!persisted_settings_.applied_version.isEmpty()) {
+            persisted_settings_.applied_version.clear();
+            settings_store_.Save(persisted_settings_);
+        }
         triggerUpdateCheck();
     });
     connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
-        const QString url = last_update_releases_url_.isEmpty()
-                                ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                : last_update_releases_url_;
-        QDesktopServices::openUrl(QUrl(url));
+        // App-layer recording guard (belt-and-suspenders alongside UpdateService's own
+        // engine-layer guard, wired via SetRecordingCoordinator() above). Never
+        // stage/launch the swap updater while a recording or MP4 finalize is in
+        // flight — mirror how triggerUpdateCheck() gates the check path.
+        if (recording_active_ || remuxing_active_) {
+            if (config_page_)
+                config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(),
+                                              QStringLiteral("Finish the recording before updating."));
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update launch skipped — recording/finalizing in progress"));
+            return;
+        }
+        // Scoop installs are notify-only: the primary button opens the releases
+        // page (today's behavior); the staged swap must not touch a Scoop tree.
+        if (UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath())) {
+            const QString url = last_update_releases_url_.isEmpty()
+                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                    : last_update_releases_url_;
+            QDesktopServices::openUrl(QUrl(url));
+            return;
+        }
+        // Otherwise stage + launch the swap updater. The app keeps running and
+        // exits normally when the updater sends WM_CLOSE.
+        if (update_service_)
+            update_service_->LaunchUpdater();
+    });
+    // WHATS-NEW: card "What's new in vX.Y" link -> overlay with the last check's
+    // gap notes (pre-update mode; no suppress checkbox). Never gated by the
+    // suppress setting.
+    connect(config_page_, &ConfigPage::whatsNewRequested, this, [this]() {
+        if (!update_service_)
+            return;
+        QVector<WhatsNewNote> notes;
+        for (const auto& n : update_service_->LastGapNotes()) {
+            WhatsNewNote note;
+            note.version = QString::fromStdString(n.version.ToString());
+            note.body = QString::fromStdString(n.body_markdown);
+            note.html_url = QString::fromStdString(n.html_url);
+            notes.push_back(note);
+        }
+        openWhatsNewOverlay(notes, /*post_update_mode=*/false);
     });
     connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
         persisted_settings_.check_updates_on_start = enabled;

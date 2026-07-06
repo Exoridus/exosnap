@@ -1,0 +1,139 @@
+// Unit tests for the pure updater step state machine.
+//
+// No QApplication: UpdaterController is Qt-Core value logic only.
+
+#include <gtest/gtest.h>
+
+#include "UpdaterController.h"
+
+namespace {
+
+UpdaterController MakeController() {
+    return UpdaterController(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+}
+
+TEST(UpdaterController, InitialStateIsAllQueuedRingZero) {
+    UpdaterController c = MakeController();
+    const UpdaterUiState& s = c.state();
+
+    for (StepStatus st : s.steps) {
+        EXPECT_EQ(st, StepStatus::Queued);
+    }
+    EXPECT_DOUBLE_EQ(s.ring, 0.0);
+    EXPECT_EQ(s.variant, TerminalVariant::None);
+    EXPECT_EQ(s.from_version, QStringLiteral("0.8.1"));
+    EXPECT_EQ(s.to_version, QStringLiteral("0.9.0"));
+    EXPECT_TRUE(s.primary_action.isEmpty());
+    EXPECT_TRUE(s.secondary_action.isEmpty());
+}
+
+TEST(UpdaterController, HappySequenceEndsSuccessRingFull) {
+    UpdaterController c = MakeController();
+    for (int i = 0; i < int(UpStep::Count); ++i) {
+        const UpStep step = static_cast<UpStep>(i);
+        c.onStepStarted(step);
+        c.onStepDone(step);
+    }
+    c.onAllDone();
+
+    const UpdaterUiState& s = c.state();
+    for (StepStatus st : s.steps) {
+        EXPECT_EQ(st, StepStatus::Done);
+    }
+    EXPECT_DOUBLE_EQ(s.ring, 1.0);
+    EXPECT_EQ(s.variant, TerminalVariant::Success);
+}
+
+TEST(UpdaterController, StepStartedMarksWorkingAndStatusLine) {
+    UpdaterController c = MakeController();
+    c.onStepStarted(UpStep::Download);
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.steps[size_t(UpStep::Download)], StepStatus::Working);
+    EXPECT_TRUE(s.status_line.contains(QStringLiteral("0.9.0")));
+    EXPECT_TRUE(s.status_line.contains(QStringLiteral("Downloading")));
+}
+
+TEST(UpdaterController, StepDoneSnapsRingToWeight) {
+    UpdaterController c = MakeController();
+    c.onStepDone(UpStep::Download);
+    EXPECT_NEAR(c.state().ring, 0.55, 1e-9);
+    c.onStepDone(UpStep::CloseApp);
+    EXPECT_NEAR(c.state().ring, 0.62, 1e-9);
+    c.onStepDone(UpStep::Install);
+    EXPECT_NEAR(c.state().ring, 0.85, 1e-9);
+    c.onStepDone(UpStep::Verify);
+    EXPECT_NEAR(c.state().ring, 0.94, 1e-9);
+    c.onStepDone(UpStep::Launch);
+    EXPECT_NEAR(c.state().ring, 1.0, 1e-9);
+}
+
+TEST(UpdaterController, DownloadProgressScalesWithinBand) {
+    UpdaterController c = MakeController();
+    c.onStepStarted(UpStep::Download);
+    c.onDownloadProgress(50, 100);
+    EXPECT_NEAR(c.state().ring, 0.275, 1e-9); // 0.55 * 0.5
+}
+
+TEST(UpdaterController, DownloadProgressZeroTotalIsSafe) {
+    UpdaterController c = MakeController();
+    c.onStepStarted(UpStep::Download);
+    c.onDownloadProgress(0, 0);
+    EXPECT_GE(c.state().ring, 0.0);
+    EXPECT_LE(c.state().ring, 0.55);
+}
+
+TEST(UpdaterController, VerifyInstallFailedIsRedRestored) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::VerifyInstallFailed, QString());
+
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.steps[size_t(UpStep::Verify)], StepStatus::Failed);
+    EXPECT_EQ(s.variant, TerminalVariant::Red);
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("previous version was restored")));
+    EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
+}
+
+TEST(UpdaterController, LaunchFailedIsGreenSoftSuccess) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::LaunchFailed, QString());
+
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.variant, TerminalVariant::Green);
+    EXPECT_EQ(s.primary_action, QStringLiteral("Open ExoSnap"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
+    // %1 in the copy resolves to the target version.
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("0.9.0")));
+}
+
+TEST(UpdaterController, DownloadFailedIsAmber) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::DownloadFailed, QString());
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.variant, TerminalVariant::Amber);
+    EXPECT_EQ(s.steps[size_t(UpStep::Download)], StepStatus::Failed);
+    EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("current version is unchanged")));
+}
+
+TEST(UpdaterController, VerifyDownloadFailedIsRedSecurityStop) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::VerifyDownloadFailed, QString());
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.variant, TerminalVariant::Red);
+    EXPECT_EQ(s.primary_action, QStringLiteral("Re-download"));
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("corrupt or tampered")));
+}
+
+TEST(UpdaterController, MsiFailedEmbedsCodeAndHasNoSecondary) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::MsiFailed, QStringLiteral("1603"));
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.variant, TerminalVariant::Red);
+    EXPECT_EQ(s.primary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(s.secondary_action.isEmpty());
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("1603")));
+}
+
+} // namespace
