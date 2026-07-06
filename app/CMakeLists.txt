@@ -250,6 +250,7 @@ qt_add_executable(exosnap WIN32
     services/CrashIssueReport.cpp
     services/UpdateService.h
     services/UpdateService.cpp
+    services/UpdateLaunchPlan.cpp
     services/ElevatedRelaunch.h
     services/ElevatedRelaunch.cpp
     models/WebcamSettings.h
@@ -1254,6 +1255,19 @@ exosnap_add_gtest(
 )
 target_include_directories(update_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(update_settings_panel_tests PROPERTIES AUTOMOC ON)
+
+# Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
+# argv (round-tripped through the updater's own parser), Scoop-path detection.
+exosnap_add_gtest(
+    NAME update_launch_plan_tests
+    TEST_PREFIX update_launch.
+    SOURCES
+        tests/test_update_launch_plan.cpp
+        services/UpdateLaunchPlan.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
+    LIBRARIES Qt6::Core exosnap::update
+)
+target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 exosnap_add_gtest(
     NAME version_tests

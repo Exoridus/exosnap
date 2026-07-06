@@ -5585,7 +5585,11 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
                                  const QString& detail) {
     if (!updates_status_label_ || !updates_action_btn_)
         return;
-    updates_available_version_ = (state == QStringLiteral("available")) ? available_version : QString();
+    // The button's primary action (open releases vs. launch the swap updater) is
+    // decided by MainWindow when updatePrimaryActionRequested fires; here it only
+    // needs a non-empty version to route to that signal instead of a re-check.
+    updates_available_version_ =
+        (state == QStringLiteral("available") || state == QStringLiteral("scoop")) ? available_version : QString();
 
     if (state == QStringLiteral("checking")) {
         updates_status_label_->setText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
@@ -5595,6 +5599,18 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
         updates_status_label_->setText(QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
         updates_action_btn_->setText(QStringLiteral("Update to %1").arg(available_version));
         updates_action_btn_->setEnabled(true);
+    } else if (state == QStringLiteral("scoop")) {
+        // Notify-only: Scoop owns the update; we never run the staged swap here.
+        updates_status_label_->setText(
+            QStringLiteral("Managed by Scoop \xe2\x80\x94 update with 'scoop update exosnap'"));
+        updates_action_btn_->setText(QStringLiteral("Open releases page"));
+        updates_action_btn_->setEnabled(true);
+    } else if (state == QStringLiteral("pending")) {
+        // Loop guard: the updater is staged/launched for this version. Restart is
+        // pending; don't re-offer the Update CTA.
+        updates_status_label_->setText(QStringLiteral("Restart pending\xe2\x80\xa6 finishing the update"));
+        updates_action_btn_->setText(QStringLiteral("Restart pending"));
+        updates_action_btn_->setEnabled(false);
     } else if (state == QStringLiteral("error")) {
         updates_status_label_->setText(detail.isEmpty() ? QStringLiteral("Couldn't check for updates") : detail);
         updates_action_btn_->setText(QStringLiteral("Retry"));

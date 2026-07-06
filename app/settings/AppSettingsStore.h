@@ -65,6 +65,14 @@ struct PersistedAppSettings {
     // Default ON.
     bool check_updates_on_start = true;
 
+    // Loop guard for the staged swap updater: the version we launched the updater
+    // for. Set when the updater is launched; cleared on the next startup once the
+    // running build (kVersion) equals it. While a target equals this stamp the
+    // Updates card shows "Restart pending" instead of the Update CTA so a stale
+    // releases-API cache right after an update can't re-offer the same version.
+    // Empty = no pending swap. Default empty.
+    QString applied_version;
+
     // THEME-SLICE-1: accent_id renamed to theme_id. Pre-1.0: stale accent_id key in
     // persisted data is simply ignored.
     QString theme_id = QStringLiteral("dark-default");

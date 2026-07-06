@@ -1,0 +1,101 @@
+// test_update_launch_plan.cpp -- pure helpers behind UpdateService::LaunchUpdater.
+//
+// These cover the UI-agnostic staging/argument/guard logic so the actual
+// CreateProcess + file-copy path in LaunchUpdater() stays a thin shell:
+//   * UpdaterStagingFileList()  -- the files copied into the staged updater dir.
+//   * BuildUpdaterArgs()        -- the argv the app hands the staged updater,
+//                                  round-tripped through the updater's own parser.
+//   * UpdateService::IsScoopManagedInstall() -- notify-only Scoop detection.
+
+#include <gtest/gtest.h>
+
+#include <QStringList>
+
+#include "../apps/updater/UpdaterArgs.h"
+#include "services/UpdateService.h"
+
+namespace {
+
+using exosnap::UpdateService;
+namespace upd = exosnap::update;
+
+// -- UpdaterStagingFileList -------------------------------------------------
+
+TEST(UpdaterStagingFileList, ContainsFourMandatoryEntries) {
+    const QStringList list = exosnap::UpdaterStagingFileList();
+    EXPECT_TRUE(list.contains(QStringLiteral("exosnap-updater.exe")))
+        << "staging list must include the updater executable";
+    EXPECT_TRUE(list.contains(QStringLiteral("Qt6Core.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("Qt6Gui.dll")));
+    EXPECT_TRUE(list.contains(QStringLiteral("Qt6Widgets.dll")));
+}
+
+TEST(UpdaterStagingFileList, IncludesPlatformPlugin) {
+    const QStringList list = exosnap::UpdaterStagingFileList();
+    // The Qt Widgets updater needs the windows platform plugin to show a window.
+    bool has_platform = false;
+    for (const QString& e : list) {
+        if (e.contains(QStringLiteral("qwindows.dll")))
+            has_platform = true;
+    }
+    EXPECT_TRUE(has_platform) << "staging list must include plugins/platforms/qwindows.dll";
+}
+
+// -- BuildUpdaterArgs round-trip -------------------------------------------
+
+TEST(BuildUpdaterArgs, RoundTripsInstalled) {
+    upd::UpdateState st;
+    st.channel = upd::UpdateChannel::Preview;
+    st.install_mode = upd::InstallMode::Installed;
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/Program Files/Codexo/ExoSnap"), 4242u,
+                                      QStringLiteral("0.9.0"));
+
+    const auto parsed = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->channel, upd::UpdateChannel::Preview);
+    EXPECT_EQ(parsed->install_mode, upd::InstallMode::Installed);
+    EXPECT_EQ(parsed->install_dir, QStringLiteral("C:/Program Files/Codexo/ExoSnap"));
+    EXPECT_EQ(parsed->app_pid, 4242u);
+    EXPECT_EQ(parsed->current_version, QStringLiteral("0.9.0"));
+}
+
+TEST(BuildUpdaterArgs, RoundTripsPortable) {
+    upd::UpdateState st;
+    st.channel = upd::UpdateChannel::Stable;
+    st.install_mode = upd::InstallMode::Portable;
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/Tools/ExoSnap"), 7u, QStringLiteral("1.2.3"));
+
+    const auto parsed = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->channel, upd::UpdateChannel::Stable);
+    EXPECT_EQ(parsed->install_mode, upd::InstallMode::Portable);
+    EXPECT_EQ(parsed->install_dir, QStringLiteral("D:/Tools/ExoSnap"));
+    EXPECT_EQ(parsed->app_pid, 7u);
+    EXPECT_EQ(parsed->current_version, QStringLiteral("1.2.3"));
+}
+
+// -- IsScoopManagedInstall --------------------------------------------------
+
+TEST(IsScoopManagedInstall, TrueForScoopPath) {
+    EXPECT_TRUE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/Users/x/scoop/apps/exosnap/current")));
+}
+
+TEST(IsScoopManagedInstall, TrueForBackslashAndMixedCase) {
+    EXPECT_TRUE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:\\Users\\x\\Scoop\\Apps\\exosnap\\current")));
+}
+
+TEST(IsScoopManagedInstall, FalseForProgramFiles) {
+    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("C:/Program Files/Codexo/ExoSnap")));
+}
+
+TEST(IsScoopManagedInstall, FalseForPortableToolsDir) {
+    EXPECT_FALSE(UpdateService::IsScoopManagedInstall(QStringLiteral("D:/Tools/ExoSnap")));
+}
+
+} // namespace
