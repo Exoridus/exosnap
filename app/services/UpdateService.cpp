@@ -10,6 +10,7 @@
 
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion (generated from PROJECT_VERSION)
 #include "RecordingCoordinator.h"
+#include "WhatsNewPayload.h"
 
 #include "../viewmodels/RecordViewModel.h" // for UiRecordingState
 
@@ -44,6 +45,9 @@ class UpdateService::Impl {
     exosnap::update::UpdateState state{};
     std::atomic<bool> checking{false};
     mutable QMutex mutex;
+
+    // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
+    std::vector<exosnap::update::ReleaseNote> gap_notes;
 
     // Build the recording guard from the RecordingCoordinator's public API.
     exosnap::update::RecordingGuardFn MakeGuard() const {
@@ -97,6 +101,11 @@ exosnap::update::UpdateState UpdateService::CurrentState() const {
     return impl_->state;
 }
 
+std::vector<exosnap::update::ReleaseNote> UpdateService::LastGapNotes() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->gap_notes;
+}
+
 void UpdateService::RequestUpdateCheck() {
     if (impl_->checking.exchange(true))
         return; // already in progress
@@ -122,6 +131,7 @@ void UpdateService::RequestUpdateCheck() {
             impl->state.available_version = result.available_version;
             if (result.error_message)
                 impl->state.last_error = *result.error_message;
+            impl->gap_notes = result.gap_notes;
         }
 
         QMetaObject::invokeMethod(
@@ -212,6 +222,35 @@ void UpdateService::LaunchUpdater() {
     }
 
     const QString staged_exe = QDir(staging_dir).filePath(QStringLiteral("exosnap-updater.exe"));
+
+    // WHATS-NEW: persist the gap notes as a pending payload BEFORE launching, so
+    // the one-time "What's new" overlay can show on the first launch of the new
+    // build. Only meaningful when the last check produced notes for the target
+    // version. If there is nothing to show, clear any stale payload instead.
+    {
+        std::vector<upd::ReleaseNote> notes;
+        std::optional<upd::SemVer> target;
+        {
+            QMutexLocker lk(&impl_->mutex);
+            notes = impl_->gap_notes;
+            target = impl_->state.available_version;
+        }
+        const QString payload_path = WhatsNewPayloadPath();
+        if (target && !notes.empty()) {
+            WhatsNewPendingPayload payload;
+            payload.target_version = QString::fromStdString(target->ToString());
+            for (const auto& n : notes) {
+                WhatsNewNote note;
+                note.version = QString::fromStdString(n.version.ToString());
+                note.body = QString::fromStdString(n.body_markdown);
+                note.html_url = QString::fromStdString(n.html_url);
+                payload.notes.push_back(note);
+            }
+            WriteWhatsNewPayload(payload_path, payload);
+        } else {
+            DeleteWhatsNewPayload(payload_path);
+        }
+    }
 
 #if defined(_WIN32)
     const quint32 pid = static_cast<quint32>(::GetCurrentProcessId());

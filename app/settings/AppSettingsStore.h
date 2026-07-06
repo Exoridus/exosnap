@@ -65,6 +65,11 @@ struct PersistedAppSettings {
     // Default ON.
     bool check_updates_on_start = true;
 
+    // WHATS-NEW: suppress the one-time post-update "What's new" overlay on future
+    // updates. Default false (notices ARE shown). This only affects the post-update
+    // auto-show; the Settings update-card "What's new" link is never suppressed.
+    bool whats_new_suppressed = false;
+
     // Loop guard for the staged swap updater: the version we launched the updater
     // for. Set when the updater is launched; cleared on the next startup once the
     // running build (kVersion) equals it. While a target equals this stamp the

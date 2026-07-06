@@ -3,8 +3,10 @@
 #include <nlohmann/json.hpp>
 #include <update/release_locator.h>
 
+#include <algorithm>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace exosnap::update {
 namespace {
@@ -87,6 +89,46 @@ std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, Updat
     if (!have_best)
         return std::nullopt;
     return best;
+}
+
+std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, const SemVer& above, const SemVer& up_to,
+                                             UpdateChannel channel) {
+    std::vector<ReleaseNote> notes;
+
+    try {
+        auto releases = nlohmann::json::parse(releases_json);
+        for (const auto& rel : releases) {
+            if (rel.value("draft", false))
+                continue;
+
+            const bool is_prerelease = rel.value("prerelease", false);
+            // Stable hides prereleases; Preview shows everything (mirrors the
+            // product's channel visibility, not LocateRelease's exclusive match).
+            if (channel != UpdateChannel::Preview && is_prerelease)
+                continue;
+
+            auto sv = TagToSemVer(rel.value("tag_name", std::string{}));
+            if (!sv)
+                continue;
+
+            // Half-open lower (exclusive), closed upper (inclusive): (above, up_to].
+            if (!(*sv > above) || !(*sv <= up_to))
+                continue;
+
+            ReleaseNote note;
+            note.version = *sv;
+            note.body_markdown = rel.value("body", std::string{});
+            note.html_url = rel.value("html_url", std::string{});
+            notes.push_back(std::move(note));
+        }
+    } catch (...) {
+        return {};
+    }
+
+    // Newest first.
+    std::sort(notes.begin(), notes.end(),
+              [](const ReleaseNote& a, const ReleaseNote& b) { return b.version < a.version; });
+    return notes;
 }
 
 const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode) {

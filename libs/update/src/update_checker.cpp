@@ -190,6 +190,9 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         r.update_available = true;
         r.available_version = release->version;
         r.releases_page_url = release->releases_page_url;
+        // Gap-aware What's-new notes: every release in (current, best] for this
+        // channel, newest first — read from the SAME fetched JSON (no extra call).
+        r.gap_notes = CollectReleaseNotes(*body, params.current_version, release->version, params.channel);
     }
     return r;
 }

@@ -716,6 +716,96 @@ QLabel[labelRole="aboutVersionLine"] {
     color: ${text3};
 }
 
+/* ── WHATS-NEW: gap-aware release-notes overlay ──────────────────────────────
+   The #whatsNewOverlay backdrop is painted in code (non-opaque QWidget); only
+   the centered card carries a styled background, mirroring #aboutCard. */
+QFrame#whatsNewCard {
+    background: ${bg1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QLabel[labelRole="whatsNewTitle"] {
+    font-size: 20px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="whatsNewSubtitle"] {
+    font-size: 13px;
+    color: ${text2};
+}
+
+QScrollArea#whatsNewScroll,
+QWidget#whatsNewSections {
+    background: transparent;
+    border: none;
+}
+
+QPushButton[whatsNewHeader="true"] {
+    text-align: left;
+    padding: 8px 10px;
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    background: ${bg2};
+    color: ${text0};
+    font-family: ${font-mono};
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+QPushButton[whatsNewHeader="true"]:hover {
+    background: ${bg3};
+    border-color: ${accent};
+}
+
+QPushButton[whatsNewHeader="true"]:checked {
+    border-color: ${accent};
+    color: ${accent};
+}
+
+QLabel[labelRole="whatsNewBody"] {
+    font-size: 13px;
+    color: ${text1};
+    padding: 2px 10px 6px 10px;
+}
+
+QPushButton#whatsNewAllReleasesBtn,
+QPushButton#updatesWhatsNewLink {
+    border: none;
+    background: transparent;
+    color: ${accent};
+    font-weight: 500;
+    padding: 6px 8px;
+}
+
+QPushButton#whatsNewAllReleasesBtn:hover,
+QPushButton#updatesWhatsNewLink:hover {
+    color: ${accent-hover};
+    text-decoration: underline;
+}
+
+QPushButton#updatesWhatsNewLink {
+    text-align: left;
+    padding: 2px 0 0 0;
+    font-size: 12px;
+}
+
+QPushButton#whatsNewCloseBtn {
+    color: ${accent-ink};
+    background: ${accent};
+    border: 1px solid ${accent};
+    border-radius: ${radius-md}px;
+    padding: 7px 18px;
+    font-weight: 600;
+}
+
+QPushButton#whatsNewCloseBtn:hover {
+    background: ${accent-hover};
+    border-color: ${accent-hover};
+}
+
 /* Matches both the legacy native QDialog and the embedded Qt::Widget overlay variant. */
 QDialog#sourcePickerDialog,
 QWidget#sourcePickerDialog {
