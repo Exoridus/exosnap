@@ -36,7 +36,11 @@ add_library(exosnap_updater_logic STATIC
     UpdaterArgs.h
     UpdaterController.cpp
     UpdaterController.h
+    UpdaterWorker.cpp
+    UpdaterWorker.h
 )
+# UpdaterWorker is a QObject (signals across the worker-thread boundary).
+set_target_properties(exosnap_updater_logic PROPERTIES AUTOMOC ON)
 target_include_directories(exosnap_updater_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(exosnap_updater_logic PUBLIC NOMINMAX)
 target_link_libraries(exosnap_updater_logic
