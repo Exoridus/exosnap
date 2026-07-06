@@ -17,6 +17,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_updater_logic
 )
 
+# Pure planning pieces behind the worker (staged-root resolution, retry entry
+# routing, msiexec command line) plus a no-network structural smoke of the
+# worker's signal contract. Qt Core only; no QApplication.
+exosnap_add_gtest(
+    NAME    test_updater_worker_plan
+    TEST_PREFIX updater.
+    SOURCES test_updater_worker_plan.cpp
+    LIBRARIES exosnap_updater_logic
+)
+
 # Widget smoke test: UpdaterWindow / ProgressRing / StepListWidget are QtWidgets,
 # so this binary owns its own QApplication (CTest isolates each binary in its own
 # process). It links the UI library, which already carries the AUTOMOC output.

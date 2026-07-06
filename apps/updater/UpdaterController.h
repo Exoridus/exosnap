@@ -18,7 +18,7 @@ enum class UpStep : int { Download = 0, CloseApp, Install, Verify, Launch, Count
 enum class StepStatus : uint8_t { Queued, Working, Done, Failed };
 enum class TerminalVariant : uint8_t { None, Success, Amber, Red, Green };
 
-enum class FailureCase : uint8_t { // brief matrix cases
+enum class FailureCase : uint8_t { // failure matrix cases
     DownloadFailed,                // A1  -> Amber
     VerifyDownloadFailed,          // A2  -> Red (security stop)
     AppWontClose,                  // B1  -> Amber

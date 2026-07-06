@@ -357,9 +357,12 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     // Footer
     buildFooter(state);
 
-    // Close X: refuse to interrupt an install or verify in flight.
+    // Close X: refuse to interrupt an install, verify, or launch in flight.
+    // Launch includes the health-check and a possible restore, so aborting there
+    // is as dangerous as aborting Install/Verify (stranded-install risk).
     const bool block = state.steps[size_t(UpStep::Install)] == StepStatus::Working ||
-                       state.steps[size_t(UpStep::Verify)] == StepStatus::Working;
+                       state.steps[size_t(UpStep::Verify)] == StepStatus::Working ||
+                       state.steps[size_t(UpStep::Launch)] == StepStatus::Working;
     close_button_->setEnabled(!block);
     close_button_->setToolTip(block ? QStringLiteral("Please wait - updating")
                                     : QStringLiteral("Close"));

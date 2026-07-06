@@ -97,7 +97,7 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
     state_.steps[size_t(FailedStepFor(c))] = StepStatus::Failed;
     state_.status_line.clear();
 
-    // Copy is VERBATIM from the failure brief matrix; %1 = version string
+    // Copy is VERBATIM from the failure matrix; %1 = version string
     // (B4: target version) or the installer exit code (C2). — = em dash.
     switch (c) {
     case FailureCase::DownloadFailed: // A1
