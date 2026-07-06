@@ -140,6 +140,10 @@ int main(int argc, char** argv) {
     auto controller = std::make_unique<UpdaterController>(args->current_version, args->current_version);
     QString to_version = args->current_version;
     FailureCase last_failure = FailureCase::DownloadFailed;
+    // Reentrancy guard: true while a pipeline run is queued or running. A
+    // double-fired Retry (or a click landing before a terminal state) must not
+    // queue a second run onto the worker. Cleared only on a terminal state.
+    bool in_flight = false;
 
     UpdaterWindow window;
 
@@ -188,12 +192,14 @@ int main(int argc, char** argv) {
         render();
     });
     QObject::connect(&worker, &UpdaterWorker::allDone, &window, [&] {
+        in_flight = false;
         controller->onAllDone();
         render();
         // Success footer: "this window closes automatically".
         QTimer::singleShot(kSuccessAutoCloseMs, &app, &QCoreApplication::quit);
     });
     QObject::connect(&worker, &UpdaterWorker::failed, &window, [&](FailureCase c, const QString& detail) {
+        in_flight = false;
         last_failure = c;
         controller->onFailure(c, detail);
         // B3's fixed copy already says "restored"; a RestoreFailed detail line
@@ -207,6 +213,10 @@ int main(int argc, char** argv) {
 
     // ── Footer actions ───────────────────────────────────────────────────────
     QObject::connect(&window, &UpdaterWindow::retryRequested, &window, [&] {
+        if (in_flight) {
+            return; // a run is already queued/running -- ignore the double-fire
+        }
+        in_flight = true;
         const UpStep entry = RetryEntryStep(last_failure);
         // Reset the UI to a clean in-progress state: steps before the re-entry
         // point are already done (their artifacts are kept by the worker).
@@ -232,16 +242,19 @@ int main(int argc, char** argv) {
     window.show();
     CenterOnScreen(window);
 
+    in_flight = true;
     QMetaObject::invokeMethod(&worker, [&worker] { worker.run(UpStep::Download); }, Qt::QueuedConnection);
 
     const int exit_code = app.exec();
 
-    // Shutdown: cancel any in-flight download and give the worker a moment to
-    // unwind. The window disables its close X during Install/Verify, so a
-    // still-busy worker here is in a cancellable or short-waiting phase.
+    // Shutdown: cancel any in-flight download and give the worker time to
+    // unwind. The window disables its close X during Install/Verify/Launch, so a
+    // still-busy worker here is in a cancellable or short-waiting phase. Allow a
+    // generous 30 s so a 15 s WaitForInstanceMutex plus a RestoreBackup can never
+    // be terminate()d mid-restore; terminate() stays only as the last resort.
     worker.requestCancel();
     worker_thread.quit();
-    if (!worker_thread.wait(5000)) {
+    if (!worker_thread.wait(30000)) {
         worker_thread.terminate();
         worker_thread.wait(2000);
     }

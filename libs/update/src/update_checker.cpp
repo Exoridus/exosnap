@@ -113,6 +113,9 @@ std::optional<std::string> FetchReleasesJson(const std::string& base_url, std::s
                 break;
             }
             parsed = parsed * 10 + static_cast<unsigned long>(ch - '0');
+            if (parsed > 65535) {
+                break; // out of range already -- stop before the value wraps
+            }
         }
         if (port_str.empty() || parsed == 0 || parsed > 65535) {
             out_error = "invalid port in base URL";

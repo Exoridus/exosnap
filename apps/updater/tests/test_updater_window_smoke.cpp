@@ -51,6 +51,16 @@ UpdaterUiState VerifyInFlight() {
     return c.state();
 }
 
+UpdaterUiState LaunchInFlight() {
+    UpdaterController c(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    c.onStepDone(UpStep::Download);
+    c.onStepDone(UpStep::CloseApp);
+    c.onStepDone(UpStep::Install);
+    c.onStepDone(UpStep::Verify);
+    c.onStepStarted(UpStep::Launch);
+    return c.state();
+}
+
 UpdaterUiState Terminal(FailureCase which) {
     UpdaterController c(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
     c.onFailure(which, QStringLiteral("1603"));
@@ -91,6 +101,12 @@ TEST_F(UpdaterWindowTest, CloseIsBlockedWhileInstallIsWorking) {
 TEST_F(UpdaterWindowTest, CloseIsBlockedWhileVerifyIsWorking) {
     UpdaterWindow window;
     window.render(VerifyInFlight());
+    EXPECT_FALSE(window.closeEnabled());
+}
+
+TEST_F(UpdaterWindowTest, CloseIsBlockedWhileLaunchIsWorking) {
+    UpdaterWindow window;
+    window.render(LaunchInFlight());
     EXPECT_FALSE(window.closeEnabled());
 }
 

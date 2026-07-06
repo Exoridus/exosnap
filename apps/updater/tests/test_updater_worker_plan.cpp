@@ -66,6 +66,13 @@ TEST_F(ResolveStagedRootTest, SingleNestedDirDescendsOneLevel) {
     EXPECT_EQ(fs::path(*resolved), inner);
 }
 
+TEST_F(ResolveStagedRootTest, SingleNestedDirWithoutExeFails) {
+    // A lone top-level folder that carries no exosnap.exe is an unusable
+    // package, not a layout to descend into.
+    Touch(root_ / "ExoSnap-0.9.0-windows-x64-portable" / "Qt6Core.dll");
+    EXPECT_FALSE(ResolveStagedRoot(root_.wstring()).has_value());
+}
+
 TEST_F(ResolveStagedRootTest, EmptyDirFails) {
     EXPECT_FALSE(ResolveStagedRoot(root_.wstring()).has_value());
 }

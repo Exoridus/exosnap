@@ -1,6 +1,6 @@
 // UpdaterWorker.cpp -- the background update pipeline (both install modes).
 //
-// Failure mapping is the brief's matrix: every early return emits exactly one
+// Failure mapping follows the failure matrix: every early return emits exactly one
 // failed(FailureCase, detail) signal; the GUI routes Retry back into run()
 // with RetryEntryStep(case). Downloaded artifacts and the swap plan are kept
 // as members so mid-pipeline retries (B1/B2/B3/C1) do not re-download.
@@ -122,6 +122,11 @@ std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir) {
     }
     std::error_code ec2;
     if (!fs::is_directory(*only_entry, ec2)) {
+        return std::nullopt;
+    }
+    // The resolved root must actually carry exosnap.exe; a nested folder without
+    // it is an unusable package, not a layout we can descend into.
+    if (!fs::exists(*only_entry / kExeName, ec2)) {
         return std::nullopt;
     }
     return only_entry->wstring();
@@ -314,8 +319,11 @@ bool UpdaterWorker::runDownload() {
     // SHA-256 gate -- a mismatch deletes the file inside VerifyPackage.
     const VerifyResult verdict = VerifyPackage({ToLocal8Bit(package_path.wstring()), package->sha256_hex});
     if (verdict != VerifyResult::Ok) {
-        emit failed(FailureCase::VerifyDownloadFailed, // A2 -- hard stop, file already deleted
-                    QStringLiteral("SHA-256 mismatch - the file was deleted."));
+        const QString detail =
+            verdict == VerifyResult::PackageNotFound
+                ? QStringLiteral("No package for this install type in the manifest.")
+                : QStringLiteral("SHA-256 mismatch - the file was deleted.");
+        emit failed(FailureCase::VerifyDownloadFailed, detail); // A2 -- hard stop
         return false;
     }
 
@@ -338,7 +346,7 @@ bool UpdaterWorker::runDownload() {
 
 // Wipe + extract + descend. ExtractZip leaves partial output on a mid-fail, so
 // the staging dir is always recreated from scratch (including on retry).
-bool UpdaterWorker::StagePortablePackage(QString* error) {
+bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package) {
     if (!RemoveTree(plan_.staging_dir)) {
         *error = QStringLiteral("Can't clear the staging directory.");
         return false;
@@ -352,6 +360,11 @@ bool UpdaterWorker::StagePortablePackage(QString* error) {
     const std::optional<std::wstring> staged_root = ResolveStagedRoot(plan_.staging_dir);
     if (!staged_root.has_value()) {
         (void)RemoveTree(plan_.staging_dir);
+        // The package extracted but carries no usable exe: re-staging it can
+        // never succeed, so flag it unusable rather than a transient failure.
+        if (unusable_package != nullptr) {
+            *unusable_package = true;
+        }
         *error = QStringLiteral("The downloaded package has an unexpected layout.");
         return false;
     }
@@ -408,8 +421,16 @@ bool UpdaterWorker::runInstallPortable() {
             return false;
         }
         QString stage_error;
-        if (!StagePortablePackage(&stage_error)) {
-            emit failed(FailureCase::InstallFailed, stage_error); // B2
+        bool unusable_package = false;
+        if (!StagePortablePackage(&stage_error, &unusable_package)) {
+            if (unusable_package) {
+                // The kept package can never install: drop it so Retry starts
+                // over from Download instead of looping an unwinnable B2.
+                have_package_ = false;
+                emit failed(FailureCase::DownloadFailed, stage_error); // A1 -> re-download
+            } else {
+                emit failed(FailureCase::InstallFailed, stage_error); // B2
+            }
             return false;
         }
     }
@@ -519,7 +540,7 @@ bool UpdaterWorker::runLaunch() {
 
     if (!LaunchExoSnapFrom(launch_dir_)) {
         // B4 soft success: the new version is installed and verified; the
-        // backup is kept for safety (cleaned on the app's next run).
+        // backup is kept for safety (cleared by the next update's StageRename).
         emit failed(FailureCase::LaunchFailed, QString());
         return false;
     }

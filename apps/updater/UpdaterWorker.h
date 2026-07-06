@@ -34,8 +34,8 @@
 // folder ("ExoSnap-<ver>-windows-x64-portable/"); a flat layout is accepted
 // too:
 //   - extract_dir itself contains exosnap.exe                -> extract_dir
-//   - exactly one entry, a directory, and no top-level exe   -> that directory
-//   - anything else (missing, empty, several entries)        -> nullopt
+//   - exactly one entry, a directory that contains exosnap.exe -> that directory
+//   - anything else (missing, empty, several entries, no exe) -> nullopt
 [[nodiscard]] std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir);
 
 // Which pipeline step a Retry / Re-download press re-enters for a failure:
@@ -87,8 +87,11 @@ class UpdaterWorker : public QObject {
     [[nodiscard]] bool runLaunch();
 
     // Wipe plan_.staging_dir, extract the kept package into it and descend the
-    // single top-level ZIP folder so exosnap.exe sits directly in staging.
-    [[nodiscard]] bool StagePortablePackage(QString* error);
+    // single top-level ZIP folder so exosnap.exe sits directly in staging. When
+    // the extracted package has no usable exe (bad layout), *unusable_package is
+    // set so the caller can drop the kept package and re-download instead of
+    // looping an unwinnable install.
+    [[nodiscard]] bool StagePortablePackage(QString* error, bool* unusable_package = nullptr);
 
     const UpdaterArgs args_;
     std::atomic<bool> cancel_{false};
