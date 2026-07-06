@@ -43,7 +43,7 @@ class HInternetGuard {
 };
 
 // Deletes the partial destination file, if any, and returns the given error.
-std::optional<std::string> FailWithCleanup(const std::wstring& dest_path, std::string error) {
+std::optional<std::string> FailWithCleanup(const std::wstring& dest_path, const std::string& error) {
     DeleteFileW(dest_path.c_str());
     return error;
 }
