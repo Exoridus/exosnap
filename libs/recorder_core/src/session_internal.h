@@ -153,6 +153,13 @@ struct SessionState {
     std::atomic<uint32_t> split_last_trigger{0}; // SplitTriggerSource of latest request
     std::atomic<bool> size_split_armed{false};   // mux has requested a size split; reset on transition
 
+    // Cumulative bytes committed by the active segment's Matroska writer, published
+    // by the mux thread (streaming loop AND during the blocking Finalize()). The
+    // shutdown sequence samples this to distinguish a finalize that is slow but
+    // still writing (keep waiting) from one that has genuinely stalled. Reset when
+    // a new segment writer opens; the progress-based wait tolerates that drop.
+    std::atomic<uint64_t> mux_bytes_written{0};
+
     // Set before Record(); invoked from the mux thread as each segment finalizes.
     SegmentCallback segment_callback;
 
