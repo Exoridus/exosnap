@@ -2,6 +2,7 @@
 
 #include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
+#include "RecordingErrorDetailText.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -155,7 +156,7 @@ QWidget* RecordingErrorPanel::buildDetailBox() {
         body->addWidget(makeDetailLine(QStringLiteral("FORMAT"), codec_bits.join(QStringLiteral(" · ")), frame));
 
     if (!model_.detail.isEmpty())
-        body->addWidget(makeDetailLine(QStringLiteral("DETAIL"), model_.detail, frame));
+        body->addWidget(makeDetailLine(QStringLiteral("DETAIL"), HumanizeEngineDetail(model_.detail), frame));
 
     return frame;
 }

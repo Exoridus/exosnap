@@ -71,7 +71,10 @@ TEST_F(RecordingErrorTest, RendersTitlePhaseCodeDetailAndFormat) {
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("Recording could not start")));
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("Validate")));
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("0x80004001")));
-    EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("requires VideoCodec")));
+    // The DETAIL line humanizes raw engine enum tokens to canonical labels:
+    // "Container::Matroska requires VideoCodec::Av1Nvenc" -> "MKV requires AV1".
+    EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("MKV requires AV1")));
+    EXPECT_FALSE(ContainsLabel(panel, QStringLiteral("VideoCodec::")));
     // Codec triple collapses into one FORMAT line.
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("MKV \xc2\xb7 HEVC \xc2\xb7 Opus")));
 }
