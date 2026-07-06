@@ -45,6 +45,25 @@ target_compile_options(exosnap_monocypher PRIVATE
 )
 
 # ---------------------------------------------------------------------------
+# Vendored miniz sources (C, not C++) -- compiled without exosnap::warnings
+# to avoid MSVC /W4 /WX noise on third-party code.
+# ---------------------------------------------------------------------------
+set(_miniz_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz")
+
+add_library(exosnap_miniz STATIC
+    ${_miniz_dir}/miniz.c
+)
+# Public so that consumers can #include the headers without repeating the path.
+target_include_directories(exosnap_miniz PUBLIC ${_miniz_dir})
+
+# Suppress all warnings on this third-party target (MSVC: /W0; Clang/GCC: -w).
+target_compile_options(exosnap_miniz PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W0>
+    $<$<CXX_COMPILER_ID:Clang>:-w>
+    $<$<CXX_COMPILER_ID:GNU>:-w>
+)
+
+# ---------------------------------------------------------------------------
 # Library
 # ---------------------------------------------------------------------------
 add_library(exosnap_update STATIC
@@ -54,6 +73,7 @@ add_library(exosnap_update STATIC
     src/update_checker.cpp
     src/package_verifier.cpp
     src/install_mode_detector.cpp
+    src/zip_extract.cpp
 )
 add_library(exosnap::update ALIAS exosnap_update)
 
@@ -68,6 +88,7 @@ target_link_libraries(exosnap_update
     PRIVATE
         exosnap::warnings
         exosnap_monocypher   # vendored Monocypher (RFC-8032 ed25519 via SHA-512)
+        exosnap_miniz        # vendored miniz (zip extraction)
         winhttp    # WinHTTP.lib (Windows SDK)
         bcrypt     # BCrypt.lib  (Windows SDK, SHA-256)
         shell32    # ShellExecuteW
