@@ -32,6 +32,15 @@ class UpdateService final : public QObject {
     explicit UpdateService(RecordingCoordinator* coordinator, QObject* parent = nullptr);
     ~UpdateService() override;
 
+    // Wire (or replace) the RecordingCoordinator backing the recording guard.
+    // RecordPage's coordinator is constructed asynchronously — after runtime
+    // capability probing completes, well after MainWindow constructs this
+    // service — so MainWindow calls this once RecordPage's coordinatorInitialized()
+    // signal fires. Safe to call more than once; nullptr is accepted (yields
+    // NotBlocked, matching the pre-wiring default and the nullptr-coordinator
+    // construction path exercised by tests).
+    void SetRecordingCoordinator(RecordingCoordinator* coordinator);
+
     // Trigger an async update check on a background thread.
     // No-op if a check is already in progress or blocked.
     void RequestUpdateCheck();

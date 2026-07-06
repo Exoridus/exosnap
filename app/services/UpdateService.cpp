@@ -50,8 +50,15 @@ class UpdateService::Impl {
     std::vector<exosnap::update::ReleaseNote> gap_notes;
 
     // Build the recording guard from the RecordingCoordinator's public API.
+    // Reads `coordinator` under `mutex` since SetRecordingCoordinator() (called from
+    // MainWindow on the UI thread once RecordPage finishes its deferred init) can
+    // race with RequestUpdateCheck()'s background worker thread capturing the guard.
     exosnap::update::RecordingGuardFn MakeGuard() const {
-        RecordingCoordinator* coord = coordinator;
+        RecordingCoordinator* coord;
+        {
+            QMutexLocker lk(&mutex);
+            coord = coordinator;
+        }
         return [coord]() -> exosnap::update::UpdateBlockReason {
             if (!coord)
                 return exosnap::update::UpdateBlockReason::NotBlocked;
@@ -79,6 +86,11 @@ UpdateService::UpdateService(RecordingCoordinator* coordinator, QObject* parent)
 
 UpdateService::~UpdateService() {
     delete impl_;
+}
+
+void UpdateService::SetRecordingCoordinator(RecordingCoordinator* coordinator) {
+    QMutexLocker lk(&impl_->mutex);
+    impl_->coordinator = coordinator;
 }
 
 exosnap::update::UpdateChannel UpdateService::Channel() const {

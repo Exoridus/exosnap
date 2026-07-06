@@ -483,9 +483,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     initHotkeyService();
 
     // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
-    // Pass nullptr for the coordinator: the recording guard is enforced at the app
-    // layer in this slice (triggerUpdateCheck()/auto-check gate on recording_active_),
-    // so the engine guard intentionally returns NotBlocked.
+    // Constructed with nullptr here because record_page_ (and its RecordingCoordinator)
+    // does not exist yet at this point in the constructor -- RecordPage is built
+    // further down, and its coordinator is itself only built later still, asynchronously,
+    // once runtime capability probing completes. UpdateService::SetRecordingCoordinator()
+    // wires the real coordinator in once RecordPage::coordinatorInitialized() fires (see
+    // below), so the engine-layer guard (LaunchUpdater's multi-state check) is live; the
+    // app-layer guard (recording_active_ || remuxing_active_) stays as belt-and-suspenders.
     update_service_ = new UpdateService(nullptr, this);
     update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
     connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
@@ -820,6 +824,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // rows and capture target from the preset after all init work is done.
     connect(record_page_, &RecordPage::coordinatorInitialized, this,
             [this]() { applyPresetConfig(preset_registry_.SelectedSavedConfig()); });
+
+    // F1 hardening (feat/updater-swap): wire the real RecordingCoordinator into
+    // UpdateService now that RecordPage has built it, so LaunchUpdater's
+    // recording/paused/preparing/countdown/armed-from-recovery/saving/stopping
+    // guard actually enforces (it was dead code while nullptr was passed above).
+    connect(record_page_, &RecordPage::coordinatorInitialized, this, [this]() {
+        if (update_service_ && record_page_)
+            update_service_->SetRecordingCoordinator(record_page_->recordingCoordinator());
+    });
 
     // NOTE: config_page_ diagnosticsRequested + webcamDetailsRequested connects wired in buildConfigPage().
     // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
@@ -4259,10 +4272,10 @@ void MainWindow::buildConfigPage() {
         triggerUpdateCheck();
     });
     connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
-        // App-layer recording guard (belt): UpdateService holds a nullptr coordinator,
-        // so its engine guard always returns NotBlocked. Never stage/launch the swap
-        // updater while a recording or MP4 finalize is in flight — mirror how
-        // triggerUpdateCheck() gates the check path.
+        // App-layer recording guard (belt-and-suspenders alongside UpdateService's own
+        // engine-layer guard, wired via SetRecordingCoordinator() above). Never
+        // stage/launch the swap updater while a recording or MP4 finalize is in
+        // flight — mirror how triggerUpdateCheck() gates the check path.
         if (recording_active_ || remuxing_active_) {
             if (config_page_)
                 config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(),
