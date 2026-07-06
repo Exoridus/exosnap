@@ -23,3 +23,9 @@ exosnap_add_gtest(
     SOURCES test_update_manifest.cpp
     LIBRARIES exosnap::update
 )
+
+exosnap_add_gtest(
+    NAME    test_http_download
+    SOURCES test_http_download.cpp
+    LIBRARIES exosnap::update
+)
