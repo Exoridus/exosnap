@@ -77,6 +77,15 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_worker_join PRIVATE src)
 
+    # Progress-based two-phase shutdown policy (finalize_join_policy.h). Pure logic.
+    exosnap_add_gtest(
+        NAME test_finalize_join_policy
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_finalize_join_policy.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_finalize_join_policy PRIVATE src)
+
     exosnap_add_gtest(
         NAME test_opus_encoder
         TEST_PREFIX recorder_core.
@@ -536,6 +545,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_nvenc_flush_drain_policy PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# test_finalize_join_policy: pure two-phase shutdown policy — a progress-based
+# finalize wait (never truncate a slow-but-progressing finalize; abort only on a
+# real byte stall) and the Phase-1/Phase-2 fault separation. No GPU / no threads.
+exosnap_add_gtest(
+    NAME test_finalize_join_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_finalize_join_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_finalize_join_policy PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
