@@ -526,6 +526,17 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_preset_guid PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_flush_drain_policy: pure bounded flush-drain policy (never wedge on a
+# lost/hung device — abort the drain past the time budget). No GPU needed.
+exosnap_add_gtest(
+    NAME test_nvenc_flush_drain_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_flush_drain_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_flush_drain_policy PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
     TEST_PREFIX recorder_core.

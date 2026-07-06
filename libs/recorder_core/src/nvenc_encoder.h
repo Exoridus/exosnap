@@ -26,6 +26,22 @@ struct EncodedVideoPacket;
 const char* NvencStatusName(NVENCSTATUS st) noexcept;
 
 // ---------------------------------------------------------------------------
+// Bounded flush-drain policy — pure, testable. The shutdown flush drains the
+// encoder's buffered frames with a non-blocking lock (doNotWait=1) and consults
+// this after each attempt. Guarantees the drain always terminates: on a lost or
+// hung device the lock stays busy forever, so once the time budget is exceeded
+// the drain aborts and the caller finalises anyway (no join-timeout wedge). No
+// GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+enum class FlushDrainStep {
+    Consume,      // NV_ENC_SUCCESS: a packet is ready — take it and continue draining.
+    Retry,        // NV_ENC_ERR_LOCK_BUSY within budget — brief wait, then poll again.
+    AbortTimeout, // LOCK_BUSY past the budget — device not delivering: stop the drain.
+    AbortError,   // Any other status — stop the drain.
+};
+FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
 // ApplyColorMetadataToNvenc — pure, testable mapping from ColorMetadata to the
 // NVENC bitstream-level color signaling fields (fix for color-range-signaling
 // bug: without this the AV1/H.264/HEVC bitstream itself carries no color
@@ -314,7 +330,12 @@ class NvencEncoder {
 
     // Lock one bitstream and return an EncodedVideoPacket.
     // Also releases the associated input slot (unmap + mark free).
-    bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error);
+    // Lock and consume one buffered output frame. non_blocking sets doNotWait=1
+    // so a not-yet-ready output returns NV_ENC_ERR_LOCK_BUSY immediately (nothing
+    // is consumed — safe to retry) instead of blocking; out_lock_status, when
+    // provided, receives the raw nvEncLockBitstream status for the drain policy.
+    bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking = false,
+                                 NVENCSTATUS* out_lock_status = nullptr);
 };
 
 } // namespace recorder_core
