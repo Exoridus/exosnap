@@ -2251,8 +2251,24 @@ void VideoThread::Run() {
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
                     if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
-                        if (odHr == DXGI_ERROR_ACCESS_LOST)
+                        // Previously only DXGI_ERROR_ACCESS_LOST set sourceLost; every
+                        // other HRESULT (notably DXGI_ERROR_DEVICE_REMOVED) fell through
+                        // this bare break with no source-loss and no log, so the worker
+                        // looped through a dead source until the fixed join budget
+                        // detached it (unfinalised .mkv). Classify explicitly, log the
+                        // HRESULT (the diagnostic that was missing), and end cleanly.
+                        const OdAcquireFailAction odAction = ClassifyOdAcquireFailure(odHr);
+                        if (odAction != OdAcquireFailAction::Idle) {
+                            char hrbuf[16];
+                            snprintf(hrbuf, sizeof(hrbuf), "0x%08X", static_cast<unsigned>(odHr));
+                            logging::LogField fields[] = {
+                                {"hr", hrbuf},
+                                {"action", odAction == OdAcquireFailAction::Recover ? "recover" : "fail"}};
+                            logging::log(logging::LogLevel::Error, "video_thread",
+                                         "OD frame acquire lost — ending recording",
+                                         std::span<const logging::LogField>(fields, std::size(fields)));
                             sourceLost = true;
+                        }
                         break;
                     }
                     // Format guard: skip foreign-format frames; fatal on size
@@ -2698,8 +2714,21 @@ void VideoThread::Run() {
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
                     if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
-                        if (odHr == DXGI_ERROR_ACCESS_LOST)
+                        // See the phase-correct drain above: classify the acquire
+                        // failure so DEVICE_REMOVED (and any unexpected HRESULT) ends the
+                        // recording cleanly with a logged reason instead of looping.
+                        const OdAcquireFailAction odAction = ClassifyOdAcquireFailure(odHr);
+                        if (odAction != OdAcquireFailAction::Idle) {
+                            char hrbuf[16];
+                            snprintf(hrbuf, sizeof(hrbuf), "0x%08X", static_cast<unsigned>(odHr));
+                            logging::LogField fields[] = {
+                                {"hr", hrbuf},
+                                {"action", odAction == OdAcquireFailAction::Recover ? "recover" : "fail"}};
+                            logging::log(logging::LogLevel::Error, "video_thread",
+                                         "OD frame acquire lost — ending recording",
+                                         std::span<const logging::LogField>(fields, std::size(fields)));
                             sourceLost = true;
+                        }
                         break;
                     }
                     // Format guard: skip foreign-format frames; fatal on size

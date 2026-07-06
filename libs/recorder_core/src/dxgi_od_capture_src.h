@@ -176,4 +176,21 @@ bool QueryDisplayHdrFacts(HMONITOR hmonitor, HdrDisplayFacts& out_facts);
 // Unknown values render as "DXGI_FORMAT(<n>)" into fallback_buf.
 const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept;
 
+// How the OD drain must react to a TryAcquireFrame() failure HRESULT.
+enum class OdAcquireFailAction {
+    Idle,    // No frame this poll tick (DXGI_ERROR_WAIT_TIMEOUT / S_OK): keep draining.
+    Recover, // DXGI_ERROR_ACCESS_LOST: duplication handle stale but the D3D device is
+             // alive — recreate the duplication (Close()+Open()) and continue the same
+             // encode session. Caused by mode/topology changes (fullscreen, refresh/HDR
+             // switch, shared-monitor re-negotiation).
+    Fail,    // DXGI_ERROR_DEVICE_REMOVED/HUNG/RESET or any unexpected HRESULT: the source
+             // is unrecoverable in place — raise source-loss so the recording ends
+             // cleanly (EOS -> finalise) instead of looping through a dead GPU.
+};
+
+// Classify a TryAcquireFrame() failure HRESULT into the drain's reaction. Pure and
+// D3D-free so the recording-loss policy is unit-pinned. Any HRESULT not explicitly
+// reasoned about is treated as Fail (fail closed, never loop silently).
+OdAcquireFailAction ClassifyOdAcquireFailure(HRESULT hr) noexcept;
+
 } // namespace recorder_core

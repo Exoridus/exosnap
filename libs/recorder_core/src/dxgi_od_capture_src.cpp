@@ -409,6 +409,23 @@ const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t f
     }
 }
 
+OdAcquireFailAction ClassifyOdAcquireFailure(HRESULT hr) noexcept {
+    switch (hr) {
+    case S_OK:
+    case DXGI_ERROR_WAIT_TIMEOUT:
+        // No frame this poll tick — normal, keep draining.
+        return OdAcquireFailAction::Idle;
+    case DXGI_ERROR_ACCESS_LOST:
+        // Duplication handle invalidated (mode/topology change) but the device is
+        // alive: recreate the duplication and continue the same recording.
+        return OdAcquireFailAction::Recover;
+    default:
+        // DXGI_ERROR_DEVICE_REMOVED / _HUNG / _RESET and every other unexpected
+        // HRESULT: fail closed — end the recording cleanly rather than loop.
+        return OdAcquireFailAction::Fail;
+    }
+}
+
 bool DxgiOdCaptureSrc::GetFramePointerShape(DXGI_OUTDUPL_POINTER_SHAPE_INFO* out_shape_info,
                                             std::vector<uint8_t>& out_bitmap) {
     if (!m_duplication || !m_frame_held || !out_shape_info)
