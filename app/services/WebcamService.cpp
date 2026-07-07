@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <thread>
 
 // MF libs are listed in CMakeLists.txt target_link_libraries and in the
 // exosnap_device_service_test_support support target; no redundant pragmas here.
@@ -221,6 +223,32 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
 } // namespace
 
 // ---------------------------------------------------------------------------
+// Webcam read-result classification (loss detection) — pure, MF-call-free
+// ---------------------------------------------------------------------------
+
+WebcamReadAction ClassifyWebcamReadResult(HRESULT hr, DWORD reader_flags, bool has_sample) noexcept {
+    if (FAILED(hr)) {
+        // ReadSample itself failed (e.g. MF_E_HW_MFT_FAILED_START_STREAMING /
+        // device invalidated): the reader is unusable — reopen the device.
+        return WebcamReadAction::Reconnect;
+    }
+    if (reader_flags & MF_SOURCE_READERF_ERROR) {
+        // Reader signalled a fatal stream error (device removed mid-stream).
+        return WebcamReadAction::Reconnect;
+    }
+    if (reader_flags & MF_SOURCE_READERF_ENDOFSTREAM) {
+        // A live capture stream ending means the device went away; try to reopen.
+        return WebcamReadAction::Reconnect;
+    }
+    if (!has_sample) {
+        // Healthy read with no payload (streaming tick / spurious wake): hold the
+        // last frame and read again.
+        return WebcamReadAction::Skip;
+    }
+    return WebcamReadAction::Deliver;
+}
+
+// ---------------------------------------------------------------------------
 // S4: MF presence probe (once-per-process, cached)
 // ---------------------------------------------------------------------------
 
@@ -417,55 +445,80 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
 
-    auto ctx = OpenReader(device_id, width, height, fps);
-    if (!ctx) {
-        running_.store(false);
-        MFShutdown();
-        CoUninitialize();
-        return;
-    }
+    // How long to wait before re-opening the reader after a device loss (or a
+    // failed initial open). The retry is UNBOUNDED: a webcam unplugged mid-recording
+    // keeps its last frame served by TryGetFrame (frozen) and resumes live if it
+    // returns, rather than vanishing — the user decides when to stop. Mirrors the
+    // DXGI OD in-place recovery (ADR 0013). Only Stop()/stop_token ends the loop.
+    constexpr auto kReconnectDelay = std::chrono::milliseconds{500};
 
-    const int W = ctx->width;
-    const int H = ctx->height;
-    std::vector<uint8_t> scratch(static_cast<size_t>(W) * H * 4);
-
+    // Outer loop: (re)open the device and drain it; on loss, fall back here to poll
+    // a reopen. The last stored frame is NEVER cleared here, so it stays frozen for
+    // the whole gap; has_frame_ is reset only by Stop().
     while (!stop.stop_requested()) {
-        DWORD flags = 0;
-        winrt::com_ptr<IMFSample> sample;
-        HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, &flags, nullptr, sample.put());
-        if (FAILED(hr) || (flags & MF_SOURCE_READERF_ERROR))
-            break;
-        if (!sample)
+        auto ctx = OpenReader(device_id, width, height, fps);
+        if (!ctx) {
+            // Device not (yet) available: hold whatever frame we have and retry.
+            std::this_thread::sleep_for(kReconnectDelay);
             continue;
-        if (flags & MF_SOURCE_READERF_ENDOFSTREAM)
-            break;
-
-        winrt::com_ptr<IMFMediaBuffer> buf;
-        if (FAILED(sample->ConvertToContiguousBuffer(buf.put())))
-            continue;
-
-        BYTE* src = nullptr;
-        DWORD maxLen = 0, curLen = 0;
-        if (FAILED(buf->Lock(&src, &maxLen, &curLen)))
-            continue;
-
-        if (ctx->is_bgra) {
-            const size_t expected = static_cast<size_t>(W) * H * 4;
-            if (curLen >= expected)
-                scratch.assign(src, src + expected);
-        } else {
-            // YUY2 → BGRA
-            const int srcStride = W * 2;
-            Yuy2ToBgra(src, W, H, srcStride, scratch.data(), W * 4);
         }
-        buf->Unlock();
 
-        // Store latest frame.
-        StoreFrame(W, H, scratch);
+        const int W = ctx->width;
+        const int H = ctx->height;
+        std::vector<uint8_t> scratch(static_cast<size_t>(W) * H * 4);
 
-        // Post QImage preview to main thread.
-        QImage img(scratch.data(), W, H, W * 4, QImage::Format_ARGB32);
-        PostFrame(img.copy()); // copy needed: scratch is reused
+        // Inner loop: drain frames until the reader dies or a stop is requested.
+        bool reader_lost = false;
+        while (!stop.stop_requested() && !reader_lost) {
+            DWORD flags = 0;
+            winrt::com_ptr<IMFSample> sample;
+            HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, &flags, nullptr, sample.put());
+
+            switch (ClassifyWebcamReadResult(hr, flags, sample != nullptr)) {
+            case WebcamReadAction::Reconnect:
+                // Reader dead — drop it and let the outer loop poll a reopen.
+                reader_lost = true;
+                continue;
+            case WebcamReadAction::Skip:
+                // No sample this read but the stream is healthy: keep the last frame.
+                continue;
+            case WebcamReadAction::Deliver:
+                break; // fall through to store the sample below
+            }
+
+            winrt::com_ptr<IMFMediaBuffer> buf;
+            if (FAILED(sample->ConvertToContiguousBuffer(buf.put())))
+                continue;
+
+            BYTE* src = nullptr;
+            DWORD maxLen = 0, curLen = 0;
+            if (FAILED(buf->Lock(&src, &maxLen, &curLen)))
+                continue;
+
+            if (ctx->is_bgra) {
+                const size_t expected = static_cast<size_t>(W) * H * 4;
+                if (curLen >= expected)
+                    scratch.assign(src, src + expected);
+            } else {
+                // YUY2 → BGRA
+                const int srcStride = W * 2;
+                Yuy2ToBgra(src, W, H, srcStride, scratch.data(), W * 4);
+            }
+            buf->Unlock();
+
+            // Store latest frame.
+            StoreFrame(W, H, scratch);
+
+            // Post QImage preview to main thread.
+            QImage img(scratch.data(), W, H, W * 4, QImage::Format_ARGB32);
+            PostFrame(img.copy()); // copy needed: scratch is reused
+        }
+
+        // Reader released as ctx goes out of scope. Wait before reopening so a
+        // permanently-gone device does not spin; stop is honoured on the next check.
+        if (stop.stop_requested())
+            break;
+        std::this_thread::sleep_for(kReconnectDelay);
     }
 
     running_.store(false);

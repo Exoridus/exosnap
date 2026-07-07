@@ -3,6 +3,8 @@
 #include <QImage>
 #include <recorder_core/recorder_session.h>
 
+#include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -12,6 +14,29 @@
 #include <vector>
 
 namespace exosnap {
+
+// ---------------------------------------------------------------------------
+// Webcam read-result classification (loss detection) policy
+// ---------------------------------------------------------------------------
+// How the capture loop must react to one IMFSourceReader::ReadSample() result.
+// Pure and MF-call-free (only inspects the returned HRESULT + reader flags) so the
+// loss-recovery policy is unit-pinned, mirroring recorder_core's
+// ClassifyOdAcquireFailure. Any result that means the reader is dead maps to
+// Reconnect: the capture thread tears the reader down and polls to reopen the
+// device, while TryGetFrame keeps serving the last captured frame (frozen).
+enum class WebcamReadAction {
+    Deliver,   // A valid sample was produced: store it and composite.
+    Skip,      // No sample this read but the stream is healthy (streaming tick /
+               // spurious wake): keep the last frame and read again.
+    Reconnect, // Reader failure / device error / device removed / end-of-stream:
+               // the reader is dead. Reopen the device, holding the last frame.
+};
+
+// Classify a ReadSample() result. has_sample is (sample != nullptr). A failed
+// HRESULT, an MF_SOURCE_READERF_ERROR, or MF_SOURCE_READERF_ENDOFSTREAM all mean
+// the reader is gone (Reconnect); a healthy read with no sample is Skip; a healthy
+// read with a sample is Deliver.
+WebcamReadAction ClassifyWebcamReadResult(HRESULT hr, DWORD reader_flags, bool has_sample) noexcept;
 
 struct WebcamDeviceInfo {
     std::string id;
