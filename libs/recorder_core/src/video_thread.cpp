@@ -1450,50 +1450,45 @@ void VideoThread::Run() {
 
     // --- WGC frame pool and session (Window-only path) ---
     bool sourceLost = false;
-    // How long to keep polling Reopen() before giving up on a recoverable OD
-    // acquire loss, and how long to wait between attempts. The output can be
-    // briefly absent while the topology renegotiation that caused the loss settles
-    // (an attached display waking, EDID/HPD re-negotiation blacks the desktop for a
-    // moment); a few seconds of polling covers the common case without stalling a
-    // genuinely gone source.
-    constexpr auto kOdReopenBudget = std::chrono::milliseconds{8000};
+    // How long to wait between Reopen() attempts after a recoverable OD acquire
+    // loss. The retry itself is UNBOUNDED (std::nullopt budget below): the output
+    // can be absent briefly (a mode/topology flip, EDID/HPD re-negotiation blacking
+    // the desktop for a moment) or indefinitely (a display left switched off), and
+    // the recording keeps going — holding the last captured frame — until it
+    // returns or the user stops. 250 ms is well inside the norm (OBS re-creates its
+    // duplicator at most every 3 s); polling faster gains nothing because the OS
+    // topology renegotiation dominates the recovery latency.
     constexpr auto kOdReopenPollDelay = std::chrono::milliseconds{250};
     // React to a DXGI OD TryAcquireFrame() failure HRESULT. ACCESS_LOST is a
     // transient loss (mode/topology change, device alive): rebuild the duplication
-    // and continue the SAME encode session and output file, leaving a gap the size
-    // of the blackout; if it does not come back within kOdReopenBudget, fall back to
-    // a clean stop. DEVICE_REMOVED / any unexpected HRESULT is unrecoverable: record
-    // a failure carrying the HRESULT so it reaches the app log ([record.failure]) —
-    // recorder_core's logging::log only feeds the ring buffer. Either way the segment
-    // is still finalised, so footage is kept.
+    // and continue the SAME encode session and output file, leaving a gap during
+    // which the last captured frame is held (frozen, not black). DEVICE_REMOVED /
+    // any unexpected HRESULT is unrecoverable: record a failure carrying the HRESULT
+    // so it reaches the app log ([record.failure]) — recorder_core's logging::log
+    // only feeds the ring buffer. Either way the segment is still finalised, so
+    // footage is kept.
     const auto HandleOdAcquireFailure = [&](HRESULT hr) {
         switch (ClassifyOdAcquireFailure(hr)) {
         case OdAcquireFailAction::Idle:
             break; // no frame available this poll — normal
         case OdAcquireFailAction::Recover: {
-            // Poll Reopen() under the pure retry/timeout policy. On recovery the
-            // drain resumes on the fresh duplication (same session, same file). A
-            // user stop mid-recovery ends the loop immediately.
-            const auto loss_t0 = std::chrono::steady_clock::now();
+            // Poll Reopen() until the duplication returns; on recovery the drain
+            // resumes on the fresh duplication (same session, same file). The retry
+            // is unbounded (std::nullopt) so a display left off does not end the
+            // recording on a timer — the user decides when to stop. A user stop
+            // mid-recovery ends the loop immediately; DEVICE_REMOVED is handled by
+            // the Fail branch, not here, so GiveUp cannot occur.
             for (;;) {
                 if (m_state.stop_requested.load())
                     break;
                 std::string reopenErr;
                 const bool reopened =
                     odSrc.Reopen(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), reopenErr);
-                const auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - loss_t0);
                 const OdReopenDecision decision =
-                    DecideOdReopen(reopened, elapsed, kOdReopenBudget, kOdReopenPollDelay);
+                    DecideOdReopen(reopened, std::chrono::milliseconds{0}, std::nullopt, kOdReopenPollDelay);
                 if (decision.action == OdReopenAction::Continue)
                     break; // duplication live again — resume the same session
-                if (decision.action == OdReopenAction::GiveUp) {
-                    // Output never returned within budget: clean stop (source-loss
-                    // -> EOS -> finalise), the historic ACCESS_LOST behaviour.
-                    sourceLost = true;
-                    break;
-                }
-                Sleep(static_cast<DWORD>(decision.retry_delay.count())); // RetryAfter
+                Sleep(static_cast<DWORD>(decision.retry_delay.count())); // RetryAfter — wait, then retry
             }
             break;
         }

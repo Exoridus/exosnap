@@ -435,22 +435,28 @@ OdAcquireFailAction ClassifyOdAcquireFailure(HRESULT hr) noexcept {
     }
 }
 
-OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed, std::chrono::milliseconds budget,
+OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed,
+                                std::optional<std::chrono::milliseconds> budget,
                                 std::chrono::milliseconds poll_delay) noexcept {
     if (reopened) {
         // The duplication is live again — resume the same encode session. A late
-        // success past the budget still continues: recovered footage beats a
+        // success past any budget still continues: recovered footage beats a
         // strict deadline.
         return {OdReopenAction::Continue, std::chrono::milliseconds{0}};
     }
-    if (elapsed >= budget) {
-        // The output did not come back within the recovery budget: end cleanly.
+    if (budget && elapsed >= *budget) {
+        // A budget was set and it is exhausted: end cleanly (the historic
+        // ACCESS_LOST behaviour). With no budget the retry is unbounded.
         return {OdReopenAction::GiveUp, std::chrono::milliseconds{0}};
     }
-    // Still within budget: wait, then retry. Clamp the wait to the remaining
-    // budget so the loop cannot sleep past the deadline and stall the give-up.
-    const std::chrono::milliseconds remaining = budget - elapsed;
-    const std::chrono::milliseconds delay = poll_delay < remaining ? poll_delay : remaining;
+    // Still recovering: wait the poll delay, then retry. When bounded, clamp the
+    // wait to the remaining budget so the loop cannot sleep past the deadline and
+    // stall the give-up.
+    std::chrono::milliseconds delay = poll_delay;
+    if (budget) {
+        const std::chrono::milliseconds remaining = *budget - elapsed;
+        delay = poll_delay < remaining ? poll_delay : remaining;
+    }
     return {OdReopenAction::RetryAfter, delay};
 }
 

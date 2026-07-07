@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -210,34 +211,40 @@ OdAcquireFailAction ClassifyOdAcquireFailure(HRESULT hr) noexcept;
 // OD live re-duplication (recovery) policy
 // ---------------------------------------------------------------------------
 // Once an acquire loss is classified Recover, the drain rebuilds the duplication
-// (Reopen()) and continues the SAME encode session and output file, leaving only
-// a gap the size of the blackout. Because the output can be momentarily absent
-// while the topology renegotiation settles, Reopen() is polled under a bounded
-// budget. This decision is pure and D3D-free so the retry/timeout policy is unit-
-// pinned exactly like ClassifyOdAcquireFailure.
+// (Reopen()) and continues the SAME encode session and output file, holding the
+// last captured frame (frozen, not black) for the duration of the gap. Because the
+// output can be absent momentarily — or indefinitely — while the topology
+// renegotiation settles, Reopen() is polled until it returns. The retry is
+// unbounded by default: the recording ends only on an explicit user stop or an
+// unrecoverable DEVICE_REMOVED, matching OBS/desktop-duplication practice (the user
+// decides when to stop). An optional budget can still bound it. This decision is
+// pure and D3D-free so the retry policy is unit-pinned like ClassifyOdAcquireFailure.
 
 // What the reopen retry loop should do after one Reopen() attempt.
 enum class OdReopenAction {
     Continue,   // Reopen() succeeded: resume draining the same encode session.
-    RetryAfter, // Not recovered yet but still within budget: wait, then retry.
-    GiveUp,     // Budget exhausted without recovery: end the recording cleanly
-                // (source-loss -> EOS -> finalise), the historic ACCESS_LOST path.
+    RetryAfter, // Not recovered yet: wait, then retry (unbounded, or still in budget).
+    GiveUp,     // Bounded budget exhausted without recovery: end the recording cleanly
+                // (source-loss -> EOS -> finalise). Never produced for an unbounded budget.
 };
 
 struct OdReopenDecision {
     OdReopenAction action = OdReopenAction::GiveUp;
     // How long to wait before the next Reopen() attempt. Only meaningful for
-    // RetryAfter; clamped so the loop never sleeps past the budget.
+    // RetryAfter; clamped to the remaining window when a budget is set.
     std::chrono::milliseconds retry_delay{0};
 };
 
-// Decide the next step of the reopen retry loop from the last attempt's result
-// and the time elapsed since the loss began. Success always wins (Continue) even
-// past the budget — recovered footage beats a strict deadline. Otherwise, while
-// elapsed is below the budget, RetryAfter with min(poll_delay, remaining budget)
-// so the loop cannot overshoot; at or past the budget, GiveUp. Time is a
+// Decide the next step of the reopen retry loop from the last attempt's result,
+// the time elapsed since the loss began, and an optional recovery budget. Success
+// always wins (Continue), even past any budget — recovered footage beats a strict
+// deadline. Otherwise the loop keeps retrying with RetryAfter(poll_delay). When
+// budget is set, elapsed at/past it yields GiveUp (clean stop) and the retry delay
+// is clamped to the remaining window so the loop cannot overshoot; when budget is
+// std::nullopt the retry is unbounded (GiveUp is never returned). Time is a
 // parameter so no wall clock is read here.
-OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed, std::chrono::milliseconds budget,
+OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed,
+                                std::optional<std::chrono::milliseconds> budget,
                                 std::chrono::milliseconds poll_delay) noexcept;
 
 } // namespace recorder_core

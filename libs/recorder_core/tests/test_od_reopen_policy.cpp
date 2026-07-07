@@ -11,13 +11,18 @@
 //
 // The decision is D3D-free and pinned here; time is passed in so no wall clock
 // is read in the test:
-//   reopened            -> Continue   (success always wins, even past the budget)
-//   still failing, in  budget -> RetryAfter (wait, then try again)
-//   still failing, past budget -> GiveUp    (end the recording cleanly)
+//   reopened                     -> Continue   (success always wins)
+//   still failing, budget unset  -> RetryAfter (unbounded: keep trying forever)
+//   still failing, in  budget    -> RetryAfter (wait, then try again)
+//   still failing, past budget   -> GiveUp     (end the recording cleanly)
+// The drain uses an unbounded budget (std::nullopt) so a recoverable loss never
+// ends the recording on a timer — only an explicit user stop / unrecoverable
+// failure does. The bounded branch remains supported and pinned below.
 
 #include "dxgi_od_capture_src.h"
 
 #include <chrono>
+#include <optional>
 
 #include <gtest/gtest.h>
 
@@ -69,6 +74,22 @@ TEST(OdReopenPolicy, RetryDelayNeverOvershootsBudget) {
     const OdReopenDecision d = DecideOdReopen(false, kBudget - 100ms, kBudget, kPoll);
     EXPECT_EQ(d.action, OdReopenAction::RetryAfter);
     EXPECT_EQ(d.retry_delay, 100ms);
+}
+
+TEST(OdReopenPolicy, UnboundedNeverGivesUp) {
+    // With no budget (std::nullopt) the retry is unbounded: even far past any
+    // reasonable deadline the loop keeps retrying at the full poll cadence rather
+    // than giving up. This is the drain's configuration — a recoverable loss ends
+    // the recording only on an explicit user stop / unrecoverable failure.
+    const OdReopenDecision d = DecideOdReopen(false, 10min, std::nullopt, kPoll);
+    EXPECT_EQ(d.action, OdReopenAction::RetryAfter);
+    EXPECT_EQ(d.retry_delay, kPoll);
+}
+
+TEST(OdReopenPolicy, UnboundedSuccessContinues) {
+    // Success still wins immediately even with no budget in play.
+    const OdReopenDecision d = DecideOdReopen(true, 10min, std::nullopt, kPoll);
+    EXPECT_EQ(d.action, OdReopenAction::Continue);
 }
 
 } // namespace
