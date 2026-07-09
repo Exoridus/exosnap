@@ -422,9 +422,18 @@ bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active,
         out_mode = OdCaptureMode::Sdr;
         return true;
     case DXGI_FORMAT_R16G16B16A16_FLOAT:
-        // scRGB FP16 HDR desktop. Off keeps the pre-HDR behaviour (a defined
-        // capture error). Hdr10 with an HDR10-capable codec keeps the native
-        // PQ/BT.2020 signal; otherwise (TonemapSdr, or Hdr10 on H.264) the
+        // scRGB FP16 desktop. As with R10G10B10A2, the format alone does not mean
+        // HDR: with Advanced Color Management the desktop composites to scRGB FP16
+        // while still in SDR mode. Such a desktop carries SDR content (reference
+        // white == 1.0), so it is merely sRGB-encoded, never tone-mapped, and it
+        // records in every mode -- including Off, which is not an HDR request.
+        if (!hdr_active) {
+            out_mode = OdCaptureMode::SdrScrgb;
+            return true;
+        }
+        // A genuinely HDR-active desktop. Off keeps the pre-HDR behaviour (a
+        // defined capture error). Hdr10 with an HDR10-capable codec keeps the
+        // native PQ/BT.2020 signal; otherwise (TonemapSdr, or Hdr10 on H.264) the
         // desktop is tone-mapped down to SDR.
         if (hdr_mode == HdrMode::Off) {
             return false;

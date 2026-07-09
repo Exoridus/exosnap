@@ -30,7 +30,7 @@ namespace exosnap {
 // selection could not exist). A schema-20 file with explicit "full" is a
 // deliberate post-flip opt-in and is respected. See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 21;
+inline constexpr int kPresetSchemaVersion = 22;
 
 // Highest schema version that loads via targeted migration instead of a full
 // reset (see RecordingPresetStore::Load). Files older than this still reset.

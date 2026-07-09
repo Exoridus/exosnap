@@ -35,6 +35,8 @@ SamplerState srcSamp : register(s0);
 
 cbuffer ToneMapConstants : register(b0) {
     float4 params; // x = peakScale (reference-white multiples that map to 1.0)
+                   // y = 1.0 when the source is an SDR scRGB (Advanced Color)
+                   //     desktop: clamp + sRGB OETF, no roll-off
 };
 
 static const float kKnee = 0.80f;
@@ -56,8 +58,18 @@ float Bt709Oetf(float l) {
     return l < 0.018f ? 4.5f * l : 1.099f * pow(l, 0.45f) - 0.099f;
 }
 
+float SrgbOetf(float l) {
+    l = saturate(l);
+    return l <= 0.0031308f ? 12.92f * l : 1.055f * pow(l, 1.0f / 2.4f) - 0.055f;
+}
+
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
     float4 c = srcTex.Sample(srcSamp, texcoord);
+    if (params.y > 0.5f) {
+        // SDR scRGB desktop: content already ends at reference white (1.0).
+        float3 s = float3(SrgbOetf(c.r), SrgbOetf(c.g), SrgbOetf(c.b));
+        return float4(s, 1.0f);
+    }
     const float peak = params.x;
     float3 lin = float3(ToneMapChannel(c.r, peak), ToneMapChannel(c.g, peak), ToneMapChannel(c.b, peak));
     float3 sig = float3(Bt709Oetf(lin.r), Bt709Oetf(lin.g), Bt709Oetf(lin.b));
@@ -66,7 +78,7 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
 )";
 
 struct ToneMapConstants {
-    float params[4]; // x = peak scale, y/z/w reserved
+    float params[4]; // x = peak scale, y = sdr scRGB source flag, z/w reserved
 };
 
 void SetHResultError(std::string& err, const char* what, HRESULT hr) {
@@ -78,7 +90,7 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
 } // namespace
 
 bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-                         std::string& err) {
+                         bool sdr_scrgb_source, std::string& err) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "HdrToneMapper::Init invalid arguments";
         return false;
@@ -137,6 +149,7 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
 
     ToneMapConstants pc{};
     pc.params[0] = peak_scale;
+    pc.params[1] = sdr_scrgb_source ? 1.0f : 0.0f;
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(ToneMapConstants);

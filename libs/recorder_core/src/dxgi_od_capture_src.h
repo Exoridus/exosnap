@@ -152,6 +152,9 @@ bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept;
 // How a captured OD frame format is handled by the encode pipeline.
 enum class OdCaptureMode {
     Sdr,        // BGRA8 / SDR R10G10B10A2 desktop: straight to the VideoProcessor.
+    SdrScrgb,   // scRGB FP16 SDR desktop (Advanced Color Management): linear SDR
+                // content (reference white == 1.0). sRGB-encoded to an SDR surface
+                // with no roll-off, then handled exactly like Sdr.
     HdrToneMap, // scRGB FP16 HDR desktop: tone-mapped to SDR BT.709 first.
     HdrNative,  // HDR desktop kept as native HDR10: PQ/BT.2020 P010 (scRGB FP16
                 // is transferred to PQ; an HDR10 R10G10B10A2 desktop is already PQ).
@@ -159,11 +162,12 @@ enum class OdCaptureMode {
 
 // Resolve how a first-frame OD capture format should be treated for the given
 // HDR handling mode. Returns false when the format cannot be recorded at all,
-// or when it is an HDR (FP16) desktop while HDR handling is Off (a defined
+// or when it is an HDR-active FP16 desktop while HDR handling is Off (a defined
 // capture error, matching the pre-HDR behaviour). On success sets out_mode.
 //
-// hdr_active disambiguates an HDR10 R10G10B10A2 desktop from an SDR 10 bpc one
-// (the format is identical). hdr10_output_supported is true only for codecs that
+// hdr_active disambiguates the two desktops that share a pixel format: an HDR10
+// R10G10B10A2 desktop from an SDR 10 bpc one, and an HDR scRGB FP16 desktop from
+// an SDR Advanced-Color one. hdr10_output_supported is true only for codecs that
 // can encode HDR10 (HEVC/AV1); when false an HDR desktop requested as Hdr10 is
 // tone-mapped to SDR instead of kept native.
 bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active, bool hdr10_output_supported,

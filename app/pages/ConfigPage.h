@@ -65,6 +65,7 @@ class ConfigPage : public QWidget {
 
     explicit ConfigPage(const OutputSettingsModel& initial_settings, const VideoSettingsModel& initial_video,
                         QWidget* parent = nullptr);
+    ~ConfigPage() override;
 
     void setOutputSettings(const OutputSettingsModel& settings);
     void setVideoSettings(const VideoSettingsModel& settings);
@@ -494,7 +495,6 @@ class ConfigPage : public QWidget {
     // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
-    QLabel* quality_cq_tier_label_ = nullptr;  // S3: "· High / Balanced / Small / Custom" tier label
 
     // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
     // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.

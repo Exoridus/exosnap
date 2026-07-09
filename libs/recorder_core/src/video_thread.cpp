@@ -635,7 +635,7 @@ void VideoThread::Run() {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetChroma(m_state.config.chroma);
-        nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
+        nvenc.SetCq(m_state.config.nvenc_cq);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
         nvenc.SetPreset(m_state.config.nvenc_preset);
         // Color signaling (fix for color-range-signaling bug): the encoded
@@ -938,6 +938,9 @@ void VideoThread::Run() {
     // (an SDR BGRA8 surface) that then follows the normal SDR VideoProcessor
     // route. hdrToneMapActive is decided during first-frame negotiation.
     bool hdrToneMapActive = false;
+    // The tone-map pass runs the SDR curve instead: the source is an SDR desktop
+    // delivered as linear scRGB (Advanced Color Management), not an HDR one.
+    bool hdrToneMapSdrSource = false;
     HdrToneMapper hdrToneMapper;
     winrt::com_ptr<ID3D11Texture2D> hdrSdrTex;
 
@@ -1064,7 +1067,11 @@ void VideoThread::Run() {
             m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
             return OdFrameCheck::Fatal;
         }
-        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap);
+        // An SDR scRGB (Advanced Color) desktop runs the same shader pass as the
+        // tone-map — FP16 source -> SDR intermediate -> VideoProcessor — but with
+        // the SDR curve (clamp + sRGB OETF, no roll-off).
+        const bool sdrScrgb = (capMode == OdCaptureMode::SdrScrgb);
+        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap) || sdrScrgb;
         const bool nativeHdr = (capMode == OdCaptureMode::HdrNative);
         // The caller committed BT.2020/PQ colour metadata + 10-bit for a native
         // session; if the display instead delivered a surface that resolves to
@@ -1154,6 +1161,7 @@ void VideoThread::Run() {
         }
         odFrameFormat = rawDesc.Format;
         hdrToneMapActive = toneMap;
+        hdrToneMapSdrSource = sdrScrgb;
         hdrNativeActive = nativeHdr;
         hdrPqInputIsPq = (rawDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
         hdrPqSrcFormat = rawDesc.Format;
@@ -1717,7 +1725,8 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
-        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale, tmErr)) {
+        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
+                                hdrToneMapSdrSource, tmErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
             if (com_inited)
                 CoUninitialize();

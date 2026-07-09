@@ -282,7 +282,9 @@ struct RecorderConfig {
     HdrMode hdr_mode = HdrMode::TonemapSdr;
 
     // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
-    NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
+    // Constant-quality target (CQP). 1 = best, 51 = worst. Only used when
+    // rate_control == ConstantQuality.
+    uint32_t nvenc_cq = CanonicalCq(NvencQualityPreset::Balanced);
 
     // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
     RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;

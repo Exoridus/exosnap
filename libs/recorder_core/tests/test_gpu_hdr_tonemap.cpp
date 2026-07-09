@@ -155,13 +155,15 @@ std::vector<uint32_t> Read32(ID3D11Device* device, ID3D11DeviceContext* context,
 
 // Tone-map a row of grey scRGB inputs into `format`; return raw 32-bit texels.
 std::vector<uint32_t> ToneMapRow(D3DTestDevice& d3d, DXGI_FORMAT format, const std::vector<float>& greys,
-                                 float peak_scale) {
+                                 float peak_scale, bool sdr_scrgb_source = false) {
     const int width = static_cast<int>(greys.size());
     auto src = CreateFp16Source(d3d.device.get(), greys);
     auto dst = CreateRenderTarget(d3d.device.get(), format, width);
     HdrToneMapper mapper;
     std::string err;
-    EXPECT_TRUE(mapper.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(width), 1, peak_scale, err)) << err;
+    EXPECT_TRUE(mapper.Init(d3d.device.get(), d3d.context.get(), static_cast<UINT>(width), 1, peak_scale,
+                            sdr_scrgb_source, err))
+        << err;
     EXPECT_TRUE(mapper.Convert(src.get(), dst.get(), err)) << err;
     return Read32(d3d.device.get(), d3d.context.get(), dst.get());
 }
@@ -193,6 +195,31 @@ TEST(GpuHdrToneMapR10, MatchesCpuReferenceAcrossRange) {
         EXPECT_NEAR(static_cast<int>(R10(texels[i])), static_cast<int>(expected), 2)
             << "grey=" << greys[i] << " sig=" << sig;
     }
+}
+
+// --- SDR scRGB (Advanced Color desktop): sRGB encode, no roll-off -----------
+
+TEST(GpuHdrToneMapR10, SdrScrgbSourceEncodesWithSrgbAndKeepsWhite) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    // An SDR Advanced-Color desktop never exceeds reference white (measured: the
+    // FP16 desktop peaks at exactly 1.0), so the pass must be a plain sRGB encode.
+    const std::vector<float> greys = {0.0f, 0.0144f, 0.2159f, 0.5271f, 0.8f, 1.0f};
+    const auto texels =
+        ToneMapRow(d3d, DXGI_FORMAT_B8G8R8A8_UNORM, greys, /*peak_scale=*/12.5f, /*sdr_scrgb_source=*/true);
+    ASSERT_EQ(texels.size(), greys.size());
+
+    for (size_t i = 0; i < greys.size(); ++i) {
+        const float sig = recorder_core::ScrgbSdrToSrgbChannel(RoundTrip(greys[i]));
+        const auto expected = static_cast<uint32_t>(std::lround(sig * 255.0f));
+        EXPECT_NEAR(static_cast<int>(R8(texels[i])), static_cast<int>(expected), 1) << "grey=" << greys[i];
+    }
+    // The regression this guards: white must reach 255, not the 233 the HDR
+    // roll-off would produce, and the peak_scale passed above must be ignored.
+    EXPECT_EQ(R8(texels.back()), 255u);
+    // Mid-grey (sRGB code 128) round-trips instead of sinking to 115.
+    EXPECT_NEAR(static_cast<int>(R8(texels[2])), 128, 1);
 }
 
 // The 8-bit path stays byte-identical to the historic behaviour.

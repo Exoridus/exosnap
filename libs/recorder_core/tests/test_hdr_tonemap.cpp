@@ -81,6 +81,26 @@ TEST(Bt709Oetf, Endpoints) {
     EXPECT_NEAR(Bt709Oetf(2.0f), 1.0f, 1e-4f);
 }
 
+TEST(SrgbOetf, MatchesTheDesktopTransfer) {
+    EXPECT_FLOAT_EQ(SrgbOetf(0.0f), 0.0f);
+    EXPECT_NEAR(SrgbOetf(1.0f), 1.0f, 1e-5f);
+    EXPECT_FLOAT_EQ(SrgbOetf(-1.0f), 0.0f); // clamps
+    EXPECT_NEAR(SrgbOetf(2.0f), 1.0f, 1e-5f);
+    // sRGB mid-grey (code 128) is linear ~0.2159 and must encode back to ~0.502.
+    EXPECT_NEAR(SrgbOetf(0.2159f), 0.5019f, 1e-3f);
+}
+
+TEST(SrgbOetf, PreservesSdrScrgbLevelsUnlikeTheHdrCurve) {
+    // An ACM (Advanced Color) desktop with HDR off delivers scRGB FP16 whose
+    // reference white is exactly 1.0 (measured). Encoding it for an sRGB target
+    // must round-trip; the HDR tone-map curve instead crushes white and shadows.
+    EXPECT_NEAR(SrgbOetf(1.0f), 1.0f, 1e-5f);
+
+    const float hdr_peak = HdrPeakScale(/*display_hdr_active=*/false, 0.0f);      // 1000/80 fallback
+    EXPECT_NEAR(Bt709Oetf(HdrToneMapChannel(1.0f, hdr_peak)), 0.9135f, 1e-3f);    // white -> ~233/255
+    EXPECT_NEAR(Bt709Oetf(HdrToneMapChannel(0.0144f, hdr_peak)), 0.0653f, 1e-3f); // code 32 -> ~17/255
+}
+
 TEST(HdrPeakScale, UsesActiveDisplayLuminance) {
     // An actively-HDR display's peak drives the knee.
     EXPECT_FLOAT_EQ(HdrPeakScale(true, 400.0f), 5.0f);
@@ -163,7 +183,22 @@ TEST(OdCaptureMode, Fp16TonemapsForSdrModesAndH264) {
 
 TEST(OdCaptureMode, Fp16OffIsCaptureError) {
     OdCaptureMode mode{};
-    EXPECT_FALSE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Off, true, true, mode));
+    EXPECT_FALSE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, HdrMode::Off, /*hdr_active=*/true, true, mode));
+}
+
+TEST(OdCaptureMode, Fp16SdrDesktopIsScrgbSdr) {
+    // Windows Advanced Color Management composites the desktop in scRGB FP16 even
+    // with HDR switched off. The format alone must not imply an HDR desktop:
+    // hdr_active disambiguates, exactly as it does for R10G10B10A2. Such a desktop
+    // is SDR content (reference white == 1.0) and must only be sRGB-encoded, never
+    // tone-mapped -- and it is recordable in every HDR-handling mode, including Off.
+    OdCaptureMode mode{};
+    for (HdrMode hdr : {HdrMode::Off, HdrMode::TonemapSdr, HdrMode::Hdr10}) {
+        for (bool hdr10_ok : {false, true}) {
+            EXPECT_TRUE(Resolve(DXGI_FORMAT_R16G16B16A16_FLOAT, hdr, /*hdr_active=*/false, hdr10_ok, mode));
+            EXPECT_EQ(mode, OdCaptureMode::SdrScrgb);
+        }
+    }
 }
 
 TEST(OdCaptureMode, UnknownFormatRejected) {

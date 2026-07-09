@@ -2,6 +2,7 @@
     <qresource prefix="/theme">
         <file>exosnap_dark.qss</file>
         <file>icons/chevron-down.svg</file>
+        <file>icons/chevron-up.svg</file>
         <file>icons/folder.svg</file>
         <file>icons/rescan.svg</file>
         <file>icons/timer.svg</file>

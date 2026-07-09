@@ -106,7 +106,7 @@ struct RcParams {
 // No GPU or NVENC session required. Used by FetchPresetConfig().
 // NVENC SDK field names: rcParams.rateControlMode, rcParams.averageBitRate,
 //   rcParams.maxBitRate, rcParams.constQP.{qpIntra, qpInterP, qpInterB}.
-RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps);
+RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps);
 
 // ---------------------------------------------------------------------------
 // InputSlot — one NVENC GPU input resource in the slot ring
@@ -154,8 +154,8 @@ class NvencEncoder {
 
     // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
     // Only meaningful for ConstantQuality mode.
-    void SetQualityPreset(NvencQualityPreset preset) noexcept {
-        m_qualityPreset = preset;
+    void SetCq(uint32_t cq) noexcept {
+        m_cq = cq;
     }
 
     // Set the NVENC speed/quality preset (P1..P7) before calling
@@ -274,7 +274,7 @@ class NvencEncoder {
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
     BitDepth m_bitDepth = BitDepth::Bit8;
     ChromaSubsampling m_chroma = ChromaSubsampling::Cs420;
-    NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
+    uint32_t m_cq = CanonicalCq(NvencQualityPreset::Balanced);
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;
     ColorMetadata m_color = ColorMetadata::Sdr709();

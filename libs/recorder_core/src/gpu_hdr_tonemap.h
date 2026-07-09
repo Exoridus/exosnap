@@ -20,9 +20,14 @@ namespace recorder_core {
 class HdrToneMapper {
   public:
     // peak_scale: display peak luminance in reference-white multiples that maps
-    // to output 1.0 (see HdrPeakScale in hdr_tonemap.h).
+    // to output 1.0 (see HdrPeakScale in hdr_tonemap.h). Ignored when
+    // sdr_scrgb_source is true.
+    // sdr_scrgb_source: the source is an SDR desktop that merely happens to be
+    // delivered as linear scRGB (Advanced Color Management). It carries no HDR
+    // headroom, so the pass clamps and applies the sRGB OETF instead of the
+    // highlight roll-off + BT.709 OETF (see OdCaptureMode::SdrScrgb).
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-              std::string& err);
+              bool sdr_scrgb_source, std::string& err);
 
     // Tone-map src (FP16, must have D3D11_BIND_SHADER_RESOURCE) into dst (BGRA8,
     // must have D3D11_BIND_RENDER_TARGET). Both must be width x height. SRVs and

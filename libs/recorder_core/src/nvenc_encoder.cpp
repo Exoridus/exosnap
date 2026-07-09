@@ -615,28 +615,20 @@ bool NvencEncoder::QueryYuv444Support(std::string& out_error) {
 //   rcParams.averageBitRate    — target average bitrate in bps (VBR/CBR)
 //   rcParams.maxBitRate        — peak bitrate in bps (VBR: 1.5× avg; CBR: = avg)
 
-RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps) {
+RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps) {
     RcParams p{};
     switch (mode) {
     case RateControlMode::ConstantQuality: {
         p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP);
-        switch (quality) {
-        case NvencQualityPreset::High:
-            p.qpIntra = 19;
-            p.qpInterP = 21;
-            p.qpInterB = 21;
-            break;
-        case NvencQualityPreset::Balanced:
-            p.qpIntra = 24;
-            p.qpInterP = 26;
-            p.qpInterB = 26;
-            break;
-        case NvencQualityPreset::Small:
-            p.qpIntra = 30;
-            p.qpInterP = 32;
-            p.qpInterB = 32;
-            break;
-        }
+        // Out-of-range values are clamped rather than rejected: the encoder must
+        // never be handed a QP outside [1, 51], whatever the caller passed.
+        const uint32_t qp = cq < kNvencCqMin ? kNvencCqMin : (cq > kNvencCqMax ? kNvencCqMax : cq);
+        // Inter frames carry +2 QP relative to intra — the ratio the three named
+        // presets always used (19/21, 24/26, 30/32), now applied to every CQ.
+        const uint32_t qp_inter = (qp + 2u) > kNvencCqMax ? kNvencCqMax : qp + 2u;
+        p.qpIntra = qp;
+        p.qpInterP = qp_inter;
+        p.qpInterB = qp_inter;
         p.averageBitRate = 0;
         p.maxBitRate = 0;
         break;
@@ -665,7 +657,8 @@ RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, 
     case RateControlMode::Lossless:
         // Lossless is not yet implemented. Capability marks it NotImplemented so
         // the UI hides it. Defensively fall back to ConstantQuality/Balanced.
-        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, NvencQualityPreset::Balanced, bitrate_kbps);
+        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(NvencQualityPreset::Balanced),
+                                 bitrate_kbps);
         break;
     }
     return p;
@@ -750,7 +743,7 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
     // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
     // NVENC SDK field names: rcParams.rateControlMode / constQP / averageBitRate / maxBitRate.
-    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_qualityPreset, m_bitrate_kbps);
+    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_cq, m_bitrate_kbps);
     m_encodeConfig.rcParams.rateControlMode = static_cast<NV_ENC_PARAMS_RC_MODE>(rc.rateControlMode);
     m_encodeConfig.rcParams.constQP.qpIntra = rc.qpIntra;
     m_encodeConfig.rcParams.constQP.qpInterP = rc.qpInterP;

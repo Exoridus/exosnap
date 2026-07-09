@@ -60,7 +60,7 @@ TEST(RecordingPreset, DefaultPreset_OutputResolutionNativeContain) {
 
 TEST(RecordingPreset, DefaultPreset_VideoSettings) {
     const RecordingPreset p = MakeDefaultPreset();
-    EXPECT_EQ(p.config.video.quality, recorder_core::NvencQualityPreset::High);
+    EXPECT_EQ(p.config.video.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High));
     EXPECT_TRUE(p.config.video.cfr);
     EXPECT_TRUE(p.config.video.capture_cursor);
     EXPECT_EQ(p.config.video.frame_rate_num, 60u);
@@ -800,7 +800,7 @@ TEST(RecordingPreset, NormalizedEquals_OutputContainerChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_VideoQualityChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.quality = recorder_core::NvencQualityPreset::Small;
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -919,7 +919,7 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_VideoQualityChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.quality = recorder_core::NvencQualityPreset::Small;
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 

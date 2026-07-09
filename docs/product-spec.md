@@ -82,7 +82,7 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Frame rate | CFR 60 fps |
 | Rate control | Constant quality (CQ), quality "High" |
 | NVENC encoder preset | P4 (all codecs) |
-| Frame pacing | Smooth (phase-correct) |
+| Frame pacing | Phase-correct |
 | Color range | Limited |
 | Cursor capture | On |
 | Countdown | 0 seconds (selectable 0/3/5/10) |
@@ -208,12 +208,12 @@ capability-gated (only the recording lock disables it). The **default is P4 for 
 takes effect from the next recording.
 
 **Frame rate and pacing.** The default is **CFR 60 fps**. An expert **"Frame pacing"** control offers
-**"Smooth (phase-correct)"** (default) and **"Newest (lowest latency)"**. Smooth selects frames by
+**"Phase-correct"** (default) and **"Lowest latency"**. Phase-correct selects frames by
 present time (it does not blend), so uncapped VRR / high-refresh sources record to smooth,
-judder-free 60 fps; it does not make 60 fps look like 144 Hz. Smooth is GPU-only and requires no
+judder-free 60 fps; it does not make 60 fps look like 144 Hz. It is GPU-only and requires no
 elevation, and applies to **monitor (DXGI duplication) capture only** — window/region (WGC) capture
 always uses newest-at-tick. VFR output is unaffected. When VRR/CFR judder is measured while in
-Newest, Diagnostics recommends switching to Smooth via a fix action.
+Lowest latency, Diagnostics recommends switching to Phase-correct via a fix action.
 
 **Bit depth.** 8-bit for all final codecs; **10-bit (P010)** is available for HEVC Main10 and AV1
 where the GPU supports it (H.264 stays 8-bit only). 10-bit is **SDR-only** — higher precision, no HDR
@@ -272,6 +272,12 @@ Behavior:
   screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
   the recording starts — moving the Windows SDR-brightness slider afterward does not retune an
   active recording.
+- **Advanced Color Management (SDR desktop, HDR off):** with Windows' automatic colour management
+  enabled, the desktop composites to scRGB FP16 even though the display stays in SDR mode. Such a
+  desktop carries SDR content (reference white = 1.0) and is recorded by encoding it with the sRGB
+  transfer function — it is **not** tone-mapped, and it records in every HDR-handling mode, including
+  `Off`. Only a display that actively reports an HDR colour space is treated as HDR. Recorded output
+  therefore matches the live preview and the desktop.
 - **HDR scope for 1.0:** HDR handling (both tone-map-to-SDR and native HDR10) applies to **monitor
   (duplication) capture** and to **window/game capture** (Windows Graphics Capture). When the window's
   hosting display is HDR-active and HDR handling is on, WGC negotiates a scRGB FP16 frame pool and

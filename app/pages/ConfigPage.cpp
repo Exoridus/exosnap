@@ -1,4 +1,4 @@
-﻿#include "ConfigPage.h"
+#include "ConfigPage.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -828,7 +828,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         expert_warn_banner_ = new QWidget(content);
         expert_warn_banner_->setObjectName(QStringLiteral("expertWarnBanner"));
         auto* ewb_hl = new QHBoxLayout(expert_warn_banner_);
-        ewb_hl->setContentsMargins(0, 0, 0, 0); // padding comes from QSS (11/15)
+        ewb_hl->setContentsMargins(15, 11, 15, 11);
         ewb_hl->setSpacing(10);
 
         auto* ewb_icon = new QLabel(expert_warn_banner_);
@@ -1047,24 +1047,25 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* qecontent = new QWidget(quality_expert_widget_);
         auto* qehl = new QHBoxLayout(qecontent);
         qehl->setContentsMargins(0, 12, 0, 12);
-        qehl->setSpacing(14);
+        qehl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
         qelbl->setProperty("labelRole", "settingsRowLabel");
-        qehl->addWidget(qelbl, 1);
+        qehl->addWidget(qelbl, 0);
+        auto* qeinfo = new ui::widgets::InfoHintIcon(ui::hints::kConstantQuality, qecontent);
+        qeinfo->setObjectName(QStringLiteral("qualityCqInfoHint"));
+        qehl->addWidget(qeinfo, 0, Qt::AlignVCenter);
+        qehl->addStretch(1);
         quality_cq_spin_ = new QSpinBox(qecontent);
         quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
-        quality_cq_spin_->setRange(1, 51);
-        quality_cq_spin_->setToolTip(QStringLiteral("NVENC Constant Quality value (1=best, 51=worst). "
-                                                    "Low=19 (High), 24 (Balanced), 30 (Small)."));
-        quality_cq_spin_->setFixedWidth(80);
+        quality_cq_spin_->setRange(static_cast<int>(recorder_core::kNvencCqMin),
+                                   static_cast<int>(recorder_core::kNvencCqMax));
+        quality_cq_spin_->setFixedWidth(160); // same column width as every other row input
+        // Scrolling the settings page must not silently retune quality: the wheel
+        // only steps the value once the box has been focused deliberately.
+        quality_cq_spin_->setFocusPolicy(Qt::StrongFocus);
+        quality_cq_spin_->installEventFilter(this);
         quality_cq_spin_->setProperty("settingsRowInput", true);
         qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
-        // S3: CQ tier label — shows the tier name corresponding to the current CQ value.
-        quality_cq_tier_label_ = new QLabel(qecontent);
-        quality_cq_tier_label_->setObjectName(QStringLiteral("qualityCqTierLabel"));
-        quality_cq_tier_label_->setProperty("labelRole", "muted");
-        quality_cq_tier_label_->setText(QStringLiteral("\xc2\xb7 High")); // initial value
-        qehl->addWidget(quality_cq_tier_label_, 0, Qt::AlignVCenter);
         qevl->addWidget(qecontent);
         quality_expert_widget_->setProperty("settingsRow", true);
         quality_expert_widget_->setVisible(false); // hidden until expert mode is on
@@ -1164,7 +1165,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rvl->addWidget(rrule);
             auto* rhl = new QHBoxLayout();
             rhl->setContentsMargins(0, 12, 0, 12);
-            rhl->setSpacing(14);
+            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* rlbl = new QLabel(QStringLiteral("Rate control"), rate_control_row_widget_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
             rhl->addWidget(rlbl, 0);
@@ -1191,7 +1192,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             bvl->addWidget(brule);
             auto* bhl = new QHBoxLayout();
             bhl->setContentsMargins(0, 12, 0, 12);
-            bhl->setSpacing(14);
+            bhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* blbl = new QLabel(QStringLiteral("Bitrate"), bitrate_row_widget_);
             blbl->setProperty("labelRole", "settingsRowLabel");
             bhl->addWidget(blbl, 0);
@@ -1228,7 +1229,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             dvl->addWidget(drule);
             auto* dhl = new QHBoxLayout();
             dhl->setContentsMargins(0, 12, 0, 12);
-            dhl->setSpacing(14);
+            dhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* dlbl = new QLabel(QStringLiteral("Bit depth"), video_bit_depth_row_);
             dlbl->setProperty("labelRole", "settingsRowLabel");
             dhl->addWidget(dlbl, 0);
@@ -1244,7 +1245,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
             dvl->addLayout(dhl);
             video_bit_depth_row_->setProperty("settingsRow", true);
-            video_bit_depth_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_bit_depth_row_);
         }
 
@@ -1265,7 +1265,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rvl->addWidget(rrule);
             auto* rhl = new QHBoxLayout();
             rhl->setContentsMargins(0, 12, 0, 12);
-            rhl->setSpacing(14);
+            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* rlbl = new QLabel(QStringLiteral("Colour range"), video_color_range_row_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
             rhl->addWidget(rlbl, 0);
@@ -1283,7 +1283,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             video_color_range_row_->setProperty("settingsRow", true);
-            video_color_range_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_color_range_row_);
         }
 
@@ -1305,7 +1304,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             pvl->addWidget(prule);
             auto* phl = new QHBoxLayout();
             phl->setContentsMargins(0, 12, 0, 12);
-            phl->setSpacing(14);
+            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* plbl = new QLabel(QStringLiteral("Encoder preset (NVENC)"), video_encoder_preset_row_);
             plbl->setProperty("labelRole", "settingsRowLabel");
             phl->addWidget(plbl, 0);
@@ -1333,7 +1332,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             phl->addWidget(video_encoder_preset_combo_, 0, Qt::AlignVCenter);
             pvl->addLayout(phl);
             video_encoder_preset_row_->setProperty("settingsRow", true);
-            video_encoder_preset_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_encoder_preset_row_);
         }
 
@@ -1353,7 +1351,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             pvl->addWidget(prule);
             auto* phl = new QHBoxLayout();
             phl->setContentsMargins(0, 12, 0, 12);
-            phl->setSpacing(14);
+            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
             plbl->setProperty("labelRole", "settingsRowLabel");
             phl->addWidget(plbl, 0);
@@ -1362,16 +1360,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             phl->addStretch(1);
             frame_pacing_combo_ = new QComboBox(frame_pacing_row_);
             frame_pacing_combo_->setObjectName(QStringLiteral("framePacingSelect"));
-            frame_pacing_combo_->addItem(QStringLiteral("Smooth (phase-correct)"),
+            frame_pacing_combo_->addItem(QStringLiteral("Phase-correct"),
                                          static_cast<int>(recorder_core::FramePacingMode::Smooth));
-            frame_pacing_combo_->addItem(QStringLiteral("Newest (lowest latency)"),
+            frame_pacing_combo_->addItem(QStringLiteral("Lowest latency"),
                                          static_cast<int>(recorder_core::FramePacingMode::Newest));
             frame_pacing_combo_->setFixedWidth(160);
             frame_pacing_combo_->setProperty("settingsRowInput", true);
             phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
             pvl->addLayout(phl);
             frame_pacing_row_->setProperty("settingsRow", true);
-            frame_pacing_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(frame_pacing_row_);
         }
 
@@ -1383,15 +1380,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             kivl->setSpacing(0);
             auto* kirule = new QFrame(ki_row);
             kirule->setFrameShape(QFrame::HLine);
-            kirule->setProperty("settingsDivider", true);
+            // "settingsDivider" has no stylesheet rule, so Qt drew its default
+            // (white) frame here instead of the hairline every other row uses.
+            kirule->setProperty("frameRole", "sectionRuleLine");
             kivl->addWidget(kirule);
             auto* kihl = new QHBoxLayout();
-            kihl->setContentsMargins(12, 6, 12, 6);
-            kihl->setSpacing(6);
+            kihl->setContentsMargins(0, 12, 0, 12); // flush with every other settings row
+            kihl->setSpacing(4);                    // label <-> info-i, matches makeSettingsRow
             auto* kilbl = new QLabel(QStringLiteral("Keyframe interval"), ki_row);
-            kilbl->setProperty("settingsLabel", true);
-            kihl->addWidget(kilbl, 1);
+            kilbl->setProperty("labelRole", "settingsRowLabel");
+            kihl->addWidget(kilbl, 0);
             kihl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kKeyframeInterval, ki_row), 0, Qt::AlignVCenter);
+            kihl->addStretch(1);
             keyframe_interval_combo_ = new QComboBox(ki_row);
             keyframe_interval_combo_->setObjectName(QStringLiteral("keyframeIntervalSelect"));
             keyframe_interval_combo_->addItem(QStringLiteral("2 s (default)"),
@@ -1404,7 +1404,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             kihl->addWidget(keyframe_interval_combo_, 0, Qt::AlignVCenter);
             kivl->addLayout(kihl);
             ki_row->setProperty("settingsRow", true);
-            ki_row->setProperty("expertEdge", true);
             fes_layout->addWidget(ki_row);
         }
 
@@ -1428,7 +1427,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hvl->addWidget(hrule);
             auto* hhl = new QHBoxLayout();
             hhl->setContentsMargins(0, 12, 0, 12);
-            hhl->setSpacing(14);
+            hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
             hlbl->setProperty("labelRole", "settingsRowLabel");
             hhl->addWidget(hlbl, 0);
@@ -1446,7 +1445,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
             hvl->addLayout(hhl);
             video_hdr_mode_row_->setProperty("settingsRow", true);
-            video_hdr_mode_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_hdr_mode_row_);
 
             // Calm inline hint (never a warning colour) shown only while H.264 disables
@@ -1472,7 +1470,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             cvl->addWidget(crule);
             auto* chl = new QHBoxLayout();
             chl->setContentsMargins(0, 12, 0, 12);
-            chl->setSpacing(14);
+            chl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* clbl = new QLabel(QStringLiteral("Chroma subsampling"), video_chroma_row_);
             clbl->setProperty("labelRole", "settingsRowLabel");
             chl->addWidget(clbl, 0);
@@ -1490,7 +1488,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             chl->addWidget(video_chroma_combo_, 0, Qt::AlignVCenter);
             cvl->addLayout(chl);
             video_chroma_row_->setProperty("settingsRow", true);
-            video_chroma_row_->setProperty("expertEdge", true);
             fes_layout->addWidget(video_chroma_row_);
 
             video_chroma_hint_ =
@@ -2371,32 +2368,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Wave 2: output_split_expander_ dissolved; outputSplitExpanderChanged is kept as
     // a no-op signal for MainWindow compat (AppSettingsStore field still persists).
 
-    // Wave 2 Part B: CQ spinbox — find nearest NvencQualityPreset from CQ value.
+    // The CQ value IS the model: the named presets are derived from it, never the
+    // other way round. (Deriving a preset and then re-seeding the spinbox from that
+    // preset is what previously snapped every keystroke back to 19/24/30.)
     connect(quality_cq_spin_, &QSpinBox::valueChanged, this, [this](int cq) {
-        // Nearest preset: |cq-19|→High, |cq-24|→Balanced, |cq-30|→Small
-        const int d_high = std::abs(cq - 19);
-        const int d_balanced = std::abs(cq - 24);
-        const int d_small = std::abs(cq - 30);
-        if (d_high <= d_balanced && d_high <= d_small) {
-            video_settings_.quality = recorder_core::NvencQualityPreset::High;
-        } else if (d_balanced <= d_small) {
-            video_settings_.quality = recorder_core::NvencQualityPreset::Balanced;
-        } else {
-            video_settings_.quality = recorder_core::NvencQualityPreset::Small;
-        }
-        // S3: Update CQ tier label next to the spinbox.
-        if (quality_cq_tier_label_) {
-            const bool is_exact = (cq == 19 || cq == 24 || cq == 30);
-            const QString prefix = is_exact ? QStringLiteral("\xc2\xb7 ") : QStringLiteral("\xc2\xb7 ~");
-            const QString tier_name = (d_high <= d_balanced && d_high <= d_small) ? QStringLiteral("High")
-                                      : (d_balanced <= d_small)                   ? QStringLiteral("Balanced")
-                                                                                  : QStringLiteral("Small");
-            quality_cq_tier_label_->setText(prefix + tier_name);
-        }
+        video_settings_.cq = static_cast<uint32_t>(cq);
         // Sync the hidden combo so onQualityChanged path stays consistent.
         if (quality_combo_) {
             const QSignalBlocker qb(quality_combo_);
-            const int idx = quality_combo_->findData(static_cast<int>(video_settings_.quality));
+            const int idx =
+                quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
             if (idx >= 0)
                 quality_combo_->setCurrentIndex(idx);
         }
@@ -2543,12 +2524,28 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
 }
 
+ConfigPage::~ConfigPage() {
+    // Qt tears the widget tree down after this body has run, and a hidden child may still
+    // emit on its way out: WebcamSetupPanel::hideEvent stops its preview, which relays
+    // previewActiveRequested back into this page. By then the dynamic type is no longer
+    // ConfigPage, so member-slot dispatch would run on a half-destroyed object. Sever the
+    // inbound connections while this is still a ConfigPage.
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->disconnect(this);
+}
+
 void ConfigPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updateResponsiveLayout();
 }
 
 bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
+    // Swallow wheel events on the CQ spinbox unless it holds focus, so scrolling
+    // past it does not change the recording quality unnoticed.
+    if (watched == quality_cq_spin_ && event->type() == QEvent::Wheel && !quality_cq_spin_->hasFocus()) {
+        event->ignore();
+        return true;
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -2600,7 +2597,9 @@ void ConfigPage::emitCurrentVideoSettings() {
 void ConfigPage::onQualityChanged(int index) {
     if (index < 0)
         return;
-    video_settings_.quality = static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt());
+    // A named preset selects its canonical CQ value; CQ stays the single source.
+    video_settings_.cq = recorder_core::CanonicalCq(
+        static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt()));
     updateQualitySegmentSelection();
     emitCurrentVideoSettings();
 }
@@ -3295,24 +3294,14 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
 
     const QSignalBlocker qb(quality_combo_);
-    const int qidx = quality_combo_->findData(static_cast<int>(settings.quality));
+    const int qidx = quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(settings.cq)));
     if (qidx >= 0)
         quality_combo_->setCurrentIndex(qidx);
 
-    // Wave 2 Part B: sync CQ spinbox from loaded preset.
+    // Sync the CQ spinbox from the loaded preset's exact value.
     if (quality_cq_spin_) {
         const QSignalBlocker sb(quality_cq_spin_);
-        switch (settings.quality) {
-        case recorder_core::NvencQualityPreset::High:
-            quality_cq_spin_->setValue(19);
-            break;
-        case recorder_core::NvencQualityPreset::Small:
-            quality_cq_spin_->setValue(30);
-            break;
-        default: // Balanced
-            quality_cq_spin_->setValue(24);
-            break;
-        }
+        quality_cq_spin_->setValue(static_cast<int>(settings.cq));
     }
 
     updateFrameRateSelection();
@@ -3357,7 +3346,7 @@ void ConfigPage::updateQualitySegmentSelection() {
         if (!segment)
             return;
 
-        const bool selected = video_settings_.quality == preset;
+        const bool selected = recorder_core::NearestQualityPreset(video_settings_.cq) == preset;
         segment->setChecked(selected);
         segment->setProperty("qualitySegmentSelected", selected);
         segment->style()->unpolish(segment);
@@ -3372,13 +3361,14 @@ void ConfigPage::updateQualitySegmentSelection() {
     // v10: keep the visible Default dropdown in sync with the model preset.
     if (quality_preset_combo_) {
         const QSignalBlocker b(quality_preset_combo_);
-        const int idx = quality_preset_combo_->findData(static_cast<int>(video_settings_.quality));
+        const int idx =
+            quality_preset_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
         if (idx >= 0)
             quality_preset_combo_->setCurrentIndex(idx);
     }
 
     if (quality_compare_hint_) {
-        switch (video_settings_.quality) {
+        switch (recorder_core::NearestQualityPreset(video_settings_.cq)) {
         case recorder_core::NvencQualityPreset::High:
             quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
             break;
@@ -3391,20 +3381,11 @@ void ConfigPage::updateQualitySegmentSelection() {
         }
     }
 
-    // Wave 2 Part B: keep CQ spinbox in sync with model (under blocker to avoid feedback loop).
+    // Mirror the model's CQ value. When the user is typing, this is already the
+    // value in the box, so it is a no-op -- it never overwrites the input.
     if (quality_cq_spin_) {
         const QSignalBlocker b(quality_cq_spin_);
-        switch (video_settings_.quality) {
-        case recorder_core::NvencQualityPreset::High:
-            quality_cq_spin_->setValue(19);
-            break;
-        case recorder_core::NvencQualityPreset::Small:
-            quality_cq_spin_->setValue(30);
-            break;
-        default: // Balanced
-            quality_cq_spin_->setValue(24);
-            break;
-        }
+        quality_cq_spin_->setValue(static_cast<int>(video_settings_.cq));
     }
 }
 
@@ -4213,7 +4194,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4257,7 +4238,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Mic channel mode"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4296,7 +4277,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Audio bitrate"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4324,7 +4305,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Opus frame duration"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4355,7 +4336,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Opus complexity"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4382,7 +4363,7 @@ void ConfigPage::buildAudioExpertSection() {
             audio_sample_rate_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_sample_rate_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Sample rate"), audio_sample_rate_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4415,7 +4396,7 @@ void ConfigPage::buildAudioExpertSection() {
             audio_channels_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_channels_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Channels"), audio_channels_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4447,7 +4428,7 @@ void ConfigPage::buildAudioExpertSection() {
             audio_bit_depth_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_bit_depth_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Bit depth"), audio_bit_depth_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4482,7 +4463,7 @@ void ConfigPage::buildAudioExpertSection() {
             flac_compression_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(flac_compression_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("FLAC compression"), flac_compression_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -5038,19 +5019,9 @@ void ConfigPage::updateExpertModeVisibility() {
         const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
         quality_expert_widget_->setVisible(expert_mode_enabled_ && rate_is_cq);
         if (expert_mode_enabled_ && rate_is_cq && quality_cq_spin_) {
-            // Seed the spinbox from the current model quality on first show.
+            // Seed the spinbox from the model's CQ on first show.
             const QSignalBlocker b(quality_cq_spin_);
-            switch (video_settings_.quality) {
-            case recorder_core::NvencQualityPreset::High:
-                quality_cq_spin_->setValue(19);
-                break;
-            case recorder_core::NvencQualityPreset::Small:
-                quality_cq_spin_->setValue(30);
-                break;
-            default: // Balanced
-                quality_cq_spin_->setValue(24);
-                break;
-            }
+            quality_cq_spin_->setValue(static_cast<int>(video_settings_.cq));
         }
     }
     // PS-PHASE-C: fmt_expert_section (rate control, bitrate, format placeholders).
