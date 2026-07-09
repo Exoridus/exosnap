@@ -63,6 +63,9 @@ RecordingErrorPanel::RecordingErrorPanel(const RecordingErrorModel& model, QWidg
     : QWidget(parent), model_(model) {
     setObjectName(QStringLiteral("recordingErrorCard"));
     setFixedWidth(440);
+    // Without this a plain QWidget child paints no stylesheet background, so the card
+    // disappears once it is embedded in its overlay (see CrashReportPanel).
+    setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet(QStringLiteral("#recordingErrorCard { background:%1; border:1px solid %2; border-radius:14px; }")
                       .arg(tok(ActiveTheme().surf), tok(ActiveTheme().line2)));
 
