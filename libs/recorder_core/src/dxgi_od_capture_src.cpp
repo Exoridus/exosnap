@@ -1,5 +1,6 @@
 #include "dxgi_od_capture_src.h"
 
+#include <recorder_core/hdr_color_space.h>
 #include <recorder_core/sdr_white_level.h>
 
 #include <dxgi1_6.h>
@@ -122,7 +123,7 @@ static void FillHdrFactsFromOutput(IDXGIOutput* output, HMONITOR hmonitor, HdrDi
     if (winrt::com_ptr<IDXGIOutput6> output6 = outputPtr.try_as<IDXGIOutput6>()) {
         DXGI_OUTPUT_DESC1 desc1{};
         if (SUCCEEDED(output6->GetDesc1(&desc1))) {
-            facts.hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+            facts.hdr_active = IsHdrColorSpace(desc1.ColorSpace);
             facts.red_primary_x = desc1.RedPrimary[0];
             facts.red_primary_y = desc1.RedPrimary[1];
             facts.green_primary_x = desc1.GreenPrimary[0];

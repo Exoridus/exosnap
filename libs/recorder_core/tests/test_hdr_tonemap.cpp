@@ -6,6 +6,8 @@
 #include "dxgi_od_capture_src.h"
 #include "hdr_tonemap.h"
 
+#include <recorder_core/hdr_color_space.h>
+
 #include <cmath>
 
 #include <gtest/gtest.h>
@@ -257,6 +259,22 @@ TEST(ToneMapIntermediateFormat, TenBitEncodeUsesR10) {
 TEST(ToneMapIntermediateFormat, EightBitEncodeKeepsBgra8) {
     // 8-bit encodes are byte-identical to the historic path: BGRA8 intermediate.
     EXPECT_EQ(ToneMapIntermediateFormat(/*encode_is_10bit=*/false), DXGI_FORMAT_B8G8R8A8_UNORM);
+}
+
+// A studio-range PQ display is in HDR just as much as a full-range one. The capture
+// path used to accept only the full-range variant, so a studio-range HDR display made
+// the coordinator pin PQ/BT.2020 metadata while capture reported SDR, and the session
+// aborted on expectNativeHdr && !nativeHdr.
+TEST(HdrColorSpace, BothPqRangesCountAsHdr) {
+    EXPECT_TRUE(recorder_core::IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
+    EXPECT_TRUE(recorder_core::IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020));
+}
+
+TEST(HdrColorSpace, NonPqColorSpacesAreNotHdr) {
+    // sRGB desktop.
+    EXPECT_FALSE(recorder_core::IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709));
+    // scRGB FP16 — an Advanced-Color SDR desktop, not HDR (see OdCaptureMode::SdrScrgb).
+    EXPECT_FALSE(recorder_core::IsHdrColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709));
 }
 
 } // namespace

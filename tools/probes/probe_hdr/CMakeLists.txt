@@ -14,6 +14,7 @@ add_executable(probe_hdr
 )
 
 target_link_libraries(probe_hdr PRIVATE
+    recorder_core # IsHdrColorSpace — one definition of "HDR is on"
     d3d11.lib
     dxgi.lib
     exosnap::warnings
