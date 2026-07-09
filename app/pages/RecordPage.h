@@ -444,6 +444,10 @@ class RecordPage : public QWidget {
 
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
+    // Whether any camera is currently connected. Gates the dock's webcam toggle so
+    // it cannot read "on" when there is nothing to turn on. Seeded from a one-shot
+    // enumeration and kept live by onWebcamDevicesChanged.
+    bool has_webcam_device_ = false;
     QLabel* capture_frame_status_label_ = nullptr;
     QTimer* capture_frame_status_timer_ = nullptr;
 
