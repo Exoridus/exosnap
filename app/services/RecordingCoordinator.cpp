@@ -8,6 +8,7 @@
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/mp4_remuxer.h>
 
+#include <capability/capability_builder.h>
 #include <capability/runtime_snapshot.h>
 
 #include <windows.h>
@@ -367,6 +368,29 @@ RecoveryManifestStore* RecordingCoordinator::GetRecoveryManifestStore() const no
 
 void RecordingCoordinator::SetDiskSpaceProvider(diagnostics::IDiskSpaceProvider* provider) {
     disk_space_provider_ = provider;
+}
+
+void RecordingCoordinator::SetDisplayFactsProvider(DisplayFactsProvider provider) {
+    display_facts_provider_ = std::move(provider);
+}
+
+const std::vector<capability::DisplayHdrFacts>& RecordingCoordinator::DisplayFacts() const {
+    return caps_.runtime.displays;
+}
+
+void RecordingCoordinator::RefreshDisplayFacts() {
+    auto displays =
+        display_facts_provider_ ? display_facts_provider_() : capability::CapabilityBuilder::QueryDisplayFacts();
+    // An empty result means the query failed (no DXGI factory). Keep what we had rather
+    // than pretending every display went SDR.
+    if (displays.empty())
+        return;
+    caps_.runtime.displays = std::move(displays);
+}
+
+const std::vector<capability::DisplayHdrFacts>& RecordingCoordinator::RefreshedDisplayFacts() {
+    RefreshDisplayFacts();
+    return caps_.runtime.displays;
 }
 
 // ---------------------------------------------------------------------------
@@ -742,7 +766,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // 10-bit. HDR10 is 10-bit by definition — PQ in 8-bit bands severely — so the
     // 8-bit setting is deliberately overridden here for the native path. H.264 is
     // excluded (it cannot encode HDR10; the pre-flight blocker catches it).
-    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, caps_.runtime.displays)) {
+    // Read through the refreshing accessor, never the startup snapshot: the metadata
+    // committed below goes into the encoder and the container, and it must describe the
+    // display as it is now — the user may have toggled HDR since launch.
+    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts())) {
         if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
             recorder_core::HdrDisplayFacts hdr_facts;
             hdr_facts.hdr_active = facts->hdr_active;
