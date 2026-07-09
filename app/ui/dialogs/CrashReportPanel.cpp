@@ -518,8 +518,8 @@ QWidget* CrashReportPanel::buildActionsRow() {
                                         devicePixelRatioF()));
     send_btn->setIconSize(QSize(14, 14));
     send_btn->setStyleSheet(
-        QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:9px 16px; "
-                       "font-size:12.5px; font-weight:600; }"
+        QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:0 16px; "
+                       "min-height:36px; max-height:36px; font-size:12.5px; font-weight:600; }"
                        "QPushButton:hover { background:%3; }"
                        "QPushButton:pressed { background:%4; }")
             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac),
@@ -536,8 +536,8 @@ QWidget* CrashReportPanel::buildActionsRow() {
     restart_btn->setCursor(Qt::PointingHandCursor);
     restart_btn->setStyleSheet(
         QStringLiteral(
-            "QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; padding:9px 16px; "
-            "font-size:12.5px; font-weight:500; }"
+            "QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; padding:0 16px; "
+            "min-height:34px; max-height:34px; font-size:12.5px; font-weight:500; }"
             "QPushButton:hover { border:1px solid %3; }")
             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
                  QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
@@ -561,8 +561,8 @@ QWidget* CrashReportPanel::buildActionsRow() {
                                                 devicePixelRatioF()));
     overflow_button_->setIconSize(QSize(14, 14));
     overflow_button_->setStyleSheet(
-        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:9px 10px; "
-                       "color:%1; font-size:12.5px; font-weight:500; }"
+        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:0 10px; "
+                       "min-height:36px; max-height:36px; color:%1; font-size:12.5px; font-weight:500; }"
                        "QPushButton:hover { color:%2; }"
                        "QPushButton::menu-indicator { image: none; width: 0; }")
             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),

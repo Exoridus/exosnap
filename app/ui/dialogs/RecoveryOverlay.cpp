@@ -41,8 +41,8 @@ QString tok(const char* base) {
 // precedence over the app QSS — no edit to exosnap_dark.qss required.
 
 QString primaryButtonQss() {
-    return QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:8px 16px; "
-                          "font-size:12.5px; font-weight:600; }"
+    return QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:0 16px; "
+                          "min-height:36px; max-height:36px; min-width:92px; font-size:12.5px; font-weight:600; }"
                           "QPushButton:hover { background:%3; }"
                           "QPushButton:pressed { background:%4; }"
                           "QPushButton:disabled { color:%2; background:%5; }")
@@ -54,8 +54,12 @@ QString primaryButtonQss() {
 QString outlineButtonQss() {
     const QString hover =
         ActiveTheme().line3_override ? tok(ActiveTheme().line3_override) : QStringLiteral("rgba(255, 255, 255, 0.20)");
+    // min/max-height are 2px shorter than the filled tiers: a QSS min-height sizes the
+    // content box, so the 1px border on each edge is added on top — 34 + 2 = 36, matching
+    // the borderless Finish/Delete buttons exactly.
     return QStringLiteral("QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; "
-                          "padding:8px 16px; font-size:12.5px; font-weight:500; }"
+                          "padding:0 16px; min-height:34px; max-height:34px; min-width:92px; font-size:12.5px; "
+                          "font-weight:500; }"
                           "QPushButton:hover { border:1px solid %3; }"
                           "QPushButton:disabled { color:%4; }")
         .arg(tok(ActiveTheme().ink), tok(ActiveTheme().line2), hover, tok(ActiveTheme().dim));
@@ -64,7 +68,7 @@ QString outlineButtonQss() {
 // Tertiary text action tinted `color_base` (mut for neutral, error for destructive).
 QString tertiaryButtonQss(const char* color_base, const char* hover_base) {
     return QStringLiteral("QPushButton { background:transparent; color:%1; border:none; border-radius:9px; "
-                          "padding:8px 12px; font-size:12.5px; font-weight:500; }"
+                          "padding:0 12px; min-height:36px; max-height:36px; font-size:12.5px; font-weight:500; }"
                           "QPushButton:hover { color:%2; }"
                           "QPushButton:disabled { color:%3; }")
         .arg(tok(color_base), tok(hover_base), tok(ActiveTheme().dim));
@@ -147,6 +151,13 @@ class RecoveryRow : public QWidget {
         auto* action_layout = new QHBoxLayout(action_row);
         action_layout->setContentsMargins(0, 0, 0, 0);
         action_layout->setSpacing(8);
+
+        // Uniform, professional button sizing is enforced in the inline QSS helpers
+        // (min-height == max-height == control height, shared min-width for the safe
+        // pair). Note: a stylesheet's min-height/max-height override QWidget::
+        // setFixedHeight(), so the size MUST live in the QSS, not on the widget — the
+        // app-wide `QPushButton { min-height:36 }` rule otherwise stacked with the inline
+        // padding and inflated these to a chunky ~52px.
 
         // "Finish" — Tier-1 primary (mint): the recommended, safe action.
         finish_btn_ = new QPushButton(QStringLiteral("Finish"), action_row);

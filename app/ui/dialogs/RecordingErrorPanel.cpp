@@ -194,9 +194,10 @@ QWidget* RecordingErrorPanel::buildActionsRow() {
             theme::lucideIcon(QStringLiteral("upload"), tok(ActiveTheme().ac_ink), 14, devicePixelRatioF()));
         send_button_->setIconSize(QSize(14, 14));
         send_button_->setStyleSheet(
-            QStringLiteral("QPushButton { padding:9px 15px; background:%1; border:none; border-radius:9px; color:%2; "
-                           "font-size:12.5px; font-weight:600; }"
-                           "QPushButton:hover { background:%3; }")
+            QStringLiteral(
+                "QPushButton { padding:0 15px; min-height:36px; max-height:36px; background:%1; border:none; "
+                "border-radius:9px; color:%2; font-size:12.5px; font-weight:600; }"
+                "QPushButton:hover { background:%3; }")
                 .arg(tok(ActiveTheme().ac), tok(ActiveTheme().ac_ink), theme::ThemeAccentHover(ActiveTheme())));
         connect(send_button_, &QPushButton::clicked, this, &RecordingErrorPanel::sendReportRequested);
         layout->addWidget(send_button_);
@@ -207,8 +208,8 @@ QWidget* RecordingErrorPanel::buildActionsRow() {
     logs_button->setObjectName(QStringLiteral("recordingErrorLogsButton"));
     logs_button->setCursor(Qt::PointingHandCursor);
     logs_button->setStyleSheet(
-        QStringLiteral("QPushButton { padding:9px 15px; background:transparent; border:1px solid %1; "
-                       "border-radius:9px; color:%2; font-size:12.5px; font-weight:500; }"
+        QStringLiteral("QPushButton { padding:0 15px; min-height:34px; max-height:34px; background:transparent; "
+                       "border:1px solid %1; border-radius:9px; color:%2; font-size:12.5px; font-weight:500; }"
                        "QPushButton:hover { border:1px solid %3; }")
             .arg(tok(ActiveTheme().line2), tok(ActiveTheme().ink),
                  ActiveTheme().line3_override ? tok(ActiveTheme().line3_override)
@@ -223,8 +224,8 @@ QWidget* RecordingErrorPanel::buildActionsRow() {
     close_button->setObjectName(QStringLiteral("recordingErrorCloseButton"));
     close_button->setCursor(Qt::PointingHandCursor);
     close_button->setStyleSheet(
-        QStringLiteral("QPushButton { padding:9px 13px; background:transparent; border:none; color:%1; "
-                       "font-size:12.5px; font-weight:500; }"
+        QStringLiteral("QPushButton { padding:0 13px; min-height:36px; max-height:36px; background:transparent; "
+                       "border:none; color:%1; font-size:12.5px; font-weight:500; }"
                        "QPushButton:hover { color:%2; }")
             .arg(tok(ActiveTheme().mut), tok(ActiveTheme().ink)));
     connect(close_button, &QPushButton::clicked, this, &RecordingErrorPanel::dismissRequested);

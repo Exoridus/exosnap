@@ -205,8 +205,8 @@ TEST_F(RecoveryOverlayVisualProofTest, RecoveryCardLiveContext) {
     // Diagnostics — dump height / sizeHint / minimumSizeHint for the whole subtree so we
     // can see exactly which widget reports a minimum shorter than its hint (that is the
     // slack the layout compresses away).
-    for (const char* obj : {"recoveryCard", "recoveryTitle", "recoveryHint", "recoveryRowsContainer", "recoveryRow",
-                            "recoveryRowInfo", "recoveryRowActions", "recoveryFinishBtn"}) {
+    for (const char* obj :
+         {"recoveryCard", "recoveryRowActions", "recoveryFinishBtn", "recoveryContinueBtn", "recoveryDeleteBtn"}) {
         auto* w = overlay->findChild<QWidget*>(QString::fromUtf8(obj));
         if (w == nullptr) {
             std::printf("[live-ctx] %-22s <null>\n", obj);
