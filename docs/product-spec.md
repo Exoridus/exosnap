@@ -313,9 +313,8 @@ applied identically in the Record-page preview and the recorded output. Its on/o
 surfaced in two always-in-sync places — Settings → Webcam and the Record-page transport dock (camera
 button) — and is off by default. Turning it on both includes the webcam in the recording and starts the
 live setup preview; the camera opens only while it is on (opening Settings → Webcam no longer turns the
-camera on by itself). When no camera is connected the Record-page control is disabled with a tooltip
-prompting to connect one, and the webcam is never recorded without a selected device (the first
-available camera is pre-selected when one exists). The device, resolution, mirror, opacity and
+camera on by itself). The webcam is never recorded without a selected device (the first available
+camera is pre-selected when one exists). The device, resolution, mirror, opacity and
 chroma-key options stay editable regardless of the on/off state. The webcam is the only feature that depends
 on Windows Media Foundation: on Windows N/KN editions without the Media Feature Pack, the app still
 launches and records normally, but the webcam UI is disabled with a notice referencing the Media

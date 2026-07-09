@@ -14,8 +14,6 @@
 #include "../ui/widgets/StatusPill.h"
 #include "../ui/widgets/TransportDock.h"
 #include "../ui/widgets/VUMeterWidget.h"
-
-#include "../services/WebcamService.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "../visual_tests/VisualScenario.h"
 #endif
@@ -804,10 +802,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_column_layout->addWidget(preview_surface_host_, 1);
 
     transport_dock_ = new ui::widgets::TransportDock(this);
-    // Seed webcam-device presence for the dock's camera toggle. The device notifier
-    // only fires on hot-plug (no initial snapshot), so the initial state comes from
-    // a one-shot enumeration here; onWebcamDevicesChanged keeps it live afterwards.
-    has_webcam_device_ = !exosnap::WebcamService::EnumerateDevices().empty();
 
     // --- Result details panel (shown on Completed success) ---
     auto* result_details_panel_ = new QFrame(this);
@@ -4090,13 +4084,9 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setToggleState(QStringLiteral("app"), view_model_.audio_ui_state.IsAppEnabled(),
                                     toggles_interactive);
     // Webcam overlay is live-mutable via coordinator->SetWebcamSettings(), so it
-    // stays interactive during recording. Block during transient states, and when
-    // no camera is connected (nothing to turn on) — with a tooltip explaining why.
-    const bool webcam_interactive = !(blocked || failed) && has_webcam_device_;
+    // stays interactive during recording. Only block during transient states.
+    const bool webcam_interactive = !(blocked || failed);
     transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, webcam_interactive);
-    transport_dock_->setToggleTooltip(QStringLiteral("webcam"), has_webcam_device_
-                                                                    ? QStringLiteral("Webcam")
-                                                                    : QStringLiteral("No webcam found — connect one"));
 
     // v10: no Completed dock state. The dock always returns to Ready after a
     // recording finishes; the result is surfaced via the NotificationManager
@@ -4638,11 +4628,6 @@ void RecordPage::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap)
 }
 
 void RecordPage::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap) {
-    // Track whether ANY camera is connected so the dock's webcam toggle can disable
-    // itself (with a tooltip) when there is nothing to turn on. Refresh applies it.
-    has_webcam_device_ = !snap.devices.empty();
-    refresh();
-
     if (!coordinator_)
         return;
 

@@ -1457,10 +1457,6 @@ void VideoThread::Run() {
     // that returned with a new HMONITOR. Cleared when Reopen() succeeds.
     bool odHolding = false;
     auto odLastReopenAttempt = std::chrono::steady_clock::now();
-    // True once a live screen frame has been captured into odCapturedTex, so it can
-    // be re-composited with a LIVE webcam/cursor during a hold (the webcam is an
-    // independent source and must keep running while the monitor is gone).
-    bool odHeldScreenValid = false;
     // How long to wait between Reopen() attempts after a recoverable OD acquire
     // loss. The retry itself is UNBOUNDED (std::nullopt budget below): the output
     // can be absent briefly (a mode/topology flip, EDID/HPD re-negotiation blacking
@@ -2572,24 +2568,12 @@ void VideoThread::Run() {
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
-                // OD recovery — keep the webcam LIVE while the monitor is gone. The
-                // monitor and the webcam are independent sources, so a monitor loss
-                // must not freeze the webcam. Instead of the duplicate path (which
-                // re-emits the last full composite, freezing the webcam too), hold the
-                // last captured SCREEN and re-composite it with a freshly-snapshotted
-                // webcam/cursor each tick. odCapturedTex is kept current with the last
-                // emitted screen: newest-at-tick already uses it as the source; the
-                // phase-correct ring does not, so copy the emitted frame in there.
-                if (useOdCapture) {
-                    if (!odHolding && rawSourceTex != nullptr) {
-                        if (rawSourceTex != odCapturedTex.get())
-                            d3dContext->CopyResource(odCapturedTex.get(), rawSourceTex);
-                        odHeldScreenValid = true;
-                    } else if (odHolding && odHeldScreenValid && odCapturedTex) {
-                        rawSourceTex = odCapturedTex.get();
-                    }
-                }
-
+                // OD recovery: during a hold the drain is skipped, so no fresh source
+                // frame arrives and rawSourceTex is null — the CFR duplicate path below
+                // re-emits the last frame (frozen) so the timeline keeps advancing until
+                // Reopen() succeeds. Re-compositing a live webcam onto the held screen
+                // during the gap is intentionally NOT done here: it touches display-tied
+                // GPU resources while the captured output is gone (crash risk).
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).

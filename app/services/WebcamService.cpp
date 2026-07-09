@@ -479,13 +479,6 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // always be accepted even if its timestamp is smaller than the old reader's.
     long long last_delivered_ts = -1;
 
-    // Frame pacing (secondary fix): a reopened reader can have several buffered
-    // frames ready to drain immediately, which would otherwise be posted back to
-    // back — a visible burst/judder between reconnects. Cap posting at the
-    // requested fps, mirroring PreviewService.cpp's GetTickCount-based gate.
-    DWORD last_posted_ms = 0;
-    const DWORD min_post_interval_ms = fps > 0 ? static_cast<DWORD>(1000 / fps) : 0;
-
     // Outer loop: (re)open the device and drain it; on loss, fall back here to poll
     // a reopen. The last stored frame is NEVER cleared here, so it stays frozen for
     // the whole gap; has_frame_ is reset only by Stop().
@@ -525,11 +518,6 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             if (!ShouldDeliverWebcamSample(last_delivered_ts, ts))
                 continue; // stale frame replayed by a reopened reader — drop it
             last_delivered_ts = ts;
-
-            const DWORD now_ms = GetTickCount();
-            if (min_post_interval_ms > 0 && (now_ms - last_posted_ms) < min_post_interval_ms)
-                continue; // faster than the requested fps: drop, keep last frame
-            last_posted_ms = now_ms;
 
             winrt::com_ptr<IMFMediaBuffer> buf;
             if (FAILED(sample->ConvertToContiguousBuffer(buf.put())))
