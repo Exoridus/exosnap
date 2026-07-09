@@ -257,8 +257,12 @@ bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_
 }
 
 // ---------------------------------------------------------------------------
-// Webcam device selection policy — pure, MF-call-free
+// Webcam device selection / preview policy — pure, MF-call-free
 // ---------------------------------------------------------------------------
+
+bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept {
+    return webcam_enabled && has_device;
+}
 
 std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::vector<WebcamDeviceInfo>& devices) {
     if (!configured_id.empty())

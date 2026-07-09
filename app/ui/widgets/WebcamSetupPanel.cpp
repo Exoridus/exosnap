@@ -263,6 +263,9 @@ void WebcamSetupPanel::setMfUnavailable(bool unavailable) {
 
 void WebcamSetupPanel::onEnableToggled(bool enabled) {
     current_settings_.enabled = enabled;
+    // Preview is coupled to the enable state; start/stop it in step with the toggle.
+    if (isVisible())
+        startPreview();
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -448,11 +451,16 @@ void WebcamSetupPanel::startPreview() {
     current_settings_ = SanitizeWebcamSettings(current_settings_);
 
     const QString dev_id = device_combo_->currentData().toString();
-    if (dev_id.isEmpty()) {
+    const bool has_device = !dev_id.isEmpty();
+    // Coupled to the enable state: open the camera only when enabled AND a device
+    // exists — never merely from the panel becoming visible.
+    if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device)) {
         preview_service_.Stop();
         if (camera_preview_) {
             camera_preview_->clearFrame();
-            camera_preview_->setPlaceholderText(QStringLiteral("No camera found.\nConnect a camera and click ↺."));
+            camera_preview_->setPlaceholderText(!has_device
+                                                    ? QStringLiteral("No camera found.\nConnect a camera and click ↺.")
+                                                    : QStringLiteral("Turn on the webcam to preview."));
         }
         return;
     }

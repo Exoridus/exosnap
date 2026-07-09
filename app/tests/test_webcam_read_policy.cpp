@@ -117,4 +117,25 @@ TEST(ShouldDeliverWebcamSampleTest, NonPositiveSampleTimestampPasses) {
     EXPECT_TRUE(ShouldDeliverWebcamSample(1000, -5));
 }
 
+// ---------------------------------------------------------------------------
+// ShouldOpenWebcamPreview (setup preview coupled to the enable state)
+// ---------------------------------------------------------------------------
+
+TEST(ShouldOpenWebcamPreviewTest, EnabledWithDeviceOpens) {
+    EXPECT_TRUE(ShouldOpenWebcamPreview(/*enabled=*/true, /*has_device=*/true));
+}
+
+TEST(ShouldOpenWebcamPreviewTest, DisabledNeverOpens) {
+    // The camera must not spring on just from opening the Webcam page.
+    EXPECT_FALSE(ShouldOpenWebcamPreview(/*enabled=*/false, /*has_device=*/true));
+}
+
+TEST(ShouldOpenWebcamPreviewTest, NoDeviceNeverOpens) {
+    EXPECT_FALSE(ShouldOpenWebcamPreview(/*enabled=*/true, /*has_device=*/false));
+}
+
+TEST(ShouldOpenWebcamPreviewTest, DisabledAndNoDeviceDoesNotOpen) {
+    EXPECT_FALSE(ShouldOpenWebcamPreview(/*enabled=*/false, /*has_device=*/false));
+}
+
 } // namespace

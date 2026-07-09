@@ -51,6 +51,11 @@ struct WebcamDeviceInfo {
     std::string name;
 };
 
+// True when the webcam setup preview should open the camera: only when the webcam
+// is enabled AND a device is available. Couples the live preview to the enable
+// state so the camera never springs on merely from opening the Webcam page.
+bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept;
+
 // Chooses the webcam device id to select given the currently-configured id and
 // the available devices. An explicit choice (non-empty id) is always kept — even
 // if that device is momentarily absent — so it reconnects when plugged back in.
