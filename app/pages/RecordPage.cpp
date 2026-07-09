@@ -671,6 +671,9 @@ void RecordPage::showEvent(QShowEvent* event) {
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    // Now that the page is visible, (re)start the webcam PiP capture — see the
+    // visibility gate in syncWebcamPreviewCapture().
+    syncWebcamPreviewCapture();
 }
 
 void RecordPage::hideEvent(QHideEvent* event) {
@@ -689,6 +692,9 @@ void RecordPage::hideEvent(QHideEvent* event) {
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    // Release the camera so the Settings webcam panel can own it without a device-lock
+    // fight (see syncWebcamPreviewCapture()). No-op while recording.
+    syncWebcamPreviewCapture();
 
     QWidget::hideEvent(event);
 }
@@ -1648,7 +1654,14 @@ void RecordPage::syncWebcamPreviewCapture() {
         return;
     const bool idle =
         (view_model_.state == UiRecordingState::Ready || view_model_.state == UiRecordingState::Completed);
-    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle);
+    // Only open the camera for the live PiP while the Record page is actually visible.
+    // The Settings webcam panel opens its OWN reader on the same device; if the Record
+    // preview also runs while the user sits on the Settings page, the two readers fight
+    // over the camera (ReadSample fails with MF_E_VIDEO_RECORDING_DEVICE_LOCKED, the
+    // reader reopens ~every 0.5s) and both previews stutter. Gating on page visibility
+    // keeps exactly one reader on the device at a time. Recording is unaffected: while
+    // recording the capture is owned by is_recording_, not the preview flag.
+    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle && record_page_visible_);
 }
 
 void RecordPage::onWebcamOverlayMoved(QRectF rect_norm) {
