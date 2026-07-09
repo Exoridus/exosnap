@@ -26,6 +26,8 @@
 #include <dxgi.h>
 #include <dxgi1_6.h> // IDXGIOutput6::GetDesc1 (per-display HDR facts)
 
+#include <recorder_core/hdr_color_space.h> // one definition of "HDR is on"
+
 // Media Foundation
 #include <mfapi.h>
 #include <mfidl.h>
@@ -319,9 +321,7 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
                         facts.name.resize(static_cast<size_t>(len - 1));
                         WideCharToMultiByte(CP_UTF8, 0, d.DeviceName, -1, facts.name.data(), len, nullptr, nullptr);
                     }
-                    // HDR is ON when the output is in a PQ/BT.2020 colour space.
-                    facts.hdr_active = (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
-                                        d.ColorSpace == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
+                    facts.hdr_active = recorder_core::IsHdrColorSpace(d.ColorSpace);
                     facts.bits_per_color = d.BitsPerColor;
                     facts.red_primary_x = d.RedPrimary[0];
                     facts.red_primary_y = d.RedPrimary[1];

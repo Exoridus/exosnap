@@ -34,6 +34,7 @@
 #include <wrl/client.h>
 
 #include <recorder_core/codec_types.h>
+#include <recorder_core/hdr_color_space.h>
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/mp4_remuxer.h>
 #include <recorder_core/recorder_session.h>
@@ -164,7 +165,7 @@ HdrDisplayFacts QueryMonitorHdrFacts(HMONITOR hmonitor) {
             if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == hmonitor && SUCCEEDED(output.As(&out6))) {
                 DXGI_OUTPUT_DESC1 d{};
                 if (SUCCEEDED(out6->GetDesc1(&d))) {
-                    facts.hdr_active = (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+                    facts.hdr_active = recorder_core::IsHdrColorSpace(d.ColorSpace);
                     facts.red_primary_x = d.RedPrimary[0];
                     facts.red_primary_y = d.RedPrimary[1];
                     facts.green_primary_x = d.GreenPrimary[0];

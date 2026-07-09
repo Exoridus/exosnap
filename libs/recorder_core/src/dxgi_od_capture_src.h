@@ -48,11 +48,11 @@ class DxgiOdCaptureSrc {
         return m_refresh_rate_hz;
     }
 
-    // True when the duplicated output is currently in an HDR colour space
-    // (DXGI_OUTPUT_DESC1.ColorSpace == RGB_FULL_G2084_NONE_P2020). Available
-    // after Open(). This gates use of the reported peak luminance: a display in
-    // SDR mode reports its EDID luminance caps, which are not the active tone-
-    // map reference.
+    // True when the duplicated output is currently in an HDR colour space, i.e.
+    // PQ over BT.2020 in either range (see recorder_core::IsHdrColorSpace).
+    // Available after Open(). This gates use of the reported peak luminance: a
+    // display in SDR mode reports its EDID luminance caps, which are not the
+    // active tone-map reference.
     bool HdrActive() const noexcept {
         return m_hdr_active;
     }
