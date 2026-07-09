@@ -1485,12 +1485,6 @@ void MainWindow::openCrashReportOverlay() {
             crash_overlay_->closeOverlay();
     });
 
-    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::restartRequested, this, [this]() {
-        relaunch_requested_ = true;
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User chose Restart ExoSnap"));
-        qApp->quit();
-    });
-
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::reportOnGitHubRequested, this, [this, model]() {
         services::CrashIssueData data;
         data.app_version = model.version;

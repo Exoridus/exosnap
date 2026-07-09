@@ -55,7 +55,6 @@ class CrashReportPanel : public QWidget {
 
   signals:
     void sendReportRequested();
-    void restartRequested();
     void reportOnGitHubRequested();
     void openCrashFolderRequested();
     void dontSendRequested();

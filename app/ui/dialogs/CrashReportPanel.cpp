@@ -248,9 +248,12 @@ QWidget* CrashReportPanel::buildChromeBar() {
     auto* bar = new QWidget(this);
     bar->setObjectName(QStringLiteral("crashChromeBar"));
     bar->setFixedHeight(38);
+    // The surface colour, not the window colour: over the overlay's dimmed backdrop the
+    // window colour is indistinguishable from the backdrop, so the bar read as floating
+    // outside the card. A hairline below it still separates chrome from body.
     bar->setStyleSheet(QStringLiteral("#crashChromeBar { background:%1; border-bottom:1px solid %2; "
                                       "border-top-left-radius:14px; border-top-right-radius:14px; }")
-                           .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().bg),
+                           .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf),
                                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
 
     auto* layout = new QHBoxLayout(bar);
@@ -533,12 +536,15 @@ QWidget* CrashReportPanel::buildActionsRow() {
     connect(send_btn, &QPushButton::clicked, this, &CrashReportPanel::sendReportRequested);
     layout->addWidget(send_btn);
 
-    // Tier 2 — secondary "Restart ExoSnap" (outline). Matches the recording-error
-    // panel's outline secondary so both surfaces share one button language.
-    auto* restart_btn = new QPushButton(QStringLiteral("Restart ExoSnap"), row);
-    restart_btn->setObjectName(QStringLiteral("crashRestartButton"));
-    restart_btn->setCursor(Qt::PointingHandCursor);
-    restart_btn->setStyleSheet(
+    // Tier 2 — secondary decline (outline). This panel is shown on the launch *after*
+    // the crash, so the app is already running: offering a restart would throw away the
+    // session the user just opened. Declining dismisses the report, exactly like the
+    // chrome-bar ×. Matches the recording-error panel's outline secondary so both
+    // surfaces share one button language.
+    auto* decline_btn = new QPushButton(QStringLiteral("Don't send"), row);
+    decline_btn->setObjectName(QStringLiteral("crashDeclineButton"));
+    decline_btn->setCursor(Qt::PointingHandCursor);
+    decline_btn->setStyleSheet(
         QStringLiteral(
             "QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; padding:0 16px; "
             "min-height:34px; max-height:34px; font-size:12.5px; font-weight:500; }"
@@ -548,8 +554,8 @@ QWidget* CrashReportPanel::buildActionsRow() {
                  exosnap::ui::theme::ActiveTheme().line3_override
                      ? QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line3_override)
                      : QStringLiteral("rgba(255, 255, 255, 0.20)")));
-    connect(restart_btn, &QPushButton::clicked, this, &CrashReportPanel::restartRequested);
-    layout->addWidget(restart_btn);
+    connect(decline_btn, &QPushButton::clicked, this, &CrashReportPanel::dontSendRequested);
+    layout->addWidget(decline_btn);
 
     layout->addStretch(1);
 

@@ -101,12 +101,6 @@ class MainWindow : public QMainWindow {
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
-    // CRASH-WIRE-R1: true when the crash dialog's "Restart ExoSnap" was chosen.
-    // main() reads this after app.exec() to relaunch a detached instance.
-    [[nodiscard]] bool relaunchRequested() const noexcept {
-        return relaunch_requested_;
-    }
-
     // ELEVATION-FOUNDATION-R1 (ADR 0033): true when the user accepted the
     // "relaunch as administrator" offer. main() reads this after app.exec() and
     // relaunches elevated (ShellExecuteEx/runas) instead of detached, reusing the
@@ -446,7 +440,6 @@ class MainWindow : public QMainWindow {
     // CRASH-WIRE-R1 (ADR 0017): crash-capture session lifecycle.
     std::string crash_dir_;
     std::optional<crash_capture::SessionContext> pending_crash_;
-    bool relaunch_requested_ = false;
 
     // ELEVATION-FOUNDATION-R1 (ADR 0033): elevated self-relaunch handoff state.
     bool elevated_relaunch_requested_ = false;
