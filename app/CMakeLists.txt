@@ -1774,6 +1774,7 @@ exosnap_add_gtest(
     TEST_PREFIX crash.update.proof.
     SOURCES
         tests/crash_update_visual_proof.cpp
+        ui/dialogs/CrashReportOverlay.cpp
         ui/dialogs/CrashReportPanel.cpp
         ui/dialogs/UpdateSettingsPanel.cpp
         ui/brand/BrandMarkWidget.cpp

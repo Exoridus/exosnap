@@ -180,6 +180,10 @@ QWidget* makeReportLine(const QString& key, const QString& value, QWidget* paren
 CrashReportPanel::CrashReportPanel(const CrashReportModel& model, QWidget* parent) : QWidget(parent), model_(model) {
     setObjectName(QStringLiteral("crashReportCard"));
     setFixedWidth(460);
+    // A plain QWidget ignores its stylesheet background unless told to paint one. As a
+    // top-level window Qt fills the background anyway, which is why this went unnoticed;
+    // embedded in the overlay the card vanished and its contents sat on the backdrop.
+    setAttribute(Qt::WA_StyledBackground, true);
     // The card is the styled surface; the chrome bar + bug tile read against it.
     setStyleSheet(QStringLiteral("#crashReportCard { background:%1; border:1px solid %2; border-radius:14px; }")
                       .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf),

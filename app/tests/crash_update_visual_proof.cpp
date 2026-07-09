@@ -33,6 +33,7 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QPainter>
+#include <QPalette>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSize>
@@ -40,6 +41,7 @@
 #include <QStringList>
 #include <QWidget>
 
+#include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/CrashReportPanel.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
 #include "ui/theme/ExoSnapTheme.h"
@@ -192,6 +194,54 @@ TEST_F(CrashUpdateVisualProofTest, Crash_NextLaunch) {
     CrashReportPanel panel(baseModel(), nullptr);
     const bool saved = renderAndSave(panel, QStringLiteral("01-crash-next-launch.png"));
     EXPECT_TRUE(saved);
+}
+
+// The proofs above render the panel alone, where Qt paints a top-level window
+// background regardless. In the app the panel is a child of CrashReportOverlay, and a
+// plain QWidget child paints no stylesheet background unless WA_StyledBackground is set
+// — so the card vanished and its contents sat loose on the backdrop. Render it as a
+// child, because that is what the user sees on the next launch.
+TEST_F(CrashUpdateVisualProofTest, Crash_InsideOverlayAsShownOnLaunch) {
+    QWidget host;
+    host.setObjectName(QStringLiteral("crashProofHost"));
+    host.resize(1280, 860);
+
+    auto* overlay = new ui::dialogs::CrashReportOverlay(baseModel(), &host);
+    overlay->setGeometry(host.rect());
+    overlay->openOverlay();
+
+    const bool saved = renderAndSave(host, QStringLiteral("06-crash-overlay-in-window.png"));
+    EXPECT_TRUE(saved);
+}
+
+// Pins the card's surface, not the attribute that produces it: a panel embedded in a
+// parent must paint its own background over that parent, or it is not a card.
+TEST_F(CrashUpdateVisualProofTest, Crash_CardPaintsItsSurfaceWhenEmbedded) {
+    QWidget host;
+    host.resize(700, 1100);
+    // Palette, not stylesheet: a plain QWidget would not paint a stylesheet background
+    // either — the very bug under test.
+    host.setAutoFillBackground(true);
+    QPalette host_palette = host.palette();
+    host_palette.setColor(QPalette::Window, QColor(0xff, 0x00, 0xff)); // a colour the card never uses
+    host.setPalette(host_palette);
+
+    auto* panel = new CrashReportPanel(baseModel(), &host);
+    panel->move(0, 0);
+    settleLayout(host);
+    host.move(-20000, -20000);
+    host.show();
+    settleLayout(host);
+
+    const QImage shot = host.grab().toImage();
+    const QColor magenta(0xff, 0x00, 0xff);
+    // Sample the card's own padding: inside its border, below the chrome bar, left of
+    // every child widget. Only the card itself can paint here.
+    const int y = 120;
+    for (const int x : {5, 8, 12}) {
+        EXPECT_NE(shot.pixelColor(x, y), magenta)
+            << "at x=" << x << ": the card does not paint its surface; the parent shows through";
+    }
 }
 
 TEST_F(CrashUpdateVisualProofTest, Crash_RecordingSecured) {
