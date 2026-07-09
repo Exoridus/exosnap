@@ -423,8 +423,17 @@ void PreviewSurface::setWebcamFrame(QImage frame) {
     if (!frame.isNull() && frame.format() != QImage::Format_ARGB32 && frame.format() != QImage::Format_RGB32) {
         frame = frame.convertToFormat(QImage::Format_ARGB32);
     }
-    if (!frame.isNull() && frame.width() > 0 && frame.height() > 0)
-        webcam_aspect_ratio_ = static_cast<double>(frame.width()) / static_cast<double>(frame.height());
+    if (!frame.isNull() && frame.width() > 0 && frame.height() > 0) {
+        const double new_ar = static_cast<double>(frame.width()) / static_cast<double>(frame.height());
+        // The default PiP rect is a guess derived from the *requested* resolution, which
+        // often differs from what the camera actually delivers (e.g. a 4:3 sensor crop
+        // served when 16:9 was asked for). Once the real frame aspect is known, re-fit
+        // the box to it so the feed is shown at its true shape instead of stretched.
+        const bool aspect_changed = std::abs(new_ar - webcam_aspect_ratio_) > 0.001;
+        webcam_aspect_ratio_ = new_ar;
+        if (aspect_changed && aspect_ratio_locked_)
+            snapOverlayRectToCurrentAspect();
+    }
     webcam_frame_ = std::move(frame);
     syncWebcamOverlayToDxgi();
     if (webcam_enabled_)

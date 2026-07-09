@@ -1633,6 +1633,25 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     }
     updateWebcamOverlay();
     syncWebcamPreviewCapture();
+
+    // Keep the Record dock's webcam toggle in step with the enable state, even when the
+    // change came from the Settings panel (not from clicking the dock toggle itself).
+    // Otherwise enabling the webcam in Settings makes the PiP appear while the dock
+    // toggle still reads "off", which looks like the camera turned on by itself.
+    if (transport_dock_) {
+        const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+        const bool failed = (view_model_.state == UiRecordingState::Failed);
+        transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled,
+                                        !(blocked || failed));
+    }
+}
+
+void RecordPage::setSettingsWebcamPreviewActive(bool active) {
+    // The Settings webcam panel is a consumer of the single shared capture. Registering
+    // it keeps the one reader alive while the user is on the Settings page (Record page
+    // hidden), so the panel sees the same frames without opening a competing reader.
+    if (coordinator_)
+        coordinator_->SetWebcamSettingsPreviewActive(active);
 }
 
 void RecordPage::updateWebcamOverlay() {
@@ -2334,9 +2353,14 @@ void RecordPage::initCoordinator() {
 
     // Live webcam frames feed the preview PiP (Qt paint or DXGI overlay). The
     // coordinator marshals these onto the main thread.
-    coordinator_->SetWebcamFrameCallback([safeSurface](QImage frame) {
+    coordinator_->SetWebcamFrameCallback([this, safeSurface](QImage frame) {
+        // Fan the single shared capture out to both consumers: the Record PiP overlay
+        // and (via webcamFrameReady → MainWindow → Settings panel) the Settings preview.
+        // The Settings panel no longer opens its own reader, so there is only ever one
+        // capture on the device.
         if (safeSurface)
-            safeSurface->setWebcamFrame(std::move(frame));
+            safeSurface->setWebcamFrame(frame);
+        emit webcamFrameReady(frame);
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
 

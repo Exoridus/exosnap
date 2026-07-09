@@ -2325,6 +2325,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 webcam_settings_ = settings;
                 emit webcamSettingsChanged(webcam_settings_);
             });
+    // Relay the panel's shared-capture consumer request out to MainWindow (→ coordinator).
+    connect(webcam_setup_panel_, &ui::widgets::WebcamSetupPanel::previewActiveRequested, this,
+            &ConfigPage::webcamPreviewActiveRequested);
     // Preset management connections — overflow menu.
     connect(save_preset_action_, &QAction::triggered, this, &ConfigPage::onSavePreset);
     connect(save_preset_as_action_, &QAction::triggered, this, &ConfigPage::onSavePresetAs);
@@ -5378,6 +5381,11 @@ void ConfigPage::setWebcamSettings(const WebcamSettings& settings) {
     webcam_settings_ = settings;
     if (webcam_setup_panel_)
         webcam_setup_panel_->applySettings(settings);
+}
+
+void ConfigPage::setWebcamPreviewFrame(const QImage& frame) {
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->setPreviewFrame(frame);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)

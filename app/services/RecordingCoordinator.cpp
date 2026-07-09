@@ -573,11 +573,16 @@ void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
     SyncWebcamService(false);
 }
 
+void RecordingCoordinator::SetWebcamSettingsPreviewActive(bool active) {
+    webcam_settings_preview_active_ = active;
+    SyncWebcamService(false);
+}
+
 void RecordingCoordinator::SyncWebcamService(bool force_restart) {
     // Recording always owns the device; while idle the capture runs only when the
     // Record preview asked for it (live Ready PiP) and webcam is enabled.
     const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
-                              (is_recording_.load() || webcam_preview_active_);
+                              (is_recording_.load() || webcam_preview_active_ || webcam_settings_preview_active_);
     if (!want_running) {
         webcam_service_.Stop();
         return;
@@ -887,9 +892,14 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
     if (webcam_settings_.enabled && !webcam_settings_.device_id.empty()) {
-        webcam_service_.Stop();
-        webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
-                              webcam_settings_.fps);
+        // Keep the already-running shared capture (the live PiP preview) instead of
+        // stopping and restarting it, which blanks the webcam for a moment right as
+        // recording begins. Settings changes before this point already restarted the
+        // capture via SyncWebcamService, so a running reader is current; only start one
+        // if none is running.
+        if (!webcam_service_.IsRunning())
+            webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
+                                  webcam_settings_.fps);
     } else {
         webcam_service_.Stop();
     }

@@ -131,6 +131,11 @@ class RecordingCoordinator {
     // Record preview can show a live PiP.  Recording always owns the device; this
     // only affects the Ready/idle state.  Idempotent and safe to call repeatedly.
     void SetWebcamPreviewActive(bool active);
+    // Same, but for the Settings webcam panel. The one shared capture runs while ANY
+    // consumer (recording, Record preview, or the Settings preview) wants it, so the
+    // Settings panel shows the exact same frames without opening a second reader — no
+    // device-lock fight, and it works while recording. Idempotent.
+    void SetWebcamSettingsPreviewActive(bool active);
     void StopRecording();
     void PauseRecording();
     void ResumeRecording();
@@ -289,6 +294,7 @@ class RecordingCoordinator {
     WebcamService webcam_service_;
     // Record preview requested the idle webcam capture (Ready-state live PiP).
     bool webcam_preview_active_ = false;
+    bool webcam_settings_preview_active_ = false;
     bool has_output_target_context_ = false;
     FilenameTargetContext output_target_context_;
 

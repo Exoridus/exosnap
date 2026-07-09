@@ -1,4 +1,5 @@
 #pragma once
+#include <QImage>
 #include <QWidget>
 
 #include "../../../libs/capability/include/capability/audio_ui_state.h"
@@ -70,6 +71,9 @@ class ConfigPage : public QWidget {
     void setOutputFolder(const std::filesystem::path& folder);
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
+    // Push a frame from the single shared webcam capture to the embedded webcam panel,
+    // which renders it (with its own mirror) instead of opening a second reader.
+    void setWebcamPreviewFrame(const QImage& frame);
     void setReadinessStatus(const QString& status_label);
     // Delivers the async-probed runtime capabilities so the expert 4:4:4 chroma
     // gate can consult the ACTIVE GPU's real YUV444 support (per codec) instead
@@ -160,6 +164,8 @@ class ConfigPage : public QWidget {
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
+    // Relayed from the embedded webcam panel: it wants the shared capture to run/stop.
+    void webcamPreviewActiveRequested(bool active);
     void diagnosticsRequested();
     void webcamDetailsRequested();
 

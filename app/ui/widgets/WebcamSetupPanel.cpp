@@ -151,12 +151,6 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     connect(mirror_toggle_, &ExoToggle::toggled, this, &WebcamSetupPanel::onMirrorToggled);
     connect(rescan_btn_, &QPushButton::clicked, this, &WebcamSetupPanel::onRescan);
 
-    // Preview frame callback: marshals to main thread via the Qt event loop.
-    preview_service_.SetFrameCallback([guard = QPointer<WebcamSetupPanel>(this)](QImage img) {
-        if (guard)
-            guard->onPreviewFrame(std::move(img));
-    });
-
     // Watchdog: surface a non-technical hint if no frame arrives after 3 s.
     watchdog_ = new QTimer(this);
     watchdog_->setSingleShot(true);
@@ -173,7 +167,14 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 }
 
 WebcamSetupPanel::~WebcamSetupPanel() {
-    stopPreview();
+    // Do NOT call stopPreview() here: it emits previewActiveRequested, and relaying a
+    // signal out of a destructor while Qt tears down the parent widget tree can re-enter
+    // a half-destroyed receiver (observed as an access violation in ConfigPage teardown).
+    // The capture consumer is released implicitly — Qt drops this object's connections on
+    // teardown, and the shared capture is only ever destroyed at app shutdown. Just stop
+    // the local watchdog timer.
+    if (watchdog_)
+        watchdog_->stop();
 }
 
 void WebcamSetupPanel::showEvent(QShowEvent* event) {
@@ -442,7 +443,7 @@ void WebcamSetupPanel::refreshFormats() {
 }
 
 void WebcamSetupPanel::startPreview() {
-    // Visual-test mode drives the preview deterministically; never open a real device.
+    // Visual-test mode drives the preview deterministically; never request capture.
     if (visual_test_mode_)
         return;
     if (watchdog_)
@@ -452,10 +453,12 @@ void WebcamSetupPanel::startPreview() {
 
     const QString dev_id = device_combo_->currentData().toString();
     const bool has_device = !dev_id.isEmpty();
-    // Coupled to the enable state: open the camera only when enabled AND a device
-    // exists — never merely from the panel becoming visible.
+    // Coupled to the enable state: request the shared capture only when enabled AND a
+    // device exists — never merely from the panel becoming visible. The panel does not
+    // open its own reader; MainWindow relays this request to the coordinator, which owns
+    // the single shared capture, and pushes frames back via setPreviewFrame().
     if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device)) {
-        preview_service_.Stop();
+        emit previewActiveRequested(false);
         if (camera_preview_) {
             camera_preview_->clearFrame();
             camera_preview_->setPlaceholderText(!has_device
@@ -465,17 +468,12 @@ void WebcamSetupPanel::startPreview() {
         return;
     }
 
-    const auto combo_data = resolution_combo_->currentData().toList();
-    const int w = (combo_data.size() >= 2) ? combo_data[0].toInt() : current_settings_.width;
-    const int h = (combo_data.size() >= 2) ? combo_data[1].toInt() : current_settings_.height;
-
     if (camera_preview_) {
         camera_preview_->clearFrame();
         camera_preview_->setPlaceholderText(QStringLiteral("Camera preview"));
     }
 
-    preview_service_.Stop();
-    preview_service_.Start(dev_id.toStdString(), w > 0 ? w : 1280, h > 0 ? h : 720, 30);
+    emit previewActiveRequested(true);
     if (watchdog_)
         watchdog_->start();
 }
@@ -483,10 +481,22 @@ void WebcamSetupPanel::startPreview() {
 void WebcamSetupPanel::stopPreview() {
     if (watchdog_)
         watchdog_->stop();
-    preview_service_.Stop();
+    emit previewActiveRequested(false);
     preview_frame_seen_ = false;
     if (camera_preview_)
         camera_preview_->clearFrame();
+}
+
+void WebcamSetupPanel::setPreviewFrame(const QImage& frame) {
+    // A frame from the shared capture. Ignore it unless this panel currently wants a
+    // preview for a selected device (avoids painting a stray frame after the user turns
+    // the webcam off or while no device is chosen). CameraPreview applies the mirror.
+    if (visual_test_mode_ || !camera_preview_ || !isVisible())
+        return;
+    const bool has_device = !device_combo_->currentData().toString().isEmpty();
+    if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device))
+        return;
+    onPreviewFrame(frame);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)

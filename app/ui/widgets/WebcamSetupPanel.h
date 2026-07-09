@@ -48,6 +48,14 @@ class WebcamSetupPanel : public QWidget {
     // unavailable is false.
     void setMfUnavailable(bool unavailable);
 
+    // The panel no longer opens its own camera reader; it is a pure viewer of the
+    // single shared capture owned by the RecordingCoordinator. MainWindow pushes each
+    // frame here (the panel applies its own mirror via CameraPreview), so the Settings
+    // preview and the Record PiP share one reader — no device-lock fight, and it works
+    // during recording. Frames for a different device than the one currently selected
+    // are ignored to avoid briefly showing the wrong camera.
+    void setPreviewFrame(const QImage& frame);
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Deterministic visual-test state: suppresses real capture and injects a
     // synthetic frame (available) or an honest unavailable placeholder, plus the
@@ -62,6 +70,10 @@ class WebcamSetupPanel : public QWidget {
     // refreshDevices() directly.  MainWindow connects this before the panel is
     // shown for the first time.
     void rescanRequested();
+    // Emitted when the panel wants the shared webcam capture to run (visible + enabled +
+    // a device is selected) or to stop. MainWindow relays this to the coordinator as a
+    // capture consumer, so the one reader stays alive while the Settings preview needs it.
+    void previewActiveRequested(bool active);
 
   private slots:
     void onEnableToggled(bool enabled);
@@ -81,7 +93,6 @@ class WebcamSetupPanel : public QWidget {
     void stopPreview();
     WebcamSettings collectSettings() const;
 
-    WebcamService preview_service_;
     std::vector<WebcamDeviceInfo> devices_;
     std::vector<WebcamFormat> formats_;
     WebcamSettings current_settings_;
