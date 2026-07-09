@@ -18,6 +18,21 @@ using recorder_core::SessionState;
 using recorder_core::SessionStatsCollector;
 using recorder_core::StatsCallback;
 
+// Sleeping for "long enough" and then asserting the tick happened is a race: under
+// `ctest -j 16` the collector thread may not get the CPU inside a fixed window, and the
+// test fails on healthy code. Wait for the condition instead. The generous ceiling only
+// bounds a genuinely stuck collector; a healthy one satisfies the predicate in a tick.
+template <typename Predicate>
+bool WaitFor(Predicate pred, std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return pred();
+}
+
 // ---------------------------------------------------------------------------
 // MeterSnapshot unit tests (no threading)
 // ---------------------------------------------------------------------------
@@ -62,11 +77,10 @@ TEST(SessionStatsMeterCollectorTest, MeterCallback_InvokedWithCorrectRms) {
 
     SessionStatsCollector collector(state);
     collector.Start();
-    // 33 ms cadence; 100 ms gives ~3 ticks
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const bool fired = WaitFor([&] { return received.load(); });
     collector.Stop();
 
-    ASSERT_TRUE(received.load());
+    ASSERT_TRUE(fired) << "the meter callback never fired";
     EXPECT_FLOAT_EQ(captured.per_track_rms[0], 0.7f);
     EXPECT_FLOAT_EQ(captured.per_track_rms[1], 0.0f);
     EXPECT_FLOAT_EQ(captured.per_track_rms[2], 0.4f);
@@ -82,10 +96,11 @@ TEST(SessionStatsMeterCollectorTest, MeterCallback_FiresMoreFrequentlyThanStatsC
 
     SessionStatsCollector collector(state);
     collector.Start();
-    // 8 meter ticks per stats tick; 300 ms → ~9 meter ticks, ~1 stats tick
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // 8 meter ticks per stats tick, so one stats tick implies several meter ticks.
+    const bool fired = WaitFor([&] { return stats_count.load() >= 1; });
     collector.Stop();
 
+    ASSERT_TRUE(fired) << "the stats callback never fired";
     EXPECT_GT(meter_count.load(), stats_count.load());
     EXPECT_GE(meter_count.load(), 2);
 }
@@ -94,11 +109,17 @@ TEST(SessionStatsMeterCollectorTest, MeterCallback_NullDoesNotCrash) {
     SessionState state{};
     state.meter_callback = nullptr;
 
+    // A stats callback proves a tick actually ran. Without it this test could pass
+    // having never reached the null meter callback at all.
+    std::atomic<int> stats_count{0};
+    state.stats_callback = [&](const recorder_core::SessionStats&) { ++stats_count; };
+
     SessionStatsCollector collector(state);
     collector.Start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    const bool ticked = WaitFor([&] { return stats_count.load() >= 1; });
     collector.Stop();
-    // Must complete without crash or hang
+
+    ASSERT_TRUE(ticked) << "no tick ran, so the null meter callback was never exercised";
 }
 
 TEST(SessionStatsMeterCollectorTest, StatsCallback_StillFiredAtLowerCadence) {
@@ -109,10 +130,10 @@ TEST(SessionStatsMeterCollectorTest, StatsCallback_StillFiredAtLowerCadence) {
 
     SessionStatsCollector collector(state);
     collector.Start();
-    // 8 × 33 ms = 264 ms per stats tick; 600 ms gives headroom for Windows timer jitter
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    const bool fired = WaitFor([&] { return stats_count.load() >= 1; });
     collector.Stop();
 
+    EXPECT_TRUE(fired);
     EXPECT_GE(stats_count.load(), 1);
 }
 
@@ -130,10 +151,10 @@ TEST(SessionStatsMeterCollectorTest, MeterCallback_ZeroRmsWhenNoAudio) {
 
     SessionStatsCollector collector(state);
     collector.Start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const bool fired = WaitFor([&] { return received.load(); });
     collector.Stop();
 
-    ASSERT_TRUE(received.load());
+    ASSERT_TRUE(fired) << "the meter callback never fired";
     for (float v : captured.per_track_rms) {
         EXPECT_FLOAT_EQ(v, 0.0f);
     }
