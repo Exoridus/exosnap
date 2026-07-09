@@ -22,6 +22,7 @@
 #include <QEventLoop>
 #include <QFrame>
 #include <QImage>
+#include <QMainWindow>
 #include <QPainter>
 #include <QPixmap>
 #include <QSize>
@@ -156,6 +157,87 @@ TEST_F(RecoveryOverlayVisualProofTest, RecoveryCard) {
     auto* card = overlay->findChild<QFrame*>(QStringLiteral("recoveryCard"));
     ASSERT_NE(card, nullptr);
     EXPECT_TRUE(renderAndSave(*card, QStringLiteral("recovery-overlay.png")));
+}
+
+// Faithful live-context render: reproduce the app exactly — parent the overlay to
+// a `mainCentral` widget inside a real QMainWindow at the shipping window size, show
+// it, openOverlay(), and render the card WITHOUT calling adjustSize()/resize() on it.
+// The shipping RecoveryCard test force-sizes the card to its sizeHint (which hides
+// any layout-driven collapse); this test lets the overlay's own layout size the card,
+// exactly like MainWindow::checkAndShowRecoveryOverlay(). Uses the real long crash
+// filename to also exercise the info-row width.
+TEST_F(RecoveryOverlayVisualProofTest, RecoveryCardLiveContext) {
+    QTemporaryDir tmp;
+    RecoveryManifestStore store(tmp.path() + QStringLiteral("/manifest.json"));
+    RecoveryService service(store);
+
+    const QVector<RecoveryCandidate> candidates = {
+        MakeCandidate(QStringLiteral("id-live"),
+                      QStringLiteral("C:/Users/test/Videos/2026-07-09_02-43-44_Desktop_Display 2.mkv"), 904LL * 1024,
+                      QStringLiteral("mkv"), /*finalized=*/false),
+    };
+
+    QMainWindow window;
+    auto* central = new QWidget();
+    central->setObjectName(QStringLiteral("mainCentral"));
+    window.setCentralWidget(central);
+    window.resize(1450, 760);
+    window.move(-20000, -20000);
+    window.show();
+
+    auto* overlay = new ui::dialogs::RecoveryOverlay(service, candidates, central);
+    overlay->openOverlay();
+
+    // Settle like a real show: pump the event queue a few times, but do NOT call
+    // adjustSize()/updateGeometry() on the card. The shipping RecoveryCard test force-
+    // settles the card to its sizeHint, which papers over the real bug: the overlay
+    // lays the card out before its action buttons are polished, sizing it too short,
+    // and the deficit compresses the action row (clipping the buttons). This mirrors
+    // the live show path (MainWindow::checkAndShowRecoveryOverlay → openOverlay).
+    for (int i = 0; i < 3; ++i)
+        QCoreApplication::processEvents(QEventLoop::AllEvents);
+
+    auto* card = overlay->findChild<QFrame*>(QStringLiteral("recoveryCard"));
+    ASSERT_NE(card, nullptr);
+    auto* action_row = overlay->findChild<QWidget*>(QStringLiteral("recoveryRowActions"));
+    ASSERT_NE(action_row, nullptr);
+
+    // Diagnostics — dump height / sizeHint / minimumSizeHint for the whole subtree so we
+    // can see exactly which widget reports a minimum shorter than its hint (that is the
+    // slack the layout compresses away).
+    for (const char* obj : {"recoveryCard", "recoveryTitle", "recoveryHint", "recoveryRowsContainer", "recoveryRow",
+                            "recoveryRowInfo", "recoveryRowActions", "recoveryFinishBtn"}) {
+        auto* w = overlay->findChild<QWidget*>(QString::fromUtf8(obj));
+        if (w == nullptr) {
+            std::printf("[live-ctx] %-22s <null>\n", obj);
+            continue;
+        }
+        std::printf("[live-ctx] %-22s h=%d hint=%d min=%d\n", obj, w->height(), w->sizeHint().height(),
+                    w->minimumSizeHint().height());
+    }
+    std::fflush(stdout);
+
+    // Render the card at its ACTUAL laid-out size (what the user sees): if the card is
+    // too short, the action row overflows the card's bounds and the buttons are clipped.
+    constexpr qreal dpr = 2.0;
+    const QSize wsize = card->size().expandedTo(QSize(1, 1));
+    QImage canvas(wsize * dpr, QImage::Format_ARGB32_Premultiplied);
+    canvas.setDevicePixelRatio(dpr);
+    canvas.fill(QColor(0x60, 0x60, 0x60));
+    QPixmap shot(wsize * dpr);
+    shot.setDevicePixelRatio(dpr);
+    shot.fill(Qt::transparent);
+    card->render(&shot, QPoint(), QRegion(), QWidget::DrawWindowBackground | QWidget::DrawChildren);
+    QPainter painter(&canvas);
+    painter.drawPixmap(QPoint(0, 0), shot);
+    painter.end();
+    EXPECT_TRUE(canvas.save(output_dir_ + QStringLiteral("/recovery-overlay-livectx.png"), "PNG"));
+
+    // Reproduction guard: the action row must not be compressed below its own minimum
+    // (which includes the 52px action buttons). This FAILS while the bug is present and
+    // is the pixel-level check the fix has to satisfy.
+    EXPECT_GE(action_row->height(), action_row->minimumSizeHint().height())
+        << "action row compressed below its minimum — buttons will be clipped";
 }
 
 TEST_F(RecoveryOverlayVisualProofTest, OutputDirectoryExists) {

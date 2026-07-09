@@ -392,7 +392,8 @@ recording:
   Resume starts the next recording slice aligned with the per-segment machinery. A 1–2 s data loss at
   the crash boundary is accepted and visible as the slice boundary. At most one Continue session can
   be armed at a time; choosing Continue on a second candidate finalizes the first.
-- **Delete** — an inline two-step confirm that permanently removes the artefact.
+- **Delete** — an inline two-step confirm that permanently removes the artefact. It is visually set
+  apart from the safe Finish/Continue actions (right-aligned, destructive tint) to avoid mis-clicks.
 - **Decide later** — an explicit text button; entries stay in the manifest and the overlay re-shows
   at the next launch.
 
