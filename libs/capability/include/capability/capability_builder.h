@@ -11,6 +11,14 @@ class CapabilityBuilder {
 
     static RuntimeCapabilitySnapshot QueryRuntimeFacts();
 
+    // Just the per-display facts (HDR colour space, bit depth, primaries, luminance).
+    //
+    // QueryRuntimeFacts() runs once at startup and its display facts go stale as soon as
+    // the user toggles Windows HDR or Advanced Color — neither changes screen geometry,
+    // so nothing notices. This is the cheap re-read: DXGI enumeration plus GetDesc1, with
+    // none of the expensive probes (no NVENC session, no Media Foundation).
+    static std::vector<DisplayHdrFacts> QueryDisplayFacts();
+
     static CapabilitySet BuildEffectiveCapabilities(const RuntimeCapabilitySnapshot& snapshot);
 
     static CapabilitySet BuildFromHardwareQuery();

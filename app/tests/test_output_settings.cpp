@@ -17,6 +17,8 @@
 #include "models/OutputSettingsModel.h"
 #include "services/RecordingCoordinator.h"
 
+#include <capability/capability_builder.h>
+
 namespace exosnap {
 
 void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings);
@@ -1145,6 +1147,55 @@ TEST(OutputDirOverrideTest, OverrideEmptyString_ReturnsConfiguredDir) {
     EXPECT_EQ(coordinator.EffectiveOutputFolder(), configured);
 
     qunsetenv("EXOSNAP_OUTPUT_DIR");
+}
+
+// ---------------------------------------------------------------------------
+// Display HDR facts must not go stale (the startup capability query runs once)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+capability::DisplayHdrFacts MakeDisplay(const char* name, bool hdr_active) {
+    capability::DisplayHdrFacts d;
+    d.name = name;
+    d.hdr_active = hdr_active;
+    return d;
+}
+
+} // namespace
+
+TEST(DisplayFactsRefreshTest, RefreshReplacesTheStartupSnapshot) {
+    RecordingCoordinator coordinator;
+
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.runtime.displays = {MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/false)};
+    coordinator.OnCapabilitiesReady(caps, capability::ResolveResult{});
+    ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
+    EXPECT_FALSE(coordinator.DisplayFacts()[0].hdr_active);
+
+    // The user turns Windows HDR on. Screen geometry does not change, so nothing notices.
+    coordinator.SetDisplayFactsProvider(
+        [] { return std::vector<capability::DisplayHdrFacts>{MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/true)}; });
+    coordinator.RefreshDisplayFacts();
+
+    ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
+    EXPECT_TRUE(coordinator.DisplayFacts()[0].hdr_active) << "the refresh must reach the facts the reconcile reads";
+}
+
+// A failed DXGI query returns nothing. Treating that as "every display went SDR" would
+// silently drop HDR metadata from a recording that should carry it.
+TEST(DisplayFactsRefreshTest, AnEmptyQueryKeepsThePreviousFacts) {
+    RecordingCoordinator coordinator;
+
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.runtime.displays = {MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/true)};
+    coordinator.OnCapabilitiesReady(caps, capability::ResolveResult{});
+
+    coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
+    coordinator.RefreshDisplayFacts();
+
+    ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
+    EXPECT_TRUE(coordinator.DisplayFacts()[0].hdr_active);
 }
 
 } // namespace

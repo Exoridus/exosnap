@@ -531,4 +531,10 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     return snapshot;
 }
 
+std::vector<DisplayHdrFacts> CapabilityBuilder::QueryDisplayFacts() {
+    std::vector<DisplayHdrFacts> displays;
+    ProbeDisplays(displays);
+    return displays;
+}
+
 } // namespace exosnap::capability
