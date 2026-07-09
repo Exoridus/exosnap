@@ -18,6 +18,7 @@ struct InternalState {
     std::deque<LogRecord> ringBuffer;
     std::size_t ringCapacity = 512;
     LogLevel minimumLevel = LogLevel::Info;
+    LogSink sink;
     bool initialized = false;
 };
 
@@ -50,6 +51,7 @@ void reset_state_locked(InternalState& s) noexcept {
         s.logger.reset();
     }
     s.ringBuffer.clear();
+    s.sink = nullptr;
     s.initialized = false;
 }
 
@@ -91,6 +93,7 @@ void initialize(const LoggerConfig& config) {
 
     s.ringCapacity = config.ringCapacity;
     s.minimumLevel = config.minimumLevel;
+    s.sink = config.sink;
     s.initialized = true;
 }
 
@@ -102,43 +105,52 @@ void shutdown() noexcept {
 
 void log(LogLevel level, std::string_view component, std::string_view message, std::span<const LogField> fields) {
     auto& s = state();
-    std::lock_guard lock(s.mutex);
-
-    if (!s.initialized) {
-        return;
-    }
-    if (static_cast<int>(level) < static_cast<int>(s.minimumLevel)) {
-        return;
-    }
 
     LogRecord record;
-    record.timestamp = std::chrono::system_clock::now();
-    record.level = level;
-    record.component = component;
-    record.message = message;
-    record.fields.assign(fields.begin(), fields.end());
+    LogSink sink;
+    {
+        std::lock_guard lock(s.mutex);
 
-    if (s.ringCapacity > 0) {
-        s.ringBuffer.push_back(record);
-        while (s.ringBuffer.size() > s.ringCapacity) {
-            s.ringBuffer.pop_front();
+        if (!s.initialized) {
+            return;
         }
+        if (static_cast<int>(level) < static_cast<int>(s.minimumLevel)) {
+            return;
+        }
+        record.timestamp = std::chrono::system_clock::now();
+        record.level = level;
+        record.component = component;
+        record.message = message;
+        record.fields.assign(fields.begin(), fields.end());
+
+        if (s.ringCapacity > 0) {
+            s.ringBuffer.push_back(record);
+            while (s.ringBuffer.size() > s.ringCapacity) {
+                s.ringBuffer.pop_front();
+            }
+        }
+
+        nlohmann::json j;
+        j["timestamp_unix_ms"] =
+            std::chrono::duration_cast<std::chrono::milliseconds>(record.timestamp.time_since_epoch()).count();
+        j["level"] = to_string(record.level);
+        j["component"] = record.component;
+        j["message"] = record.message;
+
+        nlohmann::json fieldsJson = nlohmann::json::object();
+        for (const auto& f : record.fields) {
+            fieldsJson[f.key] = f.value;
+        }
+        j["fields"] = fieldsJson;
+
+        s.logger->log(to_spdlog_level(level), j.dump());
+        sink = s.sink;
     }
 
-    nlohmann::json j;
-    j["timestamp_unix_ms"] =
-        std::chrono::duration_cast<std::chrono::milliseconds>(record.timestamp.time_since_epoch()).count();
-    j["level"] = to_string(record.level);
-    j["component"] = record.component;
-    j["message"] = record.message;
-
-    nlohmann::json fieldsJson = nlohmann::json::object();
-    for (const auto& f : record.fields) {
-        fieldsJson[f.key] = f.value;
+    // Outside the lock: a sink may block, marshal to another thread, or log again.
+    if (sink) {
+        sink(record);
     }
-    j["fields"] = fieldsJson;
-
-    s.logger->log(to_spdlog_level(level), j.dump());
 }
 
 std::vector<LogRecord> snapshot_ring_buffer() {

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -24,10 +25,18 @@ struct LogRecord {
     std::vector<LogField> fields;
 };
 
+// Receives every accepted record. Invoked on the thread that logged, outside the
+// logger's own lock, so a sink may block, marshal, or log again without deadlocking.
+using LogSink = std::function<void(const LogRecord&)>;
+
 struct LoggerConfig {
     std::filesystem::path filePath;
     std::size_t ringCapacity = 512;
     LogLevel minimumLevel = LogLevel::Info;
+    // Optional. The engine writes its own JSONL file regardless; a host sets this to
+    // also surface engine records in its own log. Without it the engine's decisions
+    // are invisible to the application.
+    LogSink sink;
 };
 
 std::string_view to_string(LogLevel level) noexcept;

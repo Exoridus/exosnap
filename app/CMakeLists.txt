@@ -285,6 +285,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
     diagnostics/AppLog.cpp
+    diagnostics/EngineLogBridge.h
+    diagnostics/EngineLogBridge.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -701,6 +703,21 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(error_message_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Engine -> AppLog bridge: drives the real InitializeEngineLogging() + a genuine
+# recorder_core::logging::log() call, so a green test means engine records really
+# reach the application log.
+exosnap_add_gtest(
+    NAME engine_log_bridge_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_engine_log_bridge.cpp
+        diagnostics/EngineLogBridge.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES recorder_core Qt6::Core
+)
+target_include_directories(engine_log_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(engine_log_bridge_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME output_settings_tests
