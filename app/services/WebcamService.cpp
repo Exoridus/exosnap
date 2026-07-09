@@ -146,17 +146,14 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         UINT32 len = 0;
         if (SUCCEEDED(devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, &sym.p,
                                                      &len))) {
-            if (device_id.empty() || WcharToString(sym.p) == device_id) {
+            if (!device_id.empty() && WcharToString(sym.p) == device_id) {
                 selected = devices[i];
                 selected->AddRef();
                 break;
             }
         }
     }
-    if (!selected && count > 0) {
-        selected = devices[0];
-        selected->AddRef();
-    }
+    // No silent devices[0] fallback: an empty/unmatched device_id opens nothing.
     for (UINT32 i = 0; i < count; ++i)
         devices[i]->Release();
     CoTaskMemFree(devices);
@@ -246,6 +243,29 @@ WebcamReadAction ClassifyWebcamReadResult(HRESULT hr, DWORD reader_flags, bool h
         return WebcamReadAction::Skip;
     }
     return WebcamReadAction::Deliver;
+}
+
+// Returns true if a freshly-read sample timestamp should be delivered — see the
+// header comment for the full rationale (drops stale frames replayed by a
+// reopened MF reader).
+bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_100ns) noexcept {
+    if (sample_100ns <= 0)
+        return true;
+    if (last_delivered_100ns < 0)
+        return true;
+    return sample_100ns > last_delivered_100ns;
+}
+
+// ---------------------------------------------------------------------------
+// Webcam device selection policy — pure, MF-call-free
+// ---------------------------------------------------------------------------
+
+std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::vector<WebcamDeviceInfo>& devices) {
+    if (!configured_id.empty())
+        return configured_id;
+    if (!devices.empty())
+        return devices.front().id;
+    return {};
 }
 
 // ---------------------------------------------------------------------------
@@ -342,17 +362,14 @@ std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& dev
         UINT32 len = 0;
         if (SUCCEEDED(devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, &sym.p,
                                                      &len))) {
-            if (device_id.empty() || WcharToString(sym.p) == device_id) {
+            if (!device_id.empty() && WcharToString(sym.p) == device_id) {
                 selected = devices[i];
                 selected->AddRef();
                 break;
             }
         }
     }
-    if (!selected && count > 0) {
-        selected = devices[0];
-        selected->AddRef();
-    }
+    // No silent devices[0] fallback: an empty/unmatched device_id opens nothing.
     for (UINT32 i = 0; i < count; ++i)
         devices[i]->Release();
     CoTaskMemFree(devices);
@@ -452,6 +469,19 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // DXGI OD in-place recovery (ADR 0013). Only Stop()/stop_token ends the loop.
     constexpr auto kReconnectDelay = std::chrono::milliseconds{500};
 
+    // Timestamp of the last sample accepted as fresh (MF 100ns units; see
+    // ShouldDeliverWebcamSample). Reset to "no frame yet" on every (re)open below
+    // because a new MF source restarts its own timeline — its first sample must
+    // always be accepted even if its timestamp is smaller than the old reader's.
+    long long last_delivered_ts = -1;
+
+    // Frame pacing (secondary fix): a reopened reader can have several buffered
+    // frames ready to drain immediately, which would otherwise be posted back to
+    // back — a visible burst/judder between reconnects. Cap posting at the
+    // requested fps, mirroring PreviewService.cpp's GetTickCount-based gate.
+    DWORD last_posted_ms = 0;
+    const DWORD min_post_interval_ms = fps > 0 ? static_cast<DWORD>(1000 / fps) : 0;
+
     // Outer loop: (re)open the device and drain it; on loss, fall back here to poll
     // a reopen. The last stored frame is NEVER cleared here, so it stays frozen for
     // the whole gap; has_frame_ is reset only by Stop().
@@ -462,6 +492,7 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             std::this_thread::sleep_for(kReconnectDelay);
             continue;
         }
+        last_delivered_ts = -1; // fresh reader: its first sample always passes.
 
         const int W = ctx->width;
         const int H = ctx->height;
@@ -471,8 +502,9 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         bool reader_lost = false;
         while (!stop.stop_requested() && !reader_lost) {
             DWORD flags = 0;
+            LONGLONG ts = 0;
             winrt::com_ptr<IMFSample> sample;
-            HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, &flags, nullptr, sample.put());
+            HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, &flags, &ts, sample.put());
 
             switch (ClassifyWebcamReadResult(hr, flags, sample != nullptr)) {
             case WebcamReadAction::Reconnect:
@@ -485,6 +517,15 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             case WebcamReadAction::Deliver:
                 break; // fall through to store the sample below
             }
+
+            if (!ShouldDeliverWebcamSample(last_delivered_ts, ts))
+                continue; // stale frame replayed by a reopened reader — drop it
+            last_delivered_ts = ts;
+
+            const DWORD now_ms = GetTickCount();
+            if (min_post_interval_ms > 0 && (now_ms - last_posted_ms) < min_post_interval_ms)
+                continue; // faster than the requested fps: drop, keep last frame
+            last_posted_ms = now_ms;
 
             winrt::com_ptr<IMFMediaBuffer> buf;
             if (FAILED(sample->ConvertToContiguousBuffer(buf.put())))

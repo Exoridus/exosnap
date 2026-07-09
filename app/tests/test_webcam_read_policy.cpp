@@ -63,4 +63,58 @@ TEST(WebcamReadPolicy, ErrorFlagWinsOverAStaleSample) {
               WebcamReadAction::Reconnect);
 }
 
+// ---------------------------------------------------------------------------
+// ResolveWebcamDeviceId (BUG 2: no silent devices[0] fallback)
+// ---------------------------------------------------------------------------
+
+TEST(ResolveWebcamDeviceIdTest, EmptyConfiguredWithDevicesReturnsFirst) {
+    const std::vector<WebcamDeviceInfo> devices = {{"A", "Cam A"}, {"B", "Cam B"}};
+    EXPECT_EQ(ResolveWebcamDeviceId("", devices), "A");
+}
+
+TEST(ResolveWebcamDeviceIdTest, ConfiguredPresentDeviceIsKept) {
+    const std::vector<WebcamDeviceInfo> devices = {{"A", "Cam A"}, {"B", "Cam B"}};
+    EXPECT_EQ(ResolveWebcamDeviceId("B", devices), "B");
+}
+
+TEST(ResolveWebcamDeviceIdTest, ConfiguredAbsentDeviceIsKeptForReconnect) {
+    // An explicit choice is kept even when momentarily absent, so it reconnects
+    // when plugged back in — it must NOT silently fall back to another device.
+    const std::vector<WebcamDeviceInfo> devices = {{"A", "Cam A"}, {"B", "Cam B"}};
+    EXPECT_EQ(ResolveWebcamDeviceId("X", devices), "X");
+}
+
+TEST(ResolveWebcamDeviceIdTest, EmptyConfiguredWithNoDevicesReturnsEmpty) {
+    EXPECT_EQ(ResolveWebcamDeviceId("", {}), "");
+}
+
+// ---------------------------------------------------------------------------
+// ShouldDeliverWebcamSample (BUG 3: timestamp monotonicity gate)
+// ---------------------------------------------------------------------------
+
+TEST(ShouldDeliverWebcamSampleTest, FirstFrameAlwaysPasses) {
+    // last_delivered_100ns < 0 means "no frame delivered yet".
+    EXPECT_TRUE(ShouldDeliverWebcamSample(-1, 12345));
+}
+
+TEST(ShouldDeliverWebcamSampleTest, NewerSamplePasses) {
+    EXPECT_TRUE(ShouldDeliverWebcamSample(1000, 2000));
+}
+
+TEST(ShouldDeliverWebcamSampleTest, EqualSampleIsDropped) {
+    EXPECT_FALSE(ShouldDeliverWebcamSample(1000, 1000));
+}
+
+TEST(ShouldDeliverWebcamSampleTest, OlderSampleIsDropped) {
+    // This is the "snap back several frames" glitch: a reopened reader replays
+    // buffered older frames — they must be dropped rather than delivered.
+    EXPECT_FALSE(ShouldDeliverWebcamSample(1000, 500));
+}
+
+TEST(ShouldDeliverWebcamSampleTest, NonPositiveSampleTimestampPasses) {
+    // No basis to reject when the sample carries no usable timestamp.
+    EXPECT_TRUE(ShouldDeliverWebcamSample(1000, 0));
+    EXPECT_TRUE(ShouldDeliverWebcamSample(1000, -5));
+}
+
 } // namespace

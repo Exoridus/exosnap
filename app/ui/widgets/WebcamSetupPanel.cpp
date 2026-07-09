@@ -198,8 +198,11 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
     if (camera_preview_)
         camera_preview_->setMirror(s.mirror);
 
+    // Resolved so an empty configured id pre-selects the first real camera instead
+    // of leaving the "(no camera)" placeholder selected.
+    const std::string want = ResolveWebcamDeviceId(s.device_id, devices_);
     for (int i = 0; i < device_combo_->count(); ++i) {
-        if (device_combo_->itemData(i).toString().toStdString() == s.device_id) {
+        if (device_combo_->itemData(i).toString().toStdString() == want) {
             device_combo_->setCurrentIndex(i);
             break;
         }
@@ -396,6 +399,12 @@ void WebcamSetupPanel::refreshDevices() {
     devices_ = WebcamService::EnumerateDevices();
     for (const auto& d : devices_)
         device_combo_->addItem(QString::fromStdString(d.name), QString::fromStdString(d.id));
+    const std::string resolved = ResolveWebcamDeviceId(current_settings_.device_id, devices_);
+    if (!resolved.empty()) {
+        const int idx = device_combo_->findData(QString::fromStdString(resolved));
+        if (idx >= 0)
+            device_combo_->setCurrentIndex(idx);
+    }
     suppress_signals_ = false;
     refreshFormats();
 }

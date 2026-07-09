@@ -576,7 +576,8 @@ void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
 void RecordingCoordinator::SyncWebcamService(bool force_restart) {
     // Recording always owns the device; while idle the capture runs only when the
     // Record preview asked for it (live Ready PiP) and webcam is enabled.
-    const bool want_running = webcam_settings_.enabled && (is_recording_.load() || webcam_preview_active_);
+    const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
+                              (is_recording_.load() || webcam_preview_active_);
     if (!want_running) {
         webcam_service_.Stop();
         return;
@@ -768,7 +769,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.output_path = output_path;
     config.split = split_settings_;
 
-    config.webcam.enabled = webcam_settings_.enabled;
+    config.webcam.enabled = webcam_settings_.enabled && !webcam_settings_.device_id.empty();
     config.webcam.frame_provider = &webcam_service_;
     config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
     config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
@@ -885,7 +886,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     split_pending_.store(false);
     session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
-    if (webcam_settings_.enabled) {
+    if (webcam_settings_.enabled && !webcam_settings_.device_id.empty()) {
         webcam_service_.Stop();
         webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
                               webcam_settings_.fps);

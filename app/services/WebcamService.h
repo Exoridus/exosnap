@@ -38,10 +38,26 @@ enum class WebcamReadAction {
 // read with a sample is Deliver.
 WebcamReadAction ClassifyWebcamReadResult(HRESULT hr, DWORD reader_flags, bool has_sample) noexcept;
 
+// Returns true if a freshly-read sample timestamp should be delivered: only
+// strictly-newer samples pass, so stale frames replayed by a reopened MF reader
+// (the "snap back several frames" glitch) are dropped. last_delivered_100ns is
+// the last delivered sample time (LONGLONG, MF 100ns units); a first frame
+// (last < 0) always passes; a non-positive/absent sample time (sample_100ns <= 0)
+// passes (no basis to reject).
+bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_100ns) noexcept;
+
 struct WebcamDeviceInfo {
     std::string id;
     std::string name;
 };
+
+// Chooses the webcam device id to select given the currently-configured id and
+// the available devices. An explicit choice (non-empty id) is always kept — even
+// if that device is momentarily absent — so it reconnects when plugged back in.
+// When nothing is chosen (empty id) and at least one camera exists, the first
+// device is returned so a fresh setup pre-selects a camera instead of leaving an
+// empty selection (which used to make capture silently grab the first device).
+std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::vector<WebcamDeviceInfo>& devices);
 
 struct WebcamFormat {
     int width = 0;
@@ -80,7 +96,8 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     void SetFrameCallback(FrameCallback cb);
 
     // Start capture; stops any existing capture first.
-    // device_id: MF symbolic link (from EnumerateDevices). Empty = first available.
+    // device_id: MF symbolic link (from EnumerateDevices). Empty opens no device
+    // (see ResolveWebcamDeviceId — callers must resolve a concrete id first).
     bool Start(const std::string& device_id, int width, int height, int fps);
 
     void Stop();
