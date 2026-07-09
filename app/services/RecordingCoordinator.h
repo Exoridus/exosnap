@@ -129,12 +129,6 @@ class RecordingCoordinator {
     // The display facts the coordinator currently holds. Exposed for tests.
     [[nodiscard]] const std::vector<capability::DisplayHdrFacts>& DisplayFacts() const;
 
-  private:
-    // Refreshes, then hands out the facts. The HDR reconcile reads through this rather
-    // than through the startup snapshot, so the refresh cannot be left out by accident.
-    const std::vector<capability::DisplayHdrFacts>& RefreshedDisplayFacts();
-
-  public:
     // Disk-space stop reason reported via the result when an auto-stop fires.
     // Exposed for tests.
     static const wchar_t* kDiskSpaceStopReason;
@@ -284,6 +278,10 @@ class RecordingCoordinator {
 
     // Low-disk guard (LOW-DISK-GUARD-R1)
     // Nullable injected provider; fallback to the Win32 implementation when nullptr.
+    // Refreshes, then hands out the facts. The HDR reconcile reads through this rather
+    // than through the startup snapshot, so the refresh cannot be left out by accident.
+    const std::vector<capability::DisplayHdrFacts>& RefreshedDisplayFacts();
+
     // Nullable; when unset RefreshDisplayFacts() queries DXGI directly.
     DisplayFactsProvider display_facts_provider_;
     diagnostics::IDiskSpaceProvider* disk_space_provider_ = nullptr;
