@@ -1450,6 +1450,17 @@ void VideoThread::Run() {
 
     // --- WGC frame pool and session (Window-only path) ---
     bool sourceLost = false;
+    // OD recovery hold state (Recover branch, i.e. DXGI_ERROR_ACCESS_LOST). While
+    // holding, the encode loop keeps emitting at CFR cadence (the last frame is
+    // held, not black) and retries Reopen() on a throttle instead of blocking —
+    // blocking froze the whole recording for the gap and never recovered a monitor
+    // that returned with a new HMONITOR. Cleared when Reopen() succeeds.
+    bool odHolding = false;
+    auto odLastReopenAttempt = std::chrono::steady_clock::now();
+    // True once a live screen frame has been captured into odCapturedTex, so it can
+    // be re-composited with a LIVE webcam/cursor during a hold (the webcam is an
+    // independent source and must keep running while the monitor is gone).
+    bool odHeldScreenValid = false;
     // How long to wait between Reopen() attempts after a recoverable OD acquire
     // loss. The retry itself is UNBOUNDED (std::nullopt budget below): the output
     // can be absent briefly (a mode/topology flip, EDID/HPD re-negotiation blacking
@@ -1471,27 +1482,18 @@ void VideoThread::Run() {
         switch (ClassifyOdAcquireFailure(hr)) {
         case OdAcquireFailAction::Idle:
             break; // no frame available this poll — normal
-        case OdAcquireFailAction::Recover: {
-            // Poll Reopen() until the duplication returns; on recovery the drain
-            // resumes on the fresh duplication (same session, same file). The retry
-            // is unbounded (std::nullopt) so a display left off does not end the
-            // recording on a timer — the user decides when to stop. A user stop
-            // mid-recovery ends the loop immediately; DEVICE_REMOVED is handled by
-            // the Fail branch, not here, so GiveUp cannot occur.
-            for (;;) {
-                if (m_state.stop_requested.load())
-                    break;
-                std::string reopenErr;
-                const bool reopened =
-                    odSrc.Reopen(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), reopenErr);
-                const OdReopenDecision decision =
-                    DecideOdReopen(reopened, std::chrono::milliseconds{0}, std::nullopt, kOdReopenPollDelay);
-                if (decision.action == OdReopenAction::Continue)
-                    break; // duplication live again — resume the same session
-                Sleep(static_cast<DWORD>(decision.retry_delay.count())); // RetryAfter — wait, then retry
-            }
+        case OdAcquireFailAction::Recover:
+            // Non-blocking: enter the holding state. The old inner poll loop blocked
+            // here for the entire gap, so the encode loop never ran — the timeline
+            // froze (recorded duration stopped at the moment of loss regardless of
+            // gap length) and a monitor that returned with a new HMONITOR was never
+            // re-resolved. Instead the outer encode loop keeps emitting at CFR
+            // cadence (holding the last frame) and retries Reopen() on a throttle
+            // (top of the encode loop) until the output returns or the user stops.
+            // Unbounded by design; DEVICE_REMOVED / unexpected HRESULTs still end the
+            // recording via the Fail branch below.
+            odHolding = true;
             break;
-        }
         case OdAcquireFailAction::Fail: {
             char msg[96];
             snprintf(msg, sizeof(msg), "DXGI OD frame acquire lost: hr=0x%08X", static_cast<unsigned>(hr));
@@ -2292,7 +2294,21 @@ void VideoThread::Run() {
                 break;
             }
 
-            if (useOdCapture) {
+            // OD recovery: while holding after a recoverable acquire loss, retry
+            // Reopen() on a throttle rather than draining a dead/closed source. On
+            // success the drain below resumes on the fresh duplication (same encode
+            // session, same file); until then the loop still emits held frames.
+            if (odHolding) {
+                const auto reopen_now = std::chrono::steady_clock::now();
+                if (reopen_now - odLastReopenAttempt >= kOdReopenPollDelay) {
+                    odLastReopenAttempt = reopen_now;
+                    std::string reopenErr;
+                    if (odSrc.Reopen(d3dDevice.get(), reopenErr))
+                        odHolding = false;
+                }
+            }
+
+            if (useOdCapture && !odHolding) {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
                 const auto acq_t0 = std::chrono::steady_clock::now();
@@ -2556,6 +2572,24 @@ void VideoThread::Run() {
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
+                // OD recovery — keep the webcam LIVE while the monitor is gone. The
+                // monitor and the webcam are independent sources, so a monitor loss
+                // must not freeze the webcam. Instead of the duplicate path (which
+                // re-emits the last full composite, freezing the webcam too), hold the
+                // last captured SCREEN and re-composite it with a freshly-snapshotted
+                // webcam/cursor each tick. odCapturedTex is kept current with the last
+                // emitted screen: newest-at-tick already uses it as the source; the
+                // phase-correct ring does not, so copy the emitted frame in there.
+                if (useOdCapture) {
+                    if (!odHolding && rawSourceTex != nullptr) {
+                        if (rawSourceTex != odCapturedTex.get())
+                            d3dContext->CopyResource(odCapturedTex.get(), rawSourceTex);
+                        odHeldScreenValid = true;
+                    } else if (odHolding && odHeldScreenValid && odCapturedTex) {
+                        rawSourceTex = odCapturedTex.get();
+                    }
+                }
+
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).
@@ -2739,12 +2773,23 @@ void VideoThread::Run() {
                 break;
             }
 
+            // OD recovery: throttled Reopen() while holding (see the CFR loop above).
+            if (odHolding) {
+                const auto reopen_now = std::chrono::steady_clock::now();
+                if (reopen_now - odLastReopenAttempt >= kOdReopenPollDelay) {
+                    odLastReopenAttempt = reopen_now;
+                    std::string reopenErr;
+                    if (odSrc.Reopen(d3dDevice.get(), reopenErr))
+                        odHolding = false;
+                }
+            }
+
             bool anyWork = false;
 
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
 
-            if (useOdCapture) {
+            if (useOdCapture && !odHolding) {
                 // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
                 while (true) {
                     ID3D11Texture2D* rawTex = nullptr;

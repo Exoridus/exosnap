@@ -92,17 +92,29 @@ class DxgiOdCaptureSrc {
     // Recreate the duplication after a recoverable acquire loss (ClassifyOd-
     // AcquireFailure -> Recover, i.e. DXGI_ERROR_ACCESS_LOST) while keeping the
     // same D3D device and encode session alive. Releases any held frame, tears
-    // down the stale IDXGIOutputDuplication (Close()), and re-runs Open() against
-    // the same monitor. The output can be briefly un-enumerable during the mode/
-    // topology renegotiation that caused the loss, so a single call may fail and
-    // leave the source closed; the caller polls this under DecideOdReopen()'s
-    // budget. Returns true when the duplication is live again; on success the
-    // width/height/format are re-read from the fresh duplication (a changed size
-    // or format is caught by the drain's per-frame guard and ends the recording).
-    bool Reopen(ID3D11Device* device, HMONITOR hmonitor, std::string& out_error);
+    // down the stale IDXGIOutputDuplication (Close()), and rebuilds it.
+    //
+    // The output is re-resolved by the STABLE GDI device name (captured at Open),
+    // not by the HMONITOR passed at Open: a monitor that fully leaves and re-joins
+    // the topology (hot-plug, KVM/EDID renegotiation) comes back with a NEW
+    // HMONITOR handle, so the stored handle would never match again. The device
+    // name (\\.\DISPLAYn) survives that, and a fresh DXGI factory is used so the
+    // enumeration reflects the current topology (the capture device's own adapter
+    // enumeration is a stale snapshot after a topology change). The output can be
+    // briefly un-enumerable while the renegotiation settles, so a single call may
+    // fail and leave the source closed; the caller polls this under
+    // DecideOdReopen()'s budget. Returns true when the duplication is live again;
+    // on success the width/height/format are re-read from the fresh duplication (a
+    // changed size or format is caught by the drain's per-frame guard).
+    bool Reopen(ID3D11Device* device, std::string& out_error);
 
   private:
     winrt::com_ptr<IDXGIOutputDuplication> m_duplication;
+    // Stable GDI device name (DXGI_OUTPUT_DESC.DeviceName, e.g. "\\.\DISPLAY2") of
+    // the duplicated output, captured at Open(). Used by Reopen() to re-find the
+    // output after its HMONITOR handle changes across a hot-plug. Never cleared by
+    // Close() so recovery can re-resolve.
+    std::wstring m_device_name;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     uint32_t m_refresh_rate_hz = 0;
