@@ -88,6 +88,13 @@ std::string NvencQualityName(recorder_core::NvencQualityPreset q) {
     return "Balanced";
 }
 
+// "CQ 24 (Balanced)" for a canonical value, "CQ 22 (~High)" for anything between.
+std::string QualityName(uint32_t cq) {
+    const std::string tier = NvencQualityName(recorder_core::NearestQualityPreset(cq));
+    const std::string approx = recorder_core::IsCanonicalCq(cq) ? "" : "~";
+    return "CQ " + std::to_string(cq) + " (" + approx + tier + ")";
+}
+
 std::string ResolutionName(const OutputResolutionSettings& resolution) {
     if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
         resolution.custom_height > 0) {
@@ -167,7 +174,7 @@ ConfigSummary ConfigSummary::FromCurrentSettings(const OutputSettingsModel& outp
     summary.entries.push_back({"Fit Mode", "Fit"});
     summary.entries.push_back({"FPS", FrameRateName(video.frame_rate_num, video.frame_rate_den)});
     summary.entries.push_back({"CFR/VFR", video.cfr ? "CFR" : "VFR"});
-    summary.entries.push_back({"Quality", NvencQualityName(video.quality)});
+    summary.entries.push_back({"Quality", QualityName(video.cq)});
     summary.entries.push_back({"Capture Cursor", video.capture_cursor ? "Yes" : "No"});
 
     // Audio routing

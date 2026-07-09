@@ -28,6 +28,7 @@
 #include <recorder_core/color_metadata.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -133,6 +134,15 @@ class MatroskaStreamWriter {
     // file is never left with a dangling handle.
     bool Finalize();
 
+    // Optional cumulative-byte progress sink. When set, the writer publishes
+    // bytes_written() into it on every cluster flush — including the flushes that
+    // happen inside the blocking Finalize() drain — so an out-of-thread observer
+    // (the shutdown sequence) can tell a slow-but-progressing finalize from a
+    // stalled one. The sink must outlive the writer; the writer never reads it.
+    void SetProgressSink(std::atomic<uint64_t>* sink) noexcept {
+        m_progress_sink = sink;
+    }
+
     // True once a write error has been recorded.
     [[nodiscard]] bool failed() const noexcept {
         return m_failed;
@@ -228,6 +238,9 @@ class MatroskaStreamWriter {
     uint64_t m_bytes_written = 0;
     uint64_t m_flush_count = 0;
     double m_last_flush_ms = 0.0;
+
+    // Optional out-of-thread progress sink (SetProgressSink). Not owned.
+    std::atomic<uint64_t>* m_progress_sink = nullptr;
 };
 
 } // namespace recorder_core

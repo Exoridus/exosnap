@@ -1,5 +1,6 @@
 #pragma once
 #include <QElapsedTimer>
+#include <QImage>
 #include <QWidget>
 #include <filesystem>
 #include <memory>
@@ -80,6 +81,11 @@ class RecordPage : public QWidget {
     void setOutputSettings(const OutputSettingsModel& settings);
     void setVideoSettings(const VideoSettingsModel& settings);
     void setWebcamSettings(const WebcamSettings& settings);
+    // The Settings webcam panel calls this (via MainWindow) to register/unregister as a
+    // consumer of the single shared webcam capture. While active, the shared capture
+    // runs even if the Record page is hidden, and its frames are relayed out through
+    // webcamFrameReady() so the panel shows the same live preview without a second reader.
+    void setSettingsWebcamPreviewActive(bool active);
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
@@ -186,6 +192,9 @@ class RecordPage : public QWidget {
     // (drag/resize release). Carries the full settings so MainWindow can persist
     // and propagate to the Settings/Webcam surfaces.
     void webcamSettingsChanged(const WebcamSettings& settings);
+    // Emitted for every frame of the shared webcam capture so consumers outside the
+    // Record page (the Settings webcam preview) can render the same live feed.
+    void webcamFrameReady(const QImage& frame);
     // Emitted at ~30 Hz during recording (via recording-meter callback) and at ~preflight cadence
     // during Ready/Idle (via individual source meter callbacks). All three sources are included in
     // every emission so the Settings Audio card can update all rows atomically.

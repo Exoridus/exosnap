@@ -425,6 +425,12 @@ bool MatroskaStreamWriter::FlushCluster() {
         if (pos_after > pos_before) {
             m_bytes_written += pos_after - pos_before;
         }
+        // Publish progress for the out-of-thread shutdown observer. This runs on
+        // the mux thread's streaming loop AND inside the blocking Finalize() drain,
+        // so a long finalize keeps advancing this value while it writes.
+        if (m_progress_sink != nullptr) {
+            m_progress_sink->store(m_bytes_written, std::memory_order_relaxed);
+        }
         // CueClusterPosition must be relative to the Segment data start (Matroska spec
         // §8.1.6.1): relative = absolute - Segment_element_start - Segment_head_bytes.
         const uint64_t cluster_abs = m_cluster->GetPosition();

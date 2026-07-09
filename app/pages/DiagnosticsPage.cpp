@@ -1320,7 +1320,7 @@ void DiagnosticsPage::refreshOverview() {
         engine.SetDpcLatency(dpc_provider_->Read());
     }
 
-    engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed);
+    engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(output_folder_.string()).passed);
     // Feed the selected capture target's live HDR status so the HDR10 + H.264
     // pre-flight blocker (rec.hdr.h264) fires only on an HDR-active desktop.
     engine.SetCaptureTargetHdrActive(SelectedTargetHdrActive(selected_capture_target_, caps_));
@@ -1412,7 +1412,7 @@ void DiagnosticsPage::refreshPipeline() {
         muxer_ok ? QStringLiteral("Selected container muxer is available. Write throughput is not measured.")
                  : QStringLiteral("Selected container is not available on this system."));
 
-    const bool disk_ok = diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed;
+    const bool disk_ok = diagnostics::SelfTestRunner::CheckOutputPathWritable(output_folder_.string()).passed;
     pipeline_flow_->setStepStatus(5, disk_ok ? Status::Ok : Status::Unavailable,
                                   disk_ok
                                       ? QStringLiteral("Output path is writable. Live disk throughput is not measured.")

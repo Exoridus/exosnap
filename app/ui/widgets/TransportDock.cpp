@@ -560,6 +560,20 @@ void TransportDock::setToggleVisible(const QString& key, bool visible) {
         toggle->setVisible(visible);
 }
 
+void TransportDock::setToggleTooltip(const QString& key, const QString& text) {
+    AudioSourceToggle* toggle = nullptr;
+    if (key == QLatin1String("system"))
+        toggle = system_toggle_;
+    else if (key == QLatin1String("mic"))
+        toggle = mic_toggle_;
+    else if (key == QLatin1String("webcam"))
+        toggle = webcam_toggle_;
+    else if (key == QLatin1String("app"))
+        toggle = app_toggle_;
+    if (toggle)
+        toggle->setToolTip(text);
+}
+
 void TransportDock::setSplitEnabled(bool enabled) {
     if (split_enabled_ == enabled)
         return;

@@ -107,7 +107,7 @@ RecordingPreset MakeDefaultPreset() {
     preset.config.output.audio_codec = capability::AudioCodec::Opus;
 
     // Video
-    preset.config.video.quality = recorder_core::NvencQualityPreset::High;
+    preset.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High);
     preset.config.video.cfr = true;
     preset.config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;
     preset.config.video.capture_cursor = true;
@@ -515,7 +515,7 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     }
 
     // --- Video ---
-    if (a.video.quality != b.video.quality) {
+    if (a.video.cq != b.video.cq) {
         return false;
     }
     if (a.video.rate_control != b.video.rate_control) {
@@ -784,7 +784,7 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     }
 
     // --- Video ---
-    if (a.video.quality != b.video.quality) {
+    if (a.video.cq != b.video.cq) {
         return false;
     }
     if (a.video.rate_control != b.video.rate_control) {

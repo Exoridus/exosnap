@@ -3,9 +3,11 @@
 #include <recorder_core/hdr_bitstream_metadata.h>
 #include <recorder_core/packet_types.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+#include <thread>
 
 namespace recorder_core {
 
@@ -294,6 +296,19 @@ const char* NvencStatusName(NVENCSTATUS st) noexcept {
         return "NV_ENC_ERR_RESOURCE_NOT_MAPPED";
     default:
         return "NV_ENC_ERR_UNKNOWN";
+    }
+}
+
+FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept {
+    switch (lock_status) {
+    case NV_ENC_SUCCESS:
+        return FlushDrainStep::Consume;
+    case NV_ENC_ERR_LOCK_BUSY:
+        // Output not ready yet: keep polling until the budget runs out, then give
+        // up so a lost/hung device can never wedge the drain.
+        return elapsed_ms < budget_ms ? FlushDrainStep::Retry : FlushDrainStep::AbortTimeout;
+    default:
+        return FlushDrainStep::AbortError;
     }
 }
 
@@ -600,28 +615,20 @@ bool NvencEncoder::QueryYuv444Support(std::string& out_error) {
 //   rcParams.averageBitRate    — target average bitrate in bps (VBR/CBR)
 //   rcParams.maxBitRate        — peak bitrate in bps (VBR: 1.5× avg; CBR: = avg)
 
-RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps) {
+RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps) {
     RcParams p{};
     switch (mode) {
     case RateControlMode::ConstantQuality: {
         p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP);
-        switch (quality) {
-        case NvencQualityPreset::High:
-            p.qpIntra = 19;
-            p.qpInterP = 21;
-            p.qpInterB = 21;
-            break;
-        case NvencQualityPreset::Balanced:
-            p.qpIntra = 24;
-            p.qpInterP = 26;
-            p.qpInterB = 26;
-            break;
-        case NvencQualityPreset::Small:
-            p.qpIntra = 30;
-            p.qpInterP = 32;
-            p.qpInterB = 32;
-            break;
-        }
+        // Out-of-range values are clamped rather than rejected: the encoder must
+        // never be handed a QP outside [1, 51], whatever the caller passed.
+        const uint32_t qp = cq < kNvencCqMin ? kNvencCqMin : (cq > kNvencCqMax ? kNvencCqMax : cq);
+        // Inter frames carry +2 QP relative to intra — the ratio the three named
+        // presets always used (19/21, 24/26, 30/32), now applied to every CQ.
+        const uint32_t qp_inter = (qp + 2u) > kNvencCqMax ? kNvencCqMax : qp + 2u;
+        p.qpIntra = qp;
+        p.qpInterP = qp_inter;
+        p.qpInterB = qp_inter;
         p.averageBitRate = 0;
         p.maxBitRate = 0;
         break;
@@ -650,7 +657,8 @@ RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, 
     case RateControlMode::Lossless:
         // Lossless is not yet implemented. Capability marks it NotImplemented so
         // the UI hides it. Defensively fall back to ConstantQuality/Balanced.
-        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, NvencQualityPreset::Balanced, bitrate_kbps);
+        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(NvencQualityPreset::Balanced),
+                                 bitrate_kbps);
         break;
     }
     return p;
@@ -735,7 +743,7 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
     // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
     // NVENC SDK field names: rcParams.rateControlMode / constQP / averageBitRate / maxBitRate.
-    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_qualityPreset, m_bitrate_kbps);
+    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_cq, m_bitrate_kbps);
     m_encodeConfig.rcParams.rateControlMode = static_cast<NV_ENC_PARAMS_RC_MODE>(rc.rateControlMode);
     m_encodeConfig.rcParams.constQP.qpIntra = rc.qpIntra;
     m_encodeConfig.rcParams.constQP.qpInterP = rc.qpInterP;
@@ -1014,14 +1022,19 @@ void NvencEncoder::ReleaseSlot(int32_t slot_idx) noexcept {
 // LockAndConsumeBitstream (internal)
 // ---------------------------------------------------------------------------
 
-bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error) {
+bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking,
+                                           NVENCSTATUS* out_lock_status) {
     NV_ENC_LOCK_BITSTREAM lockBS{};
     lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
     lockBS.outputBitstream = m_bitstreamBuffer;
-    lockBS.doNotWait = 0;
+    lockBS.doNotWait = non_blocking ? 1 : 0;
 
     NVENCSTATUS st = m_funcs.nvEncLockBitstream(m_encoder, &lockBS);
+    if (out_lock_status != nullptr)
+        *out_lock_status = st;
     if (st != NV_ENC_SUCCESS) {
+        // On LOCK_BUSY nothing has been popped/consumed yet (the pending PTS/slot
+        // are still queued), so a non-blocking caller can safely retry.
         out_error = std::string("nvEncLockBitstream: ") + NvencStatusName(st);
         return false;
     }
@@ -1207,19 +1220,45 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
         return false;
     }
 
-    // Drain buffered frames.
-    // LockAndConsumeBitstream releases each slot after output is consumed.
-    for (int i = 0; i < m_needMoreInputCount; ++i) {
+    // Drain buffered frames with a bounded, non-blocking poll. A blocking lock
+    // here (the historic doNotWait=0 path) hangs forever when the device is lost
+    // or hung — the buffered outputs never complete — so the video thread wedged
+    // and the whole session died to the fixed join budget. Polling with a per-
+    // frame time budget guarantees the drain always terminates: a healthy device
+    // delivers each frame in well under the budget (progress resets the clock),
+    // while a dead one is abandoned after the budget and the caller still pushes
+    // EOS and finalises. LockAndConsumeBitstream releases each slot on consume.
+    constexpr double kFlushDrainBudgetMs = 2000.0;
+    auto lastProgress = std::chrono::steady_clock::now();
+    for (int i = 0; i < m_needMoreInputCount;) {
         if (m_pendingPts.empty())
             break;
 
         EncodedVideoPacket pkt;
         std::string lockErr;
-        if (!LockAndConsumeBitstream(pkt, lockErr)) {
-            out_error = std::string("Flush drain stopped: ") + lockErr;
-            break;
+        NVENCSTATUS lockStatus = NV_ENC_SUCCESS;
+        LockAndConsumeBitstream(pkt, lockErr, /*non_blocking=*/true, &lockStatus);
+        const double elapsedMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lastProgress).count();
+
+        const FlushDrainStep step = NextFlushDrainStep(lockStatus, elapsedMs, kFlushDrainBudgetMs);
+        if (step == FlushDrainStep::Consume) {
+            out_packets.push_back(std::move(pkt));
+            ++i;
+            lastProgress = std::chrono::steady_clock::now();
+            continue;
         }
-        out_packets.push_back(std::move(pkt));
+        if (step == FlushDrainStep::Retry) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        // AbortTimeout / AbortError: stop draining but do not fail — the caller
+        // (which ignores this return) still pushes video-EOS and finalises the
+        // file with whatever was already muxed, instead of wedging.
+        out_error = step == FlushDrainStep::AbortTimeout
+                        ? "Flush drain timed out — device not delivering buffered frames"
+                        : (std::string("Flush drain stopped: ") + lockErr);
+        break;
     }
 
     m_needMoreInputCount = 0;

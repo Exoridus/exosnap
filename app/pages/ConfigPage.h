@@ -1,4 +1,5 @@
 #pragma once
+#include <QImage>
 #include <QWidget>
 
 #include "../../../libs/capability/include/capability/audio_ui_state.h"
@@ -64,12 +65,16 @@ class ConfigPage : public QWidget {
 
     explicit ConfigPage(const OutputSettingsModel& initial_settings, const VideoSettingsModel& initial_video,
                         QWidget* parent = nullptr);
+    ~ConfigPage() override;
 
     void setOutputSettings(const OutputSettingsModel& settings);
     void setVideoSettings(const VideoSettingsModel& settings);
     void setOutputFolder(const std::filesystem::path& folder);
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
+    // Push a frame from the single shared webcam capture to the embedded webcam panel,
+    // which renders it (with its own mirror) instead of opening a second reader.
+    void setWebcamPreviewFrame(const QImage& frame);
     void setReadinessStatus(const QString& status_label);
     // Delivers the async-probed runtime capabilities so the expert 4:4:4 chroma
     // gate can consult the ACTIVE GPU's real YUV444 support (per codec) instead
@@ -160,6 +165,8 @@ class ConfigPage : public QWidget {
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
+    // Relayed from the embedded webcam panel: it wants the shared capture to run/stop.
+    void webcamPreviewActiveRequested(bool active);
     void diagnosticsRequested();
     void webcamDetailsRequested();
 
@@ -488,7 +495,6 @@ class ConfigPage : public QWidget {
     // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
-    QLabel* quality_cq_tier_label_ = nullptr;  // S3: "· High / Balanced / Small / Custom" tier label
 
     // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
     // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.

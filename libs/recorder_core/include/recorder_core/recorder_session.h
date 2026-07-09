@@ -28,9 +28,16 @@ namespace recorder_core {
 // Implementations must be thread-safe: TryGetFrame is called from VideoThread.
 // The provider must remain alive for the duration of Record().
 struct WebcamFrameProvider {
-    // Returns true and fills out_width/out_height/out_bgra when a new (or latest)
-    // frame is available.  out_bgra is BGRA (B8G8R8A8 byte order), row-major.
-    // Returns false when no frame has been captured yet or webcam failed.
+    // Returns true and fills out_width/out_height/out_bgra with the LATEST captured
+    // frame. out_bgra is BGRA (B8G8R8A8 byte order), row-major.
+    //
+    // Freeze-on-loss contract: once a frame has been captured, a subsequent device
+    // loss (unplug / driver error) does NOT make this return false — the last
+    // captured frame keeps being served (frozen) so the composite holds the last
+    // webcam image instead of the PiP vanishing, matching the DXGI monitor recovery
+    // (ADR 0013) and industry practice. The provider recovers live if the device
+    // returns. Returns false only before the first frame is captured (nothing to
+    // show yet) or after the provider is stopped.
     virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) = 0;
     virtual ~WebcamFrameProvider() = default;
 };
@@ -275,7 +282,9 @@ struct RecorderConfig {
     HdrMode hdr_mode = HdrMode::TonemapSdr;
 
     // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
-    NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
+    // Constant-quality target (CQP). 1 = best, 51 = worst. Only used when
+    // rate_control == ConstantQuality.
+    uint32_t nvenc_cq = CanonicalCq(NvencQualityPreset::Balanced);
 
     // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
     RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;

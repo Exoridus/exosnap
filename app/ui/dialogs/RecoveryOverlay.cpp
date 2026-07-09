@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLayout>
 #include <QMetaObject>
 #include <QMouseEvent>
 #include <QPainter>
@@ -40,8 +41,8 @@ QString tok(const char* base) {
 // precedence over the app QSS — no edit to exosnap_dark.qss required.
 
 QString primaryButtonQss() {
-    return QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:8px 16px; "
-                          "font-size:12.5px; font-weight:600; }"
+    return QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:0 16px; "
+                          "min-height:36px; max-height:36px; min-width:92px; font-size:12.5px; font-weight:600; }"
                           "QPushButton:hover { background:%3; }"
                           "QPushButton:pressed { background:%4; }"
                           "QPushButton:disabled { color:%2; background:%5; }")
@@ -53,8 +54,12 @@ QString primaryButtonQss() {
 QString outlineButtonQss() {
     const QString hover =
         ActiveTheme().line3_override ? tok(ActiveTheme().line3_override) : QStringLiteral("rgba(255, 255, 255, 0.20)");
+    // min/max-height are 2px shorter than the filled tiers: a QSS min-height sizes the
+    // content box, so the 1px border on each edge is added on top — 34 + 2 = 36, matching
+    // the borderless Finish/Delete buttons exactly.
     return QStringLiteral("QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; "
-                          "padding:8px 16px; font-size:12.5px; font-weight:500; }"
+                          "padding:0 16px; min-height:34px; max-height:34px; min-width:92px; font-size:12.5px; "
+                          "font-weight:500; }"
                           "QPushButton:hover { border:1px solid %3; }"
                           "QPushButton:disabled { color:%4; }")
         .arg(tok(ActiveTheme().ink), tok(ActiveTheme().line2), hover, tok(ActiveTheme().dim));
@@ -63,7 +68,7 @@ QString outlineButtonQss() {
 // Tertiary text action tinted `color_base` (mut for neutral, error for destructive).
 QString tertiaryButtonQss(const char* color_base, const char* hover_base) {
     return QStringLiteral("QPushButton { background:transparent; color:%1; border:none; border-radius:9px; "
-                          "padding:8px 12px; font-size:12.5px; font-weight:500; }"
+                          "padding:0 12px; min-height:36px; max-height:36px; font-size:12.5px; font-weight:500; }"
                           "QPushButton:hover { color:%2; }"
                           "QPushButton:disabled { color:%3; }")
         .arg(tok(color_base), tok(hover_base), tok(ActiveTheme().dim));
@@ -147,7 +152,14 @@ class RecoveryRow : public QWidget {
         action_layout->setContentsMargins(0, 0, 0, 0);
         action_layout->setSpacing(8);
 
-        // "Finish" — always shown. Tier-1 primary (mint): the recommended action.
+        // Uniform, professional button sizing is enforced in the inline QSS helpers
+        // (min-height == max-height == control height, shared min-width for the safe
+        // pair). Note: a stylesheet's min-height/max-height override QWidget::
+        // setFixedHeight(), so the size MUST live in the QSS, not on the widget — the
+        // app-wide `QPushButton { min-height:36 }` rule otherwise stacked with the inline
+        // padding and inflated these to a chunky ~52px.
+
+        // "Finish" — Tier-1 primary (mint): the recommended, safe action.
         finish_btn_ = new QPushButton(QStringLiteral("Finish"), action_row);
         finish_btn_->setObjectName("recoveryFinishBtn");
         finish_btn_->setCursor(Qt::PointingHandCursor);
@@ -162,7 +174,8 @@ class RecoveryRow : public QWidget {
         continue_btn_->setStyleSheet(outlineButtonQss());
         continue_btn_->setVisible(can_continue);
 
-        // "Delete" — always shown (destructive, inline two-step confirm). Tier-3 coral text.
+        // "Delete" — destructive (inline two-step confirm). Tier-3 coral text, pushed to
+        // the far right so it sits clearly apart from the safe Finish/Continue actions.
         delete_btn_ = new QPushButton(QStringLiteral("Delete"), action_row);
         delete_btn_->setObjectName("recoveryDeleteBtn");
         delete_btn_->setProperty("role", "destructive");
@@ -181,6 +194,7 @@ class RecoveryRow : public QWidget {
         progress_bar_->setRange(0, 100);
         progress_bar_->setValue(0);
         progress_bar_->setFixedHeight(4);
+        progress_bar_->setMinimumWidth(140);
         progress_bar_->setVisible(false);
         progress_bar_->setTextVisible(false);
         progress_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border:none; border-radius:2px; }"
@@ -193,15 +207,16 @@ class RecoveryRow : public QWidget {
         cancel_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
         cancel_btn_->setVisible(false);
 
+        // Safe actions on the left; progress/cancel/status fill the middle during a
+        // Finish operation; the destructive Delete is isolated on the far right.
         action_layout->addWidget(finish_btn_);
         if (can_continue)
             action_layout->addWidget(continue_btn_);
-        action_layout->addWidget(delete_btn_);
-        action_layout->addSpacing(8);
-        action_layout->addWidget(progress_bar_, 1);
+        action_layout->addWidget(progress_bar_);
         action_layout->addWidget(cancel_btn_);
-        action_layout->addWidget(status_label_, 1);
+        action_layout->addWidget(status_label_);
         action_layout->addStretch(1);
+        action_layout->addWidget(delete_btn_);
 
         layout->addWidget(info_row);
         layout->addWidget(action_row);
@@ -348,6 +363,13 @@ QFrame* RecoveryOverlay::buildCard() {
     auto* main_layout = new QVBoxLayout(card);
     main_layout->setContentsMargins(0, 0, 0, 0);
     main_layout->setSpacing(0);
+    // Force the card's hard minimumSize to equal its content size. The overlay centres
+    // the card via heightForWidth(), which under-reports the height and would otherwise
+    // let the card be laid out too short — compressing the action row and clipping its
+    // buttons. A hard minimumSize is a floor the overlay layout must honour. (Paired
+    // with the hint label's Minimum vertical policy below, which makes that content
+    // minimum account for the wrapped hint text rather than a single line.)
+    main_layout->setSizeConstraint(QLayout::SetMinimumSize);
 
     // ── Chrome bar ─────────────────────────────────────────────────────────
     // Mirrors CrashReportPanel's chrome bar: bg strip, bottom hairline, rounded
@@ -409,6 +431,15 @@ QFrame* RecoveryOverlay::buildCard() {
     hint->setObjectName("recoveryHint");
     hint->setProperty("labelRole", "recoveryHint");
     hint->setWordWrap(true);
+    // Pin the wrap width to the card's content width (fixed 560 − 2×28 body margins) and
+    // forbid vertical compression. A word-wrapped QLabel reports a one-line
+    // minimumSizeHint (it assumes it may reflow wider), so the card's minimum height came
+    // out ~34px shorter than its real content; the layout then compressed the action row
+    // below its minimum and clipped its buttons. A fixed width makes the wrapped height a
+    // deterministic sizeHint, and a Minimum vertical policy makes the layout reserve that
+    // full height instead of the one-line minimum.
+    hint->setFixedWidth(560 - 28 * 2);
+    hint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
     hint->setStyleSheet(
         QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ActiveTheme().mut)));
     body_layout->addWidget(hint);

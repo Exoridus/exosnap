@@ -9,7 +9,7 @@
 namespace recorder_core {
 
 // IVideoEncoder implementation wrapping NvencEncoder.
-// Call SetCodec() and SetQualityPreset() before Open().
+// Call SetCodec() and SetCq() before Open().
 class NvencVideoEncoder : public IVideoEncoder {
   public:
     void SetCodec(VideoCodec codec) noexcept {
@@ -28,8 +28,8 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetChroma(chroma);
     }
 
-    void SetQualityPreset(NvencQualityPreset preset) noexcept {
-        m_nvenc.SetQualityPreset(preset);
+    void SetCq(uint32_t cq) noexcept {
+        m_nvenc.SetCq(cq);
     }
 
     // Set the NVENC speed/quality preset (P1..P7) before Open()/Configure().

@@ -65,6 +65,24 @@ inline float HdrToneMapChannel(float scrgb_linear, float peak_scale) {
     return y < 1.0f ? y : 1.0f;
 }
 
+// sRGB opto-electronic transfer function: SDR linear [0, 1] -> non-linear signal
+// [0, 1]. Used for a desktop that is already SDR but delivered as linear scRGB
+// (Advanced Color Management, see OdCaptureMode::SdrScrgb): no roll-off is
+// wanted there, only the transfer the desktop compositor would have applied
+// itself. Encoding such a desktop with the BT.709 OETF instead darkens the whole
+// image (mid-grey 128 -> 115) because BT.709 is a camera OETF paired with a ~2.4
+// EOTF display, not the inverse of the sRGB EOTF the preview/player assumes.
+inline float SrgbOetf(float linear) {
+    float l = linear;
+    if (l < 0.0f) {
+        l = 0.0f;
+    }
+    if (l > 1.0f) {
+        l = 1.0f;
+    }
+    return l <= 0.0031308f ? 12.92f * l : 1.055f * std::pow(l, 1.0f / 2.4f) - 0.055f;
+}
+
 // BT.709 opto-electronic transfer function (Rec.709 s.1.2): SDR linear [0, 1] ->
 // non-linear signal [0, 1].
 inline float Bt709Oetf(float linear) {
@@ -81,6 +99,13 @@ inline float Bt709Oetf(float linear) {
 // Full per-channel scRGB (HDR, linear) -> BT.709 SDR non-linear signal.
 inline float ScrgbToSdr709Channel(float scrgb_linear, float peak_scale) {
     return Bt709Oetf(HdrToneMapChannel(scrgb_linear, peak_scale));
+}
+
+// Full per-channel scRGB (SDR, linear) -> sRGB non-linear signal, for an
+// Advanced-Color desktop that is still SDR (see OdCaptureMode::SdrScrgb). There
+// is no headroom to roll off: reference white (1.0) must stay white.
+inline float ScrgbSdrToSrgbChannel(float scrgb_linear) {
+    return SrgbOetf(scrgb_linear);
 }
 
 // Pixel format for the HDR->SDR tone-map intermediate: the surface the tone-map

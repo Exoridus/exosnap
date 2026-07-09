@@ -635,7 +635,7 @@ void VideoThread::Run() {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetChroma(m_state.config.chroma);
-        nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
+        nvenc.SetCq(m_state.config.nvenc_cq);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
         nvenc.SetPreset(m_state.config.nvenc_preset);
         // Color signaling (fix for color-range-signaling bug): the encoded
@@ -938,6 +938,9 @@ void VideoThread::Run() {
     // (an SDR BGRA8 surface) that then follows the normal SDR VideoProcessor
     // route. hdrToneMapActive is decided during first-frame negotiation.
     bool hdrToneMapActive = false;
+    // The tone-map pass runs the SDR curve instead: the source is an SDR desktop
+    // delivered as linear scRGB (Advanced Color Management), not an HDR one.
+    bool hdrToneMapSdrSource = false;
     HdrToneMapper hdrToneMapper;
     winrt::com_ptr<ID3D11Texture2D> hdrSdrTex;
 
@@ -1064,7 +1067,11 @@ void VideoThread::Run() {
             m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
             return OdFrameCheck::Fatal;
         }
-        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap);
+        // An SDR scRGB (Advanced Color) desktop runs the same shader pass as the
+        // tone-map — FP16 source -> SDR intermediate -> VideoProcessor — but with
+        // the SDR curve (clamp + sRGB OETF, no roll-off).
+        const bool sdrScrgb = (capMode == OdCaptureMode::SdrScrgb);
+        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap) || sdrScrgb;
         const bool nativeHdr = (capMode == OdCaptureMode::HdrNative);
         // The caller committed BT.2020/PQ colour metadata + 10-bit for a native
         // session; if the display instead delivered a surface that resolves to
@@ -1154,6 +1161,7 @@ void VideoThread::Run() {
         }
         odFrameFormat = rawDesc.Format;
         hdrToneMapActive = toneMap;
+        hdrToneMapSdrSource = sdrScrgb;
         hdrNativeActive = nativeHdr;
         hdrPqInputIsPq = (rawDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
         hdrPqSrcFormat = rawDesc.Format;
@@ -1450,6 +1458,54 @@ void VideoThread::Run() {
 
     // --- WGC frame pool and session (Window-only path) ---
     bool sourceLost = false;
+    // OD recovery hold state (Recover branch, i.e. DXGI_ERROR_ACCESS_LOST). While
+    // holding, the encode loop keeps emitting at CFR cadence (the last frame is
+    // held, not black) and retries Reopen() on a throttle instead of blocking —
+    // blocking froze the whole recording for the gap and never recovered a monitor
+    // that returned with a new HMONITOR. Cleared when Reopen() succeeds.
+    bool odHolding = false;
+    auto odLastReopenAttempt = std::chrono::steady_clock::now();
+    // How long to wait between Reopen() attempts after a recoverable OD acquire
+    // loss. The retry itself is UNBOUNDED (std::nullopt budget below): the output
+    // can be absent briefly (a mode/topology flip, EDID/HPD re-negotiation blacking
+    // the desktop for a moment) or indefinitely (a display left switched off), and
+    // the recording keeps going — holding the last captured frame — until it
+    // returns or the user stops. 250 ms is well inside the norm (OBS re-creates its
+    // duplicator at most every 3 s); polling faster gains nothing because the OS
+    // topology renegotiation dominates the recovery latency.
+    constexpr auto kOdReopenPollDelay = std::chrono::milliseconds{250};
+    // React to a DXGI OD TryAcquireFrame() failure HRESULT. ACCESS_LOST is a
+    // transient loss (mode/topology change, device alive): rebuild the duplication
+    // and continue the SAME encode session and output file, leaving a gap during
+    // which the last captured frame is held (frozen, not black). DEVICE_REMOVED /
+    // any unexpected HRESULT is unrecoverable: record a failure carrying the HRESULT
+    // so it reaches the app log ([record.failure]) — recorder_core's logging::log
+    // only feeds the ring buffer. Either way the segment is still finalised, so
+    // footage is kept.
+    const auto HandleOdAcquireFailure = [&](HRESULT hr) {
+        switch (ClassifyOdAcquireFailure(hr)) {
+        case OdAcquireFailAction::Idle:
+            break; // no frame available this poll — normal
+        case OdAcquireFailAction::Recover:
+            // Non-blocking: enter the holding state. The old inner poll loop blocked
+            // here for the entire gap, so the encode loop never ran — the timeline
+            // froze (recorded duration stopped at the moment of loss regardless of
+            // gap length) and a monitor that returned with a new HMONITOR was never
+            // re-resolved. Instead the outer encode loop keeps emitting at CFR
+            // cadence (holding the last frame) and retries Reopen() on a throttle
+            // (top of the encode loop) until the output returns or the user stops.
+            // Unbounded by design; DEVICE_REMOVED / unexpected HRESULTs still end the
+            // recording via the Fail branch below.
+            odHolding = true;
+            break;
+        case OdAcquireFailAction::Fail: {
+            char msg[96];
+            snprintf(msg, sizeof(msg), "DXGI OD frame acquire lost: hr=0x%08X", static_cast<unsigned>(hr));
+            m_state.RecordFailure(hr, ErrorPhase::VideoCapture, msg);
+            break;
+        }
+        }
+    };
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
     winrt::event_token closedToken{};
@@ -1669,7 +1725,8 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
-        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale, tmErr)) {
+        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
+                                hdrToneMapSdrSource, tmErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
             if (com_inited)
                 CoUninitialize();
@@ -2242,7 +2299,21 @@ void VideoThread::Run() {
                 break;
             }
 
-            if (useOdCapture) {
+            // OD recovery: while holding after a recoverable acquire loss, retry
+            // Reopen() on a throttle rather than draining a dead/closed source. On
+            // success the drain below resumes on the fresh duplication (same encode
+            // session, same file); until then the loop still emits held frames.
+            if (odHolding) {
+                const auto reopen_now = std::chrono::steady_clock::now();
+                if (reopen_now - odLastReopenAttempt >= kOdReopenPollDelay) {
+                    odLastReopenAttempt = reopen_now;
+                    std::string reopenErr;
+                    if (odSrc.Reopen(d3dDevice.get(), reopenErr))
+                        odHolding = false;
+                }
+            }
+
+            if (useOdCapture && !odHolding) {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
                 const auto acq_t0 = std::chrono::steady_clock::now();
@@ -2251,8 +2322,11 @@ void VideoThread::Run() {
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
                     if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
-                        if (odHr == DXGI_ERROR_ACCESS_LOST)
-                            sourceLost = true;
+                        // Previously only DXGI_ERROR_ACCESS_LOST set sourceLost; every
+                        // other HRESULT (notably DXGI_ERROR_DEVICE_REMOVED) fell through
+                        // this bare break with no source-loss, so the worker looped
+                        // through a dead source until the fixed join budget detached it.
+                        HandleOdAcquireFailure(odHr);
                         break;
                     }
                     // Format guard: skip foreign-format frames; fatal on size
@@ -2503,6 +2577,12 @@ void VideoThread::Run() {
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
+                // OD recovery: during a hold the drain is skipped, so no fresh source
+                // frame arrives and rawSourceTex is null — the CFR duplicate path below
+                // re-emits the last frame (frozen) so the timeline keeps advancing until
+                // Reopen() succeeds. Re-compositing a live webcam onto the held screen
+                // during the gap is intentionally NOT done here: it touches display-tied
+                // GPU resources while the captured output is gone (crash risk).
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).
@@ -2686,20 +2766,33 @@ void VideoThread::Run() {
                 break;
             }
 
+            // OD recovery: throttled Reopen() while holding (see the CFR loop above).
+            if (odHolding) {
+                const auto reopen_now = std::chrono::steady_clock::now();
+                if (reopen_now - odLastReopenAttempt >= kOdReopenPollDelay) {
+                    odLastReopenAttempt = reopen_now;
+                    std::string reopenErr;
+                    if (odSrc.Reopen(d3dDevice.get(), reopenErr))
+                        odHolding = false;
+                }
+            }
+
             bool anyWork = false;
 
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
 
-            if (useOdCapture) {
+            if (useOdCapture && !odHolding) {
                 // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
                 while (true) {
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
                     if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
-                        if (odHr == DXGI_ERROR_ACCESS_LOST)
-                            sourceLost = true;
+                        // See the phase-correct drain above: DEVICE_REMOVED (and any
+                        // unexpected HRESULT) ends the recording with the HRESULT recorded
+                        // instead of looping through a dead source.
+                        HandleOdAcquireFailure(odHr);
                         break;
                     }
                     // Format guard: skip foreign-format frames; fatal on size

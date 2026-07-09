@@ -4189,6 +4189,19 @@ void MainWindow::buildConfigPage() {
             config_page_->setPresetDirty(dirty);
     });
 
+    // Shared webcam capture: the Settings panel is a consumer of the coordinator's single
+    // reader. Route its "I want a preview" request to the coordinator, and fan the
+    // coordinator's frames back into the panel — so both surfaces show one capture, with
+    // no second reader fighting for the device (works during recording too).
+    connect(config_page_, &ConfigPage::webcamPreviewActiveRequested, this, [this](bool active) {
+        if (record_page_)
+            record_page_->setSettingsWebcamPreviewActive(active);
+    });
+    connect(record_page_, &RecordPage::webcamFrameReady, this, [this](const QImage& frame) {
+        if (config_page_)
+            config_page_->setWebcamPreviewFrame(frame);
+    });
+
     // ---- Preset management operations ----
     connect(config_page_, &ConfigPage::savePresetRequested, this, &MainWindow::onSavePreset);
     connect(config_page_, &ConfigPage::savePresetAsRequested, this, &MainWindow::onSavePresetAs);

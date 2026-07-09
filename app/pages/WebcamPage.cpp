@@ -346,8 +346,9 @@ void WebcamPage::showEvent(QShowEvent* event) {
 #endif
     if (mf_unavailable_)
         return; // S4: MF absent — no preview attempt
-    // Setup preview runs whenever the page is open and a camera is available —
-    // independent of the "Include webcam in recording" toggle.
+    // Setup preview opens the camera only when the webcam is enabled and a device
+    // exists (startPreview self-gates via ShouldOpenWebcamPreview); otherwise it
+    // shows a placeholder without touching the camera.
     startPreview();
 }
 
@@ -370,9 +371,11 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
     if (camera_preview_)
         camera_preview_->setMirror(sanitized_settings.mirror);
 
-    // Find matching device.
+    // Find matching device — resolved so an empty configured id pre-selects the
+    // first real camera instead of leaving the "(no camera)" placeholder selected.
+    const std::string want = ResolveWebcamDeviceId(sanitized_settings.device_id, devices_);
     for (int i = 0; i < device_combo_->count(); ++i) {
-        if (device_combo_->itemData(i).toString().toStdString() == sanitized_settings.device_id) {
+        if (device_combo_->itemData(i).toString().toStdString() == want) {
             device_combo_->setCurrentIndex(i);
             break;
         }
@@ -560,9 +563,12 @@ void WebcamPage::applyVisualState(visual::VisualWebcamState state) {
 #endif
 
 void WebcamPage::onEnableToggled(bool enabled) {
-    // This toggle only controls whether the webcam is included in recordings.
-    // The setup preview is independent and keeps running while the page is open.
+    // Single meaning of "webcam on": included in the recording AND shown in the
+    // setup preview. The camera opens only here (never just from opening the page),
+    // so start/stop the preview in step with the toggle.
     current_settings_.enabled = enabled;
+    if (isVisible())
+        startPreview(); // self-gates on enabled: starts when on, stops when off
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -717,6 +723,12 @@ void WebcamPage::refreshDevices() {
     devices_ = WebcamService::EnumerateDevices();
     for (const auto& d : devices_)
         device_combo_->addItem(QString::fromStdString(d.name), QString::fromStdString(d.id));
+    const std::string resolved = ResolveWebcamDeviceId(current_settings_.device_id, devices_);
+    if (!resolved.empty()) {
+        const int idx = device_combo_->findData(QString::fromStdString(resolved));
+        if (idx >= 0)
+            device_combo_->setCurrentIndex(idx);
+    }
     suppress_signals_ = false;
     refreshFormats();
 }
@@ -770,11 +782,16 @@ void WebcamPage::startPreview() {
 
     const QString dev_id = device_combo_->currentData().toString();
     const bool has_device = !dev_id.isEmpty() || !devices_.empty();
-    if (!has_device) {
+    // The setup preview is coupled to the enable state: the camera opens only when
+    // the webcam is enabled AND a device exists (ShouldOpenWebcamPreview) — it no
+    // longer springs on merely from the page becoming visible.
+    if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device)) {
         preview_service_.Stop();
         if (camera_preview_) {
             camera_preview_->clearFrame();
-            camera_preview_->setPlaceholderText(QStringLiteral("No camera found. Connect a camera and click Rescan."));
+            camera_preview_->setPlaceholderText(
+                !has_device ? QStringLiteral("No camera found. Connect a camera and click Rescan.")
+                            : QStringLiteral("Turn on the webcam to preview."));
         }
         return;
     }

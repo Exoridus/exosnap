@@ -13,6 +13,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QTimer>
 #include <QToolButton>
 
 #include <capability/capability_builder.h>
@@ -27,6 +28,7 @@
 #include "ui/widgets/CameraPreview.h"
 #include "ui/widgets/ExoCheckBox.h"
 #include "ui/widgets/ExoToggle.h"
+#include "ui/widgets/InfoHintIcon.h"
 #include "ui/widgets/SettingsPopoverRow.h"
 #include "ui/widgets/VUMeterWidget.h"
 #include "ui/widgets/WebcamSetupPanel.h"
@@ -550,18 +552,18 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
 
     // Default quality is High, so each click below is a real change and emits.
     small_segment->click();
-    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Small);
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small));
     EXPECT_TRUE(small_segment->isChecked());
     EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
     EXPECT_FALSE(high_segment->isChecked());
 
     balanced_segment->click();
-    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Balanced);
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
     EXPECT_TRUE(balanced_segment->isChecked());
     EXPECT_FALSE(small_segment->isChecked());
 
     high_segment->click();
-    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::High);
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High));
     EXPECT_TRUE(high_segment->isChecked());
     EXPECT_FALSE(balanced_segment->isChecked());
 
@@ -572,7 +574,7 @@ TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     VideoSettingsModel balanced = video_defaults_;
-    balanced.quality = recorder_core::NvencQualityPreset::Balanced;
+    balanced.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced);
     page.setVideoSettings(balanced);
 
     auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
@@ -2525,6 +2527,125 @@ TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
     ASSERT_NE(hdr, nullptr);
     EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));
     EXPECT_EQ(emit_count, 0) << "setOutputSettings must not emit formatSettingsChanged";
+}
+
+// Destroying a shown page used to abort: WebcamSetupPanel::hideEvent stops its preview and
+// relays previewActiveRequested into ConfigPage, but by teardown time the receiver is no
+// longer a ConfigPage. Reaching the end of this test without aborting is the assertion.
+TEST_F(ConfigPageTest, DestroyingAShownPageDoesNotDispatchOntoTheHalfDestroyedPage) {
+    {
+        ConfigPage page(output_defaults_, video_defaults_);
+        page.show();
+        QCoreApplication::processEvents();
+        ASSERT_NE(page.findChild<ui::widgets::WebcamSetupPanel*>(), nullptr);
+    }
+    QCoreApplication::processEvents();
+    SUCCEED();
+}
+
+// --- Expert-mode CQ precision row -------------------------------------------------
+// The row carries the CQ spin box; the named tiers stay on the segmented control above
+// it, so the row itself must not restate a tier.
+TEST_F(ConfigPageTest, CqRow_HasInfoHintAndNoTierLabel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* row = page.findChild<QWidget*>(QStringLiteral("qualityExpertWidget"));
+    ASSERT_NE(row, nullptr);
+    EXPECT_NE(row->findChild<ui::widgets::InfoHintIcon*>(QStringLiteral("qualityCqInfoHint")), nullptr);
+
+    for (const auto* label : row->findChildren<QLabel*>()) {
+        EXPECT_FALSE(label->text().contains(QStringLiteral("High")));
+        EXPECT_FALSE(label->text().contains(QStringLiteral("Balanced")));
+        EXPECT_FALSE(label->text().contains(QStringLiteral("Small")));
+    }
+}
+
+// A CQ that lands between tiers still highlights the tier it is closest to.
+TEST_F(ConfigPageTest, CqSpinBox_SegmentSelectionFollowsNearestPreset) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
+    auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(high_segment, nullptr);
+    ASSERT_NE(small_segment, nullptr);
+
+    spin->setValue(20); // nearest canonical tier is High (19)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(20), recorder_core::NvencQualityPreset::High);
+    EXPECT_TRUE(high_segment->property("qualitySegmentSelected").toBool());
+
+    spin->setValue(29); // nearest canonical tier is Small (30)
+    EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
+}
+
+// A non-canonical CQ is never snapped onto a tier; it reaches the model verbatim.
+TEST_F(ConfigPageTest, CqSpinBox_KeepsNonCanonicalValuesAndReachesTheModel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    VideoSettingsModel changed;
+    int emit_count = 0;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& s) {
+        ++emit_count;
+        changed = s;
+    });
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
+    ASSERT_NE(spin, nullptr);
+
+    spin->setValue(16);
+    EXPECT_FALSE(recorder_core::IsCanonicalCq(16));
+    EXPECT_EQ(emit_count, 1);
+    EXPECT_EQ(changed.cq, 16u);
+    EXPECT_EQ(spin->value(), 16) << "the value must survive, not snap to a tier";
+}
+
+// Scrolling the settings page must not silently retune quality.
+TEST_F(ConfigPageTest, CqSpinBox_IgnoresWheelUnlessFocused) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
+    ASSERT_NE(spin, nullptr);
+    spin->setValue(24);
+    ASSERT_FALSE(spin->hasFocus());
+
+    QWheelEvent wheel(QPointF(5, 5), QPointF(5, 5), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(spin, &wheel);
+    EXPECT_EQ(spin->value(), 24) << "unfocused wheel must not change the value";
+
+    // The wheel is swallowed, not merely unhandled.
+    EXPECT_FALSE(wheel.isAccepted());
+
+    // The counterpart matters: without it the test would also pass if the wheel were
+    // ignored unconditionally. Focus needs an active window.
+    page.show();
+    page.activateWindow();
+    QCoreApplication::processEvents();
+    spin->setFocus(Qt::MouseFocusReason);
+    ASSERT_TRUE(spin->hasFocus()) << "cannot verify the focused branch without focus";
+
+    QWheelEvent focused(QPointF(5, 5), QPointF(5, 5), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                        Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(spin, &focused);
+    EXPECT_NE(spin->value(), 24) << "focused wheel steps the value";
+}
+
+// The CQ input sits in the same column as every other settings-row input.
+TEST_F(ConfigPageTest, CqSpinBox_MatchesTheRowInputColumnWidth) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
+    auto* container = page.findChild<QComboBox*>(QStringLiteral("containerCombo"));
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(container, nullptr);
+    ASSERT_GT(container->width(), 0) << "a zero reference width would make this test vacuous";
+    EXPECT_EQ(spin->width(), container->width());
 }
 
 } // namespace

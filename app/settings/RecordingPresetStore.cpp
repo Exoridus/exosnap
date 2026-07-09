@@ -608,7 +608,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     // --- Video ---
     const auto& vid = preset.config.video;
     toml::table vid_tbl;
-    vid_tbl.emplace("quality", NvencQualityPresetToString(vid.quality).toStdString());
+    vid_tbl.emplace("cq", static_cast<int64_t>(vid.cq));
     vid_tbl.emplace("rate_control", RateControlModeToString(vid.rate_control).toStdString());
     vid_tbl.emplace("bitrate_kbps", static_cast<int64_t>(vid.bitrate_kbps));
     vid_tbl.emplace("cfr", vid.cfr);
@@ -828,9 +828,9 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     // --- Video ---
     auto& vid = preset.config.video;
     {
-        const auto q = NvencQualityPresetFromString(QString::fromStdString(TomlStr(tbl["video"]["quality"])));
-        if (q.has_value())
-            vid.quality = *q;
+        const int64_t cq = TomlInt(tbl["video"]["cq"], static_cast<int64_t>(vid.cq));
+        if (cq >= recorder_core::kNvencCqMin && cq <= recorder_core::kNvencCqMax)
+            vid.cq = static_cast<uint32_t>(cq);
     }
     {
         const auto rc = RateControlModeFromString(QString::fromStdString(TomlStr(tbl["video"]["rate_control"])));

@@ -77,6 +77,15 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_worker_join PRIVATE src)
 
+    # Progress-based two-phase shutdown policy (finalize_join_policy.h). Pure logic.
+    exosnap_add_gtest(
+        NAME test_finalize_join_policy
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_finalize_join_policy.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_finalize_join_policy PRIVATE src)
+
     exosnap_add_gtest(
         NAME test_opus_encoder
         TEST_PREFIX recorder_core.
@@ -526,6 +535,28 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_preset_guid PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_flush_drain_policy: pure bounded flush-drain policy (never wedge on a
+# lost/hung device — abort the drain past the time budget). No GPU needed.
+exosnap_add_gtest(
+    NAME test_nvenc_flush_drain_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_flush_drain_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_flush_drain_policy PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# test_finalize_join_policy: pure two-phase shutdown policy — a progress-based
+# finalize wait (never truncate a slow-but-progressing finalize; abort only on a
+# real byte stall) and the Phase-1/Phase-2 fault separation. No GPU / no threads.
+exosnap_add_gtest(
+    NAME test_finalize_join_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_finalize_join_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_finalize_join_policy PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
     TEST_PREFIX recorder_core.
@@ -716,6 +747,40 @@ exosnap_add_gtest(
 )
 target_include_directories(test_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
+
+# OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
+# vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
+exosnap_add_gtest(
+    NAME test_od_acquire_failure_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_od_acquire_failure_classify.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_od_acquire_failure_classify PRIVATE src)
+target_compile_definitions(test_od_acquire_failure_classify PRIVATE NOMINMAX)
+
+# WASAPI acquire-failure classifier: pure recording-loss policy for the audio
+# drain (endpoint invalidated / audio service down / unexpected HRESULT ->
+# fail-closed; benign empty tick -> keep draining). No audio hardware.
+exosnap_add_gtest(
+    NAME test_wasapi_acquire_failure_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_wasapi_acquire_failure_classify.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_wasapi_acquire_failure_classify PRIVATE src)
+target_compile_definitions(test_wasapi_acquire_failure_classify PRIVATE NOMINMAX)
+
+# OD reopen policy: pure live re-duplication retry loop (recovered continue vs
+# in-budget retry vs budget-exhausted give-up/clean-stop). No GPU.
+exosnap_add_gtest(
+    NAME test_od_reopen_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_od_reopen_policy.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_od_reopen_policy PRIVATE src)
+target_compile_definitions(test_od_reopen_policy PRIVATE NOMINMAX)
 
 # HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
 # the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)

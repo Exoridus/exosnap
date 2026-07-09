@@ -412,6 +412,18 @@ TEST_F(TransportDockTest, DockToggle_WebcamTooltip) {
     EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("webcam"));
 }
 
+TEST_F(TransportDockTest, DockToggle_WebcamTooltipUpdatable) {
+    // setToggleTooltip lets RecordPage surface the "no camera" hint on the disabled
+    // webcam toggle and restore "Webcam" when a device is present.
+    TransportDock dock;
+    dock.setToggleTooltip(QStringLiteral("webcam"), QStringLiteral("No webcam found — connect one"));
+    auto* toggle = Toggle(dock, QStringLiteral("webcam"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("No webcam found — connect one"));
+    dock.setToggleTooltip(QStringLiteral("webcam"), QStringLiteral("Webcam"));
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("Webcam"));
+}
+
 TEST_F(TransportDockTest, DockToggle_AppAudioTooltip) {
     // The app toggle tooltip reads "App audio" (v10 user spec); the icon key still drives the window SVG path.
     TransportDock dock;

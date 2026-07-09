@@ -3,6 +3,8 @@
 #include <QImage>
 #include <recorder_core/recorder_session.h>
 
+#include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -13,10 +15,54 @@
 
 namespace exosnap {
 
+// ---------------------------------------------------------------------------
+// Webcam read-result classification (loss detection) policy
+// ---------------------------------------------------------------------------
+// How the capture loop must react to one IMFSourceReader::ReadSample() result.
+// Pure and MF-call-free (only inspects the returned HRESULT + reader flags) so the
+// loss-recovery policy is unit-pinned, mirroring recorder_core's
+// ClassifyOdAcquireFailure. Any result that means the reader is dead maps to
+// Reconnect: the capture thread tears the reader down and polls to reopen the
+// device, while TryGetFrame keeps serving the last captured frame (frozen).
+enum class WebcamReadAction {
+    Deliver,   // A valid sample was produced: store it and composite.
+    Skip,      // No sample this read but the stream is healthy (streaming tick /
+               // spurious wake): keep the last frame and read again.
+    Reconnect, // Reader failure / device error / device removed / end-of-stream:
+               // the reader is dead. Reopen the device, holding the last frame.
+};
+
+// Classify a ReadSample() result. has_sample is (sample != nullptr). A failed
+// HRESULT, an MF_SOURCE_READERF_ERROR, or MF_SOURCE_READERF_ENDOFSTREAM all mean
+// the reader is gone (Reconnect); a healthy read with no sample is Skip; a healthy
+// read with a sample is Deliver.
+WebcamReadAction ClassifyWebcamReadResult(HRESULT hr, DWORD reader_flags, bool has_sample) noexcept;
+
+// Returns true if a freshly-read sample timestamp should be delivered: only
+// strictly-newer samples pass, so stale frames replayed by a reopened MF reader
+// (the "snap back several frames" glitch) are dropped. last_delivered_100ns is
+// the last delivered sample time (LONGLONG, MF 100ns units); a first frame
+// (last < 0) always passes; a non-positive/absent sample time (sample_100ns <= 0)
+// passes (no basis to reject).
+bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_100ns) noexcept;
+
 struct WebcamDeviceInfo {
     std::string id;
     std::string name;
 };
+
+// True when the webcam setup preview should open the camera: only when the webcam
+// is enabled AND a device is available. Couples the live preview to the enable
+// state so the camera never springs on merely from opening the Webcam page.
+bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept;
+
+// Chooses the webcam device id to select given the currently-configured id and
+// the available devices. An explicit choice (non-empty id) is always kept — even
+// if that device is momentarily absent — so it reconnects when plugged back in.
+// When nothing is chosen (empty id) and at least one camera exists, the first
+// device is returned so a fresh setup pre-selects a camera instead of leaving an
+// empty selection (which used to make capture silently grab the first device).
+std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::vector<WebcamDeviceInfo>& devices);
 
 struct WebcamFormat {
     int width = 0;
@@ -55,7 +101,8 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     void SetFrameCallback(FrameCallback cb);
 
     // Start capture; stops any existing capture first.
-    // device_id: MF symbolic link (from EnumerateDevices). Empty = first available.
+    // device_id: MF symbolic link (from EnumerateDevices). Empty opens no device
+    // (see ResolveWebcamDeviceId — callers must resolve a concrete id first).
     bool Start(const std::string& device_id, int width, int height, int fps);
 
     void Stop();

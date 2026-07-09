@@ -19,6 +19,9 @@ inline const QString kQualityPreset =
     QStringLiteral("Constant-quality presets: Small \xe2\x89\x88 CQ 30 (smaller files), "
                    "Balanced \xe2\x89\x88 CQ 24, High \xe2\x89\x88 CQ 19 (sharper, larger files). "
                    "Lower CQ = higher quality.");
+inline const QString kConstantQuality = QStringLiteral("Quantizer target, 1\xe2\x80\x93"
+                                                       "51 \xC2\xB7 lower = better quality, larger files. "
+                                                       "19 = High, 24 = Balanced, 30 = Small.");
 inline const QString kFrameRate = QStringLiteral("Constant rate \xC2\xB7 editor-friendly");
 inline const QString kCaptureCursor = QStringLiteral("Show the mouse pointer");
 inline const QString kOutputResolution = QStringLiteral("Downscale to save size \xC2\xB7 re-encodes");
@@ -83,8 +86,8 @@ inline const QString kVideoColorRange =
                    "honours it.");
 inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
-inline const QString kFramePacing =
-    QStringLiteral("Smooth removes judder from high-refresh/VRR sources; Newest minimises latency");
+inline const QString kFramePacing = QStringLiteral("Phase-correct removes judder from high-refresh/VRR sources; "
+                                                   "Lowest latency shows the newest frame");
 inline const QString kKeyframeInterval = QStringLiteral(
     "Keyframe interval controls trim accuracy: "
     "2\xC2\xA0s\xC2\xA0=\xC2\xA0"

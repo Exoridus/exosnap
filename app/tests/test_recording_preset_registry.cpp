@@ -21,7 +21,7 @@ namespace {
 RecordingPresetConfig MakeDistinctConfig() {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.countdown_seconds = 3;
-    cfg.video.quality = recorder_core::NvencQualityPreset::Small;
+    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
     return cfg;
 }
 
@@ -361,7 +361,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingAudio_IsDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.video.quality = recorder_core::NvencQualityPreset::Small;
+    live.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 

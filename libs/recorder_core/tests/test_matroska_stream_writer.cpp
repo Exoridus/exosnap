@@ -496,6 +496,28 @@ TEST_F(StreamWriterTest, CuePointPerVideoKeyframe) {
     EXPECT_EQ(CountCuePoints(d), expected_kf);
 }
 
+// 4b. Cue points when the keyframe interval equals the 2 s cluster boundary — the
+// real-recording regime (one keyframe per cluster, the keyframe IS the boundary).
+// The gop=60 case above keeps two keyframes per cluster and never exercises this.
+TEST_F(StreamWriterTest, CuePointPerKeyframe_WhenGopEqualsClusterBoundary) {
+    const double seconds = 7.0;
+    const int gop = 120; // keyframe every 2 s @ 60 fps == cluster boundary
+    const uint64_t vframe = 1000000000ULL / 60;
+    const uint64_t total_ns = static_cast<uint64_t>(seconds * 1e9);
+    int expected_kf = 0;
+    for (uint64_t vpts = 0, vidx = 0; vpts < total_ns; vpts += vframe, ++vidx) {
+        if (vidx % static_cast<uint64_t>(gop) == 0)
+            ++expected_kf;
+    }
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, true, false)));
+    FeedSeconds(w, seconds, gop, 16);
+    ASSERT_TRUE(w.Finalize());
+    const auto d = ReadFile(tmp_);
+    EXPECT_EQ(CountCuePoints(d), expected_kf) << "one cue per 2 s keyframe when keyframe == cluster boundary";
+}
+
 // 5. Duration is back-patched to a real value with a stable 8-byte float.
 TEST_F(StreamWriterTest, DurationBackPatched) {
     MatroskaStreamWriter w;

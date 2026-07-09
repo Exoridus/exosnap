@@ -41,6 +41,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
@@ -670,6 +671,9 @@ void RecordPage::showEvent(QShowEvent* event) {
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    // Now that the page is visible, (re)start the webcam PiP capture — see the
+    // visibility gate in syncWebcamPreviewCapture().
+    syncWebcamPreviewCapture();
 }
 
 void RecordPage::hideEvent(QHideEvent* event) {
@@ -688,6 +692,9 @@ void RecordPage::hideEvent(QHideEvent* event) {
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    // Release the camera so the Settings webcam panel can own it without a device-lock
+    // fight (see syncWebcamPreviewCapture()). No-op while recording.
+    syncWebcamPreviewCapture();
 
     QWidget::hideEvent(event);
 }
@@ -1626,6 +1633,25 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     }
     updateWebcamOverlay();
     syncWebcamPreviewCapture();
+
+    // Keep the Record dock's webcam toggle in step with the enable state, even when the
+    // change came from the Settings panel (not from clicking the dock toggle itself).
+    // Otherwise enabling the webcam in Settings makes the PiP appear while the dock
+    // toggle still reads "off", which looks like the camera turned on by itself.
+    if (transport_dock_) {
+        const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+        const bool failed = (view_model_.state == UiRecordingState::Failed);
+        transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled,
+                                        !(blocked || failed));
+    }
+}
+
+void RecordPage::setSettingsWebcamPreviewActive(bool active) {
+    // The Settings webcam panel is a consumer of the single shared capture. Registering
+    // it keeps the one reader alive while the user is on the Settings page (Record page
+    // hidden), so the panel sees the same frames without opening a competing reader.
+    if (coordinator_)
+        coordinator_->SetWebcamSettingsPreviewActive(active);
 }
 
 void RecordPage::updateWebcamOverlay() {
@@ -1647,7 +1673,14 @@ void RecordPage::syncWebcamPreviewCapture() {
         return;
     const bool idle =
         (view_model_.state == UiRecordingState::Ready || view_model_.state == UiRecordingState::Completed);
-    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle);
+    // Only open the camera for the live PiP while the Record page is actually visible.
+    // The Settings webcam panel opens its OWN reader on the same device; if the Record
+    // preview also runs while the user sits on the Settings page, the two readers fight
+    // over the camera (ReadSample fails with MF_E_VIDEO_RECORDING_DEVICE_LOCKED, the
+    // reader reopens ~every 0.5s) and both previews stutter. Gating on page visibility
+    // keeps exactly one reader on the device at a time. Recording is unaffected: while
+    // recording the capture is owned by is_recording_, not the preview flag.
+    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle && record_page_visible_);
 }
 
 void RecordPage::onWebcamOverlayMoved(QRectF rect_norm) {
@@ -2019,6 +2052,13 @@ void RecordPage::openOutputFolder() {
 
     if (!result_path.isEmpty()) {
         QFileInfo info(result_path);
+        if (info.exists() && info.isFile()) {
+            // Reveal AND highlight the file in Explorer. QDesktopServices::openUrl
+            // only opens the containing folder without selecting the file.
+            QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                    {QStringLiteral("/select,") + QDir::toNativeSeparators(info.absoluteFilePath())});
+            return;
+        }
         folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
     } else if (!last_output_folder_.empty()) {
         folder = QString::fromStdWString(last_output_folder_.wstring());
@@ -2313,9 +2353,14 @@ void RecordPage::initCoordinator() {
 
     // Live webcam frames feed the preview PiP (Qt paint or DXGI overlay). The
     // coordinator marshals these onto the main thread.
-    coordinator_->SetWebcamFrameCallback([safeSurface](QImage frame) {
+    coordinator_->SetWebcamFrameCallback([this, safeSurface](QImage frame) {
+        // Fan the single shared capture out to both consumers: the Record PiP overlay
+        // and (via webcamFrameReady → MainWindow → Settings panel) the Settings preview.
+        // The Settings panel no longer opens its own reader, so there is only ever one
+        // capture on the device.
         if (safeSurface)
-            safeSurface->setWebcamFrame(std::move(frame));
+            safeSurface->setWebcamFrame(frame);
+        emit webcamFrameReady(frame);
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
 

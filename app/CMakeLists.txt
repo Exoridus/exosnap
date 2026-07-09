@@ -1556,6 +1556,19 @@ target_include_directories(webcam_device_notifier_tests PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(webcam_device_notifier_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_device_notifier_tests PROPERTIES AUTOMOC ON)
 
+# Pure webcam ReadSample loss-detection policy (ClassifyWebcamReadResult).
+# No live device / QApplication needed — links the service support target only for
+# the classifier symbol.
+exosnap_add_gtest(
+    NAME webcam_read_policy_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_read_policy.cpp
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
+
 exosnap_add_gtest(
     NAME display_device_notifier_tests
     TEST_PREFIX device.
