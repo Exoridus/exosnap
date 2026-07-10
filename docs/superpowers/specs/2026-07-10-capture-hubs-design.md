@@ -180,20 +180,31 @@ for HDR desktops.
 
 ## The idle-duplication risk
 
-An always-open idle duplication has desktop-wide side effects. It can force DWM out of
+An open duplication has desktop-wide side effects. It can force DWM out of
 multiplane-overlay and fullscreen-optimisation paths, and other processes can hit
 `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` when duplication slots run out. For an app that sits
 open beside a game, that is not a footnote.
+
+Bound the exposure precisely, because the older design overstates it. The DXGI hub has
+exactly one consumer — the live preview — and the preview shows exactly one display. So:
+
+- **At most one duplication, ever**, for the currently selected monitor. Never one per
+  display, never one per picker tile (D3).
+- **No duplication at all with the preview off.** Turn the preview off in the source
+  picker and the last consumer leaves; refcount hits zero; the duplication closes. Same
+  for a hidden Record page. There is no idle-with-nobody-watching state to suspend,
+  because the refcount already removes it.
+
+What remains is the case where the user has the preview open on the monitor a game is
+running on. That is the probe, and it is the only one.
 
 Today's idle preview pays a different cost (WGC's DWM sync coupling, VRR interference, the
 capture indicator — the very costs ADR 0013 removed from the recording path). The trade is
 not strictly better on every system.
 
-Mitigations, all required:
+Mitigations:
 
-- Strict refcount. The Record page hidden, or the preview stopped, closes the duplication.
-  An OD must never idle for an invisible page.
-- A suspend rule for a hub held open with no visible consumer.
+- Strict refcount, as above. This is the mitigation; the rest is contingency.
 - A kill-switch setting, if the probe shows regressions.
 
 **This risk is why the plan has an off-ramp**, and why the DXGI hub is sequenced last

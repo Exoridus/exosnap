@@ -10,6 +10,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/logging/logging.cpp
         src/audio_input_device.cpp
         src/audio_track_model.cpp
+        include/recorder_core/capture_hub_policy.h
+        src/capture_hub_policy.cpp
         src/codec_private.cpp
         include/recorder_core/audio_meter.h
         src/audio_meter.cpp
@@ -324,6 +326,8 @@ add_library(recorder_core STATIC
     src/annexb_to_avcc.cpp
     src/annexb_to_hvcc.cpp
     src/audio_track_model.cpp
+    include/recorder_core/capture_hub_policy.h
+    src/capture_hub_policy.cpp
     src/mic_meter_service.cpp
     src/loopback_meter_service.cpp
     include/recorder_core/mp4_remuxer.h
@@ -373,6 +377,16 @@ exosnap_add_gtest(
     NAME test_audio_track_resolver
     TEST_PREFIX recorder_core.
     SOURCES tests/test_audio_track_resolver.cpp
+    LIBRARIES recorder_core
+)
+
+# Capture-hub arbitration: consumer refcount, the held frame across loss and
+# unbounded reopen, and the release-before-the-engine-opens handover order that
+# the one-duplication-per-process constraint forces. Pure, GPU-free.
+exosnap_add_gtest(
+    NAME test_capture_hub_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_capture_hub_policy.cpp
     LIBRARIES recorder_core
 )
 
