@@ -9,9 +9,24 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+#include <cstdint>
 #include <cstring>
 
 namespace recorder_core {
+
+namespace {
+
+// Int16 interleaved -> Float32 interleaved, normalised by 1/32768. Matches the
+// scale used by MixedAudioSrc and the encoder-side conversion so every audio
+// path in the engine agrees on the same mapping.
+void ConvertInt16ToFloat32(const std::int16_t* src, float* dst, size_t sample_count) {
+    constexpr float kInt16Scale = 1.0f / 32768.0f;
+    for (size_t i = 0; i < sample_count; ++i) {
+        dst[i] = static_cast<float>(src[i]) * kInt16Scale;
+    }
+}
+
+} // namespace
 
 OutputFormatAudioSrc::OutputFormatAudioSrc(std::unique_ptr<IAudioCaptureSource> inner, uint32_t target_sample_rate,
                                            uint32_t target_channels)
@@ -33,13 +48,16 @@ bool OutputFormatAudioSrc::Init(std::string& out_error) {
 
     const uint32_t inner_rate = inner_->SampleRate();
     const uint32_t inner_channels = inner_->Channels();
+    inner_format_ = inner_->SampleFormat();
 
     if (inner_rate == 0 || inner_channels == 0) {
         out_error = "OutputFormatAudioSrc: inner source reported invalid rate/channels after Init";
         return false;
     }
 
-    // Fast path: if target == inner, skip the SwrContext entirely.
+    // Fast path: if target rate/channels == inner, skip the SwrContext entirely.
+    // Even here the inner may be Int16 (e.g. process-loopback capture); the byte
+    // conversion to Float32 happens in AcquireBuffer.
     if (target_sample_rate_ == inner_rate && target_channels_ == inner_channels) {
         passthrough_ = true;
         initialized_ = true;
@@ -48,6 +66,12 @@ bool OutputFormatAudioSrc::Init(std::string& out_error) {
 
     passthrough_ = false;
 
+    // Input sample format for the resampler follows the inner source. The
+    // sources feeding this decorator deliver either Float32 (mix bus, WASAPI
+    // loopback, mic DSP) or Int16 (process loopback, some mic endpoints).
+    const AVSampleFormat in_sample_fmt =
+        (inner_format_ == AudioSampleFormat::Int16) ? AV_SAMPLE_FMT_S16 : AV_SAMPLE_FMT_FLT;
+
     // Build channel layouts using the modern AVChannelLayout API (avutil-60).
     AVChannelLayout in_layout = {};
     AVChannelLayout out_layout = {};
@@ -55,11 +79,11 @@ bool OutputFormatAudioSrc::Init(std::string& out_error) {
     av_channel_layout_default(&out_layout, static_cast<int>(target_channels_));
 
     // swr_alloc_set_opts2: allocates and configures the context in one call.
-    // In = inner format (Float32 interleaved = AV_SAMPLE_FMT_FLT).
-    // Out = target format (Float32 interleaved = AV_SAMPLE_FMT_FLT).
-    // We keep Float32 throughout; bit-depth conversion is the encoder's job.
+    // In  = inner format (Int16 or Float32 interleaved, per in_sample_fmt).
+    // Out = Float32 interleaved (AV_SAMPLE_FMT_FLT). The resampler up-converts
+    // Int16 inputs to Float32; deeper bit-depth conversion is the encoder's job.
     int ret = swr_alloc_set_opts2(&swr_, &out_layout, AV_SAMPLE_FMT_FLT, static_cast<int>(target_sample_rate_),
-                                  &in_layout, AV_SAMPLE_FMT_FLT, static_cast<int>(inner_rate), 0, nullptr);
+                                  &in_layout, in_sample_fmt, static_cast<int>(inner_rate), 0, nullptr);
 
     av_channel_layout_uninit(&in_layout);
     av_channel_layout_uninit(&out_layout);
@@ -108,9 +132,26 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         return false;
     }
 
-    // ---- Passthrough mode ----
+    // ---- Passthrough mode (target rate/channels == inner) ----
     if (passthrough_) {
-        out_buf = src_buf;
+        // Float32 inner: hand the bytes through unchanged (zero-copy).
+        // Silent/null buffers carry no samples to convert — the caller treats
+        // them as zero-fill of num_frames, so forward them verbatim too.
+        if (inner_format_ == AudioSampleFormat::Float32 || src_buf.silent || src_buf.bytes == nullptr) {
+            out_buf = src_buf;
+            return true;
+        }
+
+        // Int16 inner: convert to the Float32 this decorator advertises.
+        const size_t sample_count = static_cast<size_t>(src_buf.num_frames) * target_channels_;
+        resample_buf_.resize(sample_count);
+        ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(src_buf.bytes), resample_buf_.data(), sample_count);
+
+        exposed_buf_.bytes = reinterpret_cast<const uint8_t*>(resample_buf_.data());
+        exposed_buf_.num_frames = src_buf.num_frames;
+        exposed_buf_.silent = src_buf.silent;
+        exposed_buf_.data_discontinuity = src_buf.data_discontinuity;
+        out_buf = exposed_buf_;
         return true;
     }
 

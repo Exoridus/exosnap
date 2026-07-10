@@ -5,12 +5,14 @@
 // Links libswresample (FFmpeg) — not a pure-logic test.
 //
 // Covers:
-//   - Passthrough mode (48k/stereo source, 48k/stereo target) — byte-identical.
+//   - Passthrough mode (48k/stereo source, 48k/stereo target) — byte-identical
+//     for Float32 inners; Int16 inners are converted to real Float32 samples.
+//   - Int16 inner through the resampling path (swr input format is S16).
 //   - Stereo-to-mono downmix at 48 kHz (channel reduction, no rate change).
 //   - Stereo-at-48k-to-stereo-at-44.1k (rate change only).
 //   - SampleRate()/Channels() report target values after Init.
 //   - SampleFormat() always returns Float32.
-//   - Silent buffer propagates the silent flag.
+//   - Silent buffer propagates the silent flag (Float32 and Int16 inners).
 //   - data_discontinuity propagates.
 
 #include <gtest/gtest.h>
@@ -83,6 +85,52 @@ struct StubSource final : IAudioCaptureSource {
     }
 };
 
+// A source that reports Int16 samples (like WasapiProcessLoopbackSrc, and mic
+// capture on Int16-only endpoints). Its bytes are little-endian interleaved
+// int16 frames; SampleFormat() reports Int16.
+struct Int16StubSource final : IAudioCaptureSource {
+    uint32_t sample_rate = 48000;
+    uint32_t channels = 2;
+    uint32_t frames = 480;
+    bool silent = false;
+    bool data_discontinuity = false;
+    std::vector<int16_t> data;
+    std::string endpoint = "int16stub";
+
+    bool Init(std::string& /*out_error*/) override {
+        if (data.empty()) {
+            data.assign(static_cast<size_t>(frames) * channels, 0);
+        }
+        return true;
+    }
+    uint32_t PendingFrameCount() override {
+        return frames;
+    }
+    bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& /*out_error*/) override {
+        out_buf.bytes = reinterpret_cast<const uint8_t*>(data.data());
+        out_buf.num_frames = frames;
+        out_buf.silent = silent;
+        out_buf.data_discontinuity = data_discontinuity;
+        return true;
+    }
+    void ReleaseBuffer() override {
+    }
+    uint32_t SampleRate() const override {
+        return sample_rate;
+    }
+    uint32_t Channels() const override {
+        return channels;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Int16;
+    }
+    const std::string& EndpointName() const override {
+        return endpoint;
+    }
+    void Shutdown() override {
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Passthrough: target == source format
 // ---------------------------------------------------------------------------
@@ -118,6 +166,100 @@ TEST(OutputFormatAudioSrc, Passthrough_SameRateChannels_ByteIdentical) {
     for (size_t i = 0; i < 480 * 2; ++i) {
         EXPECT_FLOAT_EQ(got[i], expected[i]) << " at index " << i;
     }
+    src.ReleaseBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// Int16 inner source, passthrough rate/channels: the decorator claims Float32
+// via SampleFormat(), so it MUST actually convert the Int16 samples to Float32
+// rather than hand the raw int16 bytes through. Otherwise the encoder reads
+// int16 bytes as float garbage (silent audio corruption).
+// ---------------------------------------------------------------------------
+
+TEST(OutputFormatAudioSrc, Passthrough_Int16Source_ConvertsToFloat32) {
+    auto stub = std::make_unique<Int16StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = 480;
+    stub->data.resize(480 * 2);
+    // A deterministic bipolar ramp spanning most of the int16 range.
+    for (size_t i = 0; i < stub->data.size(); ++i) {
+        stub->data[i] = static_cast<int16_t>(((static_cast<int>(i) * 37) % 65536) - 32768);
+    }
+    std::vector<int16_t> expected_i16 = stub->data;
+
+    OutputFormatAudioSrc src(std::move(stub), 48000, 2);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    // Contract: the decorator advertises Float32 to the encoder.
+    EXPECT_EQ(src.SampleFormat(), AudioSampleFormat::Float32);
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+    EXPECT_EQ(buf.num_frames, 480u);
+    ASSERT_NE(buf.bytes, nullptr);
+
+    // The exposed bytes must be real Float32 samples equal to int16 / 32768.
+    const float* got = reinterpret_cast<const float*>(buf.bytes);
+    for (size_t i = 0; i < expected_i16.size(); ++i) {
+        const float want = static_cast<float>(expected_i16[i]) / 32768.0f;
+        EXPECT_NEAR(got[i], want, 1e-6f) << " at index " << i;
+    }
+    src.ReleaseBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// Int16 inner source through the resampling (swr) path: the resampler input
+// format must be S16, not FLT. A constant 0.5 signal must survive resampling.
+// ---------------------------------------------------------------------------
+
+TEST(OutputFormatAudioSrc, RateConversion_Int16Source_ProducesConvertedFloat) {
+    auto stub = std::make_unique<Int16StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = 480;
+    // Constant +0.5 full-scale (16384 / 32768 == 0.5).
+    stub->data.assign(480 * 2, static_cast<int16_t>(16384));
+
+    OutputFormatAudioSrc src(std::move(stub), 44100, 2);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+    EXPECT_GT(buf.num_frames, 0u);
+    ASSERT_NE(buf.bytes, nullptr);
+
+    const float* out = reinterpret_cast<const float*>(buf.bytes);
+    const size_t out_samples = static_cast<size_t>(buf.num_frames) * 2u;
+    // A constant input resamples to a constant ~0.5 output (swr edge frames may
+    // ramp; check the settled interior). If the input were misread as FLT the
+    // values would be denormal/garbage far from 0.5.
+    for (size_t i = 4 * 2; i < out_samples; ++i) {
+        EXPECT_NEAR(out[i], 0.5f, 0.02f) << " at sample " << i;
+    }
+    src.ReleaseBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// Int16 inner source, silent buffer: still propagates the silent flag through
+// the converting passthrough without dereferencing bytes.
+// ---------------------------------------------------------------------------
+
+TEST(OutputFormatAudioSrc, Passthrough_Int16Source_SilentPropagates) {
+    auto stub = std::make_unique<Int16StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = 480;
+    stub->silent = true;
+
+    OutputFormatAudioSrc src(std::move(stub), 48000, 2);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+    EXPECT_TRUE(buf.silent);
     src.ReleaseBuffer();
 }
 

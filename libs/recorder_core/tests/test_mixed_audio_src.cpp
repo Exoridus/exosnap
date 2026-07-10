@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "mixed_audio_src.h"
+#include "output_format_audio_src.h"
 
 #include <algorithm>
 #include <cmath>
@@ -448,6 +449,67 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_Shutdown_CallsAllSources) {
 
     EXPECT_EQ(s0->shutdown_call_count, 1);
     EXPECT_EQ(s1->shutdown_call_count, 1);
+}
+
+// Cross-path symmetry (recorder_session single-source track construction):
+//   * gain == 1.0  -> the raw source is used directly, then wrapped in
+//                     OutputFormatAudioSrc by the audio thread.
+//   * gain != 1.0  -> the source is wrapped in MixedAudioSrc (which converts to
+//                     Float32), then wrapped in OutputFormatAudioSrc.
+// For an Int16 source both paths must deliver the same Float32 signal to the
+// encoder. Before the OutputFormatAudioSrc Int16 fix, the direct path handed
+// raw int16 bytes through as if they were Float32 (garbage), so the two paths
+// diverged.
+TEST(MixedAudioSrcTest, SingleSource_Int16_DirectAndMixedPathsAgree) {
+    constexpr uint32_t kFrames = MixedAudioSrc::kMixFrameCount; // 480
+    constexpr int16_t kVal = 16384;                             // 0.5 full scale
+    const std::vector<uint8_t> i16_bytes = MakeInt16Bytes(kFrames, 2, kVal);
+
+    // --- Direct path: OutputFormatAudioSrc(Int16 source) ---
+    auto direct_src = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Int16);
+    direct_src->SetPendingFrames(kFrames);
+    direct_src->SetData(i16_bytes);
+    OutputFormatAudioSrc direct(std::move(direct_src), 48000, 2);
+    std::string err;
+    ASSERT_TRUE(direct.Init(err)) << err;
+    RawAudioBuffer direct_buf{};
+    ASSERT_TRUE(direct.AcquireBuffer(direct_buf, err)) << err;
+    ASSERT_NE(direct_buf.bytes, nullptr);
+    const float* direct_f = reinterpret_cast<const float*>(direct_buf.bytes);
+    std::vector<float> direct_samples(direct_f, direct_f + static_cast<size_t>(direct_buf.num_frames) * 2u);
+    direct.ReleaseBuffer();
+
+    // --- Mixed path: OutputFormatAudioSrc(MixedAudioSrc([Int16 source], gain 1.0)) ---
+    auto mixed_inner = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Int16);
+    mixed_inner->SetPendingFrames(kFrames);
+    mixed_inner->SetData(i16_bytes);
+    std::vector<std::unique_ptr<IAudioCaptureSource>> mixed_sources;
+    mixed_sources.push_back(std::move(mixed_inner));
+    auto mixer = std::make_unique<MixedAudioSrc>(std::move(mixed_sources), MakeUnityGains(1));
+    OutputFormatAudioSrc mixed(std::move(mixer), 48000, 2);
+    ASSERT_TRUE(mixed.Init(err)) << err;
+    RawAudioBuffer mixed_buf{};
+    ASSERT_TRUE(mixed.AcquireBuffer(mixed_buf, err)) << err;
+    ASSERT_NE(mixed_buf.bytes, nullptr);
+    const float* mixed_f = reinterpret_cast<const float*>(mixed_buf.bytes);
+    std::vector<float> mixed_samples(mixed_f, mixed_f + static_cast<size_t>(mixed_buf.num_frames) * 2u);
+    mixed.ReleaseBuffer();
+
+    ASSERT_EQ(direct_samples.size(), mixed_samples.size());
+
+    auto rms = [](const std::vector<float>& v) {
+        double acc = 0.0;
+        for (float s : v)
+            acc += static_cast<double>(s) * s;
+        return v.empty() ? 0.0 : std::sqrt(acc / static_cast<double>(v.size()));
+    };
+
+    // Both paths carry the same 0.5 full-scale signal.
+    for (size_t i = 0; i < direct_samples.size(); ++i) {
+        EXPECT_NEAR(direct_samples[i], 0.5f, 1e-6f) << " direct at " << i;
+        EXPECT_NEAR(direct_samples[i], mixed_samples[i], 1e-6f) << " path mismatch at " << i;
+    }
+    EXPECT_NEAR(rms(direct_samples), rms(mixed_samples), 1e-6);
 }
 
 } // namespace
