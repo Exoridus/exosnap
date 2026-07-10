@@ -750,9 +750,14 @@ void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
             // A rebuilt card resumes where the old one left off. "Loading
             // preview..." is only honest the first time a source is seen.
             const auto key = thumbnailKeyFor(section, option.target_index);
-            const auto cached = key ? thumbnail_cache_.find(*key) : thumbnail_cache_.end();
-            if (cached != thumbnail_cache_.end()) {
-                card->setThumbnail(cached->second);
+            const QPixmap* cached_thumb = nullptr;
+            if (key) {
+                const auto cached = thumbnail_cache_.find(*key);
+                if (cached != thumbnail_cache_.end())
+                    cached_thumb = &cached->second;
+            }
+            if (cached_thumb != nullptr) {
+                card->setThumbnail(*cached_thumb);
             } else {
                 card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
             }
