@@ -1156,6 +1156,14 @@ PersistedPresetState RecordingPresetStore::Load() const {
     std::vector<RecordingPreset> accepted;
     std::set<std::string> seen_ids;
 
+    // preset.default used to be an ordinary, editable preset before built-in
+    // presets existed; every pre-upgrade presets.toml still carries one. It is
+    // captured here (first occurrence wins) so its configuration can become
+    // the live config below when the file predates [live] entirely — instead
+    // of being silently discarded like the other three built-in ids, which no
+    // released version ever wrote.
+    std::optional<RecordingPresetConfig> carried_over_default_config;
+
     if (const toml::array* presets_arr = doc["presets"].as_array()) {
         for (const auto& elem : *presets_arr) {
             const auto* item_tbl = elem.as_table();
@@ -1174,6 +1182,9 @@ PersistedPresetState RecordingPresetStore::Load() const {
                 continue;
             }
             if (IsBuiltInPresetId(raw.id)) {
+                if (raw.id == kDefaultPresetId && !carried_over_default_config.has_value()) {
+                    carried_over_default_config = raw.config;
+                }
                 continue; // Built-ins are code-defined — never loaded from disk.
             }
             if (seen_ids.count(raw.id) > 0) {
@@ -1194,13 +1205,25 @@ PersistedPresetState RecordingPresetStore::Load() const {
         }
     }
 
-    std::optional<RecordingPresetConfig> live;
-    if (const toml::table* live_tbl = doc["live"].as_table()) {
-        RecordingPresetConfig cfg = ConfigFromToml(*live_tbl);
+    // Shared by both the [live] table and the preset.default carry-over below
+    // — one path applies the ADR-0032 color-range migration and sanitization
+    // to a parsed config, regardless of which table it came from.
+    const auto migrate_and_sanitize_live = [&](RecordingPresetConfig cfg) {
         if (migrate_color_range && cfg.output.color_range == capability::ColorRange::Full) {
             cfg.output.color_range = capability::ColorRange::Limited;
         }
-        live = SanitizePresetConfig(cfg);
+        return SanitizePresetConfig(std::move(cfg));
+    };
+
+    std::optional<RecordingPresetConfig> live;
+    if (const toml::table* live_tbl = doc["live"].as_table()) {
+        live = migrate_and_sanitize_live(ConfigFromToml(*live_tbl));
+    } else if (carried_over_default_config.has_value()) {
+        // No [live] table: this is a pre-rework file. Its preset.default entry
+        // (captured above) becomes the live config, once — the entry itself
+        // does not survive into the new file, and this is not a repair since
+        // nothing the user would notice was lost.
+        live = migrate_and_sanitize_live(*carried_over_default_config);
     }
 
     // Repair selected_id: keep it if it names a built-in (always present) or a

@@ -1660,12 +1660,98 @@ TEST(RecordingPresetStore, LiveTable_CorruptField_ClampedNotReset) {
     CleanupFile(path);
 }
 
+// Extends the original contract pin: a file with no [live] table and no
+// stored "preset.default" entry leaves the live config absent (the caller
+// boots the built-in Default) and every ordinary user preset still loads —
+// nothing is dropped, so this is not a repair.
 TEST(RecordingPresetStore, LiveTable_Missing_ReturnsNullopt) {
     const QString path = UniqueTempPath();
-    ASSERT_TRUE(
-        WriteTomlString(path, QStringLiteral("schema_version = 23\nselected_id = \"preset.default\"\npresets = []\n")));
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = 23\n"
+                                                     "selected_id = \"preset.userpreset9999\"\n"
+                                                     "\n"
+                                                     "[[presets]]\n"
+                                                     "id = \"preset.userpreset9999\"\n"
+                                                     "name = \"Mine\"\n")));
     RecordingPresetStore store(path);
-    EXPECT_FALSE(store.Load().live.has_value());
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.live.has_value());
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, "preset.userpreset9999");
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// preset.default carry-over (pre-built-in-rework files)
+//
+// preset.default used to be an ordinary, editable preset before the built-in
+// rework seeded four read-only presets under reserved ids. A pre-upgrade
+// presets.toml still has no [live] table but does have a stored
+// "preset.default" entry holding whatever the user last edited it to. That
+// config becomes the live config once; the entry itself never survives into
+// the loaded preset list (built-ins are never persisted, carried-over or
+// not); and nothing is reported as repaired, since nothing the user would
+// miss was lost.
+// ===========================================================================
+
+TEST(RecordingPresetStore, PreUpgradeDefaultEntry_NoLiveTable_BecomesLiveConfig) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = 22\n"
+                                                     "selected_id = \"preset.default\"\n"
+                                                     "\n"
+                                                     "[[presets]]\n"
+                                                     "id = \"preset.default\"\n"
+                                                     "name = \"Default\"\n"
+                                                     "[presets.video]\n"
+                                                     "cq = 37\n")));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+
+    EXPECT_FALSE(state.repaired);
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_EQ(state.live->video.cq, 37u);
+
+    // The preset.default entry itself does not survive into the loaded list.
+    bool has_default_entry = false;
+    for (const auto& p : state.user_presets) {
+        if (p.id == kDefaultPresetId)
+            has_default_entry = true;
+    }
+    EXPECT_FALSE(has_default_entry);
+    EXPECT_TRUE(state.user_presets.empty());
+
+    CleanupFile(path);
+}
+
+// When [live] IS present, it wins over a stray preset.default entry (which
+// can now only arise from hand-editing, since current Save() never writes a
+// built-in id) — the entry is skipped silently, same as the other three
+// built-in ids always are.
+TEST(RecordingPresetStore, LiveTablePresent_StrayDefaultEntry_LiveWins_NoRepair) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = %1\n"
+                                                     "selected_id = \"preset.default\"\n"
+                                                     "\n"
+                                                     "[live]\n"
+                                                     "[live.video]\n"
+                                                     "cq = 11\n"
+                                                     "\n"
+                                                     "[[presets]]\n"
+                                                     "id = \"preset.default\"\n"
+                                                     "name = \"Default\"\n"
+                                                     "[presets.video]\n"
+                                                     "cq = 44\n")
+                                          .arg(kPresetSchemaVersion)));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+
+    EXPECT_FALSE(state.repaired);
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_EQ(state.live->video.cq, 11u);    // [live] wins over the stray entry
+    EXPECT_TRUE(state.user_presets.empty()); // the stray entry is skipped, not carried
+
     CleanupFile(path);
 }
 
