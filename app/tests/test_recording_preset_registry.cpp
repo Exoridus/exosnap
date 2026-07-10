@@ -37,7 +37,7 @@ TEST(RecordingPresetRegistry, Constructor_SeedsDefault) {
 }
 
 // ===========================================================================
-// AddPreset / AddDefaultPreset
+// AddPreset
 // ===========================================================================
 
 TEST(RecordingPresetRegistry, AddPreset_CreatesNewId_SelectsIt_CountGrows) {
@@ -48,27 +48,6 @@ TEST(RecordingPresetRegistry, AddPreset_CreatesNewId_SelectsIt_CountGrows) {
     EXPECT_NE(id, std::string(kDefaultPresetId));
     // id starts with "preset."
     EXPECT_EQ(id.substr(0, 7), "preset.");
-}
-
-TEST(RecordingPresetRegistry, AddDefaultPreset_CreatesNewId_SelectsIt_CountGrows) {
-    RecordingPresetRegistry reg;
-    const std::string id = reg.AddDefaultPreset();
-    EXPECT_EQ(reg.Count(), 5u);
-    EXPECT_EQ(reg.SelectedId(), id);
-    EXPECT_NE(id, std::string(kDefaultPresetId));
-}
-
-TEST(RecordingPresetRegistry, AddDefaultPreset_NameDedup) {
-    RecordingPresetRegistry reg;
-    const std::string id1 = reg.AddDefaultPreset(); // "New preset"
-    const std::string id2 = reg.AddDefaultPreset(); // "New preset (2)"
-
-    const RecordingPreset* p1 = reg.FindById(id1);
-    const RecordingPreset* p2 = reg.FindById(id2);
-    ASSERT_NE(p1, nullptr);
-    ASSERT_NE(p2, nullptr);
-    EXPECT_EQ(p1->name, "New preset");
-    EXPECT_EQ(p2->name, "New preset (2)");
 }
 
 TEST(RecordingPresetRegistry, AddPreset_NameDedup_Suffix2Then3) {
@@ -92,62 +71,6 @@ TEST(RecordingPresetRegistry, AddPreset_NameDedup_Suffix2Then3) {
 }
 
 // ===========================================================================
-// SaveSelected
-// ===========================================================================
-
-TEST(RecordingPresetRegistry, SaveSelected_OverwritesSameId_ConfigChanges_IdStable_CountUnchanged) {
-    RecordingPresetRegistry reg;
-    reg.AddPreset(MakeDefaultPreset().config, "Mine"); // selects a non-built-in preset
-    const std::string orig_id = reg.SelectedId();
-    const std::size_t orig_count = reg.Count();
-
-    RecordingPresetConfig new_cfg = MakeDistinctConfig();
-    EXPECT_TRUE(reg.SaveSelected(new_cfg));
-    EXPECT_EQ(reg.Count(), orig_count);
-    EXPECT_EQ(reg.SelectedId(), orig_id);
-    EXPECT_TRUE(NormalizedConfigEquals(reg.SelectedPreset().config, new_cfg));
-}
-
-// ===========================================================================
-// DuplicateSelected
-// ===========================================================================
-
-TEST(RecordingPresetRegistry, DuplicateSelected_NewId_CopyNameDeduped_ConfigEqual_SelectsCopy) {
-    RecordingPresetRegistry reg;
-    const std::string src_id = reg.SelectedId();
-    const RecordingPresetConfig src_cfg = reg.SelectedPreset().config;
-    const std::string src_name = reg.SelectedPreset().name;
-
-    const std::string copy_id = reg.DuplicateSelected();
-    EXPECT_NE(copy_id, src_id);
-    EXPECT_EQ(reg.SelectedId(), copy_id);
-    EXPECT_EQ(reg.Count(), 5u);
-
-    const RecordingPreset* copy = reg.FindById(copy_id);
-    ASSERT_NE(copy, nullptr);
-    EXPECT_EQ(copy->name, src_name + " (copy)");
-    EXPECT_TRUE(NormalizedConfigEquals(copy->config, src_cfg));
-}
-
-TEST(RecordingPresetRegistry, DuplicateSelected_CopyNameDedup_WhenCopyAlreadyExists) {
-    RecordingPresetRegistry reg;
-    const std::string src_name = reg.SelectedPreset().name;
-    reg.DuplicateSelected(); // "Default (copy)"
-    reg.SetSelected(std::string(kDefaultPresetId));
-    reg.DuplicateSelected(); // should become "Default (copy) (2)"
-
-    bool found_copy = false, found_copy2 = false;
-    for (const auto& p : reg.Presets()) {
-        if (p.name == src_name + " (copy)")
-            found_copy = true;
-        if (p.name == src_name + " (copy) (2)")
-            found_copy2 = true;
-    }
-    EXPECT_TRUE(found_copy);
-    EXPECT_TRUE(found_copy2);
-}
-
-// ===========================================================================
 // RenameSelected
 // ===========================================================================
 
@@ -167,14 +90,14 @@ TEST(RecordingPresetRegistry, RenameSelected_WhitespaceOnlyName_ReturnsFalse) {
 
 TEST(RecordingPresetRegistry, RenameSelected_DuplicateNameOfOtherPreset_ReturnsFalse) {
     RecordingPresetRegistry reg;
-    const std::string id1 = reg.AddDefaultPreset(); // "New preset"
-    const std::string id2 = reg.AddDefaultPreset(); // "New preset (2)"
+    const std::string id1 = reg.AddPreset(MakeDefaultPreset().config, "Streaming");
+    const std::string id2 = reg.AddPreset(MakeDefaultPreset().config, "Other");
     ASSERT_TRUE(reg.SetSelected(id2));
 
-    // Try to rename id2 to "New preset" (already taken by id1).
-    EXPECT_FALSE(reg.RenameSelected("New preset"));
+    // Try to rename id2 to "Streaming" (already taken by id1).
+    EXPECT_FALSE(reg.RenameSelected("Streaming"));
     // Name of id2 unchanged.
-    EXPECT_NE(reg.SelectedPreset().name, "New preset");
+    EXPECT_NE(reg.SelectedPreset().name, "Streaming");
     (void)id1;
 }
 
@@ -207,9 +130,9 @@ TEST(RecordingPresetRegistry, DeleteSelected_DefaultBuiltInSelected_ReturnsFalse
 
 TEST(RecordingPresetRegistry, DeleteSelected_UserPreset_RemovesIt_FallsBackToDefault) {
     RecordingPresetRegistry reg;
-    const std::string id2 = reg.AddDefaultPreset();
+    const std::string id2 = reg.AddPreset(MakeDefaultPreset().config, "Mine");
     EXPECT_EQ(reg.Count(), 5u);
-    EXPECT_EQ(reg.SelectedId(), id2); // AddDefaultPreset selects new one.
+    EXPECT_EQ(reg.SelectedId(), id2); // AddPreset selects the new one.
 
     EXPECT_TRUE(reg.DeleteSelected());
     EXPECT_EQ(reg.Count(), 4u);
@@ -225,21 +148,6 @@ TEST(RecordingPresetRegistry, SelectedSavedConfig_ReturnsSelectedPresetsConfig) 
     RecordingPresetRegistry reg;
     const RecordingPresetConfig saved_cfg = reg.SelectedPreset().config;
     EXPECT_TRUE(NormalizedConfigEquals(reg.SelectedSavedConfig(), saved_cfg));
-}
-
-// ===========================================================================
-// ResetAllToDefault
-// ===========================================================================
-
-TEST(RecordingPresetRegistry, ResetAllToDefault_Count1_IdsReset) {
-    RecordingPresetRegistry reg;
-    reg.AddDefaultPreset();
-    reg.AddDefaultPreset();
-    EXPECT_EQ(reg.Count(), 6u);
-
-    reg.ResetAllToDefault();
-    EXPECT_EQ(reg.Count(), 4u);
-    EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
 }
 
 // ===========================================================================
@@ -427,17 +335,11 @@ TEST(RecordingPresetRegistry, Constructor_SeedsFourBuiltIns_DefaultSelected) {
     EXPECT_NE(reg.FindById(kCompatibilityPresetId), nullptr);
 }
 
-// Production call sites: MainWindow::onSavePreset (until it is removed),
-// onRenamePreset, onDeletePreset — the registry is the enforcement layer,
-// the UI disable is only cosmetics.
-TEST(RecordingPresetRegistry, BuiltIn_SaveRenameDelete_Refused) {
+// Production call sites: onRenamePreset, onDeletePreset — the registry is the
+// enforcement layer, the UI disable is only cosmetics.
+TEST(RecordingPresetRegistry, BuiltIn_RenameDelete_Refused) {
     RecordingPresetRegistry reg;
     ASSERT_TRUE(reg.SetSelected(std::string(kQualityPresetId)));
-
-    RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.video.cq = 40;
-    EXPECT_FALSE(reg.SaveSelected(cfg));
-    EXPECT_EQ(reg.SelectedPreset().config.video.cq, 16u); // untouched
 
     EXPECT_FALSE(reg.RenameSelected("My Quality"));
     EXPECT_EQ(reg.SelectedPreset().name, "Quality");

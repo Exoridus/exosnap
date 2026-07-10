@@ -61,7 +61,6 @@ namespace ui::dialogs {
 class AboutOverlay;
 class CrashReportOverlay;
 class EditExportOverlay;
-class PresetManageOverlay;
 class RecoveryOverlay;
 class WhatsNewOverlay;
 class SourcePickerOverlay;
@@ -223,14 +222,10 @@ class MainWindow : public QMainWindow {
 
     // Preset operation handlers (wired to ConfigPage signals).
     void onPresetSelected(const QString& id);
-    void onSavePreset();
     void onSavePresetAs(const QString& name);
-    void onNewPreset();
-    void onDuplicatePreset();
     void onRenamePreset(const QString& name);
     void onDeletePreset();
     void onResetChanges();
-    void onResetToDefaults();
 
     // Persist the full preset store state (live config + user presets).
     void persistPresetState();
@@ -247,12 +242,11 @@ class MainWindow : public QMainWindow {
 
     // Export / import handlers (wired to OutputPage signals).
     void onExportSelectedProfile(const QString& path);
+    // Kept for OutputPage's "Export user presets…" action, which still uses
+    // RecordingPresetStore::ExportAllUserPresetsToFile; aligning OutputPage's
+    // preset row is a later task.
     void onExportAllUserProfiles(const QString& path);
     void onImportProfiles(const QString& path);
-
-    // Preset manage overlay.
-    void openPresetManageOverlay();
-    void refreshPresetManageOverlay();
 
     void saveWindowGeometryToSettings();
 
@@ -338,7 +332,6 @@ class MainWindow : public QMainWindow {
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
-    ui::dialogs::PresetManageOverlay* preset_manage_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;

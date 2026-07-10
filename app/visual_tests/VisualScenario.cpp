@@ -552,7 +552,7 @@ const QVector<VisualScenario> kScenarios = {
     // registry is touched.  preset_count > 0 triggers the injection path.
 
     // settings-preset-default: selected == default, clean state (badge visible,
-    // Save hidden).
+    // Save as new / Reset hidden).
     {.id = QStringLiteral("settings-preset-default"),
      .title = QStringLiteral("Settings / Preset Default"),
      .page = VisualPage::Settings,
@@ -560,8 +560,8 @@ const QVector<VisualScenario> kScenarios = {
      .preset_selected_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
-    // settings-preset-modified: dirty state — presetDirtyIndicator visible,
-    // Save enabled.
+    // settings-preset-modified: dirty state — combo shows "(changed)", Save as
+    // new + Reset visible.
     {.id = QStringLiteral("settings-preset-modified"),
      .title = QStringLiteral("Settings / Preset Modified"),
      .page = VisualPage::Settings,

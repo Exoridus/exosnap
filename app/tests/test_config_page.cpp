@@ -207,12 +207,12 @@ TEST_F(ConfigPageTest, PresetManagementButtonExists) {
     const auto buttons = page.findChildren<QToolButton*>();
     bool found = false;
     for (const auto* b : buttons) {
-        if (b->text() == QStringLiteral("Manage presets")) {
+        if (b->text() == QStringLiteral("\xe2\x80\xa6")) {
             found = true;
             break;
         }
     }
-    EXPECT_TRUE(found) << "Preset management overflow button not found";
+    EXPECT_TRUE(found) << "Preset overflow button not found";
 }
 
 TEST_F(ConfigPageTest, HybridCardTitles_AreVisible) {
@@ -369,17 +369,17 @@ TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
     builtin.modified = false;
 
     std::vector<ConfigPage::ProfileOption> options{builtin};
-    // Clean state: built-in badge visible, dirty indicator hidden.
+    // Clean state: built-in badge visible, combo text carries no "(changed)" hint.
     page.setPresetOptions(options, builtin.id, /*dirty=*/false);
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Built-in preset")));
-    auto* dirty_indicator = page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator"));
-    ASSERT_NE(dirty_indicator, nullptr);
-    EXPECT_TRUE(dirty_indicator->isHidden()) << "Dirty indicator must be hidden when clean";
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("profileCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_EQ(combo->currentText(), builtin.label);
 
-    // Dirty state: dirty indicator visible; built-in badge still shows.
+    // Dirty state: "(changed)" hint appears; built-in badge still shows.
     options[0].modified = true;
     page.setPresetOptions(options, builtin.id, /*dirty=*/true);
-    EXPECT_FALSE(dirty_indicator->isHidden()) << "Dirty indicator must be visible when dirty";
+    EXPECT_EQ(combo->currentText(), builtin.label + QStringLiteral(" (changed)"));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Built-in preset")));
 }
 
@@ -1272,19 +1272,9 @@ TEST_F(ConfigPageTest, PresetCombo_HasStableObjectName) {
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("profileCombo")), nullptr);
 }
 
-TEST_F(ConfigPageTest, PresetSaveButton_HasStableObjectName) {
-    ConfigPage page(output_defaults_, video_defaults_);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("presetSaveButton")), nullptr);
-}
-
 TEST_F(ConfigPageTest, PresetSaveAsButton_HasStableObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("presetSaveAsButton")), nullptr);
-}
-
-TEST_F(ConfigPageTest, PresetDirtyIndicator_HasStableObjectName) {
-    ConfigPage page(output_defaults_, video_defaults_);
-    EXPECT_NE(page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator")), nullptr);
 }
 
 // S1-REDESIGN: presetDefaultBadge removed (redundant — combo already shows the name).
@@ -1351,62 +1341,101 @@ TEST_F(ConfigPageTest, SetPresetOptions_SelectedIsNotDefault_NoBadgeWidget) {
         << "presetDefaultBadge must not exist (removed in S1-redesign)";
 }
 
-TEST_F(ConfigPageTest, SetPresetOptions_DirtyTrue_ShowsDirtyIndicatorAndEnablesSave) {
+// Spec rule 1: Save as new + Reset appear exactly when the live config is (changed).
+TEST_F(ConfigPageTest, ChangedState_ShowsSaveAsNewAndReset) {
     ConfigPage page(output_defaults_, video_defaults_);
+    std::vector<ConfigPage::ProfileOption> opts;
+    opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
+    page.setPresetOptions(opts, QStringLiteral("preset.default"), /*dirty=*/false);
 
-    ConfigPage::ProfileOption p;
-    p.id = QStringLiteral("x");
-    p.label = QStringLiteral("X");
-    page.setPresetOptions({p}, QStringLiteral("x"), /*dirty=*/true);
-
-    auto* indicator = page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator"));
-    ASSERT_NE(indicator, nullptr);
-    EXPECT_FALSE(indicator->isHidden()) << "Dirty indicator must be visible when dirty=true";
-
-    auto* save_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveButton"));
-    ASSERT_NE(save_btn, nullptr);
-    EXPECT_FALSE(save_btn->isHidden()) << "Save button must be visible when dirty";
-    EXPECT_TRUE(save_btn->isEnabled()) << "Save button must be enabled when dirty";
-}
-
-TEST_F(ConfigPageTest, SetPresetOptions_DirtyFalse_HidesDirtyIndicatorAndSaveButton) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    ConfigPage::ProfileOption p;
-    p.id = QStringLiteral("x");
-    p.label = QStringLiteral("X");
-    page.setPresetOptions({p}, QStringLiteral("x"), /*dirty=*/false);
-
-    auto* indicator = page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator"));
-    ASSERT_NE(indicator, nullptr);
-    EXPECT_TRUE(indicator->isHidden()) << "Dirty indicator must be hidden when clean";
-
-    auto* save_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveButton"));
-    ASSERT_NE(save_btn, nullptr);
-    EXPECT_TRUE(save_btn->isHidden()) << "Save button must be hidden when clean";
-}
-
-TEST_F(ConfigPageTest, SetPresetDirty_TogglesIndicatorAndSaveButton) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    ConfigPage::ProfileOption p;
-    p.id = QStringLiteral("p");
-    p.label = QStringLiteral("P");
-    page.setPresetOptions({p}, QStringLiteral("p"), false);
-
-    auto* indicator = page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator"));
-    auto* save_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveButton"));
-    ASSERT_NE(indicator, nullptr);
-    ASSERT_NE(save_btn, nullptr);
+    auto* save_as = page.findChild<QPushButton*>(QStringLiteral("presetSaveAsButton"));
+    auto* reset = page.findChild<QPushButton*>(QStringLiteral("presetResetButton"));
+    ASSERT_NE(save_as, nullptr);
+    ASSERT_NE(reset, nullptr);
+    EXPECT_FALSE(save_as->isVisibleTo(&page));
+    EXPECT_FALSE(reset->isVisibleTo(&page));
 
     page.setPresetDirty(true);
-    EXPECT_FALSE(indicator->isHidden()) << "Dirty indicator must appear after setPresetDirty(true)";
-    EXPECT_FALSE(save_btn->isHidden()) << "Save button must appear after setPresetDirty(true)";
-    EXPECT_TRUE(save_btn->isEnabled());
+    EXPECT_TRUE(save_as->isVisibleTo(&page));
+    EXPECT_TRUE(reset->isVisibleTo(&page));
+}
 
+// Spec rule 2: Delete appears for a user preset regardless of (changed),
+// and never for a built-in.
+TEST_F(ConfigPageTest, DeleteButton_UserPresetOnly_IndependentOfChanged) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    std::vector<ConfigPage::ProfileOption> opts;
+    opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
+    opts.push_back({QStringLiteral("preset.abc"), QStringLiteral("Mine"), false, false, true, {}});
+
+    auto* del = [&] {
+        page.setPresetOptions(opts, QStringLiteral("preset.abc"), /*dirty=*/false);
+        return page.findChild<QPushButton*>(QStringLiteral("presetDeleteButton"));
+    }();
+    ASSERT_NE(del, nullptr);
+    EXPECT_TRUE(del->isVisibleTo(&page)); // clean user preset is deletable
+
+    page.setPresetOptions(opts, QStringLiteral("preset.default"), /*dirty=*/true);
+    EXPECT_FALSE(del->isVisibleTo(&page)); // built-in: never
+}
+
+TEST_F(ConfigPageTest, OverflowMenu_HasExactlyFourActions_RenameDisabledForBuiltIn) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    std::vector<ConfigPage::ProfileOption> opts;
+    opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
+    page.setPresetOptions(opts, QStringLiteral("preset.default"), false);
+
+    auto* manage_btn = page.findChild<QToolButton*>(QStringLiteral("presetManageButton"));
+    ASSERT_NE(manage_btn, nullptr);
+    ASSERT_NE(manage_btn->menu(), nullptr);
+    QStringList texts;
+    for (QAction* a : manage_btn->menu()->actions())
+        if (!a->isSeparator())
+            texts << a->text();
+    EXPECT_EQ(texts, (QStringList() << QStringLiteral("Save as new\xe2\x80\xa6") << QStringLiteral("Rename\xe2\x80\xa6")
+                                    << QStringLiteral("Export\xe2\x80\xa6") << QStringLiteral("Import\xe2\x80\xa6")));
+    // Save as new stays reachable even when clean; Rename is built-in-gated.
+    EXPECT_TRUE(manage_btn->menu()->actions().first()->isEnabled());
+    for (QAction* a : manage_btn->menu()->actions())
+        if (a->text() == QStringLiteral("Rename\xe2\x80\xa6"))
+            EXPECT_FALSE(a->isEnabled());
+}
+
+// (changed) is a hint rendered in the combo text, not a warning widget.
+TEST_F(ConfigPageTest, ChangedSuffix_AppendedToSelectedComboText) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    std::vector<ConfigPage::ProfileOption> opts;
+    opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
+    page.setPresetOptions(opts, QStringLiteral("preset.default"), false);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("profileCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Default"));
+    page.setPresetDirty(true);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Default (changed)"));
     page.setPresetDirty(false);
-    EXPECT_TRUE(indicator->isHidden()) << "Dirty indicator must hide after setPresetDirty(false)";
-    EXPECT_TRUE(save_btn->isHidden()) << "Save button must hide after setPresetDirty(false)";
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Default"));
+}
+
+// Removed affordances stay removed (guards against regressions).
+TEST_F(ConfigPageTest, LegacyPresetControls_AreGone) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("presetSaveButton")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("presetExportButton")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("presetImportButton")), nullptr);
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator")), nullptr);
+}
+
+// Production call site: the QInputDialog loops in onSavePresetAs/onRenamePreset
+// validate through this exact predicate before emitting.
+TEST_F(ConfigPageTest, PresetNameRejected_FoldsTrimsAndExcludesSelf) {
+    std::vector<ConfigPage::ProfileOption> opts;
+    opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
+    opts.push_back({QStringLiteral("preset.abc"), QStringLiteral("Streaming"), false, false, true, {}});
+    EXPECT_TRUE(ConfigPage::presetNameRejected(QStringLiteral("  streaming "), opts, QString()));
+    EXPECT_TRUE(ConfigPage::presetNameRejected(QStringLiteral("default"), opts, QString()));
+    EXPECT_TRUE(ConfigPage::presetNameRejected(QStringLiteral("   "), opts, QString()));
+    EXPECT_FALSE(ConfigPage::presetNameRejected(QStringLiteral("Streaming"), opts, QStringLiteral("preset.abc")));
+    EXPECT_FALSE(ConfigPage::presetNameRejected(QStringLiteral("Fresh"), opts, QString()));
 }
 
 TEST_F(ConfigPageTest, ComboSelection_EmitsPresetSelected) {
@@ -1447,93 +1476,34 @@ TEST_F(ConfigPageTest, SetPresetOptionsDoesNotEmitPresetSelected) {
 TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesPresetSaveButtons) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Make the page dirty so Save button is normally enabled.
-    ConfigPage::ProfileOption p;
-    p.id = QStringLiteral("p");
-    p.label = QStringLiteral("P");
-    page.setPresetOptions({p}, QStringLiteral("p"), /*dirty=*/true);
+    // Make the page dirty (Save as new / Reset) and select a user preset (Delete)
+    // so all three contextual buttons are normally enabled.
+    std::vector<ConfigPage::ProfileOption> opts;
+    opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
+    opts.push_back({QStringLiteral("preset.abc"), QStringLiteral("Mine"), false, false, true, {}});
+    page.setPresetOptions(opts, QStringLiteral("preset.abc"), /*dirty=*/true);
 
-    auto* save_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveButton"));
     auto* save_as_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveAsButton"));
-    ASSERT_NE(save_btn, nullptr);
+    auto* reset_btn = page.findChild<QPushButton*>(QStringLiteral("presetResetButton"));
+    auto* delete_btn = page.findChild<QPushButton*>(QStringLiteral("presetDeleteButton"));
     ASSERT_NE(save_as_btn, nullptr);
+    ASSERT_NE(reset_btn, nullptr);
+    ASSERT_NE(delete_btn, nullptr);
 
-    // Baseline: before lock, save is enabled.
-    EXPECT_TRUE(save_btn->isEnabled());
+    // Baseline: before lock, all three are enabled.
     EXPECT_TRUE(save_as_btn->isEnabled());
+    EXPECT_TRUE(reset_btn->isEnabled());
+    EXPECT_TRUE(delete_btn->isEnabled());
 
     page.setRecordingControlsLocked(true);
 
-    EXPECT_FALSE(save_btn->isEnabled()) << "Save button must be disabled when locked";
     EXPECT_FALSE(save_as_btn->isEnabled()) << "Save As button must be disabled when locked";
+    EXPECT_FALSE(reset_btn->isEnabled()) << "Reset button must be disabled when locked";
+    EXPECT_FALSE(delete_btn->isEnabled()) << "Delete button must be disabled when locked";
 
     auto* manage_btn = page.findChild<QToolButton*>(QStringLiteral("presetManageButton"));
     ASSERT_NE(manage_btn, nullptr);
     EXPECT_FALSE(manage_btn->isEnabled()) << "Manage button must be disabled when locked";
-}
-
-TEST_F(ConfigPageTest, OverflowMenu_ExposesExpectedActions) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* manage_btn = page.findChild<QToolButton*>(QStringLiteral("presetManageButton"));
-    ASSERT_NE(manage_btn, nullptr);
-    auto* menu = manage_btn->menu();
-    ASSERT_NE(menu, nullptr);
-
-    // Collect all action texts.
-    QStringList action_texts;
-    for (const auto* action : menu->actions()) {
-        if (!action->isSeparator() && !action->text().isEmpty())
-            action_texts << action->text();
-    }
-
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Save preset"))) << "Missing: Save preset";
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("New preset from default…")))
-        << "Missing: New preset from default…";
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Duplicate preset"))) << "Missing: Duplicate preset";
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Rename preset…"))) << "Missing: Rename preset…";
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Delete preset"))) << "Missing: Delete preset";
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Reset changes"))) << "Missing: Reset changes";
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Reset all presets to factory defaults…")))
-        << "Missing: Reset all presets to factory defaults…";
-}
-
-TEST_F(ConfigPageTest, SaveButton_Click_EmitsSavePresetRequested) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    ConfigPage::ProfileOption p;
-    p.id = QStringLiteral("p");
-    p.label = QStringLiteral("P");
-    page.setPresetOptions({p}, QStringLiteral("p"), /*dirty=*/true);
-
-    bool emitted = false;
-    QObject::connect(&page, &ConfigPage::savePresetRequested, [&emitted]() { emitted = true; });
-
-    auto* save_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveButton"));
-    ASSERT_NE(save_btn, nullptr);
-    save_btn->click();
-    EXPECT_TRUE(emitted) << "Clicking Save button must emit savePresetRequested";
-}
-
-TEST_F(ConfigPageTest, ResetChanges_And_ResetToDefaults_AreDistinctActions) {
-    // The two reset actions must never be merged into one ambiguous action.
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* manage_btn = page.findChild<QToolButton*>(QStringLiteral("presetManageButton"));
-    ASSERT_NE(manage_btn, nullptr);
-    auto* menu = manage_btn->menu();
-    ASSERT_NE(menu, nullptr);
-
-    bool found_reset_changes = false;
-    bool found_reset_all = false;
-    for (const auto* action : menu->actions()) {
-        if (action->text() == QStringLiteral("Reset changes"))
-            found_reset_changes = true;
-        if (action->text().contains(QStringLiteral("factory defaults")))
-            found_reset_all = true;
-    }
-    EXPECT_TRUE(found_reset_changes) << "Missing 'Reset changes' action in overflow menu";
-    EXPECT_TRUE(found_reset_all) << "Missing 'Reset all presets to factory defaults' action in overflow menu";
 }
 
 // ---- MP4 automatic-split gating (VR-005 / functional P2-005) -------------

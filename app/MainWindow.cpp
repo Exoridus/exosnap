@@ -26,7 +26,6 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/EditExportOverlay.h"
-#include "ui/dialogs/PresetManageOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
@@ -654,10 +653,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     about_overlay_ = new ui::dialogs::AboutOverlay(this);
     about_overlay_->hide();
 
-    // Preset manage overlay — in-window, same pattern as About.
-    preset_manage_overlay_ = new ui::dialogs::PresetManageOverlay(central);
-    preset_manage_overlay_->hide();
-
     // Source picker overlay — in-window, same accessibility-first parenting as About.
     source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(central);
     source_picker_overlay_->hide();
@@ -788,25 +783,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     });
 
     // NOTE: config_page_ preset-management connects are wired in buildConfigPage().
-
-    // Wire preset manage overlay signals to the same handlers the overflow menu uses.
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::duplicatePresetRequested, this,
-            &MainWindow::onDuplicatePreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::renamePresetRequested, this,
-            &MainWindow::onRenamePreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::deletePresetRequested, this,
-            &MainWindow::onDeletePreset);
-    // setDefaultPresetRequested is intentionally left unconnected: there is no
-    // more startup-default preset to set (the live config is the persisted
-    // truth). The overlay's "Set as default" button is a harmless no-op.
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportSelectedPresetRequested, this,
-            &MainWindow::onExportSelectedProfile);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportAllPresetsRequested, this,
-            &MainWindow::onExportAllUserProfiles);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::importPresetsRequested, this,
-            &MainWindow::onImportProfiles);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::presetSelectionRequested, this,
-            &MainWindow::onPresetSelected);
 
     // ---- Hotkeys ----
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
@@ -2567,8 +2543,6 @@ void MainWindow::refreshPresetUi() {
         output_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     syncing_preset_ui_ = false;
-    // Keep the manage overlay list in sync whenever the preset UI is refreshed.
-    refreshPresetManageOverlay();
 }
 
 void MainWindow::persistPresetState() {
@@ -2657,34 +2631,11 @@ void MainWindow::onPresetSelected(const QString& id) {
     persistPresetState();
 }
 
-void MainWindow::onSavePreset() {
-    preset_registry_.SaveSelected(captureLiveConfig());
-    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-    if (config_page_)
-        config_page_->setPresetDirty(dirty);
-    refreshPresetUi();
-    persistPresetState();
-}
-
 void MainWindow::onSavePresetAs(const QString& name) {
     preset_registry_.AddPreset(captureLiveConfig(), name.toStdString());
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
     if (config_page_)
         config_page_->setPresetDirty(dirty);
-    refreshPresetUi();
-    persistPresetState();
-}
-
-void MainWindow::onNewPreset() {
-    preset_registry_.AddDefaultPreset();
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
-    refreshPresetUi();
-    persistPresetState();
-}
-
-void MainWindow::onDuplicatePreset() {
-    preset_registry_.DuplicateSelected();
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
     refreshPresetUi();
     persistPresetState();
 }
@@ -2715,18 +2666,6 @@ void MainWindow::onResetChanges() {
     // No registry mutation, but the live config just changed back to the
     // preset's saved values, so the persisted live state must follow.
     persistPresetState();
-}
-
-void MainWindow::onResetToDefaults() {
-    preset_registry_.ResetAllToDefault();
-    // Also reset hotkeys via service (handles Win32 re-registration + persistence signal).
-    if (hotkey_service_)
-        hotkey_service_->ResetAllToDefaults();
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
-    refreshPresetUi();
-    persistPresetState();
-    QMessageBox::information(this, QStringLiteral("Reset Complete"),
-                             QStringLiteral("Settings and presets were reset to defaults."));
 }
 
 // ---------------------------------------------------------------------------
@@ -2801,24 +2740,6 @@ void MainWindow::onImportProfiles(const QString& path) {
                               QStringLiteral("imported %1 preset(s) from %2").arg(imported.size()).arg(path));
     QMessageBox::information(this, QStringLiteral("Import Successful"),
                              QStringLiteral("Imported %1 preset(s).").arg(imported.size()));
-    // Keep the manage overlay list in sync after a successful import.
-    refreshPresetManageOverlay();
-}
-
-// ---------------------------------------------------------------------------
-// Preset manage overlay
-// ---------------------------------------------------------------------------
-
-void MainWindow::openPresetManageOverlay() {
-    if (!preset_manage_overlay_)
-        return;
-    refreshPresetManageOverlay();
-    preset_manage_overlay_->openOverlay();
-}
-
-void MainWindow::refreshPresetManageOverlay() {
-    if (preset_manage_overlay_)
-        preset_manage_overlay_->refreshPresets(preset_registry_);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -4215,15 +4136,10 @@ void MainWindow::buildConfigPage() {
     });
 
     // ---- Preset management operations ----
-    connect(config_page_, &ConfigPage::savePresetRequested, this, &MainWindow::onSavePreset);
     connect(config_page_, &ConfigPage::savePresetAsRequested, this, &MainWindow::onSavePresetAs);
-    connect(config_page_, &ConfigPage::newPresetRequested, this, &MainWindow::onNewPreset);
-    connect(config_page_, &ConfigPage::duplicatePresetRequested, this, &MainWindow::onDuplicatePreset);
     connect(config_page_, &ConfigPage::renamePresetRequested, this, &MainWindow::onRenamePreset);
     connect(config_page_, &ConfigPage::deletePresetRequested, this, &MainWindow::onDeletePreset);
     connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
-    connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
-    connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
     connect(config_page_, &ConfigPage::exportCurrentPresetRequested, this, &MainWindow::onExportSelectedProfile);
     connect(config_page_, &ConfigPage::importPresetsRequested, this, &MainWindow::onImportProfiles);
 
@@ -4689,18 +4605,20 @@ void MainWindow::buildOutputPage() {
         stack_->addWidget(output_page_);
     }
     // Wire all OutputPage signals that were previously connected in the ctor.
+    // newFromSafeDefaultRequested, duplicateActiveProfileRequested and
+    // resetAllSettingsAndProfilesRequested are intentionally left unconnected:
+    // their handlers depended on registry methods (AddDefaultPreset,
+    // DuplicateSelected, ResetAllToDefault) removed with the Settings preset
+    // row. OutputPage still emits them from its own overflow menu; aligning
+    // OutputPage's preset row to the simplified model is a later task.
     connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& id) { onPresetSelected(id); });
     connect(output_page_, &OutputPage::newFromCurrentRequested, this,
             [this](const QString& name) { onSavePresetAs(name); });
-    connect(output_page_, &OutputPage::newFromSafeDefaultRequested, this,
-            [this](const QString& /*name*/) { onNewPreset(); });
-    connect(output_page_, &OutputPage::duplicateActiveProfileRequested, this, &MainWindow::onDuplicatePreset);
     connect(output_page_, &OutputPage::renameActiveProfileRequested, this, &MainWindow::onRenamePreset);
     connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, &MainWindow::onDeletePreset);
     connect(output_page_, &OutputPage::resetActiveProfileRequested, this, &MainWindow::onResetChanges);
     connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this,
             [this](const QString& name) { onSavePresetAs(name); });
-    connect(output_page_, &OutputPage::resetAllSettingsAndProfilesRequested, this, &MainWindow::onResetToDefaults);
     connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, &MainWindow::onExportSelectedProfile);
     connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, &MainWindow::onExportAllUserProfiles);
     connect(output_page_, &OutputPage::importProfilesRequested, this, &MainWindow::onImportProfiles);

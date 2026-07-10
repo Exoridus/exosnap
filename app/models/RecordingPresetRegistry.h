@@ -65,20 +65,6 @@ class RecordingPresetRegistry {
     // id, selects the new preset, returns its id.
     std::string AddPreset(RecordingPresetConfig config, const std::string& name);
 
-    // Adds a fresh MakeDefaultPreset() config under a unique name ("New preset"),
-    // new id, selects it, returns its id.
-    std::string AddDefaultPreset();
-
-    // Overwrite the SELECTED preset's config with the supplied (sanitized) config;
-    // id and name are unchanged. Returns false for a built-in preset or when
-    // nothing is selected (impossible via invariant, but provided for
-    // defensive use).
-    bool SaveSelected(RecordingPresetConfig config);
-
-    // Copy the selected preset's SAVED config to a new preset with a deduped
-    // "<name> (copy)" name, selects the copy, returns its id.
-    std::string DuplicateSelected();
-
     // Rename the selected preset. Returns false for a built-in preset, for
     // empty/whitespace names, or when the folded name already names another
     // preset (built-in names are reserved).
@@ -98,9 +84,6 @@ class RecordingPresetRegistry {
     // preset name, including built-in names.
     // The newly imported preset is NOT auto-selected (unlike AddPreset).
     void ImportPreset(RecordingPreset preset);
-
-    // Clear to the four built-ins; selected = kDefaultPresetId.
-    void ResetAllToDefault();
 
     // Returns true when live_config differs from the selected preset's saved config
     // (!NormalizedConfigEquals).

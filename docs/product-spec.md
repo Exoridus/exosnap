@@ -99,9 +99,14 @@ Preset names are unique case-insensitively (leading/trailing whitespace trimmed)
 reserved. A name collision — including on import — is resolved with a numeric suffix ("Name (2)",
 "Name (3)", …).
 
-Presets are stored in a human-readable TOML store and can be exported and imported for sharing. A
-preset manage dialog supports rename, duplicate, delete, and set-default for user presets. Presets are
-validated and sanitized before storage; invalid values are clamped rather than rejected silently.
+Presets are stored in a human-readable TOML store and can be exported and imported for sharing.
+Settings hosts the preset dropdown directly — there is no separate preset manager surface. The
+dropdown shows a calm "(changed)" hint when the live configuration differs from the selected preset;
+while changed, **Save as new…** and **Reset** appear next to it. **Delete** appears whenever a user
+preset is selected, independent of the changed state, and never for a built-in preset. A `…` overflow
+menu holds **Save as new…**, **Rename…**, **Export…**, and **Import…** — Rename is disabled for a
+built-in preset. Presets are validated and sanitized before storage; invalid values are clamped
+rather than rejected silently.
 
 ---
 

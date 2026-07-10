@@ -115,17 +115,6 @@ std::string RecordingPresetRegistry::AddPreset(RecordingPresetConfig config, con
     return id;
 }
 
-std::string RecordingPresetRegistry::AddDefaultPreset() {
-    RecordingPreset preset = MakeDefaultPreset();
-    preset.id = GeneratePresetId();
-    preset.name = DeduplicateName("New preset");
-
-    const std::string id = preset.id;
-    presets_.push_back(std::move(preset));
-    selected_id_ = id;
-    return id;
-}
-
 void RecordingPresetRegistry::ImportPreset(RecordingPreset preset) {
     // The caller has already resolved id collisions.  Deduplicate the name
     // (fold-aware, built-in names reserved) and strip environment fields (an
@@ -138,32 +127,6 @@ void RecordingPresetRegistry::ImportPreset(RecordingPreset preset) {
     preset = SanitizePreset(std::move(preset));
     presets_.push_back(std::move(preset));
     // selected_id_ is intentionally NOT changed: the user selects explicitly.
-}
-
-bool RecordingPresetRegistry::SaveSelected(RecordingPresetConfig config) {
-    if (IsBuiltIn(selected_id_)) {
-        return false;
-    }
-    const std::size_t idx = IndexById(selected_id_);
-    if (idx == std::string::npos) {
-        return false; // Should not happen given invariant.
-    }
-    presets_[idx].config = SanitizePresetConfig(std::move(config));
-    return true;
-}
-
-std::string RecordingPresetRegistry::DuplicateSelected() {
-    const RecordingPreset& src = SelectedPreset();
-
-    RecordingPreset copy;
-    copy.id = GeneratePresetId();
-    copy.name = DeduplicateName(src.name + " (copy)");
-    copy.config = src.config;
-
-    const std::string id = copy.id;
-    presets_.push_back(std::move(copy));
-    selected_id_ = id;
-    return id;
 }
 
 bool RecordingPresetRegistry::RenameSelected(const std::string& new_name) {
@@ -208,11 +171,6 @@ bool RecordingPresetRegistry::DeleteSelected() {
 
 RecordingPresetConfig RecordingPresetRegistry::SelectedSavedConfig() const {
     return SelectedPreset().config;
-}
-
-void RecordingPresetRegistry::ResetAllToDefault() {
-    presets_ = MakeBuiltInPresets();
-    selected_id_ = std::string(kDefaultPresetId);
 }
 
 bool RecordingPresetRegistry::IsSelectedDirty(const RecordingPresetConfig& live_config) const {
