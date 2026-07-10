@@ -82,11 +82,15 @@ class ConfigPage : public QWidget {
     // chroma control. Before this arrives, the static rule stands (pre-probe).
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     // Preset card contract: options = presets (id + label); selected_id = active preset;
-    // default_id = startup-default preset (shown with a badge); dirty = unsaved changes.
-    void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
-                          const QString& default_id, bool dirty);
+    // dirty = unsaved changes.
+    void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id, bool dirty);
     // Lightweight dirty-only update (avoids rebuilding the full combo).
     void setPresetDirty(bool dirty);
+
+    // True when `name` is empty after trimming or collides (trimmed,
+    // case-insensitive) with any option label other than `exclude_id`'s.
+    [[nodiscard]] static bool presetNameRejected(const QString& name, const std::vector<ProfileOption>& options,
+                                                 const QString& exclude_id);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
 
@@ -210,17 +214,10 @@ class ConfigPage : public QWidget {
     void themeIdChanged(const QString& theme_id);
 
     // ---- Preset management signals ----
-    void savePresetRequested();
     void savePresetAsRequested(const QString& name);
-    void newPresetRequested();
-    void duplicatePresetRequested();
     void renamePresetRequested(const QString& name);
     void deletePresetRequested();
     void resetChangesRequested();
-    void resetToDefaultsRequested();
-    void setDefaultPresetRequested();
-    // Emitted when the user opens the Manage presets overlay.
-    void managePresetsRequested();
     // Emitted when the user clicks Export in the preset toolbar.
     void exportCurrentPresetRequested(const QString& path);
     // Emitted when the user clicks Import in the preset toolbar.
@@ -320,16 +317,9 @@ class ConfigPage : public QWidget {
     void updateAudioFormatControlVisibility();
 
     // Preset management handlers.
-    void onSavePreset();
     void onSavePresetAs();
-    void onNewPreset();
-    void onDuplicatePreset();
     void onRenamePreset();
     void onDeletePreset();
-    void onResetChanges();
-    void onResetToDefaults();
-    void onSetDefaultPreset();
-    void onManagePresets();
     void updatePresetActionState();
     void updateExpertModeVisibility();
     // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
@@ -351,7 +341,6 @@ class ConfigPage : public QWidget {
     QString active_profile_name_;
     std::vector<ProfileOption> profile_options_;
     QString active_preset_id_;
-    QString default_preset_id_;
     bool preset_dirty_ = false;
     // Current selected preset's built_in/available flags (set by setPresetOptions).
     bool active_preset_is_built_in_ = false;
@@ -456,23 +445,15 @@ class ConfigPage : public QWidget {
 
     // Preset card widgets.
     QLabel* profile_status_label_ = nullptr;
-    QLabel* preset_dirty_indicator_ = nullptr;
-    QPushButton* preset_save_btn_ = nullptr;
     QPushButton* preset_save_as_btn_ = nullptr;
-    QPushButton* preset_export_btn_ = nullptr;
-    QPushButton* preset_import_btn_ = nullptr;
+    QPushButton* preset_reset_btn_ = nullptr;
+    QPushButton* preset_delete_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
     // Preset management actions in the overflow menu.
-    QAction* save_preset_action_ = nullptr;
     QAction* save_preset_as_action_ = nullptr;
-    QAction* new_preset_action_ = nullptr;
-    QAction* duplicate_preset_action_ = nullptr;
     QAction* rename_preset_action_ = nullptr;
-    QAction* delete_preset_action_ = nullptr;
-    QAction* reset_changes_action_ = nullptr;
-    QAction* reset_to_defaults_action_ = nullptr;
-    QAction* set_default_preset_action_ = nullptr;
-    QAction* manage_presets_action_ = nullptr;
+    QAction* export_preset_action_ = nullptr;
+    QAction* import_presets_action_ = nullptr;
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 

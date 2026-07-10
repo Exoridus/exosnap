@@ -726,72 +726,42 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_status_label_->setVisible(false);
         toolbar_hl->addWidget(profile_status_label_, 0, Qt::AlignVCenter);
 
-        // Save button (dirty-gated)
-        preset_save_btn_ = new QPushButton(QStringLiteral("Save"), toolbar_row);
-        preset_save_btn_->setObjectName(QStringLiteral("presetSaveButton"));
-        preset_save_btn_->setProperty("role", "ghost");
-        preset_save_btn_->setEnabled(false);
-        preset_save_btn_->setVisible(false);
-        toolbar_hl->addWidget(preset_save_btn_, 0, Qt::AlignVCenter);
-
-        // Save As... button
-        preset_save_as_btn_ = new QPushButton(QStringLiteral("Save As\xe2\x80\xa6"), toolbar_row);
+        // Save as new (shown only while the live config is (changed))
+        preset_save_as_btn_ = new QPushButton(QStringLiteral("Save as new\xe2\x80\xa6"), toolbar_row);
         preset_save_as_btn_->setObjectName(QStringLiteral("presetSaveAsButton"));
         preset_save_as_btn_->setProperty("role", "ghost");
+        preset_save_as_btn_->setVisible(false);
         toolbar_hl->addWidget(preset_save_as_btn_, 0, Qt::AlignVCenter);
 
-        // Export button (v10)
-        preset_export_btn_ = new QPushButton(QStringLiteral("Export"), toolbar_row);
-        preset_export_btn_->setObjectName(QStringLiteral("presetExportButton"));
-        preset_export_btn_->setProperty("role", "ghost");
-        toolbar_hl->addWidget(preset_export_btn_, 0, Qt::AlignVCenter);
+        // Reset (shown only while the live config is (changed))
+        preset_reset_btn_ = new QPushButton(QStringLiteral("Reset"), toolbar_row);
+        preset_reset_btn_->setObjectName(QStringLiteral("presetResetButton"));
+        preset_reset_btn_->setProperty("role", "ghost");
+        preset_reset_btn_->setVisible(false);
+        toolbar_hl->addWidget(preset_reset_btn_, 0, Qt::AlignVCenter);
 
-        // Import button (v10)
-        preset_import_btn_ = new QPushButton(QStringLiteral("Import"), toolbar_row);
-        preset_import_btn_->setObjectName(QStringLiteral("presetImportButton"));
-        preset_import_btn_->setProperty("role", "ghost");
-        toolbar_hl->addWidget(preset_import_btn_, 0, Qt::AlignVCenter);
+        // Delete (shown only for a selected user preset)
+        preset_delete_btn_ = new QPushButton(QStringLiteral("Delete"), toolbar_row);
+        preset_delete_btn_->setObjectName(QStringLiteral("presetDeleteButton"));
+        preset_delete_btn_->setProperty("role", "ghost");
+        preset_delete_btn_->setVisible(false);
+        toolbar_hl->addWidget(preset_delete_btn_, 0, Qt::AlignVCenter);
 
-        // Manage overflow button
+        // Overflow menu button
         profile_overflow_btn_ = new QToolButton(toolbar_row);
         profile_overflow_btn_->setObjectName(QStringLiteral("presetManageButton"));
-        profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
+        profile_overflow_btn_->setText(QStringLiteral("\xe2\x80\xa6"));
         profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
         profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
         auto* profile_menu = new QMenu(profile_overflow_btn_);
-        // Section 1: Save actions.
-        save_preset_action_ = profile_menu->addAction(QStringLiteral("Save preset"));
-        save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new preset\xe2\x80\xa6"));
+        save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new\xe2\x80\xa6"));
+        rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename\xe2\x80\xa6"));
         profile_menu->addSeparator();
-        // Section 2: Preset lifecycle.
-        new_preset_action_ = profile_menu->addAction(QStringLiteral("New preset from default\xe2\x80\xa6"));
-        duplicate_preset_action_ = profile_menu->addAction(QStringLiteral("Duplicate preset"));
-        rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename preset\xe2\x80\xa6"));
-        delete_preset_action_ = profile_menu->addAction(QStringLiteral("Delete preset"));
-        profile_menu->addSeparator();
-        // Section 3: Default assignment.
-        set_default_preset_action_ = profile_menu->addAction(QStringLiteral("Set as default preset"));
-        profile_menu->addSeparator();
-        // Section 4: Reset -- two CLEARLY SEPARATE actions.
-        reset_changes_action_ = profile_menu->addAction(QStringLiteral("Reset changes"));
-        profile_menu->addSeparator();
-        // Destructive reset is separated so it cannot be confused with "Reset changes".
-        reset_to_defaults_action_ =
-            profile_menu->addAction(QStringLiteral("Reset all presets to factory defaults\xe2\x80\xa6"));
-        profile_menu->addSeparator();
-        // Section 5: Manage overlay.
-        manage_presets_action_ = profile_menu->addAction(QStringLiteral("Manage presets\xe2\x80\xa6"));
+        export_preset_action_ = profile_menu->addAction(QStringLiteral("Export\xe2\x80\xa6"));
+        import_presets_action_ = profile_menu->addAction(QStringLiteral("Import\xe2\x80\xa6"));
         profile_overflow_btn_->setMenu(profile_menu);
         toolbar_hl->addWidget(profile_overflow_btn_, 0, Qt::AlignVCenter);
-
-        // Dirty hint (inline, shown when dirty)
-        preset_dirty_indicator_ = new QLabel(toolbar_row);
-        preset_dirty_indicator_->setObjectName(QStringLiteral("presetDirtyIndicator"));
-        preset_dirty_indicator_->setProperty("labelRole", "presetDirtyIndicator");
-        preset_dirty_indicator_->setText(QStringLiteral("\xc2\xb7 Unsaved"));
-        preset_dirty_indicator_->setVisible(false);
-        toolbar_hl->addWidget(preset_dirty_indicator_, 0, Qt::AlignVCenter);
 
         // Stretch pushes expert controls to the right
         toolbar_hl->addStretch(1);
@@ -2325,27 +2295,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Relay the panel's shared-capture consumer request out to MainWindow (→ coordinator).
     connect(webcam_setup_panel_, &ui::widgets::WebcamSetupPanel::previewActiveRequested, this,
             &ConfigPage::webcamPreviewActiveRequested);
-    // Preset management connections — overflow menu.
-    connect(save_preset_action_, &QAction::triggered, this, &ConfigPage::onSavePreset);
-    connect(save_preset_as_action_, &QAction::triggered, this, &ConfigPage::onSavePresetAs);
-    connect(new_preset_action_, &QAction::triggered, this, &ConfigPage::onNewPreset);
-    connect(duplicate_preset_action_, &QAction::triggered, this, &ConfigPage::onDuplicatePreset);
-    connect(rename_preset_action_, &QAction::triggered, this, &ConfigPage::onRenamePreset);
-    connect(delete_preset_action_, &QAction::triggered, this, &ConfigPage::onDeletePreset);
-    connect(set_default_preset_action_, &QAction::triggered, this, &ConfigPage::onSetDefaultPreset);
-    connect(reset_changes_action_, &QAction::triggered, this, &ConfigPage::onResetChanges);
-    connect(reset_to_defaults_action_, &QAction::triggered, this, &ConfigPage::onResetToDefaults);
-    connect(manage_presets_action_, &QAction::triggered, this, &ConfigPage::onManagePresets);
-    // Preset management connections — primary action buttons.
-    connect(preset_save_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePreset);
+    // Preset management connections — toolbar buttons.
     connect(preset_save_as_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePresetAs);
-    connect(preset_export_btn_, &QPushButton::clicked, this, [this]() {
+    connect(preset_reset_btn_, &QPushButton::clicked, this, &ConfigPage::resetChangesRequested);
+    connect(preset_delete_btn_, &QPushButton::clicked, this, &ConfigPage::onDeletePreset);
+    // Preset management connections — overflow menu.
+    connect(save_preset_as_action_, &QAction::triggered, this, &ConfigPage::onSavePresetAs);
+    connect(rename_preset_action_, &QAction::triggered, this, &ConfigPage::onRenamePreset);
+    connect(export_preset_action_, &QAction::triggered, this, [this]() {
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Preset"), QString(),
                                                           QStringLiteral("TOML files (*.toml)"));
         if (!path.isEmpty())
             emit exportCurrentPresetRequested(path);
     });
-    connect(preset_import_btn_, &QPushButton::clicked, this, [this]() {
+    connect(import_presets_action_, &QAction::triggered, this, [this]() {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Presets"), QString(),
                                                           QStringLiteral("TOML files (*.toml)"));
         if (!path.isEmpty())
@@ -3570,11 +3533,9 @@ void ConfigPage::setActiveProfileName(const QString& profile_name) {
     updateExampleFilename();
 }
 
-void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
-                                  const QString& default_id, bool dirty) {
+void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id, bool dirty) {
     profile_options_ = options;
     active_preset_id_ = selected_id;
-    default_preset_id_ = default_id;
     preset_dirty_ = dirty;
 
     const QSignalBlocker blocker(profile_combo_);
@@ -3582,12 +3543,7 @@ void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, con
     int active_index = -1;
     for (std::size_t i = 0; i < options.size(); ++i) {
         const auto& opt = options[i];
-        // All non-selected default entries get the ★ suffix so users can identify
-        // the startup default while browsing the list.
-        QString label = opt.label;
-        if (!default_id.isEmpty() && opt.id == default_id && opt.id != selected_id)
-            label += QStringLiteral(" ★");
-        profile_combo_->addItem(label, opt.id);
+        profile_combo_->addItem(opt.label, opt.id);
         if (opt.id == selected_id) {
             active_index = static_cast<int>(i);
             active_preset_is_built_in_ = opt.built_in;
@@ -3608,14 +3564,8 @@ void ConfigPage::setPresetDirty(bool dirty) {
 }
 
 void ConfigPage::updatePresetActionState() {
-    const bool is_default = !default_preset_id_.isEmpty() && (active_preset_id_ == default_preset_id_);
-    const bool has_preset = !active_preset_id_.isEmpty();
     const bool locked = controls_locked_;
-
-    // Dirty indicator: amber "● Unsaved" label shown only when dirty.
-    if (preset_dirty_indicator_) {
-        preset_dirty_indicator_->setVisible(preset_dirty_);
-    }
+    const bool user_preset = !active_preset_id_.isEmpty() && !active_preset_is_built_in_;
 
     // Status badge (built-in / unavailable): separate label in toolbar.
     if (profile_status_label_) {
@@ -3633,64 +3583,85 @@ void ConfigPage::updatePresetActionState() {
         profile_status_label_->style()->polish(profile_status_label_);
     }
 
-    // Save button: enabled only when dirty and not locked.
-    if (preset_save_btn_) {
-        preset_save_btn_->setVisible(preset_dirty_);
-        preset_save_btn_->setEnabled(preset_dirty_ && !locked);
-    }
-
-    // Save As button: always visible, always enabled (unless locked).
+    // Save as new / Reset: shown exactly while the live config is (changed).
     if (preset_save_as_btn_) {
-        preset_save_as_btn_->setEnabled(!locked);
+        preset_save_as_btn_->setVisible(preset_dirty_);
+        preset_save_as_btn_->setEnabled(preset_dirty_ && !locked);
+    }
+    if (preset_reset_btn_) {
+        preset_reset_btn_->setVisible(preset_dirty_);
+        preset_reset_btn_->setEnabled(preset_dirty_ && !locked);
+    }
+    // Delete: shown for a selected user preset, regardless of (changed).
+    if (preset_delete_btn_) {
+        preset_delete_btn_->setVisible(user_preset);
+        preset_delete_btn_->setEnabled(user_preset && !locked);
     }
 
     // Menu actions.
-    if (save_preset_action_)
-        save_preset_action_->setEnabled(preset_dirty_);
     if (save_preset_as_action_)
-        save_preset_as_action_->setEnabled(true);
-    if (new_preset_action_)
-        new_preset_action_->setEnabled(true);
-    if (duplicate_preset_action_)
-        duplicate_preset_action_->setEnabled(has_preset);
+        save_preset_as_action_->setEnabled(!locked); // permanently reachable
     if (rename_preset_action_)
-        rename_preset_action_->setEnabled(has_preset && !active_preset_is_built_in_);
-    if (delete_preset_action_)
-        delete_preset_action_->setEnabled(has_preset && !active_preset_is_built_in_);
-    // "Set as default" is available only when the selected preset is NOT already the default.
-    if (set_default_preset_action_)
-        set_default_preset_action_->setEnabled(has_preset && !is_default);
-    if (reset_changes_action_)
-        reset_changes_action_->setEnabled(preset_dirty_);
-    if (reset_to_defaults_action_)
-        reset_to_defaults_action_->setEnabled(true);
+        rename_preset_action_->setEnabled(user_preset && !locked);
+    if (export_preset_action_)
+        export_preset_action_->setEnabled(!active_preset_id_.isEmpty());
+    if (import_presets_action_)
+        import_presets_action_->setEnabled(!locked);
+
+    // "(changed)" hint in the combo text — informative, not a warning.
+    if (profile_combo_) {
+        const int idx = profile_combo_->currentIndex();
+        if (idx >= 0 && idx < static_cast<int>(profile_options_.size())) {
+            const QSignalBlocker blocker(profile_combo_);
+            const QString base = profile_options_[static_cast<std::size_t>(idx)].label;
+            profile_combo_->setItemText(idx, preset_dirty_ ? base + QStringLiteral(" (changed)") : base);
+        }
+    }
 }
 
-void ConfigPage::onSavePreset() {
-    emit savePresetRequested();
+bool ConfigPage::presetNameRejected(const QString& name, const std::vector<ProfileOption>& options,
+                                    const QString& exclude_id) {
+    const QString folded = name.trimmed().toCaseFolded();
+    if (folded.isEmpty())
+        return true;
+    for (const auto& opt : options) {
+        if (opt.id == exclude_id)
+            continue;
+        if (opt.label.trimmed().toCaseFolded() == folded)
+            return true;
+    }
+    return false;
 }
 
 void ConfigPage::onSavePresetAs() {
-    const QString name = QInputDialog::getText(this, QStringLiteral("Save As New Preset"),
-                                               QStringLiteral("Preset name:"), QLineEdit::Normal, active_profile_name_);
-    if (name.trimmed().isEmpty())
-        return;
+    QString name = active_profile_name_;
+    for (;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, QStringLiteral("Save as new preset"), QStringLiteral("Preset name:"),
+                                     QLineEdit::Normal, name, &ok);
+        if (!ok)
+            return;
+        if (!presetNameRejected(name, profile_options_, QString()))
+            break;
+        QMessageBox::warning(this, QStringLiteral("Save as new preset"),
+                             QStringLiteral("That name is empty or already in use. Preset names are unique."));
+    }
     emit savePresetAsRequested(name.trimmed());
 }
 
-void ConfigPage::onNewPreset() {
-    emit newPresetRequested();
-}
-
-void ConfigPage::onDuplicatePreset() {
-    emit duplicatePresetRequested();
-}
-
 void ConfigPage::onRenamePreset() {
-    const QString name = QInputDialog::getText(this, QStringLiteral("Rename Preset"), QStringLiteral("New name:"),
-                                               QLineEdit::Normal, active_profile_name_);
-    if (name.trimmed().isEmpty())
-        return;
+    QString name = active_profile_name_;
+    for (;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, QStringLiteral("Rename preset"), QStringLiteral("Preset name:"),
+                                     QLineEdit::Normal, name, &ok);
+        if (!ok)
+            return;
+        if (!presetNameRejected(name, profile_options_, active_preset_id_))
+            break;
+        QMessageBox::warning(this, QStringLiteral("Rename preset"),
+                             QStringLiteral("That name is empty or already in use. Preset names are unique."));
+    }
     emit renamePresetRequested(name.trimmed());
 }
 
@@ -3702,28 +3673,6 @@ void ConfigPage::onDeletePreset() {
     if (answer != QMessageBox::Yes)
         return;
     emit deletePresetRequested();
-}
-
-void ConfigPage::onResetChanges() {
-    emit resetChangesRequested();
-}
-
-void ConfigPage::onResetToDefaults() {
-    const auto answer = QMessageBox::warning(this, QStringLiteral("Reset All to Factory Defaults"),
-                                             QStringLiteral("Reset all presets and settings to factory defaults? "
-                                                            "This action cannot be undone."),
-                                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (answer != QMessageBox::Yes)
-        return;
-    emit resetToDefaultsRequested();
-}
-
-void ConfigPage::onSetDefaultPreset() {
-    emit setDefaultPresetRequested();
-}
-
-void ConfigPage::onManagePresets() {
-    emit managePresetsRequested();
 }
 
 void ConfigPage::onBrowse() {
@@ -5368,9 +5317,9 @@ void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
 void ConfigPage::applyVisualPresetSaveError(bool show) {
     if (show && !visual_preset_error_label_) {
         // Lazily insert the error label directly below the preset selector row in
-        // the same parent QWidget.  We locate the preset_save_btn_ parent layout
+        // the same parent QWidget.  We locate the overflow button's parent layout
         // and insert the label after the selector row.
-        QWidget* panel = preset_save_btn_ ? preset_save_btn_->parentWidget() : nullptr;
+        QWidget* panel = profile_overflow_btn_ ? profile_overflow_btn_->parentWidget() : nullptr;
         if (!panel)
             return;
         visual_preset_error_label_ = new QLabel(panel);
@@ -5470,10 +5419,7 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
 
     // Non-audio controls: locked unconditionally (no target-kind policy applies).
     profile_combo_->setEnabled(enabled);
-    if (preset_save_btn_)
-        preset_save_btn_->setEnabled(enabled && preset_dirty_);
-    if (preset_save_as_btn_)
-        preset_save_as_btn_->setEnabled(enabled);
+    updatePresetActionState(); // re-derives Save as new / Reset / Delete / menu from controls_locked_
     profile_overflow_btn_->setEnabled(enabled);
     if (container_combo_)
         container_combo_->setEnabled(enabled);

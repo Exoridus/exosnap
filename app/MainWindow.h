@@ -38,6 +38,7 @@
 
 class QShowEvent;
 class QPaintEvent;
+class QTimer;
 
 namespace exosnap {
 
@@ -60,7 +61,6 @@ namespace ui::dialogs {
 class AboutOverlay;
 class CrashReportOverlay;
 class EditExportOverlay;
-class PresetManageOverlay;
 class RecoveryOverlay;
 class WhatsNewOverlay;
 class SourcePickerOverlay;
@@ -222,27 +222,27 @@ class MainWindow : public QMainWindow {
 
     // Preset operation handlers (wired to ConfigPage signals).
     void onPresetSelected(const QString& id);
-    void onSavePreset();
     void onSavePresetAs(const QString& name);
-    void onNewPreset();
-    void onDuplicatePreset();
     void onRenamePreset(const QString& name);
     void onDeletePreset();
     void onResetChanges();
-    void onResetToDefaults();
-    void onSetDefaultPreset();
 
-    // Persist the full preset store state.
+    // Persist the full preset store state (live config + user presets).
     void persistPresetState();
+
+    // Recomputes the dirty flag against the live config and schedules a
+    // debounced persist. Wired to every live-config-changed signal so a save
+    // never depends on the user remembering to press "Save preset".
+    void onLiveConfigChanged();
+
+    // Starts (or restarts) the debounce timer; persistPresetState() runs once
+    // it elapses. Coalesces bursts of live edits (e.g. a slider drag) into a
+    // single write instead of one per intermediate value.
+    void schedulePersistLiveState();
 
     // Export / import handlers (wired to OutputPage signals).
     void onExportSelectedProfile(const QString& path);
-    void onExportAllUserProfiles(const QString& path);
     void onImportProfiles(const QString& path);
-
-    // Preset manage overlay.
-    void openPresetManageOverlay();
-    void refreshPresetManageOverlay();
 
     void saveWindowGeometryToSettings();
 
@@ -328,7 +328,6 @@ class MainWindow : public QMainWindow {
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
-    ui::dialogs::PresetManageOverlay* preset_manage_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
@@ -395,6 +394,27 @@ class MainWindow : public QMainWindow {
     RecordingPresetRegistry preset_registry_;
     RecordingPresetStore preset_store_;
 
+    // Snapshot needed to undo a preset switch: the live config and selection
+    // as they were immediately before the switch that raised the pending
+    // "Switched to '<name>'" toast. Single-slot — a later switch overwrites it,
+    // so only the most recent switch can ever be undone (matches the toast: the
+    // superseded toast's Undo button, if clicked, undoes the LATEST switch, not
+    // the one it was shown for).
+    struct PresetSwitchUndo {
+        RecordingPresetConfig previous_live;
+        std::string previous_selected_id;
+    };
+    std::optional<PresetSwitchUndo> pending_preset_undo_;
+    // The config the app booted with (from [live] or a fresh Default).
+    // Re-applied once more after the deferred coordinator init resets things.
+    RecordingPresetConfig boot_live_config_;
+    // 750 ms single-shot debounce for schedulePersistLiveState(); created on
+    // first use.
+    QTimer* live_persist_timer_ = nullptr;
+    // Set when RecordingPresetStore::Load() had to repair the file; consumed
+    // (and cleared) once the notification toast system exists to report it.
+    bool preset_store_repaired_ = false;
+
     // Reduced AppSettingsStore: hotkeys + window geometry only.
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
@@ -422,7 +442,6 @@ class MainWindow : public QMainWindow {
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
     bool resize_cursor_shown_ = false;
-    bool syncing_preset_ui_ = false;
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
     // PERF-MEASURE: one-shot guard so first-paint latency is logged exactly once.

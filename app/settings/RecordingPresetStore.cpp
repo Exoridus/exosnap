@@ -562,14 +562,14 @@ double TomlFloat(const toml::node_view<const toml::node>& node, double default_v
 // Per-item TOML serialization helpers
 // ---------------------------------------------------------------------------
 
-toml::table PresetToToml(const RecordingPreset& preset) {
+// Serializes the config body shared by every stored preset AND the [live]
+// table — capture/output/video/audio/webcam/countdown. No id/name here: those
+// are preset-only identity, not part of the config.
+toml::table ConfigToToml(const RecordingPresetConfig& config) {
     toml::table tbl;
 
-    tbl.emplace("id", preset.id);
-    tbl.emplace("name", preset.name);
-
     // --- Capture ---
-    const auto& cap = preset.config.capture;
+    const auto& cap = config.capture;
     toml::table cap_tbl;
     cap_tbl.emplace("kind", PresetCaptureKindToString(cap.kind).toStdString());
     cap_tbl.emplace("display_key", cap.display_key);
@@ -583,7 +583,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     tbl.emplace("capture", std::move(cap_tbl));
 
     // --- Output ---
-    const auto& out = preset.config.output;
+    const auto& out = config.output;
     toml::table out_tbl;
     out_tbl.emplace("folder", QString::fromStdWString(out.output_folder.wstring()).toStdString());
     out_tbl.emplace("naming_pattern", QString::fromStdWString(out.naming_pattern).toStdString());
@@ -606,7 +606,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     tbl.emplace("output", std::move(out_tbl));
 
     // --- Video ---
-    const auto& vid = preset.config.video;
+    const auto& vid = config.video;
     toml::table vid_tbl;
     vid_tbl.emplace("cq", static_cast<int64_t>(vid.cq));
     vid_tbl.emplace("rate_control", RateControlModeToString(vid.rate_control).toStdString());
@@ -619,7 +619,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     tbl.emplace("video", std::move(vid_tbl));
 
     // --- Audio ---
-    const auto& aud = preset.config.audio;
+    const auto& aud = config.audio;
     toml::table aud_tbl;
     aud_tbl.emplace("target_kind", CaptureTargetKindToString(aud.target_kind).toStdString());
     aud_tbl.emplace("mic_channel_mode", MicChannelModeToString(aud.mic_channel_mode).toStdString());
@@ -668,7 +668,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     tbl.emplace("audio", std::move(aud_tbl));
 
     // --- Webcam ---
-    const auto& wc = preset.config.webcam;
+    const auto& wc = config.webcam;
     toml::table wc_tbl;
     wc_tbl.emplace("enabled", wc.enabled);
     wc_tbl.emplace("device_id", wc.device_id);
@@ -698,24 +698,27 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     tbl.emplace("webcam", std::move(wc_tbl));
 
     // --- Countdown ---
-    tbl.emplace("countdown_seconds", static_cast<int64_t>(preset.config.countdown_seconds));
+    tbl.emplace("countdown_seconds", static_cast<int64_t>(config.countdown_seconds));
 
     return tbl;
 }
 
-// Parse a single TOML preset table into a RecordingPreset.
-// Returns nullopt if the item is malformed (empty id).
-std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
-    RecordingPreset preset;
+// A stored preset is just an id + name wrapped around a config body.
+toml::table PresetToToml(const RecordingPreset& preset) {
+    toml::table tbl = ConfigToToml(preset.config);
+    tbl.emplace("id", preset.id);
+    tbl.emplace("name", preset.name);
+    return tbl;
+}
 
-    preset.id = QString::fromStdString(TomlStr(tbl["id"])).trimmed().toStdString();
-    if (preset.id.empty()) {
-        return std::nullopt; // Malformed — skip.
-    }
-    preset.name = TomlStr(tbl["name"]);
+// Parses the config body shared by every stored preset AND the [live] table.
+// Field-wise: a missing or wrong-typed key leaves that field at its model
+// default instead of failing the whole parse.
+RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
+    RecordingPresetConfig config;
 
     // --- Capture ---
-    auto& cap = preset.config.capture;
+    auto& cap = config.capture;
     {
         const auto kind = PresetCaptureKindFromString(QString::fromStdString(TomlStr(tbl["capture"]["kind"])));
         cap.kind = kind.value_or(PresetCaptureKind::Display);
@@ -730,7 +733,7 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     cap.region_display_key = TomlStr(tbl["capture"]["region_display_key"]);
 
     // --- Output ---
-    auto& out = preset.config.output;
+    auto& out = config.output;
     {
         const std::string folder = TomlStr(tbl["output"]["folder"]);
         if (!folder.empty()) {
@@ -826,7 +829,7 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     }
 
     // --- Video ---
-    auto& vid = preset.config.video;
+    auto& vid = config.video;
     {
         const int64_t cq = TomlInt(tbl["video"]["cq"], static_cast<int64_t>(vid.cq));
         if (cq >= recorder_core::kNvencCqMin && cq <= recorder_core::kNvencCqMax)
@@ -861,7 +864,7 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     vid.frame_pacing = static_cast<recorder_core::FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));
 
     // --- Audio ---
-    auto& aud = preset.config.audio;
+    auto& aud = config.audio;
     {
         const auto k = CaptureTargetKindFromString(QString::fromStdString(TomlStr(tbl["audio"]["target_kind"])));
         if (k.has_value())
@@ -980,7 +983,7 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     }
 
     // --- Webcam ---
-    auto& wc = preset.config.webcam;
+    auto& wc = config.webcam;
     wc.enabled = TomlBool(tbl["webcam"]["enabled"], false);
     wc.device_id = TomlStr(tbl["webcam"]["device_id"]);
     wc.width = static_cast<int>(TomlInt(tbl["webcam"]["width"], 1280));
@@ -1009,7 +1012,22 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     wc.chroma_key.spill_reduction = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["spill"], 0.30));
 
     // --- Countdown ---
-    preset.config.countdown_seconds = static_cast<int>(TomlInt(tbl["countdown_seconds"], 0));
+    config.countdown_seconds = static_cast<int>(TomlInt(tbl["countdown_seconds"], 0));
+
+    return config;
+}
+
+// Parse a single TOML preset table into a RecordingPreset.
+// Returns nullopt if the item is malformed (empty id).
+std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
+    RecordingPreset preset;
+
+    preset.id = QString::fromStdString(TomlStr(tbl["id"])).trimmed().toStdString();
+    if (preset.id.empty()) {
+        return std::nullopt; // Malformed — skip.
+    }
+    preset.name = TomlStr(tbl["name"]);
+    preset.config = ConfigFromToml(tbl);
 
     return preset;
 }
@@ -1076,15 +1094,10 @@ std::optional<toml::table> ParseTomlFile(const QString& path, bool* parse_failed
     }
 }
 
-// ---------------------------------------------------------------------------
-// Seed helper: produce the standard reset state.
-// ---------------------------------------------------------------------------
-PersistedPresetState MakeResetState() {
+// A first run (no file yet) is not a repair — there is nothing to fix.
+PersistedPresetState MakeFirstRunState() {
     PersistedPresetState state;
-    state.presets.push_back(MakeDefaultPreset());
     state.selected_id = std::string(kDefaultPresetId);
-    state.default_id = std::string(kDefaultPresetId);
-    state.was_reset = true;
     return state;
 }
 
@@ -1113,108 +1126,123 @@ RecordingPresetStore::RecordingPresetStore(QString file_path) : file_path_(std::
 
 PersistedPresetState RecordingPresetStore::Load() const {
     if (file_path_.isEmpty()) {
-        return MakeResetState();
+        return MakeFirstRunState();
     }
 
-    // If file doesn't exist, return reset state.
+    // No file yet (first run) — nothing to repair.
     if (!QFileInfo::exists(file_path_)) {
-        return MakeResetState();
+        return MakeFirstRunState();
     }
 
     bool parse_failed = false;
     const auto maybe_doc = ParseTomlFile(file_path_, &parse_failed);
     if (!maybe_doc.has_value()) {
-        return MakeResetState();
+        PersistedPresetState state;
+        state.selected_id = std::string(kDefaultPresetId);
+        state.repaired = true; // Unparseable file — nothing survived.
+        return state;
     }
     const toml::table& doc = *maybe_doc;
 
-    // Version check. Schema 19 loads via a targeted field migration (see
-    // below) instead of a full reset — user presets are preserved. Anything
-    // else that is not the current version still resets.
+    // A schema mismatch alone is a routine version re-stamp, not a repair —
+    // every field still parses cleanly and nothing is discarded. `repaired`
+    // instead tracks whether an item actually had to be dropped below.
     const int64_t schema_version = TomlInt(doc["schema_version"], -1);
-    const bool migrate_v19_color_range = (schema_version == kPresetSchemaMigratableFrom);
-    if (schema_version != kPresetSchemaVersion && !migrate_v19_color_range) {
-        return MakeResetState();
-    }
+    // Files at or below this schema carry the ADR-0032 targeted color-range
+    // rewrite on top of the ordinary field-wise repair (see RecordingPreset.h).
+    const bool migrate_color_range = (schema_version >= 0 && schema_version <= kPresetSchemaColorRangeMigratedThrough);
 
-    const toml::array* presets_arr = doc["presets"].as_array();
-    if (!presets_arr) {
-        return MakeResetState();
-    }
-
+    bool item_dropped = false;
     std::vector<RecordingPreset> accepted;
     std::set<std::string> seen_ids;
 
-    for (const auto& elem : *presets_arr) {
-        const auto* item_tbl = elem.as_table();
-        if (!item_tbl)
-            continue;
-        const auto maybe = PresetFromToml(*item_tbl);
-        if (!maybe.has_value()) {
-            continue; // Malformed item — skip.
+    // preset.default used to be an ordinary, editable preset before built-in
+    // presets existed; every pre-upgrade presets.toml still carries one. It is
+    // captured here (first occurrence wins) so its configuration can become
+    // the live config below when the file predates [live] entirely — instead
+    // of being silently discarded like the other three built-in ids, which no
+    // released version ever wrote.
+    std::optional<RecordingPresetConfig> carried_over_default_config;
+
+    if (const toml::array* presets_arr = doc["presets"].as_array()) {
+        for (const auto& elem : *presets_arr) {
+            const auto* item_tbl = elem.as_table();
+            if (!item_tbl) {
+                item_dropped = true; // Malformed item — not even a table.
+                continue;
+            }
+            const auto maybe = PresetFromToml(*item_tbl);
+            if (!maybe.has_value()) {
+                item_dropped = true; // Malformed item — skip.
+                continue;
+            }
+            const RecordingPreset& raw = *maybe;
+            if (raw.id.empty()) {
+                item_dropped = true;
+                continue;
+            }
+            if (IsBuiltInPresetId(raw.id)) {
+                if (raw.id == kDefaultPresetId && !carried_over_default_config.has_value()) {
+                    carried_over_default_config = raw.config;
+                }
+                continue; // Built-ins are code-defined — never loaded from disk.
+            }
+            if (seen_ids.count(raw.id) > 0) {
+                item_dropped = true; // Duplicate id — drop later occurrence.
+                continue;
+            }
+            seen_ids.insert(raw.id);
+            RecordingPreset sanitized = SanitizePreset(raw);
+            // ADR 0032: under schema <=19 "full" was the materialized old code
+            // default — never an informed user choice (the colour-range combo
+            // had a hydration bug and always displayed "Full (PC)" regardless
+            // of the stored value). Rewrite it to the new Limited default; an
+            // explicit "limited" is kept.
+            if (migrate_color_range && sanitized.config.output.color_range == capability::ColorRange::Full) {
+                sanitized.config.output.color_range = capability::ColorRange::Limited;
+            }
+            accepted.push_back(std::move(sanitized));
         }
-        const RecordingPreset& raw = *maybe;
-        if (raw.id.empty()) {
-            continue;
-        }
-        if (seen_ids.count(raw.id) > 0) {
-            continue; // Duplicate id — drop later occurrence.
-        }
-        seen_ids.insert(raw.id);
-        RecordingPreset sanitized = SanitizePreset(raw);
-        // v19 -> v20 migration (fix/color-range-signaling): under schema <=19
-        // "full" was the materialized old code default — never an informed
-        // user choice (the colour-range combo had a hydration bug and always
-        // displayed "Full (PC)" regardless of the stored value). Rewrite it to
-        // the new Limited default; an explicit "limited" (the only value a
-        // user could have deliberately produced a difference with) is kept.
-        // One-shot: the store is written back as schema 20 on the next Save,
-        // after which an explicit "full" is a respected opt-in.
-        if (migrate_v19_color_range && sanitized.config.output.color_range == capability::ColorRange::Full) {
-            sanitized.config.output.color_range = capability::ColorRange::Limited;
-        }
-        accepted.push_back(std::move(sanitized));
     }
 
-    // No valid items → reset.
-    if (accepted.empty()) {
-        return MakeResetState();
-    }
-
-    const auto id_in_list = [&](const std::string& id) {
-        for (const auto& p : accepted)
-            if (p.id == id)
-                return true;
-        return false;
+    // Shared by both the [live] table and the preset.default carry-over below
+    // — one path applies the ADR-0032 color-range migration and sanitization
+    // to a parsed config, regardless of which table it came from.
+    const auto migrate_and_sanitize_live = [&](RecordingPresetConfig cfg) {
+        if (migrate_color_range && cfg.output.color_range == capability::ColorRange::Full) {
+            cfg.output.color_range = capability::ColorRange::Limited;
+        }
+        return SanitizePresetConfig(std::move(cfg));
     };
 
-    // Repair selected_id.
-    std::string selected_id = TomlStr(doc["selected_id"]);
-    std::string default_id = TomlStr(doc["default_id"]);
-
-    if (!id_in_list(selected_id)) {
-        if (id_in_list(default_id)) {
-            selected_id = default_id;
-        } else {
-            selected_id = accepted.front().id;
-        }
+    std::optional<RecordingPresetConfig> live;
+    if (const toml::table* live_tbl = doc["live"].as_table()) {
+        live = migrate_and_sanitize_live(ConfigFromToml(*live_tbl));
+    } else if (carried_over_default_config.has_value()) {
+        // No [live] table: this is a pre-rework file. Its preset.default entry
+        // (captured above) becomes the live config, once — the entry itself
+        // does not survive into the new file, and this is not a repair since
+        // nothing the user would notice was lost.
+        live = migrate_and_sanitize_live(*carried_over_default_config);
     }
 
-    // Repair default_id.
-    if (!id_in_list(default_id)) {
-        const std::string canonical(kDefaultPresetId);
-        if (id_in_list(canonical)) {
-            default_id = canonical;
-        } else {
-            default_id = accepted.front().id;
-        }
+    // Repair selected_id: keep it if it names a built-in (always present) or a
+    // surviving user preset; otherwise fall back to the built-in Default. The
+    // registry re-repairs this independently, but the store keeps its own
+    // contract self-consistent.
+    std::string selected_id = TomlStr(doc["selected_id"]);
+    const bool selected_is_builtin = IsBuiltInPresetId(selected_id);
+    const bool selected_in_user_list =
+        std::any_of(accepted.begin(), accepted.end(), [&](const RecordingPreset& p) { return p.id == selected_id; });
+    if (!selected_is_builtin && !selected_in_user_list) {
+        selected_id = std::string(kDefaultPresetId);
     }
 
     PersistedPresetState state;
-    state.presets = std::move(accepted);
+    state.user_presets = std::move(accepted);
     state.selected_id = std::move(selected_id);
-    state.default_id = std::move(default_id);
-    state.was_reset = false;
+    state.live = std::move(live);
+    state.repaired = item_dropped;
     return state;
 }
 
@@ -1223,7 +1251,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
 // ---------------------------------------------------------------------------
 
 void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, const std::string& selected_id,
-                                const std::string& default_id) const {
+                                const RecordingPresetConfig& live) const {
     if (file_path_.isEmpty()) {
         return;
     }
@@ -1234,10 +1262,12 @@ void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
     toml::table doc;
     doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
     doc.emplace("selected_id", selected_id);
-    doc.emplace("default_id", default_id);
+    doc.emplace("live", ConfigToToml(live));
 
     toml::array presets_arr;
     for (const auto& preset : presets) {
+        if (IsBuiltInPresetId(preset.id))
+            continue; // Built-ins are code-defined — never written to disk.
         presets_arr.push_back(PresetToToml(preset));
     }
     doc.emplace("presets", std::move(presets_arr));
@@ -1277,38 +1307,6 @@ bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, con
 
     toml::array presets_arr;
     presets_arr.push_back(PresetToToml(preset));
-    doc.emplace("presets", std::move(presets_arr));
-
-    return WriteTomlAtomic(doc, path, err);
-}
-
-// ---------------------------------------------------------------------------
-// ExportAllUserPresetsToFile
-// ---------------------------------------------------------------------------
-
-bool RecordingPresetStore::ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
-                                                      QString* err) {
-    if (path.isEmpty()) {
-        if (err)
-            *err = QStringLiteral("Export path is empty.");
-        return false;
-    }
-
-    const QFileInfo info(path);
-    if (!QDir().mkpath(info.absolutePath())) {
-        if (err)
-            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
-        return false;
-    }
-
-    toml::table doc;
-    doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
-    doc.emplace("export_kind", std::string("all"));
-
-    toml::array presets_arr;
-    for (const auto& preset : presets) {
-        presets_arr.push_back(PresetToToml(preset));
-    }
     doc.emplace("presets", std::move(presets_arr));
 
     return WriteTomlAtomic(doc, path, err);
@@ -1378,13 +1376,11 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
 
         RecordingPreset preset = SanitizePreset(*maybe);
 
-        // Collision handling: if the id is already used, generate a fresh one
-        // and suffix the name so the user can tell it apart.
+        // Collision handling: if the id is already used, generate a fresh one.
         if (used_ids.count(preset.id) > 0) {
             preset.id = GeneratePresetId();
-            if (!preset.name.empty() && preset.name.rfind(" (imported)") == std::string::npos) {
-                preset.name += " (imported)";
-            }
+            // Name collisions are resolved by the registry's numeric dedupe
+            // ("name (2)") at insert time — no marker suffix here.
         }
         used_ids.insert(preset.id);
         result.push_back(std::move(preset));

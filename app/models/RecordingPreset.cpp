@@ -4,6 +4,7 @@
 #include <recorder_core/audio_track_model.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <random>
 #include <set>
@@ -156,6 +157,50 @@ RecordingPreset MakeDefaultPreset() {
     preset.config.countdown_seconds = 0;
 
     return preset;
+}
+
+// ---------------------------------------------------------------------------
+// MakeBuiltInPresets
+// ---------------------------------------------------------------------------
+
+std::vector<RecordingPreset> MakeBuiltInPresets() {
+    std::vector<RecordingPreset> result;
+    result.push_back(MakeDefaultPreset());
+
+    // Quality: maximum sharpness; costs disk and GPU. Default already sits at
+    // the canonical High tier (cq 19), so Quality deliberately goes below the
+    // canonical ladder to cq 16 (the segment UI renders it as "~High").
+    RecordingPreset quality = MakeDefaultPreset();
+    quality.id = std::string(kQualityPresetId);
+    quality.name = "Quality";
+    quality.config.video.cq = 16;
+    quality.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    result.push_back(std::move(quality));
+
+    // Efficiency: small files at usable quality. P6 buys compression with GPU
+    // time instead of quality loss.
+    RecordingPreset efficiency = MakeDefaultPreset();
+    efficiency.id = std::string(kEfficiencyPresetId);
+    efficiency.name = "Efficiency";
+    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    efficiency.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
+    result.push_back(std::move(efficiency));
+
+    // Compatibility: editing, upload, GPUs without AV1 encode (pre-RTX-40).
+    RecordingPreset compatibility = MakeDefaultPreset();
+    compatibility.id = std::string(kCompatibilityPresetId);
+    compatibility.name = "Compatibility";
+    compatibility.config.output.container = capability::Container::Mp4;
+    compatibility.config.output.video_codec = capability::VideoCodec::H264Nvenc;
+    compatibility.config.output.audio_codec = capability::AudioCodec::AacMf;
+    result.push_back(std::move(compatibility));
+
+    return result;
+}
+
+bool IsBuiltInPresetId(std::string_view id) {
+    return id == kDefaultPresetId || id == kQualityPresetId || id == kEfficiencyPresetId ||
+           id == kCompatibilityPresetId;
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +477,13 @@ bool IsValidPresetName(std::string_view name) {
 
 std::string NormalizePresetName(std::string_view name) {
     return TrimWhitespace(name);
+}
+
+std::string FoldPresetName(std::string_view name) {
+    std::string folded = NormalizePresetName(name);
+    std::transform(folded.begin(), folded.end(), folded.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return folded;
 }
 
 // ---------------------------------------------------------------------------
@@ -722,11 +774,16 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 
 bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
     // Capture identity (kind, display_key, window_key, has_region, region,
-    // region_display_key) is intentionally NOT compared here.  Capture depends
-    // on transient device availability and auto-resolution, so comparing it
-    // would cause spurious/unstable dirty state (e.g. default preset appears
-    // dirty at startup because the live policy resolves an empty display_key to
-    // a concrete monitor key, or because a monitor is replugged).
+    // region_display_key), output.bit_depth, and output.hdr_mode are
+    // intentionally NOT compared here: all three are environment fields
+    // (see WithEnvironmentFields/StripEnvironmentFields) describing the
+    // machine/display rather than the user's recording intent. Capture
+    // depends on transient device availability and auto-resolution; bit depth
+    // and HDR mode depend on the connected display and source. Comparing any
+    // of them would cause spurious/unstable dirty state (e.g. default preset
+    // appears dirty at startup because the live policy resolves an empty
+    // display_key to a concrete monitor key, or because a monitor is
+    // replugged, or because the desktop's HDR toggle changes).
     // Per spec: temporary availability changes must not make the preset dirty.
     // NormalizedConfigEquals (full structural equality) is kept for persistence
     // round-trip verification and must NOT be changed.
@@ -743,9 +800,6 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     if (a.output.video_codec != b.output.video_codec) {
         return false;
     }
-    if (a.output.bit_depth != b.output.bit_depth) {
-        return false;
-    }
     if (a.output.chroma_subsampling != b.output.chroma_subsampling) {
         return false;
     }
@@ -753,9 +807,6 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.nvenc_preset != b.output.nvenc_preset) {
-        return false;
-    }
-    if (a.output.hdr_mode != b.output.hdr_mode) {
         return false;
     }
     if (a.output.audio_codec != b.output.audio_codec) {
@@ -983,6 +1034,25 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Environment fields
+// ---------------------------------------------------------------------------
+
+RecordingPresetConfig WithEnvironmentFields(RecordingPresetConfig config, const RecordingPresetConfig& env) {
+    config.capture = env.capture;
+    config.output.bit_depth = env.output.bit_depth;
+    config.output.hdr_mode = env.output.hdr_mode;
+    return config;
+}
+
+RecordingPresetConfig StripEnvironmentFields(RecordingPresetConfig config) {
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    config.capture = PresetCaptureTarget{};
+    config.output.bit_depth = defaults.bit_depth;
+    config.output.hdr_mode = defaults.hdr_mode;
+    return config;
 }
 
 // ---------------------------------------------------------------------------

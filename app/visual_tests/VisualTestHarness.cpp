@@ -298,9 +298,6 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
             preset.insert(QStringLiteral("count"), scenario.preset_count);
         }
 
-        // default_name: from scenario (no widget exposes the default id directly).
-        preset.insert(QStringLiteral("default_name"), scenario.preset_default_name);
-
         // dirty: presetDirtyIndicator visibility is the ground truth.
         if (const auto* ind = window.findChild<const QLabel*>(QStringLiteral("presetDirtyIndicator")))
             preset.insert(QStringLiteral("dirty"), ind->isVisible());

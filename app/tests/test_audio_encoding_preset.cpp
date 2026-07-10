@@ -160,12 +160,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Bitrate) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.audio_bitrate_kbps = 256u;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.audio.audio_bitrate_kbps, 256u);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.audio.audio_bitrate_kbps, 256u);
     QFile::remove(path);
 }
 
@@ -177,12 +178,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_AudioCodec_Pcm) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.output.audio_codec = capability::AudioCodec::Pcm;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.output.audio_codec, capability::AudioCodec::Pcm);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.output.audio_codec, capability::AudioCodec::Pcm);
     QFile::remove(path);
 }
 
@@ -194,12 +196,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_AudioCodec_Flac) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.output.audio_codec = capability::AudioCodec::Flac;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.output.audio_codec, capability::AudioCodec::Flac);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.output.audio_codec, capability::AudioCodec::Flac);
     QFile::remove(path);
 }
 
@@ -208,12 +211,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_OpusFrameDuration_Ms10) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.opus_frame_duration = OpusFrameDuration::Ms10;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms10);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms10);
     QFile::remove(path);
 }
 
@@ -222,12 +226,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_OpusFrameDuration_Ms5) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.opus_frame_duration = OpusFrameDuration::Ms5;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms5);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms5);
     QFile::remove(path);
 }
 
@@ -236,12 +241,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_OpusFrameDuration_Ms2_5) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.opus_frame_duration = OpusFrameDuration::Ms2_5;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms2_5);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms2_5);
     QFile::remove(path);
 }
 
@@ -250,12 +256,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Complexity) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.opus_complexity = 3;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    EXPECT_EQ(state.presets.front().config.audio.opus_complexity, 3);
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_EQ(state.user_presets.front().config.audio.opus_complexity, 3);
     QFile::remove(path);
 }
 
@@ -264,14 +271,15 @@ TEST(AudioEncodingPreset, StoreRoundTrip_AllThreeFields) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.audio_bitrate_kbps = 128u;
     p.config.audio.opus_frame_duration = OpusFrameDuration::Ms10;
     p.config.audio.opus_complexity = 7;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_EQ(loaded.audio_bitrate_kbps, 128u);
     EXPECT_EQ(loaded.opus_frame_duration, OpusFrameDuration::Ms10);
     EXPECT_EQ(loaded.opus_complexity, 7);
@@ -284,11 +292,10 @@ TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
     const QString path = UniqueTempPath();
     const QString toml =
         QStringLiteral("schema_version = %1\n"
-                       "selected_id = \"preset.default\"\n"
-                       "default_id  = \"preset.default\"\n"
+                       "selected_id = \"preset.testfixture0001\"\n"
                        "\n"
                        "[[presets]]\n"
-                       "id   = \"preset.default\"\n"
+                       "id   = \"preset.testfixture0001\"\n"
                        "name = \"Default\"\n"
                        "countdown_seconds = 0\n"
                        "[presets.capture]\n"
@@ -358,20 +365,20 @@ TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
 
     RecordingPresetStore store(path);
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
+    ASSERT_FALSE(state.user_presets.empty());
     // Missing keys must fall back to defaults: 160, Ms20, 10.
-    EXPECT_EQ(state.presets.front().config.audio.audio_bitrate_kbps, 160u);
-    EXPECT_EQ(state.presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms20);
-    EXPECT_EQ(state.presets.front().config.audio.opus_complexity, 10);
+    EXPECT_EQ(state.user_presets.front().config.audio.audio_bitrate_kbps, 160u);
+    EXPECT_EQ(state.user_presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms20);
+    EXPECT_EQ(state.user_presets.front().config.audio.opus_complexity, 10);
     // Limiter keys also omitted → enabled / 0.0 dBFS defaults.
-    EXPECT_TRUE(state.presets.front().config.audio.limiter_enabled);
-    EXPECT_FLOAT_EQ(state.presets.front().config.audio.limiter_ceiling_db, 0.0f);
+    EXPECT_TRUE(state.user_presets.front().config.audio.limiter_enabled);
+    EXPECT_FLOAT_EQ(state.user_presets.front().config.audio.limiter_ceiling_db, 0.0f);
     // Mic HPF keys also omitted → disabled / 80 Hz defaults.
-    EXPECT_FALSE(state.presets.front().config.audio.mic_hpf_enabled);
-    EXPECT_FLOAT_EQ(state.presets.front().config.audio.mic_hpf_cutoff_hz, 80.0f);
+    EXPECT_FALSE(state.user_presets.front().config.audio.mic_hpf_enabled);
+    EXPECT_FLOAT_EQ(state.user_presets.front().config.audio.mic_hpf_cutoff_hz, 80.0f);
     // Mic gate keys also omitted → disabled / -45 dB defaults.
-    EXPECT_FALSE(state.presets.front().config.audio.mic_gate_enabled);
-    EXPECT_FLOAT_EQ(state.presets.front().config.audio.mic_gate_threshold_db, -45.0f);
+    EXPECT_FALSE(state.user_presets.front().config.audio.mic_gate_enabled);
+    EXPECT_FLOAT_EQ(state.user_presets.front().config.audio.mic_gate_threshold_db, -45.0f);
     QFile::remove(path);
 }
 
@@ -432,13 +439,14 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Limiter) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.limiter_enabled = false;
     p.config.audio.limiter_ceiling_db = -3.0f;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_FALSE(loaded.limiter_enabled);
     EXPECT_NEAR(loaded.limiter_ceiling_db, -3.0f, 0.01f);
     QFile::remove(path);
@@ -501,13 +509,14 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicHpf) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.mic_hpf_enabled = true;
     p.config.audio.mic_hpf_cutoff_hz = 120.0f;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_TRUE(loaded.mic_hpf_enabled);
     EXPECT_NEAR(loaded.mic_hpf_cutoff_hz, 120.0f, 0.01f);
     QFile::remove(path);
@@ -570,13 +579,14 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicGate) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.mic_gate_enabled = true;
     p.config.audio.mic_gate_threshold_db = -30.0f;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_TRUE(loaded.mic_gate_enabled);
     EXPECT_NEAR(loaded.mic_gate_threshold_db, -30.0f, 0.01f);
     QFile::remove(path);
@@ -639,13 +649,14 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicAgc) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.mic_agc_enabled = true;
     p.config.audio.mic_agc_target_db = -24.0f;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_TRUE(loaded.mic_agc_enabled);
     EXPECT_NEAR(loaded.mic_agc_target_db, -24.0f, 0.01f);
     QFile::remove(path);
@@ -679,12 +690,13 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicRnnoise) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     p.config.audio.mic_rnnoise_enabled = true;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_TRUE(loaded.mic_rnnoise_enabled);
     QFile::remove(path);
 }
@@ -839,17 +851,18 @@ TEST(AudioEncodingPreset, StoreRoundTrip_FormatModelAllFourFields) {
     RecordingPresetStore store(path);
 
     RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     // Use PCM so bit_depth=24 is valid.
     p.config.output.audio_codec = capability::AudioCodec::Pcm;
     p.config.audio.audio_sample_rate = 44100u;
     p.config.audio.audio_channels = 1u;
     p.config.audio.audio_bit_depth = 24u;
     p.config.audio.flac_compression_level = 3;
-    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({p}, p.id, p.config);
 
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_EQ(loaded.audio_sample_rate, 44100u);
     EXPECT_EQ(loaded.audio_channels, 1u);
     EXPECT_EQ(loaded.audio_bit_depth, 24u);
@@ -864,11 +877,10 @@ TEST(AudioEncodingPreset, StoreRoundTrip_FormatModel_DefaultsOnMissingKeys) {
     // Reuse the TOML fixture from StoreLoad_MissingKeys_FallsBackToDefaults but
     // update the schema_version and verify only format-model fields.
     const QString toml = QStringLiteral("schema_version = %1\n"
-                                        "selected_id = \"preset.default\"\n"
-                                        "default_id  = \"preset.default\"\n"
+                                        "selected_id = \"preset.testfixture0001\"\n"
                                         "\n"
                                         "[[presets]]\n"
-                                        "id   = \"preset.default\"\n"
+                                        "id   = \"preset.testfixture0001\"\n"
                                         "name = \"Default\"\n"
                                         "countdown_seconds = 0\n"
                                         "[presets.capture]\n"
@@ -938,8 +950,8 @@ TEST(AudioEncodingPreset, StoreRoundTrip_FormatModel_DefaultsOnMissingKeys) {
 
     RecordingPresetStore store(path);
     const auto state = store.Load();
-    ASSERT_FALSE(state.presets.empty());
-    const auto& loaded = state.presets.front().config.audio;
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_EQ(loaded.audio_sample_rate, 48000u);
     EXPECT_EQ(loaded.audio_channels, 2u);
     EXPECT_EQ(loaded.audio_bit_depth, 16u);

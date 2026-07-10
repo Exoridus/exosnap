@@ -36,30 +36,26 @@ class OutputPage : public QWidget {
   signals:
     void outputSettingsChanged(const OutputSettingsModel& settings);
     void activeProfileChanged(const QString& profile_id);
-    void newFromCurrentRequested(const QString& name);
-    void newFromSafeDefaultRequested(const QString& name);
-    void duplicateActiveProfileRequested();
+    void saveAsNewRequested(const QString& name);
     void renameActiveProfileRequested(const QString& name);
     void deleteActiveProfileRequested();
     void resetActiveProfileRequested();
-    void saveModifiedBuiltInAsNewRequested(const QString& name);
     void importProfilesRequested(const QString& file_path);
     void exportSelectedProfileRequested(const QString& file_path);
-    void exportAllUserProfilesRequested(const QString& file_path);
-    void resetAllSettingsAndProfilesRequested();
 
   private:
     void onProfileSelectionChanged(int index);
+    // Renders combo-selection-derived UI state (status label, action
+    // visibility) for the option at `index`. Never emits — shared by the
+    // sync path (setProfileOptions) and the user-interaction path
+    // (onProfileSelectionChanged), which emit differently.
+    void applySelectionState(int index);
     void onImportProfiles();
     void onExportSelectedProfile();
-    void onExportAllUserProfiles();
-    void onResetAllSettingsAndProfiles();
     void onDeleteActiveProfile();
     void updateProfileActionState();
-    void promptCreateProfileFromCurrent();
-    void promptCreateProfileFromSafeDefault();
+    void promptSaveAsNew();
     void promptRenameActiveProfile();
-    void promptSaveModifiedBuiltInAsNew();
 
     bool active_profile_is_built_in_ = true;
     bool active_profile_is_modified_ = false;
@@ -69,16 +65,12 @@ class OutputPage : public QWidget {
     QLabel* profile_status_label_ = nullptr;
     QPushButton* reset_profile_btn_ = nullptr;
     QPushButton* save_as_new_btn_ = nullptr;
+    QPushButton* delete_profile_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
-    QAction* new_from_current_action_ = nullptr;
-    QAction* new_from_safe_default_action_ = nullptr;
-    QAction* duplicate_profile_action_ = nullptr;
+    QAction* save_preset_as_action_ = nullptr;
     QAction* rename_profile_action_ = nullptr;
-    QAction* delete_profile_action_ = nullptr;
     QAction* import_profiles_action_ = nullptr;
     QAction* export_selected_action_ = nullptr;
-    QAction* export_all_users_action_ = nullptr;
-    QAction* reset_all_action_ = nullptr;
 };
 
 } // namespace exosnap

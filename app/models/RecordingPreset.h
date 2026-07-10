@@ -10,37 +10,52 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace exosnap {
 
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 //
+// v23: the store's persisted unit changes from "the preset list plus a
+// startup-default id" to "the live configuration plus named snapshots".
+// A [live] table holds the config the app is actually running (restored
+// verbatim on the next launch); built-in presets are never written to disk
+// (they are code-defined and reseeded on every load); default_id is gone —
+// there is no more startup-default preset, only a live config and, always,
+// the built-in Default preset it can fall back to. Loading no longer resets
+// the whole store on a schema mismatch: every field is repaired
+// individually (missing/invalid values fall back to their model default).
+// A version bump alone is not reported to the user — only an actual parse
+// failure or dropped item is; see PersistedPresetState::repaired. This
+// subsumes the v19->v20 colour-range exception below, which is now just one
+// more field-wise migration rule instead of a special case.
+//
 // v21: adds output.hdr_mode (Off/TonemapSdr/Hdr10).
-// Pre-1.0 policy: schema-20-and-older files are NOT migrated — they reset to
-// the default preset via the ordinary version-mismatch path below, same as
-// every bump except the v19->v20 colour-range exception documented below.
 //
 // v20 (fix/color-range-signaling): default colour range flipped Full ->
-// Limited. Schema-19 files are NOT reset — they load through a targeted
-// field migration: color_range=="full" is rewritten to "limited", because
-// under schema <=19 "full" was the materialized old code default, never an
-// informed user choice (the ConfigPage combo had a hydration bug and always
-// displayed "Full (PC)" regardless of the model, so a deliberate Full
-// selection could not exist). A schema-20 file with explicit "full" is a
-// deliberate post-flip opt-in and is respected. See ADR 0032.
+// Limited. Schema-19-and-older files rewrite color_range=="full" to
+// "limited", because under schema <=19 "full" was the materialized old code
+// default, never an informed user choice (the ConfigPage combo had a
+// hydration bug and always displayed "Full (PC)" regardless of the model, so
+// a deliberate Full selection could not exist). A schema-20-and-newer file
+// with explicit "full" is a deliberate post-flip opt-in and is respected.
+// See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 22;
+inline constexpr int kPresetSchemaVersion = 23;
 
-// Highest schema version that loads via targeted migration instead of a full
-// reset (see RecordingPresetStore::Load). Files older than this still reset.
-inline constexpr int kPresetSchemaMigratableFrom = 19;
+// Files at or below this schema get the targeted color_range full->limited
+// rewrite (ADR 0032) on top of the ordinary field-wise repair.
+inline constexpr int kPresetSchemaColorRangeMigratedThrough = 19;
 
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;
 
-// Stable id for the single built-in default preset.
+// Stable ids for the four shipped read-only built-in presets.
 inline constexpr std::string_view kDefaultPresetId = "preset.default";
+inline constexpr std::string_view kQualityPresetId = "preset.quality";
+inline constexpr std::string_view kEfficiencyPresetId = "preset.efficiency";
+inline constexpr std::string_view kCompatibilityPresetId = "preset.compatibility";
 
 // ---------------------------------------------------------------------------
 // PresetCaptureKind
@@ -102,8 +117,15 @@ struct RecordingPreset {
 // Returns the canonical default preset (MKV + AV1 + Opus, quality=High, …).
 [[nodiscard]] RecordingPreset MakeDefaultPreset();
 
+// The four read-only shipped presets, Default first. None of them sets an
+// environment field (capture / bit_depth / hdr_mode stay at model defaults).
+[[nodiscard]] std::vector<RecordingPreset> MakeBuiltInPresets();
+
+// True when `id` names one of the shipped read-only presets.
+[[nodiscard]] bool IsBuiltInPresetId(std::string_view id);
+
 // Returns a stable unique id with prefix "preset." followed by 16 hex chars.
-// Guaranteed to never equal kDefaultPresetId.
+// Never equals any built-in id (the built-in suffixes are not 16 hex chars).
 [[nodiscard]] std::string GeneratePresetId();
 
 // ---------------------------------------------------------------------------
@@ -141,6 +163,10 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 // Returns a trimmed copy of `name`.
 [[nodiscard]] std::string NormalizePresetName(std::string_view name);
 
+// Trim + ASCII-lowercase fold for name uniqueness ("streaming" == "Streaming ").
+// Non-ASCII case folding is intentionally not attempted.
+[[nodiscard]] std::string FoldPresetName(std::string_view name);
+
 // ---------------------------------------------------------------------------
 // Semantic equality (dirty-state comparison)
 // ---------------------------------------------------------------------------
@@ -161,6 +187,23 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 // NOTE: NormalizedConfigEquals is kept for persistence round-trip verification
 // and must NOT be changed.
 [[nodiscard]] bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
+
+// ---------------------------------------------------------------------------
+// Environment fields
+// ---------------------------------------------------------------------------
+
+// Environment fields describe the machine/display, not the user's recording
+// intent: capture identity, video bit depth, HDR handling. Presets neither
+// set nor override them, and they never count toward the (changed) state.
+
+// Returns `config` with the environment fields copied from `env` — used when
+// applying a preset so a switch never overrides the live environment.
+[[nodiscard]] RecordingPresetConfig WithEnvironmentFields(RecordingPresetConfig config,
+                                                          const RecordingPresetConfig& env);
+
+// Returns `config` with the environment fields reset to model defaults —
+// used when snapshotting the live config into a named preset.
+[[nodiscard]] RecordingPresetConfig StripEnvironmentFields(RecordingPresetConfig config);
 
 // ---------------------------------------------------------------------------
 // Filename token helpers (previously in RecordingProfile.h)

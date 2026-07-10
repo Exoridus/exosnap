@@ -86,12 +86,48 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Color range | Limited |
 | Cursor capture | On |
 | Countdown | 0 seconds (selectable 0/3/5/10) |
-| Audio sources | `APP`, `SYS`, `MIC` — all enabled, each a separate resulting track |
+| Audio source rows | Order is `APP`, `SYS`, `MIC`. Which rows exist depends on the capture target: an `APP` row exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
+| Resulting tracks | Each enabled source is a separate resulting track unless merged with the row above |
 | Webcam | Off |
 
-Presets are stored in a human-readable TOML store and can be exported and imported for sharing. A
-preset manage dialog supports rename, duplicate, delete, and set-default. Presets are validated and
-sanitized before storage; invalid values are clamped rather than rejected silently.
+Four read-only built-in presets ship with the app and always appear first in the preset list. They
+cannot be renamed, overwritten, or deleted; **Save as new…** derives an editable user preset from any
+of them.
+
+| Preset | Container | Codecs | CQ | NVENC preset | Intent |
+|--------|-----------|--------|----|--------------|--------|
+| Default | MKV | AV1 + Opus | 19 | P4 | balanced |
+| Quality | MKV | AV1 + Opus | 16 | P6 | maximum sharpness; costs disk and GPU |
+| Efficiency | MKV | AV1 + Opus | 30 | P6 | small files at usable quality |
+| Compatibility | MP4 | H.264 + AAC | 19 | P4 | editing, upload, GPUs without AV1 encode |
+
+The **live configuration is the source of truth**. It is persisted silently and continuously, so the
+app restarts into exactly the state it was closed in. A preset is a named snapshot the live
+configuration is compared against: when the two differ, the selector shows `Name (changed)` as a calm
+hint. There is no Save button, no unsaved-changes warning, and no discard dialog.
+
+Capture identity, video bit depth, and HDR mode are **environment facts**, not preset content.
+Presets neither store nor override them, and a difference in them never counts as a change. Switching
+presets therefore leaves the capture target alone. The existing H.264 8-bit clamp is the one
+sanctioned exception.
+
+Settings hosts the preset dropdown directly — there is no separate preset manager surface. Next to it
+a `…` overflow menu holds **Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and
+**Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
+appear; **Delete** appears whenever a user preset is selected, independent of the changed state, and
+never for a built-in. The Output page carries the same row. Switching presets applies immediately and
+raises a notification offering **Undo**, which restores both the previous live configuration and the
+previous selection.
+
+Preset names are unique case-insensitively (leading and trailing whitespace trimmed); built-in names
+are reserved. The naming dialogs reject a collision and let the user correct it; on import a
+collision is resolved with a numeric suffix ("Name (2)", "Name (3)", …).
+
+Presets are stored in a human-readable TOML store and can be exported and imported for sharing.
+Values are validated and sanitized before storage; invalid values are clamped rather than rejected
+silently, and a damaged store is repaired entry by entry — surviving entries are kept — instead of
+being reset wholesale. A repair that actually discards something raises a notification; a mere schema
+upgrade does not.
 
 ---
 

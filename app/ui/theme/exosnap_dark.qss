@@ -1936,11 +1936,6 @@ QLabel[labelRole="presetToolbarLabel"] {
     color: ${text3};
 }
 
-/* v10: "· Unsaved" dirty indicator — amber/caution, matches videoRailUnsaved. */
-QLabel[labelRole="presetDirtyIndicator"] {
-    color: ${warn};
-}
-
 /* InfoHint "i" glyph button: flat icon only, no button chrome. The generic
    QToolButton rule above paints a bg/border/padding box that otherwise hides
    the 15px info glyph; reset it so only the icon shows (faint at rest, mint on

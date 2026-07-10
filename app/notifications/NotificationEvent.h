@@ -17,6 +17,8 @@ enum class NotificationType : uint8_t {
     RecoveryAvailable, // startup scan found recoverable sessions
     UpdateAvailable,   // a newer release exists on the active channel (ADR 0012)
     FramesDropped,     // encoder backpressure dropped real frames during recording (DROP-NOTIFY)
+    SettingsRepaired,  // the preset store needed a field-wise repair on load
+    PresetSwitched,    // a preset switch applied immediately; offers an Undo
 };
 
 // ---------------------------------------------------------------------------
@@ -36,6 +38,7 @@ enum class NotificationAction : uint8_t {
     Edit,             // navigate to the Edit/Output page for the saved recording (primary on Saved type)
     RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics (ADR 0033)
     OpenDiagnostics,  // navigate to the Diagnostics page for the frame-drop breakdown (FramesDropped type)
+    UndoPresetSwitch, // restore the previous live config and selection (PresetSwitched type)
 };
 
 // ---------------------------------------------------------------------------

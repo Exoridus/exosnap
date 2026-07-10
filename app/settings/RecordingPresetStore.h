@@ -16,18 +16,22 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 
 struct PersistedPresetState {
-    std::vector<RecordingPreset> presets;
-    std::string selected_id;
-    std::string default_id;
-    // True when defaults had to be seeded or repaired (caller should log one
-    // Warning and immediately re-save to purge the bad data).
-    bool was_reset = false;
+    std::vector<RecordingPreset> user_presets; // built-ins are code-defined, never persisted
+    std::string selected_id;                   // repaired to kDefaultPresetId when unknown
+    std::optional<RecordingPresetConfig> live; // nullopt: [live] missing/unreadable -> boot Default
+    // True when the file could not be parsed at all, or when loading it
+    // required dropping something (a malformed entry, an unreadable table, a
+    // duplicate id). A pure schema-version bump that parses cleanly, or a
+    // field clamped to a valid value, is normal sanitization and does not set
+    // this. False on a first run (missing file) — there is nothing to repair
+    // yet.
+    bool repaired = false;
 };
 
 // ---------------------------------------------------------------------------
 // RecordingPresetStore
 //
-// Reads/writes the preset list to a QSettings IniFormat file.
+// Reads/writes the live config and named preset snapshots to a TOML file.
 // Thread-safety: instances are not thread-safe; use from a single thread.
 // ---------------------------------------------------------------------------
 
@@ -37,48 +41,46 @@ class RecordingPresetStore {
     RecordingPresetStore();
 
     // Explicit path — intended for tests.  An empty path causes Load() to
-    // return a seeded default and Save() to be a no-op.
+    // return defaults and Save() to be a no-op.
     explicit RecordingPresetStore(QString file_path);
 
-    // Load the preset state from the file.
-    // On any parse failure or version mismatch, returns a seeded default with
-    // was_reset=true.  Individual malformed items are silently skipped.
+    // Load the persisted state from the file.  A parse failure or schema
+    // mismatch is repaired field by field instead of resetting the whole
+    // file.  Individual malformed items are silently skipped — see
+    // PersistedPresetState::repaired for when that is reported.
     [[nodiscard]] PersistedPresetState Load() const;
 
-    // Persist the preset state.  Creates parent directories as needed.
+    // Persist the live config and the given (non-built-in) presets.  Built-in
+    // ids are silently skipped — they are code-defined and never round-trip
+    // through disk.  Creates parent directories as needed.
     // Empty file_path → no-op.
     void Save(const std::vector<RecordingPreset>& presets, const std::string& selected_id,
-              const std::string& default_id) const;
+              const RecordingPresetConfig& live) const;
 
     [[nodiscard]] const QString& FilePath() const;
 
     // ---------------------------------------------------------------------------
     // Export / import helpers
     //
-    // All three methods use the same IniFormat serialization as Save/Load so
-    // there is exactly one serialization code path.  kPresetSchemaVersion is
-    // embedded in every exported file so future Load() callers can reject
+    // Both methods use the same TOML serialization as Save/Load so there is
+    // exactly one serialization code path.  kPresetSchemaVersion is embedded
+    // in every exported file so future Load() callers can reject
     // incompatible files.
     // ---------------------------------------------------------------------------
 
-    // Write a single preset to a standalone .ini file.
+    // Write a single preset to a standalone .toml file.
     // Returns true on success; on failure writes a human-readable message into
     // *err (if non-null) and returns false.
     [[nodiscard]] static bool ExportPresetToFile(const RecordingPreset& preset, const QString& path, QString* err);
 
-    // Write all given user presets to one .ini file using the same multi-item
-    // array layout the live store uses for presets.ini.
-    // Returns true on success.
-    [[nodiscard]] static bool ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
-                                                         QString* err);
-
-    // Read one or more presets from a .ini file previously created by
-    // ExportPresetToFile or ExportAllUserPresetsToFile.
+    // Read one or more presets from a .toml file previously created by
+    // ExportPresetToFile, or any file using the same multi-item array layout
+    // (e.g. hand-edited, or produced by an older build).
     //
     // existing_ids: the caller supplies the current live preset ids so that
     // collision handling can assign fresh ids to any imported preset whose id
-    // is already in use.  The imported preset's name is also suffixed with
-    // " (imported)" on collision so the user can tell it apart.
+    // is already in use.  Name collisions are left to the registry's numeric
+    // dedupe ("name (2)") at insert time — the name returned here is unchanged.
     //
     // On unrecoverable failure (file missing, garbage content, no valid
     // items) returns an empty vector and sets *err.

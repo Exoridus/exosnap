@@ -88,8 +88,6 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
-    ui/dialogs/PresetManageOverlay.h
-    ui/dialogs/PresetManageOverlay.cpp
     ui/dialogs/UpdateSettingsPanel.h
     ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
@@ -850,6 +848,18 @@ target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
+exosnap_add_gtest(
+    NAME output_page_tests
+    TEST_PREFIX output.
+    SOURCES
+        tests/test_output_page.cpp
+        pages/OutputPage.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+    LIBRARIES exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(output_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(output_page_tests PROPERTIES AUTOMOC ON)
+
 # SETTINGS-TIERS-R2 Phase 2: InfoHintIcon widget unit tests.
 exosnap_add_gtest(
     NAME info_hint_icon_tests
@@ -1192,24 +1202,6 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui
 )
 target_include_directories(test_edit_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
-    NAME preset_manage_overlay_tests
-    TEST_PREFIX preset_manage.
-    SOURCES
-        tests/test_preset_manage_overlay.cpp
-        ui/dialogs/PresetManageOverlay.cpp
-        models/RecordingPreset.cpp
-        models/RecordingPresetRegistry.cpp
-        models/OutputSettingsModel.cpp
-        # THEME-SLICE-2C: PresetManageOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(preset_manage_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(preset_manage_overlay_tests PRIVATE NOMINMAX)
-target_link_libraries(preset_manage_overlay_tests PRIVATE ole32.lib shell32.lib)
-set_target_properties(preset_manage_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME crash_report_overlay_tests
