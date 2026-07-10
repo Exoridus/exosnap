@@ -774,15 +774,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         expert_mode_label_->setProperty("expertOn", false);
         toolbar_hl->addWidget(expert_mode_label_, 0, Qt::AlignVCenter);
 
+        // Info-i sits directly right of the label so the toggle stays flush to the
+        // right edge, vertically aligned with the cards below.
+        auto* expert_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertMode, toolbar_row);
+        expert_info->setObjectName(QStringLiteral("expertModeInfoHint"));
+        toolbar_hl->addWidget(expert_info, 0, Qt::AlignVCenter);
+
         expert_mode_toggle_ = new ui::widgets::ExoToggle(toolbar_row);
         expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
         expert_mode_toggle_->setOn(false);
         toolbar_hl->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
-
-        // Info-i to the right of the Expert toggle (replaces the expert_warn_label_ banner).
-        auto* expert_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertMode, toolbar_row);
-        expert_info->setObjectName(QStringLiteral("expertModeInfoHint"));
-        toolbar_hl->addWidget(expert_info, 0, Qt::AlignVCenter);
 
         header_vl->addWidget(toolbar_row);
 
