@@ -52,9 +52,9 @@ QString VendorDisplayName(capability::AdapterVendor v) {
 QString KindDisplayName(capability::AdapterKind k) {
     switch (k) {
     case capability::AdapterKind::Discrete:
-        return QStringLiteral("dGPU");
+        return QStringLiteral("DGPU");
     case capability::AdapterKind::Integrated:
-        return QStringLiteral("iGPU");
+        return QStringLiteral("IGPU");
     case capability::AdapterKind::Unknown:
         return QString();
     }
@@ -113,9 +113,12 @@ QWidget* makeFeatureRow(const QString& label, const QString& value, QWidget* par
     name_label->setMinimumWidth(160);
     row_layout->addWidget(name_label);
 
+    // Canon (suite-device.jsx): the value column is right-aligned across the
+    // full card width, mono — label left, measurement right.
     auto* value_label = new QLabel(value, row);
     value_label->setProperty("labelRole", "mono");
     value_label->setWordWrap(true);
+    value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row_layout->addWidget(value_label, 1);
 
     return row;
@@ -148,6 +151,8 @@ QWidget* make444Row(bool h264_advertised, bool h264_ok, bool hevc_advertised, bo
     name_label->setMinimumWidth(160);
     row_layout->addWidget(name_label);
 
+    // Values sit right-aligned like every other matrix row (canon suite-device.jsx).
+    row_layout->addStretch(1);
     const QString chip444 = QStringLiteral("deviceChroma444Chip");
     if (h264_advertised)
         row_layout->addWidget(
@@ -155,7 +160,6 @@ QWidget* make444Row(bool h264_advertised, bool h264_ok, bool hevc_advertised, bo
     if (hevc_advertised)
         row_layout->addWidget(
             makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::HevcNvenc), hevc_ok, row, chip444));
-    row_layout->addStretch(1);
 
     return row;
 }
@@ -611,7 +615,7 @@ void DevicePage::renderCapabilityMatrix() {
     // probed-but-unused second NVIDIA GPU — reads "Backend planned" (mirrors
     // suite-device.jsx).
     if (is_active) {
-        matrix_state_badge_->setText(QStringLiteral("Active encoder"));
+        matrix_state_badge_->setText(QStringLiteral("ACTIVE ENCODER"));
         matrix_state_badge_->setProperty("labelRole", "deviceStateBadgeActive");
     } else {
         matrix_state_badge_->setText(QStringLiteral("Backend planned"));
@@ -633,9 +637,10 @@ void DevicePage::renderCapabilityMatrix() {
             item->widget()->deleteLater();
         delete item;
     }
-    codec_chip_row_->addWidget(makeCodecChip(QStringLiteral("H.264"), cap.h264, codec_chip_row_->parentWidget()));
-    codec_chip_row_->addWidget(makeCodecChip(QStringLiteral("HEVC"), cap.hevc, codec_chip_row_->parentWidget()));
+    // Recommendation order (canon suite-device.jsx): AV1 first, H.264 last.
     codec_chip_row_->addWidget(makeCodecChip(QStringLiteral("AV1"), cap.av1, codec_chip_row_->parentWidget()));
+    codec_chip_row_->addWidget(makeCodecChip(QStringLiteral("HEVC"), cap.hevc, codec_chip_row_->parentWidget()));
+    codec_chip_row_->addWidget(makeCodecChip(QStringLiteral("H.264"), cap.h264, codec_chip_row_->parentWidget()));
     codec_chip_row_->addStretch(1);
 
     // Feature rows. The bit-depth and rate-control declarations come from the

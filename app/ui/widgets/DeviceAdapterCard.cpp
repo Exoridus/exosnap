@@ -69,7 +69,7 @@ DeviceAdapterCard::DeviceAdapterCard(QWidget* parent) : QFrame(parent) {
     text_col->addWidget(backend_label_);
     root->addLayout(text_col, 1);
 
-    active_badge_ = new QLabel(QStringLiteral("Active"), this);
+    active_badge_ = new QLabel(QStringLiteral("ACTIVE"), this);
     active_badge_->setProperty("labelRole", "deviceAdapterCardActiveBadge");
     active_badge_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     active_badge_->setVisible(false);
