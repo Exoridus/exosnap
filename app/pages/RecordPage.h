@@ -437,6 +437,9 @@ class RecordPage : public QWidget {
     // The engine is recording without webcam/cursor overlays; the preview must not
     // promise what the file will not contain.
     bool engine_omits_webcam_overlay_ = false;
+    // Cameras seen by the last device snapshot. Starts true so the toggle is not
+    // greyed out before the first enumeration has had a chance to answer.
+    bool webcam_device_present_ = true;
     // Latched intent for a recording start requested before caps resolved; replayed
     // from the caps-delivery path (setRuntimeCapabilities) so the click is never dropped.
     bool start_requested_awaiting_caps_ = false;

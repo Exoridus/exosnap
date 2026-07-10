@@ -56,6 +56,12 @@ struct WebcamDeviceInfo {
 // state so the camera never springs on merely from opening the Webcam page.
 bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept;
 
+// True when the Record dock's webcam toggle accepts a click. With no camera
+// attached there is nothing to turn on, so the control reads as unavailable
+// rather than failing after the fact. A locked transport (failed or blocked
+// session) disables it regardless.
+[[nodiscard]] bool ShouldEnableWebcamToggle(bool has_device, bool transport_locked) noexcept;
+
 // Chooses the webcam device id to select given the currently-configured id and
 // the available devices. An explicit choice (non-empty id) is always kept — even
 // if that device is momentarily absent — so it reconnects when plugged back in.

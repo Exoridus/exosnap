@@ -260,6 +260,10 @@ bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_
 // Webcam device selection / preview policy — pure, MF-call-free
 // ---------------------------------------------------------------------------
 
+bool ShouldEnableWebcamToggle(bool has_device, bool transport_locked) noexcept {
+    return has_device && !transport_locked;
+}
+
 bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept {
     return webcam_enabled && has_device;
 }

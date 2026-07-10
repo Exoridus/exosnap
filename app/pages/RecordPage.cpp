@@ -4141,9 +4141,13 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setToggleState(QStringLiteral("app"), view_model_.audio_ui_state.IsAppEnabled(),
                                     toggles_interactive);
     // Webcam overlay is live-mutable via coordinator->SetWebcamSettings(), so it
-    // stays interactive during recording. Only block during transient states.
-    const bool webcam_interactive = !(blocked || failed);
+    // stays interactive during recording. Only block during transient states, and
+    // when no camera is attached there is nothing to turn on.
+    const bool webcam_interactive = ShouldEnableWebcamToggle(webcam_device_present_, blocked || failed);
     transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, webcam_interactive);
+    transport_dock_->setToggleTooltip(QStringLiteral("webcam"), webcam_device_present_
+                                                                    ? QStringLiteral("Webcam")
+                                                                    : QStringLiteral("No camera connected"));
 
     // v10: no Completed dock state. The dock always returns to Ready after a
     // recording finishes; the result is surfaced via the NotificationManager
@@ -4688,9 +4692,29 @@ void RecordPage::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& sna
     if (!coordinator_)
         return;
 
+    // The dock toggle follows the hardware: unplug the last camera and it greys out,
+    // plug one back in and it returns.
+    webcam_device_present_ = !snap.devices.isEmpty();
+    updateTransportDock();
+
     const std::string configured_id = current_webcam_settings_.device_id;
-    if (configured_id.empty())
+    if (configured_id.empty()) {
+        // Nothing chosen yet. With cameras attached, adopt one so enabling the toggle
+        // records something instead of refusing. This is a runtime convenience, not a
+        // configuration change: it is not persisted and must not mark the preset
+        // changed (see MainWindow::onWebcamDevicesChanged).
+        std::vector<WebcamDeviceInfo> devices;
+        devices.reserve(static_cast<std::size_t>(snap.devices.size()));
+        for (const auto& dev : snap.devices)
+            devices.push_back(dev);
+        const std::string resolved = ResolveWebcamDeviceId(std::string(), devices);
+        if (!resolved.empty()) {
+            WebcamSettings s = current_webcam_settings_;
+            s.device_id = resolved;
+            setWebcamSettings(s);
+        }
         return;
+    }
 
     // Check whether the configured device is present in the new snapshot.
     bool present = false;
