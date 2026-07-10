@@ -369,18 +369,31 @@ TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
     builtin.modified = false;
 
     std::vector<ConfigPage::ProfileOption> options{builtin};
-    // Clean state: built-in badge visible, combo text carries no "(changed)" hint.
+    // Clean state: the built-in marker lives INSIDE the combo option (carried on
+    // kPresetBuiltInRole for the delegate), not in a separate toolbar label that
+    // would shift the layout. The combo text carries no "(changed)" hint.
     page.setPresetOptions(options, builtin.id, /*dirty=*/false);
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Built-in preset")));
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Built-in preset")))
+        << "the external 'Built-in preset' badge must no longer exist";
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("profileCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_EQ(combo->currentText(), builtin.label);
+    EXPECT_TRUE(combo->itemData(combo->currentIndex(), ConfigPage::kPresetBuiltInRole).toBool())
+        << "the built-in option must carry the badge role for the delegate";
 
-    // Dirty state: "(changed)" hint appears; built-in badge still shows.
+    // Dirty state: "(changed)" hint appears; the option keeps its built-in role.
     options[0].modified = true;
     page.setPresetOptions(options, builtin.id, /*dirty=*/true);
     EXPECT_EQ(combo->currentText(), builtin.label + QStringLiteral(" (changed)"));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Built-in preset")));
+    EXPECT_TRUE(combo->itemData(combo->currentIndex(), ConfigPage::kPresetBuiltInRole).toBool());
+
+    // A user preset carries no built-in badge role.
+    ConfigPage::ProfileOption user;
+    user.id = QStringLiteral("user");
+    user.label = QStringLiteral("My preset");
+    user.built_in = false;
+    page.setPresetOptions({user}, user.id, /*dirty=*/false);
+    EXPECT_FALSE(combo->itemData(combo->currentIndex(), ConfigPage::kPresetBuiltInRole).toBool());
 }
 
 // ── HYBRID-SETTINGS-WEBCAM-R1: inline WebcamSetupPanel replaces stub + nav ──

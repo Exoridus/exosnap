@@ -30,6 +30,8 @@
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QStyle>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QSvgRenderer>
 #include <QTimer>
 #include <QToolButton>
@@ -74,6 +76,57 @@ namespace exosnap {
 namespace {
 
 using M = ui::theme::ExoSnapMetrics;
+
+// Draws the preset combo's option rows and, for built-in presets, a small
+// "Built-in" badge pill at the right edge of the row. Keeping the badge inside
+// the option means it no longer sits beside the combo and shifts the toolbar
+// layout. Built-in-ness is carried per item in ConfigPage::kPresetBuiltInRole.
+class PresetOptionDelegate : public QStyledItemDelegate {
+  public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+  protected:
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        // Base draws the row background, selection highlight, and label text.
+        QStyledItemDelegate::paint(painter, option, index);
+
+        if (!index.data(ConfigPage::kPresetBuiltInRole).toBool())
+            return;
+
+        const QString badge = QStringLiteral("Built-in");
+        QFont badge_font = option.font;
+        const int base_px = badge_font.pixelSize();
+        badge_font.setPixelSize(base_px > 0 ? qMax(9, base_px - 2) : 11);
+        const QFontMetrics fm(badge_font);
+
+        constexpr int kPadX = 7;
+        constexpr int kMargin = 8;
+        const int badge_w = fm.horizontalAdvance(badge) + 2 * kPadX;
+        const int badge_h = qMin(option.rect.height() - 4, fm.height() + 4);
+        const QRect badge_rect(option.rect.right() - badge_w - kMargin,
+                               option.rect.top() + (option.rect.height() - badge_h) / 2, badge_w, badge_h);
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const auto& th = ui::theme::ActiveTheme();
+        QPainterPath pill;
+        pill.addRoundedRect(badge_rect, badge_h / 2.0, badge_h / 2.0);
+        painter->setPen(QPen(ui::theme::ParseThemeColor(th.line2), 1.0));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawPath(pill);
+        painter->setFont(badge_font);
+        painter->setPen(ui::theme::ParseThemeColor(th.mut));
+        painter->drawText(badge_rect, Qt::AlignCenter, badge);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        QSize s = QStyledItemDelegate::sizeHint(option, index);
+        if (index.data(ConfigPage::kPresetBuiltInRole).toBool())
+            s.setWidth(s.width() + 72); // reserve room for the "Built-in" badge
+        return s;
+    }
+};
 
 // Upper bound for the Config form width. Settings is a wide product surface;
 // the cap prevents absurd stretching on ultra-wide displays while preserving
@@ -718,6 +771,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_combo_->setMinimumWidth(0);
         profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         profile_combo_->setMaximumWidth(260);
+        // Draw the "Built-in" badge inside the dropdown rows (see PresetOptionDelegate).
+        profile_combo_->setItemDelegate(new PresetOptionDelegate(profile_combo_));
         toolbar_hl->addWidget(profile_combo_, 1, Qt::AlignVCenter);
 
         profile_status_label_ = new QLabel(toolbar_row);
@@ -3545,6 +3600,8 @@ void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, con
     for (std::size_t i = 0; i < options.size(); ++i) {
         const auto& opt = options[i];
         profile_combo_->addItem(opt.label, opt.id);
+        // Carry built-in-ness so PresetOptionDelegate can badge the option row.
+        profile_combo_->setItemData(static_cast<int>(i), opt.built_in, kPresetBuiltInRole);
         if (opt.id == selected_id) {
             active_index = static_cast<int>(i);
             active_preset_is_built_in_ = opt.built_in;
@@ -3568,15 +3625,15 @@ void ConfigPage::updatePresetActionState() {
     const bool locked = controls_locked_;
     const bool user_preset = !active_preset_id_.isEmpty() && !active_preset_is_built_in_;
 
-    // Status badge (built-in / unavailable): separate label in toolbar.
+    // Status badge (unavailable only): a separate toolbar label. The built-in
+    // marker now renders as a "Built-in" badge inside the combo option rows
+    // (PresetOptionDelegate) so it no longer sits beside the combo and shifts
+    // the toolbar layout.
     if (profile_status_label_) {
         QString badge;
         if (!active_preset_is_available_) {
             badge = QStringLiteral("Unavailable");
             profile_status_label_->setProperty("stateRole", "blocked");
-        } else if (active_preset_is_built_in_) {
-            badge = QStringLiteral("Built-in preset");
-            profile_status_label_->setProperty("stateRole", "ready");
         }
         profile_status_label_->setText(badge);
         profile_status_label_->setVisible(!badge.isEmpty());

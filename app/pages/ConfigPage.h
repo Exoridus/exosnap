@@ -63,6 +63,11 @@ class ConfigPage : public QWidget {
         QString availability_reason;
     };
 
+    // Item-data role on the preset combo marking an entry as a built-in preset.
+    // The combo's item delegate reads it to draw the small "Built-in" badge
+    // inside the option row (Qt::UserRole holds the preset id from addItem()).
+    static constexpr int kPresetBuiltInRole = Qt::UserRole + 1;
+
     explicit ConfigPage(const OutputSettingsModel& initial_settings, const VideoSettingsModel& initial_video,
                         QWidget* parent = nullptr);
     ~ConfigPage() override;
