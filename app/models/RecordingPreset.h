@@ -10,6 +10,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace exosnap {
 
@@ -39,8 +40,11 @@ inline constexpr int kPresetSchemaMigratableFrom = 19;
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;
 
-// Stable id for the single built-in default preset.
+// Stable ids for the four shipped read-only built-in presets.
 inline constexpr std::string_view kDefaultPresetId = "preset.default";
+inline constexpr std::string_view kQualityPresetId = "preset.quality";
+inline constexpr std::string_view kEfficiencyPresetId = "preset.efficiency";
+inline constexpr std::string_view kCompatibilityPresetId = "preset.compatibility";
 
 // ---------------------------------------------------------------------------
 // PresetCaptureKind
@@ -102,8 +106,15 @@ struct RecordingPreset {
 // Returns the canonical default preset (MKV + AV1 + Opus, quality=High, …).
 [[nodiscard]] RecordingPreset MakeDefaultPreset();
 
+// The four read-only shipped presets, Default first. None of them sets an
+// environment field (capture / bit_depth / hdr_mode stay at model defaults).
+[[nodiscard]] std::vector<RecordingPreset> MakeBuiltInPresets();
+
+// True when `id` names one of the shipped read-only presets.
+[[nodiscard]] bool IsBuiltInPresetId(std::string_view id);
+
 // Returns a stable unique id with prefix "preset." followed by 16 hex chars.
-// Guaranteed to never equal kDefaultPresetId.
+// Never equals any built-in id (the built-in suffixes are not 16 hex chars).
 [[nodiscard]] std::string GeneratePresetId();
 
 // ---------------------------------------------------------------------------
@@ -140,6 +151,10 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 
 // Returns a trimmed copy of `name`.
 [[nodiscard]] std::string NormalizePresetName(std::string_view name);
+
+// Trim + ASCII-lowercase fold for name uniqueness ("streaming" == "Streaming ").
+// Non-ASCII case folding is intentionally not attempted.
+[[nodiscard]] std::string FoldPresetName(std::string_view name);
 
 // ---------------------------------------------------------------------------
 // Semantic equality (dirty-state comparison)

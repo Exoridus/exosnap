@@ -33,6 +33,67 @@ RecordingPresetConfig WithMicGainDelta(RecordingPresetConfig cfg, float delta) {
 }
 
 // ===========================================================================
+// Built-in presets
+// ===========================================================================
+
+// Production call site: RecordingPresetRegistry constructor / LoadState seed
+// the registry from MakeBuiltInPresets(); MainWindow::refreshPresetUi maps
+// RecordingPresetRegistry::IsBuiltIn into ConfigPage/OutputPage ProfileOption.
+TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
+    const std::vector<RecordingPreset> b = MakeBuiltInPresets();
+    ASSERT_EQ(b.size(), 4u);
+
+    EXPECT_EQ(b[0].id, kDefaultPresetId);
+    EXPECT_EQ(b[0].name, "Default");
+    EXPECT_EQ(b[0].config.video.cq, 19u);
+    EXPECT_EQ(b[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+
+    EXPECT_EQ(b[1].id, kQualityPresetId);
+    EXPECT_EQ(b[1].name, "Quality");
+    EXPECT_EQ(b[1].config.video.cq, 16u);
+    EXPECT_EQ(b[1].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
+    EXPECT_EQ(b[1].config.output.container, capability::Container::Matroska);
+
+    EXPECT_EQ(b[2].id, kEfficiencyPresetId);
+    EXPECT_EQ(b[2].name, "Efficiency");
+    EXPECT_EQ(b[2].config.video.cq, 30u);
+    EXPECT_EQ(b[2].config.output.nvenc_preset, recorder_core::NvencPreset::P6);
+
+    EXPECT_EQ(b[3].id, kCompatibilityPresetId);
+    EXPECT_EQ(b[3].name, "Compatibility");
+    EXPECT_EQ(b[3].config.output.container, capability::Container::Mp4);
+    EXPECT_EQ(b[3].config.output.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(b[3].config.output.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(b[3].config.video.cq, 19u);
+    EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+
+    // No built-in claims an environment field.
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    for (const auto& preset : b) {
+        EXPECT_EQ(preset.config.output.bit_depth, defaults.bit_depth);
+        EXPECT_EQ(preset.config.output.hdr_mode, defaults.hdr_mode);
+        EXPECT_TRUE(preset.config.capture.display_key.empty());
+        EXPECT_TRUE(preset.config.capture.window_key.empty());
+        EXPECT_FALSE(preset.config.capture.has_region);
+    }
+}
+
+TEST(RecordingPreset, IsBuiltInPresetId_MatchesExactlyTheFour) {
+    EXPECT_TRUE(IsBuiltInPresetId(kDefaultPresetId));
+    EXPECT_TRUE(IsBuiltInPresetId(kQualityPresetId));
+    EXPECT_TRUE(IsBuiltInPresetId(kEfficiencyPresetId));
+    EXPECT_TRUE(IsBuiltInPresetId(kCompatibilityPresetId));
+    EXPECT_FALSE(IsBuiltInPresetId("preset.0123456789abcdef"));
+    EXPECT_FALSE(IsBuiltInPresetId(""));
+}
+
+TEST(RecordingPreset, FoldPresetName_TrimsAndLowercases) {
+    EXPECT_EQ(FoldPresetName("  Streaming "), "streaming");
+    EXPECT_EQ(FoldPresetName("QUALITY"), "quality");
+    EXPECT_EQ(FoldPresetName("   "), "");
+}
+
+// ===========================================================================
 // MakeDefaultPreset — exact canonical values
 // ===========================================================================
 

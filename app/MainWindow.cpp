@@ -2535,7 +2535,7 @@ void MainWindow::refreshPresetUi() {
         ConfigPage::ProfileOption co;
         co.id = QString::fromStdString(preset.id);
         co.label = QString::fromStdString(preset.name);
-        co.built_in = false;
+        co.built_in = RecordingPresetRegistry::IsBuiltIn(preset.id);
         co.modified = false;
         co.available = true;
         config_options.push_back(co);
@@ -2543,7 +2543,7 @@ void MainWindow::refreshPresetUi() {
         OutputPage::ProfileOption oo;
         oo.id = co.id;
         oo.label = co.label;
-        oo.built_in = false;
+        oo.built_in = co.built_in;
         oo.modified = false;
         oo.available = true;
         output_options.push_back(std::move(oo));

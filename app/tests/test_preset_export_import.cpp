@@ -152,8 +152,34 @@ TEST(PresetExportImport, IdCollision_NewIdAssigned_ConfigPreserved) {
     EXPECT_EQ(loaded.id.substr(0, 7), std::string("preset."));
     // Config must be preserved.
     EXPECT_TRUE(NormalizedConfigEquals(loaded.config, original.config));
+    // Name is unchanged by the store — numeric dedupe happens at registry
+    // insert time, not here.
+    EXPECT_EQ(loaded.name, original.name);
 
     CleanupFile(path);
+}
+
+// ===========================================================================
+// Import name collision → registry numeric suffix, not "(imported)"
+// ===========================================================================
+
+// Production call site: MainWindow::onImportProfiles ->
+// RecordingPresetStore::ImportPresetsFromFile + RecordingPresetRegistry::
+// ImportPreset. Import never rejects; names collide into "(2)", "(3)".
+TEST(PresetExportImport, ImportNameCollision_GetsNumericSuffix_NotImportedSuffix) {
+    RecordingPresetRegistry reg;
+    reg.AddPreset(MakeDefaultPreset().config, "Streaming");
+
+    RecordingPreset incoming;
+    incoming.id = GeneratePresetId();
+    incoming.name = " streaming "; // folded collision
+    incoming.config = MakeDefaultPreset().config;
+    reg.ImportPreset(incoming);
+
+    const RecordingPreset* found = reg.FindById(incoming.id);
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found->name, "streaming (2)");
+    EXPECT_EQ(found->name.find(" (imported)"), std::string::npos);
 }
 
 // ===========================================================================
@@ -267,7 +293,7 @@ TEST(PresetExportImport, Registry_ImportPreset_InsertsWithoutSelectingIt) {
 
     reg.ImportPreset(imported_preset);
 
-    EXPECT_EQ(reg.Count(), 2u);
+    EXPECT_EQ(reg.Count(), 5u); // 4 built-ins + the imported preset
     // Selection must not change.
     EXPECT_EQ(reg.SelectedId(), original_selected);
     // The imported preset must be findable by id.
@@ -293,7 +319,7 @@ TEST(PresetExportImport, Registry_ImportPreset_DeduplicatesName) {
 
     reg.ImportPreset(dup);
 
-    EXPECT_EQ(reg.Count(), 2u);
+    EXPECT_EQ(reg.Count(), 5u); // 4 built-ins + the imported preset
     const RecordingPreset* found = reg.FindById(dup.id);
     ASSERT_NE(found, nullptr);
     // Name must have been changed to avoid collision.
@@ -322,7 +348,7 @@ TEST(PresetExportImport, FullPipeline_ExportImportRegistry_ConfigEqual) {
     ASSERT_EQ(imported.size(), 1) << err.toStdString();
 
     reg.ImportPreset(imported[0]);
-    EXPECT_EQ(reg.Count(), 2u);
+    EXPECT_EQ(reg.Count(), 5u); // 4 built-ins + the imported preset
 
     const RecordingPreset* found = reg.FindById(imported[0].id);
     ASSERT_NE(found, nullptr);

@@ -12,7 +12,7 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 
 RecordingPresetRegistry::RecordingPresetRegistry() {
-    presets_.push_back(MakeDefaultPreset());
+    presets_ = MakeBuiltInPresets();
     selected_id_ = std::string(kDefaultPresetId);
     default_id_ = std::string(kDefaultPresetId);
 }
@@ -23,29 +23,30 @@ RecordingPresetRegistry::RecordingPresetRegistry() {
 
 void RecordingPresetRegistry::LoadState(std::vector<RecordingPreset> presets, std::string selected_id,
                                         std::string default_id) {
-    // 1. Dedup ids: keep first occurrence; sanitize each accepted preset.
-    std::vector<RecordingPreset> accepted;
+    // 1. Seed the four built-ins first; they always win over any persisted
+    //    copy of the same id (a stale/tampered built-in snapshot is ignored).
+    presets_ = MakeBuiltInPresets();
     std::set<std::string> seen_ids;
+    for (const auto& p : presets_) {
+        seen_ids.insert(p.id);
+    }
 
+    // 2. Append the persisted user presets: drop empty/duplicate/built-in
+    //    ids, sanitize, and dedupe names (fold-aware) against the built-ins
+    //    and any already-accepted user preset.
     for (auto& p : presets) {
         if (p.id.empty()) {
             continue; // Caller should have set an id; skip empty-id items.
         }
         if (seen_ids.count(p.id) > 0) {
-            continue; // Duplicate — drop later occurrence.
+            continue; // Duplicate of a built-in or an earlier entry — drop.
         }
         seen_ids.insert(p.id);
-        accepted.push_back(SanitizePreset(std::move(p)));
-    }
 
-    // 2. If empty after dedup/sanitize, seed a fresh default.
-    if (accepted.empty()) {
-        accepted.push_back(MakeDefaultPreset());
-        selected_id = std::string(kDefaultPresetId);
-        default_id = std::string(kDefaultPresetId);
+        RecordingPreset sanitized = SanitizePreset(std::move(p));
+        sanitized.name = DeduplicateName(sanitized.name);
+        presets_.push_back(std::move(sanitized));
     }
-
-    presets_ = std::move(accepted);
 
     // 3. Repair selected_id.
     const bool selected_valid = (IndexById(selected_id) != std::string::npos);
@@ -139,7 +140,7 @@ std::string RecordingPresetRegistry::AddPreset(RecordingPresetConfig config, con
     if (preset.name.empty()) {
         preset.name = DeduplicateName("New preset");
     }
-    preset.config = std::move(config);
+    preset.config = StripEnvironmentFields(std::move(config));
     preset = SanitizePreset(std::move(preset));
 
     // Keep the deduped name (SanitizePreset may have changed it only if empty).
@@ -161,17 +162,23 @@ std::string RecordingPresetRegistry::AddDefaultPreset() {
 }
 
 void RecordingPresetRegistry::ImportPreset(RecordingPreset preset) {
-    // The caller has already resolved id collisions.  Deduplicate the name only.
+    // The caller has already resolved id collisions.  Deduplicate the name
+    // (fold-aware, built-in names reserved) and strip environment fields (an
+    // older export may still carry them).
     preset.name = DeduplicateName(NormalizePresetName(preset.name));
     if (preset.name.empty()) {
         preset.name = DeduplicateName("Imported preset");
     }
+    preset.config = StripEnvironmentFields(std::move(preset.config));
     preset = SanitizePreset(std::move(preset));
     presets_.push_back(std::move(preset));
     // selected_id_ is intentionally NOT changed: the user selects explicitly.
 }
 
 bool RecordingPresetRegistry::SaveSelected(RecordingPresetConfig config) {
+    if (IsBuiltIn(selected_id_)) {
+        return false;
+    }
     const std::size_t idx = IndexById(selected_id_);
     if (idx == std::string::npos) {
         return false; // Should not happen given invariant.
@@ -195,17 +202,17 @@ std::string RecordingPresetRegistry::DuplicateSelected() {
 }
 
 bool RecordingPresetRegistry::RenameSelected(const std::string& new_name) {
+    if (IsBuiltIn(selected_id_)) {
+        return false;
+    }
+
     const std::string normalized = NormalizePresetName(new_name);
     if (normalized.empty()) {
         return false;
     }
 
-    // Check for duplicate name among OTHER presets (same-id is allowed to keep
-    // its own name unchanged).
-    for (const auto& p : presets_) {
-        if (p.id != selected_id_ && NormalizePresetName(p.name) == normalized) {
-            return false;
-        }
+    if (IsNameTaken(normalized, selected_id_)) {
+        return false;
     }
 
     const std::size_t idx = IndexById(selected_id_);
@@ -217,7 +224,7 @@ bool RecordingPresetRegistry::RenameSelected(const std::string& new_name) {
 }
 
 bool RecordingPresetRegistry::DeleteSelected() {
-    if (presets_.size() == 1) {
+    if (IsBuiltIn(selected_id_)) {
         return false;
     }
 
@@ -230,25 +237,10 @@ bool RecordingPresetRegistry::DeleteSelected() {
 
     presets_.erase(presets_.begin() + static_cast<std::ptrdiff_t>(del_idx));
 
-    // Determine the new selected id.
-    // Preference: element AFTER the deleted position; else BEFORE; else index 0.
-    std::size_t new_idx = 0;
-    if (del_idx < presets_.size()) {
-        new_idx = del_idx; // The next element is now at del_idx.
-    } else {
-        new_idx = del_idx - 1; // del_idx was the last element.
-    }
-    selected_id_ = presets_[new_idx].id;
-
-    // Repair default if it pointed at the deleted preset.
+    // kDefaultPresetId is a built-in and therefore always present.
+    selected_id_ = std::string(kDefaultPresetId);
     if (was_default) {
-        // Prefer kDefaultPresetId if it still exists.
-        const bool canonical_present = (IndexById(kDefaultPresetId) != std::string::npos);
-        if (canonical_present) {
-            default_id_ = std::string(kDefaultPresetId);
-        } else {
-            default_id_ = selected_id_;
-        }
+        default_id_ = std::string(kDefaultPresetId);
     }
 
     return true;
@@ -259,8 +251,7 @@ RecordingPresetConfig RecordingPresetRegistry::SelectedSavedConfig() const {
 }
 
 void RecordingPresetRegistry::ResetAllToDefault() {
-    presets_.clear();
-    presets_.push_back(MakeDefaultPreset());
+    presets_ = MakeBuiltInPresets();
     selected_id_ = std::string(kDefaultPresetId);
     default_id_ = std::string(kDefaultPresetId);
 }
@@ -272,28 +263,45 @@ bool RecordingPresetRegistry::IsSelectedDirty(const RecordingPresetConfig& live_
     return !ConfigDirtyEquivalent(live_config, SelectedPreset().config);
 }
 
+bool RecordingPresetRegistry::IsBuiltIn(std::string_view id) {
+    return IsBuiltInPresetId(id);
+}
+
+bool RecordingPresetRegistry::IsNameTaken(std::string_view name, std::string_view exclude_id) const {
+    const std::string folded = FoldPresetName(name);
+    for (const auto& p : presets_) {
+        if (!exclude_id.empty() && p.id == exclude_id) {
+            continue;
+        }
+        if (FoldPresetName(p.name) == folded) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
 std::string RecordingPresetRegistry::DeduplicateName(const std::string& base) const {
-    // Check if `base` is already in use.
-    const auto name_exists = [&](const std::string& name) {
+    // Check if `base` is already in use (trimmed + case-insensitive).
+    const auto name_exists = [&](const std::string& folded_candidate) {
         for (const auto& p : presets_) {
-            if (NormalizePresetName(p.name) == name) {
+            if (FoldPresetName(p.name) == folded_candidate) {
                 return true;
             }
         }
         return false;
     };
 
-    if (!name_exists(base)) {
+    if (!name_exists(FoldPresetName(base))) {
         return base;
     }
 
     for (int suffix = 2;; ++suffix) {
         const std::string candidate = base + " (" + std::to_string(suffix) + ")";
-        if (!name_exists(candidate)) {
+        if (!name_exists(FoldPresetName(candidate))) {
             return candidate;
         }
     }

@@ -1378,13 +1378,11 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
 
         RecordingPreset preset = SanitizePreset(*maybe);
 
-        // Collision handling: if the id is already used, generate a fresh one
-        // and suffix the name so the user can tell it apart.
+        // Collision handling: if the id is already used, generate a fresh one.
         if (used_ids.count(preset.id) > 0) {
             preset.id = GeneratePresetId();
-            if (!preset.name.empty() && preset.name.rfind(" (imported)") == std::string::npos) {
-                preset.name += " (imported)";
-            }
+            // Name collisions are resolved by the registry's numeric dedupe
+            // ("name (2)") at insert time — no marker suffix here.
         }
         used_ids.insert(preset.id);
         result.push_back(std::move(preset));

@@ -89,9 +89,19 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Audio sources | `APP`, `SYS`, `MIC` — all enabled, each a separate resulting track |
 | Webcam | Off |
 
+Four read-only built-in presets ship with the app and always appear first in the preset list:
+**Default** (MKV + AV1 + Opus + CFR 60 fps, quality "High", NVENC preset P4), **Quality** (CQ 16,
+NVENC preset P6), **Efficiency** (CQ 30, NVENC preset P6), and **Compatibility** (MP4 + H.264 + AAC,
+quality "High", NVENC preset P4). Built-in presets cannot be renamed, overwritten, or deleted; a user
+duplicates one to create an editable copy.
+
+Preset names are unique case-insensitively (leading/trailing whitespace trimmed); built-in names are
+reserved. A name collision — including on import — is resolved with a numeric suffix ("Name (2)",
+"Name (3)", …).
+
 Presets are stored in a human-readable TOML store and can be exported and imported for sharing. A
-preset manage dialog supports rename, duplicate, delete, and set-default. Presets are validated and
-sanitized before storage; invalid values are clamped rather than rejected silently.
+preset manage dialog supports rename, duplicate, delete, and set-default for user presets. Presets are
+validated and sanitized before storage; invalid values are clamped rather than rejected silently.
 
 ---
 

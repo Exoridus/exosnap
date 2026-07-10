@@ -77,8 +77,8 @@ class RecordingPresetStore {
     //
     // existing_ids: the caller supplies the current live preset ids so that
     // collision handling can assign fresh ids to any imported preset whose id
-    // is already in use.  The imported preset's name is also suffixed with
-    // " (imported)" on collision so the user can tell it apart.
+    // is already in use.  Name collisions are left to the registry's numeric
+    // dedupe ("name (2)") at insert time — the name returned here is unchanged.
     //
     // On unrecoverable failure (file missing, garbage content, no valid
     // items) returns an empty vector and sets *err.
