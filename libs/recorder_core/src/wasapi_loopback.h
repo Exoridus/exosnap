@@ -25,7 +25,9 @@ class WasapiLoopback {
     WasapiLoopback& operator=(const WasapiLoopback&) = delete;
 
     // Initialize and start the loopback stream.
-    // Required: 48000 Hz stereo (validated against mix format).
+    // Always requests 48000 Hz stereo float via AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    // so devices mixing at a different rate/channel count are resampled/downmixed
+    // by WASAPI rather than rejected.
     bool Init(std::string& out_error);
 
     // Retrieve the next available packet.
