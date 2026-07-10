@@ -502,7 +502,10 @@ TEST(RecordingPresetRegistry, IsNameTaken_FoldsAndExcludesSelf) {
 }
 
 // Production call site: MainWindow::onDeletePreset — after delete the
-// selection falls to Default and the live config is NOT re-applied.
+// selection falls to Default. This test covers only the registry's own
+// contract (selection + count); MainWindow no longer re-applies the newly
+// selected preset's saved config, but that is a MainWindow-level guarantee
+// this test cannot observe.
 TEST(RecordingPresetRegistry, DeleteUserPreset_SelectionFallsToDefault) {
     RecordingPresetRegistry reg;
     reg.AddPreset(MakeDefaultPreset().config, "Mine");

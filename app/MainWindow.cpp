@@ -2678,10 +2678,10 @@ void MainWindow::onRenamePreset(const QString& name) {
 
 void MainWindow::onDeletePreset() {
     if (!preset_registry_.DeleteSelected()) {
-        QMessageBox::warning(this, QStringLiteral("Delete Preset"), QStringLiteral("Cannot delete the only preset."));
+        QMessageBox::warning(this, QStringLiteral("Delete Preset"),
+                             QStringLiteral("Built-in presets cannot be deleted."));
         return;
     }
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
     refreshPresetUi();
     persistPresetState();
 }
