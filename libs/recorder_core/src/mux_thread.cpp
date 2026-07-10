@@ -212,6 +212,10 @@ void MuxThread::Run() {
         seg.epoch_set = epoch_set;
         seg.max_local_pts_ns = 0;
         seg.writer = std::make_unique<MatroskaStreamWriter>();
+        // Publish cluster-flush progress into SessionState so the shutdown sequence
+        // can tell a slow-but-progressing finalize from a stalled one. A new writer
+        // starts at 0; the progress-based wait tolerates that reset.
+        seg.writer->SetProgressSink(&m_state.mux_bytes_written);
 
         MatroskaStreamConfig cfg = sw_config_template;
         cfg.output_path = seg.path.string();

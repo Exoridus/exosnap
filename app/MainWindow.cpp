@@ -26,11 +26,11 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/EditExportOverlay.h"
-#include "ui/dialogs/PresetManageOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
+#include "ui/dialogs/WhatsNewOverlay.h"
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
@@ -482,30 +482,69 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     initHotkeyService();
 
     // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
-    // Pass nullptr for the coordinator: the recording guard is enforced at the app
-    // layer in this slice (triggerUpdateCheck()/auto-check gate on recording_active_),
-    // so the engine guard intentionally returns NotBlocked.
+    // Constructed with nullptr here because record_page_ (and its RecordingCoordinator)
+    // does not exist yet at this point in the constructor -- RecordPage is built
+    // further down, and its coordinator is itself only built later still, asynchronously,
+    // once runtime capability probing completes. UpdateService::SetRecordingCoordinator()
+    // wires the real coordinator in once RecordPage::coordinatorInitialized() fires (see
+    // below), so the engine-layer guard (LaunchUpdater's multi-state check) is live; the
+    // app-layer guard (recording_active_ || remuxing_active_) stays as belt-and-suspenders.
     update_service_ = new UpdateService(nullptr, this);
     update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
     connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
 
-    // ---- Load preset store ----
-    PersistedPresetState loaded_presets = preset_store_.Load();
-    if (loaded_presets.was_reset) {
-        diagnostics::AppLog::warning(QStringLiteral("presets"),
-                                     QStringLiteral("Preset store missing/incompatible — reset to defaults"));
-        preset_store_.Save(loaded_presets.presets, loaded_presets.selected_id, loaded_presets.default_id);
-    }
-    preset_registry_.LoadState(loaded_presets.presets, loaded_presets.selected_id, loaded_presets.default_id);
-    // Startup: boot to the DEFAULT preset.
-    preset_registry_.SetSelected(preset_registry_.DefaultId());
+    // The staged swap updater has been launched: stamp the loop guard so a stale
+    // releases-API cache can't re-offer the same version, and flip the card to the
+    // "Restart pending" state. The updater will send WM_CLOSE when it is ready to
+    // swap; the app then closes normally.
+    connect(update_service_, &UpdateService::updaterLaunched, this, [this]() {
+        persisted_settings_.applied_version = last_available_version_;
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+        diagnostics::AppLog::info(
+            QStringLiteral("update"),
+            QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
+    });
+    // Any staging/launch failure surfaces on the Settings card as an error.
+    connect(update_service_, &UpdateService::updateError, this,
+            [this](exosnap::update::VerifyResult /*result*/, const QString& detail) {
+                if (config_page_)
+                    config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), detail);
+                diagnostics::AppLog::warning(QStringLiteral("update"),
+                                             QStringLiteral("Updater launch failed: %1").arg(detail));
+            });
 
-    // Initialize live mirrors from the selected preset.
-    const RecordingPresetConfig& startup_cfg = preset_registry_.SelectedSavedConfig();
-    output_settings_ = startup_cfg.output;
-    video_settings_ = startup_cfg.video;
-    live_audio_ = startup_cfg.audio;
-    live_webcam_ = startup_cfg.webcam;
+    // Loop guard: once the running build equals a pending applied_version, the swap
+    // completed — clear the stamp so future checks work normally.
+    if (!persisted_settings_.applied_version.isEmpty() &&
+        persisted_settings_.applied_version == QString::fromLatin1(exosnap::build::kVersion)) {
+        persisted_settings_.applied_version.clear();
+        settings_store_.Save(persisted_settings_);
+    }
+
+    // ---- Load preset store (live config is the truth; presets are snapshots) ----
+    PersistedPresetState loaded_presets = preset_store_.Load();
+    preset_registry_.LoadState(std::move(loaded_presets.user_presets), loaded_presets.selected_id);
+    if (loaded_presets.live.has_value()) {
+        boot_live_config_ = SanitizePresetConfig(*loaded_presets.live);
+    } else {
+        // No readable live config: start on Default, not (changed).
+        preset_registry_.SetSelected(std::string(kDefaultPresetId));
+        boot_live_config_ = preset_registry_.SelectedSavedConfig();
+    }
+    if (loaded_presets.repaired) {
+        preset_store_repaired_ = true;
+        diagnostics::AppLog::warning(QStringLiteral("presets"),
+                                     QStringLiteral("Preset store repaired field-wise on load"));
+        preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), boot_live_config_);
+    }
+
+    // Initialize live mirrors from the restored live config.
+    output_settings_ = boot_live_config_.output;
+    video_settings_ = boot_live_config_.video;
+    live_audio_ = boot_live_config_.audio;
+    live_webcam_ = boot_live_config_.webcam;
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("settings loaded"));
     diagnostics::AppLog::info(QStringLiteral("perf"),
@@ -602,7 +641,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     record_page_->setVideoSettings(video_settings_);
     record_page_->setWebcamSettings(live_webcam_);
     record_page_->applyPersistedAudioSettings(live_audio_);
-    record_page_->setCountdownSeconds(startup_cfg.countdown_seconds);
+    record_page_->setCountdownSeconds(boot_live_config_.countdown_seconds);
     record_page_->restoreRecordingHistory();
     // NOTE: config_page_ initial setters and signal connects are wired in buildConfigPage().
 
@@ -613,10 +652,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // The visible About surface is AboutPage, which lives in the nav stack.
     about_overlay_ = new ui::dialogs::AboutOverlay(this);
     about_overlay_->hide();
-
-    // Preset manage overlay — in-window, same pattern as About.
-    preset_manage_overlay_ = new ui::dialogs::PresetManageOverlay(central);
-    preset_manage_overlay_->hide();
 
     // Source picker overlay — in-window, same accessibility-first parenting as About.
     source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(central);
@@ -721,9 +756,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         live_audio_ = state;
         if (config_page_)
             config_page_->setAudioUiState(state);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         refreshDiagnosticsData();
     });
 
@@ -731,9 +764,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::recordingConfigChanged, this, [this]() {
         if (applying_preset_)
             return;
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
 
     // NOTE: webcam_page_ settingsChanged is wired in buildWebcamPage() after deferred construction.
@@ -748,30 +779,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             config_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
 
     // NOTE: config_page_ preset-management connects are wired in buildConfigPage().
-
-    // Wire preset manage overlay signals to the same handlers the overflow menu uses.
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::duplicatePresetRequested, this,
-            &MainWindow::onDuplicatePreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::renamePresetRequested, this,
-            &MainWindow::onRenamePreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::deletePresetRequested, this,
-            &MainWindow::onDeletePreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::setDefaultPresetRequested, this,
-            &MainWindow::onSetDefaultPreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportSelectedPresetRequested, this,
-            &MainWindow::onExportSelectedProfile);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportAllPresetsRequested, this,
-            &MainWindow::onExportAllUserProfiles);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::importPresetsRequested, this,
-            &MainWindow::onImportProfiles);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::presetSelectionRequested, this,
-            &MainWindow::onPresetSelected);
 
     // ---- Hotkeys ----
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
@@ -788,7 +799,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // preset applied in the constructor.  This connection restores the exact audio
     // rows and capture target from the preset after all init work is done.
     connect(record_page_, &RecordPage::coordinatorInitialized, this,
-            [this]() { applyPresetConfig(preset_registry_.SelectedSavedConfig()); });
+            [this]() { applyPresetConfig(boot_live_config_); });
+
+    // F1 hardening (feat/updater-swap): wire the real RecordingCoordinator into
+    // UpdateService now that RecordPage has built it, so LaunchUpdater's
+    // recording/paused/preparing/countdown/armed-from-recovery/saving/stopping
+    // guard actually enforces (it was dead code while nullptr was passed above).
+    connect(record_page_, &RecordPage::coordinatorInitialized, this, [this]() {
+        if (update_service_ && record_page_)
+            update_service_->SetRecordingCoordinator(record_page_->recordingCoordinator());
+    });
 
     // NOTE: config_page_ diagnosticsRequested + webcamDetailsRequested connects wired in buildConfigPage().
     // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
@@ -999,8 +1019,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     }
 
     record_page_->rebroadcastChromeState();
-    // Apply the startup preset config to all pages.
-    applyPresetConfig(startup_cfg);
+    // Apply the boot live config to all pages.
+    applyPresetConfig(boot_live_config_);
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructed"));
     diagnostics::AppLog::info(QStringLiteral("perf"),
@@ -1048,6 +1068,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         checkAndShowRecoveryOverlay();
         // CRASH-WIRE-R1: next-launch crash dialog (deferred behind recovery).
         checkAndShowCrashReportOverlay();
+        // WHATS-NEW: one-time post-update overlay (deferred behind recovery/crash).
+        checkAndShowWhatsNewOverlay();
 
         // UPDATE-WIRE-R1 (ADR 0012): auto-check for updates on startup, guarded so we
         // never contact the update server while a recording/finalize is in flight.
@@ -1074,6 +1096,8 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
         record_page_->setRuntimeCapabilities(runtime_caps_); // delivers caps to coordinator (A1 gate)
     if (device_page_)
         device_page_->setCapabilitySet(runtime_caps_); // static bit-depth/rate-control facts for the matrix
+    if (config_page_)
+        config_page_->setRuntimeCapabilities(runtime_caps_); // per-GPU 4:4:4 chroma gate
     refreshPresetUi();
     refreshDiagnosticsData();
     startDeviceNotifiers();
@@ -1175,6 +1199,111 @@ void MainWindow::checkAndShowRecoveryOverlay() {
     connect(recovery_overlay_, &ui::dialogs::RecoveryOverlay::continueRequested, record_page_,
             &RecordPage::armFromRecovery);
     recovery_overlay_->openOverlay();
+}
+
+void MainWindow::openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool post_update_mode) {
+    if (notes.isEmpty())
+        return;
+
+    // One overlay at a time; replace any existing instance. closeOverlay() emits
+    // closed() synchronously, and the closed-handler connected below reads the
+    // whats_new_overlay_ *member* (not a captured pointer) to null it out. So:
+    // take a local pointer first, null the member, then disconnect the old
+    // overlay's signals (so its own closed-handler can't fire against the
+    // now-null member) before closing + deleting it through the local pointer.
+    if (whats_new_overlay_ != nullptr) {
+        auto* old_overlay = whats_new_overlay_;
+        whats_new_overlay_ = nullptr;
+        old_overlay->disconnect(this);
+        old_overlay->closeOverlay();
+        old_overlay->deleteLater();
+    }
+
+    const QString releases_url = last_update_releases_url_.isEmpty()
+                                     ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                     : last_update_releases_url_;
+
+    auto* central = centralWidget();
+    whats_new_overlay_ = new ui::dialogs::WhatsNewOverlay(notes, post_update_mode, releases_url, central);
+    whats_new_overlay_->hide();
+    connect(whats_new_overlay_, &ui::dialogs::WhatsNewOverlay::closed, this, [this]() {
+        whats_new_overlay_->deleteLater();
+        whats_new_overlay_ = nullptr;
+    });
+    // Post-update mode: the suppress checkbox persists whats_new_suppressed.
+    connect(whats_new_overlay_, &ui::dialogs::WhatsNewOverlay::suppressToggled, this, [this](bool suppressed) {
+        persisted_settings_.whats_new_suppressed = suppressed;
+        settings_store_.Save(persisted_settings_);
+    });
+    whats_new_overlay_->openOverlay();
+}
+
+void MainWindow::checkAndShowWhatsNewOverlay() {
+    // Consume the pending payload written by LaunchUpdater. It only shows when the
+    // running build equals the payload's target and notices aren't suppressed —
+    // first install / downgrade / manual-ZIP update leave no matching payload, so
+    // in every one of those cases the stale payload is simply cleared without a UI.
+    const QString payload_path = WhatsNewPayloadPath();
+    const auto payload = ReadWhatsNewPayload(payload_path);
+    if (!payload.has_value()) {
+        // File exists but doesn't parse (or is absent). Best-effort delete is a
+        // no-op when there's nothing there, and clears a corrupt payload so it
+        // isn't re-read (and re-fail) on every subsequent launch.
+        DeleteWhatsNewPayload(payload_path);
+        return;
+    }
+
+    const QString running_version = QString::fromLatin1(exosnap::build::kVersion);
+    const bool show = ShouldShowWhatsNew(payload, running_version, persisted_settings_.whats_new_suppressed);
+
+    // One-time: always clear the payload once we've decided (shown or stale, e.g.
+    // target-version mismatch).
+    DeleteWhatsNewPayload(payload_path);
+    if (!show)
+        return;
+
+    QVector<WhatsNewNote> notes = payload->notes;
+    // Defer behind any recovery/crash overlay so nothing double-stacks: if one is
+    // open, show once it closes; otherwise show now.
+    //
+    // Startup call order (see the ctor): checkAndShowRecoveryOverlay(), then
+    // checkAndShowCrashReportOverlay(), then this function. When recovery is NOT
+    // open, checkAndShowCrashReportOverlay() has already run synchronously by the
+    // time we get here, so crash_overlay_ below already reflects its final state.
+    //
+    // When recovery IS open, checkAndShowCrashReportOverlay() couldn't make its
+    // own decision yet either — it deferred to recovery_overlay_::closed too, and
+    // its connection was made before ours (it runs first). So on recovery.closed,
+    // Qt invokes the crash continuation first, then ours. If our continuation
+    // opened the What's New overlay directly at that point, it would race the
+    // crash continuation: both overlays could end up open at once (crash_overlay_
+    // may not be fully constructed as the whats-new slot begins running, or a
+    // future refactor could reorder the connects). To make the ordering
+    // guarantee explicit rather than implicit-via-connect-order, hop one more
+    // event-loop tick with QTimer::singleShot(0) before re-checking crash_overlay_
+    // in showWhatsNewAfterStartupOverlays() — that guarantees the crash
+    // continuation has fully run (overlay constructed and shown, or decided not
+    // to run at all) before we decide whether to stack behind it.
+    if (recovery_overlay_ != nullptr && recovery_overlay_->isOpen()) {
+        connect(
+            recovery_overlay_, &ui::dialogs::RecoveryOverlay::closed, this,
+            [this, notes]() {
+                QTimer::singleShot(0, this, [this, notes]() { showWhatsNewAfterStartupOverlays(notes); });
+            },
+            Qt::SingleShotConnection);
+        return;
+    }
+    showWhatsNewAfterStartupOverlays(notes);
+}
+
+void MainWindow::showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& notes) {
+    if (crash_overlay_ != nullptr) {
+        connect(
+            crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this,
+            [this, notes]() { openWhatsNewOverlay(notes, /*post_update_mode=*/true); }, Qt::SingleShotConnection);
+        return;
+    }
+    openWhatsNewOverlay(notes, /*post_update_mode=*/true);
 }
 
 namespace {
@@ -1330,12 +1459,6 @@ void MainWindow::openCrashReportOverlay() {
         diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User granted crash-report consent (send)"));
         if (crash_overlay_)
             crash_overlay_->closeOverlay();
-    });
-
-    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::restartRequested, this, [this]() {
-        relaunch_requested_ = true;
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User chose Restart ExoSnap"));
-        qApp->quit();
     });
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::reportOnGitHubRequested, this, [this, model]() {
@@ -2065,6 +2188,13 @@ void MainWindow::changeEvent(QEvent* event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    // Flush a pending debounced live-config save so a quit within the 750 ms
+    // window never loses the last edit.
+    if (live_persist_timer_ && live_persist_timer_->isActive()) {
+        live_persist_timer_->stop();
+        persistPresetState();
+    }
+
     saveWindowGeometry();
 
     // TRAY-CLOSE-TO-TRAY-R1: if close-to-tray is enabled and this is NOT a
@@ -2344,10 +2474,13 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
     live_audio_ = cfg2.audio;
     live_webcam_ = cfg2.webcam;
 
-    // Push to pages (handlers early-return while applying_preset_).
-    // Order matters: applyCapturePolicy can rebuild/reset audio rows via
-    // ApplyTargetKindPreservingAudio; applyPersistedAudioSettings must come LAST
-    // so the preset's exact audio rows win over any kind-default rows.
+    // Push to pages. record_page_->applyCapturePolicy() below can rebuild
+    // audio rows and emit audioSettingsChanged with kind-default rows before
+    // applyPersistedAudioSettings() (LAST) restores the preset's exact rows.
+    // Every live-config listener below early-returns while applying_preset_
+    // is set so those intermediate kind-default emissions never clobber
+    // live_audio_ or trigger a spurious live-config persist mid-apply; order
+    // still matters so the preset's rows are what finally lands.
     if (record_page_) {
         record_page_->setOutputSettings(cfg2.output);
         record_page_->setVideoSettings(cfg2.video);
@@ -2388,7 +2521,7 @@ void MainWindow::refreshPresetUi() {
         ConfigPage::ProfileOption co;
         co.id = QString::fromStdString(preset.id);
         co.label = QString::fromStdString(preset.name);
-        co.built_in = false;
+        co.built_in = RecordingPresetRegistry::IsBuiltIn(preset.id);
         co.modified = false;
         co.available = true;
         config_options.push_back(co);
@@ -2396,30 +2529,46 @@ void MainWindow::refreshPresetUi() {
         OutputPage::ProfileOption oo;
         oo.id = co.id;
         oo.label = co.label;
-        oo.built_in = false;
+        oo.built_in = co.built_in;
         oo.modified = false;
         oo.available = true;
         output_options.push_back(std::move(oo));
     }
 
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-    syncing_preset_ui_ = true;
+    // Neither page emits its selection-changed signal from the sync setter
+    // (setPresetOptions/setProfileOptions render only) — see
+    // ConfigPage.cpp's QSignalBlocker on the combo and OutputPage's
+    // applySelectionState split — so this replay cannot re-enter onPresetSelected.
     if (config_page_) {
-        config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()),
-                                       QString::fromStdString(preset_registry_.DefaultId()), dirty);
+        config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     if (output_page_) {
         output_page_->setProfileOptions(output_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
         output_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
-    syncing_preset_ui_ = false;
-    // Keep the manage overlay list in sync whenever the preset UI is refreshed.
-    refreshPresetManageOverlay();
 }
 
 void MainWindow::persistPresetState() {
-    preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), preset_registry_.DefaultId());
+    preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), captureLiveConfig());
+}
+
+void MainWindow::onLiveConfigChanged() {
+    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+    if (config_page_)
+        config_page_->setPresetDirty(dirty);
+    schedulePersistLiveState();
+}
+
+void MainWindow::schedulePersistLiveState() {
+    if (!live_persist_timer_) {
+        live_persist_timer_ = new QTimer(this);
+        live_persist_timer_->setSingleShot(true);
+        live_persist_timer_->setInterval(750); // coalesce slider drags into one write
+        connect(live_persist_timer_, &QTimer::timeout, this, [this]() { persistPresetState(); });
+    }
+    live_persist_timer_->start();
 }
 
 void MainWindow::initHotkeyService() {
@@ -2472,8 +2621,8 @@ void MainWindow::refreshDiagnosticsData() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::onPresetSelected(const QString& id) {
-    if (syncing_preset_ui_)
-        return;
+    if (id.toStdString() == preset_registry_.SelectedId())
+        return; // combo refresh echo (e.g. OutputPage's profile combo) — not a switch
     if (!record_page_ || !record_page_->canApplyPresetNow()) {
         // Reject switch during recording — revert the selector.
         refreshPresetUi();
@@ -2481,19 +2630,26 @@ void MainWindow::onPresetSelected(const QString& id) {
                                      QStringLiteral("preset switch rejected: recording in progress"));
         return;
     }
+
+    PresetSwitchUndo undo;
+    undo.previous_live = captureLiveConfig();
+    undo.previous_selected_id = preset_registry_.SelectedId();
+
     if (!preset_registry_.SetSelected(id.toStdString()))
         return;
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
-    persistPresetState();
-}
+    pending_preset_undo_ = std::move(undo);
 
-void MainWindow::onSavePreset() {
-    preset_registry_.SaveSelected(captureLiveConfig());
-    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-    if (config_page_)
-        config_page_->setPresetDirty(dirty);
-    refreshPresetUi();
+    applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     persistPresetState();
+
+    if (persisted_settings_.show_notifications && notification_manager_) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::PresetSwitched;
+        event.title =
+            QStringLiteral("Switched to '%1'").arg(QString::fromStdString(preset_registry_.SelectedPreset().name));
+        event.action = notifications::NotificationAction::UndoPresetSwitch;
+        notification_manager_->Enqueue(std::move(event));
+    }
 }
 
 void MainWindow::onSavePresetAs(const QString& name) {
@@ -2501,20 +2657,6 @@ void MainWindow::onSavePresetAs(const QString& name) {
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
     if (config_page_)
         config_page_->setPresetDirty(dirty);
-    refreshPresetUi();
-    persistPresetState();
-}
-
-void MainWindow::onNewPreset() {
-    preset_registry_.AddDefaultPreset();
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
-    refreshPresetUi();
-    persistPresetState();
-}
-
-void MainWindow::onDuplicatePreset() {
-    preset_registry_.DuplicateSelected();
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
     refreshPresetUi();
     persistPresetState();
 }
@@ -2531,35 +2673,19 @@ void MainWindow::onRenamePreset(const QString& name) {
 
 void MainWindow::onDeletePreset() {
     if (!preset_registry_.DeleteSelected()) {
-        QMessageBox::warning(this, QStringLiteral("Delete Preset"), QStringLiteral("Cannot delete the only preset."));
+        QMessageBox::warning(this, QStringLiteral("Delete Preset"),
+                             QStringLiteral("Built-in presets cannot be deleted."));
         return;
     }
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
     refreshPresetUi();
     persistPresetState();
 }
 
 void MainWindow::onResetChanges() {
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     refreshPresetUi();
-    // No persistence needed (no registry mutation).
-}
-
-void MainWindow::onResetToDefaults() {
-    preset_registry_.ResetAllToDefault();
-    // Also reset hotkeys via service (handles Win32 re-registration + persistence signal).
-    if (hotkey_service_)
-        hotkey_service_->ResetAllToDefaults();
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
-    refreshPresetUi();
-    persistPresetState();
-    QMessageBox::information(this, QStringLiteral("Reset Complete"),
-                             QStringLiteral("Settings and presets were reset to defaults."));
-}
-
-void MainWindow::onSetDefaultPreset() {
-    preset_registry_.SetDefault(preset_registry_.SelectedId());
-    refreshPresetUi();
+    // No registry mutation, but the live config just changed back to the
+    // preset's saved values, so the persisted live state must follow.
     persistPresetState();
 }
 
@@ -2580,31 +2706,6 @@ void MainWindow::onExportSelectedProfile(const QString& path) {
     QMessageBox::information(
         this, QStringLiteral("Export Successful"),
         QStringLiteral("Preset \"%1\" exported successfully.").arg(QString::fromStdString(selected.name)));
-}
-
-void MainWindow::onExportAllUserProfiles(const QString& path) {
-    const std::vector<RecordingPreset>& all = preset_registry_.Presets();
-    // Collect all presets (no built-in distinction in the current registry).
-    QVector<RecordingPreset> presets_to_export;
-    presets_to_export.reserve(static_cast<int>(all.size()));
-    for (const auto& p : all) {
-        presets_to_export.push_back(p);
-    }
-
-    if (presets_to_export.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("Export Presets"), QStringLiteral("No presets to export."));
-        return;
-    }
-
-    QString err;
-    if (!RecordingPresetStore::ExportAllUserPresetsToFile(presets_to_export, path, &err)) {
-        QMessageBox::warning(this, QStringLiteral("Export Failed"), err);
-        return;
-    }
-    diagnostics::AppLog::info(QStringLiteral("preset"),
-                              QStringLiteral("exported %1 preset(s) to %2").arg(presets_to_export.size()).arg(path));
-    QMessageBox::information(this, QStringLiteral("Export Successful"),
-                             QStringLiteral("Exported %1 preset(s) successfully.").arg(presets_to_export.size()));
 }
 
 void MainWindow::onImportProfiles(const QString& path) {
@@ -2635,24 +2736,6 @@ void MainWindow::onImportProfiles(const QString& path) {
                               QStringLiteral("imported %1 preset(s) from %2").arg(imported.size()).arg(path));
     QMessageBox::information(this, QStringLiteral("Import Successful"),
                              QStringLiteral("Imported %1 preset(s).").arg(imported.size()));
-    // Keep the manage overlay list in sync after a successful import.
-    refreshPresetManageOverlay();
-}
-
-// ---------------------------------------------------------------------------
-// Preset manage overlay
-// ---------------------------------------------------------------------------
-
-void MainWindow::openPresetManageOverlay() {
-    if (!preset_manage_overlay_)
-        return;
-    refreshPresetManageOverlay();
-    preset_manage_overlay_->openOverlay();
-}
-
-void MainWindow::refreshPresetManageOverlay() {
-    if (preset_manage_overlay_)
-        preset_manage_overlay_->refreshPresets(preset_registry_);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -2778,6 +2861,8 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
             dgpu_cap.h264 = true;
             dgpu_cap.hevc = true;
             dgpu_cap.av1 = true;
+            dgpu_cap.yuv444_h264 = true;
+            dgpu_cap.yuv444_hevc = true;
 
             capability::AdapterInfo igpu;
             igpu.name = "UHD Graphics 770";
@@ -2925,12 +3010,11 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
         // Capture scenario fields by value for the deferred lambda.
         const int count = scenario.preset_count > 0 ? scenario.preset_count : 3;
         const QString selected_name = scenario.preset_selected_name;
-        const QString default_name = scenario.preset_default_name;
         const bool dirty = scenario.preset_dirty;
         const bool save_error = scenario.preset_save_error;
         const bool menu_open = scenario.preset_menu_open;
 
-        QTimer::singleShot(20, this, [this, count, selected_name, default_name, dirty, save_error, menu_open]() {
+        QTimer::singleShot(20, this, [this, count, selected_name, dirty, save_error, menu_open]() {
             if (!config_page_)
                 return;
 
@@ -2951,17 +3035,14 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
                 opts.push_back(opt);
             }
 
-            // Match selected_id and default_id to the scenario's named fields.
+            // Match selected_id to the scenario's named field.
             QString selected_id = opts.front().id;
-            QString default_id = opts.front().id;
             for (const auto& opt : opts) {
                 if (opt.label == selected_name)
                     selected_id = opt.id;
-                if (opt.label == default_name)
-                    default_id = opt.id;
             }
 
-            config_page_->setPresetOptions(opts, selected_id, default_id, dirty);
+            config_page_->setPresetOptions(opts, selected_id, dirty);
 
             // Inline save-error affordance (no modal — entirely deterministic).
             config_page_->applyVisualPresetSaveError(save_error);
@@ -3391,6 +3472,19 @@ void MainWindow::initNotificationToasts() {
     connect(notification_toast_window_, &ui::overlay::NotificationToastWindow::actionTriggered, this,
             &MainWindow::dispatchNotificationAction);
 
+    // The preset store needed a field-wise repair before toasts existed to report
+    // it (see the ctor's preset-load block) — raise it now that they do.
+    if (preset_store_repaired_) {
+        preset_store_repaired_ = false;
+        if (persisted_settings_.show_notifications && notification_manager_) {
+            notifications::NotificationEvent event;
+            event.type = notifications::NotificationType::SettingsRepaired;
+            event.title = QStringLiteral("Settings repaired");
+            event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
+            notification_manager_->Enqueue(std::move(event));
+        }
+    }
+
     // NOTE: config_page_ setShowNotifications + showNotificationsChanged connect are
     // wired in buildConfigPage() (config_page_ does not exist yet at this call site).
 
@@ -3652,6 +3746,20 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         qApp->quit();
         break;
     }
+    case NotificationAction::UndoPresetSwitch: {
+        if (!pending_preset_undo_)
+            break; // already consumed by a later Undo click, or never set
+        const PresetSwitchUndo undo = std::move(*pending_preset_undo_);
+        pending_preset_undo_.reset();
+        if (!preset_registry_.SetSelected(undo.previous_selected_id))
+            preset_registry_.SetSelected(std::string(kDefaultPresetId)); // previous preset was deleted meanwhile
+        // Overlay the *current* environment fields (capture target, bit depth, HDR
+        // mode) rather than the ones captured before the switch — the display/HDR
+        // state may have changed in the meantime, and Undo must not stomp it.
+        applyPresetConfig(WithEnvironmentFields(undo.previous_live, captureLiveConfig()));
+        persistPresetState();
+        break;
+    }
     case NotificationAction::Discard:
     case NotificationAction::None:
     default:
@@ -3746,6 +3854,7 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
 
     const QString available_version =
         result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString();
+    last_available_version_ = available_version;
 
     ui::dialogs::UpdateUiModel model;
     model.current_version = current_version;
@@ -3783,9 +3892,14 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
                                                        : ui::dialogs::UpdateUiState::UpToDate);
     }
     if (config_page_) {
-        config_page_->setUpdateStatus(result.update_available ? QStringLiteral("available")
-                                                              : QStringLiteral("uptodate"),
-                                      available_version, model.last_checked);
+        // Loop-guard / recovery semantics live in the pure ResolveUpdateCardState
+        // helper. A manual check clears applied_version before the check runs, so a
+        // stuck "Restart pending" re-arms to "available" for a still-applicable
+        // version; automatic checks keep available==applied pinned to "pending".
+        const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
+        const QString card_state = exosnap::ResolveUpdateCardState(
+            result.update_available, is_scoop, persisted_settings_.applied_version, available_version);
+        config_page_->setUpdateStatus(card_state, available_version, model.last_checked);
     }
 
     diagnostics::AppLog::info(
@@ -3856,10 +3970,27 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     if (!edit_export_overlay_)
         buildEditExportOverlay();
     setCurrentPage(kRecordPageIndex);
-    edit_export_overlay_->page()->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
-                                                   scenario.edit_export_size, scenario.edit_export_resolution,
-                                                   scenario.edit_export_fps, scenario.edit_export_video_codec,
-                                                   scenario.edit_export_audio_codec, scenario.edit_export_container);
+
+    // setEditContext() (rather than the legacy setRecordingInfo() shim) so the
+    // deterministic duration/markers below flow through the same path real
+    // recordings use — this is what drives the Edit-phase timeline marker pins.
+    EditContext ctx;
+    ctx.output_path = scenario.edit_export_file_path;
+    ctx.duration = scenario.edit_export_duration;
+    ctx.size = scenario.edit_export_size;
+    ctx.resolution = scenario.edit_export_resolution;
+    ctx.fps = scenario.edit_export_fps;
+    ctx.video_codec = scenario.edit_export_video_codec;
+    ctx.audio_codec = scenario.edit_export_audio_codec;
+    ctx.container = scenario.edit_export_container;
+    ctx.duration_seconds = scenario.edit_export_duration_seconds;
+    for (const uint64_t time_ms : scenario.edit_export_marker_times_ms) {
+        RecordingMarker marker;
+        marker.time_ms = time_ms;
+        ctx.markers.push_back(marker);
+    }
+    edit_export_overlay_->page()->setEditContext(ctx);
+
     EditExportPage::Phase phase = EditExportPage::Phase::Review;
     if (scenario.edit_export_phase == QStringLiteral("edit"))
         phase = EditExportPage::Phase::Edit;
@@ -3882,69 +4013,32 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 // ---- Staged post-show page hydration (PERF-B1) ----
 
 void MainWindow::hydrateSecondaryPages() {
-    // Build one deferred page per event-loop tick so the UI can paint and respond
-    // between constructors. Order: ConfigPage first — it is the heaviest and the
-    // most commonly visited item; then DevicePage (construction only — the adapter
-    // scan runs async on its first showEvent), HotkeysPage, DiagnosticsPage,
-    // LogsPage, AboutPage, EditExportOverlay (not a stack page — see
-    // EDIT-OVERLAY-R1), WebcamPage, OutputPage.
+    // Register one deferred page builder per event-loop tick so the UI can paint
+    // and respond between constructors. Order: ConfigPage first — it is the
+    // heaviest and the most commonly visited item; then DevicePage (construction
+    // only — the adapter scan runs async on its first showEvent), HotkeysPage,
+    // DiagnosticsPage, LogsPage, AboutPage, EditExportOverlay (not a stack page —
+    // see EDIT-OVERLAY-R1), WebcamPage, OutputPage.
     // Webcam/Output come last because their fan-out replay depends on stable
     // live_webcam_ and the preset registry, both settled before the ctor exits.
     //
-    // PERF-MEASURE: logPerf brackets every step with a "<name> <elapsed> ms" pair
-    // (same convention as first-paint / preview-live) so a later optimization slice
-    // has a per-page cost baseline (see .workspace/refactor-2.md Phase 1). It is a
-    // stateless lambda (no captures of its own), so copying it into each nested
-    // QTimer::singleShot capture list below is trivial.
-    auto logPerf = [](const QString& name) {
-        diagnostics::AppLog::info(QStringLiteral("perf"),
-                                  QStringLiteral("%1 %2 ms").arg(name).arg(diagnostics::StartupClock().elapsed()));
-    };
+    // PageHydrationController owns the singleShot(0) staging and the "perf"
+    // AppLog milestone bracketing (same "<name> <elapsed> ms" convention as
+    // first-paint / preview-live) so a later optimization slice has a per-page
+    // cost baseline; this method only supplies the ordered list of page builders.
+    std::vector<PageHydrationController::Step> steps;
+    steps.push_back({QStringLiteral("config"), [this] { buildConfigPage(); }});
+    steps.push_back({QStringLiteral("device"), [this] { buildDevicePage(); }});
+    steps.push_back({QStringLiteral("hotkeys"), [this] { buildHotkeysPage(); }});
+    steps.push_back({QStringLiteral("diagnostics"), [this] { buildDiagnosticsPage(); }});
+    steps.push_back({QStringLiteral("logs"), [this] { buildLogsPage(); }});
+    steps.push_back({QStringLiteral("about"), [this] { buildAboutPage(); }});
+    steps.push_back({QStringLiteral("edit-export"), [this] { buildEditExportOverlay(); }});
+    steps.push_back({QStringLiteral("webcam"), [this] { buildWebcamPage(); }});
+    steps.push_back({QStringLiteral("output"), [this] { buildOutputPage(); }});
 
-    logPerf(QStringLiteral("hydrate-config-start"));
-    buildConfigPage();
-    logPerf(QStringLiteral("hydrate-config-end"));
-    QTimer::singleShot(0, this, [this, logPerf]() {
-        logPerf(QStringLiteral("hydrate-page-start:device"));
-        buildDevicePage();
-        logPerf(QStringLiteral("hydrate-page-end:device"));
-        QTimer::singleShot(0, this, [this, logPerf]() {
-            logPerf(QStringLiteral("hydrate-page-start:hotkeys"));
-            buildHotkeysPage();
-            logPerf(QStringLiteral("hydrate-page-end:hotkeys"));
-            QTimer::singleShot(0, this, [this, logPerf]() {
-                logPerf(QStringLiteral("hydrate-page-start:diagnostics"));
-                buildDiagnosticsPage();
-                logPerf(QStringLiteral("hydrate-page-end:diagnostics"));
-                QTimer::singleShot(0, this, [this, logPerf]() {
-                    logPerf(QStringLiteral("hydrate-page-start:logs"));
-                    buildLogsPage();
-                    logPerf(QStringLiteral("hydrate-page-end:logs"));
-                    QTimer::singleShot(0, this, [this, logPerf]() {
-                        logPerf(QStringLiteral("hydrate-page-start:about"));
-                        buildAboutPage();
-                        logPerf(QStringLiteral("hydrate-page-end:about"));
-                        QTimer::singleShot(0, this, [this, logPerf]() {
-                            logPerf(QStringLiteral("hydrate-page-start:edit-export"));
-                            buildEditExportOverlay();
-                            logPerf(QStringLiteral("hydrate-page-end:edit-export"));
-                            QTimer::singleShot(0, this, [this, logPerf]() {
-                                logPerf(QStringLiteral("hydrate-page-start:webcam"));
-                                buildWebcamPage();
-                                logPerf(QStringLiteral("hydrate-page-end:webcam"));
-                                QTimer::singleShot(0, this, [this, logPerf]() {
-                                    logPerf(QStringLiteral("hydrate-page-start:output"));
-                                    buildOutputPage();
-                                    logPerf(QStringLiteral("hydrate-page-end:output"));
-                                    logPerf(QStringLiteral("hydrate-all-end"));
-                                });
-                            });
-                        });
-                    });
-                });
-            });
-        });
-    });
+    page_hydration_controller_ = new PageHydrationController(std::move(steps), this);
+    page_hydration_controller_->start();
 }
 
 void MainWindow::buildConfigPage() {
@@ -4007,9 +4101,7 @@ void MainWindow::buildConfigPage() {
         // selections never reached output_settings_ (and thus never the recording).
         MergeFormatSelection(output_settings_, settings);
         record_page_->setOutputSettings(output_settings_);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         // CRASH-WIRE-R1: container/codec context changed — refresh the sidecar.
         refreshCrashSessionContext();
         refreshDiagnosticsData();
@@ -4020,9 +4112,7 @@ void MainWindow::buildConfigPage() {
             return;
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         refreshDiagnosticsData();
     });
     connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
@@ -4031,9 +4121,7 @@ void MainWindow::buildConfigPage() {
         live_audio_ = state;
         if (record_page_)
             record_page_->applyPersistedAudioSettings(state);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         refreshDiagnosticsData();
     });
     connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
@@ -4043,22 +4131,27 @@ void MainWindow::buildConfigPage() {
         record_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        onLiveConfigChanged();
+    });
+
+    // Shared webcam capture: the Settings panel is a consumer of the coordinator's single
+    // reader. Route its "I want a preview" request to the coordinator, and fan the
+    // coordinator's frames back into the panel — so both surfaces show one capture, with
+    // no second reader fighting for the device (works during recording too).
+    connect(config_page_, &ConfigPage::webcamPreviewActiveRequested, this, [this](bool active) {
+        if (record_page_)
+            record_page_->setSettingsWebcamPreviewActive(active);
+    });
+    connect(record_page_, &RecordPage::webcamFrameReady, this, [this](const QImage& frame) {
         if (config_page_)
-            config_page_->setPresetDirty(dirty);
+            config_page_->setWebcamPreviewFrame(frame);
     });
 
     // ---- Preset management operations ----
-    connect(config_page_, &ConfigPage::savePresetRequested, this, &MainWindow::onSavePreset);
     connect(config_page_, &ConfigPage::savePresetAsRequested, this, &MainWindow::onSavePresetAs);
-    connect(config_page_, &ConfigPage::newPresetRequested, this, &MainWindow::onNewPreset);
-    connect(config_page_, &ConfigPage::duplicatePresetRequested, this, &MainWindow::onDuplicatePreset);
     connect(config_page_, &ConfigPage::renamePresetRequested, this, &MainWindow::onRenamePreset);
     connect(config_page_, &ConfigPage::deletePresetRequested, this, &MainWindow::onDeletePreset);
     connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
-    connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
-    connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
-    connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
     connect(config_page_, &ConfigPage::exportCurrentPresetRequested, this, &MainWindow::onExportSelectedProfile);
     connect(config_page_, &ConfigPage::importPresetsRequested, this, &MainWindow::onImportProfiles);
 
@@ -4120,13 +4213,58 @@ void MainWindow::buildConfigPage() {
     config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
     connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
         manual_update_check_ = true;
+        // Recovery: a user-initiated check clears any persisted "Restart pending"
+        // stamp so the card can re-arm to "Update to vX.Y" if the updater launched
+        // earlier but never completed the swap. Automatic startup checks keep the
+        // loop-guard semantics (available==applied stays "pending").
+        if (!persisted_settings_.applied_version.isEmpty()) {
+            persisted_settings_.applied_version.clear();
+            settings_store_.Save(persisted_settings_);
+        }
         triggerUpdateCheck();
     });
     connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
-        const QString url = last_update_releases_url_.isEmpty()
-                                ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                : last_update_releases_url_;
-        QDesktopServices::openUrl(QUrl(url));
+        // App-layer recording guard (belt-and-suspenders alongside UpdateService's own
+        // engine-layer guard, wired via SetRecordingCoordinator() above). Never
+        // stage/launch the swap updater while a recording or MP4 finalize is in
+        // flight — mirror how triggerUpdateCheck() gates the check path.
+        if (recording_active_ || remuxing_active_) {
+            if (config_page_)
+                config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(),
+                                              QStringLiteral("Finish the recording before updating."));
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update launch skipped — recording/finalizing in progress"));
+            return;
+        }
+        // Scoop installs are notify-only: the primary button opens the releases
+        // page (today's behavior); the staged swap must not touch a Scoop tree.
+        if (UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath())) {
+            const QString url = last_update_releases_url_.isEmpty()
+                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                    : last_update_releases_url_;
+            QDesktopServices::openUrl(QUrl(url));
+            return;
+        }
+        // Otherwise stage + launch the swap updater. The app keeps running and
+        // exits normally when the updater sends WM_CLOSE.
+        if (update_service_)
+            update_service_->LaunchUpdater();
+    });
+    // WHATS-NEW: card "What's new in vX.Y" link -> overlay with the last check's
+    // gap notes (pre-update mode; no suppress checkbox). Never gated by the
+    // suppress setting.
+    connect(config_page_, &ConfigPage::whatsNewRequested, this, [this]() {
+        if (!update_service_)
+            return;
+        QVector<WhatsNewNote> notes;
+        for (const auto& n : update_service_->LastGapNotes()) {
+            WhatsNewNote note;
+            note.version = QString::fromStdString(n.version.ToString());
+            note.body = QString::fromStdString(n.body_markdown);
+            note.html_url = QString::fromStdString(n.html_url);
+            notes.push_back(note);
+        }
+        openWhatsNewOverlay(notes, /*post_update_mode=*/false);
     });
     connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
         persisted_settings_.check_updates_on_start = enabled;
@@ -4147,6 +4285,12 @@ void MainWindow::buildConfigPage() {
             setup_panel->setMfUnavailable(true);
     }
 
+    // Deliver probed capabilities to the expert 4:4:4 chroma gate if the async
+    // probe already resolved before this (lazily built) page existed; otherwise
+    // onRuntimeCapsReady() applies them once they arrive.
+    if (runtime_caps_ready_)
+        config_page_->setRuntimeCapabilities(runtime_caps_);
+
     // ---- Notification toasts wiring (moved from initNotificationToasts()) ----
     // initNotificationToasts() runs before buildConfigPage() so config_page_ was null there.
     config_page_->setShowNotifications(persisted_settings_.show_notifications);
@@ -4157,11 +4301,13 @@ void MainWindow::buildConfigPage() {
     });
 
     // ---- Fan-out replay ----
-    // applyPresetConfig delivers the full preset-applied config (output/video/audio/webcam/
-    // folder/name) to the freshly-built page. refreshPresetUi delivers preset combo options
-    // + active profile name + dirty flag. Both are safe regardless of runtime_caps_ready_
-    // because they only update UI from in-memory state (same as what a ctor call would do).
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    // applyPresetConfig delivers the full live config (output/video/audio/webcam/
+    // folder/name) to the freshly-built page — the CURRENT live state, not the
+    // boot snapshot, since the page can be built well after startup.
+    // refreshPresetUi delivers preset combo options + active profile name +
+    // dirty flag. Both are safe regardless of runtime_caps_ready_ because they
+    // only update UI from in-memory state (same as what a ctor call would do).
+    applyPresetConfig(captureLiveConfig());
     refreshPresetUi();
 
     // Chrome-state replay: deliver the current readiness + lock status that was last set by
@@ -4258,8 +4404,7 @@ void MainWindow::buildDiagnosticsPage() {
                     config_page_->setVideoSettings(video_settings_);
                 if (record_page_)
                     record_page_->setVideoSettings(video_settings_);
-                if (config_page_)
-                    config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                onLiveConfigChanged();
                 refreshDiagnosticsData();
                 diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
                 return;
@@ -4306,8 +4451,7 @@ void MainWindow::buildDiagnosticsPage() {
                 config_page_->setOutputSettings(output_settings_);
             if (record_page_)
                 record_page_->setOutputSettings(output_settings_);
-            if (config_page_)
-                config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+            onLiveConfigChanged();
             refreshCrashSessionContext();
             refreshDiagnosticsData();
             diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
@@ -4443,9 +4587,7 @@ void MainWindow::buildWebcamPage() {
         record_page_->setWebcamSettings(settings);
         if (config_page_)
             config_page_->setWebcamSettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
     connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(webcam_page_, &WebcamPage::rescanRequested, &webcam_notifier_, &WebcamDeviceNotifier::rescan);
@@ -4474,21 +4616,13 @@ void MainWindow::buildOutputPage() {
     } else {
         stack_->addWidget(output_page_);
     }
-    // Wire all OutputPage signals that were previously connected in the ctor.
+    // Wire OutputPage signals — same handlers as the Settings preset row.
     connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& id) { onPresetSelected(id); });
-    connect(output_page_, &OutputPage::newFromCurrentRequested, this,
-            [this](const QString& name) { onSavePresetAs(name); });
-    connect(output_page_, &OutputPage::newFromSafeDefaultRequested, this,
-            [this](const QString& /*name*/) { onNewPreset(); });
-    connect(output_page_, &OutputPage::duplicateActiveProfileRequested, this, &MainWindow::onDuplicatePreset);
+    connect(output_page_, &OutputPage::saveAsNewRequested, this, &MainWindow::onSavePresetAs);
     connect(output_page_, &OutputPage::renameActiveProfileRequested, this, &MainWindow::onRenamePreset);
     connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, &MainWindow::onDeletePreset);
     connect(output_page_, &OutputPage::resetActiveProfileRequested, this, &MainWindow::onResetChanges);
-    connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this,
-            [this](const QString& name) { onSavePresetAs(name); });
-    connect(output_page_, &OutputPage::resetAllSettingsAndProfilesRequested, this, &MainWindow::onResetToDefaults);
     connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, &MainWindow::onExportSelectedProfile);
-    connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, &MainWindow::onExportAllUserProfiles);
     connect(output_page_, &OutputPage::importProfilesRequested, this, &MainWindow::onImportProfiles);
     // Fan-out replay: OutputPage gets its profile list ONLY from refreshPresetUi().
     // The ctor called refreshPresetUi() → if(output_page_) was false then, so the page

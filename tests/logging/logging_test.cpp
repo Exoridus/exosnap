@@ -174,4 +174,52 @@ TEST_F(LoggingTest, ReinitializeClearsPreviousRingBuffer) {
     EXPECT_EQ(contentA.find("msg_b"), std::string::npos);
 }
 
+// Without a sink the engine's decisions never reach the host application: they land in
+// a JSONL file nobody reads. The host installs one to mirror them into its own log.
+TEST_F(LoggingTest, SinkReceivesEveryAcceptedRecord) {
+    std::vector<recorder_core::logging::LogRecord> seen;
+
+    LoggerConfig cfg;
+    cfg.filePath = makeTempPath();
+    cfg.minimumLevel = recorder_core::logging::LogLevel::Info;
+    cfg.sink = [&seen](const recorder_core::logging::LogRecord& r) { seen.push_back(r); };
+    recorder_core::logging::initialize(cfg);
+
+    const LogField field{"mode", "hdr10-native"};
+    recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "capture", "resolved", {&field, 1});
+    recorder_core::logging::log(recorder_core::logging::LogLevel::Debug, "capture", "below_minimum");
+
+    recorder_core::logging::shutdown();
+
+    ASSERT_EQ(seen.size(), 1u) << "records below the minimum level must not reach the sink";
+    EXPECT_EQ(seen[0].component, "capture");
+    EXPECT_EQ(seen[0].message, "resolved");
+    ASSERT_EQ(seen[0].fields.size(), 1u);
+    EXPECT_EQ(seen[0].fields[0].key, "mode");
+    EXPECT_EQ(seen[0].fields[0].value, "hdr10-native");
+}
+
+// The sink runs outside the logger's lock, so a sink that logs again — or blocks on a
+// mutex of its own — must not deadlock the thread that produced the record.
+TEST_F(LoggingTest, SinkMayLogReentrantlyWithoutDeadlock) {
+    int depth = 0;
+    int calls = 0;
+
+    LoggerConfig cfg;
+    cfg.filePath = makeTempPath();
+    cfg.sink = [&](const recorder_core::logging::LogRecord&) {
+        ++calls;
+        if (depth == 0) {
+            ++depth;
+            recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "sink", "reentrant");
+        }
+    };
+    recorder_core::logging::initialize(cfg);
+
+    recorder_core::logging::log(recorder_core::logging::LogLevel::Info, "capture", "outer");
+    recorder_core::logging::shutdown();
+
+    EXPECT_EQ(calls, 2) << "the reentrant record must also reach the sink";
+}
+
 } // namespace

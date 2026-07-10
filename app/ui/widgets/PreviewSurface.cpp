@@ -300,6 +300,16 @@ bool PreviewSurface::isDxgiPreviewActive() const noexcept {
     return dxgi_active_ && dxgi_renderer_ && dxgi_renderer_->IsActive();
 }
 
+void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height) {
+    if (dxgi_renderer_)
+        dxgi_renderer_->BeginPushedSource(nt_handle, width, height);
+}
+
+void PreviewSurface::endPushedSource() {
+    if (dxgi_renderer_)
+        dxgi_renderer_->EndPushedSource();
+}
+
 void PreviewSurface::repositionDxgiPreview() {
     applyDxgiPreviewResize();
 }
@@ -413,8 +423,17 @@ void PreviewSurface::setWebcamFrame(QImage frame) {
     if (!frame.isNull() && frame.format() != QImage::Format_ARGB32 && frame.format() != QImage::Format_RGB32) {
         frame = frame.convertToFormat(QImage::Format_ARGB32);
     }
-    if (!frame.isNull() && frame.width() > 0 && frame.height() > 0)
-        webcam_aspect_ratio_ = static_cast<double>(frame.width()) / static_cast<double>(frame.height());
+    if (!frame.isNull() && frame.width() > 0 && frame.height() > 0) {
+        const double new_ar = static_cast<double>(frame.width()) / static_cast<double>(frame.height());
+        // The default PiP rect is a guess derived from the *requested* resolution, which
+        // often differs from what the camera actually delivers (e.g. a 4:3 sensor crop
+        // served when 16:9 was asked for). Once the real frame aspect is known, re-fit
+        // the box to it so the feed is shown at its true shape instead of stretched.
+        const bool aspect_changed = std::abs(new_ar - webcam_aspect_ratio_) > 0.001;
+        webcam_aspect_ratio_ = new_ar;
+        if (aspect_changed && aspect_ratio_locked_)
+            snapOverlayRectToCurrentAspect();
+    }
     webcam_frame_ = std::move(frame);
     syncWebcamOverlayToDxgi();
     if (webcam_enabled_)
@@ -461,6 +480,16 @@ void PreviewSurface::setWebcamMirror(bool mirror) {
     if (webcam_mirror_ == mirror)
         return;
     webcam_mirror_ = mirror;
+    syncWebcamOverlayToDxgi();
+    if (webcam_enabled_)
+        update();
+}
+
+void PreviewSurface::setWebcamOpacity(float opacity) {
+    const float clamped = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
+    if (qFuzzyCompare(webcam_opacity_, clamped))
+        return;
+    webcam_opacity_ = clamped;
     syncWebcamOverlayToDxgi();
     if (webcam_enabled_)
         update();
@@ -546,7 +575,8 @@ void PreviewSurface::syncWebcamOverlayToDxgi() {
     const bool selected = webcam_selected_ && webcamEditingAllowed();
     dxgi_renderer_->SetWebcamOverlayState(
         show, selected, static_cast<float>(webcam_rect_norm_.x()), static_cast<float>(webcam_rect_norm_.y()),
-        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_);
+        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_,
+        webcam_opacity_);
     if (show && !webcam_frame_.isNull()) {
         const QImage& img = webcam_frame_;
         dxgi_renderer_->SetWebcamOverlayFrame(img.constBits(), img.width(), img.height(),
@@ -1099,6 +1129,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         const bool show_chrome = webcam_selected_ && webcamEditingAllowed();
         if (!webcam_frame_.isNull()) {
             painter.save();
+            painter.setOpacity(webcam_opacity_);
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             const bool effective_aspect_lock = aspect_ratio_locked_ != drag_modifier_toggle_held_;
             QRectF draw_rect = cam_rect;
@@ -1123,6 +1154,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             painter.restore();
         } else {
             painter.save();
+            painter.setOpacity(webcam_opacity_);
             painter.setBrush(QColor(0, 0, 0, 160));
             painter.setPen(Qt::NoPen);
             painter.drawRect(cam_rect);

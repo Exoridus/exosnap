@@ -1,7 +1,9 @@
 #pragma once
+#include <QImage>
 #include <QWidget>
 
 #include "../../../libs/capability/include/capability/audio_ui_state.h"
+#include "../../../libs/capability/include/capability/capability_set.h"
 #include "../../../libs/recorder_core/include/recorder_core/audio_input_device.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
@@ -63,19 +65,32 @@ class ConfigPage : public QWidget {
 
     explicit ConfigPage(const OutputSettingsModel& initial_settings, const VideoSettingsModel& initial_video,
                         QWidget* parent = nullptr);
+    ~ConfigPage() override;
 
     void setOutputSettings(const OutputSettingsModel& settings);
     void setVideoSettings(const VideoSettingsModel& settings);
     void setOutputFolder(const std::filesystem::path& folder);
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
+    // Push a frame from the single shared webcam capture to the embedded webcam panel,
+    // which renders it (with its own mirror) instead of opening a second reader.
+    void setWebcamPreviewFrame(const QImage& frame);
     void setReadinessStatus(const QString& status_label);
+    // Delivers the async-probed runtime capabilities so the expert 4:4:4 chroma
+    // gate can consult the ACTIVE GPU's real YUV444 support (per codec) instead
+    // of only the static codec/bit-depth rule. Stores a copy and re-evaluates the
+    // chroma control. Before this arrives, the static rule stands (pre-probe).
+    void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     // Preset card contract: options = presets (id + label); selected_id = active preset;
-    // default_id = startup-default preset (shown with a badge); dirty = unsaved changes.
-    void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
-                          const QString& default_id, bool dirty);
+    // dirty = unsaved changes.
+    void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id, bool dirty);
     // Lightweight dirty-only update (avoids rebuilding the full combo).
     void setPresetDirty(bool dirty);
+
+    // True when `name` is empty after trimming or collides (trimmed,
+    // case-insensitive) with any option label other than `exclude_id`'s.
+    [[nodiscard]] static bool presetNameRejected(const QString& name, const std::vector<ProfileOption>& options,
+                                                 const QString& exclude_id);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
 
@@ -154,6 +169,8 @@ class ConfigPage : public QWidget {
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
+    // Relayed from the embedded webcam panel: it wants the shared capture to run/stop.
+    void webcamPreviewActiveRequested(bool active);
     void diagnosticsRequested();
     void webcamDetailsRequested();
 
@@ -180,6 +197,9 @@ class ConfigPage : public QWidget {
     // Primary action while an update is available ("Update to vX.Y"). Phase A
     // hands off to the releases page; Phase B starts the in-app download.
     void updatePrimaryActionRequested();
+    // WHATS-NEW: "What's new in vX.Y" card link (available state only). Opens the
+    // gap-aware release-notes overlay. Never suppressed.
+    void whatsNewRequested();
     // "Check for updates automatically" toggle changed.
     void autoUpdateCheckToggled(bool enabled);
 
@@ -194,17 +214,10 @@ class ConfigPage : public QWidget {
     void themeIdChanged(const QString& theme_id);
 
     // ---- Preset management signals ----
-    void savePresetRequested();
     void savePresetAsRequested(const QString& name);
-    void newPresetRequested();
-    void duplicatePresetRequested();
     void renamePresetRequested(const QString& name);
     void deletePresetRequested();
     void resetChangesRequested();
-    void resetToDefaultsRequested();
-    void setDefaultPresetRequested();
-    // Emitted when the user opens the Manage presets overlay.
-    void managePresetsRequested();
     // Emitted when the user clicks Export in the preset toolbar.
     void exportCurrentPresetRequested(const QString& path);
     // Emitted when the user clicks Import in the preset toolbar.
@@ -219,6 +232,7 @@ class ConfigPage : public QWidget {
     void onContainerChanged(int id);
     void onVideoCodecChanged(int index);
     void onVideoBitDepthChanged(int index);
+    void onVideoChromaChanged(int index);
     void onVideoColorRangeChanged(int index);
     void onVideoHdrModeChanged(int index);
     void onVideoEncoderPresetChanged(int index);
@@ -253,6 +267,13 @@ class ConfigPage : public QWidget {
     // Syncs the video bit-depth combo to the model and capability-gates the 10-bit
     // item (selectable only for HEVC / AV1). Single source of truth: caps QueryCombo.
     void updateVideoBitDepthControl();
+    // Syncs the chroma-subsampling combo to the model and gates the 4:4:4 item by
+    // the static codec/bit-depth rule (selectable only for H.264/HEVC at 8-bit)
+    // AND, once runtime capabilities have been delivered (setRuntimeCapabilities),
+    // the ACTIVE GPU's probed YUV444 support for the current codec. A 4:4:4
+    // selection that becomes invalid is snapped back to 4:2:0 (mirrors bit depth /
+    // SanitizePresetConfig).
+    void updateVideoChromaControl();
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
     void updateVideoColorRangeControl();
@@ -296,16 +317,9 @@ class ConfigPage : public QWidget {
     void updateAudioFormatControlVisibility();
 
     // Preset management handlers.
-    void onSavePreset();
     void onSavePresetAs();
-    void onNewPreset();
-    void onDuplicatePreset();
     void onRenamePreset();
     void onDeletePreset();
-    void onResetChanges();
-    void onResetToDefaults();
-    void onSetDefaultPreset();
-    void onManagePresets();
     void updatePresetActionState();
     void updateExpertModeVisibility();
     // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
@@ -319,10 +333,14 @@ class ConfigPage : public QWidget {
 
     OutputSettingsModel format_settings_;
     VideoSettingsModel video_settings_;
+    // Async-probed runtime capabilities for the active GPU. runtime_caps_set_
+    // stays false until setRuntimeCapabilities() delivers them; while false the
+    // 4:4:4 gate uses only the static codec/bit-depth rule.
+    capability::CapabilitySet runtime_caps_;
+    bool runtime_caps_set_ = false;
     QString active_profile_name_;
     std::vector<ProfileOption> profile_options_;
     QString active_preset_id_;
-    QString default_preset_id_;
     bool preset_dirty_ = false;
     // Current selected preset's built_in/available flags (set by setPresetOptions).
     bool active_preset_is_built_in_ = false;
@@ -427,23 +445,15 @@ class ConfigPage : public QWidget {
 
     // Preset card widgets.
     QLabel* profile_status_label_ = nullptr;
-    QLabel* preset_dirty_indicator_ = nullptr;
-    QPushButton* preset_save_btn_ = nullptr;
     QPushButton* preset_save_as_btn_ = nullptr;
-    QPushButton* preset_export_btn_ = nullptr;
-    QPushButton* preset_import_btn_ = nullptr;
+    QPushButton* preset_reset_btn_ = nullptr;
+    QPushButton* preset_delete_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
     // Preset management actions in the overflow menu.
-    QAction* save_preset_action_ = nullptr;
     QAction* save_preset_as_action_ = nullptr;
-    QAction* new_preset_action_ = nullptr;
-    QAction* duplicate_preset_action_ = nullptr;
     QAction* rename_preset_action_ = nullptr;
-    QAction* delete_preset_action_ = nullptr;
-    QAction* reset_changes_action_ = nullptr;
-    QAction* reset_to_defaults_action_ = nullptr;
-    QAction* set_default_preset_action_ = nullptr;
-    QAction* manage_presets_action_ = nullptr;
+    QAction* export_preset_action_ = nullptr;
+    QAction* import_presets_action_ = nullptr;
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 
@@ -466,7 +476,6 @@ class ConfigPage : public QWidget {
     // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
-    QLabel* quality_cq_tier_label_ = nullptr;  // S3: "· High / Balanced / Small / Custom" tier label
 
     // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
     // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.
@@ -505,7 +514,12 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* updates_auto_toggle_ = nullptr;
     QLabel* updates_status_label_ = nullptr;
     QPushButton* updates_action_btn_ = nullptr;
-    QString updates_available_version_; // last advertised "vX.Y" (Available state)
+    QPushButton* updates_whats_new_link_ = nullptr; // WHATS-NEW: "What's new in vX.Y" (available only)
+    QString updates_available_version_;             // last advertised "vX.Y" (Available state)
+    // State-derived enabled value for the updates action button, independent of the
+    // recording lock. The effective enabled state is (this && !controls_locked_) so a
+    // recording lock disables the button without a later setUpdateStatus re-enabling it.
+    bool updates_action_intrinsically_enabled_ = true;
 
     // v10 split: the old "Format & encoding" mega-card is split into
     // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).
@@ -530,6 +544,11 @@ class ConfigPage : public QWidget {
     // Video bit depth (0.7.0 — S7): 8-bit / 10-bit selector, capability-gated.
     QWidget* video_bit_depth_row_ = nullptr;
     QComboBox* video_bit_depth_combo_ = nullptr;
+    // Chroma subsampling (expert): 4:2:0 (default) / 4:4:4 selector, capability-gated
+    // (4:4:4 = 8-bit H.264/HEVC only).
+    QWidget* video_chroma_row_ = nullptr;
+    QComboBox* video_chroma_combo_ = nullptr;
+    QLabel* video_chroma_hint_ = nullptr; // calm inline hint, visible when 4:4:4 is unavailable
     // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
     QWidget* video_color_range_row_ = nullptr;
     QComboBox* video_color_range_combo_ = nullptr;

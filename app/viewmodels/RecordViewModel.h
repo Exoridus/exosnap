@@ -51,6 +51,16 @@ enum class UiRecordingState {
            state == UiRecordingState::ArmedFromRecovery;
 }
 
+// After recording ends, the WYSIWYG preview must leave "pushed" mode (the engine
+// source-tap) and return to its own live WGC capture. This covers EVERY terminal
+// state the pushed handoff can settle in: a clean stop (Ready/Completed) AND a
+// failed recording (Failed). Omitting Failed strands the preview frozen on the
+// engine's last shared frame behind the error state.
+[[nodiscard]] inline bool ShouldRevertPreviewFromPushedMode(UiRecordingState state) noexcept {
+    return state == UiRecordingState::Ready || state == UiRecordingState::Completed ||
+           state == UiRecordingState::Failed;
+}
+
 // ---------------------------------------------------------------------------
 // CaptureMode
 // ---------------------------------------------------------------------------

@@ -11,6 +11,9 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <filesystem>
+#include <fstream>
+
 #include "pages/DiagnosticsPage.h"
 #include "ui/widgets/PipelineFlow.h"
 #include "ui/widgets/PipelineStepCard.h"
@@ -118,6 +121,67 @@ TEST_F(DiagnosticsPageTest, RealStepsResolveAfterDataAndProbelessStepsStayPlanne
     EXPECT_EQ(flow->card(0)->status(), PipelineStepCard::Status::Planned);
     EXPECT_EQ(flow->card(1)->status(), PipelineStepCard::Status::Planned);
     EXPECT_EQ(flow->card(2)->status(), PipelineStepCard::Status::Planned);
+}
+
+// The writability probe must interrogate the output folder, not the settings file.
+// Passing a file path used to yield "<settings.ini>/probe.tmp", which never opens, so
+// the Disk step and the rec.output.writable blocker reported failure on a healthy setup.
+TEST_F(DiagnosticsPageTest, DiskStepProbesOutputFolderNotSettingsFile) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "exosnap_diag_page_probe";
+    fs::create_directories(dir);
+    const fs::path settings_file = dir / "settings.ini";
+    {
+        std::ofstream(settings_file) << "[general]\n";
+    }
+    ASSERT_TRUE(fs::is_regular_file(settings_file));
+
+    DiagnosticsPage page;
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    output.output_folder = dir;
+    VideoSettingsModel video;
+    capability::AudioUiState audio;
+    page.setDiagnosticData(caps, output, video, audio, "MKV AV1 Opus", "Start/Stop: Alt+F9", settings_file.string(),
+                           true);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(5)->status(), PipelineStepCard::Status::Ok);
+
+    fs::remove(settings_file);
+    fs::remove(dir);
+}
+
+// The default output folder is created lazily on the first recording, so a folder that
+// does not exist yet is not a failure: what matters is whether it can be created. Probing
+// it directly made every fresh install show a writability blocker before its first take.
+TEST_F(DiagnosticsPageTest, DiskStepAcceptsAnOutputFolderThatDoesNotExistYet) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "exosnap_diag_absent" / "nested";
+    fs::remove_all(fs::temp_directory_path() / "exosnap_diag_absent");
+    ASSERT_FALSE(fs::exists(dir));
+
+    DiagnosticsPage page;
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    output.output_folder = dir;
+    VideoSettingsModel video;
+    capability::AudioUiState audio;
+    page.setDiagnosticData(caps, output, video, audio, "MKV AV1 Opus", "Start/Stop: Alt+F9", "", true);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(5)->status(), PipelineStepCard::Status::Ok);
+
+    // Diagnostics inspects; it must not create the folder as a side effect.
+    EXPECT_FALSE(fs::exists(dir));
 }
 
 TEST_F(DiagnosticsPageTest, CapabilityRowsRenderAfterData) {

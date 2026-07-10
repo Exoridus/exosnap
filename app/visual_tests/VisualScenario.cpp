@@ -552,23 +552,21 @@ const QVector<VisualScenario> kScenarios = {
     // registry is touched.  preset_count > 0 triggers the injection path.
 
     // settings-preset-default: selected == default, clean state (badge visible,
-    // Save hidden).
+    // Save as new / Reset hidden).
     {.id = QStringLiteral("settings-preset-default"),
      .title = QStringLiteral("Settings / Preset Default"),
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Default"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
-    // settings-preset-modified: dirty state — presetDirtyIndicator visible,
-    // Save enabled.
+    // settings-preset-modified: dirty state — combo shows "(changed)", Save as
+    // new + Reset visible.
     {.id = QStringLiteral("settings-preset-modified"),
      .title = QStringLiteral("Settings / Preset Modified"),
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = true},
 
     // settings-preset-saved: clean state after a save on a non-default preset.
@@ -577,7 +575,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Tutorial"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-menu: Manage overflow menu shown with all actions.
@@ -586,7 +583,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false,
      .preset_menu_open = true},
 
@@ -596,7 +592,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 5,
      .preset_selected_name = QStringLiteral("Streaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-default-badge: selected == default so presetDefaultBadge is
@@ -606,7 +601,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 4,
      .preset_selected_name = QStringLiteral("Default"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-delete-confirm: represents the delete-confirmation intent
@@ -619,7 +613,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false,
      .preset_menu_open = true},
 
@@ -630,7 +623,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = true,
      .preset_save_error = true},
 
@@ -985,7 +977,6 @@ const QVector<VisualScenario> kScenarios = {
      true,
      0,
      QString(),
-     QString(),
      false,
      false,
      false,
@@ -1044,7 +1035,6 @@ const QVector<VisualScenario> kScenarios = {
      QString(),
      true,
      0,
-     QString(),
      QString(),
      false,
      false,
@@ -1105,7 +1095,6 @@ const QVector<VisualScenario> kScenarios = {
      true,
      0,
      QString(),
-     QString(),
      false,
      false,
      false,
@@ -1165,7 +1154,6 @@ const QVector<VisualScenario> kScenarios = {
      true,
      0,
      QString(),
-     QString(),
      false,
      false,
      false,
@@ -1224,7 +1212,6 @@ const QVector<VisualScenario> kScenarios = {
      QString(),
      true,
      0,
-     QString(),
      QString(),
      false,
      false,
@@ -1757,6 +1744,20 @@ const QVector<VisualScenario> kEditExportScenarios = {
      .edit_export_video_codec = QStringLiteral("AV1"),
      .edit_export_audio_codec = QStringLiteral("Opus"),
      .edit_export_container = QStringLiteral("MKV")},
+    {.id = QStringLiteral("edit-edit"),
+     .title = QStringLiteral("Edit Export / Edit (marker pins)"),
+     .page = VisualPage::EditExport,
+     .edit_export_phase = QStringLiteral("edit"),
+     .edit_export_file_path = QStringLiteral("C:\\Users\\User\\Videos\\ExoSnap\\2026-06-19_Sprint-demo.mkv"),
+     .edit_export_duration = QStringLiteral("00:04:18"),
+     .edit_export_size = QStringLiteral("612 MB"),
+     .edit_export_resolution = QStringLiteral("2560 \xc3\x97 1440"),
+     .edit_export_fps = QStringLiteral("60 fps CFR"),
+     .edit_export_video_codec = QStringLiteral("AV1"),
+     .edit_export_audio_codec = QStringLiteral("Opus"),
+     .edit_export_container = QStringLiteral("MKV"),
+     .edit_export_duration_seconds = 258.0, // 00:04:18
+     .edit_export_marker_times_ms = {15000, 90000, 129000, 220000}},
     {.id = QStringLiteral("edit-output"),
      .title = QStringLiteral("Edit Export / Output"),
      .page = VisualPage::EditExport,

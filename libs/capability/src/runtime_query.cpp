@@ -26,6 +26,8 @@
 #include <dxgi.h>
 #include <dxgi1_6.h> // IDXGIOutput6::GetDesc1 (per-display HDR facts)
 
+#include <recorder_core/hdr_color_space.h> // one definition of "HDR is on"
+
 // Media Foundation
 #include <mfapi.h>
 #include <mfidl.h>
@@ -209,6 +211,26 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
             }
             // Only now is the per-codec result authoritative.
             nvidia.nvenc_codec_probed = true;
+
+            // Per-codec 4:4:4 (YUV444, 8-bit) support via
+            // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Only queried for the codecs the
+            // GPU actually advertised; a failed/absent query leaves the flag
+            // false (no 4:4:4 claimed beyond the static baseline).
+            if (funcs.nvEncGetEncodeCaps != nullptr) {
+                auto query_yuv444 = [&funcs, encoder](const GUID& codec) -> bool {
+                    NV_ENC_CAPS_PARAM capsParam{};
+                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
+                    capsParam.capsToQuery = NV_ENC_CAPS_SUPPORT_YUV444_ENCODE;
+                    int value = 0;
+                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS && value != 0;
+                };
+                if (nvidia.nvenc_h264) {
+                    nvidia.nvenc_yuv444_h264 = query_yuv444(NV_ENC_CODEC_H264_GUID);
+                }
+                if (nvidia.nvenc_hevc) {
+                    nvidia.nvenc_yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
+                }
+            }
         }
     }
 
@@ -299,9 +321,7 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
                         facts.name.resize(static_cast<size_t>(len - 1));
                         WideCharToMultiByte(CP_UTF8, 0, d.DeviceName, -1, facts.name.data(), len, nullptr, nullptr);
                     }
-                    // HDR is ON when the output is in a PQ/BT.2020 colour space.
-                    facts.hdr_active = (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
-                                        d.ColorSpace == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
+                    facts.hdr_active = recorder_core::IsHdrColorSpace(d.ColorSpace);
                     facts.bits_per_color = d.BitsPerColor;
                     facts.red_primary_x = d.RedPrimary[0];
                     facts.red_primary_y = d.RedPrimary[1];
@@ -509,6 +529,12 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     ProbeDisplays(snapshot.displays);
 
     return snapshot;
+}
+
+std::vector<DisplayHdrFacts> CapabilityBuilder::QueryDisplayFacts() {
+    std::vector<DisplayHdrFacts> displays;
+    ProbeDisplays(displays);
+    return displays;
 }
 
 } // namespace exosnap::capability

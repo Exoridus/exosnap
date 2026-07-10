@@ -19,6 +19,7 @@
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
+#include <capability/runtime_snapshot.h>
 #include <capability/translation.h>
 #include <capability/user_config.h>
 #include <recorder_core/mp4_remuxer.h>
@@ -111,6 +112,23 @@ class RecordingCoordinator {
     // Must be called before StartRecording; safe to call after construction.
     void SetDiskSpaceProvider(diagnostics::IDiskSpaceProvider* provider);
 
+    // Supplies the current per-display HDR facts. When unset, the real DXGI query runs.
+    // Tests inject a stub to simulate a display whose HDR state changed after startup.
+    using DisplayFactsProvider = std::function<std::vector<capability::DisplayHdrFacts>()>;
+    void SetDisplayFactsProvider(DisplayFactsProvider provider);
+
+    // Re-reads the per-display HDR facts and replaces the startup snapshot's copy.
+    //
+    // The startup capability query runs once. Toggling Windows HDR or Advanced Color
+    // changes neither screen geometry nor adapter topology, so nothing notices, and both
+    // the rec.hdr.h264 blocker and the HDR10 encode reconcile then work from stale facts.
+    // StartRecording calls this so the metadata it commits describes the display as it is
+    // now, not as it was at launch.
+    void RefreshDisplayFacts();
+
+    // The display facts the coordinator currently holds. Exposed for tests.
+    [[nodiscard]] const std::vector<capability::DisplayHdrFacts>& DisplayFacts() const;
+
     // Disk-space stop reason reported via the result when an auto-stop fires.
     // Exposed for tests.
     static const wchar_t* kDiskSpaceStopReason;
@@ -131,6 +149,11 @@ class RecordingCoordinator {
     // Record preview can show a live PiP.  Recording always owns the device; this
     // only affects the Ready/idle state.  Idempotent and safe to call repeatedly.
     void SetWebcamPreviewActive(bool active);
+    // Same, but for the Settings webcam panel. The one shared capture runs while ANY
+    // consumer (recording, Record preview, or the Settings preview) wants it, so the
+    // Settings panel shows the exact same frames without opening a second reader — no
+    // device-lock fight, and it works while recording. Idempotent.
+    void SetWebcamSettingsPreviewActive(bool active);
     void StopRecording();
     void PauseRecording();
     void ResumeRecording();
@@ -191,6 +214,15 @@ class RecordingCoordinator {
     void SetSplitFeedbackCallback(SplitFeedbackCallback cb);
     void SetRemuxProgressCallback(RemuxProgressCallback cb);
 
+    // Register a callback fired (from the engine's video thread) once the shared
+    // WYSIWYG preview texture is ready. nt_handle is a Windows HANDLE passed as
+    // void*; ownership transfers to the callee (open then CloseHandle). Fires only
+    // for SDR / tone-map / 4:4:4 sessions, and only when the callback is set before
+    // StartRecording. The callback must return fast and must not make D3D calls on
+    // the calling thread.
+    using PreviewSharedHandleReadyCallback = std::function<void(void* nt_handle, uint32_t width, uint32_t height)>;
+    void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
+
     // Request cooperative cancellation of any in-progress remux job.
     // Safe to call from the Qt main thread at any time; no-op if no remux is running.
     void CancelRemux();
@@ -246,6 +278,12 @@ class RecordingCoordinator {
 
     // Low-disk guard (LOW-DISK-GUARD-R1)
     // Nullable injected provider; fallback to the Win32 implementation when nullptr.
+    // Refreshes, then hands out the facts. The HDR reconcile reads through this rather
+    // than through the startup snapshot, so the refresh cannot be left out by accident.
+    const std::vector<capability::DisplayHdrFacts>& RefreshedDisplayFacts();
+
+    // Nullable; when unset RefreshDisplayFacts() queries DXGI directly.
+    DisplayFactsProvider display_facts_provider_;
     diagnostics::IDiskSpaceProvider* disk_space_provider_ = nullptr;
     // Owned Win32 fallback; allocated lazily on first StartRecording if no provider was injected.
     std::unique_ptr<diagnostics::Win32DiskSpaceProvider> default_disk_space_provider_;
@@ -280,6 +318,7 @@ class RecordingCoordinator {
     WebcamService webcam_service_;
     // Record preview requested the idle webcam capture (Ready-state live PiP).
     bool webcam_preview_active_ = false;
+    bool webcam_settings_preview_active_ = false;
     bool has_output_target_context_ = false;
     FilenameTargetContext output_target_context_;
 
@@ -398,6 +437,7 @@ class RecordingCoordinator {
     AppMeterUpdatedCallback on_app_meter_updated_;
     RecordingMeterCallback on_recording_meter_updated_;
     FrameCapturedCallback on_frame_captured_;
+    PreviewSharedHandleReadyCallback on_preview_shared_handle_ready_;
     std::function<QImage()> ready_frame_source_;
 
     std::optional<std::string> mic_meter_device_id_;

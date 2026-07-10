@@ -13,27 +13,32 @@ namespace exosnap {
 // RecordingPresetRegistry
 //
 // Qt-independent in-memory registry for the user's saved presets.
-// Holds the saved list plus the currently selected and startup-default ids.
-// The registry does NOT hold the live working config — callers pass the live
+// Holds the saved list plus the currently selected preset id. The registry
+// does NOT hold the live working config — callers pass the live
 // RecordingPresetConfig explicitly to operations that compare or snapshot it.
+// There is no startup-default preset: the live config is the persisted
+// truth, and kDefaultPresetId (the built-in Default, always present) is the
+// only fallback selection ever needs.
 //
 // Invariants maintained at all times:
 //   - presets_ is non-empty.
 //   - selected_id_ refers to a preset in presets_.
-//   - default_id_  refers to a preset in presets_.
 // ---------------------------------------------------------------------------
 
 class RecordingPresetRegistry {
   public:
-    // Seeds presets_ with [MakeDefaultPreset()]; selected = default = kDefaultPresetId.
+    // Seeds presets_ with MakeBuiltInPresets(); selected = kDefaultPresetId.
     RecordingPresetRegistry();
 
     // Replace state from a loaded snapshot, repairing invariants:
-    //   - Dedup ids (keep first occurrence).
-    //   - Sanitize each preset via SanitizePreset().
-    //   - If presets empty after dedup/sanitize, seed a fresh default.
-    //   - Repair selected_id / default_id if they point to non-existent presets.
-    void LoadState(std::vector<RecordingPreset> presets, std::string selected_id, std::string default_id);
+    //   - The four built-ins are always seeded first; a persisted preset whose
+    //     id matches a built-in id is dropped (the built-in wins).
+    //   - Dedup ids among the remaining (user) presets (keep first occurrence).
+    //   - Sanitize each accepted preset via SanitizePreset(); names colliding
+    //     with a built-in or an already-accepted name are deduped ("(2)", "(3)").
+    //   - Repair selected_id to kDefaultPresetId if it points to a non-existent
+    //     preset (kDefaultPresetId is a built-in and therefore always present).
+    void LoadState(std::vector<RecordingPreset> presets, std::string selected_id);
 
     // -----------------------------------------------------------------------
     // Observers
@@ -42,71 +47,59 @@ class RecordingPresetRegistry {
     [[nodiscard]] const std::vector<RecordingPreset>& Presets() const noexcept;
     [[nodiscard]] std::size_t Count() const noexcept;
     [[nodiscard]] const std::string& SelectedId() const noexcept;
-    [[nodiscard]] const std::string& DefaultId() const noexcept;
     [[nodiscard]] const RecordingPreset* FindById(std::string_view id) const;
     [[nodiscard]] const RecordingPreset& SelectedPreset() const; // always valid (invariant)
 
     // -----------------------------------------------------------------------
-    // Selection / default
+    // Selection
     // -----------------------------------------------------------------------
 
     // Returns false if id is not found.
     bool SetSelected(std::string id);
 
-    // Returns false if id is not found.
-    bool SetDefault(std::string id);
-
     // -----------------------------------------------------------------------
     // Mutations
     // -----------------------------------------------------------------------
 
-    // Sanitize config, dedup name, generate new id, select the new preset,
-    // return its id.
+    // Strips environment fields from `config`, dedups name, generates a new
+    // id, selects the new preset, returns its id.
     std::string AddPreset(RecordingPresetConfig config, const std::string& name);
 
-    // Adds a fresh MakeDefaultPreset() config under a unique name ("New preset"),
-    // new id, selects it, returns its id.
-    std::string AddDefaultPreset();
-
-    // Overwrite the SELECTED preset's config with the supplied (sanitized) config;
-    // id and name are unchanged.  Returns false if nothing is selected (impossible
-    // via invariant, but provided for defensive use).
-    bool SaveSelected(RecordingPresetConfig config);
-
-    // Copy the selected preset's SAVED config to a new preset with a deduped
-    // "<name> (copy)" name, selects the copy, returns its id.
-    std::string DuplicateSelected();
-
-    // Rename the selected preset.  Returns false for empty/whitespace names or
-    // when the normalized name already exists among other presets.
+    // Rename the selected preset. Returns false for a built-in preset, for
+    // empty/whitespace names, or when the folded name already names another
+    // preset (built-in names are reserved).
     bool RenameSelected(const std::string& new_name);
 
-    // Remove the selected preset.  Returns false when Count()==1.
-    // Fallback selection: the element AFTER the deleted one; if none, the one
-    // BEFORE; if neither (impossible given Count>1), index 0.
-    // If the deleted preset was the default, default falls back to
-    // kDefaultPresetId if present, else the new selected id.
+    // Remove the selected preset. Returns false for a built-in preset.
+    // Selection always falls back to kDefaultPresetId (always present).
     bool DeleteSelected();
 
     // Returns the selected preset's saved config (for "Reset changes").
     [[nodiscard]] RecordingPresetConfig SelectedSavedConfig() const;
 
-    // Insert a fully-formed preset produced by the import flow.
+    // Insert a fully-formed preset produced by the import flow. Environment
+    // fields are stripped (an older export may still carry them).
     // The id must already be unique (caller is responsible for collision resolution).
-    // The name is deduplicated if it collides with an existing preset name.
+    // The name is deduplicated (fold-aware) if it collides with an existing
+    // preset name, including built-in names.
     // The newly imported preset is NOT auto-selected (unlike AddPreset).
     void ImportPreset(RecordingPreset preset);
-
-    // Clear to a single MakeDefaultPreset(); selected = default = kDefaultPresetId.
-    void ResetAllToDefault();
 
     // Returns true when live_config differs from the selected preset's saved config
     // (!NormalizedConfigEquals).
     [[nodiscard]] bool IsSelectedDirty(const RecordingPresetConfig& live_config) const;
 
+    // True when `id` names one of the shipped read-only presets.
+    [[nodiscard]] static bool IsBuiltIn(std::string_view id);
+
+    // True when a preset other than `exclude_id` already uses `name`
+    // (trimmed, case-insensitive). Built-in names are always taken.
+    [[nodiscard]] bool IsNameTaken(std::string_view name, std::string_view exclude_id = {}) const;
+
   private:
-    // Returns a name that does not collide with any existing preset name.
-    // If `base` exists, tries "base (2)", "base (3)", ... until free.
+    // Returns a name that does not collide with any existing preset name
+    // (fold-aware — see FoldPresetName). If `base` exists, tries "base (2)",
+    // "base (3)", ... until free.
     [[nodiscard]] std::string DeduplicateName(const std::string& base) const;
 
     // Finds the index of the preset with `id` in presets_, or npos-equivalent.
@@ -117,7 +110,6 @@ class RecordingPresetRegistry {
     // -----------------------------------------------------------------------
     std::vector<RecordingPreset> presets_;
     std::string selected_id_;
-    std::string default_id_;
 };
 
 } // namespace exosnap

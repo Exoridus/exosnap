@@ -56,6 +56,10 @@ class TransportDock : public QFrame {
     // Show or hide an individual source toggle (e.g. App toggle in Display mode).
     void setToggleVisible(const QString& key, bool visible);
 
+    // Update a source toggle's tooltip (e.g. the webcam toggle's "no camera" hint
+    // when disabled). No-op for an unknown key.
+    void setToggleTooltip(const QString& key, const QString& text);
+
     // Live audio meter for source toggles. key: "system" | "mic" | "app".
     // level01: 0.0 = silence/inactive, 1.0 = peak. Webcam has no audio meter.
     void setMeterLevel(const QString& key, float level01);

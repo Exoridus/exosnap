@@ -189,6 +189,10 @@ const std::string& OutputFormatAudioSrc::EndpointName() const {
     return inner_->EndpointName();
 }
 
+int32_t OutputFormatAudioSrc::LastCaptureHresult() const {
+    return inner_ ? inner_->LastCaptureHresult() : 0;
+}
+
 void OutputFormatAudioSrc::Shutdown() {
     if (swr_ != nullptr) {
         swr_free(&swr_);

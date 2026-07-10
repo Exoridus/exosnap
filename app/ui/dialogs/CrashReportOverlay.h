@@ -37,7 +37,6 @@ class CrashReportOverlay : public QWidget {
   signals:
     // Forwarded from the embedded CrashReportPanel.
     void sendReportRequested();
-    void restartRequested();
     void reportOnGitHubRequested();
     void openCrashFolderRequested();
     void dontSendRequested();

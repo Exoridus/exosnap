@@ -174,4 +174,32 @@ void ConvertYuv420ToBgra(const PlanarYuv420Frame& src, const YuvToBgraParams& pa
     }
 }
 
+void ConvertAyuvToBgra(const PackedAyuvFrame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
+                       uint32_t out_stride_bytes) {
+    if (src.width == 0 || src.height == 0 || src.data == nullptr || out_bgra == nullptr)
+        return;
+
+    // Packed 4:4:4 AYUV is always 8-bit single-plane; reuse the shared 8-bit
+    // fixed-point coefficients so this decode is the exact inverse of the
+    // RGB->AYUV encoder shader (same BT.709 matrix + Full/Limited range math as
+    // the NV12 branch). No chroma subsampling: each pixel carries its own V,U,Y.
+    const FixedCoefs c = ComputeCoefs(params.matrix, params.range, /*bits_per_sample=*/8);
+
+    for (uint32_t row = 0; row < src.height; ++row) {
+        const uint8_t* in_row = src.data + static_cast<size_t>(row) * src.stride_bytes;
+        uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
+        for (uint32_t col = 0; col < src.width; ++col) {
+            const uint8_t* p = in_row + static_cast<size_t>(col) * 4u; // [V, U, Y, A]
+            const int32_t v_val = static_cast<int32_t>(p[0]) - c.c_off;
+            const int32_t u_val = static_cast<int32_t>(p[1]) - c.c_off;
+            const int32_t luma = c.c_y * (static_cast<int32_t>(p[2]) - c.y_off);
+            uint8_t* px = out_row + static_cast<size_t>(col) * 4u;
+            px[0] = ClampFixedToByte(luma + c.c_bu * u_val);                  // B
+            px[1] = ClampFixedToByte(luma - c.c_gu * u_val - c.c_gv * v_val); // G
+            px[2] = ClampFixedToByte(luma + c.c_rv * v_val);                  // R
+            px[3] = 255u;                                                     // A
+        }
+    }
+}
+
 } // namespace recorder_core

@@ -13,6 +13,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QPaintEvent>
+#include <QPainter>
 #include <QPushButton>
 #include <QSize>
 #include <QString>
@@ -62,11 +64,40 @@ const QStringList kNever = {
     QStringLiteral("Machine name"),
 };
 
-QFrame* makeBullet(const char* color_base, QWidget* parent) {
-    auto* dot = new QFrame(parent);
-    dot->setFixedSize(5, 5);
-    dot->setStyleSheet(QStringLiteral("background:%1; border-radius:2px;").arg(tok(color_base)));
-    return dot;
+// A cleanly antialiased filled dot. A styled QFrame at this size renders as a
+// slightly boxy square on some DPRs; a painted circle is crisp everywhere and
+// carries no cascading border (the old QWidget{border-left} on the column used
+// to paint a stray 1px bar onto each of these). No Q_OBJECT — pure paintEvent.
+class BulletDot : public QWidget {
+  public:
+    BulletDot(const QColor& color, QWidget* parent) : QWidget(parent), color_(color) {
+        // Box is one text-line tall so a top-aligned dot centres on the first line.
+        // The box is wider than the painted circle (10px vs 6px) so the circle's
+        // edges never land on the widget boundary; at some DPRs a 6px-wide box
+        // clipped the antialiased edge of a 6px circle into a flattened nub.
+        setFixedSize(10, 17);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setStyleSheet(QStringLiteral("background:transparent; border:none;"));
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color_);
+        // 6px circle centred in the (wider) box, both horizontally and within
+        // the line-tall box vertically.
+        const QRectF dot((width() - 6) / 2.0, (height() - 6) / 2.0, 6.0, 6.0);
+        p.drawEllipse(dot);
+    }
+
+  private:
+    QColor color_;
+};
+
+QWidget* makeBullet(const char* color_base, QWidget* parent) {
+    return new BulletDot(QColor(tok(color_base)), parent);
 }
 
 // One "What gets sent / Never sent" column. `icon_name` is the Lucide glyph shown
@@ -98,10 +129,11 @@ QWidget* makeTransparencyColumn(const QString& icon_name, const QString& heading
         auto* row = new QWidget(col);
         auto* row_layout = new QHBoxLayout(row);
         row_layout->setContentsMargins(0, 0, 0, 0);
-        row_layout->setSpacing(8);
+        // Bullet box widened 6px->10px (see BulletDot); spacing trimmed 8->4 so
+        // the item text keeps its original x-position (10+4 == 6+8).
+        row_layout->setSpacing(4);
         auto* bullet = makeBullet(color_base, row);
         row_layout->addWidget(bullet, 0, Qt::AlignTop);
-        row_layout->addSpacing(0);
         auto* text = new QLabel(item, row);
         text->setWordWrap(true);
         text->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent;")
@@ -111,9 +143,11 @@ QWidget* makeTransparencyColumn(const QString& icon_name, const QString& heading
     }
     layout->addStretch(1);
 
-    if (left_rule)
-        col->setStyleSheet(QStringLiteral("QWidget { border-left:1px solid %1; }")
-                               .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
+    // NOTE: the column separator is now a single explicit divider owned by
+    // buildTransparencyBlock. The previous `QWidget { border-left }` set here
+    // cascaded to every descendant widget — painting a stray 1px bar next to
+    // each bullet and beside the header glyph (the "broken" look). `left_rule`
+    // now only governs the content indent.
     return col;
 }
 
@@ -146,6 +180,10 @@ QWidget* makeReportLine(const QString& key, const QString& value, QWidget* paren
 CrashReportPanel::CrashReportPanel(const CrashReportModel& model, QWidget* parent) : QWidget(parent), model_(model) {
     setObjectName(QStringLiteral("crashReportCard"));
     setFixedWidth(460);
+    // A plain QWidget ignores its stylesheet background unless told to paint one. As a
+    // top-level window Qt fills the background anyway, which is why this went unnoticed;
+    // embedded in the overlay the card vanished and its contents sat on the backdrop.
+    setAttribute(Qt::WA_StyledBackground, true);
     // The card is the styled surface; the chrome bar + bug tile read against it.
     setStyleSheet(QStringLiteral("#crashReportCard { background:%1; border:1px solid %2; border-radius:14px; }")
                       .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf),
@@ -210,9 +248,12 @@ QWidget* CrashReportPanel::buildChromeBar() {
     auto* bar = new QWidget(this);
     bar->setObjectName(QStringLiteral("crashChromeBar"));
     bar->setFixedHeight(38);
+    // The surface colour, not the window colour: over the overlay's dimmed backdrop the
+    // window colour is indistinguishable from the backdrop, so the bar read as floating
+    // outside the card. A hairline below it still separates chrome from body.
     bar->setStyleSheet(QStringLiteral("#crashChromeBar { background:%1; border-bottom:1px solid %2; "
                                       "border-top-left-radius:14px; border-top-right-radius:14px; }")
-                           .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().bg),
+                           .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf),
                                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
 
     auto* layout = new QHBoxLayout(bar);
@@ -347,7 +388,18 @@ QWidget* CrashReportPanel::buildTransparencyBlock() {
     auto* never_col = makeTransparencyColumn(QStringLiteral("x"), QStringLiteral("Never sent"),
                                              exosnap::ui::theme::ActiveTheme().error, kNever, true, cols);
     never_col->setObjectName(QStringLiteral("crashNeverSentColumn"));
+
+    // Single hairline divider between the columns (scoped to this one frame, so
+    // it can never cascade onto the bullets/labels the way the old per-column
+    // border-left did).
+    auto* divider = new QFrame(cols);
+    divider->setObjectName(QStringLiteral("crashTransparencyDivider"));
+    divider->setFixedWidth(1);
+    divider->setStyleSheet(QStringLiteral("#crashTransparencyDivider { background:%1; border:none; }")
+                               .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
+
     cols_layout->addWidget(sent_col, 1);
+    cols_layout->addWidget(divider, 0);
     cols_layout->addWidget(never_col, 1);
     layout->addWidget(cols);
 
@@ -461,10 +513,10 @@ QWidget* CrashReportPanel::buildActionsRow() {
     auto* row = new QWidget(this);
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(9);
+    layout->setSpacing(10);
 
-    // Primary "Send report" — Studio Mint accent. The upload glyph sits on the mint
-    // fill, so it's tinted with the accent-ink colour.
+    // Tier 1 — primary "Send report" (Studio Mint accent). The upload glyph sits
+    // on the mint fill, so it's tinted with the accent-ink colour.
     auto* send_btn = new QPushButton(QStringLiteral("Send report"), row);
     send_btn->setObjectName(QStringLiteral("crashSendButton"));
     send_btn->setCursor(Qt::PointingHandCursor);
@@ -473,8 +525,8 @@ QWidget* CrashReportPanel::buildActionsRow() {
                                         devicePixelRatioF()));
     send_btn->setIconSize(QSize(14, 14));
     send_btn->setStyleSheet(
-        QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:8px; padding:8px 14px; "
-                       "font-size:12.5px; font-weight:600; }"
+        QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:0 16px; "
+                       "min-height:36px; max-height:36px; font-size:12.5px; font-weight:600; }"
                        "QPushButton:hover { background:%3; }"
                        "QPushButton:pressed { background:%4; }")
             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac),
@@ -484,39 +536,47 @@ QWidget* CrashReportPanel::buildActionsRow() {
     connect(send_btn, &QPushButton::clicked, this, &CrashReportPanel::sendReportRequested);
     layout->addWidget(send_btn);
 
-    // Solid secondary "Restart ExoSnap".
-    auto* restart_btn = new QPushButton(QStringLiteral("Restart ExoSnap"), row);
-    restart_btn->setObjectName(QStringLiteral("crashRestartButton"));
-    restart_btn->setCursor(Qt::PointingHandCursor);
-    restart_btn->setStyleSheet(
+    // Tier 2 — secondary decline (outline). This panel is shown on the launch *after*
+    // the crash, so the app is already running: offering a restart would throw away the
+    // session the user just opened. Declining dismisses the report, exactly like the
+    // chrome-bar ×. Matches the recording-error panel's outline secondary so both
+    // surfaces share one button language.
+    auto* decline_btn = new QPushButton(QStringLiteral("Don't send"), row);
+    decline_btn->setObjectName(QStringLiteral("crashDeclineButton"));
+    decline_btn->setCursor(Qt::PointingHandCursor);
+    decline_btn->setStyleSheet(
         QStringLiteral(
-            "QPushButton { background:%1; color:%2; border:1px solid %3; border-radius:8px; padding:8px 14px; "
-            "font-size:12.5px; }"
-            "QPushButton:hover { background:%4; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
+            "QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; padding:0 16px; "
+            "min-height:34px; max-height:34px; font-size:12.5px; font-weight:500; }"
+            "QPushButton:hover { border:1px solid %3; }")
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
                  QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
-                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme())));
-    connect(restart_btn, &QPushButton::clicked, this, &CrashReportPanel::restartRequested);
-    layout->addWidget(restart_btn);
+                 exosnap::ui::theme::ActiveTheme().line3_override
+                     ? QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line3_override)
+                     : QStringLiteral("rgba(255, 255, 255, 0.20)")));
+    connect(decline_btn, &QPushButton::clicked, this, &CrashReportPanel::dontSendRequested);
+    layout->addWidget(decline_btn);
 
     layout->addStretch(1);
 
-    // Overflow "⋯" — secondary fallbacks + danger decline.
-    overflow_button_ = new QPushButton(row);
+    // Tier 3 — tertiary "More options" text button. Replaces the cryptic "⋯"
+    // circle; a labelled trigger + right chevron reads as an obvious menu. It
+    // opens the exact same QMenu (Report on GitHub / Open crash folder / decline).
+    overflow_button_ = new QPushButton(QStringLiteral("More options"), row);
     overflow_button_->setObjectName(QStringLiteral("crashOverflowButton"));
-    overflow_button_->setFixedSize(34, 34);
     overflow_button_->setCursor(Qt::PointingHandCursor);
-    overflow_button_->setIcon(theme::lucideIcon(QStringLiteral("more-horizontal"),
-                                                QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 16,
+    overflow_button_->setLayoutDirection(Qt::RightToLeft); // icon trails the label
+    overflow_button_->setIcon(theme::lucideIcon(QStringLiteral("chevron-down"),
+                                                QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14,
                                                 devicePixelRatioF()));
-    overflow_button_->setIconSize(QSize(16, 16));
+    overflow_button_->setIconSize(QSize(14, 14));
     overflow_button_->setStyleSheet(
-        QStringLiteral("QPushButton { background:transparent; border:1px solid %1; border-radius:17px; }"
-                       "QPushButton:hover { border:1px solid %2; }"
+        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:0 10px; "
+                       "min-height:36px; max-height:36px; color:%1; font-size:12.5px; font-weight:500; }"
+                       "QPushButton:hover { color:%2; }"
                        "QPushButton::menu-indicator { image: none; width: 0; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
-                 exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac)), 0.60)));
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
 
     overflow_menu_ = new QMenu(overflow_button_);
     overflow_menu_->setStyleSheet(

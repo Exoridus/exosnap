@@ -1,4 +1,4 @@
-﻿#include "ConfigPage.h"
+#include "ConfigPage.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -37,6 +37,7 @@
 #include <QVBoxLayout>
 
 #include <capability/capability_builder.h>
+#include <capability/support_level.h>
 
 #include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
 #include "../diagnostics/AppLog.h"
@@ -725,72 +726,42 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_status_label_->setVisible(false);
         toolbar_hl->addWidget(profile_status_label_, 0, Qt::AlignVCenter);
 
-        // Save button (dirty-gated)
-        preset_save_btn_ = new QPushButton(QStringLiteral("Save"), toolbar_row);
-        preset_save_btn_->setObjectName(QStringLiteral("presetSaveButton"));
-        preset_save_btn_->setProperty("role", "ghost");
-        preset_save_btn_->setEnabled(false);
-        preset_save_btn_->setVisible(false);
-        toolbar_hl->addWidget(preset_save_btn_, 0, Qt::AlignVCenter);
-
-        // Save As... button
-        preset_save_as_btn_ = new QPushButton(QStringLiteral("Save As\xe2\x80\xa6"), toolbar_row);
+        // Save as new (shown only while the live config is (changed))
+        preset_save_as_btn_ = new QPushButton(QStringLiteral("Save as new\xe2\x80\xa6"), toolbar_row);
         preset_save_as_btn_->setObjectName(QStringLiteral("presetSaveAsButton"));
         preset_save_as_btn_->setProperty("role", "ghost");
+        preset_save_as_btn_->setVisible(false);
         toolbar_hl->addWidget(preset_save_as_btn_, 0, Qt::AlignVCenter);
 
-        // Export button (v10)
-        preset_export_btn_ = new QPushButton(QStringLiteral("Export"), toolbar_row);
-        preset_export_btn_->setObjectName(QStringLiteral("presetExportButton"));
-        preset_export_btn_->setProperty("role", "ghost");
-        toolbar_hl->addWidget(preset_export_btn_, 0, Qt::AlignVCenter);
+        // Reset (shown only while the live config is (changed))
+        preset_reset_btn_ = new QPushButton(QStringLiteral("Reset"), toolbar_row);
+        preset_reset_btn_->setObjectName(QStringLiteral("presetResetButton"));
+        preset_reset_btn_->setProperty("role", "ghost");
+        preset_reset_btn_->setVisible(false);
+        toolbar_hl->addWidget(preset_reset_btn_, 0, Qt::AlignVCenter);
 
-        // Import button (v10)
-        preset_import_btn_ = new QPushButton(QStringLiteral("Import"), toolbar_row);
-        preset_import_btn_->setObjectName(QStringLiteral("presetImportButton"));
-        preset_import_btn_->setProperty("role", "ghost");
-        toolbar_hl->addWidget(preset_import_btn_, 0, Qt::AlignVCenter);
+        // Delete (shown only for a selected user preset)
+        preset_delete_btn_ = new QPushButton(QStringLiteral("Delete"), toolbar_row);
+        preset_delete_btn_->setObjectName(QStringLiteral("presetDeleteButton"));
+        preset_delete_btn_->setProperty("role", "ghost");
+        preset_delete_btn_->setVisible(false);
+        toolbar_hl->addWidget(preset_delete_btn_, 0, Qt::AlignVCenter);
 
-        // Manage overflow button
+        // Overflow menu button
         profile_overflow_btn_ = new QToolButton(toolbar_row);
         profile_overflow_btn_->setObjectName(QStringLiteral("presetManageButton"));
-        profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
+        profile_overflow_btn_->setText(QStringLiteral("\xe2\x80\xa6"));
         profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
         profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
         auto* profile_menu = new QMenu(profile_overflow_btn_);
-        // Section 1: Save actions.
-        save_preset_action_ = profile_menu->addAction(QStringLiteral("Save preset"));
-        save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new preset\xe2\x80\xa6"));
+        save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new\xe2\x80\xa6"));
+        rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename\xe2\x80\xa6"));
         profile_menu->addSeparator();
-        // Section 2: Preset lifecycle.
-        new_preset_action_ = profile_menu->addAction(QStringLiteral("New preset from default\xe2\x80\xa6"));
-        duplicate_preset_action_ = profile_menu->addAction(QStringLiteral("Duplicate preset"));
-        rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename preset\xe2\x80\xa6"));
-        delete_preset_action_ = profile_menu->addAction(QStringLiteral("Delete preset"));
-        profile_menu->addSeparator();
-        // Section 3: Default assignment.
-        set_default_preset_action_ = profile_menu->addAction(QStringLiteral("Set as default preset"));
-        profile_menu->addSeparator();
-        // Section 4: Reset -- two CLEARLY SEPARATE actions.
-        reset_changes_action_ = profile_menu->addAction(QStringLiteral("Reset changes"));
-        profile_menu->addSeparator();
-        // Destructive reset is separated so it cannot be confused with "Reset changes".
-        reset_to_defaults_action_ =
-            profile_menu->addAction(QStringLiteral("Reset all presets to factory defaults\xe2\x80\xa6"));
-        profile_menu->addSeparator();
-        // Section 5: Manage overlay.
-        manage_presets_action_ = profile_menu->addAction(QStringLiteral("Manage presets\xe2\x80\xa6"));
+        export_preset_action_ = profile_menu->addAction(QStringLiteral("Export\xe2\x80\xa6"));
+        import_presets_action_ = profile_menu->addAction(QStringLiteral("Import\xe2\x80\xa6"));
         profile_overflow_btn_->setMenu(profile_menu);
         toolbar_hl->addWidget(profile_overflow_btn_, 0, Qt::AlignVCenter);
-
-        // Dirty hint (inline, shown when dirty)
-        preset_dirty_indicator_ = new QLabel(toolbar_row);
-        preset_dirty_indicator_->setObjectName(QStringLiteral("presetDirtyIndicator"));
-        preset_dirty_indicator_->setProperty("labelRole", "presetDirtyIndicator");
-        preset_dirty_indicator_->setText(QStringLiteral("\xc2\xb7 Unsaved"));
-        preset_dirty_indicator_->setVisible(false);
-        toolbar_hl->addWidget(preset_dirty_indicator_, 0, Qt::AlignVCenter);
 
         // Stretch pushes expert controls to the right
         toolbar_hl->addStretch(1);
@@ -827,7 +798,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         expert_warn_banner_ = new QWidget(content);
         expert_warn_banner_->setObjectName(QStringLiteral("expertWarnBanner"));
         auto* ewb_hl = new QHBoxLayout(expert_warn_banner_);
-        ewb_hl->setContentsMargins(0, 0, 0, 0); // padding comes from QSS (11/15)
+        ewb_hl->setContentsMargins(15, 11, 15, 11);
         ewb_hl->setSpacing(10);
 
         auto* ewb_icon = new QLabel(expert_warn_banner_);
@@ -1046,24 +1017,25 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* qecontent = new QWidget(quality_expert_widget_);
         auto* qehl = new QHBoxLayout(qecontent);
         qehl->setContentsMargins(0, 12, 0, 12);
-        qehl->setSpacing(14);
+        qehl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
         qelbl->setProperty("labelRole", "settingsRowLabel");
-        qehl->addWidget(qelbl, 1);
+        qehl->addWidget(qelbl, 0);
+        auto* qeinfo = new ui::widgets::InfoHintIcon(ui::hints::kConstantQuality, qecontent);
+        qeinfo->setObjectName(QStringLiteral("qualityCqInfoHint"));
+        qehl->addWidget(qeinfo, 0, Qt::AlignVCenter);
+        qehl->addStretch(1);
         quality_cq_spin_ = new QSpinBox(qecontent);
         quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
-        quality_cq_spin_->setRange(1, 51);
-        quality_cq_spin_->setToolTip(QStringLiteral("NVENC Constant Quality value (1=best, 51=worst). "
-                                                    "Low=19 (High), 24 (Balanced), 30 (Small)."));
-        quality_cq_spin_->setFixedWidth(80);
+        quality_cq_spin_->setRange(static_cast<int>(recorder_core::kNvencCqMin),
+                                   static_cast<int>(recorder_core::kNvencCqMax));
+        quality_cq_spin_->setFixedWidth(160); // same column width as every other row input
+        // Scrolling the settings page must not silently retune quality: the wheel
+        // only steps the value once the box has been focused deliberately.
+        quality_cq_spin_->setFocusPolicy(Qt::StrongFocus);
+        quality_cq_spin_->installEventFilter(this);
         quality_cq_spin_->setProperty("settingsRowInput", true);
         qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
-        // S3: CQ tier label — shows the tier name corresponding to the current CQ value.
-        quality_cq_tier_label_ = new QLabel(qecontent);
-        quality_cq_tier_label_->setObjectName(QStringLiteral("qualityCqTierLabel"));
-        quality_cq_tier_label_->setProperty("labelRole", "muted");
-        quality_cq_tier_label_->setText(QStringLiteral("\xc2\xb7 High")); // initial value
-        qehl->addWidget(quality_cq_tier_label_, 0, Qt::AlignVCenter);
         qevl->addWidget(qecontent);
         quality_expert_widget_->setProperty("settingsRow", true);
         quality_expert_widget_->setVisible(false); // hidden until expert mode is on
@@ -1163,7 +1135,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rvl->addWidget(rrule);
             auto* rhl = new QHBoxLayout();
             rhl->setContentsMargins(0, 12, 0, 12);
-            rhl->setSpacing(14);
+            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* rlbl = new QLabel(QStringLiteral("Rate control"), rate_control_row_widget_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
             rhl->addWidget(rlbl, 0);
@@ -1190,7 +1162,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             bvl->addWidget(brule);
             auto* bhl = new QHBoxLayout();
             bhl->setContentsMargins(0, 12, 0, 12);
-            bhl->setSpacing(14);
+            bhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* blbl = new QLabel(QStringLiteral("Bitrate"), bitrate_row_widget_);
             blbl->setProperty("labelRole", "settingsRowLabel");
             bhl->addWidget(blbl, 0);
@@ -1227,7 +1199,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             dvl->addWidget(drule);
             auto* dhl = new QHBoxLayout();
             dhl->setContentsMargins(0, 12, 0, 12);
-            dhl->setSpacing(14);
+            dhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* dlbl = new QLabel(QStringLiteral("Bit depth"), video_bit_depth_row_);
             dlbl->setProperty("labelRole", "settingsRowLabel");
             dhl->addWidget(dlbl, 0);
@@ -1243,7 +1215,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
             dvl->addLayout(dhl);
             video_bit_depth_row_->setProperty("settingsRow", true);
-            video_bit_depth_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_bit_depth_row_);
         }
 
@@ -1264,7 +1235,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rvl->addWidget(rrule);
             auto* rhl = new QHBoxLayout();
             rhl->setContentsMargins(0, 12, 0, 12);
-            rhl->setSpacing(14);
+            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* rlbl = new QLabel(QStringLiteral("Colour range"), video_color_range_row_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
             rhl->addWidget(rlbl, 0);
@@ -1282,7 +1253,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             video_color_range_row_->setProperty("settingsRow", true);
-            video_color_range_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_color_range_row_);
         }
 
@@ -1304,7 +1274,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             pvl->addWidget(prule);
             auto* phl = new QHBoxLayout();
             phl->setContentsMargins(0, 12, 0, 12);
-            phl->setSpacing(14);
+            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* plbl = new QLabel(QStringLiteral("Encoder preset (NVENC)"), video_encoder_preset_row_);
             plbl->setProperty("labelRole", "settingsRowLabel");
             phl->addWidget(plbl, 0);
@@ -1332,7 +1302,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             phl->addWidget(video_encoder_preset_combo_, 0, Qt::AlignVCenter);
             pvl->addLayout(phl);
             video_encoder_preset_row_->setProperty("settingsRow", true);
-            video_encoder_preset_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_encoder_preset_row_);
         }
 
@@ -1352,7 +1321,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             pvl->addWidget(prule);
             auto* phl = new QHBoxLayout();
             phl->setContentsMargins(0, 12, 0, 12);
-            phl->setSpacing(14);
+            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
             plbl->setProperty("labelRole", "settingsRowLabel");
             phl->addWidget(plbl, 0);
@@ -1361,16 +1330,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             phl->addStretch(1);
             frame_pacing_combo_ = new QComboBox(frame_pacing_row_);
             frame_pacing_combo_->setObjectName(QStringLiteral("framePacingSelect"));
-            frame_pacing_combo_->addItem(QStringLiteral("Smooth (phase-correct)"),
+            frame_pacing_combo_->addItem(QStringLiteral("Phase-correct"),
                                          static_cast<int>(recorder_core::FramePacingMode::Smooth));
-            frame_pacing_combo_->addItem(QStringLiteral("Newest (lowest latency)"),
+            frame_pacing_combo_->addItem(QStringLiteral("Lowest latency"),
                                          static_cast<int>(recorder_core::FramePacingMode::Newest));
             frame_pacing_combo_->setFixedWidth(160);
             frame_pacing_combo_->setProperty("settingsRowInput", true);
             phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
             pvl->addLayout(phl);
             frame_pacing_row_->setProperty("settingsRow", true);
-            frame_pacing_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(frame_pacing_row_);
         }
 
@@ -1382,15 +1350,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             kivl->setSpacing(0);
             auto* kirule = new QFrame(ki_row);
             kirule->setFrameShape(QFrame::HLine);
-            kirule->setProperty("settingsDivider", true);
+            // "settingsDivider" has no stylesheet rule, so Qt drew its default
+            // (white) frame here instead of the hairline every other row uses.
+            kirule->setProperty("frameRole", "sectionRuleLine");
             kivl->addWidget(kirule);
             auto* kihl = new QHBoxLayout();
-            kihl->setContentsMargins(12, 6, 12, 6);
-            kihl->setSpacing(6);
+            kihl->setContentsMargins(0, 12, 0, 12); // flush with every other settings row
+            kihl->setSpacing(4);                    // label <-> info-i, matches makeSettingsRow
             auto* kilbl = new QLabel(QStringLiteral("Keyframe interval"), ki_row);
-            kilbl->setProperty("settingsLabel", true);
-            kihl->addWidget(kilbl, 1);
+            kilbl->setProperty("labelRole", "settingsRowLabel");
+            kihl->addWidget(kilbl, 0);
             kihl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kKeyframeInterval, ki_row), 0, Qt::AlignVCenter);
+            kihl->addStretch(1);
             keyframe_interval_combo_ = new QComboBox(ki_row);
             keyframe_interval_combo_->setObjectName(QStringLiteral("keyframeIntervalSelect"));
             keyframe_interval_combo_->addItem(QStringLiteral("2 s (default)"),
@@ -1403,7 +1374,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             kihl->addWidget(keyframe_interval_combo_, 0, Qt::AlignVCenter);
             kivl->addLayout(kihl);
             ki_row->setProperty("settingsRow", true);
-            ki_row->setProperty("expertEdge", true);
             fes_layout->addWidget(ki_row);
         }
 
@@ -1427,7 +1397,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hvl->addWidget(hrule);
             auto* hhl = new QHBoxLayout();
             hhl->setContentsMargins(0, 12, 0, 12);
-            hhl->setSpacing(14);
+            hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
             hlbl->setProperty("labelRole", "settingsRowLabel");
             hhl->addWidget(hlbl, 0);
@@ -1445,7 +1415,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
             hvl->addLayout(hhl);
             video_hdr_mode_row_->setProperty("settingsRow", true);
-            video_hdr_mode_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_hdr_mode_row_);
 
             // Calm inline hint (never a warning colour) shown only while H.264 disables
@@ -1456,23 +1425,48 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(video_hdr_mode_hint_);
         }
 
-#ifndef NDEBUG
-        // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
-        // These are real, enabled controls wired to nothing, used so the roadmap
-        // layout can be designed and captured on pixels.  Gate: #ifndef NDEBUG.
-        // NOTE (0.7.0 — S7): the HEVC-codec and Bit-depth mockups were promoted to
-        // real controls (Video codec combo + Video bit depth row above). The
-        // encoder-preset mockup was promoted to a real control (NVENC-PRESET-R1,
-        // below). HDR handling was promoted to a real control above. The row left
-        // here is still a placeholder: chroma subsampling (no engine path yet).
+        // --- Chroma subsampling (expert): 4:2:0 default / 4:4:4 gated ---
+        // Real control: 4:4:4 is an 8-bit H.264/HEVC-only path (AYUV, NVENC High
+        // 4:4:4 / HEVC FREXT). The 4:4:4 item is capability-gated per selected
+        // codec/bit-depth; 4:2:2 is not offered (Ada NVENC has no 4:2:2).
         {
-            auto* chroma_combo = new QComboBox(fmt_expert_section_);
-            chroma_combo->setObjectName(QStringLiteral("roadmapDummy_chromaSubsampling"));
-            chroma_combo->addItems({QStringLiteral("4:2:0"), QStringLiteral("4:2:2"), QStringLiteral("4:4:4")});
-            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("Chroma subsampling"), nullptr,
-                                                  QString(), chroma_combo));
+            video_chroma_row_ = new QWidget(fmt_expert_section_);
+            auto* cvl = new QVBoxLayout(video_chroma_row_);
+            cvl->setContentsMargins(0, 0, 0, 0);
+            cvl->setSpacing(0);
+            auto* crule = new QFrame(video_chroma_row_);
+            crule->setFrameShape(QFrame::HLine);
+            crule->setProperty("frameRole", "sectionRuleLine");
+            cvl->addWidget(crule);
+            auto* chl = new QHBoxLayout();
+            chl->setContentsMargins(0, 12, 0, 12);
+            chl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* clbl = new QLabel(QStringLiteral("Chroma subsampling"), video_chroma_row_);
+            clbl->setProperty("labelRole", "settingsRowLabel");
+            chl->addWidget(clbl, 0);
+            chl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kChromaSubsampling, video_chroma_row_), 0,
+                           Qt::AlignVCenter);
+            chl->addStretch(1);
+            video_chroma_combo_ = new QComboBox(video_chroma_row_);
+            video_chroma_combo_->setObjectName(QStringLiteral("videoChromaCombo"));
+            video_chroma_combo_->addItem(QStringLiteral("4:2:0"),
+                                         static_cast<int>(capability::ChromaSubsampling::Cs420));
+            video_chroma_combo_->addItem(QStringLiteral("4:4:4"),
+                                         static_cast<int>(capability::ChromaSubsampling::Cs444));
+            video_chroma_combo_->setFixedWidth(160);
+            video_chroma_combo_->setProperty("settingsRowInput", true);
+            chl->addWidget(video_chroma_combo_, 0, Qt::AlignVCenter);
+            cvl->addLayout(chl);
+            video_chroma_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_chroma_row_);
+
+            video_chroma_hint_ =
+                makeHint(QStringLiteral("4:4:4 needs 8-bit H.264 or HEVC \xE2\x80\x94 not available with the current "
+                                        "codec or bit depth."),
+                         fmt_expert_section_);
+            video_chroma_hint_->setVisible(false);
+            fes_layout->addWidget(video_chroma_hint_);
         }
-#endif // NDEBUG
 
         // Container & codecs expert rows (Bit depth, Colour range, roadmap) append
         // to the codecs card; the Quality card's rate section is inserted just before
@@ -2149,6 +2143,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 emit updatePrimaryActionRequested();
         });
 
+        // WHATS-NEW: "What's new in vX.Y" link — shown only in the available state
+        // (setUpdateStatus toggles visibility). Opens the gap-aware notes overlay.
+        updates_whats_new_link_ = new QPushButton(updates_panel_);
+        updates_whats_new_link_->setObjectName(QStringLiteral("updatesWhatsNewLink"));
+        updates_whats_new_link_->setProperty("cardTextLink", true);
+        updates_whats_new_link_->setFlat(true);
+        updates_whats_new_link_->setCursor(Qt::PointingHandCursor);
+        updates_whats_new_link_->setVisible(false);
+        updates_layout->addWidget(updates_whats_new_link_, 0, Qt::AlignLeft);
+        connect(updates_whats_new_link_, &QPushButton::clicked, this, &ConfigPage::whatsNewRequested);
+
         // updates_panel_ added to right_layout in the consolidation block below.
     }
 
@@ -2210,6 +2215,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onVideoCodecChanged);
     connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoBitDepthChanged);
+    connect(video_chroma_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoChromaChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
     connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -2285,27 +2292,23 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 webcam_settings_ = settings;
                 emit webcamSettingsChanged(webcam_settings_);
             });
-    // Preset management connections — overflow menu.
-    connect(save_preset_action_, &QAction::triggered, this, &ConfigPage::onSavePreset);
-    connect(save_preset_as_action_, &QAction::triggered, this, &ConfigPage::onSavePresetAs);
-    connect(new_preset_action_, &QAction::triggered, this, &ConfigPage::onNewPreset);
-    connect(duplicate_preset_action_, &QAction::triggered, this, &ConfigPage::onDuplicatePreset);
-    connect(rename_preset_action_, &QAction::triggered, this, &ConfigPage::onRenamePreset);
-    connect(delete_preset_action_, &QAction::triggered, this, &ConfigPage::onDeletePreset);
-    connect(set_default_preset_action_, &QAction::triggered, this, &ConfigPage::onSetDefaultPreset);
-    connect(reset_changes_action_, &QAction::triggered, this, &ConfigPage::onResetChanges);
-    connect(reset_to_defaults_action_, &QAction::triggered, this, &ConfigPage::onResetToDefaults);
-    connect(manage_presets_action_, &QAction::triggered, this, &ConfigPage::onManagePresets);
-    // Preset management connections — primary action buttons.
-    connect(preset_save_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePreset);
+    // Relay the panel's shared-capture consumer request out to MainWindow (→ coordinator).
+    connect(webcam_setup_panel_, &ui::widgets::WebcamSetupPanel::previewActiveRequested, this,
+            &ConfigPage::webcamPreviewActiveRequested);
+    // Preset management connections — toolbar buttons.
     connect(preset_save_as_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePresetAs);
-    connect(preset_export_btn_, &QPushButton::clicked, this, [this]() {
+    connect(preset_reset_btn_, &QPushButton::clicked, this, &ConfigPage::resetChangesRequested);
+    connect(preset_delete_btn_, &QPushButton::clicked, this, &ConfigPage::onDeletePreset);
+    // Preset management connections — overflow menu.
+    connect(save_preset_as_action_, &QAction::triggered, this, &ConfigPage::onSavePresetAs);
+    connect(rename_preset_action_, &QAction::triggered, this, &ConfigPage::onRenamePreset);
+    connect(export_preset_action_, &QAction::triggered, this, [this]() {
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Preset"), QString(),
                                                           QStringLiteral("TOML files (*.toml)"));
         if (!path.isEmpty())
             emit exportCurrentPresetRequested(path);
     });
-    connect(preset_import_btn_, &QPushButton::clicked, this, [this]() {
+    connect(import_presets_action_, &QAction::triggered, this, [this]() {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Presets"), QString(),
                                                           QStringLiteral("TOML files (*.toml)"));
         if (!path.isEmpty())
@@ -2328,32 +2331,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Wave 2: output_split_expander_ dissolved; outputSplitExpanderChanged is kept as
     // a no-op signal for MainWindow compat (AppSettingsStore field still persists).
 
-    // Wave 2 Part B: CQ spinbox — find nearest NvencQualityPreset from CQ value.
+    // The CQ value IS the model: the named presets are derived from it, never the
+    // other way round. (Deriving a preset and then re-seeding the spinbox from that
+    // preset is what previously snapped every keystroke back to 19/24/30.)
     connect(quality_cq_spin_, &QSpinBox::valueChanged, this, [this](int cq) {
-        // Nearest preset: |cq-19|→High, |cq-24|→Balanced, |cq-30|→Small
-        const int d_high = std::abs(cq - 19);
-        const int d_balanced = std::abs(cq - 24);
-        const int d_small = std::abs(cq - 30);
-        if (d_high <= d_balanced && d_high <= d_small) {
-            video_settings_.quality = recorder_core::NvencQualityPreset::High;
-        } else if (d_balanced <= d_small) {
-            video_settings_.quality = recorder_core::NvencQualityPreset::Balanced;
-        } else {
-            video_settings_.quality = recorder_core::NvencQualityPreset::Small;
-        }
-        // S3: Update CQ tier label next to the spinbox.
-        if (quality_cq_tier_label_) {
-            const bool is_exact = (cq == 19 || cq == 24 || cq == 30);
-            const QString prefix = is_exact ? QStringLiteral("\xc2\xb7 ") : QStringLiteral("\xc2\xb7 ~");
-            const QString tier_name = (d_high <= d_balanced && d_high <= d_small) ? QStringLiteral("High")
-                                      : (d_balanced <= d_small)                   ? QStringLiteral("Balanced")
-                                                                                  : QStringLiteral("Small");
-            quality_cq_tier_label_->setText(prefix + tier_name);
-        }
+        video_settings_.cq = static_cast<uint32_t>(cq);
         // Sync the hidden combo so onQualityChanged path stays consistent.
         if (quality_combo_) {
             const QSignalBlocker qb(quality_combo_);
-            const int idx = quality_combo_->findData(static_cast<int>(video_settings_.quality));
+            const int idx =
+                quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
             if (idx >= 0)
                 quality_combo_->setCurrentIndex(idx);
         }
@@ -2500,12 +2487,28 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
 }
 
+ConfigPage::~ConfigPage() {
+    // Qt tears the widget tree down after this body has run, and a hidden child may still
+    // emit on its way out: WebcamSetupPanel::hideEvent stops its preview, which relays
+    // previewActiveRequested back into this page. By then the dynamic type is no longer
+    // ConfigPage, so member-slot dispatch would run on a half-destroyed object. Sever the
+    // inbound connections while this is still a ConfigPage.
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->disconnect(this);
+}
+
 void ConfigPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updateResponsiveLayout();
 }
 
 bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
+    // Swallow wheel events on the CQ spinbox unless it holds focus, so scrolling
+    // past it does not change the recording quality unnoticed.
+    if (watched == quality_cq_spin_ && event->type() == QEvent::Wheel && !quality_cq_spin_->hasFocus()) {
+        event->ignore();
+        return true;
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -2557,7 +2560,9 @@ void ConfigPage::emitCurrentVideoSettings() {
 void ConfigPage::onQualityChanged(int index) {
     if (index < 0)
         return;
-    video_settings_.quality = static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt());
+    // A named preset selects its canonical CQ value; CQ stays the single source.
+    video_settings_.cq = recorder_core::CanonicalCq(
+        static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt()));
     updateQualitySegmentSelection();
     emitCurrentVideoSettings();
 }
@@ -2744,6 +2749,8 @@ void ConfigPage::updateVideoCodecChoices() {
     updateVideoBitDepthControl();
     // HDR10-native selectability depends on the selected codec — refresh it here too.
     updateVideoHdrModeControl();
+    // 4:4:4 selectability depends on the selected codec — refresh it here too.
+    updateVideoChromaControl();
 }
 
 void ConfigPage::updateVideoBitDepthControl() {
@@ -2792,6 +2799,70 @@ void ConfigPage::updateVideoBitDepthControl() {
     } else {
         video_bit_depth_combo_->setToolTip(QString());
         video_bit_depth_combo_->unsetCursor();
+    }
+}
+
+void ConfigPage::updateVideoChromaControl() {
+    if (!video_chroma_combo_ || !video_chroma_row_)
+        return;
+
+    // 4:4:4 (AYUV, NVENC High 4:4:4 / HEVC FREXT) is an 8-bit H.264/HEVC-only expert
+    // path — AV1 NVENC is 4:2:0 only and 4:4:4 + 10-bit is out of scope. Mirror the
+    // engine/translation rule so the UI stays the single source of truth.
+    const auto codec = format_settings_.video_codec;
+    const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+    const bool eight_bit = format_settings_.bit_depth == capability::BitDepth::Bit8;
+    // Once the async probe has delivered runtime capabilities, consult the ACTIVE
+    // GPU's real per-codec YUV444 support; before that, gpu_ok is true so the
+    // static codec/bit-depth rule stands unchanged (pre-probe behavior).
+    const bool gpu_ok = !runtime_caps_set_ || capability::IsSelectable(runtime_caps_.QueryChroma444(codec));
+    const bool supports_444 = codec_ok && eight_bit && gpu_ok;
+    const bool locked = controls_locked_;
+
+    // Snap the model back to 4:2:0 when 4:4:4 is no longer valid (mirrors bit depth /
+    // SanitizePresetConfig / RecordingCoordinator reconcile).
+    if (!supports_444 && format_settings_.chroma_subsampling == capability::ChromaSubsampling::Cs444) {
+        format_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
+    }
+
+    // Reason string is three-tiered: bit-depth/codec first, then the per-GPU
+    // downgrade when codec+bit-depth are fine but the active GPU can't carry it.
+    QString reason = eight_bit ? QStringLiteral("4:4:4 requires H.264 or HEVC")
+                               : QStringLiteral("4:4:4 requires 8-bit H.264 or HEVC");
+    if (codec_ok && eight_bit && !gpu_ok) {
+        reason = QStringLiteral("4:4:4 is not supported by this GPU");
+    }
+
+    // Enable/disable the 4:4:4 item per codec/bit-depth.
+    if (auto* model = qobject_cast<QStandardItemModel*>(video_chroma_combo_->model())) {
+        const int idx444 = video_chroma_combo_->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
+        if (auto* item = (idx444 >= 0) ? model->item(idx444) : nullptr) {
+            item->setEnabled(supports_444);
+            item->setToolTip(supports_444 ? QString() : reason);
+        }
+    }
+
+    // Sync the combo selection to the model (signal-blocked).
+    {
+        const QSignalBlocker b(video_chroma_combo_);
+        const int idx = video_chroma_combo_->findData(static_cast<int>(format_settings_.chroma_subsampling));
+        video_chroma_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 4:2:0 */);
+    }
+
+    video_chroma_combo_->setEnabled(!locked);
+    if (!supports_444) {
+        video_chroma_combo_->setToolTip(reason);
+        video_chroma_combo_->setCursor(Qt::ForbiddenCursor);
+    } else if (locked) {
+        video_chroma_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        video_chroma_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        video_chroma_combo_->setToolTip(QString());
+        video_chroma_combo_->unsetCursor();
+    }
+
+    if (video_chroma_hint_) {
+        video_chroma_hint_->setVisible(!supports_444);
     }
 }
 
@@ -3036,6 +3107,8 @@ void ConfigPage::onVideoCodecChanged(int index) {
     // live. Unlike bit depth this does NOT snap the stored value back (see
     // updateVideoHdrModeControl()).
     updateVideoHdrModeControl();
+    // 4:4:4 depends on the codec (H.264/HEVC only) — refresh + snap back if needed.
+    updateVideoChromaControl();
     emitCurrentFormatSettings();
 }
 
@@ -3051,6 +3124,26 @@ void ConfigPage::onVideoBitDepthChanged(int index) {
                                      ? capability::BitDepth::Bit10
                                      : capability::BitDepth::Bit8;
     updateVideoBitDepthControl();
+    // 4:4:4 is 8-bit only — a 10-bit switch must snap chroma back to 4:2:0.
+    updateVideoChromaControl();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::onVideoChromaChanged(int index) {
+    if (index < 0 || !video_chroma_combo_)
+        return;
+    const auto requested = static_cast<capability::ChromaSubsampling>(video_chroma_combo_->itemData(index).toInt());
+    // Guard: 4:4:4 is only honored for 8-bit H.264/HEVC AND (once probed) a GPU
+    // that supports it. The disabled item should prevent this, but keep the model
+    // authoritative regardless of how the index changed. Mirrors updateVideoChromaControl.
+    const auto codec = format_settings_.video_codec;
+    const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+    const bool gpu_ok = !runtime_caps_set_ || capability::IsSelectable(runtime_caps_.QueryChroma444(codec));
+    const bool supports_444 = codec_ok && format_settings_.bit_depth == capability::BitDepth::Bit8 && gpu_ok;
+    format_settings_.chroma_subsampling = (requested == capability::ChromaSubsampling::Cs444 && supports_444)
+                                              ? capability::ChromaSubsampling::Cs444
+                                              : capability::ChromaSubsampling::Cs420;
+    updateVideoChromaControl();
     emitCurrentFormatSettings();
 }
 
@@ -3115,6 +3208,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.container = settings.container;
     format_settings_.video_codec = settings.video_codec;
     format_settings_.bit_depth = settings.bit_depth;
+    format_settings_.chroma_subsampling = settings.chroma_subsampling;
     format_settings_.color_range = settings.color_range;
     format_settings_.nvenc_preset = settings.nvenc_preset;
     format_settings_.hdr_mode = settings.hdr_mode;
@@ -3163,24 +3257,14 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
 
     const QSignalBlocker qb(quality_combo_);
-    const int qidx = quality_combo_->findData(static_cast<int>(settings.quality));
+    const int qidx = quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(settings.cq)));
     if (qidx >= 0)
         quality_combo_->setCurrentIndex(qidx);
 
-    // Wave 2 Part B: sync CQ spinbox from loaded preset.
+    // Sync the CQ spinbox from the loaded preset's exact value.
     if (quality_cq_spin_) {
         const QSignalBlocker sb(quality_cq_spin_);
-        switch (settings.quality) {
-        case recorder_core::NvencQualityPreset::High:
-            quality_cq_spin_->setValue(19);
-            break;
-        case recorder_core::NvencQualityPreset::Small:
-            quality_cq_spin_->setValue(30);
-            break;
-        default: // Balanced
-            quality_cq_spin_->setValue(24);
-            break;
-        }
+        quality_cq_spin_->setValue(static_cast<int>(settings.cq));
     }
 
     updateFrameRateSelection();
@@ -3225,7 +3309,7 @@ void ConfigPage::updateQualitySegmentSelection() {
         if (!segment)
             return;
 
-        const bool selected = video_settings_.quality == preset;
+        const bool selected = recorder_core::NearestQualityPreset(video_settings_.cq) == preset;
         segment->setChecked(selected);
         segment->setProperty("qualitySegmentSelected", selected);
         segment->style()->unpolish(segment);
@@ -3240,13 +3324,14 @@ void ConfigPage::updateQualitySegmentSelection() {
     // v10: keep the visible Default dropdown in sync with the model preset.
     if (quality_preset_combo_) {
         const QSignalBlocker b(quality_preset_combo_);
-        const int idx = quality_preset_combo_->findData(static_cast<int>(video_settings_.quality));
+        const int idx =
+            quality_preset_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
         if (idx >= 0)
             quality_preset_combo_->setCurrentIndex(idx);
     }
 
     if (quality_compare_hint_) {
-        switch (video_settings_.quality) {
+        switch (recorder_core::NearestQualityPreset(video_settings_.cq)) {
         case recorder_core::NvencQualityPreset::High:
             quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
             break;
@@ -3259,20 +3344,11 @@ void ConfigPage::updateQualitySegmentSelection() {
         }
     }
 
-    // Wave 2 Part B: keep CQ spinbox in sync with model (under blocker to avoid feedback loop).
+    // Mirror the model's CQ value. When the user is typing, this is already the
+    // value in the box, so it is a no-op -- it never overwrites the input.
     if (quality_cq_spin_) {
         const QSignalBlocker b(quality_cq_spin_);
-        switch (video_settings_.quality) {
-        case recorder_core::NvencQualityPreset::High:
-            quality_cq_spin_->setValue(19);
-            break;
-        case recorder_core::NvencQualityPreset::Small:
-            quality_cq_spin_->setValue(30);
-            break;
-        default: // Balanced
-            quality_cq_spin_->setValue(24);
-            break;
-        }
+        quality_cq_spin_->setValue(static_cast<int>(video_settings_.cq));
     }
 }
 
@@ -3457,11 +3533,9 @@ void ConfigPage::setActiveProfileName(const QString& profile_name) {
     updateExampleFilename();
 }
 
-void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
-                                  const QString& default_id, bool dirty) {
+void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id, bool dirty) {
     profile_options_ = options;
     active_preset_id_ = selected_id;
-    default_preset_id_ = default_id;
     preset_dirty_ = dirty;
 
     const QSignalBlocker blocker(profile_combo_);
@@ -3469,12 +3543,7 @@ void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, con
     int active_index = -1;
     for (std::size_t i = 0; i < options.size(); ++i) {
         const auto& opt = options[i];
-        // All non-selected default entries get the ★ suffix so users can identify
-        // the startup default while browsing the list.
-        QString label = opt.label;
-        if (!default_id.isEmpty() && opt.id == default_id && opt.id != selected_id)
-            label += QStringLiteral(" ★");
-        profile_combo_->addItem(label, opt.id);
+        profile_combo_->addItem(opt.label, opt.id);
         if (opt.id == selected_id) {
             active_index = static_cast<int>(i);
             active_preset_is_built_in_ = opt.built_in;
@@ -3495,14 +3564,8 @@ void ConfigPage::setPresetDirty(bool dirty) {
 }
 
 void ConfigPage::updatePresetActionState() {
-    const bool is_default = !default_preset_id_.isEmpty() && (active_preset_id_ == default_preset_id_);
-    const bool has_preset = !active_preset_id_.isEmpty();
     const bool locked = controls_locked_;
-
-    // Dirty indicator: amber "● Unsaved" label shown only when dirty.
-    if (preset_dirty_indicator_) {
-        preset_dirty_indicator_->setVisible(preset_dirty_);
-    }
+    const bool user_preset = !active_preset_id_.isEmpty() && !active_preset_is_built_in_;
 
     // Status badge (built-in / unavailable): separate label in toolbar.
     if (profile_status_label_) {
@@ -3520,64 +3583,85 @@ void ConfigPage::updatePresetActionState() {
         profile_status_label_->style()->polish(profile_status_label_);
     }
 
-    // Save button: enabled only when dirty and not locked.
-    if (preset_save_btn_) {
-        preset_save_btn_->setVisible(preset_dirty_);
-        preset_save_btn_->setEnabled(preset_dirty_ && !locked);
-    }
-
-    // Save As button: always visible, always enabled (unless locked).
+    // Save as new / Reset: shown exactly while the live config is (changed).
     if (preset_save_as_btn_) {
-        preset_save_as_btn_->setEnabled(!locked);
+        preset_save_as_btn_->setVisible(preset_dirty_);
+        preset_save_as_btn_->setEnabled(preset_dirty_ && !locked);
+    }
+    if (preset_reset_btn_) {
+        preset_reset_btn_->setVisible(preset_dirty_);
+        preset_reset_btn_->setEnabled(preset_dirty_ && !locked);
+    }
+    // Delete: shown for a selected user preset, regardless of (changed).
+    if (preset_delete_btn_) {
+        preset_delete_btn_->setVisible(user_preset);
+        preset_delete_btn_->setEnabled(user_preset && !locked);
     }
 
     // Menu actions.
-    if (save_preset_action_)
-        save_preset_action_->setEnabled(preset_dirty_);
     if (save_preset_as_action_)
-        save_preset_as_action_->setEnabled(true);
-    if (new_preset_action_)
-        new_preset_action_->setEnabled(true);
-    if (duplicate_preset_action_)
-        duplicate_preset_action_->setEnabled(has_preset);
+        save_preset_as_action_->setEnabled(!locked); // permanently reachable
     if (rename_preset_action_)
-        rename_preset_action_->setEnabled(has_preset && !active_preset_is_built_in_);
-    if (delete_preset_action_)
-        delete_preset_action_->setEnabled(has_preset && !active_preset_is_built_in_);
-    // "Set as default" is available only when the selected preset is NOT already the default.
-    if (set_default_preset_action_)
-        set_default_preset_action_->setEnabled(has_preset && !is_default);
-    if (reset_changes_action_)
-        reset_changes_action_->setEnabled(preset_dirty_);
-    if (reset_to_defaults_action_)
-        reset_to_defaults_action_->setEnabled(true);
+        rename_preset_action_->setEnabled(user_preset && !locked);
+    if (export_preset_action_)
+        export_preset_action_->setEnabled(!active_preset_id_.isEmpty());
+    if (import_presets_action_)
+        import_presets_action_->setEnabled(!locked);
+
+    // "(changed)" hint in the combo text — informative, not a warning.
+    if (profile_combo_) {
+        const int idx = profile_combo_->currentIndex();
+        if (idx >= 0 && idx < static_cast<int>(profile_options_.size())) {
+            const QSignalBlocker blocker(profile_combo_);
+            const QString base = profile_options_[static_cast<std::size_t>(idx)].label;
+            profile_combo_->setItemText(idx, preset_dirty_ ? base + QStringLiteral(" (changed)") : base);
+        }
+    }
 }
 
-void ConfigPage::onSavePreset() {
-    emit savePresetRequested();
+bool ConfigPage::presetNameRejected(const QString& name, const std::vector<ProfileOption>& options,
+                                    const QString& exclude_id) {
+    const QString folded = name.trimmed().toCaseFolded();
+    if (folded.isEmpty())
+        return true;
+    for (const auto& opt : options) {
+        if (opt.id == exclude_id)
+            continue;
+        if (opt.label.trimmed().toCaseFolded() == folded)
+            return true;
+    }
+    return false;
 }
 
 void ConfigPage::onSavePresetAs() {
-    const QString name = QInputDialog::getText(this, QStringLiteral("Save As New Preset"),
-                                               QStringLiteral("Preset name:"), QLineEdit::Normal, active_profile_name_);
-    if (name.trimmed().isEmpty())
-        return;
+    QString name = active_profile_name_;
+    for (;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, QStringLiteral("Save as new preset"), QStringLiteral("Preset name:"),
+                                     QLineEdit::Normal, name, &ok);
+        if (!ok)
+            return;
+        if (!presetNameRejected(name, profile_options_, QString()))
+            break;
+        QMessageBox::warning(this, QStringLiteral("Save as new preset"),
+                             QStringLiteral("That name is empty or already in use. Preset names are unique."));
+    }
     emit savePresetAsRequested(name.trimmed());
 }
 
-void ConfigPage::onNewPreset() {
-    emit newPresetRequested();
-}
-
-void ConfigPage::onDuplicatePreset() {
-    emit duplicatePresetRequested();
-}
-
 void ConfigPage::onRenamePreset() {
-    const QString name = QInputDialog::getText(this, QStringLiteral("Rename Preset"), QStringLiteral("New name:"),
-                                               QLineEdit::Normal, active_profile_name_);
-    if (name.trimmed().isEmpty())
-        return;
+    QString name = active_profile_name_;
+    for (;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, QStringLiteral("Rename preset"), QStringLiteral("Preset name:"),
+                                     QLineEdit::Normal, name, &ok);
+        if (!ok)
+            return;
+        if (!presetNameRejected(name, profile_options_, active_preset_id_))
+            break;
+        QMessageBox::warning(this, QStringLiteral("Rename preset"),
+                             QStringLiteral("That name is empty or already in use. Preset names are unique."));
+    }
     emit renamePresetRequested(name.trimmed());
 }
 
@@ -3589,28 +3673,6 @@ void ConfigPage::onDeletePreset() {
     if (answer != QMessageBox::Yes)
         return;
     emit deletePresetRequested();
-}
-
-void ConfigPage::onResetChanges() {
-    emit resetChangesRequested();
-}
-
-void ConfigPage::onResetToDefaults() {
-    const auto answer = QMessageBox::warning(this, QStringLiteral("Reset All to Factory Defaults"),
-                                             QStringLiteral("Reset all presets and settings to factory defaults? "
-                                                            "This action cannot be undone."),
-                                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (answer != QMessageBox::Yes)
-        return;
-    emit resetToDefaultsRequested();
-}
-
-void ConfigPage::onSetDefaultPreset() {
-    emit setDefaultPresetRequested();
-}
-
-void ConfigPage::onManagePresets() {
-    emit managePresetsRequested();
 }
 
 void ConfigPage::onBrowse() {
@@ -4081,7 +4143,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4125,7 +4187,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Mic channel mode"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4164,7 +4226,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Audio bitrate"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4192,7 +4254,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Opus frame duration"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4223,7 +4285,7 @@ void ConfigPage::buildAudioExpertSection() {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Opus complexity"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4250,7 +4312,7 @@ void ConfigPage::buildAudioExpertSection() {
             audio_sample_rate_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_sample_rate_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Sample rate"), audio_sample_rate_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4283,7 +4345,7 @@ void ConfigPage::buildAudioExpertSection() {
             audio_channels_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_channels_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Channels"), audio_channels_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4315,7 +4377,7 @@ void ConfigPage::buildAudioExpertSection() {
             audio_bit_depth_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_bit_depth_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Bit depth"), audio_bit_depth_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4350,7 +4412,7 @@ void ConfigPage::buildAudioExpertSection() {
             flac_compression_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(flac_compression_row_);
             hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("FLAC compression"), flac_compression_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 0);
@@ -4906,19 +4968,9 @@ void ConfigPage::updateExpertModeVisibility() {
         const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
         quality_expert_widget_->setVisible(expert_mode_enabled_ && rate_is_cq);
         if (expert_mode_enabled_ && rate_is_cq && quality_cq_spin_) {
-            // Seed the spinbox from the current model quality on first show.
+            // Seed the spinbox from the model's CQ on first show.
             const QSignalBlocker b(quality_cq_spin_);
-            switch (video_settings_.quality) {
-            case recorder_core::NvencQualityPreset::High:
-                quality_cq_spin_->setValue(19);
-                break;
-            case recorder_core::NvencQualityPreset::Small:
-                quality_cq_spin_->setValue(30);
-                break;
-            default: // Balanced
-                quality_cq_spin_->setValue(24);
-                break;
-            }
+            quality_cq_spin_->setValue(static_cast<int>(video_settings_.cq));
         }
     }
     // PS-PHASE-C: fmt_expert_section (rate control, bitrate, format placeholders).
@@ -4927,6 +4979,9 @@ void ConfigPage::updateExpertModeVisibility() {
     // 0.7.0 — S7: sync the video bit-depth combo + 10-bit gating when the section shows.
     if (expert_mode_enabled_)
         updateVideoBitDepthControl();
+    // Sync the chroma combo (4:2:0 / gated 4:4:4) when the section shows.
+    if (expert_mode_enabled_)
+        updateVideoChromaControl();
     // 0.7.0: sync the colour-range combo (Full/Limited) when the section shows.
     if (expert_mode_enabled_)
         updateVideoColorRangeControl();
@@ -5248,6 +5303,11 @@ void ConfigPage::setWebcamSettings(const WebcamSettings& settings) {
         webcam_setup_panel_->applySettings(settings);
 }
 
+void ConfigPage::setWebcamPreviewFrame(const QImage& frame) {
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->setPreviewFrame(frame);
+}
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
     if (webcam_setup_panel_)
@@ -5257,9 +5317,9 @@ void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
 void ConfigPage::applyVisualPresetSaveError(bool show) {
     if (show && !visual_preset_error_label_) {
         // Lazily insert the error label directly below the preset selector row in
-        // the same parent QWidget.  We locate the preset_save_btn_ parent layout
+        // the same parent QWidget.  We locate the overflow button's parent layout
         // and insert the label after the selector row.
-        QWidget* panel = preset_save_btn_ ? preset_save_btn_->parentWidget() : nullptr;
+        QWidget* panel = profile_overflow_btn_ ? profile_overflow_btn_->parentWidget() : nullptr;
         if (!panel)
             return;
         visual_preset_error_label_ = new QLabel(panel);
@@ -5297,6 +5357,14 @@ void ConfigPage::applyVisualPresetSaveError(bool show) {
         visual_preset_error_label_->setVisible(show);
 }
 #endif
+
+void ConfigPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
+    runtime_caps_ = caps;
+    runtime_caps_set_ = true;
+    // Re-evaluate the 4:4:4 gate now that the active GPU's real YUV444 support is
+    // known (may disable + snap back a selection the static rule had allowed).
+    updateVideoChromaControl();
+}
 
 void ConfigPage::setReadinessStatus(const QString& status_label) {
     if (!readiness_badge_label_)
@@ -5351,10 +5419,7 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
 
     // Non-audio controls: locked unconditionally (no target-kind policy applies).
     profile_combo_->setEnabled(enabled);
-    if (preset_save_btn_)
-        preset_save_btn_->setEnabled(enabled && preset_dirty_);
-    if (preset_save_as_btn_)
-        preset_save_as_btn_->setEnabled(enabled);
+    updatePresetActionState(); // re-derives Save as new / Reset / Delete / menu from controls_locked_
     profile_overflow_btn_->setEnabled(enabled);
     if (container_combo_)
         container_combo_->setEnabled(enabled);
@@ -5362,6 +5427,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     audio_codec_combo_->setEnabled(enabled);
     // 0.7.0 — S7: bit-depth combo honours both the recording lock and codec gating.
     updateVideoBitDepthControl();
+    // Chroma combo honours both the recording lock and codec/bit-depth gating.
+    updateVideoChromaControl();
     // 0.7.0: colour-range combo honours the recording lock (never codec-gated).
     updateVideoColorRangeControl();
     // NVENC-PRESET-R1: encoder-preset combo honours the recording lock (never codec-gated).
@@ -5403,6 +5470,12 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     destination_edit_->setEnabled(enabled);
     browse_btn_->setEnabled(enabled);
     naming_edit_->setEnabled(enabled);
+
+    // The updates action (Check / Update to vX.Y / swap-launch) must not fire while a
+    // recording or MP4 finalize is in flight. On unlock, restore the state-derived
+    // enabled value so a "pending"/"checking" state stays correctly disabled.
+    if (updates_action_btn_)
+        updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && enabled);
 
     if (lock_note_label_)
         lock_note_label_->setVisible(locked);
@@ -5454,25 +5527,55 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
                                  const QString& detail) {
     if (!updates_status_label_ || !updates_action_btn_)
         return;
-    updates_available_version_ = (state == QStringLiteral("available")) ? available_version : QString();
+    // The button's primary action (open releases vs. launch the swap updater) is
+    // decided by MainWindow when updatePrimaryActionRequested fires; here it only
+    // needs a non-empty version to route to that signal instead of a re-check.
+    updates_available_version_ =
+        (state == QStringLiteral("available") || state == QStringLiteral("scoop")) ? available_version : QString();
 
     if (state == QStringLiteral("checking")) {
         updates_status_label_->setText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
         updates_action_btn_->setText(QStringLiteral("Check for updates"));
-        updates_action_btn_->setEnabled(false);
+        updates_action_intrinsically_enabled_ = false;
     } else if (state == QStringLiteral("available")) {
         updates_status_label_->setText(QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
         updates_action_btn_->setText(QStringLiteral("Update to %1").arg(available_version));
-        updates_action_btn_->setEnabled(true);
+        updates_action_intrinsically_enabled_ = true;
+    } else if (state == QStringLiteral("scoop")) {
+        // Notify-only: Scoop owns the update; we never run the staged swap here.
+        updates_status_label_->setText(
+            QStringLiteral("Managed by Scoop \xe2\x80\x94 update with 'scoop update exosnap'"));
+        updates_action_btn_->setText(QStringLiteral("Open releases page"));
+        updates_action_intrinsically_enabled_ = true;
+    } else if (state == QStringLiteral("pending")) {
+        // Loop guard: the updater is staged/launched for this version. Restart is
+        // pending; don't re-offer the Update CTA.
+        updates_status_label_->setText(QStringLiteral("Restart pending\xe2\x80\xa6 finishing the update"));
+        updates_action_btn_->setText(QStringLiteral("Restart pending"));
+        updates_action_intrinsically_enabled_ = false;
     } else if (state == QStringLiteral("error")) {
         updates_status_label_->setText(detail.isEmpty() ? QStringLiteral("Couldn't check for updates") : detail);
         updates_action_btn_->setText(QStringLiteral("Retry"));
-        updates_action_btn_->setEnabled(true);
+        updates_action_intrinsically_enabled_ = true;
     } else { // "uptodate"
         const QString suffix = last_checked.isEmpty() ? QString() : QStringLiteral(" \xc2\xb7 %1").arg(last_checked);
         updates_status_label_->setText(QStringLiteral("\xe2\x9c\x93 Up to date%1").arg(suffix));
         updates_action_btn_->setText(QStringLiteral("Check for updates"));
-        updates_action_btn_->setEnabled(true);
+        updates_action_intrinsically_enabled_ = true;
+    }
+
+    // A recording/finalizing lock always wins: never allow the swap/check action to
+    // fire while a recording is in flight (belt to the MainWindow handler guard).
+    updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && !controls_locked_);
+
+    // WHATS-NEW: the "What's new in vX.Y" link appears only in the available state.
+    // The suppress setting never hides this link (it only gates the post-update
+    // auto-show).
+    if (updates_whats_new_link_) {
+        const bool show_link = (state == QStringLiteral("available")) && !available_version.isEmpty();
+        updates_whats_new_link_->setVisible(show_link);
+        if (show_link)
+            updates_whats_new_link_->setText(QStringLiteral("What's new in %1").arg(available_version));
     }
 
     // Accent CTA styling only in the available state (QSS [updatesCta="true"]).

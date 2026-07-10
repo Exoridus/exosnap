@@ -7,12 +7,13 @@
 #include "gpu_compositor.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_hdr_tonemap.h"
+#include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
 
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
-#include "preview_staging_ring.h"
+#include "preview_shared_texture.h"
 #include "session_internal.h"
 #include "yuv_to_bgra.h"
 #include <recorder_core/hdr_native.h>
@@ -20,6 +21,7 @@
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
+#include <recorder_core/sdr_white_level.h>
 #include <recorder_core/webcam_placement.h>
 
 #include <windows.graphics.capture.interop.h>
@@ -204,6 +206,28 @@ int ScaleCoordinateToSource(LONG screen_delta, int source_pixels, int bounds_pix
     return static_cast<int>(rounded / bounds_pixels);
 }
 
+// A 10-bit R10G10B10A2 tone-map intermediate must be a supported VideoProcessor
+// *input* on this driver, or every CreateVideoProcessorInputView call for it
+// would fail per tick with no recorded failure — silent frame starvation. This
+// demotes to BGRA8 (with a WARN log) when the check fails, and is a no-op for
+// any other format. Shared by the OD first-frame negotiation and the WGC HDR
+// tone-map init, since both choose the same toneMapIntermediateFormat and are
+// exposed to the same driver limitation.
+DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerator* video_enum,
+                                                    DXGI_FORMAT tone_map_intermediate_format) {
+    if (tone_map_intermediate_format != DXGI_FORMAT_R10G10B10A2_UNORM)
+        return tone_map_intermediate_format;
+    UINT support = 0;
+    const HRESULT hr = video_enum->CheckVideoProcessorFormat(tone_map_intermediate_format, &support);
+    if (SUCCEEDED(hr) && (support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) != 0)
+        return tone_map_intermediate_format;
+    logging::log(logging::LogLevel::Warn, "video_thread",
+                 "10-bit tone-map intermediate (R10G10B10A2) is not a supported VideoProcessor input on "
+                 "this driver; falling back to BGRA8 (8-bit tone-map precision)",
+                 {});
+    return DXGI_FORMAT_B8G8R8A8_UNORM;
+}
+
 } // namespace
 
 VideoThread::VideoThread(SessionState& state) : m_state(state) {
@@ -379,6 +403,15 @@ void VideoThread::Run() {
     DxgiOdCaptureSrc odSrc;
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
 
+    // WGC (window) path: HDR facts of the window's hosting monitor, resolved once
+    // at session start via MonitorFromWindow. A mid-session move to another monitor
+    // keeps this initial decision (documented limitation). Unused on the OD path,
+    // which reads its facts from odSrc.DisplayFacts() instead.
+    HdrDisplayFacts wgcHdrFacts;
+    // WGC frame-pool format + capture mode. Defaults keep the historic BGRA8 / SDR
+    // window path; recomputed from wgcHdrFacts below when the target is a window.
+    WgcCapturePlan wgcPlan;
+
     // scRGB->SDR tone-map knee, in reference-white multiples. Only an actively-
     // HDR display's reported peak is trusted; otherwise the documented fallback
     // is used (an SDR-mode display still reports inflated EDID luminance caps).
@@ -415,6 +448,31 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
+
+        // Resolve the hosting monitor's HDR facts once, then decide the frame-pool
+        // format + capture mode the same way the OD path does for a monitor. On an
+        // HDR desktop this negotiates an FP16 pool so the real scRGB signal reaches
+        // the shared tone-map / native-HDR10 machinery instead of DWM's SDR
+        // tone-map; on an SDR desktop the plan stays BGRA8 / SDR (unchanged).
+        const HMONITOR wgcMonitor =
+            MonitorFromWindow(reinterpret_cast<HWND>(target.native_id), MONITOR_DEFAULTTONEAREST);
+        QueryDisplayHdrFacts(wgcMonitor, wgcHdrFacts);
+        wgcPlan = ResolveWgcCapturePlan(wgcHdrFacts.hdr_active, m_state.config.hdr_mode,
+                                        CodecSupportsHdr10Native(m_state.config.video_codec));
+        hdrPeakScale = HdrPeakScale(wgcHdrFacts.hdr_active, wgcHdrFacts.max_luminance_nits);
+        expectNativeHdr =
+            IsHdr10NativeEffective(m_state.config.hdr_mode, wgcHdrFacts.hdr_active, m_state.config.video_codec);
+
+        char wgcFmtBuf[32];
+        const logging::LogField wgcFields[] = {
+            {"hdr_active", BoolText(wgcHdrFacts.hdr_active)},
+            {"framePoolFormat", OdCaptureFormatName(wgcPlan.frame_pool_format, wgcFmtBuf, sizeof(wgcFmtBuf))},
+            {"handling",
+             wgcPlan.mode == OdCaptureMode::HdrNative
+                 ? "native HDR10 PQ/BT.2020 -> P010"
+                 : (wgcPlan.mode == OdCaptureMode::HdrToneMap ? "HDR scRGB -> SDR BT.709 tone-map" : "SDR")}};
+        logging::log(logging::LogLevel::Info, "video_thread", "WGC capture plan resolved",
+                     std::span<const logging::LogField>(wgcFields, std::size(wgcFields)));
     }
 
     // Capture dimensions
@@ -576,7 +634,8 @@ void VideoThread::Run() {
     {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetBitDepth(m_state.config.bit_depth);
-        nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
+        nvenc.SetChroma(m_state.config.chroma);
+        nvenc.SetCq(m_state.config.nvenc_cq);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
         nvenc.SetPreset(m_state.config.nvenc_preset);
         // Color signaling (fix for color-range-signaling bug): the encoded
@@ -611,7 +670,42 @@ void VideoThread::Run() {
     // reference texture use DXGI_FORMAT_P010. The output color space stays studio
     // BT.709 (no HDR/BT.2020 here — that is a later slice).
     const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
-    const DXGI_FORMAT encodeFormat = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+
+    // Expert 4:4:4 (8-bit H.264/HEVC): the VideoProcessor cannot emit 4:4:4, so it
+    // performs geometry (crop/scale/letterbox) into a full-range BGRA intermediate,
+    // and a compute shader converts that into the packed AYUV surface NVENC
+    // consumes (NV_ENC_BUFFER_FORMAT_AYUV). The 4:2:0 path is untouched. 4:4:4 is
+    // 8-bit only and mutually exclusive with 10-bit / native HDR (blocked upstream).
+    const bool chroma444 = (m_state.config.chroma == ChromaSubsampling::Cs444);
+    // Encode texture registered with NVENC: NV12/P010 for 4:2:0, AYUV for 4:4:4.
+    const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
+
+    // Number of pipelined capture/encode slots (shared by every per-slot texture array).
+    static constexpr int32_t kSlotCount = 8;
+
+    // 4:4:4: the VideoProcessor output is a separate BGRA intermediate (RGB, geometry
+    // only); the shader then writes AYUV into the encode textures. RgbToAyuvConverter
+    // carries the BT.709 + range conversion the VideoProcessor does for 4:2:0.
+    winrt::com_ptr<ID3D11Texture2D> vpRgbTextures[kSlotCount];
+    RgbToAyuvConverter rgbToAyuv;
+    if (chroma444) {
+        const bool fullRange = m_state.config.color.range != ColorRange::Limited;
+        std::string ayuvErr;
+        if (!rgbToAyuv.Init(d3dDevice.get(), d3dContext.get(), encodeWidth, encodeHeight, fullRange, ayuvErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "RGB->AYUV shader init: " + ayuvErr);
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+    }
+
+    // HDR->SDR tone-map intermediate depth follows the encode target: a 10-bit
+    // encode (P010) tone-maps into R10G10B10A2 so the extra depth survives the
+    // RGB->P010 conversion; 8-bit encodes keep BGRA8, byte-identical to before.
+    // This is the pure choice; it may fall back to BGRA8 at runtime if the device
+    // rejects R10G10B10A2 as a VideoProcessor input (OD format negotiation below)
+    // or as a render target (tone-map texture creation below).
+    DXGI_FORMAT toneMapIntermediateFormat = ToneMapIntermediateFormat(tenBit);
 
     // Native HDR10 (PQ/BT.2020) requires a 10-bit P010 encode target. The caller
     // assembles BT.2020/PQ colour metadata and pins 10-bit together (see the HDR10
@@ -627,7 +721,6 @@ void VideoThread::Run() {
         return;
     }
 
-    static constexpr int32_t kSlotCount = 8;
     winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
     winrt::com_ptr<ID3D11VideoProcessor> videoProcessor;
@@ -663,34 +756,60 @@ void VideoThread::Run() {
             return;
         }
 
-        // Create NV12 textures and output views for each slot
+        // Create the encode textures + VideoProcessor output views for each slot.
+        // 4:2:0: the VP output view targets the NV12/P010 encode texture directly.
+        // 4:4:4: the VP output view targets a BGRA intermediate (geometry only); the
+        //        shader converts it into the AYUV encode texture registered below.
         for (int32_t i = 0; i < kSlotCount; ++i) {
             D3D11_TEXTURE2D_DESC desc{};
             desc.Width = encodeWidth;
             desc.Height = encodeHeight;
             desc.MipLevels = 1;
             desc.ArraySize = 1;
-            desc.Format = encodeFormat; // NV12 (8-bit) or P010 (10-bit)
+            desc.Format = encodeFormat; // NV12 (8-bit) / P010 (10-bit) / AYUV (4:4:4)
             desc.SampleDesc = {1, 0};
             desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            // AYUV encode textures are written by the compute shader (UAV) and copied
+            // for frame duplication; NV12/P010 are VideoProcessorBlt render targets.
+            desc.BindFlags = chroma444 ? D3D11_BIND_UNORDERED_ACCESS : D3D11_BIND_RENDER_TARGET;
 
             hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
             if (FAILED(hr)) {
                 char buf[96];
-                snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX", tenBit ? "P010" : "NV12",
-                         static_cast<int>(i), static_cast<unsigned long>(hr));
+                snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX",
+                         chroma444 ? "AYUV" : (tenBit ? "P010" : "NV12"), static_cast<int>(i),
+                         static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
                 if (com_inited)
                     CoUninitialize();
                 return;
             }
 
+            // The VideoProcessor output view target: BGRA intermediate for 4:4:4,
+            // else the encode texture itself.
+            ID3D11Texture2D* vpOutTex = nv12Textures[i].get();
+            if (chroma444) {
+                D3D11_TEXTURE2D_DESC rgbDesc = desc;
+                rgbDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                rgbDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                hr = d3dDevice->CreateTexture2D(&rgbDesc, nullptr, vpRgbTextures[i].put());
+                if (FAILED(hr)) {
+                    char buf[96];
+                    snprintf(buf, sizeof(buf), "CreateTexture2D(vpRgb[%d]) failed 0x%08lX", static_cast<int>(i),
+                             static_cast<unsigned long>(hr));
+                    m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
+                    if (com_inited)
+                        CoUninitialize();
+                    return;
+                }
+                vpOutTex = vpRgbTextures[i].get();
+            }
+
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovDesc{};
             ovDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
             ovDesc.Texture2D.MipSlice = 0;
 
-            hr = videoDevice->CreateVideoProcessorOutputView(nv12Textures[i].get(), videoEnum.get(), &ovDesc,
+            hr = videoDevice->CreateVideoProcessorOutputView(vpOutTex, videoEnum.get(), &ovDesc,
                                                              videoOutputViews[i].put());
             if (FAILED(hr)) {
                 char buf[80];
@@ -736,7 +855,24 @@ void VideoThread::Run() {
         // is read from the live config, not hardcoded, so it always follows
         // the current default/selection automatically.
         const bool fullRange = m_state.config.color.range != ColorRange::Limited;
-        if (videoContext1) {
+        if (chroma444) {
+            // 4:4:4: the VideoProcessor does geometry only, emitting full-range BGRA
+            // (no chroma subsampling); the RGB->AYUV shader applies BT.709 + the
+            // selected quantization range. Input and output are both full-range RGB.
+            if (videoContext1) {
+                videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
+                                                                  DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
+                                                                  DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            } else {
+                D3D11_VIDEO_PROCESSOR_COLOR_SPACE rgbColorSpace{};
+                rgbColorSpace.Usage = 0;
+                rgbColorSpace.RGB_Range = 0; // full-range RGB (0-255)
+                rgbColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+                videoContext->VideoProcessorSetStreamColorSpace(videoProcessor.get(), 0, &rgbColorSpace);
+                videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &rgbColorSpace);
+            }
+        } else if (videoContext1) {
             // Preferred path: explicit DXGI colour spaces. Input is the desktop's
             // full-range BT.709 RGB; output is BT.709 YUV in the selected range.
             // Drivers honour the quantization range here, so the encoded NV12/P010
@@ -802,6 +938,9 @@ void VideoThread::Run() {
     // (an SDR BGRA8 surface) that then follows the normal SDR VideoProcessor
     // route. hdrToneMapActive is decided during first-frame negotiation.
     bool hdrToneMapActive = false;
+    // The tone-map pass runs the SDR curve instead: the source is an SDR desktop
+    // delivered as linear scRGB (Advanced Color Management), not an HDR one.
+    bool hdrToneMapSdrSource = false;
     HdrToneMapper hdrToneMapper;
     winrt::com_ptr<ID3D11Texture2D> hdrSdrTex;
 
@@ -813,6 +952,16 @@ void VideoThread::Run() {
     bool hdrPqInputIsPq = false; // true when the source is an already-PQ HDR10 R10G10B10A2 desktop
     DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     HdrPqConverter hdrPqConverter;
+
+    // WGC (window) path decides its HDR handling up front from wgcPlan (the frame
+    // pool format is *requested*, not negotiated from frames). A WGC FP16 pool is
+    // always scRGB linear — never an already-PQ desktop — so hdrPqInputIsPq stays
+    // false and hdrPqSrcFormat stays FP16 (the defaults above). The OD path leaves
+    // these untouched here and sets them during first-frame negotiation instead.
+    if (!useOdCapture) {
+        hdrToneMapActive = (wgcPlan.mode == OdCaptureMode::HdrToneMap);
+        hdrNativeActive = (wgcPlan.mode == OdCaptureMode::HdrNative);
+    }
 
     bool odCursorShapeValid = false;
     bool odCursorVisible = false;
@@ -918,7 +1067,11 @@ void VideoThread::Run() {
             m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
             return OdFrameCheck::Fatal;
         }
-        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap);
+        // An SDR scRGB (Advanced Color) desktop runs the same shader pass as the
+        // tone-map — FP16 source -> SDR intermediate -> VideoProcessor — but with
+        // the SDR curve (clamp + sRGB OETF, no roll-off).
+        const bool sdrScrgb = (capMode == OdCaptureMode::SdrScrgb);
+        const bool toneMap = (capMode == OdCaptureMode::HdrToneMap) || sdrScrgb;
         const bool nativeHdr = (capMode == OdCaptureMode::HdrNative);
         // The caller committed BT.2020/PQ colour metadata + 10-bit for a native
         // session; if the display instead delivered a surface that resolves to
@@ -951,14 +1104,28 @@ void VideoThread::Run() {
         // The format fed to the VideoProcessor must be a supported VP INPUT on
         // this driver, or every CreateVideoProcessorInputView would fail per tick
         // without a recorded failure — silent starvation one stage later. For a
-        // tone-mapped HDR desktop the VP input is the BGRA8 tone-map output, not
-        // the FP16 capture format (the D3D11 VP cannot convert scRGB HDR at all).
-        // The native HDR10 path never touches the VP, so it skips this check.
+        // tone-mapped HDR desktop the VP input is the tone-map output (BGRA8, or
+        // R10G10B10A2 for a 10-bit encode), not the FP16 capture format (the D3D11
+        // VP cannot convert scRGB HDR at all). The native HDR10 path never touches
+        // the VP, so it skips this check.
         if (!nativeHdr) {
-            const DXGI_FORMAT vpInputFormat = toneMap ? DXGI_FORMAT_B8G8R8A8_UNORM : rawDesc.Format;
+            auto vpInputSupported = [&](DXGI_FORMAT fmt, HRESULT& hr, UINT& support) {
+                support = 0;
+                hr = videoEnum->CheckVideoProcessorFormat(fmt, &support);
+                return SUCCEEDED(hr) && (support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) != 0;
+            };
+            DXGI_FORMAT vpInputFormat = toneMap ? toneMapIntermediateFormat : rawDesc.Format;
+            HRESULT supHr = S_OK;
             UINT formatSupport = 0;
-            const HRESULT supHr = videoEnum->CheckVideoProcessorFormat(vpInputFormat, &formatSupport);
-            if (FAILED(supHr) || (formatSupport & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) == 0) {
+            // Graceful fallback: a driver that rejects the 10-bit R10G10B10A2
+            // tone-map intermediate as a VP input keeps recording at BGRA8 (the
+            // historic default, universally supported) rather than failing.
+            // Shared with the WGC HDR init path — see DemoteToneMapFormatIfUnsupportedVpInput.
+            if (toneMap) {
+                vpInputFormat = DemoteToneMapFormatIfUnsupportedVpInput(videoEnum.get(), vpInputFormat);
+                toneMapIntermediateFormat = vpInputFormat;
+            }
+            if (!vpInputSupported(vpInputFormat, supHr, formatSupport)) {
                 char fmtBuf[32];
                 std::ostringstream err;
                 err << "DXGI OD: capture format " << OdCaptureFormatName(vpInputFormat, fmtBuf, sizeof(fmtBuf))
@@ -994,6 +1161,7 @@ void VideoThread::Run() {
         }
         odFrameFormat = rawDesc.Format;
         hdrToneMapActive = toneMap;
+        hdrToneMapSdrSource = sdrScrgb;
         hdrNativeActive = nativeHdr;
         hdrPqInputIsPq = (rawDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
         hdrPqSrcFormat = rawDesc.Format;
@@ -1068,7 +1236,8 @@ void VideoThread::Run() {
         chroma.spill_reduction = overlay.chroma_spill_reduction;
 
         std::string compErr;
-        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr)) {
+        if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr,
+                                      overlay.opacity)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU webcam composite: " + compErr);
             return false;
         }
@@ -1289,6 +1458,54 @@ void VideoThread::Run() {
 
     // --- WGC frame pool and session (Window-only path) ---
     bool sourceLost = false;
+    // OD recovery hold state (Recover branch, i.e. DXGI_ERROR_ACCESS_LOST). While
+    // holding, the encode loop keeps emitting at CFR cadence (the last frame is
+    // held, not black) and retries Reopen() on a throttle instead of blocking —
+    // blocking froze the whole recording for the gap and never recovered a monitor
+    // that returned with a new HMONITOR. Cleared when Reopen() succeeds.
+    bool odHolding = false;
+    auto odLastReopenAttempt = std::chrono::steady_clock::now();
+    // How long to wait between Reopen() attempts after a recoverable OD acquire
+    // loss. The retry itself is UNBOUNDED (std::nullopt budget below): the output
+    // can be absent briefly (a mode/topology flip, EDID/HPD re-negotiation blacking
+    // the desktop for a moment) or indefinitely (a display left switched off), and
+    // the recording keeps going — holding the last captured frame — until it
+    // returns or the user stops. 250 ms is well inside the norm (OBS re-creates its
+    // duplicator at most every 3 s); polling faster gains nothing because the OS
+    // topology renegotiation dominates the recovery latency.
+    constexpr auto kOdReopenPollDelay = std::chrono::milliseconds{250};
+    // React to a DXGI OD TryAcquireFrame() failure HRESULT. ACCESS_LOST is a
+    // transient loss (mode/topology change, device alive): rebuild the duplication
+    // and continue the SAME encode session and output file, leaving a gap during
+    // which the last captured frame is held (frozen, not black). DEVICE_REMOVED /
+    // any unexpected HRESULT is unrecoverable: record a failure carrying the HRESULT
+    // so it reaches the app log ([record.failure]) — recorder_core's logging::log
+    // only feeds the ring buffer. Either way the segment is still finalised, so
+    // footage is kept.
+    const auto HandleOdAcquireFailure = [&](HRESULT hr) {
+        switch (ClassifyOdAcquireFailure(hr)) {
+        case OdAcquireFailAction::Idle:
+            break; // no frame available this poll — normal
+        case OdAcquireFailAction::Recover:
+            // Non-blocking: enter the holding state. The old inner poll loop blocked
+            // here for the entire gap, so the encode loop never ran — the timeline
+            // froze (recorded duration stopped at the moment of loss regardless of
+            // gap length) and a monitor that returned with a new HMONITOR was never
+            // re-resolved. Instead the outer encode loop keeps emitting at CFR
+            // cadence (holding the last frame) and retries Reopen() on a throttle
+            // (top of the encode loop) until the output returns or the user stops.
+            // Unbounded by design; DEVICE_REMOVED / unexpected HRESULTs still end the
+            // recording via the Fail branch below.
+            odHolding = true;
+            break;
+        case OdAcquireFailAction::Fail: {
+            char msg[96];
+            snprintf(msg, sizeof(msg), "DXGI OD frame acquire lost: hr=0x%08X", static_cast<unsigned>(hr));
+            m_state.RecordFailure(hr, ErrorPhase::VideoCapture, msg);
+            break;
+        }
+        }
+    };
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
     winrt::event_token closedToken{};
@@ -1301,8 +1518,15 @@ void VideoThread::Run() {
             auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
 
             auto capSz = item.Size();
-            framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
-                d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
+            // BGRA8 for the SDR window path (unchanged); scRGB FP16 when the hosting
+            // display is HDR-active and HDR handling is on (wgcPlan). FP16 delivers
+            // the real HDR signal instead of DWM's silent SDR tone-map.
+            const auto wgcPoolFormat =
+                (wgcPlan.frame_pool_format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+                    ? winrt::Windows::Graphics::DirectX::DirectXPixelFormat::R16G16B16A16Float
+                    : winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized;
+            framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(d3dWinRTDev,
+                                                                                              wgcPoolFormat, 3, capSz);
 
             captureSession = framePool.CreateCaptureSession(item);
             captureSession.IsBorderRequired(false);
@@ -1454,19 +1678,44 @@ void VideoThread::Run() {
 
     // --- HDR tone-map init (deferred until the capture format is negotiated) ---
     // On an HDR desktop the negotiated frames are scRGB FP16; convert each
-    // emitted frame to an SDR BGRA8 surface (hdrSdrTex) that the compositor and
-    // VideoProcessor then treat as an ordinary SDR desktop.
+    // emitted frame to an SDR surface (hdrSdrTex) that the compositor and
+    // VideoProcessor then treat as an ordinary SDR desktop. The surface is
+    // R10G10B10A2 for a 10-bit encode (preserving tone-map precision into P010)
+    // or BGRA8 for an 8-bit encode / after a device-capability fallback.
     if (hdrToneMapActive) {
+        // Probe the VP input support for the chosen tone-map intermediate before
+        // using it. The OD path performs this same check as part of its
+        // first-frame negotiation (see the vpInputSupported lambda above); WGC
+        // has no equivalent negotiation step, so without this check a driver
+        // that rejects R10G10B10A2 as a VideoProcessor input would fail
+        // CreateVideoProcessorInputView on every tick with no recorded failure
+        // — frames dropping silently instead of falling back to BGRA8.
+        toneMapIntermediateFormat = DemoteToneMapFormatIfUnsupportedVpInput(videoEnum.get(), toneMapIntermediateFormat);
+
         D3D11_TEXTURE2D_DESC sdrDesc{};
         sdrDesc.Width = sourceWidth;
         sdrDesc.Height = sourceHeight;
         sdrDesc.MipLevels = 1;
         sdrDesc.ArraySize = 1;
-        sdrDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        sdrDesc.Format = toneMapIntermediateFormat;
         sdrDesc.SampleDesc = {1, 0};
         sdrDesc.Usage = D3D11_USAGE_DEFAULT;
         sdrDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
         HRESULT sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+        // Graceful fallback: a device that rejects R10G10B10A2 as a render target
+        // reverts to BGRA8 rather than failing the recording. BGRA8 VP-input support
+        // is assumed here (universal in practice), not re-checked: negotiation only
+        // probed BGRA8 when R10G10B10A2 was rejected as VP input.
+        if (FAILED(sdrHr) && toneMapIntermediateFormat == DXGI_FORMAT_R10G10B10A2_UNORM) {
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "10-bit tone-map intermediate (R10G10B10A2) could not be created as a render target on this "
+                         "device; falling back to BGRA8 (8-bit tone-map precision)",
+                         {});
+            toneMapIntermediateFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+            sdrDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            hdrSdrTex = nullptr;
+            sdrHr = d3dDevice->CreateTexture2D(&sdrDesc, nullptr, hdrSdrTex.put());
+        }
         std::string tmErr;
         if (FAILED(sdrHr)) {
             char buf[80];
@@ -1476,7 +1725,8 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
-        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale, tmErr)) {
+        if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
+                                hdrToneMapSdrSource, tmErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
             if (com_inited)
                 CoUninitialize();
@@ -1526,24 +1776,35 @@ void VideoThread::Run() {
     }
 
     // --- GPU compositor init (deferred until the capture format is known) ---
-    // WGC frames are always BGRA8 (frame pool format); OD frames use the format
-    // negotiated from the first acquired frame above. If stop was requested
-    // before the first OD frame arrived the format is unknown — skip init; the
-    // encode loop below will not run.
+    // WGC frames use the requested frame-pool format (BGRA8 on SDR, scRGB FP16 when
+    // wgcPlan chose HDR); OD frames use the format negotiated from the first
+    // acquired frame above. If stop was requested before the first OD frame arrived
+    // the format is unknown — skip init; the encode loop below will not run.
     // The already-PQ R10G10B10A2 native sub-path composites nothing (non-linear
     // surface); every other path gets a compositor matched to its working format.
     const bool nativeOverlaysUnsupported = hdrNativeActive && hdrPqInputIsPq;
     if (needsGpuCompositor && !nativeOverlaysUnsupported && (!useOdCapture || odCapturedTex != nullptr)) {
         // Native HDR10 (FP16): overlays are composited in linear scRGB FP16 before
-        // the PQ conversion. Tone-mapped HDR: composited on the SDR BGRA8 surface.
+        // the PQ conversion. Tone-mapped HDR: composited on the SDR tone-map
+        // surface (R10G10B10A2 for a 10-bit encode, else BGRA8). The compositor
+        // background CopyResource requires this to match hdrSdrTex exactly.
         // Plain SDR: the negotiated capture format.
         const DXGI_FORMAT compositorFormat =
             hdrNativeActive ? DXGI_FORMAT_R16G16B16A16_FLOAT
-                            : (hdrToneMapActive ? DXGI_FORMAT_B8G8R8A8_UNORM
+                            : (hdrToneMapActive ? toneMapIntermediateFormat
                                                 : (useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM));
+        // Only the native-HDR FP16 path uses the SDR white level (linear-light
+        // overlay compositing); every other path keeps the 203-nit default,
+        // which Init ignores for non-FP16 render formats anyway. The facts come
+        // from the capture path's own source: odSrc for a monitor, the window's
+        // hosting-monitor facts for WGC.
+        const float overlayRefWhiteNits =
+            hdrNativeActive ? EffectiveOverlayReferenceWhiteNits(
+                                  (useOdCapture ? odSrc.DisplayFacts() : wgcHdrFacts).sdr_white_level_nits)
+                            : kDefaultSdrWhiteLevelNits;
         std::string compErr;
         if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
-                                compositorFormat)) {
+                                compositorFormat, overlayRefWhiteNits)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "GPU compositor init: " + compErr);
             if (!useOdCapture) {
                 if (captureSession != nullptr)
@@ -1599,6 +1860,17 @@ void VideoThread::Run() {
     // this single arming point; manual implicitly resets the auto interval because
     // the threshold is recomputed off the new segment start when the boundary
     // actually lands (in routePacket).
+    // 4:4:4: after the VideoProcessorBlt produced the geometry-corrected BGRA
+    // intermediate for `slot`, convert it into the AYUV encode texture the encoder
+    // registered. No-op (returns true) for the 4:2:0 path, which keeps writing the
+    // NV12/P010 texture directly. Called right after each successful Blt, before the
+    // reference-save and encode.
+    auto finalizeEncodeSurface = [&](int32_t slot, std::string& err) -> bool {
+        if (!chroma444)
+            return true;
+        return rgbToAyuv.Convert(vpRgbTextures[slot].get(), nv12Textures[slot].get(), err);
+    };
+
     auto maybeArmSplit = [&](uint64_t pts_ns) {
         if (split_armed)
             return; // a boundary is already pending; coalesce further requests
@@ -1735,7 +2007,8 @@ void VideoThread::Run() {
     };
 
     // --- Frame snapshot (CaptureFrame) ---
-    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for NV12→BGRA readback.
+    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for the
+    // NV12/P010/AYUV→BGRA readback (format follows encodeFormat).
     // Lives until the encode loop exits; reused across multiple snapshot requests.
     winrt::com_ptr<ID3D11Texture2D> snapshotStagingTex;
     // Callback type alias — must precede the lambda that uses it.
@@ -1752,7 +2025,8 @@ void VideoThread::Run() {
         hdrMonitorConverter->Convert(yuvSrc, out_bgra, out_stride_bytes);
     };
 
-    // Perform a one-shot NV12→BGRA readback for the current slot if a snapshot is pending.
+    // Perform a one-shot encode-surface→BGRA readback (NV12/P010/AYUV) for the
+    // current slot if a snapshot is pending.
     // Called only on real frames (not duplicates) to ensure non-stale data.
     // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
     //       it stalls the thread until the GPU completes the CopyResource, typically <1 ms.
@@ -1761,7 +2035,8 @@ void VideoThread::Run() {
             return;
 
         // Lazily allocate the staging texture on first use. Matches encodeFormat
-        // (NV12 for 8-bit, P010 for 10-bit) so both bit depths can snapshot.
+        // (NV12 for 8-bit, P010 for 10-bit, AYUV for 4:4:4) so every encode
+        // surface layout can snapshot.
         if (!snapshotStagingTex) {
             D3D11_TEXTURE2D_DESC sd{};
             sd.Width = encodeWidth;
@@ -1791,7 +2066,7 @@ void VideoThread::Run() {
             }
         }
 
-        // Copy the final NV12/P010 encode-ready frame to the staging texture.
+        // Copy the final encode-ready frame (NV12/P010/AYUV) to the staging texture.
         d3dContext->CopyResource(snapshotStagingTex.get(), nv12Textures[slot_idx].get());
 
         // Map for CPU read (synchronization point — stalls until GPU copy completes).
@@ -1814,38 +2089,60 @@ void VideoThread::Run() {
             return;
         }
 
-        // NV12/P010 layout:
-        //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes
-        //   Plane UV: rows height .. height+height/2-1, interleaved U V, same RowPitch
-        const auto* y_plane = static_cast<const uint8_t*>(mapped.pData);
-        const auto* uv_plane = y_plane + static_cast<size_t>(mapped.RowPitch) * encodeHeight;
-
         std::vector<uint8_t> bgra;
         bgra.resize(static_cast<size_t>(encodeWidth) * encodeHeight * 4u);
 
-        // Convert using the color space the session actually configured
-        // (see color_metadata.h / RecorderConfig::color) rather than a
-        // hard-coded assumption — the encoder always writes BT.709-tagged
-        // output with the user-selected range, so the readback must match.
-        PlanarYuv420Frame yuvSrc;
-        yuvSrc.y_plane = y_plane;
-        yuvSrc.y_stride_bytes = mapped.RowPitch;
-        yuvSrc.uv_plane = uv_plane;
-        yuvSrc.uv_stride_bytes = mapped.RowPitch;
-        yuvSrc.width = encodeWidth;
-        yuvSrc.height = encodeHeight;
-        yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
+        // The encode-surface layouts are mutually exclusive:
+        //   - 4:4:4 -> AYUV, single plane, 4 bytes/pixel [V, U, Y, A]; always
+        //     8-bit SDR (native HDR10 snaps chroma to 4:2:0, see
+        //     ApplyHdr10NativeEncode), so it never overlaps the HDR branch.
+        //   - 4:2:0 -> planar NV12 (8-bit) / P010 (10-bit), where native HDR10
+        //     P010 holds PQ/BT.2020 and needs the tone-mapping decode.
+        if (chroma444) {
+            // Decode the packed AYUV encode surface with the exact inverse of
+            // the RGB->AYUV shader, using the color space the session actually
+            // configured (see color_metadata.h / RecorderConfig::color).
+            PackedAyuvFrame ayuvSrc;
+            ayuvSrc.data = static_cast<const uint8_t*>(mapped.pData);
+            ayuvSrc.stride_bytes = mapped.RowPitch;
+            ayuvSrc.width = encodeWidth;
+            ayuvSrc.height = encodeHeight;
 
-        if (hdrNativeActive) {
-            // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode and
-            // tone-map to SDR for on-screen monitoring (approximate; see
-            // hdr_preview.h) at the session display peak.
-            hdrMonitorConvert(yuvSrc, bgra.data(), encodeWidth * 4u);
-        } else {
             YuvToBgraParams colorParams;
             colorParams.matrix = m_state.config.color.matrix;
             colorParams.range = m_state.config.color.range;
-            ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+            ConvertAyuvToBgra(ayuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+        } else {
+            // NV12/P010 layout:
+            //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes
+            //   Plane UV: rows height .. height+height/2-1, interleaved U V, same RowPitch
+            const auto* y_plane = static_cast<const uint8_t*>(mapped.pData);
+            const auto* uv_plane = y_plane + static_cast<size_t>(mapped.RowPitch) * encodeHeight;
+
+            PlanarYuv420Frame yuvSrc;
+            yuvSrc.y_plane = y_plane;
+            yuvSrc.y_stride_bytes = mapped.RowPitch;
+            yuvSrc.uv_plane = uv_plane;
+            yuvSrc.uv_stride_bytes = mapped.RowPitch;
+            yuvSrc.width = encodeWidth;
+            yuvSrc.height = encodeHeight;
+            yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
+
+            if (hdrNativeActive) {
+                // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode and
+                // tone-map to SDR for on-screen monitoring (approximate; see
+                // hdr_preview.h) at the session display peak.
+                hdrMonitorConvert(yuvSrc, bgra.data(), encodeWidth * 4u);
+            } else {
+                // Convert using the color space the session actually configured
+                // (see color_metadata.h / RecorderConfig::color) rather than a
+                // hard-coded assumption — the encoder always writes BT.709-tagged
+                // output with the user-selected range, so the readback must match.
+                YuvToBgraParams colorParams;
+                colorParams.matrix = m_state.config.color.matrix;
+                colorParams.range = m_state.config.color.range;
+                ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
+            }
         }
 
         d3dContext->Unmap(snapshotStagingTex.get(), 0);
@@ -1854,107 +2151,53 @@ void VideoThread::Run() {
             pending_cb(true, encodeWidth, encodeHeight, std::move(bgra), {});
     };
 
-    // --- Live WYSIWYG preview tap (Strand 3 slice 1) ---
-    // Throttled to ~30 Hz and zero-cost when no callback is registered (a
-    // single std::function bool-check before any GPU work). The staging ring
-    // (see preview_staging_ring.h) lets Map() read back a copy submitted on
-    // the PREVIOUS publish tick, so it resolves immediately instead of
-    // stalling on the newest, possibly still in-flight copy; the published
-    // frame therefore carries the ring's per-slot timestamp (one tick old),
-    // never the current tick's PTS.
+    // --- Live WYSIWYG preview tap: shared GPU texture ---
+    // The preview shows exactly what the encoder receives by sharing the
+    // composited, pre-encode source frame (vpInput) with the preview renderer via
+    // an NT-handle + keyed-mutex texture. Zero CPU copies; the encode path is never
+    // stalled (0 ms keyed-mutex acquire, drop on contention). Zero cost when no
+    // consumer registered the callback.
     //
-    // The CPU YUV->BGRA conversion runs inline on VideoThread rather than on
-    // a separate worker thread. Deliberate, pragmatic choice: the conversion
-    // is integer fixed-point (see yuv_to_bgra.cpp) and the destination
-    // buffer is reused across ticks, so at the ~30 Hz throttle rate this is
-    // a small, bounded, measured per-tick cost (see the slice benchmark).
-    // Handing it to a worker thread would remove that cost from VideoThread
-    // entirely, but adds cross-thread lifetime/synchronization for the
-    // source buffer that this throttled cadence does not need.
-    PreviewStagingRing previewStagingRing;
-    bool previewStagingReady = false;
-    int previewInitFailures = 0;
-    constexpr int kPreviewMaxInitFailures = 3; // give up for the session after this many
-    bool previewCallbackFaulted = false;       // one-shot log guard for throwing callbacks
+    // The shared texture is created lazily from the FIRST composited vpInput so it
+    // matches that surface's exact format (B8G8R8A8 for SDR/tone-map, R10G10B10A2
+    // for 10-bit). The NT handle is handed to the consumer once, on creation.
+    //
+    // Native HDR10 sessions never reach this tap: they encode straight from an FP16
+    // scRGB surface (no vpInput / SDR intermediate), so the preview keeps its own
+    // WGC capture there. See product-spec / KNOWN_LIMITATIONS.
+    PreviewSharedTexture previewSharedTex;
+    bool previewSharedInitFailed = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
-    PreviewFrame previewFrame; // persistent: bgra buffer reused across ticks
 
-    auto publishPreviewIfDue = [&](int32_t slot_idx, uint64_t pts_ns) {
-        if (!m_state.preview_frame_callback)
-            return; // unregistered -- zero cost beyond this check
-        if (previewInitFailures >= kPreviewMaxInitFailures)
-            return; // staging init failed repeatedly -- preview disabled for this session
-
-        if (!previewGate.ShouldPublish(pts_ns))
+    auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
+        if (!m_state.preview_shared_handle_cb)
+            return; // no consumer registered -- zero cost beyond this check
+        if (previewSharedInitFailed || vpInput == nullptr || hdrNativeActive)
             return;
+        if (!previewGate.ShouldPublish(pts_ns))
+            return; // throttle to ~30 Hz
 
-        if (!previewStagingReady) {
+        if (!previewSharedTex.Valid()) {
             D3D11_TEXTURE2D_DESC srcDesc{};
-            nv12Textures[slot_idx]->GetDesc(&srcDesc);
-            previewStagingReady = previewStagingRing.Initialize(d3dDevice.get(), srcDesc);
-            if (!previewStagingReady) {
-                ++previewInitFailures;
-                if (previewInitFailures == kPreviewMaxInitFailures) {
-                    logging::log(logging::LogLevel::Warn, "video_thread",
-                                 "preview staging ring init failed repeatedly; preview disabled for this session", {});
-                }
+            vpInput->GetDesc(&srcDesc);
+            HANDLE ntHandle = nullptr;
+            std::string err;
+            if (!previewSharedTex.Create(d3dDevice.get(), srcDesc.Width, srcDesc.Height, srcDesc.Format, &ntHandle,
+                                         err)) {
+                previewSharedInitFailed = true;
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "preview shared texture init failed; preview tap disabled for this session: " + err, {});
                 return;
             }
+            // One-shot: ownership of the NT handle transfers to the consumer, which
+            // opens it on its render device and CloseHandle's it. Must return fast
+            // and must not touch D3D on this (video) thread.
+            m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height);
         }
 
-        previewStagingRing.Submit(d3dContext.get(), nv12Textures[slot_idx].get(), pts_ns);
-
-        const uint8_t* mapped_data = nullptr;
-        uint32_t mapped_pitch = 0;
-        uint64_t mapped_pts_ns = 0;
-        if (!previewStagingRing.TryReadReady(d3dContext.get(), &mapped_data, &mapped_pitch, &mapped_pts_ns))
-            return; // ring not primed / copy still in flight -- next tick will have data
-
-        // RAII: the slot is unmapped even if buffer sizing or the app
-        // callback throws (otherwise the preview would be dead for the rest
-        // of the session, or the exception would escape VideoThread::Run and
-        // std::terminate).
-        PreviewRingReadGuard readGuard(previewStagingRing, d3dContext.get());
-
-        try {
-            previewFrame.width = encodeWidth;
-            previewFrame.height = encodeHeight;
-            previewFrame.stride_bytes = encodeWidth * 4u;
-            previewFrame.timestamp_ns = mapped_pts_ns; // one-tick-old frame => its own PTS
-            previewFrame.bgra.resize(static_cast<size_t>(previewFrame.stride_bytes) * encodeHeight);
-
-            PlanarYuv420Frame yuvSrc;
-            yuvSrc.y_plane = mapped_data;
-            yuvSrc.y_stride_bytes = mapped_pitch;
-            yuvSrc.uv_plane = mapped_data + static_cast<size_t>(mapped_pitch) * encodeHeight;
-            yuvSrc.uv_stride_bytes = mapped_pitch;
-            yuvSrc.width = encodeWidth;
-            yuvSrc.height = encodeHeight;
-            yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
-
-            if (hdrNativeActive) {
-                // Native HDR10: the P010 holds PQ/BT.2020, not SDR BT.709. Decode
-                // and tone-map to SDR for the live preview (approximate; see
-                // hdr_preview.h) at the session display peak.
-                hdrMonitorConvert(yuvSrc, previewFrame.bgra.data(), previewFrame.stride_bytes);
-            } else {
-                YuvToBgraParams colorParams;
-                colorParams.matrix = m_state.config.color.matrix;
-                colorParams.range = m_state.config.color.range;
-                ConvertYuv420ToBgra(yuvSrc, colorParams, previewFrame.bgra.data(), previewFrame.stride_bytes);
-            }
-
-            m_state.preview_frame_callback(previewFrame);
-        } catch (...) {
-            // The callback contract says it must not throw (see
-            // recorder_session.h); a bad_alloc from resize lands here too.
-            // Drop this frame; recording continues unaffected.
-            if (!previewCallbackFaulted) {
-                previewCallbackFaulted = true;
-                logging::log(logging::LogLevel::Warn, "video_thread",
-                             "preview publish threw (callback or allocation); frame dropped", {});
-            }
-        }
+        // Non-blocking publish of the composited frame (observation-only; the encode
+        // path continues regardless of whether the preview picked up this frame).
+        previewSharedTex.TryPublish(d3dContext.get(), vpInput);
     };
 
     if (m_state.config.cfr) {
@@ -2056,7 +2299,21 @@ void VideoThread::Run() {
                 break;
             }
 
-            if (useOdCapture) {
+            // OD recovery: while holding after a recoverable acquire loss, retry
+            // Reopen() on a throttle rather than draining a dead/closed source. On
+            // success the drain below resumes on the fresh duplication (same encode
+            // session, same file); until then the loop still emits held frames.
+            if (odHolding) {
+                const auto reopen_now = std::chrono::steady_clock::now();
+                if (reopen_now - odLastReopenAttempt >= kOdReopenPollDelay) {
+                    odLastReopenAttempt = reopen_now;
+                    std::string reopenErr;
+                    if (odSrc.Reopen(d3dDevice.get(), reopenErr))
+                        odHolding = false;
+                }
+            }
+
+            if (useOdCapture && !odHolding) {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
                 const auto acq_t0 = std::chrono::steady_clock::now();
@@ -2065,8 +2322,11 @@ void VideoThread::Run() {
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
                     if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
-                        if (odHr == DXGI_ERROR_ACCESS_LOST)
-                            sourceLost = true;
+                        // Previously only DXGI_ERROR_ACCESS_LOST set sourceLost; every
+                        // other HRESULT (notably DXGI_ERROR_DEVICE_REMOVED) fell through
+                        // this bare break with no source-loss, so the worker looped
+                        // through a dead source until the fixed join budget detached it.
+                        HandleOdAcquireFailure(odHr);
                         break;
                     }
                     // Format guard: skip foreign-format frames; fatal on size
@@ -2317,6 +2577,12 @@ void VideoThread::Run() {
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
+                // OD recovery: during a hold the drain is skipped, so no fresh source
+                // frame arrives and rawSourceTex is null — the CFR duplicate path below
+                // re-emits the last frame (frozen) so the timeline keeps advancing until
+                // Reopen() succeeds. Re-compositing a live webcam onto the held screen
+                // during the gap is intentionally NOT done here: it touches display-tied
+                // GPU resources while the captured output is gone (crash risk).
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).
@@ -2349,7 +2615,8 @@ void VideoThread::Run() {
                         refNv12Valid = true;
                     }
                     performSnapshotIfRequested(slot);
-                    publishPreviewIfDue(slot, pts_ns);
+                    // Native HDR10 has no SDR vpInput to share; the preview keeps its
+                    // own WGC capture (see product-spec / KNOWN_LIMITATIONS).
                     frameWritten = true;
                 } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
@@ -2374,6 +2641,11 @@ void VideoThread::Run() {
                         pendingWgcTex = nullptr;
                     }
 
+                    // Live WYSIWYG preview tap: share the composited pre-encode frame.
+                    // Works for 4:2:0/4:2:2 AND 4:4:4 (tapped before RGB->AYUV). Throttled
+                    // and non-blocking; never stalls the encode below.
+                    tapPreviewSource(vpInput, pts_ns);
+
                     // Convert RGB frame to NV12/P010 via VideoProcessorBlt
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
@@ -2396,21 +2668,25 @@ void VideoThread::Run() {
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
                         inputView = nullptr;
 
+                        std::string ayuvErr;
+                        if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                            nvenc.ReleaseSlot(slot);
+                            goto end_encode_loop;
+                        }
                         if (SUCCEEDED(hr)) {
-                            // Save NV12 as reference for future duplicate frames
+                            // Save the encode surface as reference for future duplicate frames
                             if (refNv12 != nullptr) {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
                             }
                             // Capture frame snapshot on real (non-duplicate) frames.
                             performSnapshotIfRequested(slot);
-                            // Live preview tap on real (non-duplicate) frames (throttled internally).
-                            publishPreviewIfDue(slot, pts_ns);
                             frameWritten = true;
                         }
                     }
                 } else if (refNv12Valid) {
-                    // Duplicate: copy reference NV12 into this slot
+                    // Duplicate: copy the reference encode surface into this slot
                     d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
                     frameWritten = true;
                     ++duplicatedFrames;
@@ -2490,20 +2766,33 @@ void VideoThread::Run() {
                 break;
             }
 
+            // OD recovery: throttled Reopen() while holding (see the CFR loop above).
+            if (odHolding) {
+                const auto reopen_now = std::chrono::steady_clock::now();
+                if (reopen_now - odLastReopenAttempt >= kOdReopenPollDelay) {
+                    odLastReopenAttempt = reopen_now;
+                    std::string reopenErr;
+                    if (odSrc.Reopen(d3dDevice.get(), reopenErr))
+                        odHolding = false;
+                }
+            }
+
             bool anyWork = false;
 
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
 
-            if (useOdCapture) {
+            if (useOdCapture && !odHolding) {
                 // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
                 while (true) {
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
                     HRESULT odHr = S_OK;
                     if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
-                        if (odHr == DXGI_ERROR_ACCESS_LOST)
-                            sourceLost = true;
+                        // See the phase-correct drain above: DEVICE_REMOVED (and any
+                        // unexpected HRESULT) ends the recording with the HRESULT recorded
+                        // instead of looping through a dead source.
+                        HandleOdAcquireFailure(odHr);
                         break;
                     }
                     // Format guard: skip foreign-format frames; fatal on size
@@ -2675,7 +2964,7 @@ void VideoThread::Run() {
                     latestTex = nullptr;
 
                     performSnapshotIfRequested(slot);
-                    publishPreviewIfDue(slot, framePts_ns);
+                    // Native HDR10 has no SDR vpInput to share (see CFR path / spec).
                     maybeArmSplit(framePts_ns);
 
                     EncodedVideoPacket pkt;
@@ -2714,6 +3003,10 @@ void VideoThread::Run() {
                         odCapturedTexValid = false;
                     }
 
+                    // Live WYSIWYG preview tap: share the composited pre-encode frame
+                    // (works for 4:4:4 too; non-blocking, never stalls the encode below).
+                    tapPreviewSource(vpInput, framePts_ns);
+
                     // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's view
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
@@ -2738,11 +3031,15 @@ void VideoThread::Run() {
                         inputView = nullptr;
                         latestTex = nullptr;
 
+                        std::string ayuvErr;
+                        if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                            nvenc.ReleaseSlot(slot);
+                            goto end_encode_loop;
+                        }
                         if (SUCCEEDED(hr)) {
                             // Capture frame snapshot on real frames (VFR path).
                             performSnapshotIfRequested(slot);
-                            // Live preview tap on real frames (VFR path; throttled internally).
-                            publishPreviewIfDue(slot, framePts_ns);
 
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);

@@ -88,12 +88,12 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
-    ui/dialogs/PresetManageOverlay.h
-    ui/dialogs/PresetManageOverlay.cpp
     ui/dialogs/UpdateSettingsPanel.h
     ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
     ui/dialogs/RecoveryOverlay.cpp
+    ui/dialogs/WhatsNewOverlay.h
+    ui/dialogs/WhatsNewOverlay.cpp
     ui/dialogs/SourcePickerPanel.h
     ui/dialogs/SourcePickerPanel.cpp
     ui/dialogs/SourcePickerDialog.h
@@ -239,14 +239,20 @@ qt_add_executable(exosnap WIN32
     services/WebcamService.cpp
     services/RecordingCoordinator.h
     services/RecordingCoordinator.cpp
+    services/TargetDisplayFacts.h
     services/RecordingCountdownController.h
     services/RecordingCountdownController.cpp
+    services/PageHydrationController.h
+    services/PageHydrationController.cpp
     services/RecoveryService.h
     services/RecoveryService.cpp
     services/CrashIssueReport.h
     services/CrashIssueReport.cpp
     services/UpdateService.h
     services/UpdateService.cpp
+    services/UpdateLaunchPlan.cpp
+    services/WhatsNewPayload.h
+    services/WhatsNewPayload.cpp
     services/ElevatedRelaunch.h
     services/ElevatedRelaunch.cpp
     models/WebcamSettings.h
@@ -277,6 +283,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
     diagnostics/AppLog.cpp
+    diagnostics/EngineLogBridge.h
+    diagnostics/EngineLogBridge.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -653,6 +661,18 @@ exosnap_add_gtest(
 target_include_directories(recording_countdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
+    NAME page_hydration_controller_tests
+    TEST_PREFIX hydration.
+    SOURCES
+        tests/test_page_hydration_controller.cpp
+        services/PageHydrationController.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core
+)
+set_target_properties(page_hydration_controller_tests PROPERTIES AUTOMOC ON)
+target_include_directories(page_hydration_controller_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
     NAME region_geometry_tests
     TEST_PREFIX region.
     SOURCES
@@ -681,6 +701,21 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(error_message_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Engine -> AppLog bridge: drives the real InitializeEngineLogging() + a genuine
+# recorder_core::logging::log() call, so a green test means engine records really
+# reach the application log.
+exosnap_add_gtest(
+    NAME engine_log_bridge_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_engine_log_bridge.cpp
+        diagnostics/EngineLogBridge.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES recorder_core Qt6::Core
+)
+target_include_directories(engine_log_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(engine_log_bridge_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME output_settings_tests
@@ -812,6 +847,18 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+exosnap_add_gtest(
+    NAME output_page_tests
+    TEST_PREFIX output.
+    SOURCES
+        tests/test_output_page.cpp
+        pages/OutputPage.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+    LIBRARIES exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(output_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(output_page_tests PROPERTIES AUTOMOC ON)
 
 # SETTINGS-TIERS-R2 Phase 2: InfoHintIcon widget unit tests.
 exosnap_add_gtest(
@@ -1043,6 +1090,17 @@ set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 exosnap_add_gtest(
+    NAME webcam_setup_panel_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_setup_panel.cpp
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(webcam_setup_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(webcam_setup_panel_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(webcam_setup_panel_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+exosnap_add_gtest(
     NAME hotkeys_page_tests
     TEST_PREFIX hotkey.
     SOURCES
@@ -1146,24 +1204,6 @@ exosnap_add_gtest(
 target_include_directories(test_edit_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
-    NAME preset_manage_overlay_tests
-    TEST_PREFIX preset_manage.
-    SOURCES
-        tests/test_preset_manage_overlay.cpp
-        ui/dialogs/PresetManageOverlay.cpp
-        models/RecordingPreset.cpp
-        models/RecordingPresetRegistry.cpp
-        models/OutputSettingsModel.cpp
-        # THEME-SLICE-2C: PresetManageOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(preset_manage_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(preset_manage_overlay_tests PRIVATE NOMINMAX)
-target_link_libraries(preset_manage_overlay_tests PRIVATE ole32.lib shell32.lib)
-set_target_properties(preset_manage_overlay_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
     NAME crash_report_overlay_tests
     TEST_PREFIX crash.
     SOURCES
@@ -1229,6 +1269,19 @@ exosnap_add_gtest(
 target_include_directories(update_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(update_settings_panel_tests PROPERTIES AUTOMOC ON)
 
+# Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
+# argv (round-tripped through the updater's own parser), Scoop-path detection.
+exosnap_add_gtest(
+    NAME update_launch_plan_tests
+    TEST_PREFIX update_launch.
+    SOURCES
+        tests/test_update_launch_plan.cpp
+        services/UpdateLaunchPlan.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
+    LIBRARIES Qt6::Core exosnap::update
+)
+target_include_directories(update_launch_plan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
 exosnap_add_gtest(
     NAME version_tests
     TEST_PREFIX version.
@@ -1247,6 +1300,16 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Pure switch-over state machine for the WYSIWYG preview during recording
+# (pushed engine source vs the preview's own WGC capture). Header-only logic.
+exosnap_add_gtest(
+    NAME pushed_source_state_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_pushed_source_state.cpp
+)
+target_include_directories(pushed_source_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME region_preview_crop_tests
@@ -1446,6 +1509,7 @@ exosnap_add_gtest(
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
         diagnostics/AppLog.cpp
+        ui/brand/BrandMarkWidget.cpp
         # THEME-SLICE-2C: RecoveryOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core FFmpeg::mux
@@ -1453,6 +1517,33 @@ exosnap_add_gtest(
 target_include_directories(recovery_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(recovery_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(recovery_overlay_tests PROPERTIES AUTOMOC ON)
+
+# WHATS-NEW: pending-payload persistence round-trip + show decision (headless).
+exosnap_add_gtest(
+    NAME whats_new_payload_tests
+    TEST_PREFIX whats_new.
+    SOURCES
+        tests/test_whats_new_payload.cpp
+        services/WhatsNewPayload.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(whats_new_payload_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# WHATS-NEW: overlay smoke (sections render, checkbox only post-update, Esc/close).
+exosnap_add_gtest(
+    NAME whats_new_overlay_tests
+    TEST_PREFIX whats_new.
+    SOURCES
+        tests/test_whats_new_overlay.cpp
+        ui/dialogs/WhatsNewOverlay.cpp
+        services/WhatsNewPayload.cpp
+        ui/widgets/ExoCheckBox.cpp
+        ui/theme/ExoSnapTheme.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(whats_new_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(whats_new_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(whats_new_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME audio_device_notifier_tests
@@ -1473,6 +1564,19 @@ exosnap_add_gtest(
 target_include_directories(webcam_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_device_notifier_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_device_notifier_tests PROPERTIES AUTOMOC ON)
+
+# Pure webcam ReadSample loss-detection policy (ClassifyWebcamReadResult).
+# No live device / QApplication needed — links the service support target only for
+# the classifier symbol.
+exosnap_add_gtest(
+    NAME webcam_read_policy_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_read_policy.cpp
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME display_device_notifier_tests
@@ -1662,6 +1766,7 @@ exosnap_add_gtest(
     TEST_PREFIX crash.update.proof.
     SOURCES
         tests/crash_update_visual_proof.cpp
+        ui/dialogs/CrashReportOverlay.cpp
         ui/dialogs/CrashReportPanel.cpp
         ui/dialogs/UpdateSettingsPanel.cpp
         ui/brand/BrandMarkWidget.cpp
@@ -1745,6 +1850,39 @@ exosnap_add_gtest(
 )
 target_include_directories(tray_presence_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(tray_presence_tests PROPERTIES AUTOMOC ON)
+
+# Pure unit tests for HumanizeEngineDetail (RecordingErrorPanel's raw-enum → canon
+# label mapping). Dependency-light: QString only.
+exosnap_add_gtest(
+    NAME recording_error_detail_text_tests
+    TEST_PREFIX record.error.detail.
+    SOURCES
+        tests/test_recording_error_detail_text.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
+
+# Offscreen render of the startup Recovery card. Applies the real ExoSnap theme;
+# produces .workspace/screenshots/recovery-overlay.png for visual verification.
+exosnap_add_gtest(
+    NAME recovery_overlay_visual_proof_tests
+    TEST_PREFIX recovery.proof.
+    SOURCES
+        tests/recovery_overlay_visual_proof.cpp
+        ui/dialogs/RecoveryOverlay.cpp
+        settings/RecoveryManifestStore.cpp
+        services/RecoveryService.cpp
+        diagnostics/AppLog.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core FFmpeg::mux
+)
+target_include_directories(recovery_overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recovery_overlay_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(recovery_overlay_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # ---------------------------------------------------------------------------
 # Install / windeployqt

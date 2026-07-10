@@ -151,12 +151,6 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     connect(mirror_toggle_, &ExoToggle::toggled, this, &WebcamSetupPanel::onMirrorToggled);
     connect(rescan_btn_, &QPushButton::clicked, this, &WebcamSetupPanel::onRescan);
 
-    // Preview frame callback: marshals to main thread via the Qt event loop.
-    preview_service_.SetFrameCallback([guard = QPointer<WebcamSetupPanel>(this)](QImage img) {
-        if (guard)
-            guard->onPreviewFrame(std::move(img));
-    });
-
     // Watchdog: surface a non-technical hint if no frame arrives after 3 s.
     watchdog_ = new QTimer(this);
     watchdog_->setSingleShot(true);
@@ -173,7 +167,14 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 }
 
 WebcamSetupPanel::~WebcamSetupPanel() {
-    stopPreview();
+    // Do NOT call stopPreview() here: it emits previewActiveRequested, and relaying a
+    // signal out of a destructor while Qt tears down the parent widget tree can re-enter
+    // a half-destroyed receiver (observed as an access violation in ConfigPage teardown).
+    // The capture consumer is released implicitly — Qt drops this object's connections on
+    // teardown, and the shared capture is only ever destroyed at app shutdown. Just stop
+    // the local watchdog timer.
+    if (watchdog_)
+        watchdog_->stop();
 }
 
 void WebcamSetupPanel::showEvent(QShowEvent* event) {
@@ -198,8 +199,11 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
     if (camera_preview_)
         camera_preview_->setMirror(s.mirror);
 
+    // Resolved so an empty configured id pre-selects the first real camera instead
+    // of leaving the "(no camera)" placeholder selected.
+    const std::string want = ResolveWebcamDeviceId(s.device_id, devices_);
     for (int i = 0; i < device_combo_->count(); ++i) {
-        if (device_combo_->itemData(i).toString().toStdString() == s.device_id) {
+        if (device_combo_->itemData(i).toString().toStdString() == want) {
             device_combo_->setCurrentIndex(i);
             break;
         }
@@ -260,6 +264,9 @@ void WebcamSetupPanel::setMfUnavailable(bool unavailable) {
 
 void WebcamSetupPanel::onEnableToggled(bool enabled) {
     current_settings_.enabled = enabled;
+    // Preview is coupled to the enable state; start/stop it in step with the toggle.
+    if (isVisible())
+        startPreview();
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -396,11 +403,24 @@ void WebcamSetupPanel::refreshDevices() {
     devices_ = WebcamService::EnumerateDevices();
     for (const auto& d : devices_)
         device_combo_->addItem(QString::fromStdString(d.name), QString::fromStdString(d.id));
+    const std::string resolved = ResolveWebcamDeviceId(current_settings_.device_id, devices_);
+    if (!resolved.empty()) {
+        const int idx = device_combo_->findData(QString::fromStdString(resolved));
+        if (idx >= 0)
+            device_combo_->setCurrentIndex(idx);
+    }
     suppress_signals_ = false;
     refreshFormats();
 }
 
 void WebcamSetupPanel::refreshFormats() {
+    // Preserve the caller's suppression state instead of hard-resetting it: when
+    // called from applySettings() (already suppressing for the whole call), a
+    // hardcoded "false" here used to re-enable emissions partway through
+    // applySettings(), letting the tail of that function leak a spurious
+    // settingsChanged (dropping opacity, see collectSettings()) before
+    // applySettings() even returns.
+    const bool was_suppressed = suppress_signals_;
     suppress_signals_ = true;
     resolution_combo_->clear();
     const QString dev_id = device_combo_->currentData().toString();
@@ -419,11 +439,11 @@ void WebcamSetupPanel::refreshFormats() {
         resolution_combo_->addItem(QStringLiteral("(no camera)"), QVariant());
         resolution_combo_->setEnabled(false);
     }
-    suppress_signals_ = false;
+    suppress_signals_ = was_suppressed;
 }
 
 void WebcamSetupPanel::startPreview() {
-    // Visual-test mode drives the preview deterministically; never open a real device.
+    // Visual-test mode drives the preview deterministically; never request capture.
     if (visual_test_mode_)
         return;
     if (watchdog_)
@@ -432,26 +452,28 @@ void WebcamSetupPanel::startPreview() {
     current_settings_ = SanitizeWebcamSettings(current_settings_);
 
     const QString dev_id = device_combo_->currentData().toString();
-    if (dev_id.isEmpty()) {
-        preview_service_.Stop();
+    const bool has_device = !dev_id.isEmpty();
+    // Coupled to the enable state: request the shared capture only when enabled AND a
+    // device exists — never merely from the panel becoming visible. The panel does not
+    // open its own reader; MainWindow relays this request to the coordinator, which owns
+    // the single shared capture, and pushes frames back via setPreviewFrame().
+    if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device)) {
+        emit previewActiveRequested(false);
         if (camera_preview_) {
             camera_preview_->clearFrame();
-            camera_preview_->setPlaceholderText(QStringLiteral("No camera found.\nConnect a camera and click ↺."));
+            camera_preview_->setPlaceholderText(!has_device
+                                                    ? QStringLiteral("No camera found.\nConnect a camera and click ↺.")
+                                                    : QStringLiteral("Turn on the webcam to preview."));
         }
         return;
     }
-
-    const auto combo_data = resolution_combo_->currentData().toList();
-    const int w = (combo_data.size() >= 2) ? combo_data[0].toInt() : current_settings_.width;
-    const int h = (combo_data.size() >= 2) ? combo_data[1].toInt() : current_settings_.height;
 
     if (camera_preview_) {
         camera_preview_->clearFrame();
         camera_preview_->setPlaceholderText(QStringLiteral("Camera preview"));
     }
 
-    preview_service_.Stop();
-    preview_service_.Start(dev_id.toStdString(), w > 0 ? w : 1280, h > 0 ? h : 720, 30);
+    emit previewActiveRequested(true);
     if (watchdog_)
         watchdog_->start();
 }
@@ -459,10 +481,22 @@ void WebcamSetupPanel::startPreview() {
 void WebcamSetupPanel::stopPreview() {
     if (watchdog_)
         watchdog_->stop();
-    preview_service_.Stop();
+    emit previewActiveRequested(false);
     preview_frame_seen_ = false;
     if (camera_preview_)
         camera_preview_->clearFrame();
+}
+
+void WebcamSetupPanel::setPreviewFrame(const QImage& frame) {
+    // A frame from the shared capture. Ignore it unless this panel currently wants a
+    // preview for a selected device (avoids painting a stray frame after the user turns
+    // the webcam off or while no device is chosen). CameraPreview applies the mirror.
+    if (visual_test_mode_ || !camera_preview_ || !isVisible())
+        return;
+    const bool has_device = !device_combo_->currentData().toString().isEmpty();
+    if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device))
+        return;
+    onPreviewFrame(frame);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -523,11 +557,12 @@ WebcamSettings WebcamSetupPanel::collectSettings() const {
 
     s.mirror = mirror_toggle_->isChecked();
 
-    // Preserve overlay and chroma from current (panel does not expose these controls).
+    // Preserve overlay, chroma, and opacity from current (panel does not expose these controls).
     s.overlay = current_settings_.overlay;
     s.overlay_user_placed = current_settings_.overlay_user_placed;
     s.aspect_ratio_locked = current_settings_.aspect_ratio_locked;
     s.chroma_key = current_settings_.chroma_key;
+    s.opacity = current_settings_.opacity;
 
     return SanitizeWebcamSettings(s);
 }

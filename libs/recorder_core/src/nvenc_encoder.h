@@ -26,6 +26,22 @@ struct EncodedVideoPacket;
 const char* NvencStatusName(NVENCSTATUS st) noexcept;
 
 // ---------------------------------------------------------------------------
+// Bounded flush-drain policy — pure, testable. The shutdown flush drains the
+// encoder's buffered frames with a non-blocking lock (doNotWait=1) and consults
+// this after each attempt. Guarantees the drain always terminates: on a lost or
+// hung device the lock stays busy forever, so once the time budget is exceeded
+// the drain aborts and the caller finalises anyway (no join-timeout wedge). No
+// GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+enum class FlushDrainStep {
+    Consume,      // NV_ENC_SUCCESS: a packet is ready — take it and continue draining.
+    Retry,        // NV_ENC_ERR_LOCK_BUSY within budget — brief wait, then poll again.
+    AbortTimeout, // LOCK_BUSY past the budget — device not delivering: stop the drain.
+    AbortError,   // Any other status — stop the drain.
+};
+FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
 // ApplyColorMetadataToNvenc — pure, testable mapping from ColorMetadata to the
 // NVENC bitstream-level color signaling fields (fix for color-range-signaling
 // bug: without this the AV1/H.264/HEVC bitstream itself carries no color
@@ -49,6 +65,27 @@ void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const Color
 GUID NvencPresetToGuid(NvencPreset preset) noexcept;
 
 // ---------------------------------------------------------------------------
+// Chroma / input-format helpers — pure, testable, no GPU/NVENC session.
+//
+// NvencInputFormat: the NVENC input buffer format for a bit depth + chroma.
+//   4:2:0  8-bit -> NV12 (semi-planar)
+//   4:2:0 10-bit -> YUV420_10BIT (P010, semi-planar 16 bpc)
+//   4:4:4  8-bit -> AYUV (packed A8Y8U8V8 — the DirectX 4:4:4 format NVENC
+//                   consumes; planar YUV444 has no single D3D11 texture form).
+//   4:4:4 10-bit is out of scope and never produced (blocked upstream).
+//
+// NvencChromaFormatIDC: the NV_ENC_CONFIG chromaFormatIDC value (1 = 4:2:0,
+//   3 = 4:4:4) — see nvEncodeAPI.h H.264/HEVC config fields.
+//
+// Nvenc444ProfileGuid: the profile GUID enabling 4:4:4 for a codec — H.264
+//   High 4:4:4 Predictive, HEVC Range Extensions (FREXT). Returns an all-zero
+//   GUID for AV1 (NVENC AV1 is 4:2:0-only); callers must not enable 4:4:4 then.
+// ---------------------------------------------------------------------------
+NV_ENC_BUFFER_FORMAT NvencInputFormat(BitDepth depth, ChromaSubsampling chroma) noexcept;
+uint32_t NvencChromaFormatIDC(ChromaSubsampling chroma) noexcept;
+GUID Nvenc444ProfileGuid(VideoCodec codec) noexcept;
+
+// ---------------------------------------------------------------------------
 // RcParams — pure value type for NVENC rate-control parameters.
 // Used by ComputeNvencRcParams (testable without GPU).
 // ---------------------------------------------------------------------------
@@ -69,7 +106,7 @@ struct RcParams {
 // No GPU or NVENC session required. Used by FetchPresetConfig().
 // NVENC SDK field names: rcParams.rateControlMode, rcParams.averageBitRate,
 //   rcParams.maxBitRate, rcParams.constQP.{qpIntra, qpInterP, qpInterB}.
-RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps);
+RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps);
 
 // ---------------------------------------------------------------------------
 // InputSlot — one NVENC GPU input resource in the slot ring
@@ -106,10 +143,19 @@ class NvencEncoder {
         m_bitDepth = depth;
     }
 
+    // Set the chroma subsampling before calling Open()/FetchPresetConfig().
+    // Defaults to Cs420. Cs444 selects AYUV input, chromaFormatIDC=3, and the
+    // codec's 4:4:4 profile (H.264 High 4:4:4 / HEVC FREXT); it is valid only for
+    // HevcNvenc and H264Nvenc at 8-bit (validated upstream — AV1 and 10-bit are
+    // rejected before reaching the encoder).
+    void SetChroma(ChromaSubsampling chroma) noexcept {
+        m_chroma = chroma;
+    }
+
     // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
     // Only meaningful for ConstantQuality mode.
-    void SetQualityPreset(NvencQualityPreset preset) noexcept {
-        m_qualityPreset = preset;
+    void SetCq(uint32_t cq) noexcept {
+        m_cq = cq;
     }
 
     // Set the NVENC speed/quality preset (P1..P7) before calling
@@ -155,6 +201,13 @@ class NvencEncoder {
 
     // Query HEVC (H.265) GUID and NV12 format support.
     bool QueryHevcNv12Support(std::string& out_error);
+
+    // Honest 4:4:4 gate for the current codec (call after Open(), before
+    // InitEncoder). Verifies the GPU advertises NV_ENC_CAPS_SUPPORT_YUV444_ENCODE
+    // and that the AYUV input format is enumerated for the codec. Only meaningful
+    // for H264Nvenc/HevcNvenc; fails honestly (out_error set) when 4:4:4 is
+    // unavailable so the session can refuse rather than mis-encode.
+    bool QueryYuv444Support(std::string& out_error);
 
     // Fetch preset config and set chromaFormatIDC=1 (YUV420).
     bool FetchPresetConfig(std::string& out_error);
@@ -220,7 +273,8 @@ class NvencEncoder {
 
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
     BitDepth m_bitDepth = BitDepth::Bit8;
-    NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
+    ChromaSubsampling m_chroma = ChromaSubsampling::Cs420;
+    uint32_t m_cq = CanonicalCq(NvencQualityPreset::Balanced);
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;
     ColorMetadata m_color = ColorMetadata::Sdr709();
@@ -253,9 +307,35 @@ class NvencEncoder {
     // One-shot forced-IDR request consumed by the next EncodeFrame submission.
     bool m_forceIdrNext = false;
 
+    // In-band HDR10 metadata (HEVC SEI / AV1 metadata OBU) injected on every
+    // keyframe. Built once by BuildHdrBitstreamPayloads() when the session is
+    // HDR10-native; the payload byte buffers and the NVENC payload-descriptor
+    // array are owned members so their pointers stay valid across the
+    // synchronous NvEncEncodePicture call (NVENC reads them during that call).
+    // Empty / count 0 for SDR and tone-map-SDR sessions, so their bitstream is
+    // byte-identical to before this feature.
+    std::vector<uint8_t> m_hdrMdcvPayload;
+    std::vector<uint8_t> m_hdrCllPayload;
+    std::array<NV_ENC_SEI_PAYLOAD, 2> m_hdrPayloadEntries{};
+    uint32_t m_hdrPayloadCount = 0;
+    // Deterministic IDR cadence tracking (gopLength; no B-frames / no lookahead,
+    // so IDRs land on submission indices 0, gopLength, 2*gopLength, ... and each
+    // forced IDR resets the phase). Used to attach HDR metadata on keyframes.
+    uint32_t m_gopLength = 0;
+    uint32_t m_frameInGop = 0;
+
+    // Build the per-keyframe HDR metadata payloads for the current codec + color.
+    // No-op (clears state) unless the session is HDR10-native on HEVC/AV1.
+    void BuildHdrBitstreamPayloads();
+
     // Lock one bitstream and return an EncodedVideoPacket.
     // Also releases the associated input slot (unmap + mark free).
-    bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error);
+    // Lock and consume one buffered output frame. non_blocking sets doNotWait=1
+    // so a not-yet-ready output returns NV_ENC_ERR_LOCK_BUSY immediately (nothing
+    // is consumed — safe to retry) instead of blocking; out_lock_status, when
+    // provided, receives the raw nvEncLockBitstream status for the drain policy.
+    bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking = false,
+                                 NVENCSTATUS* out_lock_status = nullptr);
 };
 
 } // namespace recorder_core

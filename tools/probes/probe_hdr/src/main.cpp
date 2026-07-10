@@ -11,6 +11,8 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <recorder_core/hdr_color_space.h>
+
 #include <cstdio>
 
 using Microsoft::WRL::ComPtr;
@@ -26,7 +28,9 @@ const char* ColorSpaceName(DXGI_COLOR_SPACE_TYPE cs) {
     case DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709:
         return "RGB_STUDIO_G22_NONE_P709 (SDR, limited)";
     case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
-        return "RGB_FULL_G2084_NONE_P2020 (HDR10 PQ/BT.2020) <-- HDR MODE ON";
+        return "RGB_FULL_G2084_NONE_P2020 (HDR10 PQ/BT.2020, full) <-- HDR MODE ON";
+    case DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020:
+        return "RGB_STUDIO_G2084_NONE_P2020 (HDR10 PQ/BT.2020, studio) <-- HDR MODE ON";
     case DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020:
         return "YCBCR_STUDIO_G2084_LEFT_P2020 (PQ/BT.2020 studio)";
     case DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709:
@@ -36,10 +40,6 @@ const char* ColorSpaceName(DXGI_COLOR_SPACE_TYPE cs) {
     default:
         return "(other)";
     }
-}
-
-bool IsHdrColorSpace(DXGI_COLOR_SPACE_TYPE cs) {
-    return cs == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || cs == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020;
 }
 
 void DumpDisplays() {
@@ -63,7 +63,8 @@ void DumpDisplays() {
             if (SUCCEEDED(out6->GetDesc1(&d))) {
                 printf("  display \"%ls\":\n", d.DeviceName);
                 printf("    colorSpace      = %d  %s\n", static_cast<int>(d.ColorSpace), ColorSpaceName(d.ColorSpace));
-                printf("    HDR mode        = %s\n", IsHdrColorSpace(d.ColorSpace) ? "ON" : "off (SDR)");
+                printf("    HDR mode        = %s\n",
+                       recorder_core::IsHdrColorSpace(d.ColorSpace) ? "ON" : "off (SDR)");
                 printf("    bitsPerColor    = %u\n", d.BitsPerColor);
                 printf("    luminance       = min %.4f / max %.1f / maxFullFrame %.1f nits\n",
                        static_cast<double>(d.MinLuminance), static_cast<double>(d.MaxLuminance),

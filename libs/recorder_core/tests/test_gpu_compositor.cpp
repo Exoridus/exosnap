@@ -102,6 +102,33 @@ std::vector<uint8_t> SolidBgra(int width, int height, uint8_t b, uint8_t g, uint
     return pixels;
 }
 
+float HalfToFloat(uint16_t h) {
+    const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1Fu;
+    uint32_t mant = h & 0x3FFu;
+    uint32_t bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            bits = sign;
+        } else {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x400u) == 0) {
+                mant <<= 1;
+                --exp;
+            }
+            mant &= 0x3FFu;
+            bits = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        bits = sign | 0x7F800000u | (mant << 13);
+    } else {
+        bits = sign | ((exp - 15 + 127) << 23) | (mant << 13);
+    }
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
 TEST(GpuCompositorTest, InitAndOpaquePaste) {
     auto d3d = CreateWarpDevice();
     ASSERT_TRUE(d3d.device);
@@ -453,6 +480,131 @@ TEST(GpuCompositorTest, InitAcceptsFp16ForNativeHdr) {
     EXPECT_TRUE(err.empty()) << err;
 }
 
+TEST(GpuCompositorTest, HdrLinearScalesOverlayToConfiguredRefWhite) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    // 160 nits ref white on the FP16 (linear scRGB) target: sRGB white (255)
+    // must land at linear 160/80 = 2.0 in every colour channel.
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err, DXGI_FORMAT_R16G16B16A16_FLOAT, 160.0f))
+        << err;
+
+    // FP16 background (zeros).
+    D3D11_TEXTURE2D_DESC bg_desc{};
+    bg_desc.Width = 1;
+    bg_desc.Height = 1;
+    bg_desc.MipLevels = 1;
+    bg_desc.ArraySize = 1;
+    bg_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    bg_desc.SampleDesc.Count = 1;
+    bg_desc.Usage = D3D11_USAGE_DEFAULT;
+    std::vector<uint16_t> zeros(4, 0);
+    D3D11_SUBRESOURCE_DATA init{};
+    init.pSysMem = zeros.data();
+    init.SysMemPitch = 8;
+    winrt::com_ptr<ID3D11Texture2D> background;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&bg_desc, &init, background.put())));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    auto webcam = SolidBgra(1, 1, 255, 255, 255);
+    GpuCompositor::ChromaKeyParams chroma;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 1, 1}, false, chroma, err)) << err;
+
+    // Staging readback of the FP16 composite.
+    D3D11_TEXTURE2D_DESC desc{};
+    compositor.Result()->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    winrt::com_ptr<ID3D11Texture2D> staging;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, nullptr, staging.put())));
+    d3d.context->CopyResource(staging.get(), compositor.Result());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    ASSERT_TRUE(SUCCEEDED(d3d.context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)));
+    const auto* halfs = static_cast<const uint16_t*>(mapped.pData);
+    const float r = HalfToFloat(halfs[0]);
+    const float g = HalfToFloat(halfs[1]);
+    const float b = HalfToFloat(halfs[2]);
+    d3d.context->Unmap(staging.get(), 0);
+
+    EXPECT_NEAR(r, 2.0f, 0.02f);
+    EXPECT_NEAR(g, 2.0f, 0.02f);
+    EXPECT_NEAR(b, 2.0f, 0.02f);
+}
+
+TEST(GpuCompositorTest, OpacityBlendsWebcamOverBackground) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 2, SolidBgra(2, 2, 0, 0, 0));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    auto webcam = SolidBgra(1, 1, 200, 200, 200);
+    GpuCompositor::ChromaKeyParams chroma;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 2, 2}, false, chroma, err, 0.5f))
+        << err;
+
+    // 50 % of 200 over black = ~100 on every channel; alpha stays opaque in the target.
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 2, 0, 0, 100, 100, 100, 255, 3);
+    ExpectPixelNear(pixels, 2, 1, 1, 100, 100, 100, 255, 3);
+}
+
+TEST(GpuCompositorTest, OpacityZeroLeavesBackgroundUntouched) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 2, SolidBgra(2, 2, 10, 20, 30));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    auto webcam = SolidBgra(1, 1, 200, 200, 200);
+    GpuCompositor::ChromaKeyParams chroma;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 2, 2}, false, chroma, err, 0.0f))
+        << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 2, 0, 0, 10, 20, 30, 255);
+}
+
+TEST(GpuCompositorTest, OpacityCombinesWithChromaKey) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 1, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 1, SolidBgra(2, 1, 10, 20, 30));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    // Left pixel = pure green (keyed away), right pixel = pure red (far outside
+    // the key's chroma soft zone -> fully kept, then faded to 50 %). Do NOT use
+    // gray/white here: their CbCr sits ~0.53 from the green key, inside the
+    // default tolerance+softness soft zone (0.55), which yields partial alpha.
+    std::vector<uint8_t> webcam = {
+        0, 255, 0,   255, // green left (BGRA)
+        0, 0,   255, 255, // red right (BGRA)
+    };
+    GpuCompositor::ChromaKeyParams chroma;
+    chroma.enabled = true;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 2, 1, WebcamPixelRect{0, 0, 2, 1}, false, chroma, err, 0.5f))
+        << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 2, 0, 0, 10, 20, 30, 255, 3); // keyed: background survives
+    ExpectPixelNear(pixels, 2, 1, 0, 5, 10, 143, 255, 3); // 0.5*{0,0,255} + 0.5*{10,20,30}
+}
+
 TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay) {
     SessionState state;
     state.config.webcam.enabled = true;
@@ -461,12 +613,14 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     state.config.webcam.overlay_w_norm = 0.50f;
     state.config.webcam.overlay_h_norm = 0.25f;
     state.config.webcam.mirror = true;
+    state.config.webcam.opacity = 0.4f;
     state.SeedWebcamOverlayFromConfig();
 
     WebcamOverlayLive seeded = state.SnapshotWebcamOverlay();
     EXPECT_TRUE(seeded.enabled);
     EXPECT_TRUE(seeded.mirror);
     EXPECT_LE(seeded.overlay_x_norm + seeded.overlay_w_norm, 1.0f);
+    EXPECT_FLOAT_EQ(seeded.opacity, 0.4f);
 
     WebcamOverlayLive live;
     live.enabled = false;
@@ -476,6 +630,7 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     live.overlay_h_norm = 0.0f;
     live.chroma_tolerance = std::nanf("");
     live.chroma_softness = 2.0f;
+    live.opacity = 7.0f;
     state.UpdateWebcamOverlay(live);
 
     const WebcamOverlayLive updated = state.SnapshotWebcamOverlay();
@@ -487,6 +642,12 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     EXPECT_FLOAT_EQ(updated.chroma_tolerance, 0.40f); // NaN → fallback default
     EXPECT_FLOAT_EQ(updated.chroma_softness, 1.0f);   // 2.0 clamped to 1.0
     EXPECT_FLOAT_EQ(updated.chroma_spill_reduction, 0.30f);
+    EXPECT_FLOAT_EQ(updated.opacity, 1.0f); // 7.0 clamped to 1.0
+
+    live.opacity = std::nanf("");
+    state.UpdateWebcamOverlay(live);
+    const WebcamOverlayLive nanUpdated = state.SnapshotWebcamOverlay();
+    EXPECT_FLOAT_EQ(nanUpdated.opacity, 1.0f); // NaN → fallback default
 }
 
 } // namespace

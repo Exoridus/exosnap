@@ -129,7 +129,6 @@ struct VisualScenario {
     // preset_count == 0 means "leave the card untouched".
     int preset_count = 0;
     QString preset_selected_name;   // selected preset display name
-    QString preset_default_name;    // startup-default preset name (for the badge)
     bool preset_dirty = false;      // unsaved-changes indicator
     bool preset_menu_open = false;  // open the Manage overflow menu
     bool preset_save_error = false; // render an inline save/name error affordance
@@ -281,6 +280,13 @@ struct VisualScenario {
     // SDR (default) / Record native HDR10, capability-gated on video_codec above
     // (HEVC/AV1 only).
     recorder_core::HdrMode hdr_mode = recorder_core::HdrMode::TonemapSdr;
+
+    // --- EditExport Edit-phase marker pins ---
+    // Trailing fields so existing positional initializers stay valid.
+    // duration_seconds == 0.0 means "unknown" (no pins render). Marker times are
+    // milliseconds into the recording; positioned proportionally on the timeline.
+    double edit_export_duration_seconds = 0.0;
+    QVector<uint64_t> edit_export_marker_times_ms;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

@@ -21,6 +21,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <cmath>
+
 namespace exosnap {
 
 namespace {
@@ -154,6 +156,25 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         resolution_combo_->setMaximumWidth(380);
         cl->addWidget(resolution_combo_);
 
+        // Overlay opacity: uniform PiP transparency, applied identically to the
+        // Record preview and the recorded output.
+        auto* op_row = new QWidget(card);
+        auto* opl = new QHBoxLayout(op_row);
+        opl->setContentsMargins(0, 0, 0, 0);
+        opl->setSpacing(8);
+        opl->addWidget(makeLabel(QStringLiteral("Overlay Opacity"), "videoKvKey", op_row), 1);
+        opacity_slider_ = new QSlider(Qt::Horizontal, op_row);
+        opacity_slider_->setObjectName(QStringLiteral("webcamOpacitySlider"));
+        opacity_slider_->setRange(0, 100);
+        opacity_slider_->setValue(100);
+        opacity_slider_->setFixedWidth(160);
+        opacity_label_ = makeLabel(pct(100), "videoKvKey", op_row);
+        opacity_label_->setFixedWidth(36);
+        opacity_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        opl->addWidget(opacity_slider_);
+        opl->addWidget(opacity_label_);
+        cl->addWidget(op_row);
+
         layout->addWidget(card);
     }
 
@@ -286,6 +307,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     connect(tolerance_slider_, &QSlider::valueChanged, this, &WebcamPage::onToleranceChanged);
     connect(softness_slider_, &QSlider::valueChanged, this, &WebcamPage::onSoftnessChanged);
     connect(spill_slider_, &QSlider::valueChanged, this, &WebcamPage::onSpillReductionChanged);
+    connect(opacity_slider_, &QSlider::valueChanged, this, &WebcamPage::onOpacityChanged);
 
     // Live frames arrive on the main thread (WebcamService marshals via the
     // event loop). Guard with a QPointer so a frame in flight after the page is
@@ -324,8 +346,9 @@ void WebcamPage::showEvent(QShowEvent* event) {
 #endif
     if (mf_unavailable_)
         return; // S4: MF absent — no preview attempt
-    // Setup preview runs whenever the page is open and a camera is available —
-    // independent of the "Include webcam in recording" toggle.
+    // Setup preview opens the camera only when the webcam is enabled and a device
+    // exists (startPreview self-gates via ShouldOpenWebcamPreview); otherwise it
+    // shows a placeholder without touching the camera.
     startPreview();
 }
 
@@ -348,9 +371,11 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
     if (camera_preview_)
         camera_preview_->setMirror(sanitized_settings.mirror);
 
-    // Find matching device.
+    // Find matching device — resolved so an empty configured id pre-selects the
+    // first real camera instead of leaving the "(no camera)" placeholder selected.
+    const std::string want = ResolveWebcamDeviceId(sanitized_settings.device_id, devices_);
     for (int i = 0; i < device_combo_->count(); ++i) {
-        if (device_combo_->itemData(i).toString().toStdString() == sanitized_settings.device_id) {
+        if (device_combo_->itemData(i).toString().toStdString() == want) {
             device_combo_->setCurrentIndex(i);
             break;
         }
@@ -390,6 +415,11 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
         softness_slider_->setValue(static_cast<int>(sanitized_settings.chroma_key.softness * 100));
     if (spill_slider_)
         spill_slider_->setValue(static_cast<int>(sanitized_settings.chroma_key.spill_reduction * 100));
+    if (opacity_slider_) {
+        opacity_slider_->setValue(static_cast<int>(std::lround(sanitized_settings.opacity * 100)));
+        if (opacity_label_)
+            opacity_label_->setText(pct(opacity_slider_->value()));
+    }
 
     suppress_signals_ = false;
 
@@ -464,6 +494,8 @@ void WebcamPage::setMfUnavailable(bool unavailable) {
         softness_slider_->setEnabled(false);
     if (spill_slider_)
         spill_slider_->setEnabled(false);
+    if (opacity_slider_)
+        opacity_slider_->setEnabled(false);
     if (camera_preview_) {
         camera_preview_->clearFrame();
         camera_preview_->setPlaceholderText(QStringLiteral("Webcam unavailable — Media Feature Pack not installed."));
@@ -494,6 +526,8 @@ void WebcamPage::setRecordingControlsLocked(bool locked) {
         softness_slider_->setEnabled(true);
     if (spill_slider_)
         spill_slider_->setEnabled(true);
+    if (opacity_slider_)
+        opacity_slider_->setEnabled(true);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -529,9 +563,12 @@ void WebcamPage::applyVisualState(visual::VisualWebcamState state) {
 #endif
 
 void WebcamPage::onEnableToggled(bool enabled) {
-    // This toggle only controls whether the webcam is included in recordings.
-    // The setup preview is independent and keeps running while the page is open.
+    // Single meaning of "webcam on": included in the recording AND shown in the
+    // setup preview. The camera opens only here (never just from opening the page),
+    // so start/stop the preview in step with the toggle.
     current_settings_.enabled = enabled;
+    if (isVisible())
+        startPreview(); // self-gates on enabled: starts when on, stops when off
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -664,6 +701,13 @@ void WebcamPage::onSpillReductionChanged(int value) {
         emit settingsChanged(collectSettings());
 }
 
+void WebcamPage::onOpacityChanged(int value) {
+    opacity_label_->setText(pct(value));
+    current_settings_.opacity = value / 100.0f;
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
 void WebcamPage::onPreviewFrame(QImage frame) {
     preview_frame_seen_ = true;
     if (preview_watchdog_)
@@ -679,11 +723,23 @@ void WebcamPage::refreshDevices() {
     devices_ = WebcamService::EnumerateDevices();
     for (const auto& d : devices_)
         device_combo_->addItem(QString::fromStdString(d.name), QString::fromStdString(d.id));
+    const std::string resolved = ResolveWebcamDeviceId(current_settings_.device_id, devices_);
+    if (!resolved.empty()) {
+        const int idx = device_combo_->findData(QString::fromStdString(resolved));
+        if (idx >= 0)
+            device_combo_->setCurrentIndex(idx);
+    }
     suppress_signals_ = false;
     refreshFormats();
 }
 
 void WebcamPage::refreshFormats() {
+    // Preserve the caller's suppression state instead of hard-resetting it: when
+    // called from applySettings() (already suppressing for the whole call), a
+    // hardcoded "false" here used to re-enable emissions partway through
+    // applySettings(), letting the tail of that function (chroma/opacity sliders)
+    // leak a spurious settingsChanged before applySettings() even returns.
+    const bool was_suppressed = suppress_signals_;
     suppress_signals_ = true;
     resolution_combo_->clear();
     const QString dev_id = device_combo_->currentData().toString();
@@ -696,7 +752,7 @@ void WebcamPage::refreshFormats() {
             resolution_combo_->addItem(label, res_data);
         }
     }
-    suppress_signals_ = false;
+    suppress_signals_ = was_suppressed;
 }
 
 void WebcamPage::applyCurrentSettings() {
@@ -726,11 +782,16 @@ void WebcamPage::startPreview() {
 
     const QString dev_id = device_combo_->currentData().toString();
     const bool has_device = !dev_id.isEmpty() || !devices_.empty();
-    if (!has_device) {
+    // The setup preview is coupled to the enable state: the camera opens only when
+    // the webcam is enabled AND a device exists (ShouldOpenWebcamPreview) — it no
+    // longer springs on merely from the page becoming visible.
+    if (!ShouldOpenWebcamPreview(current_settings_.enabled, has_device)) {
         preview_service_.Stop();
         if (camera_preview_) {
             camera_preview_->clearFrame();
-            camera_preview_->setPlaceholderText(QStringLiteral("No camera found. Connect a camera and click Rescan."));
+            camera_preview_->setPlaceholderText(
+                !has_device ? QStringLiteral("No camera found. Connect a camera and click Rescan.")
+                            : QStringLiteral("Turn on the webcam to preview."));
         }
         return;
     }
@@ -776,6 +837,7 @@ WebcamSettings WebcamPage::collectSettings() const {
     s.overlay = current_settings_.overlay;
     s.overlay_user_placed = current_settings_.overlay_user_placed;
     s.aspect_ratio_locked = current_settings_.aspect_ratio_locked;
+    s.opacity = current_settings_.opacity;
 
     s.chroma_key.enabled = chroma_toggle_ ? chroma_toggle_->isChecked() : current_settings_.chroma_key.enabled;
     s.chroma_key.color_mode = current_settings_.chroma_key.color_mode;

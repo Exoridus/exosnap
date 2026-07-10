@@ -42,10 +42,11 @@ EditExportOverlay::EditExportOverlay(QWidget* parent) : QWidget(parent) {
     root->setSpacing(0);
     root->addWidget(page_, 1);
 
-    // Back / Done both emit backRequested regardless of phase (pre-existing,
-    // unchanged EditExportPage behavior) — closing the overlay is the direct
-    // equivalent of the former stack-swap-back, since Record is already the page
-    // underneath.
+    // Done always emits backRequested (unchanged). Back only emits it from the
+    // Review phase — the three-step flow's Edit/Output steps handle Back
+    // in-page (stepping to the previous phase) instead. Either way, when it
+    // does fire, closing the overlay is the direct equivalent of the former
+    // stack-swap-back, since Record is already the page underneath.
     connect(page_, &EditExportPage::backRequested, this, &EditExportOverlay::closeOverlay);
 
     if (parent != nullptr)

@@ -19,6 +19,9 @@ inline const QString kQualityPreset =
     QStringLiteral("Constant-quality presets: Small \xe2\x89\x88 CQ 30 (smaller files), "
                    "Balanced \xe2\x89\x88 CQ 24, High \xe2\x89\x88 CQ 19 (sharper, larger files). "
                    "Lower CQ = higher quality.");
+inline const QString kConstantQuality = QStringLiteral("Quantizer target, 1\xe2\x80\x93"
+                                                       "51 \xC2\xB7 lower = better quality, larger files. "
+                                                       "19 = High, 24 = Balanced, 30 = Small.");
 inline const QString kFrameRate = QStringLiteral("Constant rate \xC2\xB7 editor-friendly");
 inline const QString kCaptureCursor = QStringLiteral("Show the mouse pointer");
 inline const QString kOutputResolution = QStringLiteral("Downscale to save size \xC2\xB7 re-encodes");
@@ -72,6 +75,10 @@ inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression
 inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
 inline const QString kVideoBitDepth =
     QStringLiteral("8-bit is universal \xC2\xB7 10-bit needs HEVC or AV1 (smoother gradients, larger files)");
+inline const QString kChromaSubsampling =
+    QStringLiteral("4:2:0 is universal and the right choice for almost everything. 4:4:4 keeps full colour "
+                   "resolution (sharper text/UI, larger files) but needs 8-bit H.264 or HEVC \xE2\x80\x94 not "
+                   "available with AV1 or 10-bit.");
 inline const QString kVideoColorRange =
     QStringLiteral("Limited is compatible with every player. Full keeps marginally more tonal detail, but some "
                    "common players (notably VLC) ignore the range flag and expand as Limited, so Full-range "
@@ -79,8 +86,8 @@ inline const QString kVideoColorRange =
                    "honours it.");
 inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
-inline const QString kFramePacing =
-    QStringLiteral("Smooth removes judder from high-refresh/VRR sources; Newest minimises latency");
+inline const QString kFramePacing = QStringLiteral("Phase-correct removes judder from high-refresh/VRR sources; "
+                                                   "Lowest latency shows the newest frame");
 inline const QString kKeyframeInterval = QStringLiteral(
     "Keyframe interval controls trim accuracy: "
     "2\xC2\xA0s\xC2\xA0=\xC2\xA0"

@@ -1,9 +1,13 @@
 #include "dxgi_od_capture_src.h"
 
+#include <recorder_core/hdr_color_space.h>
+#include <recorder_core/sdr_white_level.h>
+
 #include <dxgi1_6.h>
 
 #include <cstdio>
 #include <iterator>
+#include <vector>
 
 namespace recorder_core {
 
@@ -52,77 +56,207 @@ DxgiOdCaptureSrc::~DxgiOdCaptureSrc() {
     Close();
 }
 
+// Queries the OS "SDR content brightness" reference white of the monitor, in
+// nits (DISPLAYCONFIG_SDR_WHITE_LEVEL; raw 1000 == 80 nits). Returns 0.0f when
+// the monitor cannot be matched or any DisplayConfig call fails — callers
+// treat 0 as unknown and fall back to the 203-nit default.
+static float QuerySdrWhiteLevelNits(HMONITOR hmonitor) {
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(hmonitor, &mi) == FALSE) {
+        return 0.0f;
+    }
+
+    UINT32 pathCount = 0;
+    UINT32 modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) {
+        return 0.0f;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) !=
+        ERROR_SUCCESS) {
+        return 0.0f;
+    }
+    paths.resize(pathCount);
+
+    for (const auto& path : paths) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) {
+            continue;
+        }
+        if (wcscmp(source.viewGdiDeviceName, mi.szDevice) != 0) {
+            continue;
+        }
+
+        DISPLAYCONFIG_SDR_WHITE_LEVEL white{};
+        white.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+        white.header.size = sizeof(white);
+        white.header.adapterId = path.targetInfo.adapterId;
+        white.header.id = path.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&white.header) != ERROR_SUCCESS) {
+            return 0.0f;
+        }
+        return SdrWhiteLevelRawToNits(white.SDRWhiteLevel);
+    }
+    return 0.0f;
+}
+
+// Fill HDR facts from an already-matched DXGI output + its monitor. Mirrors the
+// exact ordering used at Open() below: the SDR white level is read first (it is
+// the OS SDR-content reference, independent of the HDR colour-space gate), then
+// the primaries/luminance/hdr_active are read from IDXGIOutput6::GetDesc1 when the
+// output exposes it. Shared by Open() (OD path) and QueryDisplayHdrFacts (WGC path)
+// so both paths derive the identical facts.
+static void FillHdrFactsFromOutput(IDXGIOutput* output, HMONITOR hmonitor, HdrDisplayFacts& facts) {
+    facts = HdrDisplayFacts{};
+    facts.sdr_white_level_nits = QuerySdrWhiteLevelNits(hmonitor);
+    if (output == nullptr) {
+        return;
+    }
+    winrt::com_ptr<IDXGIOutput> outputPtr;
+    outputPtr.copy_from(output);
+    if (winrt::com_ptr<IDXGIOutput6> output6 = outputPtr.try_as<IDXGIOutput6>()) {
+        DXGI_OUTPUT_DESC1 desc1{};
+        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
+            facts.hdr_active = IsHdrColorSpace(desc1.ColorSpace);
+            facts.red_primary_x = desc1.RedPrimary[0];
+            facts.red_primary_y = desc1.RedPrimary[1];
+            facts.green_primary_x = desc1.GreenPrimary[0];
+            facts.green_primary_y = desc1.GreenPrimary[1];
+            facts.blue_primary_x = desc1.BluePrimary[0];
+            facts.blue_primary_y = desc1.BluePrimary[1];
+            facts.white_point_x = desc1.WhitePoint[0];
+            facts.white_point_y = desc1.WhitePoint[1];
+            facts.max_luminance_nits = desc1.MaxLuminance;
+            facts.min_luminance_nits = desc1.MinLuminance;
+        }
+    }
+}
+
+bool QueryDisplayHdrFacts(HMONITOR hmonitor, HdrDisplayFacts& out_facts) {
+    out_facts = HdrDisplayFacts{};
+    if (!hmonitor) {
+        return false;
+    }
+    // The SDR white level does not depend on finding a DXGI output, so seed it even
+    // if the enumeration below fails to match (matches the OD ordering).
+    out_facts.sdr_white_level_nits = QuerySdrWhiteLevelNits(hmonitor);
+
+    winrt::com_ptr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put())))) {
+        return false;
+    }
+    winrt::com_ptr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND; ++i) {
+        winrt::com_ptr<IDXGIOutput> output;
+        for (UINT j = 0; adapter->EnumOutputs(j, output.put()) != DXGI_ERROR_NOT_FOUND; ++j) {
+            DXGI_OUTPUT_DESC desc{};
+            if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == hmonitor) {
+                FillHdrFactsFromOutput(output.get(), hmonitor, out_facts);
+                return true;
+            }
+            output = nullptr;
+        }
+        adapter = nullptr;
+    }
+    return false;
+}
+
+// Resolve the IDXGIOutput to duplicate for `device`, using a FRESH DXGI factory so
+// the current display topology is seen (a device's original adapter/output
+// enumeration and HMONITOR handles go stale after a monitor hot-plug or mode/
+// topology change — the exact loss recovery must survive). The search is filtered
+// to the device's own adapter by LUID, so DuplicateOutput's same-adapter
+// requirement holds. Matches the output whose DXGI_OUTPUT_DESC matches either
+// `match_monitor` (initial Open, by handle) or `match_name` (Reopen, by stable GDI
+// device name, when the handle has changed). Returns the matched output + its desc.
+static bool ResolveOutputForDevice(ID3D11Device* device, HMONITOR match_monitor, const std::wstring& match_name,
+                                   IDXGIOutput** out_output, DXGI_OUTPUT_DESC* out_desc, std::string& out_error) {
+    if (!device || !out_output) {
+        out_error = "null argument";
+        return false;
+    }
+    // The device's adapter LUID is stable across topology changes; the fresh
+    // enumeration below is filtered to it.
+    winrt::com_ptr<IDXGIDevice> dxgiDevice;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())))) {
+        out_error = "QI IDXGIDevice failed";
+        return false;
+    }
+    winrt::com_ptr<IDXGIAdapter> devAdapter;
+    if (FAILED(dxgiDevice->GetAdapter(devAdapter.put()))) {
+        out_error = "GetAdapter failed";
+        return false;
+    }
+    DXGI_ADAPTER_DESC devAdapterDesc{};
+    devAdapter->GetDesc(&devAdapterDesc);
+    const LUID devLuid = devAdapterDesc.AdapterLuid;
+
+    winrt::com_ptr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put())))) {
+        out_error = "CreateDXGIFactory1 failed";
+        return false;
+    }
+
+    winrt::com_ptr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 aDesc{};
+        if (SUCCEEDED(adapter->GetDesc1(&aDesc)) && aDesc.AdapterLuid.LowPart == devLuid.LowPart &&
+            aDesc.AdapterLuid.HighPart == devLuid.HighPart) {
+            winrt::com_ptr<IDXGIOutput> output;
+            for (UINT j = 0; adapter->EnumOutputs(j, output.put()) != DXGI_ERROR_NOT_FOUND; ++j) {
+                DXGI_OUTPUT_DESC d{};
+                if (SUCCEEDED(output->GetDesc(&d))) {
+                    const bool matched = match_monitor ? (d.Monitor == match_monitor)
+                                                       : (!match_name.empty() && match_name == d.DeviceName);
+                    if (matched) {
+                        if (out_desc)
+                            *out_desc = d;
+                        *out_output = output.detach();
+                        return true;
+                    }
+                }
+                output = nullptr;
+            }
+        }
+        adapter = nullptr;
+    }
+    out_error = "no matching output on the capture device's adapter";
+    return false;
+}
+
 bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string& out_error) {
     if (!device || !hmonitor) {
         out_error = "null argument";
         return false;
     }
 
-    // QI device -> IDXGIDevice -> adapter -> outputs
-    winrt::com_ptr<IDXGIDevice> dxgiDevice;
-    HRESULT hr = device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()));
-    if (FAILED(hr)) {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "QI IDXGIDevice failed 0x%08lX", static_cast<unsigned long>(hr));
-        out_error = buf;
-        return false;
-    }
-
-    winrt::com_ptr<IDXGIAdapter> dxgiAdapter;
-    hr = dxgiDevice->GetAdapter(dxgiAdapter.put());
-    if (FAILED(hr)) {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "GetAdapter failed 0x%08lX", static_cast<unsigned long>(hr));
-        out_error = buf;
-        return false;
-    }
-
-    // Find the IDXGIOutput that matches hmonitor
+    // Resolve the output via a fresh factory (see ResolveOutputForDevice) and record
+    // the stable GDI device name so Reopen() can re-find it by name after a hot-plug.
+    HRESULT hr = S_OK;
     winrt::com_ptr<IDXGIOutput> matchedOutput;
-    winrt::com_ptr<IDXGIOutput> output;
-    for (UINT j = 0; dxgiAdapter->EnumOutputs(j, output.put()) != DXGI_ERROR_NOT_FOUND; ++j) {
-        DXGI_OUTPUT_DESC desc{};
-        if (SUCCEEDED(output->GetDesc(&desc)) && desc.Monitor == hmonitor) {
-            matchedOutput = output;
-            break;
-        }
-        output = nullptr;
-    }
-
-    if (!matchedOutput) {
-        out_error = "device adapter does not own the specified HMONITOR";
+    DXGI_OUTPUT_DESC matchedDesc{};
+    if (!ResolveOutputForDevice(device, hmonitor, std::wstring{}, matchedOutput.put(), &matchedDesc, out_error))
         return false;
-    }
+    m_device_name = matchedDesc.DeviceName;
 
     // HDR facts of the active output (IDXGIOutput6::GetDesc1), read before
     // duplicating so the format request can depend on the display's HDR state.
     // hdr_active is only true in a PQ/BT.2020 colour space — an SDR-mode display
     // still reports its EDID luminance caps here, which are not the active
     // reference; consumers gate their use of the luminance/primaries on it.
-    m_hdr_active = false;
-    m_max_luminance_nits = 0.0f;
-    m_hdr_facts = HdrDisplayFacts{};
-    if (winrt::com_ptr<IDXGIOutput6> output6 = matchedOutput.try_as<IDXGIOutput6>()) {
-        DXGI_OUTPUT_DESC1 desc1{};
-        if (SUCCEEDED(output6->GetDesc1(&desc1))) {
-            m_hdr_active = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
-            m_max_luminance_nits = desc1.MaxLuminance;
-            // Full facts for native HDR10 mastering-display metadata. The
-            // primaries/luminance are the display's capabilities (the usual
-            // approximation for content mastering values).
-            m_hdr_facts.hdr_active = m_hdr_active;
-            m_hdr_facts.red_primary_x = desc1.RedPrimary[0];
-            m_hdr_facts.red_primary_y = desc1.RedPrimary[1];
-            m_hdr_facts.green_primary_x = desc1.GreenPrimary[0];
-            m_hdr_facts.green_primary_y = desc1.GreenPrimary[1];
-            m_hdr_facts.blue_primary_x = desc1.BluePrimary[0];
-            m_hdr_facts.blue_primary_y = desc1.BluePrimary[1];
-            m_hdr_facts.white_point_x = desc1.WhitePoint[0];
-            m_hdr_facts.white_point_y = desc1.WhitePoint[1];
-            m_hdr_facts.max_luminance_nits = desc1.MaxLuminance;
-            m_hdr_facts.min_luminance_nits = desc1.MinLuminance;
-        }
-    }
+    // Full facts (hdr_active, chromaticity primaries, luminance range, SDR white
+    // level) for native HDR10 mastering-display metadata and tone-map peak. The
+    // primaries/luminance are the display's capabilities (the usual approximation
+    // for content mastering values). Shared with the WGC path via the same helper.
+    FillHdrFactsFromOutput(matchedOutput.get(), hmonitor, m_hdr_facts);
+    m_hdr_active = m_hdr_facts.hdr_active;
+    m_max_luminance_nits = m_hdr_facts.max_luminance_nits;
 
     // Prefer IDXGIOutput5::DuplicateOutput1 (Win10 1703+): declaring the
     // supported formats lets DXGI hand us the desktop's native surface — BGRA8
@@ -193,6 +327,29 @@ void DxgiOdCaptureSrc::Close() {
     m_width = 0;
     m_height = 0;
     m_refresh_rate_hz = 0;
+}
+
+bool DxgiOdCaptureSrc::Reopen(ID3D11Device* device, std::string& out_error) {
+    // Drop any held frame and the stale duplication, then rebuild it on the still-
+    // alive device. The monitor may return from a hot-plug with a NEW HMONITOR, so
+    // re-resolve the output by the stable GDI device name (captured at Open) against
+    // a fresh factory, then run the normal Open() path with the CURRENT handle.
+    // Open() re-reads size/format/HDR facts and resets m_frame_held; on failure it
+    // leaves the source closed so a subsequent poll attempt can try again.
+    Close();
+    if (!device) {
+        out_error = "null argument";
+        return false;
+    }
+    if (m_device_name.empty()) {
+        out_error = "no stored device name for reopen";
+        return false;
+    }
+    winrt::com_ptr<IDXGIOutput> matchedOutput;
+    DXGI_OUTPUT_DESC matchedDesc{};
+    if (!ResolveOutputForDevice(device, nullptr, m_device_name, matchedOutput.put(), &matchedDesc, out_error))
+        return false;
+    return Open(device, matchedDesc.Monitor, out_error);
 }
 
 bool DxgiOdCaptureSrc::TryAcquireFrame(uint32_t timeout_ms, ID3D11Texture2D** out_texture,
@@ -266,9 +423,18 @@ bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active,
         out_mode = OdCaptureMode::Sdr;
         return true;
     case DXGI_FORMAT_R16G16B16A16_FLOAT:
-        // scRGB FP16 HDR desktop. Off keeps the pre-HDR behaviour (a defined
-        // capture error). Hdr10 with an HDR10-capable codec keeps the native
-        // PQ/BT.2020 signal; otherwise (TonemapSdr, or Hdr10 on H.264) the
+        // scRGB FP16 desktop. As with R10G10B10A2, the format alone does not mean
+        // HDR: with Advanced Color Management the desktop composites to scRGB FP16
+        // while still in SDR mode. Such a desktop carries SDR content (reference
+        // white == 1.0), so it is merely sRGB-encoded, never tone-mapped, and it
+        // records in every mode -- including Off, which is not an HDR request.
+        if (!hdr_active) {
+            out_mode = OdCaptureMode::SdrScrgb;
+            return true;
+        }
+        // A genuinely HDR-active desktop. Off keeps the pre-HDR behaviour (a
+        // defined capture error). Hdr10 with an HDR10-capable codec keeps the
+        // native PQ/BT.2020 signal; otherwise (TonemapSdr, or Hdr10 on H.264) the
         // desktop is tone-mapped down to SDR.
         if (hdr_mode == HdrMode::Off) {
             return false;
@@ -279,6 +445,20 @@ bool ResolveOdCaptureMode(DXGI_FORMAT format, HdrMode hdr_mode, bool hdr_active,
     default:
         return false;
     }
+}
+
+WgcCapturePlan ResolveWgcCapturePlan(bool hdr_active, HdrMode hdr_mode, bool hdr10_output_supported) noexcept {
+    // SDR desktop, or HDR handling disabled: keep the historic BGRA8 window path
+    // byte-identical (DWM tone-maps an HDR window down to SDR into this pool).
+    if (!hdr_active || hdr_mode == HdrMode::Off) {
+        return WgcCapturePlan{DXGI_FORMAT_B8G8R8A8_UNORM, OdCaptureMode::Sdr};
+    }
+    // HDR-active display + HDR handling on: request a scRGB FP16 pool so the real
+    // HDR signal reaches the pipeline instead of DWM's SDR tone-map. Native HDR10
+    // when the codec can carry it; otherwise tone-map to SDR BT.709.
+    const OdCaptureMode mode =
+        (hdr_mode == HdrMode::Hdr10 && hdr10_output_supported) ? OdCaptureMode::HdrNative : OdCaptureMode::HdrToneMap;
+    return WgcCapturePlan{DXGI_FORMAT_R16G16B16A16_FLOAT, mode};
 }
 
 const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept {
@@ -296,6 +476,48 @@ const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t f
         }
         return "DXGI_FORMAT(?)";
     }
+}
+
+OdAcquireFailAction ClassifyOdAcquireFailure(HRESULT hr) noexcept {
+    switch (hr) {
+    case S_OK:
+    case DXGI_ERROR_WAIT_TIMEOUT:
+        // No frame this poll tick — normal, keep draining.
+        return OdAcquireFailAction::Idle;
+    case DXGI_ERROR_ACCESS_LOST:
+        // Duplication handle invalidated (mode/topology change) but the device is
+        // alive: recreate the duplication and continue the same recording.
+        return OdAcquireFailAction::Recover;
+    default:
+        // DXGI_ERROR_DEVICE_REMOVED / _HUNG / _RESET and every other unexpected
+        // HRESULT: fail closed — end the recording cleanly rather than loop.
+        return OdAcquireFailAction::Fail;
+    }
+}
+
+OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed,
+                                std::optional<std::chrono::milliseconds> budget,
+                                std::chrono::milliseconds poll_delay) noexcept {
+    if (reopened) {
+        // The duplication is live again — resume the same encode session. A late
+        // success past any budget still continues: recovered footage beats a
+        // strict deadline.
+        return {OdReopenAction::Continue, std::chrono::milliseconds{0}};
+    }
+    if (budget && elapsed >= *budget) {
+        // A budget was set and it is exhausted: end cleanly (the historic
+        // ACCESS_LOST behaviour). With no budget the retry is unbounded.
+        return {OdReopenAction::GiveUp, std::chrono::milliseconds{0}};
+    }
+    // Still recovering: wait the poll delay, then retry. When bounded, clamp the
+    // wait to the remaining budget so the loop cannot sleep past the deadline and
+    // stall the give-up.
+    std::chrono::milliseconds delay = poll_delay;
+    if (budget) {
+        const std::chrono::milliseconds remaining = *budget - elapsed;
+        delay = poll_delay < remaining ? poll_delay : remaining;
+    }
+    return {OdReopenAction::RetryAfter, delay};
 }
 
 bool DxgiOdCaptureSrc::GetFramePointerShape(DXGI_OUTDUPL_POINTER_SHAPE_INFO* out_shape_info,

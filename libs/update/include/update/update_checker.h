@@ -12,6 +12,7 @@
 //     blocked result without making any network request.
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <update/update_types.h>
 
@@ -32,6 +33,18 @@ struct CheckParams {
 // Synchronous blocking call; intended to be run on a background thread.
 // Never throws; always returns a populated UpdateCheckResult.
 [[nodiscard]] UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept;
+
+// Raw releases fetch seam (shared with the standalone updater process): HTTPS
+// GET of the first releases page for `base_url` ("?per_page=30" is appended;
+// "&" when the URL already carries a query). `base_url` must be an https URL
+// of the CheckParams::api_base_url shape; "host:port" is honoured for dev
+// servers. Returns the response body, or nullopt with `out_error` set.
+//
+// Deliberately NOT gated by EXOSNAP_OFFICIAL_BUILD: the gate is an update-check
+// *policy* enforced by CheckForUpdate; the updater process only exists once the
+// app (which is gated) has handed off, and dev runs override via --base-url.
+[[nodiscard]] std::optional<std::string> FetchReleasesJson(const std::string& base_url,
+                                                           std::string& out_error) noexcept;
 
 // Compile-time gate: false when EXOSNAP_OFFICIAL_BUILD is not defined.
 [[nodiscard]] constexpr bool IsUpdateCheckEnabled() noexcept {

@@ -133,23 +133,39 @@ SelfTestResult SelfTestRunner::CheckOutputPathWritable(const std::string& path) 
     result.category = "Output Path";
 
     namespace fs = std::filesystem;
-    std::string target = path.empty() ? fs::temp_directory_path().string() : path;
-    auto probe = fs::path(target) / "exosnap_selftest_write_check.tmp";
+    const fs::path target = path.empty() ? fs::temp_directory_path() : fs::path(path);
     try {
+        // Recording creates the output folder on start, so one that does not exist yet is
+        // not a failure. Probe the nearest existing ancestor, which is where it would be
+        // created. Diagnostics only inspects; it never creates the folder itself.
+        fs::path probe_dir = target;
+        while (!probe_dir.empty() && !fs::exists(probe_dir)) {
+            const fs::path parent = probe_dir.parent_path();
+            if (parent == probe_dir)
+                break;
+            probe_dir = parent;
+        }
+        if (probe_dir.empty() || !fs::is_directory(probe_dir)) {
+            result.passed = false;
+            result.detail = "Not a writable directory: " + target.string();
+            return result;
+        }
+
+        const auto probe = probe_dir / "exosnap_selftest_write_check.tmp";
         std::ofstream f(probe, std::ios::binary);
         if (!f) {
             result.passed = false;
-            result.detail = "Cannot write to: " + target;
+            result.detail = "Cannot write to: " + target.string();
             return result;
         }
         f << "exosnap-selftest";
         f.close();
         fs::remove(probe);
         result.passed = true;
-        result.detail = "Output path is writable \xe2\x80\x94 probe succeeded for: " + target;
+        result.detail = "Output path is writable \xe2\x80\x94 probe succeeded for: " + target.string();
     } catch (...) {
         result.passed = false;
-        result.detail = "Exception during output path writability check for: " + target;
+        result.detail = "Exception during output path writability check for: " + target.string();
     }
     return result;
 }

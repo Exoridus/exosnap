@@ -2,6 +2,7 @@
 
 #include "audio_thread.h"
 #include "brickwall_limiter.h"
+#include "finalize_join_policy.h"
 #include "mic_dsp_audio_src.h"
 #include "mixed_audio_src.h"
 #include "mux_thread.h"
@@ -87,7 +88,7 @@ struct RecorderSession::Impl {
     StatsCallback stats_callback;
     MeterCallback meter_callback;
     DiagnosticsCallback diagnostics_callback;
-    PreviewFrameCallback preview_frame_callback;
+    PreviewSharedHandleCallback preview_shared_handle_callback;
     uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
 };
@@ -128,8 +129,8 @@ void RecorderSession::SetDiagnosticsCallback(DiagnosticsCallback cb) {
     m_impl->diagnostics_callback = std::move(cb);
 }
 
-void RecorderSession::SetPreviewFrameCallback(PreviewFrameCallback cb) {
-    m_impl->preview_frame_callback = std::move(cb);
+void RecorderSession::SetPreviewSharedHandleCallback(PreviewSharedHandleCallback cb) {
+    m_impl->preview_shared_handle_callback = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +266,21 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
     // Lossy codecs (Opus, AAC): bit_depth is not applicable; no validation needed.
 
-    // Chroma: only Cs420 supported
-    if (config.chroma != ChromaSubsampling::Cs420) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only ChromaSubsampling::Cs420 is supported in M3.1");
+    // Chroma: Cs420 is universal. Cs444 (AYUV, NVENC High 4:4:4 / HEVC FREXT) is an
+    // 8-bit H.264/HEVC expert path — AV1 NVENC is 4:2:0 only, and 4:4:4 + 10-bit is
+    // out of scope.
+    if (config.chroma != ChromaSubsampling::Cs420 && config.chroma != ChromaSubsampling::Cs444) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Unsupported ChromaSubsampling; supported: Cs420, Cs444");
+    }
+    if (config.chroma == ChromaSubsampling::Cs444) {
+        if (config.video_codec != VideoCodec::H264Nvenc && config.video_codec != VideoCodec::HevcNvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                        "ChromaSubsampling::Cs444 requires VideoCodec::H264Nvenc or VideoCodec::HevcNvenc "
+                        "(AV1 NVENC is 4:2:0 only)");
+        }
+        if (config.bit_depth != BitDepth::Bit8) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare, "ChromaSubsampling::Cs444 is 8-bit only");
+        }
     }
 
     // Bit depth: Bit8 is universal. Bit10 (P010 → HEVC Main10 / AV1 10-bit, SDR BT.709,
@@ -477,7 +490,15 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.stats_callback = m_impl->stats_callback;
         st.meter_callback = m_impl->meter_callback;
         st.diagnostics_callback = m_impl->diagnostics_callback;
-        st.preview_frame_callback = m_impl->preview_frame_callback;
+        // Bridge the public uintptr_t handle callback to the internal HANDLE-typed one.
+        if (m_impl->preview_shared_handle_callback) {
+            auto pub_cb = m_impl->preview_shared_handle_callback;
+            st.preview_shared_handle_cb = [pub_cb](HANDLE h, uint32_t w, uint32_t ht) {
+                pub_cb(reinterpret_cast<uintptr_t>(h), w, ht);
+            };
+        } else {
+            st.preview_shared_handle_cb = nullptr;
+        }
         st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(engine_config));
     }
 
@@ -647,42 +668,84 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         }
     }
 
-    constexpr DWORD kParallelJoinTimeoutMs = 120000;
+    // Two-phase shutdown (see finalize_join_policy.h). The single fixed 120 s join
+    // budget conflated two very different waits: the producer workers (video/audio)
+    // only have to flush their encoders and exit, while the mux thread's finalize
+    // (drain window -> clusters, Cues -> Render, back-patch Duration/SeekHead/
+    // Segment size, close) is O(duration) and disk-bound. On a long recording
+    // finalising to a NAS, finalize can legitimately run past 120 s while writing
+    // bytes the whole time, yet was reported as a hung worker (m=TIMEOUT).
+    //   Phase 1 — producers under a SHORT budget: a producer that will not flush
+    //             and exit in this window is the real "worker hangs" fault.
+    //   Phase 2 — the mux/finalize handle under a PROGRESS-based wait: keep waiting
+    //             as long as bytes are still being committed, abort only on a real
+    //             stall (no byte progress for a whole stall window) or a hard cap.
+    constexpr DWORD kProducerJoinBudgetMs = 10000; // Phase 1: flush + exit
     constexpr DWORD kStopPollIntervalMs = 100;
+    constexpr DWORD kFinalizePollIntervalMs = 250;     // Phase 2: sampling cadence
+    constexpr uint64_t kFinalizeStallWindowMs = 30000; // abort after 30 s of zero disk progress
+    constexpr uint64_t kFinalizeHardCapMs = 0;         // 0 = purely progress-based (no fixed cap)
 
-    std::vector<bool> handleSignaled(allHandles.size(), false);
-    if (!hasNullHandle) {
-        const WorkerJoinResult jr = WaitForWorkersThenJoin(allHandles, m_impl->state.stop_requested,
-                                                           kParallelJoinTimeoutMs, kStopPollIntervalMs);
-        if (jr.wait_failed) {
-            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(jr.last_error), ErrorPhase::Shutdown,
-                                        "WaitForMultipleObjects failed during thread join");
-        }
-        handleSignaled = jr.signaled;
-    } else {
-        m_impl->state.RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
-    }
+    // allHandles is [video, audio..., mux]; split the mux (finalize) handle off.
+    const size_t muxIndex = allHandles.size() - 1;
+    std::vector<HANDLE> producerHandles(allHandles.begin(), allHandles.begin() + muxIndex);
+    const HANDLE muxHandle = allHandles[muxIndex];
 
-    // Join the std::thread wrappers for any worker that has actually exited, so
-    // their destructors don't detach a still-running thread. Workers that timed
-    // out remain unsignaled and are detached by their destructors (unchanged
-    // behavior on the failure path).
     bool videoJoined = false;
     std::vector<bool> audioJoined(audioWorkers.size(), false);
     bool muxJoined = false;
+    bool finalizeStalled = false;
+
     if (!hasNullHandle) {
-        if (handleSignaled[0]) {
+        // --- Phase 1: producer workers under the short budget. Phase 1 of the wait
+        // is still unbounded until stop_requested, so recording duration is never
+        // capped; only the post-stop drain is bounded (kProducerJoinBudgetMs). ---
+        const WorkerJoinResult jr = WaitForWorkersThenJoin(producerHandles, m_impl->state.stop_requested,
+                                                           kProducerJoinBudgetMs, kStopPollIntervalMs);
+        if (jr.wait_failed) {
+            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(jr.last_error), ErrorPhase::Shutdown,
+                                        "WaitForMultipleObjects failed during producer join");
+        }
+        // Join the std::thread wrappers for producers that actually exited so their
+        // destructors don't detach a still-running thread (order matches producerHandles:
+        // video at 0, audio at 1..n). Timed-out workers stay unsignaled and are detached.
+        if (!jr.signaled.empty() && jr.signaled[0]) {
             videoJoined = videoThread.Join(0);
         }
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
-            if (handleSignaled[1 + i]) {
+            if (jr.signaled[1 + i]) {
                 audioJoined[i] = audioWorkers[i]->Join(0);
             }
         }
-        const size_t muxIndex = 1 + audioWorkers.size();
-        if (handleSignaled[muxIndex]) {
-            muxJoined = muxThread.Join(0);
+
+        // --- Phase 2: mux/finalize under a progress-based wait. Sample the bytes
+        // the Matroska writer has committed (published from inside Finalize()) and
+        // keep waiting while they grow; abort only on a genuine stall. ---
+        FinalizeProgressTracker finalizeTracker(kFinalizeStallWindowMs, kFinalizeHardCapMs);
+        const auto phase2_start = std::chrono::steady_clock::now();
+        for (;;) {
+            const DWORD w = WaitForSingleObject(muxHandle, kFinalizePollIntervalMs);
+            if (w == WAIT_OBJECT_0) {
+                muxJoined = muxThread.Join(0);
+                break;
+            }
+            if (w == WAIT_FAILED) {
+                m_impl->state.RecordFailure(HRESULT_FROM_WIN32(GetLastError()), ErrorPhase::Shutdown,
+                                            "WaitForSingleObject failed during finalize wait");
+                break;
+            }
+            // WAIT_TIMEOUT: sample finalize byte progress and decide whether to keep waiting.
+            const uint64_t bytes = m_impl->state.mux_bytes_written.load(std::memory_order_relaxed);
+            const uint64_t elapsed_ms = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - phase2_start)
+                    .count());
+            if (finalizeTracker.Observe(bytes, elapsed_ms) == FinalizeWaitDecision::StalledAbort) {
+                finalizeStalled = true;
+                break;
+            }
         }
+    } else {
+        m_impl->state.RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
     }
 
     // Stop stats collector
@@ -707,7 +770,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             result.error_phase = ErrorPhase::None;
         }
 
-        // Append join timeout info if any thread didn't join cleanly
+        // Report the two shutdown faults distinctly (finalize_join_policy.h): a
+        // producer that failed to flush and join in Phase 1 (WorkerHang) is a very
+        // different problem from a finalize that stalled in Phase 2 (FinalizeStalled),
+        // and they must not be conflated under one "join timeout" message.
         bool allAudioJoined = true;
         for (bool joined : audioJoined) {
             if (!joined) {
@@ -715,18 +781,27 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
                 break;
             }
         }
+        const bool producersJoined = videoJoined && allAudioJoined;
+        const ShutdownFault fault = ClassifyShutdownFault(producersJoined, muxJoined);
 
-        if (!videoJoined || !allAudioJoined || !muxJoined) {
+        if (fault != ShutdownFault::None) {
             if (result.error_detail.empty()) {
                 result.succeeded = false;
                 result.error_code = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
                 result.error_phase = ErrorPhase::Shutdown;
             }
-            result.error_detail += " [join timeout: v=" + std::string(videoJoined ? "ok" : "TIMEOUT");
-            for (size_t i = 0; i < audioJoined.size(); ++i) {
-                result.error_detail += " a" + std::to_string(i) + "=" + std::string(audioJoined[i] ? "ok" : "TIMEOUT");
+            if (fault == ShutdownFault::WorkerHang) {
+                result.error_detail += " [worker hang: v=" + std::string(videoJoined ? "ok" : "TIMEOUT");
+                for (size_t i = 0; i < audioJoined.size(); ++i) {
+                    result.error_detail +=
+                        " a" + std::to_string(i) + "=" + std::string(audioJoined[i] ? "ok" : "TIMEOUT");
+                }
+                result.error_detail +=
+                    " m=" + std::string(muxJoined ? "ok" : (finalizeStalled ? "STALLED" : "TIMEOUT")) + "]";
+            } else { // FinalizeStalled: producers were clean, only finalize failed to complete.
+                result.error_detail += " [finalize " + std::string(finalizeStalled ? "stalled" : "incomplete") +
+                                       ": no byte progress for " + std::to_string(kFinalizeStallWindowMs) + " ms]";
             }
-            result.error_detail += " m=" + std::string(muxJoined ? "ok" : "TIMEOUT") + "]";
         }
     }
 

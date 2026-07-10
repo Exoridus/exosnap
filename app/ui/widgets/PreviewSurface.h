@@ -60,6 +60,13 @@ class PreviewSurface : public QWidget {
     [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
     void repositionDxgiPreview();
 
+    // Switch the active DXGI preview to the engine's shared source texture during
+    // recording (WYSIWYG). No-op if no DXGI preview is running. Ownership of the NT
+    // handle transfers to the renderer. See DxgiPreviewRenderer::BeginPushedSource.
+    void beginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    // Revert to the DXGI preview's own WGC capture. No-op if no renderer exists.
+    void endPushedSource();
+
     void setTopMetaText(const QString& text);
     // Help text shown under the branded empty-state placeholder (no live preview).
     // Empty => the default "No source selected — choose one to preview" prompt.
@@ -83,6 +90,14 @@ class PreviewSurface : public QWidget {
     void setWebcamMirror(bool mirror);
     [[nodiscard]] bool webcamMirror() const noexcept {
         return webcam_mirror_;
+    }
+
+    // PiP compositing opacity (0 = fully transparent, 1 = fully opaque). Applied to
+    // both the Qt paint path and the DXGI overlay so the record-page preview stays
+    // WYSIWYG with the recording compositor. Never applied to the edit chrome.
+    void setWebcamOpacity(float opacity);
+    [[nodiscard]] float webcamOpacity() const noexcept {
+        return webcam_opacity_;
     }
 
     // Editing lock. When locked the PiP video stays visible but selection/drag/resize
@@ -155,6 +170,7 @@ class PreviewSurface : public QWidget {
     bool webcam_enabled_ = false;
     bool aspect_ratio_locked_ = true;
     bool webcam_mirror_ = false;
+    float webcam_opacity_ = 1.0f;
     bool webcam_selected_ = false;
     bool webcam_edit_locked_ = false;
     double webcam_aspect_ratio_ = 16.0 / 9.0;

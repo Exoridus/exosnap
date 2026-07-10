@@ -372,7 +372,9 @@ QWidget#recordSourceRow[sourceLocked="true"] {
 QWidget#recordPreviewSurfaceHost {
     background: #0A0A0B;
     border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
+    /* Square corners: the live preview is a rectangular native swap-chain child
+       window that would cover any rounded corner unevenly. */
+    border-radius: 0px;
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="ready"] {
@@ -714,6 +716,96 @@ QLabel[labelRole="aboutVersionLine"] {
     color: ${text3};
 }
 
+/* ── WHATS-NEW: gap-aware release-notes overlay ──────────────────────────────
+   The #whatsNewOverlay backdrop is painted in code (non-opaque QWidget); only
+   the centered card carries a styled background, mirroring #aboutCard. */
+QFrame#whatsNewCard {
+    background: ${bg1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QLabel[labelRole="whatsNewTitle"] {
+    font-size: 20px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="whatsNewSubtitle"] {
+    font-size: 13px;
+    color: ${text2};
+}
+
+QScrollArea#whatsNewScroll,
+QWidget#whatsNewSections {
+    background: transparent;
+    border: none;
+}
+
+QPushButton[whatsNewHeader="true"] {
+    text-align: left;
+    padding: 8px 10px;
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    background: ${bg2};
+    color: ${text0};
+    font-family: ${font-mono};
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+QPushButton[whatsNewHeader="true"]:hover {
+    background: ${bg3};
+    border-color: ${accent};
+}
+
+QPushButton[whatsNewHeader="true"]:checked {
+    border-color: ${accent};
+    color: ${accent};
+}
+
+QLabel[labelRole="whatsNewBody"] {
+    font-size: 13px;
+    color: ${text1};
+    padding: 2px 10px 6px 10px;
+}
+
+QPushButton#whatsNewAllReleasesBtn,
+QPushButton#updatesWhatsNewLink {
+    border: none;
+    background: transparent;
+    color: ${accent};
+    font-weight: 500;
+    padding: 6px 8px;
+}
+
+QPushButton#whatsNewAllReleasesBtn:hover,
+QPushButton#updatesWhatsNewLink:hover {
+    color: ${accent-hover};
+    text-decoration: underline;
+}
+
+QPushButton#updatesWhatsNewLink {
+    text-align: left;
+    padding: 2px 0 0 0;
+    font-size: 12px;
+}
+
+QPushButton#whatsNewCloseBtn {
+    color: ${accent-ink};
+    background: ${accent};
+    border: 1px solid ${accent};
+    border-radius: ${radius-md}px;
+    padding: 7px 18px;
+    font-weight: 600;
+}
+
+QPushButton#whatsNewCloseBtn:hover {
+    background: ${accent-hover};
+    border-color: ${accent-hover};
+}
+
 /* Matches both the legacy native QDialog and the embedded Qt::Widget overlay variant. */
 QDialog#sourcePickerDialog,
 QWidget#sourcePickerDialog {
@@ -942,26 +1034,19 @@ QLabel#expertModeLabel[expertOn="true"] {
 }
 
 /* v10 P2: amber warning banner above the Settings card grid (expert mode only). */
+/* Padding lives in the layout's contentsMargins: Qt does not apply stylesheet
+   padding to a plain QWidget's child layout, only to its background/border box. */
 QWidget#expertWarnBanner {
     background: ${warn-dim};
     border: 1px solid ${warn-b};
     border-left: 3px solid ${warn};
     border-radius: 11px;
-    padding: 11px 15px;
 }
 
 QLabel#expertWarnBannerText {
     color: ${warn};
     font-size: 12.5px;
     font-weight: 500;
-}
-
-/* v10 P3: expert-only rows (Bit depth, Colour range) carry a left accent edge. */
-QWidget[expertEdge="true"] {
-    border-left: 2px solid ${accent-b2};
-    border-top-left-radius: 2px;
-    border-bottom-left-radius: 2px;
-    padding-left: 10px;
 }
 
 QLabel[labelRole="fieldLabel"] {
@@ -1536,7 +1621,10 @@ QDoubleSpinBox {
     padding: 0 ${space-md}px;
     color: ${text0};
     min-height: ${control-height}px;
-    padding-right: 28px;
+    /* Must match QComboBox's padding-right: Qt applies the QSS min-width to the
+       content box, so a different horizontal padding yields a different overall
+       control width and the settings-row input column stops aligning. */
+    padding-right: 34px;
 }
 
 QSpinBox:hover,
@@ -1599,32 +1687,26 @@ QDoubleSpinBox::down-button:disabled {
 
 QSpinBox::up-arrow,
 QDoubleSpinBox::up-arrow {
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 3px solid transparent;
-    border-right: 3px solid transparent;
-    border-bottom: 4px solid ${text2};
+    image: url(:/theme/icons/chevron-up.svg);
+    width: 10px;
+    height: 10px;
 }
 
 QSpinBox::up-arrow:disabled,
 QDoubleSpinBox::up-arrow:disabled {
-    border-bottom-color: ${text3};
+    image: url(:/theme/icons/chevron-up.svg);
 }
 
 QSpinBox::down-arrow,
 QDoubleSpinBox::down-arrow {
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 3px solid transparent;
-    border-right: 3px solid transparent;
-    border-top: 4px solid ${text2};
+    image: url(:/theme/icons/chevron-down.svg);
+    width: 10px;
+    height: 10px;
 }
 
 QSpinBox::down-arrow:disabled,
 QDoubleSpinBox::down-arrow:disabled {
-    border-top-color: ${text3};
+    image: url(:/theme/icons/chevron-down.svg);
 }
 
 /* S3 — Editable combobox: the embedded QLineEdit must inherit the same chrome.
@@ -1852,11 +1934,6 @@ QLabel[labelRole="presetToolbarLabel"] {
     text-transform: uppercase;
     letter-spacing: 0.7px;
     color: ${text3};
-}
-
-/* v10: "· Unsaved" dirty indicator — amber/caution, matches videoRailUnsaved. */
-QLabel[labelRole="presetDirtyIndicator"] {
-    color: ${warn};
 }
 
 /* InfoHint "i" glyph button: flat icon only, no button chrome. The generic

@@ -84,13 +84,45 @@ Invalid combinations are not offered.
   as Limited, so Full-range recordings can look too dark in those players; Diagnostics surfaces
   a compatibility notice with a one-click fix when Full is selected.
 - **10-bit video output (P010)** is available for HEVC Main10 and AV1 in 10-bit
-  mode. This is **SDR-only**: no HDR10 transfer curve (PQ/HLG), no HDR metadata,
-  and no wide color gamut. The 10-bit path increases color precision in SDR
-  workflows that support it. See "Planned beyond 0.7.0" for true HDR.
-- 4:2:0 chroma subsampling only. 4:2:2 and 4:4:4 are not available.
-- **No HDR10 output** in this build. Displays that are HDR-capable are identified
-  in Diagnostics, but recording does not use the HDR pipeline. Content is captured
-  and encoded in SDR (BT.709) regardless of the display's HDR state.
+  mode. It serves two roles: higher color precision in SDR workflows, and the
+  mandatory pixel format for native HDR10 recording (below).
+- **Chroma subsampling: 4:2:0 (default) or 4:4:4.** 4:2:0 is universal (all codecs, 8- and
+  10-bit). **4:4:4** is an Expert-mode option (Settings → Video), limited to **8-bit H.264 and
+  HEVC** (NVENC High 4:4:4 Predictive / HEVC Range Extensions) on GPUs that report YUV444 encode
+  support. Boundaries, all enforced by capability gating and the resolver:
+  - **No AV1 4:4:4** — NVENC AV1 is 4:2:0 (Main) only.
+  - **No 10-bit 4:4:4** — the 4:4:4 path is 8-bit only in this build.
+  - **No 4:4:4 with native HDR10** — HDR10 requires 10-bit, which excludes 4:4:4.
+  - **No 4:2:2** — the NVENC generation has no 4:2:2 encode path.
+  - On the 4:4:4 path the **live in-app preview works** (it shares the composited RGB frame
+    with the preview before the AYUV conversion) and the **single-frame snapshot works** as well
+    (the packed AYUV 4:4:4 encode surface is decoded on the CPU with the exact inverse of the
+    encoder's RGB→AYUV conversion).
+  - 4:4:4 uses the same BT.709 matrix and Full/Limited range selection as 4:2:0.
+- **HDR displays are detected automatically.** By default an HDR desktop is
+  recorded as tone-mapped SDR (BT.709) for universal playability. An expert
+  setting ("HDR handling") switches to **native HDR10 recording**: PQ/BT.2020,
+  P010 10-bit, limited range, with mastering-display metadata written to MKV and
+  carried into remuxed MP4. Native HDR10 requires HEVC or AV1; H.264 is blocked
+  by a pre-flight check with a one-click codec fix. HDR handling applies to both
+  **monitor (duplication) capture and window/game capture** (Windows Graphics
+  Capture): a window on an HDR display negotiates a scRGB FP16 frame pool and
+  gets the same tone-map / native-HDR10 handling and the same H.264 blocker. The
+  window's hosting display is resolved once at recording start — moving the
+  window to a different monitor mid-recording keeps the session's initial HDR
+  decision. HDR10 static metadata is written **both** at the container level
+  **and in-band in the bitstream** — HEVC Mastering Display Colour Volume (SEI
+  type 137) and Content Light Level Info (SEI type 144) messages, and AV1 HDR
+  MDCV / HDR CLL metadata OBUs — emitted on every keyframe, so players that
+  ignore container-level HDR metadata (notably some Apple players) still receive
+  it. Content-light (MaxCLL/MaxFALL) metadata is only emitted when present; the
+  current native path fills mastering-display data but leaves MaxCLL/MaxFALL
+  absent (no per-frame content-light analysis). Current boundaries: no HLG, and
+  the in-app recording preview shows an approximate SDR tone-map. That last point
+  is also the one exception to the WYSIWYG-during-recording preview (below): for
+  **native HDR10** the engine has no SDR intermediate to share, so during a
+  native-HDR10 recording the Record-page preview keeps its own capture and shows
+  the same approximate SDR tone-map rather than the exact encoded frame.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -173,17 +205,34 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 
 ## Other current limitations
 
+- **Live preview during recording is WYSIWYG** for SDR, HDR-tone-map, and 4:4:4
+  sessions: the preview shares the engine's composited pre-encode frame over a GPU
+  texture and stops its own capture, so there is no second capture and the preview
+  reflects the actual encoded content. **Native HDR10 is the exception** — the
+  preview keeps its own capture and shows an approximate SDR tone-map there (see
+  the HDR section above). Cross-GPU handle sharing is not supported: if the
+  preview and engine devices resolve to different adapters the shared frame cannot
+  be opened, so the preview never switches sources and simply keeps running its own
+  live WGC capture (recording is unaffected).
 - Update checking is **notify-only**: the official build checks GitHub Releases and points you to
   the releases page. There is no in-place download, no auto-install, and no silent restart (see the
   Crash reporting and updates section below).
 - No code signing (portable ZIP and MSI are both unsigned); Windows SmartScreen may warn on first
   launch. An MSI installer is provided in addition to the portable ZIP.
 - No Replay Buffer.
-- No built-in editor, trimming, or Quick Trim.
-- **No HDR10 output.** 10-bit video (HEVC Main10, AV1 10-bit) is available in SDR
-  only. True HDR recording (PQ/HLG transfer, HDR10 metadata) is planned for a
-  future release.
-- No 4:2:2 or 4:4:4 chroma subsampling (4:2:0 only).
+- The built-in editor (Review → Edit → Output overlay, opened from a completed recording) supports
+  keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). There is no
+  video preview playback in the overlay yet, and there is no chapter/container-metadata export.
+- **HDR handling covers both monitor and window/game capture** (expert opt-in
+  for native HDR10; tone-mapped SDR is the default for HDR desktops). A window on
+  an HDR display captures via a scRGB FP16 frame pool and follows the same HDR
+  path as a monitor, keyed to the window's hosting display resolved at recording
+  start (a mid-recording move to another monitor keeps the initial decision).
+  Bitstream HDR10 static metadata (HEVC SEI / AV1 metadata OBUs) **is** written
+  on every keyframe, in addition to the container-level metadata. HLG is not
+  available.
+- No 4:2:2 chroma subsampling (4:2:0 everywhere; 4:4:4 only on the 8-bit
+  H.264/HEVC path described above).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
 - Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
   which can be reassigned on a monitor topology change. A saved Region or Display
@@ -234,6 +283,8 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 The following are intentionally deferred and are documented here only so the
 current boundary is unambiguous. They are **not** part of 0.7.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
-AMD and Intel hardware encoding, software encoding fallback, true HDR10 recording (PQ/HLG transfer
-curve, HDR10/HLG metadata, wide color gamut), 4:2:2/4:4:4 chroma subsampling, more-than-stereo
+AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut management
+beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and window/game
+capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level metadata),
+4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
 audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).

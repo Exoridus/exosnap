@@ -2,6 +2,7 @@
 
 #include "yuv_to_bgra.h"
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -32,8 +33,10 @@
 namespace {
 
 using recorder_core::ColorRange;
+using recorder_core::ConvertAyuvToBgra;
 using recorder_core::ConvertYuv420ToBgra;
 using recorder_core::MatrixCoefficients;
+using recorder_core::PackedAyuvFrame;
 using recorder_core::PlanarYuv420Frame;
 using recorder_core::YuvToBgraParams;
 
@@ -110,6 +113,46 @@ void ExpectGoldenP010(const Golden& gold, MatrixCoefficients matrix, ColorRange 
         << "G for YUV10(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
     EXPECT_NEAR(static_cast<int>(out[0]), static_cast<int>(gold.b), tolerance)
         << "B for YUV10(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
+    EXPECT_EQ(out[3], 255);
+}
+
+// Converts a minimal uniform 2x2 packed-AYUV frame and checks the result
+// against the hand-computed golden pixel. Packed AYUV is single-plane, 4 bytes
+// per pixel, memory byte order [V, U, Y, A] (DXGI_FORMAT_AYUV) — spelled out
+// explicitly below so a byte-order regression is caught. Because 4:4:4 carries
+// full chroma per pixel, the golden RGB is identical to the NV12 vector with
+// the same Y/U/V samples.
+void ExpectGoldenAyuv(const Golden& gold, MatrixCoefficients matrix, ColorRange range, int tolerance = 1) {
+    const auto y8 = static_cast<uint8_t>(gold.y);
+    const auto u8 = static_cast<uint8_t>(gold.cb);
+    const auto v8 = static_cast<uint8_t>(gold.cr);
+    // Four identical pixels, each 4 bytes in [V, U, Y, A] order. Alpha input is
+    // deliberately NOT 0xFF (0x11) to prove the decoder ignores it and writes
+    // 0xFF out.
+    const std::array<uint8_t, 4> px = {v8, u8, y8, 0x11};
+    std::vector<uint8_t> data;
+    for (int i = 0; i < 4; ++i)
+        data.insert(data.end(), px.begin(), px.end());
+
+    PackedAyuvFrame src;
+    src.data = data.data();
+    src.stride_bytes = 2 * 4; // 2 px/row, 4 bytes/px, no padding
+    src.width = 2;
+    src.height = 2;
+
+    YuvToBgraParams params;
+    params.matrix = matrix;
+    params.range = range;
+
+    std::vector<uint8_t> out(2 * 2 * 4, 0);
+    ConvertAyuvToBgra(src, params, out.data(), 2 * 4);
+
+    EXPECT_NEAR(static_cast<int>(out[2]), static_cast<int>(gold.r), tolerance)
+        << "R for AYUV(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
+    EXPECT_NEAR(static_cast<int>(out[1]), static_cast<int>(gold.g), tolerance)
+        << "G for AYUV(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
+    EXPECT_NEAR(static_cast<int>(out[0]), static_cast<int>(gold.b), tolerance)
+        << "B for AYUV(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
     EXPECT_EQ(out[3], 255);
 }
 
@@ -194,6 +237,88 @@ TEST(YuvToBgra, GoldenP010Bt601Full) {
     // Y=512, Cr=720: R = 0.50049 + 1.402*0.20332 = 0.78554 -> 200
     //                G = 0.50049 - 0.71414*0.20332 = 0.35529 -> 91
     ExpectGoldenP010({512, 512, 720, 200, 91, 128}, MatrixCoefficients::Bt601, ColorRange::Full);
+}
+
+// --- Packed AYUV (4:4:4, 8-bit) golden vectors -----------------------------
+// Same matrix/range math as NV12, no chroma subsampling. The expected RGB
+// reuses the hand-computed NV12 goldens above (identical Y/U/V samples).
+
+TEST(AyuvToBgra, GoldenBt709Limited) {
+    // Y=16 -> black, Y=235 -> white, neutral chroma 128.
+    ExpectGoldenAyuv({16, 128, 128, 0, 0, 0}, MatrixCoefficients::Bt709, ColorRange::Limited, 0);
+    ExpectGoldenAyuv({235, 128, 128, 255, 255, 255}, MatrixCoefficients::Bt709, ColorRange::Limited, 0);
+    // Saturated Cr: (126,128,180) -> (221,100,128), same as the NV12 golden.
+    ExpectGoldenAyuv({126, 128, 180, 221, 100, 128}, MatrixCoefficients::Bt709, ColorRange::Limited);
+    // Saturated Cb: (126,180,128) -> (128,117,238).
+    ExpectGoldenAyuv({126, 180, 128, 128, 117, 238}, MatrixCoefficients::Bt709, ColorRange::Limited);
+}
+
+TEST(AyuvToBgra, GoldenBt709Full) {
+    ExpectGoldenAyuv({0, 128, 128, 0, 0, 0}, MatrixCoefficients::Bt709, ColorRange::Full, 0);
+    ExpectGoldenAyuv({255, 128, 128, 255, 255, 255}, MatrixCoefficients::Bt709, ColorRange::Full, 0);
+    // (128,128,180) -> (210,104,128); (128,180,128) -> (128,118,224).
+    ExpectGoldenAyuv({128, 128, 180, 210, 104, 128}, MatrixCoefficients::Bt709, ColorRange::Full);
+    ExpectGoldenAyuv({128, 180, 128, 128, 118, 224}, MatrixCoefficients::Bt709, ColorRange::Full);
+}
+
+// The alpha input byte (0x11 in the helper) must be ignored; output alpha 0xFF.
+// (Already asserted per-pixel by the helper; this names the intent.)
+TEST(AyuvToBgra, IgnoresSourceAlphaWritesOpaque) {
+    ExpectGoldenAyuv({126, 128, 180, 221, 100, 128}, MatrixCoefficients::Bt709, ColorRange::Limited);
+}
+
+// Padded stride: a 2x2 frame whose row pitch exceeds width*4. Distinct pixels
+// per position pin down both the packed [V,U,Y] addressing and stride handling.
+// BT.709 full, neutral chroma -> R=G=B=Y, so each pixel decodes to its own Y.
+TEST(AyuvToBgra, PaddedStrideDistinctPixels) {
+    constexpr uint32_t kW = 2, kH = 2;
+    constexpr uint32_t kStride = kW * 4 + 8; // 8 bytes padding per row
+    const uint8_t lumas[kH][kW] = {{40, 90}, {150, 220}};
+
+    std::vector<uint8_t> data(kStride * kH, 0xEE); // poison the padding
+    for (uint32_t r = 0; r < kH; ++r) {
+        for (uint32_t c = 0; c < kW; ++c) {
+            uint8_t* p = data.data() + r * kStride + c * 4;
+            p[0] = 128;         // V (neutral)
+            p[1] = 128;         // U (neutral)
+            p[2] = lumas[r][c]; // Y
+            p[3] = 0x00;        // A (ignored)
+        }
+    }
+
+    PackedAyuvFrame src;
+    src.data = data.data();
+    src.stride_bytes = kStride;
+    src.width = kW;
+    src.height = kH;
+
+    YuvToBgraParams params;
+    params.matrix = MatrixCoefficients::Bt709;
+    params.range = ColorRange::Full;
+
+    constexpr uint32_t kOutStride = kW * 4 + 4; // also padded
+    std::vector<uint8_t> out(kOutStride * kH, 0);
+    ConvertAyuvToBgra(src, params, out.data(), kOutStride);
+
+    for (uint32_t r = 0; r < kH; ++r) {
+        for (uint32_t c = 0; c < kW; ++c) {
+            const int expected = lumas[r][c];
+            const uint8_t* px = out.data() + r * kOutStride + c * 4;
+            EXPECT_NEAR(static_cast<int>(px[0]), expected, 1) << "B at (" << r << "," << c << ")";
+            EXPECT_NEAR(static_cast<int>(px[1]), expected, 1) << "G at (" << r << "," << c << ")";
+            EXPECT_NEAR(static_cast<int>(px[2]), expected, 1) << "R at (" << r << "," << c << ")";
+            EXPECT_EQ(px[3], 255);
+        }
+    }
+}
+
+TEST(AyuvToBgra, DegenerateInputsAreNoOps) {
+    std::vector<uint8_t> out(16, 0xAB);
+    PackedAyuvFrame src; // all zero/null by default
+    YuvToBgraParams params;
+    ConvertAyuvToBgra(src, params, out.data(), 4);
+    for (uint8_t b : out)
+        EXPECT_EQ(b, 0xAB);
 }
 
 // --- Addressing coverage: non-uniform frames, every pixel checked ----------

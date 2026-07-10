@@ -95,6 +95,42 @@ static std::vector<uint8_t> MakeHevcSpsNal(uint8_t profile_idc, uint32_t bit_dep
     return nal;
 }
 
+// Build a real, parseable HEVC Range-Extensions (FREXT) SPS NAL with
+// chroma_format_idc = 3 (4:4:4), 8-bit. When chroma_format_idc == 3 the SPS
+// carries an extra separate_colour_plane_flag bit (H.265 7.3.2.2.1) that shifts
+// every field after it; the parser must consume it to keep the bit-depth fields
+// aligned. profile_idc = 4 (Format Range Extensions).
+static std::vector<uint8_t> MakeHevc444SpsNal() {
+    SpsBitWriter w;
+    w.PutBits(0u, 4u); // sps_video_parameter_set_id
+    w.PutBits(0u, 3u); // sps_max_sub_layers_minus1
+    w.PutBit(1u);      // sps_temporal_id_nesting_flag
+
+    // profile_tier_level (general layer, 12 bytes)
+    w.PutBits(0u, 2u);    // general_profile_space
+    w.PutBit(0u);         // general_tier_flag
+    w.PutBits(4u, 5u);    // general_profile_idc = 4 (Range Extensions / FREXT)
+    w.PutBits(0u, 32u);   // general_profile_compatibility_flags
+    w.PutBits(0x90u, 8u); // constraint byte 0
+    for (int i = 0; i < 5; ++i)
+        w.PutBits(0u, 8u); // constraint bytes 1-5
+    w.PutBits(0x5Du, 8u);  // general_level_idc
+
+    w.PutUe(0u);    // sps_seq_parameter_set_id
+    w.PutUe(3u);    // chroma_format_idc = 3 (4:4:4)
+    w.PutBit(0u);   // separate_colour_plane_flag (present only when chroma == 3)
+    w.PutUe(1920u); // pic_width_in_luma_samples
+    w.PutUe(1080u); // pic_height_in_luma_samples
+    w.PutBit(0u);   // conformance_window_flag
+    w.PutUe(0u);    // bit_depth_luma_minus8 = 0 (8-bit)
+    w.PutUe(0u);    // bit_depth_chroma_minus8 = 0 (8-bit)
+
+    std::vector<uint8_t> rbsp = w.Finish();
+    std::vector<uint8_t> nal = {0x42, 0x01}; // SPS NAL header (type 33)
+    nal.insert(nal.end(), rbsp.begin(), rbsp.end());
+    return nal;
+}
+
 // Builds a minimal Annex-B HEVC packet with the requested NAL types.
 // VPS/PPS carry short synthetic payloads; the SPS is a real, parseable Main (8-bit,
 // 4:2:0) SPS so BuildHvcc reflects real profile/level/chroma/bit-depth values.
@@ -517,6 +553,23 @@ TEST(AnnexBHvccTest, BuildHvcc_Main10_LevelIdcExtracted) {
 
     // general_level_idc at hvcc[12] (we wrote 0x5D into the SPS).
     EXPECT_EQ(hvcc[12], 0x5Du);
+}
+
+TEST(AnnexBHvccTest, BuildHvcc_Frext444_ChromaFormatAndProfileAndBitDepth) {
+    // A 4:4:4 FREXT SPS (chroma_format_idc=3 with separate_colour_plane_flag) must
+    // parse correctly and stamp chromaFormat=3 into the hvcC without the extra bit
+    // desyncing the bit-depth fields.
+    const auto sps = MakeHevc444SpsNal();
+    const auto vps_sps_pps = WrapVpsSpsPps(sps);
+
+    std::vector<uint8_t> hvcc;
+    ASSERT_TRUE(BuildHvccFromAnnexBVpsSpsPps(vps_sps_pps, hvcc));
+
+    EXPECT_EQ(hvcc[1], 0x04u);  // general_profile_idc = 4 (Range Extensions)
+    EXPECT_EQ(hvcc[16], 0xFFu); // chromaFormat: reserved(6b) + 3 (4:4:4) = 0xFF
+    EXPECT_EQ(hvcc[17], 0xF8u); // bit_depth_luma_minus8 = 0 (8-bit) — stays aligned
+    EXPECT_EQ(hvcc[18], 0xF8u); // bit_depth_chroma_minus8 = 0 (8-bit) — stays aligned
+    EXPECT_EQ(hvcc[12], 0x5Du); // general_level_idc still extracted correctly
 }
 
 TEST(AnnexBHvccTest, BuildHvcc_Main8_StillReportsEightBitProfile1) {

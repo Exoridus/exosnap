@@ -10,9 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 18: SETTINGS-HONESTY-R1 adds developer_log_level.
-// Pre-1.0: no migration; missing key defaults to "Info".
-constexpr int kSettingsVersionCurrent = 18;
+// Bump to 19: WHATS-NEW adds whats_new_suppressed.
+// Pre-1.0: no migration; missing key defaults to false.
+constexpr int kSettingsVersionCurrent = 19;
 
 } // namespace
 
@@ -89,6 +89,10 @@ PersistedAppSettings AppSettingsStore::Load() const {
     // Pre-1.0: no migration; missing keys default to Stable / true.
     persisted.update_channel = settings.value(QStringLiteral("channel"), QStringLiteral("Stable")).toString();
     persisted.check_updates_on_start = settings.value(QStringLiteral("check_updates_on_start"), true).toBool();
+    // Loop guard for the staged swap updater; empty when no swap is pending.
+    persisted.applied_version = settings.value(QStringLiteral("applied_version"), QString()).toString();
+    // WHATS-NEW: suppress the post-update overlay (default false = notices shown).
+    persisted.whats_new_suppressed = settings.value(QStringLiteral("whats_new_suppressed"), false).toBool();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
@@ -185,6 +189,9 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     // UPDATE-WIRE-R1: update channel + auto-check-on-start.
     settings.setValue(QStringLiteral("channel"), settings_snapshot.update_channel);
     settings.setValue(QStringLiteral("check_updates_on_start"), settings_snapshot.check_updates_on_start);
+    settings.setValue(QStringLiteral("applied_version"), settings_snapshot.applied_version);
+    // WHATS-NEW: suppress the post-update overlay.
+    settings.setValue(QStringLiteral("whats_new_suppressed"), settings_snapshot.whats_new_suppressed);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));

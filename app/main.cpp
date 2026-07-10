@@ -11,6 +11,7 @@
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion
 #include "MainWindow.h"
 #include "diagnostics/AppLog.h"
+#include "diagnostics/EngineLogBridge.h"
 #include "diagnostics/StartupClock.h"
 #include "exosnap_resource.h"
 #include "services/ElevatedRelaunch.h"
@@ -111,6 +112,7 @@ int main(int argc, char* argv[]) {
     // AppLog::init() only ran once MainWindow was constructed (see MainWindow.cpp);
     // that call is still there and is a harmless no-op (AppLog::init() is idempotent).
     exosnap::diagnostics::AppLog::init();
+    exosnap::InitializeEngineLogging();
     exosnap::diagnostics::AppLog::info(QStringLiteral("perf"), QStringLiteral("main-start %1 ms").arg(main_start_ms));
     exosnap::diagnostics::AppLog::info(QStringLiteral("perf"),
                                        QStringLiteral("qapplication-created %1 ms").arg(qapplication_created_ms));
@@ -253,6 +255,9 @@ int main(int argc, char* argv[]) {
 
     const int rc = app.exec();
 
+    // Detach the sink before AppLog is torn down: a late engine record must not reach it.
+    exosnap::ShutdownEngineLogging();
+
 #if defined(Q_OS_WIN)
     // Normal shutdown: mark a clean exit so the next launch does not show the
     // crash dialog, then flush + shut down the crash engine.
@@ -260,17 +265,7 @@ int main(int argc, char* argv[]) {
         exosnap::crash_capture::MarkCleanExit(crash_dir);
     exosnap::crash_capture::Shutdown();
 
-    // Relaunch path (dialog "Restart ExoSnap"): MarkCleanExit + Shutdown already
-    // ran above, so the relaunched instance is quiet. Release the single-instance
-    // mutex so the new process can acquire it, then spawn a detached copy.
-    if (win.relaunchRequested()) {
-        if (hMutex != nullptr) {
-            ReleaseMutex(hMutex);
-            CloseHandle(hMutex);
-            hMutex = nullptr;
-        }
-        QProcess::startDetached(QApplication::applicationFilePath(), {});
-    } else if (win.elevatedRelaunchRequested()) {
+    if (win.elevatedRelaunchRequested()) {
         // ELEVATION-FOUNDATION-R1 (ADR 0033): relaunch elevated via ShellExecuteEx
         // ("runas", UAC). Reuse the same single-instance mutex release so the new
         // elevated process can acquire it. A UAC decline (UserDeclined) is a

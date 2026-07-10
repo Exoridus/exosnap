@@ -36,6 +36,25 @@ MicChannelMode EffectiveAutoMode(const AutoModeState& state);
 
 } // namespace mic_channel_detail
 
+// How the WASAPI audio drain must react to an IAudioCaptureClient acquire
+// (GetBuffer / GetNextPacketSize) result HRESULT. Audio mirror of
+// OdAcquireFailAction — but there is no in-place "recover": a capture endpoint
+// invalidated mid-recording cannot be reacquired on the same stream, so
+// endpoint loss ends the recording cleanly instead.
+enum class WasapiAcquireFailAction {
+    Idle, // S_OK / AUDCLNT_S_BUFFER_EMPTY: no data-carrying failure this poll tick — keep draining.
+    Fail, // AUDCLNT_E_DEVICE_INVALIDATED / AUDCLNT_E_SERVICE_NOT_RUNNING or any unexpected HRESULT:
+          // the endpoint is unrecoverable in place — raise source-loss so the recording ends
+          // cleanly (EOS -> finalise) instead of looping through a dead endpoint until the join
+          // budget detaches the worker (the a0=TIMEOUT symptom of the recording hang).
+};
+
+// Classify an IAudioCaptureClient acquire result HRESULT into the drain's
+// reaction. Pure and hardware-free so the recording-loss policy is unit-pinned.
+// Any HRESULT that is not a benign "no data this tick" code is treated as Fail
+// (fail closed, never loop silently).
+WasapiAcquireFailAction ClassifyWasapiAcquireFailure(HRESULT hr) noexcept;
+
 class WasapiCaptureSrc : public IAudioCaptureSource {
   public:
     explicit WasapiCaptureSrc(MicChannelMode channel_mode = MicChannelMode::Auto,
@@ -54,6 +73,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     uint32_t Channels() const override;
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
+    int32_t LastCaptureHresult() const override;
 
     void Shutdown() override;
 
@@ -77,6 +97,10 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
 
     bool pending_capture_error_ = false;
     std::string pending_capture_error_msg_;
+    // Raw HRESULT of the last fatal acquire failure (endpoint loss). Surfaced to
+    // the drain so it reaches the app log as the recording's error code, rather
+    // than a generic E_FAIL. 0 (S_OK) when no fatal acquire failure has occurred.
+    int32_t last_capture_hr_ = 0;
 
     MicChannelMode requested_channel_mode_ = MicChannelMode::Auto;
     std::optional<std::string> device_id_;

@@ -56,6 +56,13 @@ class NotificationManager : public QObject {
     // drop breakdown lives on the Diagnostics page, not in the toast). DROP-NOTIFY.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_FramesDropped = 8000;
+    // info / "Settings repaired" — auto-dismiss 8 s (informational; no action to take).
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_SettingsRepaired = 8000;
+    // info / "Switched to '<preset>'" — auto-dismiss 8 s (the live config already
+    // applied; Undo just needs a window to be seen, not to force a decision).
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_PresetSwitched = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

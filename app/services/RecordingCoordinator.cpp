@@ -1,11 +1,14 @@
 #include "RecordingCoordinator.h"
 
+#include "services/TargetDisplayFacts.h"
+
 #include "../../../libs/recorder_core/src/loopback_meter_service.h"
 #include "../../../libs/recorder_core/src/mic_meter_service.h"
 
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/mp4_remuxer.h>
 
+#include <capability/capability_builder.h>
 #include <capability/runtime_snapshot.h>
 
 #include <windows.h>
@@ -59,29 +62,6 @@ static std::wstring ToWide(const std::string& s) {
     return w;
 }
 
-// Resolve the HDR facts of the display a monitor capture target is on. The
-// impure HMONITOR -> Windows display-device-name step lives here; the pure
-// lookup over the already-probed facts is capability::FindDisplayByName. Returns
-// nullopt for window targets or when the display cannot be matched.
-static const capability::DisplayHdrFacts* FindTargetDisplayFacts(const recorder_core::CaptureTarget& target,
-                                                                 const capability::CapabilitySet& caps) {
-    if (target.kind != recorder_core::CaptureTarget::Kind::Monitor) {
-        return nullptr;
-    }
-    MONITORINFOEXW mi{};
-    mi.cbSize = sizeof(mi);
-    if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &mi) == FALSE) {
-        return nullptr;
-    }
-    const int len = WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 1) {
-        return nullptr;
-    }
-    std::string device_name(static_cast<size_t>(len - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, device_name.data(), len, nullptr, nullptr);
-    return capability::FindDisplayByName(caps.runtime.displays, device_name);
-}
-
 static std::string TrimAscii(const std::string& value) {
     std::size_t first = 0;
     while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
@@ -121,6 +101,7 @@ static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings
     overlay.overlay_w_norm = sanitized.overlay.w_norm;
     overlay.overlay_h_norm = sanitized.overlay.h_norm;
     overlay.mirror = sanitized.mirror;
+    overlay.opacity = sanitized.opacity;
     overlay.chroma_key_enabled = sanitized.chroma_key.enabled;
     {
         const auto ac = sanitized.chroma_key.active_color();
@@ -389,6 +370,29 @@ void RecordingCoordinator::SetDiskSpaceProvider(diagnostics::IDiskSpaceProvider*
     disk_space_provider_ = provider;
 }
 
+void RecordingCoordinator::SetDisplayFactsProvider(DisplayFactsProvider provider) {
+    display_facts_provider_ = std::move(provider);
+}
+
+const std::vector<capability::DisplayHdrFacts>& RecordingCoordinator::DisplayFacts() const {
+    return caps_.runtime.displays;
+}
+
+void RecordingCoordinator::RefreshDisplayFacts() {
+    auto displays =
+        display_facts_provider_ ? display_facts_provider_() : capability::CapabilityBuilder::QueryDisplayFacts();
+    // An empty result means the query failed (no DXGI factory). Keep what we had rather
+    // than pretending every display went SDR.
+    if (displays.empty())
+        return;
+    caps_.runtime.displays = std::move(displays);
+}
+
+const std::vector<capability::DisplayHdrFacts>& RecordingCoordinator::RefreshedDisplayFacts() {
+    RefreshDisplayFacts();
+    return caps_.runtime.displays;
+}
+
 // ---------------------------------------------------------------------------
 // Low-disk guard (LOW-DISK-GUARD-R1)
 // ---------------------------------------------------------------------------
@@ -593,10 +597,16 @@ void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
     SyncWebcamService(false);
 }
 
+void RecordingCoordinator::SetWebcamSettingsPreviewActive(bool active) {
+    webcam_settings_preview_active_ = active;
+    SyncWebcamService(false);
+}
+
 void RecordingCoordinator::SyncWebcamService(bool force_restart) {
     // Recording always owns the device; while idle the capture runs only when the
     // Record preview asked for it (live Ready PiP) and webcam is enabled.
-    const bool want_running = webcam_settings_.enabled && (is_recording_.load() || webcam_preview_active_);
+    const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
+                              (is_recording_.load() || webcam_preview_active_ || webcam_settings_preview_active_);
     if (!want_running) {
         webcam_service_.Stop();
         return;
@@ -720,7 +730,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     PostStateChange(UiRecordingState::Preparing);
 
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
-    config.nvenc_quality_preset = video_settings_.quality;
+    config.nvenc_cq = video_settings_.cq;
     config.nvenc_rate_control = video_settings_.rate_control;
     config.nvenc_bitrate_kbps = video_settings_.bitrate_kbps;
     config.frame_rate_num = video_settings_.frame_rate_num;
@@ -756,7 +766,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // 10-bit. HDR10 is 10-bit by definition — PQ in 8-bit bands severely — so the
     // 8-bit setting is deliberately overridden here for the native path. H.264 is
     // excluded (it cannot encode HDR10; the pre-flight blocker catches it).
-    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, caps_)) {
+    // Read through the refreshing accessor, never the startup snapshot: the metadata
+    // committed below goes into the encoder and the container, and it must describe the
+    // display as it is now — the user may have toggled HDR since launch.
+    if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts())) {
         if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
             recorder_core::HdrDisplayFacts hdr_facts;
             hdr_facts.hdr_active = facts->hdr_active;
@@ -770,23 +783,32 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             hdr_facts.white_point_y = facts->white_point_y;
             hdr_facts.max_luminance_nits = facts->max_luminance_nits;
             hdr_facts.min_luminance_nits = facts->min_luminance_nits;
-            config.color = recorder_core::MakeHdr10ColorMetadata(hdr_facts);
-            config.bit_depth = recorder_core::BitDepth::Bit10;
+            // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
+            // 4:2:0 — 4:4:4 (AYUV) is 8-bit only, so a leftover Cs444 selection would
+            // otherwise reach Validate() as Cs444 + Bit10 and fail the recording start
+            // on any HDR-active display.
+            const bool chroma_snapped = recorder_core::ApplyHdr10NativeEncode(config, hdr_facts);
             diagnostics::AppLog::info(
                 QStringLiteral("record.hdr"),
                 QStringLiteral("mode=hdr10-native primaries=bt2020 transfer=pq bitdepth=10 range=limited"));
+            if (chroma_snapped) {
+                diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
+                                             QStringLiteral("field=chroma requested=4:4:4 effective=4:2:0 "
+                                                            "reason=\"HDR10 native is 10-bit; 4:4:4 is 8-bit only\""));
+            }
         }
     }
     config.output_path = output_path;
     config.split = split_settings_;
 
-    config.webcam.enabled = webcam_settings_.enabled;
+    config.webcam.enabled = webcam_settings_.enabled && !webcam_settings_.device_id.empty();
     config.webcam.frame_provider = &webcam_service_;
     config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
     config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
     config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
     config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
     config.webcam.mirror = webcam_settings_.mirror;
+    config.webcam.opacity = webcam_settings_.opacity;
     config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
     {
         const auto ac = webcam_settings_.chroma_key.active_color();
@@ -878,6 +900,15 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
     session_.SetDiagnosticsCallback(
         [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) { PostDiagnostics(snapshot); });
+    // Forward the shared WYSIWYG preview handle to whoever registered. Bridges the
+    // engine's uintptr_t handle to the app-facing void*; ownership transfers along.
+    if (on_preview_shared_handle_ready_) {
+        auto cb = on_preview_shared_handle_ready_;
+        session_.SetPreviewSharedHandleCallback(
+            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h) { cb(reinterpret_cast<void*>(nt_handle), w, h); });
+    } else {
+        session_.SetPreviewSharedHandleCallback(nullptr);
+    }
     // Show an "initializing" diagnostics state until the engine emits live snapshots.
     EmitInitializingDiagnostics();
     {
@@ -887,10 +918,15 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     split_pending_.store(false);
     session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
-    if (webcam_settings_.enabled) {
-        webcam_service_.Stop();
-        webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
-                              webcam_settings_.fps);
+    if (webcam_settings_.enabled && !webcam_settings_.device_id.empty()) {
+        // Keep the already-running shared capture (the live PiP preview) instead of
+        // stopping and restarting it, which blanks the webcam for a moment right as
+        // recording begins. Settings changes before this point already restarted the
+        // capture via SyncWebcamService, so a running reader is current; only start one
+        // if none is running.
+        if (!webcam_service_.IsRunning())
+            webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
+                                  webcam_settings_.fps);
     } else {
         webcam_service_.Stop();
     }
@@ -1851,6 +1887,16 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
         output_settings_.bit_depth = capability::BitDepth::Bit8;
     }
     resolved_user_config_.bit_depth = output_settings_.bit_depth;
+    // Chroma subsampling (expert): 4:4:4 is 8-bit H.264/HEVC only. Reset to 4:2:0
+    // when the resolved codec/bit-depth can't carry it (the resolver applies the
+    // same fallback); then carry it into UserRecorderConfig.chroma.
+    if (output_settings_.chroma_subsampling == capability::ChromaSubsampling::Cs444 &&
+        (output_settings_.bit_depth != capability::BitDepth::Bit8 ||
+         (output_settings_.video_codec != capability::VideoCodec::HevcNvenc &&
+          output_settings_.video_codec != capability::VideoCodec::H264Nvenc))) {
+        output_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
+    }
+    resolved_user_config_.chroma = output_settings_.chroma_subsampling;
     // Colour range (0.7.0): always valid for every codec/container, so it flows
     // straight through (no reconcile) to UserRecorderConfig.color_range and on to
     // the engine's ColorMetadata.range.
@@ -1911,6 +1957,10 @@ void RecordingCoordinator::SetRecordingMeterCallback(RecordingMeterCallback cb) 
 
 void RecordingCoordinator::SetFrameCapturedCallback(FrameCapturedCallback cb) {
     on_frame_captured_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb) {
+    on_preview_shared_handle_ready_ = std::move(cb);
 }
 
 void RecordingCoordinator::SetReadyFrameSource(std::function<QImage()> getter) {

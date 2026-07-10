@@ -124,6 +124,26 @@ void ProbeNvencGuidsOnDevice(HMODULE dll, ID3D11Device* device, AdapterEncoderCa
                     out.h264 = true;
             }
             out.probed = true; // only now is the per-codec result authoritative
+
+            // Per-codec 8-bit 4:4:4 (YUV444) support via
+            // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Mirrors runtime_query.cpp's
+            // system-wide probe, but targeted at THIS adapter's session. Only
+            // queried for codecs this adapter advertised; a failed/absent query
+            // leaves the flag false (no 4:4:4 claimed). No AV1 — NVENC AV1 is
+            // 4:2:0 only.
+            if (funcs.nvEncGetEncodeCaps != nullptr) {
+                auto query_yuv444 = [&funcs, encoder](const GUID& codec) -> bool {
+                    NV_ENC_CAPS_PARAM capsParam{};
+                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
+                    capsParam.capsToQuery = NV_ENC_CAPS_SUPPORT_YUV444_ENCODE;
+                    int value = 0;
+                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS && value != 0;
+                };
+                if (out.h264)
+                    out.yuv444_h264 = query_yuv444(NV_ENC_CODEC_H264_GUID);
+                if (out.hevc)
+                    out.yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
+            }
         }
     }
 

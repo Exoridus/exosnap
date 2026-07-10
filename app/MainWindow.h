@@ -21,8 +21,10 @@
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
 #include "services/GlobalHotkeyService.h"
+#include "services/PageHydrationController.h"
 #include "services/RecoveryService.h"
 #include "services/WebcamDeviceNotifier.h"
+#include "services/WhatsNewPayload.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
 #include "settings/RecoveryManifestStore.h"
@@ -36,6 +38,7 @@
 
 class QShowEvent;
 class QPaintEvent;
+class QTimer;
 
 namespace exosnap {
 
@@ -58,8 +61,8 @@ namespace ui::dialogs {
 class AboutOverlay;
 class CrashReportOverlay;
 class EditExportOverlay;
-class PresetManageOverlay;
 class RecoveryOverlay;
+class WhatsNewOverlay;
 class SourcePickerOverlay;
 class RecordingErrorOverlay;
 struct RecordingErrorModel;
@@ -97,12 +100,6 @@ class MainWindow : public QMainWindow {
   public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
-
-    // CRASH-WIRE-R1: true when the crash dialog's "Restart ExoSnap" was chosen.
-    // main() reads this after app.exec() to relaunch a detached instance.
-    [[nodiscard]] bool relaunchRequested() const noexcept {
-        return relaunch_requested_;
-    }
 
     // ELEVATION-FOUNDATION-R1 (ADR 0033): true when the user accepted the
     // "relaunch as administrator" offer. main() reads this after app.exec() and
@@ -225,27 +222,27 @@ class MainWindow : public QMainWindow {
 
     // Preset operation handlers (wired to ConfigPage signals).
     void onPresetSelected(const QString& id);
-    void onSavePreset();
     void onSavePresetAs(const QString& name);
-    void onNewPreset();
-    void onDuplicatePreset();
     void onRenamePreset(const QString& name);
     void onDeletePreset();
     void onResetChanges();
-    void onResetToDefaults();
-    void onSetDefaultPreset();
 
-    // Persist the full preset store state.
+    // Persist the full preset store state (live config + user presets).
     void persistPresetState();
+
+    // Recomputes the dirty flag against the live config and schedules a
+    // debounced persist. Wired to every live-config-changed signal so a save
+    // never depends on the user remembering to press "Save preset".
+    void onLiveConfigChanged();
+
+    // Starts (or restarts) the debounce timer; persistPresetState() runs once
+    // it elapses. Coalesces bursts of live edits (e.g. a slider drag) into a
+    // single write instead of one per intermediate value.
+    void schedulePersistLiveState();
 
     // Export / import handlers (wired to OutputPage signals).
     void onExportSelectedProfile(const QString& path);
-    void onExportAllUserProfiles(const QString& path);
     void onImportProfiles(const QString& path);
-
-    // Preset manage overlay.
-    void openPresetManageOverlay();
-    void refreshPresetManageOverlay();
 
     void saveWindowGeometryToSettings();
 
@@ -257,6 +254,20 @@ class MainWindow : public QMainWindow {
     // the user is never double-prompted.
     void checkAndShowCrashReportOverlay();
     void openCrashReportOverlay();
+    // WHATS-NEW: on startup, show the one-time post-update overlay when a pending
+    // payload matches the running build (and notices aren't suppressed), then
+    // clear the payload. Deferred behind recovery/crash so nothing double-stacks.
+    void checkAndShowWhatsNewOverlay();
+    // WHATS-NEW: second half of the startup ordering decision — called once the
+    // recovery overlay (if any) has closed, and once one more event-loop tick has
+    // passed so checkAndShowCrashReportOverlay's own recovery-closed continuation
+    // (connected before ours; see checkAndShowWhatsNewOverlay) has had a chance to
+    // run and populate crash_overlay_. Defers behind crash_overlay_ if it is now
+    // open; otherwise opens directly.
+    void showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& notes);
+    // WHATS-NEW: open the (shared) overlay with the given notes. post_update_mode
+    // shows the suppress checkbox; pre-update (card link) does not.
+    void openWhatsNewOverlay(const QVector<WhatsNewNote>& notes, bool post_update_mode);
     // RECORDING-ERROR-MODAL-R1: show the modal recording-failure dialog. Decides
     // can_send_report from crash_capture availability and wires the report/logs
     // actions. Replaces any existing error overlay.
@@ -317,8 +328,8 @@ class MainWindow : public QMainWindow {
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
-    ui::dialogs::PresetManageOverlay* preset_manage_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
+    ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
@@ -341,6 +352,9 @@ class MainWindow : public QMainWindow {
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
     QString last_update_releases_url_;
+    // Last check's available version string (empty when up to date). Used to stamp
+    // the loop-guard applied_version when the staged updater is launched.
+    QString last_available_version_;
     // ADR 0034 Phase A: true while a user-initiated check is in flight, so an
     // available result updates the Settings card but does NOT also raise a toast.
     bool manual_update_check_ = false;
@@ -380,6 +394,27 @@ class MainWindow : public QMainWindow {
     RecordingPresetRegistry preset_registry_;
     RecordingPresetStore preset_store_;
 
+    // Snapshot needed to undo a preset switch: the live config and selection
+    // as they were immediately before the switch that raised the pending
+    // "Switched to '<name>'" toast. Single-slot — a later switch overwrites it,
+    // so only the most recent switch can ever be undone (matches the toast: the
+    // superseded toast's Undo button, if clicked, undoes the LATEST switch, not
+    // the one it was shown for).
+    struct PresetSwitchUndo {
+        RecordingPresetConfig previous_live;
+        std::string previous_selected_id;
+    };
+    std::optional<PresetSwitchUndo> pending_preset_undo_;
+    // The config the app booted with (from [live] or a fresh Default).
+    // Re-applied once more after the deferred coordinator init resets things.
+    RecordingPresetConfig boot_live_config_;
+    // 750 ms single-shot debounce for schedulePersistLiveState(); created on
+    // first use.
+    QTimer* live_persist_timer_ = nullptr;
+    // Set when RecordingPresetStore::Load() had to repair the file; consumed
+    // (and cleared) once the notification toast system exists to report it.
+    bool preset_store_repaired_ = false;
+
     // Reduced AppSettingsStore: hotkeys + window geometry only.
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
@@ -392,6 +427,10 @@ class MainWindow : public QMainWindow {
     GlobalHotkeyService* hotkey_service_ = nullptr;
     std::unique_ptr<IHotkeyRegistrar> win32_hotkey_registrar_;
 
+    // Owns the staged post-first-paint hydration of the secondary pages (see
+    // hydrateSecondaryPages()). Parented to `this`, so Qt handles its lifetime.
+    PageHydrationController* page_hydration_controller_ = nullptr;
+
     bool recording_active_ = false;
     // ADR-0014: true while the MP4 remux job is running after the engine stopped.
     bool remuxing_active_ = false;
@@ -403,7 +442,6 @@ class MainWindow : public QMainWindow {
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
     bool resize_cursor_shown_ = false;
-    bool syncing_preset_ui_ = false;
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
     // PERF-MEASURE: one-shot guard so first-paint latency is logged exactly once.
@@ -421,7 +459,6 @@ class MainWindow : public QMainWindow {
     // CRASH-WIRE-R1 (ADR 0017): crash-capture session lifecycle.
     std::string crash_dir_;
     std::optional<crash_capture::SessionContext> pending_crash_;
-    bool relaunch_requested_ = false;
 
     // ELEVATION-FOUNDATION-R1 (ADR 0033): elevated self-relaunch handoff state.
     bool elevated_relaunch_requested_ = false;

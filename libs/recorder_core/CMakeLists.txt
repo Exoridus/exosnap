@@ -77,6 +77,15 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_worker_join PRIVATE src)
 
+    # Progress-based two-phase shutdown policy (finalize_join_policy.h). Pure logic.
+    exosnap_add_gtest(
+        NAME test_finalize_join_policy
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_finalize_join_policy.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_finalize_join_policy PRIVATE src)
+
     exosnap_add_gtest(
         NAME test_opus_encoder
         TEST_PREFIX recorder_core.
@@ -256,12 +265,16 @@ add_library(recorder_core STATIC
     src/frame_pacing.cpp
     src/nvenc_encoder.cpp
     src/nvenc_video_encoder.cpp
+    include/recorder_core/hdr_bitstream_metadata.h
+    src/hdr_bitstream_metadata.cpp
     src/mf_aac_encoder.cpp
     src/fdk_aac_encoder.cpp
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/gpu_hdr_tonemap.cpp
     src/gpu_hdr_tonemap.h
+    src/gpu_rgb_to_ayuv.cpp
+    src/gpu_rgb_to_ayuv.h
     src/gpu_hdr_pq.cpp
     src/gpu_hdr_pq.h
     src/hdr_tonemap.h
@@ -303,8 +316,8 @@ add_library(recorder_core STATIC
     src/yuv_to_bgra.h
     src/yuv_to_bgra.cpp
     src/preview_publish_gate.h
-    src/preview_staging_ring.h
-    src/preview_staging_ring.cpp
+    src/preview_shared_texture.h
+    src/preview_shared_texture.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
     src/matroska_stream_writer.cpp
@@ -478,6 +491,39 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_color_config PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_chroma_config: pure unit tests for the NVENC chroma/input-format
+# helpers backing the 4:4:4 expert path (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_chroma_config
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_chroma_config.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_chroma_config PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# test_hdr_bitstream_metadata: byte-exact unit tests for the in-band HDR10
+# metadata payload builders (HEVC SEI 137/144, AV1 MDCV/CLL OBU payloads). Pure
+# functions — no GPU/NVENC.
+exosnap_add_gtest(
+    NAME test_hdr_bitstream_metadata
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_bitstream_metadata.cpp
+            src/hdr_bitstream_metadata.cpp
+)
+target_include_directories(test_hdr_bitstream_metadata PRIVATE src include)
+
+# test_hdr_native_reconcile: coordinator-seam tests for the native HDR10 encode
+# reconcile (ApplyHdr10NativeEncode) — pins 10-bit and snaps 4:4:4 -> 4:2:0 so an
+# HDR-active display never turns a valid UI selection into a Validate() failure.
+exosnap_add_gtest(
+    NAME test_hdr_native_reconcile
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_hdr_native_reconcile.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_hdr_native_reconcile PRIVATE src include)
+
 # test_nvenc_preset_guid: pure unit tests for NvencPresetToGuid (P1..P7 -> SDK
 # preset GUID mapping — no GPU needed).
 exosnap_add_gtest(
@@ -488,6 +534,28 @@ exosnap_add_gtest(
 )
 target_include_directories(test_nvenc_preset_guid PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# test_nvenc_flush_drain_policy: pure bounded flush-drain policy (never wedge on a
+# lost/hung device — abort the drain past the time budget). No GPU needed.
+exosnap_add_gtest(
+    NAME test_nvenc_flush_drain_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_flush_drain_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_flush_drain_policy PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# test_finalize_join_policy: pure two-phase shutdown policy — a progress-based
+# finalize wait (never truncate a slow-but-progressing finalize; abort only on a
+# real byte stall) and the Phase-1/Phase-2 fault separation. No GPU / no threads.
+exosnap_add_gtest(
+    NAME test_finalize_join_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_finalize_join_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_finalize_join_policy PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
@@ -680,6 +748,64 @@ exosnap_add_gtest(
 target_include_directories(test_hdr_tonemap PRIVATE src)
 target_compile_definitions(test_hdr_tonemap PRIVATE NOMINMAX)
 
+# OD acquire-failure classifier: pure recording-loss policy (ACCESS_LOST recover
+# vs DEVICE_REMOVED / unexpected HRESULT fail-closed). No GPU.
+exosnap_add_gtest(
+    NAME test_od_acquire_failure_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_od_acquire_failure_classify.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_od_acquire_failure_classify PRIVATE src)
+target_compile_definitions(test_od_acquire_failure_classify PRIVATE NOMINMAX)
+
+# WASAPI acquire-failure classifier: pure recording-loss policy for the audio
+# drain (endpoint invalidated / audio service down / unexpected HRESULT ->
+# fail-closed; benign empty tick -> keep draining). No audio hardware.
+exosnap_add_gtest(
+    NAME test_wasapi_acquire_failure_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_wasapi_acquire_failure_classify.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_wasapi_acquire_failure_classify PRIVATE src)
+target_compile_definitions(test_wasapi_acquire_failure_classify PRIVATE NOMINMAX)
+
+# OD reopen policy: pure live re-duplication retry loop (recovered continue vs
+# in-budget retry vs budget-exhausted give-up/clean-stop). No GPU.
+exosnap_add_gtest(
+    NAME test_od_reopen_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_od_reopen_policy.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_od_reopen_policy PRIVATE src)
+target_compile_definitions(test_od_reopen_policy PRIVATE NOMINMAX)
+
+# HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
+# the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)
+# intermediates, and that the 10-bit target preserves precision the 8-bit loses.
+exosnap_add_gtest(
+    NAME test_gpu_hdr_tonemap
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_hdr_tonemap.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_hdr_tonemap PRIVATE src)
+target_compile_definitions(test_gpu_hdr_tonemap PRIVATE NOMINMAX)
+
+# RGB -> packed AYUV (4:4:4, 8-bit) conversion on the GPU: WARP-backed golden
+# proof that the compute shader emits the exact BT.709 limited/full-range AYUV
+# bytes NVENC consumes for YUV444 H.264/HEVC encoding.
+exosnap_add_gtest(
+    NAME test_gpu_rgb_to_ayuv
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_rgb_to_ayuv.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_rgb_to_ayuv PRIVATE src)
+target_compile_definitions(test_gpu_rgb_to_ayuv PRIVATE NOMINMAX)
+
 # Native HDR10 (PQ / BT.2020 / P010) output: pure curve + matrix + Y'CbCr math,
 # effective-mode decision, and colour-metadata assembly. No GPU — the compute
 # shader (gpu_hdr_pq.*) replicates the same math.
@@ -691,6 +817,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_hdr_pq PRIVATE src)
 target_compile_definitions(test_hdr_pq PRIVATE NOMINMAX)
+
+# HDR overlay reference white: pure conversion/fallback logic for scaling SDR
+# overlay sprites to the display's SDR content brightness on the native-HDR10
+# path. No GPU/D3D needed (the DisplayConfig query itself lives in
+# dxgi_od_capture_src.cpp, exercised indirectly via test_gpu_compositor).
+exosnap_add_gtest(
+    NAME test_sdr_white_level
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_sdr_white_level.cpp
+    LIBRARIES recorder_core
+)
 
 # On-screen monitoring decode for native HDR10 (P010 PQ/BT.2020 -> tone-mapped
 # SDR BGRA): pure curve/matrix math shared with the encode reference, plus the
@@ -725,8 +862,8 @@ exosnap_add_gtest(
 )
 target_include_directories(test_yuv_to_bgra_bench PRIVATE src include)
 
-# Strand 3 slice 1: pure throttle/dirty state machine for the live preview
-# tap. Header-only logic; no clock/D3D11/threads needed to test it.
+# Pure throttle/dirty state machine for the live preview tap. Header-only
+# logic; no clock/D3D11/threads needed to test it.
 exosnap_add_gtest(
     NAME test_preview_publish_gate
     TEST_PREFIX recorder_core.
@@ -734,18 +871,19 @@ exosnap_add_gtest(
 )
 target_include_directories(test_preview_publish_gate PRIVATE src)
 
-# Strand 3 slice 1: two-slot staging-texture ring that lets VideoThread read
-# back composed frames without Map() stalling on the newest, possibly
-# in-flight copy. WARP-backed (see test_gpu_compositor above), deterministic.
+# Producer-side shared GPU texture for the WYSIWYG preview tap: create the
+# NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on
+# a second D3D11 device and verify the pixels round-trip; plus the non-blocking
+# drop discipline. WARP-backed (see test_gpu_compositor above), deterministic.
 exosnap_add_gtest(
-    NAME test_preview_staging_ring
+    NAME test_preview_shared_texture
     TEST_PREFIX recorder_core.
-    SOURCES tests/test_preview_staging_ring.cpp
-            src/preview_staging_ring.cpp
+    SOURCES tests/test_preview_shared_texture.cpp
+            src/preview_shared_texture.cpp
     LIBRARIES d3d11.lib dxgi.lib
 )
-target_include_directories(test_preview_staging_ring PRIVATE src)
-target_compile_definitions(test_preview_staging_ring PRIVATE NOMINMAX)
+target_include_directories(test_preview_shared_texture PRIVATE src)
+target_compile_definitions(test_preview_shared_texture PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME test_matroska_mux_structure

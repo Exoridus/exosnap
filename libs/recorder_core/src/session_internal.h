@@ -153,6 +153,13 @@ struct SessionState {
     std::atomic<uint32_t> split_last_trigger{0}; // SplitTriggerSource of latest request
     std::atomic<bool> size_split_armed{false};   // mux has requested a size split; reset on transition
 
+    // Cumulative bytes committed by the active segment's Matroska writer, published
+    // by the mux thread (streaming loop AND during the blocking Finalize()). The
+    // shutdown sequence samples this to distinguish a finalize that is slow but
+    // still writing (keep waiting) from one that has genuinely stalled. Reset when
+    // a new segment writer opens; the progress-based wait tolerates that drop.
+    std::atomic<uint64_t> mux_bytes_written{0};
+
     // Set before Record(); invoked from the mux thread as each segment finalizes.
     SegmentCallback segment_callback;
 
@@ -212,10 +219,12 @@ struct SessionState {
     PipelineDiagnosticsAggregator diagnostics;
     DiagnosticsCallback diagnostics_callback;
 
-    // Live WYSIWYG preview-frame callback (set before Record(); see
-    // RecorderSession::SetPreviewFrameCallback). VideoThread reads this once
-    // per composed frame; unset == disabled at zero cost (plain bool check).
-    PreviewFrameCallback preview_frame_callback;
+    // WYSIWYG preview shared-texture callback (set before Record(); bridged from
+    // RecorderSession::SetPreviewSharedHandleCallback). VideoThread fires it once
+    // when the shared preview texture is ready, passing the NT handle whose
+    // ownership transfers to the consumer. Unset == the tap is disabled at zero
+    // cost (the shared texture is never created).
+    std::function<void(HANDLE, uint32_t, uint32_t)> preview_shared_handle_cb;
 
     // Record config captured at Record() time
     RecorderConfig config;
@@ -268,6 +277,11 @@ struct SessionState {
         overlay.chroma_tolerance = std::clamp(overlay.chroma_tolerance, 0.0f, 1.0f);
         overlay.chroma_softness = std::clamp(overlay.chroma_softness, 0.0f, 1.0f);
         overlay.chroma_spill_reduction = std::clamp(overlay.chroma_spill_reduction, 0.0f, 1.0f);
+
+        if (!std::isfinite(static_cast<double>(overlay.opacity))) {
+            overlay.opacity = 1.0f;
+        }
+        overlay.opacity = std::clamp(overlay.opacity, 0.0f, 1.0f);
         return overlay;
     }
 
@@ -286,6 +300,7 @@ struct SessionState {
         overlay.chroma_tolerance = config.chroma_tolerance;
         overlay.chroma_softness = config.chroma_softness;
         overlay.chroma_spill_reduction = config.chroma_spill_reduction;
+        overlay.opacity = config.opacity;
         return SanitizeWebcamOverlay(overlay);
     }
 

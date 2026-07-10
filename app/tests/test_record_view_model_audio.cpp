@@ -845,5 +845,29 @@ TEST(RecordViewModelStateGuardTest, CanResume_Ready_ReturnsFalse) {
     EXPECT_FALSE(vm.CanResume());
 }
 
+// --- WYSIWYG preview revert policy (the app-level seam RecordPage wires to) ---
+// RecordPage leaves pushed mode and restarts its own live preview on exactly these
+// terminal states. The bug this pins: a FAILED recording must also revert, or the
+// preview stays frozen on the engine's last shared frame behind the error state.
+// The pre-fix wiring only reverted on Ready/Completed, so the Failed expectation
+// below fails against it.
+
+TEST(RecordViewModelPreviewRevertTest, RevertsOnEveryTerminalState) {
+    EXPECT_TRUE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Ready));
+    EXPECT_TRUE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Completed));
+    EXPECT_TRUE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Failed));
+}
+
+TEST(RecordViewModelPreviewRevertTest, DoesNotRevertWhileActiveOrTransient) {
+    // Reverting mid-recording (or during the handoff) would kill the pushed preview.
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Recording));
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Paused));
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Countdown));
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Preparing));
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Stopping));
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::Saving));
+    EXPECT_FALSE(ShouldRevertPreviewFromPushedMode(UiRecordingState::ArmedFromRecovery));
+}
+
 } // namespace
 } // namespace exosnap

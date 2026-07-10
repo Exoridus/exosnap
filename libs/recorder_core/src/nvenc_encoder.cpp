@@ -1,10 +1,13 @@
 #include "nvenc_encoder.h"
 
+#include <recorder_core/hdr_bitstream_metadata.h>
 #include <recorder_core/packet_types.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+#include <thread>
 
 namespace recorder_core {
 
@@ -60,15 +63,15 @@ bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, GUID code
     return true;
 }
 
-// Required NVENC input buffer format for a given bit depth.
-// 8-bit → NV12; 10-bit → P010 (semi-planar 16-bit, MSB-aligned 10-bit data).
-static NV_ENC_BUFFER_FORMAT RequiredInputFormat(BitDepth depth) noexcept {
-    return (depth == BitDepth::Bit10) ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
-}
-
 static const char* BufferFormatName(NV_ENC_BUFFER_FORMAT fmt) noexcept {
-    return (fmt == NV_ENC_BUFFER_FORMAT_YUV420_10BIT) ? "NV_ENC_BUFFER_FORMAT_YUV420_10BIT"
-                                                      : "NV_ENC_BUFFER_FORMAT_NV12";
+    switch (fmt) {
+    case NV_ENC_BUFFER_FORMAT_YUV420_10BIT:
+        return "NV_ENC_BUFFER_FORMAT_YUV420_10BIT";
+    case NV_ENC_BUFFER_FORMAT_AYUV:
+        return "NV_ENC_BUFFER_FORMAT_AYUV";
+    default:
+        return "NV_ENC_BUFFER_FORMAT_NV12";
+    }
 }
 
 // Codec label for init diagnostics (0=AV1, 1=H264, 2=HEVC)
@@ -81,7 +84,8 @@ static const char* CodecLabel(int codec_index) noexcept {
 }
 
 std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, int codec_index,
-                                bool have_caps, int w_min, int w_max, int h_min, int h_max, BitDepth bit_depth) {
+                                bool have_caps, int w_min, int w_max, int h_min, int h_max, BitDepth bit_depth,
+                                ChromaSubsampling chroma) {
     const bool isH264 = (codec_index == 1);
     const bool isHevc = (codec_index == 2);
     std::ostringstream oss;
@@ -90,7 +94,8 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
         << ", encodeWidth=" << p.encodeWidth << ", encodeHeight=" << p.encodeHeight << ", darWidth=" << p.darWidth
         << ", darHeight=" << p.darHeight << ", maxEncodeWidth=" << p.maxEncodeWidth
         << ", maxEncodeHeight=" << p.maxEncodeHeight << ", frameRateNum=" << p.frameRateNum
-        << ", frameRateDen=" << p.frameRateDen << ", bufferFormat=" << BufferFormatName(RequiredInputFormat(bit_depth))
+        << ", frameRateDen=" << p.frameRateDen
+        << ", bufferFormat=" << BufferFormatName(NvencInputFormat(bit_depth, chroma))
         << ", enablePTD=" << static_cast<int>(p.enablePTD)
         << ", rateControlMode=" << static_cast<uint32_t>(cfg.rcParams.rateControlMode)
         << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP;
@@ -204,6 +209,34 @@ GUID NvencPresetToGuid(NvencPreset preset) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Chroma / input-format helpers (pure, testable — see nvenc_encoder.h)
+// ---------------------------------------------------------------------------
+
+NV_ENC_BUFFER_FORMAT NvencInputFormat(BitDepth depth, ChromaSubsampling chroma) noexcept {
+    if (chroma == ChromaSubsampling::Cs444) {
+        // 8-bit 4:4:4 only; 10-bit 4:4:4 is out of scope and blocked upstream.
+        return NV_ENC_BUFFER_FORMAT_AYUV;
+    }
+    return (depth == BitDepth::Bit10) ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
+}
+
+uint32_t NvencChromaFormatIDC(ChromaSubsampling chroma) noexcept {
+    return (chroma == ChromaSubsampling::Cs444) ? 3u : 1u;
+}
+
+GUID Nvenc444ProfileGuid(VideoCodec codec) noexcept {
+    if (codec == VideoCodec::H264Nvenc) {
+        return NV_ENC_H264_PROFILE_HIGH_444_GUID;
+    }
+    if (codec == VideoCodec::HevcNvenc) {
+        // HEVC Range Extensions (FREXT) — the 4:2:2/4:4:4 8/10-bit profile.
+        return NV_ENC_HEVC_PROFILE_FREXT_GUID;
+    }
+    // AV1 NVENC has no 4:4:4 profile.
+    return GUID{};
+}
+
+// ---------------------------------------------------------------------------
 // NvencStatusName
 // ---------------------------------------------------------------------------
 
@@ -263,6 +296,19 @@ const char* NvencStatusName(NVENCSTATUS st) noexcept {
         return "NV_ENC_ERR_RESOURCE_NOT_MAPPED";
     default:
         return "NV_ENC_ERR_UNKNOWN";
+    }
+}
+
+FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept {
+    switch (lock_status) {
+    case NV_ENC_SUCCESS:
+        return FlushDrainStep::Consume;
+    case NV_ENC_ERR_LOCK_BUSY:
+        // Output not ready yet: keep polling until the budget runs out, then give
+        // up so a lost/hung device can never wedge the drain.
+        return elapsed_ms < budget_ms ? FlushDrainStep::Retry : FlushDrainStep::AbortTimeout;
+    default:
+        return FlushDrainStep::AbortError;
     }
 }
 
@@ -367,7 +413,7 @@ bool NvencEncoder::QueryAv1Nv12Support(std::string& out_error) {
         return false;
     }
 
-    const NV_ENC_BUFFER_FORMAT wantFmt = RequiredInputFormat(m_bitDepth);
+    const NV_ENC_BUFFER_FORMAT wantFmt = NvencInputFormat(m_bitDepth, m_chroma);
     bool fmtFound = false;
     for (uint32_t i = 0; i < got; ++i) {
         if (fmts[i] == wantFmt) {
@@ -488,7 +534,7 @@ bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
         return false;
     }
 
-    const NV_ENC_BUFFER_FORMAT wantFmt = RequiredInputFormat(m_bitDepth);
+    const NV_ENC_BUFFER_FORMAT wantFmt = NvencInputFormat(m_bitDepth, m_chroma);
     bool fmtFound = false;
     for (uint32_t i = 0; i < got; ++i) {
         if (fmts[i] == wantFmt) {
@@ -504,6 +550,60 @@ bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
+// QueryYuv444Support
+// ---------------------------------------------------------------------------
+
+bool NvencEncoder::QueryYuv444Support(std::string& out_error) {
+    GUID codecGuid;
+    const char* label;
+    if (m_codec == VideoCodec::H264Nvenc) {
+        codecGuid = NV_ENC_CODEC_H264_GUID;
+        label = "H264";
+    } else if (m_codec == VideoCodec::HevcNvenc) {
+        codecGuid = NV_ENC_CODEC_HEVC_GUID;
+        label = "HEVC";
+    } else {
+        // AV1 NVENC is 4:2:0 only — there is no 4:4:4 path to probe.
+        out_error = "AV1 NVENC does not support 4:4:4 encoding";
+        return false;
+    }
+
+    // Capability bit: NV_ENC_CAPS_SUPPORT_YUV444_ENCODE.
+    int yuv444Cap = 0;
+    std::string capsError;
+    if (!QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_SUPPORT_YUV444_ENCODE, yuv444Cap, capsError)) {
+        out_error = std::string(label) + " YUV444 caps query failed: " + capsError;
+        return false;
+    }
+    if (yuv444Cap == 0) {
+        out_error = std::string(label) + " reports NV_ENC_CAPS_SUPPORT_YUV444_ENCODE = 0";
+        return false;
+    }
+
+    // Input-format enumeration: AYUV must be accepted for this codec.
+    uint32_t count = 0;
+    NVENCSTATUS st = m_funcs.nvEncGetInputFormatCount(m_encoder, codecGuid, &count);
+    if (st != NV_ENC_SUCCESS || count == 0) {
+        out_error = std::string("nvEncGetInputFormatCount(") + label + "): " + NvencStatusName(st);
+        return false;
+    }
+    std::vector<NV_ENC_BUFFER_FORMAT> fmts(count);
+    uint32_t got = 0;
+    st = m_funcs.nvEncGetInputFormats(m_encoder, codecGuid, fmts.data(), count, &got);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncGetInputFormats(") + label + "): " + NvencStatusName(st);
+        return false;
+    }
+    for (uint32_t i = 0; i < got; ++i) {
+        if (fmts[i] == NV_ENC_BUFFER_FORMAT_AYUV) {
+            return true;
+        }
+    }
+    out_error = std::string("NV_ENC_BUFFER_FORMAT_AYUV not in ") + label + " input formats";
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // ComputeNvencRcParams — pure mapping from canonical rate-control to NVENC
 // ---------------------------------------------------------------------------
 //
@@ -515,28 +615,20 @@ bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
 //   rcParams.averageBitRate    — target average bitrate in bps (VBR/CBR)
 //   rcParams.maxBitRate        — peak bitrate in bps (VBR: 1.5× avg; CBR: = avg)
 
-RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps) {
+RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps) {
     RcParams p{};
     switch (mode) {
     case RateControlMode::ConstantQuality: {
         p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP);
-        switch (quality) {
-        case NvencQualityPreset::High:
-            p.qpIntra = 19;
-            p.qpInterP = 21;
-            p.qpInterB = 21;
-            break;
-        case NvencQualityPreset::Balanced:
-            p.qpIntra = 24;
-            p.qpInterP = 26;
-            p.qpInterB = 26;
-            break;
-        case NvencQualityPreset::Small:
-            p.qpIntra = 30;
-            p.qpInterP = 32;
-            p.qpInterB = 32;
-            break;
-        }
+        // Out-of-range values are clamped rather than rejected: the encoder must
+        // never be handed a QP outside [1, 51], whatever the caller passed.
+        const uint32_t qp = cq < kNvencCqMin ? kNvencCqMin : (cq > kNvencCqMax ? kNvencCqMax : cq);
+        // Inter frames carry +2 QP relative to intra — the ratio the three named
+        // presets always used (19/21, 24/26, 30/32), now applied to every CQ.
+        const uint32_t qp_inter = (qp + 2u) > kNvencCqMax ? kNvencCqMax : qp + 2u;
+        p.qpIntra = qp;
+        p.qpInterP = qp_inter;
+        p.qpInterB = qp_inter;
         p.averageBitRate = 0;
         p.maxBitRate = 0;
         break;
@@ -565,7 +657,8 @@ RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, 
     case RateControlMode::Lossless:
         // Lossless is not yet implemented. Capability marks it NotImplemented so
         // the UI hides it. Defensively fall back to ConstantQuality/Balanced.
-        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, NvencQualityPreset::Balanced, bitrate_kbps);
+        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(NvencQualityPreset::Balanced),
+                                 bitrate_kbps);
         break;
     }
     return p;
@@ -613,14 +706,25 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     const bool tenBit = (m_bitDepth == BitDepth::Bit10);
     const NV_ENC_BIT_DEPTH nvBitDepth = tenBit ? NV_ENC_BIT_DEPTH_10 : NV_ENC_BIT_DEPTH_8;
 
+    // Chroma: 1 = 4:2:0 (NV12/P010), 3 = 4:4:4 (AYUV). 4:4:4 is an 8-bit
+    // H.264/HEVC expert option; AV1 and 4:4:4 + 10-bit are rejected upstream, so
+    // this stays at 1 for AV1 and for every 4:2:0 session — keeping the 4:2:0
+    // bitstream byte-identical to before.
+    const uint32_t chromaIdc = NvencChromaFormatIDC(m_chroma);
+    const bool is444 = (m_chroma == ChromaSubsampling::Cs444);
+
     if (m_codec == VideoCodec::H264Nvenc) {
-        m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = 1; // YUV420/NV12
+        m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = chromaIdc;
+        if (is444)
+            m_encodeConfig.profileGUID = Nvenc444ProfileGuid(m_codec); // High 4:4:4 Predictive
     } else if (m_codec == VideoCodec::HevcNvenc) {
-        m_encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = 1; // YUV420/NV12 or P010
+        m_encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = chromaIdc; // YUV420/P010 or YUV444/AYUV
         m_encodeConfig.encodeCodecConfig.hevcConfig.inputBitDepth = nvBitDepth;
         m_encodeConfig.encodeCodecConfig.hevcConfig.outputBitDepth = nvBitDepth;
         if (tenBit)
             m_encodeConfig.profileGUID = NV_ENC_HEVC_PROFILE_MAIN10_GUID;
+        else if (is444)
+            m_encodeConfig.profileGUID = Nvenc444ProfileGuid(m_codec); // FREXT (Range Extensions)
     } else {
         m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12 or P010
         m_encodeConfig.encodeCodecConfig.av1Config.inputBitDepth = nvBitDepth;
@@ -639,7 +743,7 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
     // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
     // NVENC SDK field names: rcParams.rateControlMode / constQP / averageBitRate / maxBitRate.
-    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_qualityPreset, m_bitrate_kbps);
+    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_cq, m_bitrate_kbps);
     m_encodeConfig.rcParams.rateControlMode = static_cast<NV_ENC_PARAMS_RC_MODE>(rc.rateControlMode);
     m_encodeConfig.rcParams.constQP.qpIntra = rc.qpIntra;
     m_encodeConfig.rcParams.constQP.qpInterP = rc.qpInterP;
@@ -657,6 +761,50 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
+// BuildHdrBitstreamPayloads
+// ---------------------------------------------------------------------------
+//
+// Precompute the per-keyframe in-band HDR10 metadata once, so EncodeFrame only
+// has to point NVENC at owned, stable buffers. HEVC uses SEI messages
+// (seiPayloadArray, payloadType 137/144); AV1 uses metadata OBUs
+// (obuPayloadArray, payloadType = AV1 metadata_type 2/1). For both codecs NVENC
+// consumes the same NV_ENC_SEI_PAYLOAD descriptor: {payloadSize, payloadType,
+// payload}. We supply the payload *content* only; NVENC frames it (SEI NAL +
+// emulation prevention for HEVC; OBU header + leb128 size + metadata_type +
+// byte alignment for AV1). See recorder_core/hdr_bitstream_metadata.h.
+void NvencEncoder::BuildHdrBitstreamPayloads() {
+    m_hdrPayloadCount = 0;
+    m_hdrMdcvPayload.clear();
+    m_hdrCllPayload.clear();
+
+    // H.264 never carries HDR10-native (blocked upstream); only HEVC/AV1 do.
+    if (m_codec != VideoCodec::HevcNvenc && m_codec != VideoCodec::Av1Nvenc) {
+        return;
+    }
+    if (!hdr_meta::ShouldEmitHdrBitstreamMetadata(m_color)) {
+        return;
+    }
+    const bool av1 = (m_codec == VideoCodec::Av1Nvenc);
+
+    if (hdr_meta::HasMasteringDisplayData(m_color)) {
+        m_hdrMdcvPayload = av1 ? hdr_meta::BuildAv1MasteringDisplayObuPayload(m_color)
+                               : hdr_meta::BuildHevcMasteringDisplaySeiPayload(m_color);
+        NV_ENC_SEI_PAYLOAD& e = m_hdrPayloadEntries[m_hdrPayloadCount++];
+        e.payloadSize = static_cast<uint32_t>(m_hdrMdcvPayload.size());
+        e.payloadType = av1 ? hdr_meta::kAv1MetadataTypeHdrMdcv : hdr_meta::kHevcSeiPayloadTypeMasteringDisplay;
+        e.payload = m_hdrMdcvPayload.data();
+    }
+    if (hdr_meta::HasContentLightLevelData(m_color)) {
+        m_hdrCllPayload = av1 ? hdr_meta::BuildAv1ContentLightLevelObuPayload(m_color)
+                              : hdr_meta::BuildHevcContentLightLevelSeiPayload(m_color);
+        NV_ENC_SEI_PAYLOAD& e = m_hdrPayloadEntries[m_hdrPayloadCount++];
+        e.payloadSize = static_cast<uint32_t>(m_hdrCllPayload.size());
+        e.payloadType = av1 ? hdr_meta::kAv1MetadataTypeHdrCll : hdr_meta::kHevcSeiPayloadTypeContentLightLevel;
+        e.payload = m_hdrCllPayload.data();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // InitEncoder
 // ---------------------------------------------------------------------------
 
@@ -671,6 +819,16 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
                                     0.5f)
             : 120u;
     m_encodeConfig.gopLength = kGopFrames;
+    // Remember the IDR cadence and (re)build the HDR metadata payloads for this
+    // session. m_frameInGop starts at 0 so the first submitted frame — always an
+    // IDR — carries the metadata. The submission-side keyframe prediction in
+    // EncodeFrame relies on this cadence AND on frameIntervalP = 1 / no lookahead
+    // / no adaptive I: enabling any of those desynchronizes the predicted GOP
+    // phase from NVENC's real IDR placement (metadata would land on non-IDR
+    // frames — legal but off-cadence). Revisit the prediction if that changes.
+    m_gopLength = kGopFrames;
+    m_frameInGop = 0;
+    BuildHdrBitstreamPayloads();
     if (m_codec == VideoCodec::H264Nvenc) {
         m_encodeConfig.encodeCodecConfig.h264Config.idrPeriod = kGopFrames;
     } else if (m_codec == VideoCodec::HevcNvenc) {
@@ -728,7 +886,20 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
         !haveCaps || (height >= static_cast<uint32_t>(capHeightMin) && height <= static_cast<uint32_t>(capHeightMax));
 
     const std::string initDiag = BuildInitDiagString(p, m_encodeConfig, codec_index, haveCaps, capWidthMin, capWidthMax,
-                                                     capHeightMin, capHeightMax, m_bitDepth);
+                                                     capHeightMin, capHeightMax, m_bitDepth, m_chroma);
+
+    // Honest 4:4:4 gate: refuse before nvEncInitializeEncoder if the GPU does not
+    // advertise YUV444 encoding for this codec, so we fail with a clear message
+    // rather than mis-encoding. Only checked for the 4:4:4 path; the 4:2:0 path is
+    // untouched.
+    if (m_chroma == ChromaSubsampling::Cs444) {
+        std::string yuv444Err;
+        if (!QueryYuv444Support(yuv444Err)) {
+            out_error = std::string("NVENC ") + CodecLabel(codec_index) + " 4:4:4 unsupported: " + yuv444Err +
+                        "; init={" + initDiag + "}";
+            return false;
+        }
+    }
 
     if (!evenWidth || !evenHeight || !widthInRange || !heightInRange) {
         std::ostringstream oss;
@@ -798,7 +969,7 @@ bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* textur
     reg.resourceToRegister = texture;
     // 8-bit registers the NV12 D3D11 texture; 10-bit registers the P010 texture as
     // NV_ENC_BUFFER_FORMAT_YUV420_10BIT (both are semi-planar 4:2:0, P010 being 16 bpc).
-    reg.bufferFormat = RequiredInputFormat(m_bitDepth);
+    reg.bufferFormat = NvencInputFormat(m_bitDepth, m_chroma);
     reg.bufferUsage = NV_ENC_INPUT_IMAGE;
 
     NVENCSTATUS st = m_funcs.nvEncRegisterResource(m_encoder, &reg);
@@ -851,14 +1022,19 @@ void NvencEncoder::ReleaseSlot(int32_t slot_idx) noexcept {
 // LockAndConsumeBitstream (internal)
 // ---------------------------------------------------------------------------
 
-bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error) {
+bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking,
+                                           NVENCSTATUS* out_lock_status) {
     NV_ENC_LOCK_BITSTREAM lockBS{};
     lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
     lockBS.outputBitstream = m_bitstreamBuffer;
-    lockBS.doNotWait = 0;
+    lockBS.doNotWait = non_blocking ? 1 : 0;
 
     NVENCSTATUS st = m_funcs.nvEncLockBitstream(m_encoder, &lockBS);
+    if (out_lock_status != nullptr)
+        *out_lock_status = st;
     if (st != NV_ENC_SUCCESS) {
+        // On LOCK_BUSY nothing has been popped/consumed yet (the pending PTS/slot
+        // are still queued), so a non-blocking caller can safely retry.
         out_error = std::string("nvEncLockBitstream: ") + NvencStatusName(st);
         return false;
     }
@@ -939,12 +1115,39 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     pic.bufferFmt = mapRes.mappedBufferFmt;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.encodePicFlags = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
-    if (m_forceIdrNext) {
+    const bool forcedIdr = m_forceIdrNext;
+    if (forcedIdr) {
         // Force an IDR at a segment boundary: the first frame of the new segment
         // must be a self-contained keyframe carrying fresh SPS/PPS so no dependent
         // frame precedes it. Consume the one-shot request.
         pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR;
         m_forceIdrNext = false;
+    }
+
+    // Deterministic keyframe (IDR) detection. With no B-frames and no lookahead
+    // (enforced in FetchPresetConfig), output order == submission order and IDRs
+    // land on submission indices 0, gopLength, 2*gopLength, ...; a forced IDR
+    // resets the GOP phase. Advance the phase and decide before submitting.
+    const bool isKeyframe = forcedIdr || (m_frameInGop == 0);
+    if (isKeyframe) {
+        m_frameInGop = 0;
+    }
+    ++m_frameInGop;
+    if (m_gopLength > 0 && m_frameInGop >= m_gopLength) {
+        m_frameInGop = 0;
+    }
+
+    // Attach the precomputed in-band HDR10 metadata on every keyframe, so each
+    // segment/split file and mid-stream join point carries it. The payload
+    // buffers are owned members that outlive this synchronous encode call.
+    if (isKeyframe && m_hdrPayloadCount > 0) {
+        if (m_codec == VideoCodec::Av1Nvenc) {
+            pic.codecPicParams.av1PicParams.obuPayloadArray = m_hdrPayloadEntries.data();
+            pic.codecPicParams.av1PicParams.obuPayloadArrayCnt = m_hdrPayloadCount;
+        } else {
+            pic.codecPicParams.hevcPicParams.seiPayloadArray = m_hdrPayloadEntries.data();
+            pic.codecPicParams.hevcPicParams.seiPayloadArrayCnt = m_hdrPayloadCount;
+        }
     }
     pic.inputTimeStamp = m_frameIdx++;
 
@@ -1017,19 +1220,45 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
         return false;
     }
 
-    // Drain buffered frames.
-    // LockAndConsumeBitstream releases each slot after output is consumed.
-    for (int i = 0; i < m_needMoreInputCount; ++i) {
+    // Drain buffered frames with a bounded, non-blocking poll. A blocking lock
+    // here (the historic doNotWait=0 path) hangs forever when the device is lost
+    // or hung — the buffered outputs never complete — so the video thread wedged
+    // and the whole session died to the fixed join budget. Polling with a per-
+    // frame time budget guarantees the drain always terminates: a healthy device
+    // delivers each frame in well under the budget (progress resets the clock),
+    // while a dead one is abandoned after the budget and the caller still pushes
+    // EOS and finalises. LockAndConsumeBitstream releases each slot on consume.
+    constexpr double kFlushDrainBudgetMs = 2000.0;
+    auto lastProgress = std::chrono::steady_clock::now();
+    for (int i = 0; i < m_needMoreInputCount;) {
         if (m_pendingPts.empty())
             break;
 
         EncodedVideoPacket pkt;
         std::string lockErr;
-        if (!LockAndConsumeBitstream(pkt, lockErr)) {
-            out_error = std::string("Flush drain stopped: ") + lockErr;
-            break;
+        NVENCSTATUS lockStatus = NV_ENC_SUCCESS;
+        LockAndConsumeBitstream(pkt, lockErr, /*non_blocking=*/true, &lockStatus);
+        const double elapsedMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lastProgress).count();
+
+        const FlushDrainStep step = NextFlushDrainStep(lockStatus, elapsedMs, kFlushDrainBudgetMs);
+        if (step == FlushDrainStep::Consume) {
+            out_packets.push_back(std::move(pkt));
+            ++i;
+            lastProgress = std::chrono::steady_clock::now();
+            continue;
         }
-        out_packets.push_back(std::move(pkt));
+        if (step == FlushDrainStep::Retry) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        // AbortTimeout / AbortError: stop draining but do not fail — the caller
+        // (which ignores this return) still pushes video-EOS and finalises the
+        // file with whatever was already muxed, instead of wedging.
+        out_error = step == FlushDrainStep::AbortTimeout
+                        ? "Flush drain timed out — device not delivering buffered frames"
+                        : (std::string("Flush drain stopped: ") + lockErr);
+        break;
     }
 
     m_needMoreInputCount = 0;

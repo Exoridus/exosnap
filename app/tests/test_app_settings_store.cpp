@@ -105,8 +105,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 18: SETTINGS-HONESTY-R1 adds developer_log_level.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 18);
+    // Version bumped to 19: WHATS-NEW adds whats_new_suppressed.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 19);
 }
 
 // CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests

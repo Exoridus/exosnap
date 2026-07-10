@@ -41,6 +41,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
@@ -57,6 +58,7 @@
 
 #include <exception>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -73,6 +75,25 @@
 
 namespace exosnap {
 namespace {
+
+// RAII owner for a preview-shared NT handle in flight to the UI thread. The
+// shared-handle callback queues a lambda that either hands the handle to the
+// renderer (which then owns + closes it) or, if no DXGI preview is active, closes
+// it itself. If the queued lambda is dropped before it runs (the target QObject is
+// destroyed first), this destructor closes the handle so it never leaks. Handing
+// the handle on is a "claim": the lambda nulls `handle` first so the destructor
+// does not double-close it.
+struct QueuedSharedHandle {
+    void* handle = nullptr;
+    explicit QueuedSharedHandle(void* h) noexcept : handle(h) {
+    }
+    ~QueuedSharedHandle() {
+        if (handle != nullptr)
+            CloseHandle(static_cast<HANDLE>(handle));
+    }
+    QueuedSharedHandle(const QueuedSharedHandle&) = delete;
+    QueuedSharedHandle& operator=(const QueuedSharedHandle&) = delete;
+};
 
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
@@ -144,6 +165,7 @@ EditContext MakeEditContext(const CompletedRecording& rec) {
     ctx.output_path = rec.file_path;
     ctx.mkv_master_path = rec.file_path; // best-effort fallback (may not be correct for MP4)
     ctx.duration = QString::fromStdWString(RecordViewModel::FormatElapsed(rec.totalDurationSeconds()));
+    ctx.duration_seconds = rec.totalDurationSeconds();
     ctx.size = rec.totalSizeBytes() > 0
                    ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.totalSizeBytes())))
                    : QString{};
@@ -649,6 +671,9 @@ void RecordPage::showEvent(QShowEvent* event) {
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    // Now that the page is visible, (re)start the webcam PiP capture — see the
+    // visibility gate in syncWebcamPreviewCapture().
+    syncWebcamPreviewCapture();
 }
 
 void RecordPage::hideEvent(QHideEvent* event) {
@@ -667,6 +692,9 @@ void RecordPage::hideEvent(QHideEvent* event) {
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    // Release the camera so the Settings webcam panel can own it without a device-lock
+    // fight (see syncWebcamPreviewCapture()). No-op while recording.
+    syncWebcamPreviewCapture();
 
     QWidget::hideEvent(event);
 }
@@ -1594,6 +1622,7 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     if (preview_surface_) {
         preview_surface_->setAspectRatioLocked(s.aspect_ratio_locked);
         preview_surface_->setWebcamMirror(s.mirror);
+        preview_surface_->setWebcamOpacity(s.opacity);
         preview_surface_->setWebcamOverlayRect(
             QRectF(s.overlay.x_norm, s.overlay.y_norm, s.overlay.w_norm, s.overlay.h_norm));
         preview_surface_->setWebcamOverlayEnabled(s.enabled);
@@ -1604,6 +1633,25 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     }
     updateWebcamOverlay();
     syncWebcamPreviewCapture();
+
+    // Keep the Record dock's webcam toggle in step with the enable state, even when the
+    // change came from the Settings panel (not from clicking the dock toggle itself).
+    // Otherwise enabling the webcam in Settings makes the PiP appear while the dock
+    // toggle still reads "off", which looks like the camera turned on by itself.
+    if (transport_dock_) {
+        const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+        const bool failed = (view_model_.state == UiRecordingState::Failed);
+        transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled,
+                                        !(blocked || failed));
+    }
+}
+
+void RecordPage::setSettingsWebcamPreviewActive(bool active) {
+    // The Settings webcam panel is a consumer of the single shared capture. Registering
+    // it keeps the one reader alive while the user is on the Settings page (Record page
+    // hidden), so the panel sees the same frames without opening a competing reader.
+    if (coordinator_)
+        coordinator_->SetWebcamSettingsPreviewActive(active);
 }
 
 void RecordPage::updateWebcamOverlay() {
@@ -1611,6 +1659,7 @@ void RecordPage::updateWebcamOverlay() {
         return;
     preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled);
     preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
+    preview_surface_->setWebcamOpacity(current_webcam_settings_.opacity);
     preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
     // Overlay placement/mirror/chroma are live-applied to the running session
     // via RecorderSession::UpdateWebcamOverlay, so editing is allowed while
@@ -1624,7 +1673,14 @@ void RecordPage::syncWebcamPreviewCapture() {
         return;
     const bool idle =
         (view_model_.state == UiRecordingState::Ready || view_model_.state == UiRecordingState::Completed);
-    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle);
+    // Only open the camera for the live PiP while the Record page is actually visible.
+    // The Settings webcam panel opens its OWN reader on the same device; if the Record
+    // preview also runs while the user sits on the Settings page, the two readers fight
+    // over the camera (ReadSample fails with MF_E_VIDEO_RECORDING_DEVICE_LOCKED, the
+    // reader reopens ~every 0.5s) and both previews stutter. Gating on page visibility
+    // keeps exactly one reader on the device at a time. Recording is unaffected: while
+    // recording the capture is owned by is_recording_, not the preview flag.
+    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle && record_page_visible_);
 }
 
 void RecordPage::onWebcamOverlayMoved(QRectF rect_norm) {
@@ -1950,6 +2006,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         if (preview_surface_) {
             preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
             preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
+            preview_surface_->setWebcamOpacity(current_webcam_settings_.opacity);
             preview_surface_->setWebcamOverlayRect(
                 QRectF(current_webcam_settings_.overlay.x_norm, current_webcam_settings_.overlay.y_norm,
                        current_webcam_settings_.overlay.w_norm, current_webcam_settings_.overlay.h_norm));
@@ -1995,6 +2052,13 @@ void RecordPage::openOutputFolder() {
 
     if (!result_path.isEmpty()) {
         QFileInfo info(result_path);
+        if (info.exists() && info.isFile()) {
+            // Reveal AND highlight the file in Explorer. QDesktopServices::openUrl
+            // only opens the containing folder without selecting the file.
+            QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                    {QStringLiteral("/select,") + QDir::toNativeSeparators(info.absoluteFilePath())});
+            return;
+        }
         folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
     } else if (!last_output_folder_.empty()) {
         folder = QString::fromStdWString(last_output_folder_.wstring());
@@ -2289,11 +2353,48 @@ void RecordPage::initCoordinator() {
 
     // Live webcam frames feed the preview PiP (Qt paint or DXGI overlay). The
     // coordinator marshals these onto the main thread.
-    coordinator_->SetWebcamFrameCallback([safeSurface](QImage frame) {
+    coordinator_->SetWebcamFrameCallback([this, safeSurface](QImage frame) {
+        // Fan the single shared capture out to both consumers: the Record PiP overlay
+        // and (via webcamFrameReady → MainWindow → Settings panel) the Settings preview.
+        // The Settings panel no longer opens its own reader, so there is only ever one
+        // capture on the device.
         if (safeSurface)
-            safeSurface->setWebcamFrame(std::move(frame));
+            safeSurface->setWebcamFrame(frame);
+        emit webcamFrameReady(frame);
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
+
+    // WYSIWYG preview during recording: when the engine publishes its shared,
+    // pre-encode source texture, switch the live DXGI preview to consume it (which
+    // also stops the preview's own WGC capture — no second capture). The engine
+    // callback fires on the video thread, so marshal onto the UI thread where the
+    // renderer handle is owned; only D3D-free atomic stores happen there. Ownership
+    // of the NT handle transfers to the renderer (which closes it); if no DXGI
+    // preview is active we close the handle on the UI thread instead (no leak).
+    coordinator_->SetPreviewSharedHandleReadyCallback([safeSurface](void* nt_handle, uint32_t w, uint32_t h) {
+        QPointer<ui::widgets::PreviewSurface> surface = safeSurface;
+        QObject* context = surface ? static_cast<QObject*>(surface.data()) : static_cast<QObject*>(qApp);
+        // Self-closing handle owner: if the queued lambda is ever dropped (the target
+        // QObject is destroyed before delivery) the owner's destructor closes the NT
+        // handle, so it never leaks. When the lambda runs and hands the handle to the
+        // renderer it "claims" the handle (nulls the owner) first, so the destructor
+        // does not double-close what the renderer now owns.
+        auto handle_owner = std::make_shared<QueuedSharedHandle>(nt_handle);
+        QMetaObject::invokeMethod(
+            context,
+            [surface, handle_owner, w, h]() {
+                void* raw = handle_owner->handle;
+                if (raw == nullptr)
+                    return;
+                if (surface && surface->isDxgiPreviewActive()) {
+                    handle_owner->handle = nullptr; // claim: renderer now owns + closes it
+                    surface->beginPushedSource(raw, w, h);
+                }
+                // Otherwise the owner's destructor closes the handle when this lambda
+                // returns (no active preview to hand it to).
+            },
+            Qt::QueuedConnection);
+    });
 
     // Deliver capabilities only when they are already available. When the async HW
     // probe hasn't landed yet, latch coordinator_awaiting_caps_ and deliver later from
@@ -2348,8 +2449,17 @@ void RecordPage::initCoordinator() {
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("recording paused"));
         else if (state == UiRecordingState::Stopping)
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("stopping"));
-        else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed)
+        else if (ShouldRevertPreviewFromPushedMode(state)) {
+            // Ready / Completed / Failed: leave pushed mode so the preview returns to
+            // its own live WGC capture. endPushedSource signals the renderer to revert
+            // IN PLACE (rebuilds its WGC graph); a failed recording must revert too or
+            // the preview stays frozen on the engine's last frame behind the error
+            // state. startPreviewIfIdle then no-ops via its idempotency guard unless
+            // the target actually changed.
+            if (preview_surface_)
+                preview_surface_->endPushedSource();
             startPreviewIfIdle();
+        }
         refresh();
     });
     coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {

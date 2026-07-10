@@ -8,6 +8,7 @@
 #include "../diagnostics/SelfTestRunner.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
+#include "../services/TargetDisplayFacts.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/LucideIcon.h"
@@ -50,27 +51,16 @@ using Pal = ui::theme::ExoSnapPalette;
 
 namespace {
 
-// True when the monitor capture target's display currently has Windows HDR ON.
-// The impure HMONITOR -> display-device-name step lives here; the pure lookup
-// over the already-probed facts is capability::FindDisplayByName. A window/region
-// target (WGC path) is always treated as SDR — its capture never engages HDR10.
+// True when the capture target's hosting display currently has Windows HDR ON.
+// Monitor targets use their HMONITOR; window targets (WGC) resolve their hosting
+// monitor via MonitorFromWindow — so a window on an HDR display now gets the same
+// HDR-blocker/expert gating as a monitor target (see FindTargetDisplayFacts).
 static bool SelectedTargetHdrActive(const std::optional<recorder_core::CaptureTarget>& target,
                                     const capability::CapabilitySet& caps) {
-    if (!target.has_value() || target->kind != recorder_core::CaptureTarget::Kind::Monitor) {
+    if (!target.has_value()) {
         return false;
     }
-    MONITORINFOEXW mi{};
-    mi.cbSize = sizeof(mi);
-    if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target->native_id), &mi) == FALSE) {
-        return false;
-    }
-    const int len = WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 1) {
-        return false;
-    }
-    std::string device_name(static_cast<size_t>(len - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, device_name.data(), len, nullptr, nullptr);
-    const capability::DisplayHdrFacts* facts = capability::FindDisplayByName(caps.runtime.displays, device_name);
+    const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(*target, caps.runtime.displays);
     return facts != nullptr && facts->hdr_active;
 }
 
@@ -1330,7 +1320,7 @@ void DiagnosticsPage::refreshOverview() {
         engine.SetDpcLatency(dpc_provider_->Read());
     }
 
-    engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed);
+    engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(output_folder_.string()).passed);
     // Feed the selected capture target's live HDR status so the HDR10 + H.264
     // pre-flight blocker (rec.hdr.h264) fires only on an HDR-active desktop.
     engine.SetCaptureTargetHdrActive(SelectedTargetHdrActive(selected_capture_target_, caps_));
@@ -1422,7 +1412,7 @@ void DiagnosticsPage::refreshPipeline() {
         muxer_ok ? QStringLiteral("Selected container muxer is available. Write throughput is not measured.")
                  : QStringLiteral("Selected container is not available on this system."));
 
-    const bool disk_ok = diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed;
+    const bool disk_ok = diagnostics::SelfTestRunner::CheckOutputPathWritable(output_folder_.string()).passed;
     pipeline_flow_->setStepStatus(5, disk_ok ? Status::Ok : Status::Unavailable,
                                   disk_ok
                                       ? QStringLiteral("Output path is writable. Live disk throughput is not measured.")

@@ -80,6 +80,9 @@ struct WebcamSettings {
     // Horizontal mirror of the webcam image. Default off. Applied identically to
     // the Settings preview, Record PiP and recorded output.
     bool mirror = false;
+    // Uniform PiP opacity [0,1]; 1.0 = fully opaque. Applied identically to the
+    // Record-page preview and the recorded output.
+    float opacity = 1.0f;
     WebcamChromaKeySettings chroma_key;
 };
 
@@ -140,6 +143,11 @@ inline WebcamSettings SanitizeWebcamSettings(WebcamSettings settings) {
     ck.tolerance = std::clamp(ck.tolerance, 0.0f, 1.0f);
     ck.softness = std::clamp(ck.softness, 0.0f, 1.0f);
     ck.spill_reduction = std::clamp(ck.spill_reduction, 0.0f, 1.0f);
+
+    if (!std::isfinite(static_cast<double>(settings.opacity))) {
+        settings.opacity = 1.0f;
+    }
+    settings.opacity = std::clamp(settings.opacity, 0.0f, 1.0f);
     return settings;
 }
 

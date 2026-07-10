@@ -1,6 +1,6 @@
 // update_checker.cpp -- GitHub Releases API update check (WinHTTP).
 
-#include <nlohmann/json.hpp>
+#include <update/release_locator.h>
 #include <update/update_checker.h>
 
 // WinHTTP is available on all supported Windows versions (Vista+).
@@ -10,14 +10,14 @@
 #pragma comment(lib, "winhttp.lib")
 
 #include <optional>
-#include <sstream>
 #include <string>
 
 namespace exosnap::update {
 namespace {
 
 // Perform a simple HTTPS GET and return the response body, or nullopt on failure.
-std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view path, std::string& out_error) noexcept {
+std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view path, INTERNET_PORT port,
+                                    std::string& out_error) noexcept {
     HINTERNET session = WinHttpOpen(L"ExoSnap-UpdateChecker/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) {
@@ -25,7 +25,7 @@ std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view pa
         return std::nullopt;
     }
 
-    HINTERNET conn = WinHttpConnect(session, std::wstring(host).c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET conn = WinHttpConnect(session, std::wstring(host).c_str(), port, 0);
     if (!conn) {
         WinHttpCloseHandle(session);
         out_error = "WinHttpConnect failed";
@@ -82,15 +82,59 @@ std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view pa
     return body;
 }
 
-// Parse a tag name like "v1.2.3" or "1.2.3" into SemVer.
-std::optional<SemVer> TagToSemVer(const std::string& tag) noexcept {
-    std::string_view sv = tag;
-    if (!sv.empty() && sv[0] == 'v')
-        sv.remove_prefix(1);
-    return ParseSemVer(sv);
-}
-
 } // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// FetchReleasesJson
+// ---------------------------------------------------------------------------
+std::optional<std::string> FetchReleasesJson(const std::string& base_url, std::string& out_error) noexcept {
+    // Split "https://host[:port]/path" for WinHTTP. https-only by design
+    // (mirrors DownloadToFile); the URLs here are ASCII (GitHub API / dev
+    // overrides), so a plain char->wchar widen is sufficient.
+    constexpr std::string_view kScheme = "https://";
+    if (base_url.compare(0, kScheme.size(), kScheme) != 0) {
+        out_error = "base URL must be https://";
+        return std::nullopt;
+    }
+
+    const std::string rest = base_url.substr(kScheme.size());
+    const size_t slash = rest.find('/');
+    std::string host_port = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+    std::string path = (slash == std::string::npos) ? std::string("/") : rest.substr(slash);
+
+    INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
+    if (const size_t colon = host_port.find(':'); colon != std::string::npos) {
+        const std::string port_str = host_port.substr(colon + 1);
+        host_port.resize(colon);
+        unsigned long parsed = 0;
+        for (const char ch : port_str) {
+            if (ch < '0' || ch > '9') {
+                parsed = 0;
+                break;
+            }
+            parsed = parsed * 10 + static_cast<unsigned long>(ch - '0');
+            if (parsed > 65535) {
+                break; // out of range already -- stop before the value wraps
+            }
+        }
+        if (port_str.empty() || parsed == 0 || parsed > 65535) {
+            out_error = "invalid port in base URL";
+            return std::nullopt;
+        }
+        port = static_cast<INTERNET_PORT>(parsed);
+    }
+    if (host_port.empty()) {
+        out_error = "missing host in base URL";
+        return std::nullopt;
+    }
+
+    // First page only; the newest qualifying release is always near the top.
+    path += (path.find('?') == std::string::npos) ? "?per_page=30" : "&per_page=30";
+
+    const std::wstring whost(host_port.begin(), host_port.end());
+    const std::wstring wpath(path.begin(), path.end());
+    return HttpsGet(whost, wpath, port, out_error);
+}
 
 // ---------------------------------------------------------------------------
 // CheckForUpdate
@@ -118,14 +162,10 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         return r;
     }
 
-    // Build API URL: /releases for all, then filter client-side
-    // api_base_url = "https://api.github.com/repos/Exoridus/exosnap/releases"
-    // We fetch the first page (30 items) and pick the right channel.
-    const std::wstring host = L"api.github.com";
-    const std::wstring path = L"/repos/Exoridus/exosnap/releases?per_page=30";
-
+    // Fetch the first releases page (30 items) and pick the right channel.
+    // Honours params.api_base_url so tests / dev servers can redirect the call.
     std::string http_error;
-    auto body = HttpsGet(host, path, http_error);
+    auto body = FetchReleasesJson(params.api_base_url, http_error);
     if (!body) {
         UpdateCheckResult r{};
         r.check_failed = true;
@@ -133,33 +173,11 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         return r;
     }
 
-    // Parse JSON array
-    std::optional<SemVer> best_ver;
-    std::optional<std::string> best_html_url;
-
-    try {
-        auto releases = nlohmann::json::parse(*body);
-        for (const auto& rel : releases) {
-            bool is_prerelease = rel.value("prerelease", false);
-            bool is_draft = rel.value("draft", false);
-            if (is_draft)
-                continue;
-
-            bool channel_match = (params.channel == UpdateChannel::Preview) ? is_prerelease : !is_prerelease;
-            if (!channel_match)
-                continue;
-
-            auto tag = rel.value("tag_name", std::string{});
-            auto sv = TagToSemVer(tag);
-            if (!sv)
-                continue;
-
-            if (!best_ver || *sv > *best_ver) {
-                best_ver = sv;
-                best_html_url = rel.value("html_url", std::string{});
-            }
-        }
-    } catch (...) {
+    // Select the newest qualifying release for the channel. The channel/draft
+    // filtering and asset extraction live once in LocateRelease (DRY).
+    std::string parse_error;
+    auto release = LocateRelease(*body, params.channel, &parse_error);
+    if (!release && !parse_error.empty()) {
         UpdateCheckResult r{};
         r.check_failed = true;
         r.error_message = "JSON parse error from GitHub releases API";
@@ -168,10 +186,13 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
 
     UpdateCheckResult r{};
     r.check_failed = false;
-    if (best_ver && *best_ver > params.current_version) {
+    if (release && release->version > params.current_version) {
         r.update_available = true;
-        r.available_version = best_ver;
-        r.releases_page_url = best_html_url;
+        r.available_version = release->version;
+        r.releases_page_url = release->releases_page_url;
+        // Gap-aware What's-new notes: every release in (current, best] for this
+        // channel, newest first — read from the SAME fetched JSON (no extra call).
+        r.gap_notes = CollectReleaseNotes(*body, params.current_version, release->version, params.channel);
     }
     return r;
 }

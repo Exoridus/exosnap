@@ -1,5 +1,6 @@
 #include "RecoveryOverlay.h"
 
+#include "ui/brand/BrandMarkWidget.h"
 #include "ui/theme/ExoSnapTheme.h"
 
 #include <QColor>
@@ -8,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLayout>
 #include <QMetaObject>
 #include <QMouseEvent>
 #include <QPainter>
@@ -25,6 +27,52 @@ namespace exosnap::ui::dialogs {
 namespace {
 
 constexpr int kBackdropAlpha = 158; // 0.62 * 255, matches other overlays
+
+using theme::ActiveTheme;
+
+QString tok(const char* base) {
+    return QString::fromUtf8(base);
+}
+
+// ── Shared button tiers ──────────────────────────────────────────────────────
+// Inline, token-driven styles so the Recovery surface speaks the exact same
+// button language as CrashReportPanel / RecordingErrorPanel (primary mint,
+// secondary outline, tertiary text). Set as per-widget stylesheets, which take
+// precedence over the app QSS — no edit to exosnap_dark.qss required.
+
+QString primaryButtonQss() {
+    return QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:0 16px; "
+                          "min-height:36px; max-height:36px; min-width:92px; font-size:12.5px; font-weight:600; }"
+                          "QPushButton:hover { background:%3; }"
+                          "QPushButton:pressed { background:%4; }"
+                          "QPushButton:disabled { color:%2; background:%5; }")
+        .arg(tok(ActiveTheme().ac), tok(ActiveTheme().ac_ink), theme::ThemeAccentHover(ActiveTheme()),
+             theme::ThemeAccentPressed(ActiveTheme()),
+             theme::ThemeRgba(theme::ParseThemeColor(ActiveTheme().ac), 0.40));
+}
+
+QString outlineButtonQss() {
+    const QString hover =
+        ActiveTheme().line3_override ? tok(ActiveTheme().line3_override) : QStringLiteral("rgba(255, 255, 255, 0.20)");
+    // min/max-height are 2px shorter than the filled tiers: a QSS min-height sizes the
+    // content box, so the 1px border on each edge is added on top — 34 + 2 = 36, matching
+    // the borderless Finish/Delete buttons exactly.
+    return QStringLiteral("QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; "
+                          "padding:0 16px; min-height:34px; max-height:34px; min-width:92px; font-size:12.5px; "
+                          "font-weight:500; }"
+                          "QPushButton:hover { border:1px solid %3; }"
+                          "QPushButton:disabled { color:%4; }")
+        .arg(tok(ActiveTheme().ink), tok(ActiveTheme().line2), hover, tok(ActiveTheme().dim));
+}
+
+// Tertiary text action tinted `color_base` (mut for neutral, error for destructive).
+QString tertiaryButtonQss(const char* color_base, const char* hover_base) {
+    return QStringLiteral("QPushButton { background:transparent; color:%1; border:none; border-radius:9px; "
+                          "padding:0 12px; min-height:36px; max-height:36px; font-size:12.5px; font-weight:500; }"
+                          "QPushButton:hover { color:%2; }"
+                          "QPushButton:disabled { color:%3; }")
+        .arg(tok(color_base), tok(hover_base), tok(ActiveTheme().dim));
+}
 
 // Format bytes as human-readable size string.
 QString FormatSize(qint64 bytes) {
@@ -80,6 +128,8 @@ class RecoveryRow : public QWidget {
         name_label_->setObjectName("recoveryRowName");
         name_label_->setProperty("labelRole", "recoveryName");
         name_label_->setWordWrap(false);
+        name_label_->setStyleSheet(QStringLiteral("font-size:13px; font-weight:600; color:%1; background:transparent;")
+                                       .arg(tok(ActiveTheme().ink)));
 
         const QString meta = QStringLiteral("%1  \xc2\xb7  %2  \xc2\xb7  %3")
                                  .arg(FormatSize(candidate_.artefact_size_bytes), candidate_.entry.started_at.left(10),
@@ -87,6 +137,10 @@ class RecoveryRow : public QWidget {
         auto* meta_label = new QLabel(meta, info_row);
         meta_label->setObjectName("recoveryRowMeta");
         meta_label->setProperty("labelRole", "recoveryMeta");
+        meta_label->setStyleSheet(
+            QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; letter-spacing:0.3px; "
+                           "color:%1; background:transparent;")
+                .arg(tok(ActiveTheme().dim)));
 
         info_layout->addWidget(name_label_, 1);
         info_layout->addWidget(meta_label);
@@ -98,25 +152,41 @@ class RecoveryRow : public QWidget {
         action_layout->setContentsMargins(0, 0, 0, 0);
         action_layout->setSpacing(8);
 
-        // "Finish" — always shown.
+        // Uniform, professional button sizing is enforced in the inline QSS helpers
+        // (min-height == max-height == control height, shared min-width for the safe
+        // pair). Note: a stylesheet's min-height/max-height override QWidget::
+        // setFixedHeight(), so the size MUST live in the QSS, not on the widget — the
+        // app-wide `QPushButton { min-height:36 }` rule otherwise stacked with the inline
+        // padding and inflated these to a chunky ~52px.
+
+        // "Finish" — Tier-1 primary (mint): the recommended, safe action.
         finish_btn_ = new QPushButton(QStringLiteral("Finish"), action_row);
         finish_btn_->setObjectName("recoveryFinishBtn");
+        finish_btn_->setCursor(Qt::PointingHandCursor);
+        finish_btn_->setStyleSheet(primaryButtonQss());
 
-        // "Continue" — only for non-finalized candidates (true crashes).
+        // "Continue" — only for non-finalized candidates (true crashes). Tier-2 outline.
         // Finalized entries are deliberate stops whose remux failed; they get Finish/Delete only.
         const bool can_continue = !candidate_.entry.finalized;
         continue_btn_ = new QPushButton(QStringLiteral("Continue"), action_row);
         continue_btn_->setObjectName("recoveryContinueBtn");
+        continue_btn_->setCursor(Qt::PointingHandCursor);
+        continue_btn_->setStyleSheet(outlineButtonQss());
         continue_btn_->setVisible(can_continue);
 
-        // "Delete" — always shown (destructive, inline two-step confirm).
+        // "Delete" — destructive (inline two-step confirm). Tier-3 coral text, pushed to
+        // the far right so it sits clearly apart from the safe Finish/Continue actions.
         delete_btn_ = new QPushButton(QStringLiteral("Delete"), action_row);
         delete_btn_->setObjectName("recoveryDeleteBtn");
         delete_btn_->setProperty("role", "destructive");
+        delete_btn_->setCursor(Qt::PointingHandCursor);
+        delete_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().error, ActiveTheme().error));
 
         status_label_ = new QLabel(action_row);
         status_label_->setObjectName("recoveryRowStatus");
         status_label_->setProperty("labelRole", "recoveryStatus");
+        status_label_->setStyleSheet(
+            QStringLiteral("font-size:11.5px; color:%1; background:transparent;").arg(tok(ActiveTheme().mut)));
         status_label_->setVisible(false);
 
         progress_bar_ = new QProgressBar(action_row);
@@ -124,22 +194,29 @@ class RecoveryRow : public QWidget {
         progress_bar_->setRange(0, 100);
         progress_bar_->setValue(0);
         progress_bar_->setFixedHeight(4);
+        progress_bar_->setMinimumWidth(140);
         progress_bar_->setVisible(false);
         progress_bar_->setTextVisible(false);
+        progress_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border:none; border-radius:2px; }"
+                                                    "QProgressBar::chunk { background:%2; border-radius:2px; }")
+                                         .arg(tok(ActiveTheme().line2), tok(ActiveTheme().ac)));
 
         cancel_btn_ = new QPushButton(QStringLiteral("Cancel"), action_row);
         cancel_btn_->setObjectName("recoveryCancelBtn");
+        cancel_btn_->setCursor(Qt::PointingHandCursor);
+        cancel_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
         cancel_btn_->setVisible(false);
 
+        // Safe actions on the left; progress/cancel/status fill the middle during a
+        // Finish operation; the destructive Delete is isolated on the far right.
         action_layout->addWidget(finish_btn_);
         if (can_continue)
             action_layout->addWidget(continue_btn_);
-        action_layout->addWidget(delete_btn_);
-        action_layout->addSpacing(8);
-        action_layout->addWidget(progress_bar_, 1);
+        action_layout->addWidget(progress_bar_);
         action_layout->addWidget(cancel_btn_);
-        action_layout->addWidget(status_label_, 1);
+        action_layout->addWidget(status_label_);
         action_layout->addStretch(1);
+        action_layout->addWidget(delete_btn_);
 
         layout->addWidget(info_row);
         layout->addWidget(action_row);
@@ -166,6 +243,8 @@ class RecoveryRow : public QWidget {
     void setStatus(const QString& text, bool is_error = false) {
         status_label_->setText(text);
         status_label_->setProperty("isError", is_error);
+        status_label_->setStyleSheet(QStringLiteral("font-size:11.5px; color:%1; background:transparent;")
+                                         .arg(tok(is_error ? ActiveTheme().error : ActiveTheme().mut)));
         status_label_->setVisible(true);
         status_label_->style()->unpolish(status_label_);
         status_label_->style()->polish(status_label_);
@@ -275,38 +354,99 @@ QFrame* RecoveryOverlay::buildCard() {
     auto* card = new QFrame(this);
     card->setObjectName("recoveryCard");
     card->setFixedWidth(560);
+    // Same card surface as the crash / recording-error panels (surf fill, line2
+    // hairline, 14px radius). Inline so it matches those surfaces exactly and
+    // doesn't depend on the app QSS.
+    card->setStyleSheet(QStringLiteral("#recoveryCard { background:%1; border:1px solid %2; border-radius:14px; }")
+                            .arg(tok(ActiveTheme().surf), tok(ActiveTheme().line2)));
 
     auto* main_layout = new QVBoxLayout(card);
-    main_layout->setContentsMargins(28, 24, 28, 22);
+    main_layout->setContentsMargins(0, 0, 0, 0);
     main_layout->setSpacing(0);
+    // Force the card's hard minimumSize to equal its content size. The overlay centres
+    // the card via heightForWidth(), which under-reports the height and would otherwise
+    // let the card be laid out too short — compressing the action row and clipping its
+    // buttons. A hard minimumSize is a floor the overlay layout must honour. (Paired
+    // with the hint label's Minimum vertical policy below, which makes that content
+    // minimum account for the wrapped hint text rather than a single line.)
+    main_layout->setSizeConstraint(QLayout::SetMinimumSize);
+
+    // ── Chrome bar ─────────────────────────────────────────────────────────
+    // Mirrors CrashReportPanel's chrome bar: bg strip, bottom hairline, rounded
+    // top corners, brand dot + "ExoSnap" + separator + mono subtitle.
+    auto* chrome = new QWidget(card);
+    chrome->setObjectName("recoveryChromeBar");
+    chrome->setFixedHeight(38);
+    chrome->setStyleSheet(QStringLiteral("#recoveryChromeBar { background:%1; border-bottom:1px solid %2; "
+                                         "border-top-left-radius:14px; border-top-right-radius:14px; }")
+                              .arg(tok(ActiveTheme().bg), tok(ActiveTheme().line)));
+    auto* chrome_layout = new QHBoxLayout(chrome);
+    chrome_layout->setContentsMargins(15, 0, 12, 0);
+    chrome_layout->setSpacing(9);
+
+    auto* brand_mark = new ui::brand::BrandMarkWidget(chrome);
+    brand_mark->setFixedSize(15, 15);
+    chrome_layout->addWidget(brand_mark, 0, Qt::AlignVCenter);
+
+    auto* brand = new QLabel(QStringLiteral("ExoSnap"), chrome);
+    brand->setStyleSheet(QStringLiteral("font-size:12px; font-weight:600; color:%1; background:transparent;")
+                             .arg(tok(ActiveTheme().ink)));
+    chrome_layout->addWidget(brand, 0, Qt::AlignVCenter);
+
+    auto* sep = new QFrame(chrome);
+    sep->setFixedSize(1, 13);
+    sep->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ActiveTheme().line2)));
+    chrome_layout->addWidget(sep, 0, Qt::AlignVCenter);
+
+    auto* chrome_sub = new QLabel(QStringLiteral("Recovery"), chrome);
+    chrome_sub->setStyleSheet(
+        QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; letter-spacing:0.3px; "
+                       "color:%1; background:transparent;")
+            .arg(tok(ActiveTheme().dim)));
+    chrome_layout->addWidget(chrome_sub, 0, Qt::AlignVCenter);
+    chrome_layout->addStretch(1);
+    main_layout->addWidget(chrome);
+
+    // ── Body ───────────────────────────────────────────────────────────────
+    auto* body = new QWidget(card);
+    auto* body_layout = new QVBoxLayout(body);
+    body_layout->setContentsMargins(28, 22, 28, 20);
+    body_layout->setSpacing(0);
 
     // ── Title ─────────────────────────────────────────────────────────────
-    auto* title_row = new QHBoxLayout();
-    title_row->setContentsMargins(0, 0, 0, 0);
-    title_row->setSpacing(12);
-
-    auto* title = new QLabel(QStringLiteral("Recover interrupted recordings"), card);
+    auto* title = new QLabel(QStringLiteral("Recover interrupted recordings"), body);
     title->setObjectName("recoveryTitle");
     title->setProperty("labelRole", "recoveryTitle");
-    title_row->addWidget(title, 1);
-
-    main_layout->addLayout(title_row);
-    main_layout->addSpacing(6);
+    title->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600; color:%1; background:transparent;")
+                             .arg(tok(ActiveTheme().ink)));
+    body_layout->addWidget(title);
+    body_layout->addSpacing(6);
 
     // ── Hint text ─────────────────────────────────────────────────────────
     auto* hint = new QLabel(QStringLiteral("These recordings were interrupted before they could be saved. "
                                            "Finish saves the recording as originally configured. "
                                            "Continue resumes recording from where you left off. "
                                            "Or decide later — entries stay for the next launch."),
-                            card);
+                            body);
     hint->setObjectName("recoveryHint");
     hint->setProperty("labelRole", "recoveryHint");
     hint->setWordWrap(true);
-    main_layout->addWidget(hint);
-    main_layout->addSpacing(16);
+    // Pin the wrap width to the card's content width (fixed 560 − 2×28 body margins) and
+    // forbid vertical compression. A word-wrapped QLabel reports a one-line
+    // minimumSizeHint (it assumes it may reflow wider), so the card's minimum height came
+    // out ~34px shorter than its real content; the layout then compressed the action row
+    // below its minimum and clipped its buttons. A fixed width makes the wrapped height a
+    // deterministic sizeHint, and a Minimum vertical policy makes the layout reserve that
+    // full height instead of the one-line minimum.
+    hint->setFixedWidth(560 - 28 * 2);
+    hint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    hint->setStyleSheet(
+        QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ActiveTheme().mut)));
+    body_layout->addWidget(hint);
+    body_layout->addSpacing(18);
 
     // ── Candidate rows ────────────────────────────────────────────────────
-    auto* rows_container = new QWidget(card);
+    auto* rows_container = new QWidget(body);
     rows_container->setObjectName("recoveryRowsContainer");
     auto* rows_layout = new QVBoxLayout(rows_container);
     rows_layout->setContentsMargins(0, 0, 0, 0);
@@ -320,6 +460,8 @@ QFrame* RecoveryOverlay::buildCard() {
     for (const auto& candidate : candidates_) {
         auto* rule = new QFrame(rows_container);
         rule->setProperty("frameRole", "sectionRuleLine");
+        rule->setFixedHeight(1);
+        rule->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ActiveTheme().line)));
         rows_layout->addWidget(rule);
 
         auto* row = new RecoveryRow(service_, candidate, rows_container);
@@ -344,21 +486,23 @@ QFrame* RecoveryOverlay::buildCard() {
         });
     }
 
-    main_layout->addWidget(rows_container);
-    main_layout->addSpacing(16);
+    body_layout->addWidget(rows_container);
+    body_layout->addSpacing(18);
 
     // ── "Decide later" footer button ──────────────────────────────────────
     auto* footer_row = new QHBoxLayout();
     footer_row->setContentsMargins(0, 0, 0, 0);
     footer_row->addStretch(1);
 
-    auto* decide_later_btn = new QPushButton(QStringLiteral("Decide later"), card);
+    auto* decide_later_btn = new QPushButton(QStringLiteral("Decide later"), body);
     decide_later_btn->setObjectName("recoveryDecideLaterBtn");
-    decide_later_btn->setFlat(true);
+    decide_later_btn->setCursor(Qt::PointingHandCursor);
+    decide_later_btn->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
     connect(decide_later_btn, &QPushButton::clicked, this, &RecoveryOverlay::closeOverlay);
     footer_row->addWidget(decide_later_btn);
 
-    main_layout->addLayout(footer_row);
+    body_layout->addLayout(footer_row);
+    main_layout->addWidget(body);
 
     return card;
 }

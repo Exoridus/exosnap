@@ -154,17 +154,17 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
         DiagnosticResult pr = MakeResult(
             "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-            "Smooth frame pacing recommended", "Phase-correct pacing removes judder from high-refresh / VRR sources.",
-            "Your recording uses Newest frame pacing; the measured judder is exactly what "
-            "Smooth (phase-correct) pacing fixes.",
-            "Frame pacing: Newest", "Switch to Smooth frame pacing in Advanced Video settings.");
+            "Phase-correct frame pacing recommended",
+            "Phase-correct pacing removes judder from high-refresh / VRR sources.",
+            "Your recording uses Lowest latency frame pacing; the measured judder is exactly what "
+            "Phase-correct pacing fixes.",
+            "Frame pacing: Lowest latency", "Switch to Phase-correct frame pacing in Advanced Video settings.");
         FixAction pfa;
         pfa.id = "fix.frame_pacing.smooth";
-        pfa.label = "Switch to Smooth pacing";
+        pfa.label = "Switch to Phase-correct pacing";
         pfa.safety = FixAction::Safety::Auto; // safe, reversible, config-only
         pfa.reversible = true;
-        pfa.changes_summary =
-            "Sets video frame pacing to Smooth (phase-correct). Reversible in Advanced Video settings.";
+        pfa.changes_summary = "Sets video frame pacing to Phase-correct. Reversible in Advanced Video settings.";
         pr.fix_action = pfa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(pr));

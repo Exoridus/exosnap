@@ -83,6 +83,11 @@ struct OutputSettingsModel {
     // valid for HEVC / AV1 (gated by capability::QueryCombo and reconciled in
     // SanitizePresetConfig — forced back to Bit8 for H.264 / unsupported combos).
     capability::BitDepth bit_depth = capability::BitDepth::Bit8;
+    // Chroma subsampling (expert). 4:2:0 is the universal default; 4:4:4 is an
+    // 8-bit H.264/HEVC-only expert path (gated by capability::QueryCombo /
+    // QueryChroma444 and reconciled in SanitizePresetConfig — forced back to
+    // Cs420 for AV1, 10-bit, or GPUs without YUV444 support).
+    capability::ChromaSubsampling chroma_subsampling = capability::ChromaSubsampling::Cs420;
     // Y'CbCr quantization range. Limited (16-235, broadcast) is the default as of
     // fix/color-range-signaling: common consumer players (verified: VLC) ignore
     // the range flag entirely and always apply limited->full expansion, so a

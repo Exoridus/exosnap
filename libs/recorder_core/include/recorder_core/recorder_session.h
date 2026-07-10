@@ -6,6 +6,7 @@
 #include "codec_types.h"
 #include "error_types.h"
 #include "frame_pacing.h"
+#include "hdr_native.h"
 #include "output_geometry.h"
 #include "pipeline_diagnostics.h"
 #include "session_stats.h"
@@ -27,9 +28,16 @@ namespace recorder_core {
 // Implementations must be thread-safe: TryGetFrame is called from VideoThread.
 // The provider must remain alive for the duration of Record().
 struct WebcamFrameProvider {
-    // Returns true and fills out_width/out_height/out_bgra when a new (or latest)
-    // frame is available.  out_bgra is BGRA (B8G8R8A8 byte order), row-major.
-    // Returns false when no frame has been captured yet or webcam failed.
+    // Returns true and fills out_width/out_height/out_bgra with the LATEST captured
+    // frame. out_bgra is BGRA (B8G8R8A8 byte order), row-major.
+    //
+    // Freeze-on-loss contract: once a frame has been captured, a subsequent device
+    // loss (unplug / driver error) does NOT make this return false — the last
+    // captured frame keeps being served (frozen) so the composite holds the last
+    // webcam image instead of the PiP vanishing, matching the DXGI monitor recovery
+    // (ADR 0013) and industry practice. The provider recovers live if the device
+    // returns. Returns false only before the first frame is captured (nothing to
+    // show yet) or after the provider is stopped.
     virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) = 0;
     virtual ~WebcamFrameProvider() = default;
 };
@@ -54,6 +62,10 @@ struct WebcamConfig {
     // No vertical flip is performed.  Must match the Record-preview mirror state.
     bool mirror = false;
 
+    // Uniform overlay opacity [0,1]; 1.0 = fully opaque. Applied to the sprite's
+    // alpha after chroma keying, so keyed edges and overall fade compose correctly.
+    float opacity = 1.0f;
+
     // Chroma key. chroma_r/g/b hold the resolved active key color (caller
     // computes this from WebcamChromaKeySettings::active_color() before handing
     // config to the engine; the engine never needs to know the color mode).
@@ -75,6 +87,9 @@ struct WebcamOverlayLive {
     float overlay_w_norm = 0.25f;
     float overlay_h_norm = 0.25f;
     bool mirror = false;
+    // Uniform overlay opacity [0,1]; 1.0 = fully opaque. Applied to the sprite's
+    // alpha after chroma keying, so keyed edges and overall fade compose correctly.
+    float opacity = 1.0f;
     // chroma_r/g/b carry the resolved active key color (not the raw mode enum).
     bool chroma_key_enabled = false;
     uint8_t chroma_r = 0;
@@ -189,42 +204,28 @@ struct CompletedSegment {
 using SegmentCallback = std::function<void(const CompletedSegment&)>;
 
 // ---------------------------------------------------------------------------
-// PreviewFrame — throttled WYSIWYG preview tap (Strand 3 slice 1)
+// PreviewSharedHandleCallback — WYSIWYG preview via a shared GPU texture
 // ---------------------------------------------------------------------------
 
-// One composed video frame surfaced from the live encode pipeline for the
-// in-app preview while recording. Unlike FrameSnapshotCallback (a one-shot
-// request), this is a repeating feed throttled to roughly 30 Hz — see
-// SetPreviewFrameCallback. UI-agnostic: raw BGRA pixels only, no Qt types.
-struct PreviewFrame {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    // Row pitch of `bgra` in bytes; always >= width * 4. May exceed width * 4
-    // if the source buffer this frame was copied from is padded.
-    uint32_t stride_bytes = 0;
-    // Encode timestamp (PTS) of THIS frame's pixels, nanoseconds, same clock
-    // basis as the muxed video track (CFR frame index * frame interval for
-    // CFR sessions, capture-relative for VFR). The preview readback is one
-    // publish tick behind the encoder (see preview_staging_ring.h), so this
-    // is typically ~33 ms older than the newest encoded frame — but it is
-    // always the correct PTS for the pixels it accompanies.
-    uint64_t timestamp_ns = 0;
-    // B8G8R8A8, row-major, top-down, `stride_bytes` per row. Alpha is always
-    // opaque (255).
-    std::vector<uint8_t> bgra;
-};
-
-// Invoked SYNCHRONOUSLY from VideoThread at most ~30 Hz, only for frames
-// that were actually newly composed (never for CFR-duplicated/skipped
-// ticks). Because the call runs inline in the encode loop, implementations
-// must return quickly (copy/queue the data and return — do not render or
-// block inside the callback) and are expected not to throw; a thrown
-// exception is caught by the engine, logged once, and the frame is dropped.
-// The referenced PreviewFrame (including its pixel buffer) is only valid
-// for the duration of the call and is reused for the next frame. Leaving
-// the callback unset disables the tap at zero cost (a single bool check per
-// composed frame).
-using PreviewFrameCallback = std::function<void(const PreviewFrame&)>;
+// Invoked ONCE from VideoThread when the engine has created the shared
+// preview texture for a session — an NT-handle + keyed-mutex D3D11 texture
+// holding the composited, pre-encode source frame (cursor + webcam PiP baked
+// in, exactly as recorded). The engine copies each newly composed frame into
+// that texture without ever stalling the encode path; the consumer opens the
+// handle on its own device and samples it. Zero CPU copies.
+//
+// `nt_handle` is a Windows HANDLE passed as uintptr_t to keep <windows.h> out
+// of this public header. Ownership passes to the callback: open it with
+// ID3D11Device1::OpenSharedResource1, then CloseHandle. The callback MUST
+// return quickly and MUST NOT make D3D11 calls on the calling (video) thread —
+// stash the handle and hand off to the consumer's render thread.
+//
+// Fires only for SDR / HDR-tone-map / 4:4:4 sessions, where a samplable SDR or
+// 10-bit composited surface exists. Native HDR10 sessions composite in FP16
+// scRGB with no SDR intermediate and never fire this (see product spec /
+// KNOWN_LIMITATIONS). Must be set before Record(); the callback is captured at
+// Record() start and does not survive Stop()/Record() cycles.
+using PreviewSharedHandleCallback = std::function<void(uintptr_t nt_handle, uint32_t width, uint32_t height)>;
 
 // ---------------------------------------------------------------------------
 // OpusFrameDuration — configurable Opus frame size (ADR 0019)
@@ -281,7 +282,9 @@ struct RecorderConfig {
     HdrMode hdr_mode = HdrMode::TonemapSdr;
 
     // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
-    NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
+    // Constant-quality target (CQP). 1 = best, 51 = worst. Only used when
+    // rate_control == ConstantQuality.
+    uint32_t nvenc_cq = CanonicalCq(NvencQualityPreset::Balanced);
 
     // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
     RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;
@@ -470,6 +473,23 @@ struct RecorderConfig {
     RecordingSplitSettings split;
 };
 
+// Apply the native HDR10 (PQ/BT.2020) encode overrides to a base config once the
+// caller has established that the native path is effective (see
+// IsHdr10NativeEffective) and gathered the captured display's HdrDisplayFacts:
+//   * colour metadata derived from the display facts (BT.2020/PQ, mastering data),
+//   * bit depth pinned to 10-bit (HDR10 is 10-bit by definition), and
+//   * chroma snapped to 4:2:0 — 4:4:4 (AYUV) is an 8-bit-only path, so a leftover
+//     Cs444 selection would otherwise reach Validate() as Cs444 + Bit10 and fail
+//     the recording start. Returns true iff the chroma was snapped (the caller
+//     may log a reconcile line). Pure: no logging, no D3D.
+[[nodiscard]] inline bool ApplyHdr10NativeEncode(RecorderConfig& config, const HdrDisplayFacts& facts) noexcept {
+    config.color = MakeHdr10ColorMetadata(facts);
+    config.bit_depth = BitDepth::Bit10;
+    const bool chroma_snapped = config.chroma != ChromaSubsampling::Cs420;
+    config.chroma = ChromaSubsampling::Cs420;
+    return chroma_snapped;
+}
+
 // Derive the on-disk path for segment `index` (0-based) from a base output path.
 // Segment 0 keeps the base name; later segments insert a "_part-NNN" suffix
 // before the extension (recording.mkv -> recording_part-002.mkv). If the derived
@@ -563,16 +583,13 @@ class RecorderSession {
     // calling Record(). Optional: leaving it unset disables diagnostics with no cost.
     void SetDiagnosticsCallback(DiagnosticsCallback cb);
 
-    // Register a live WYSIWYG preview-frame callback invoked synchronously
-    // from VideoThread at most ~30 Hz while recording, only for
-    // actually-composed frames (never CFR duplicate ticks). Must be set
-    // before calling Record(): the callback is captured at Record() start,
-    // so setting or clearing it while a recording is running has NO effect
-    // until the next Record(). Optional: leaving it unset disables the
-    // preview tap at zero cost (one bool check per composed frame). See
-    // PreviewFrameCallback for the callback-side contract (return fast,
-    // don't throw, don't retain the frame reference).
-    void SetPreviewFrameCallback(PreviewFrameCallback cb);
+    // Register the WYSIWYG preview shared-texture callback (see
+    // PreviewSharedHandleCallback). Fired once from VideoThread when the shared
+    // preview texture is ready. Must be set before Record(): the callback is
+    // captured at Record() start, so setting or clearing it while a recording is
+    // running has NO effect until the next Record(). Optional: leaving it unset
+    // disables the preview tap at zero cost (the shared texture is never created).
+    void SetPreviewSharedHandleCallback(PreviewSharedHandleCallback cb);
 
     // Request a one-shot BGRA frame snapshot from the next composed video frame.
     // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).

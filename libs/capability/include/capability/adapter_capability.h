@@ -28,6 +28,13 @@ struct AdapterEncoderCapability {
     bool h264 = false;
     bool hevc = false;
     bool av1 = false;
+
+    // Per-codec 8-bit 4:4:4 (YUV444) encode support, from
+    // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Only meaningful when probed==true; only
+    // queried for a codec this adapter actually advertised. No AV1 field on
+    // purpose — NVENC AV1 is 4:2:0 Main only.
+    bool yuv444_h264 = false;
+    bool yuv444_hevc = false;
 };
 
 // Vendor -> backend label, pure (no probing). NVIDIA => "NVENC"; AMD, Intel,

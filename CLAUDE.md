@@ -8,15 +8,15 @@ Read:
 
 1. `README.md`
 2. `AGENTS.md`
-3. `.workspace/product/exosnap-1.0-end-spec.md`
+3. `docs/product-spec.md` — the tracked product specification (durable source for user-visible behavior)
 4. `.workspace/architecture/system-overview.md`
 5. Any document directly related to the task
 
-## Product decisions (authoritative source: `.workspace/product/exosnap-1.0-end-spec.md`)
+## Product decisions (authoritative source: `docs/product-spec.md`)
 
 - Dark mode by default
-- Default audio source order: `APP`, `SYS`, `MIC`
-- Default resulting tracks: `APP`, `SYS`, `MIC`
+- Audio source row order: `APP`, `SYS`, `MIC`. The `APP` row exists only while a specific application window is the capture target; for screen capture the shipped default is `SYS` on, `MIC` off
+- Each enabled source becomes its own resulting track unless merged with the row above
 - Exact label: `Merge with above`
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
@@ -24,6 +24,21 @@ Read:
   - **Settings** hosts Video, Audio, Output, Webcam, Hotkeys, and Advanced (expert-only) as embedded sections
   - **Device** hosts adapter selection + the per-GPU capability matrix (moved out of Diagnostics)
   - **Edit/Output/Save** is an overlay over the Record page (ADR 0022), not a nav item
+
+## Never drive the running application
+
+The developer works on the same machine. Taking over the pointer or the foreground window
+interrupts them and is not acceptable.
+
+- **Never interact with a running ExoSnap instance.** No mouse or keyboard synthesis, no
+  `EnumWindows` / `GetWindowRect` / `SetForegroundWindow`, no window enumeration, no clicking,
+  no screenshots of the live app.
+- Starting the app **once** to confirm it does not crash at startup is allowed, and is required
+  after editing a QSS theme (an invalid `${token}` crashes at launch). Confirm the process
+  survives, then close it. Nothing else.
+- Judge pixels with the `--visual-test` render harness. Judge behavior with the widget tests.
+- If a change can only be verified by clicking through the live app, **stop and ask the developer
+  to do it.** Never do it yourself, and never do it without asking first.
 
 ## Work style
 
