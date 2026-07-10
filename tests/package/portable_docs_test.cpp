@@ -52,18 +52,21 @@ TEST(PortableDocs, StalePlainTextLimitationsRemoved) {
 }
 
 // ---------------------------------------------------------------------------
-// Version consistency — every release-facing doc names the canonical project
-// version and none claims 1.0. EXOSNAP_PROJECT_VERSION is injected from
-// PROJECT_VERSION at build time, so this self-updates on a version bump: the
-// only edit a release needs is the canonical project(... VERSION ...).
+// Version consistency — the documents shipped alongside a binary name that
+// binary's version, and no document claims 1.0. EXOSNAP_PROJECT_VERSION is
+// injected from PROJECT_VERSION at build time, so a version bump fails these
+// tests until the shipped documents are updated to match.
 // ---------------------------------------------------------------------------
-TEST(PortableDocs, AllDocsNameCanonicalVersion) {
+// README.md is deliberately absent here. It is the repository front page, always
+// rendered against the live repository, and it states the current release through
+// a release badge that cannot go stale. A hardcoded version there could only
+// drift. The two documents below ship inside the portable ZIP, offline, next to
+// one specific binary — for them, naming that binary's version is the point.
+TEST(PortableDocs, ShippedDocsNameCanonicalVersion) {
     EXPECT_TRUE(contains(known_limitations(), EXOSNAP_PROJECT_VERSION))
         << "KNOWN_LIMITATIONS.md must name version " << EXOSNAP_PROJECT_VERSION;
     EXPECT_TRUE(contains(portable_readme(), EXOSNAP_PROJECT_VERSION))
         << "README-PORTABLE.md must name version " << EXOSNAP_PROJECT_VERSION;
-    EXPECT_TRUE(contains(root_readme(), EXOSNAP_PROJECT_VERSION))
-        << "README.md must name version " << EXOSNAP_PROJECT_VERSION;
 }
 
 TEST(PortableDocs, NoDocClaimsItIsOnePointZeroRelease) {
