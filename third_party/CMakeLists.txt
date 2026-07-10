@@ -65,6 +65,12 @@ _exosnap_install_license("toml++ v3.4.0"
 _exosnap_install_license("IBM Plex Mono (SIL OFL 1.1)"
     "${PROJECT_SOURCE_DIR}/third_party/ibm-plex/LICENSE.txt" "ibm-plex-mono.txt")
 
+# --- Hanken Grotesk (bundled font, Regular/Medium/SemiBold/Bold) ---
+# Vendored TTFs live in app/assets/fonts (compiled into the Qt resource system);
+# only the SIL OFL 1.1 license text is staged here for the install tree.
+_exosnap_install_license("Hanken Grotesk (SIL OFL 1.1)"
+    "${PROJECT_SOURCE_DIR}/app/assets/fonts/HankenGrotesk-OFL.txt" "hanken-grotesk.txt")
+
 # --- libopus v1.5.2 ---
 FetchContent_Declare(
   libopus

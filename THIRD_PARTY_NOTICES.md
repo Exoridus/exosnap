@@ -117,8 +117,19 @@ directory alongside the ExoSnap binary.
   compiled into the Qt resource system and loaded via `QFontDatabase`
 - **Bundled license:** `licenses/ibm-plex-mono.txt`
 - **Role:** the application's monospace UI face (timecode, chips, kicker
-  labels, log viewer, metadata values). UI sans text uses the system-provided
-  Segoe UI; no sans-serif font is bundled.
+  labels, log viewer, metadata values).
+
+### Hanken Grotesk
+
+- **Project:** https://github.com/marcologous/hanken-grotesk
+- **License:** SIL Open Font License 1.1 (Copyright © 2021 The Hanken Grotesk
+  Project Authors)
+- **Files:** `HankenGrotesk-Regular.ttf`, `HankenGrotesk-Medium.ttf`,
+  `HankenGrotesk-SemiBold.ttf`, `HankenGrotesk-Bold.ttf`, compiled into the Qt
+  resource system and loaded via `QFontDatabase`
+- **Bundled license:** `licenses/hanken-grotesk.txt`
+- **Role:** the application's primary sans-serif UI face (body text, labels,
+  headings). It is not the system-provided Segoe UI.
 
 ### FFmpeg
 
