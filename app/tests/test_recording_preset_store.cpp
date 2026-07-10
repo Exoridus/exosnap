@@ -574,31 +574,32 @@ TEST(RecordingPresetStore, WebcamOpacityMissingKey_DefaultsTo1) {
     CleanupFile(path);
 }
 
-// A schema-22 file — one version behind current — is repaired field-wise
-// (kept, not reset) per pre-1.0 policy; only the version stamp itself is
-// stale, so the flag simply reports that a repair happened.
-TEST(RecordingPresetStore, SchemaV22_OneVersionBehindCurrent_KeepsData_FlagsRepaired) {
+// A schema-22 file — one version behind current — is kept field-wise (not
+// reset) per pre-1.0 policy. Every field still parses cleanly, so this is a
+// routine version re-stamp, not a repair — the flag stays false.
+TEST(RecordingPresetStore, SchemaV22_OneVersionBehindCurrent_KeepsData_NotRepaired) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion - 1, QStringLiteral("limited"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].id, "preset.migrate0011");
 
     CleanupFile(path);
 }
 
-// A schema-19 file with the materialized old default ("full") is repaired
-// field-wise (user preset kept) and the colour range is migrated to Limited.
+// A schema-19 file with the materialized old default ("full") keeps the user
+// preset and migrates the colour range to Limited. Every field still parses
+// cleanly and nothing is dropped, so this is not a repair.
 TEST(RecordingPresetStore, MigrationV19_MaterializedFullBecomesLimited) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("full"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].id, "preset.migrate0011");
     EXPECT_EQ(state.user_presets[0].name, "User Preset");
@@ -608,14 +609,15 @@ TEST(RecordingPresetStore, MigrationV19_MaterializedFullBecomesLimited) {
     CleanupFile(path);
 }
 
-// A schema-19 file with "limited" stays Limited (nothing to migrate).
+// A schema-19 file with "limited" stays Limited (nothing to migrate, nothing
+// dropped — not a repair).
 TEST(RecordingPresetStore, MigrationV19_LimitedStaysLimited) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("limited"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
 
@@ -664,15 +666,16 @@ TEST(RecordingPresetStore, MigrationV19_IdempotentAfterSaveReload) {
 }
 
 // Schema versions well below the current one still get the same field-wise
-// repair (kept, not reset); a schema this old also falls at-or-below the
-// color-range migration ceiling, so "full" is rewritten to Limited too.
-TEST(RecordingPresetStore, Migration_Schema18_FieldwiseRepair_AndColorRangeRewritten) {
+// treatment (kept, not reset, not flagged as repaired); a schema this old
+// also falls at-or-below the color-range migration ceiling, so "full" is
+// rewritten to Limited too.
+TEST(RecordingPresetStore, Migration_Schema18_FieldwiseKept_AndColorRangeRewritten) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(18, QStringLiteral("full"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].id, "preset.migrate0011");
     EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
@@ -1068,7 +1071,7 @@ TEST(RecordingPresetStore, MalformedItem_EmptyId_Skipped_ValidKept) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.repaired);
+    EXPECT_TRUE(state.repaired); // the empty-id item was dropped
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].id, "preset.aabbccddeeff0011");
     EXPECT_EQ(state.user_presets[0].name, "Good Item");
@@ -1166,6 +1169,7 @@ TEST(RecordingPresetStore, DuplicateIds_Repaired_OneKeepedFirst) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.repaired); // the duplicate later occurrence was dropped
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].name, "First");
 
@@ -1269,10 +1273,10 @@ TEST(RecordingPresetStore, EmptyPath_Save_NoCrash) {
 }
 
 // ===========================================================================
-// Schema version mismatch → field-wise repair, not a reset
+// Schema version mismatch → field-wise kept, not a reset, not a repair
 // ===========================================================================
 
-TEST(RecordingPresetStore, WrongSchemaVersion_KeepsData_FlagsRepaired) {
+TEST(RecordingPresetStore, WrongSchemaVersion_KeepsData_NotRepaired) {
     const QString path = UniqueTempPath();
 
     // Write a TOML file with schema_version one higher than current — must be
@@ -1353,7 +1357,7 @@ TEST(RecordingPresetStore, WrongSchemaVersion_KeepsData_FlagsRepaired) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].id, "preset.userpreset0001");
 
@@ -1413,15 +1417,17 @@ TEST(RecordingPresetStore, MalformedToml_Load_ReturnsDefaults_FlagsRepaired_NoCr
 }
 
 // ===========================================================================
-// New: Incompatible schema (old version) → field-wise repair, not a reset
+// New: Incompatible schema (old version) → field-wise kept, not a reset,
+// not a repair (nothing parsed invalidly and nothing was dropped)
 // ===========================================================================
 
-TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_FlagsRepaired) {
+TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_NotRepaired) {
     const QString path = UniqueTempPath();
 
     // kPresetSchemaVersion - 2: genuinely below the migration ceiling too, so
-    // it is repaired the same way SchemaV22_OneVersionBehindCurrent is, plus
-    // the color-range rewrite (covered separately by Migration_Schema18_*).
+    // it is kept the same way SchemaV22_OneVersionBehindCurrent is, plus the
+    // color-range rewrite (covered separately by Migration_Schema18_*). No
+    // item is dropped, so the flag stays false.
     const QString toml = QStringLiteral("schema_version = %1\n"
                                         "selected_id = \"preset.default\"\n")
                              .arg(kPresetSchemaVersion - 2);
@@ -1430,7 +1436,7 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_FlagsRepaired) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     EXPECT_TRUE(state.user_presets.empty());                     // no [[presets]] array in this minimal fixture
     EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId)); // "preset.default" is a built-in
 
@@ -1602,10 +1608,12 @@ TEST(RecordingPresetStore, TomlOnDisk_HasLiveTable_NoDefaultId) {
     CleanupFile(path);
 }
 
-// Field-wise repair replaces the full reset on version mismatch.
+// Field-wise keep replaces the full reset on version mismatch, and a clean
+// version re-stamp alone is not reported as a repair — every field here
+// parses cleanly and nothing is dropped.
 // Production call site: MainWindow ctor load — a schema-22 file keeps its
 // user presets and live values instead of resetting.
-TEST(RecordingPresetStore, SchemaMismatch_KeepsData_FlagsRepaired) {
+TEST(RecordingPresetStore, SchemaMismatch_KeepsData_NotRepaired) {
     const QString path = UniqueTempPath();
     RecordingPresetStore store(path);
     RecordingPreset user = MakeRegionPreset();
@@ -1622,7 +1630,7 @@ TEST(RecordingPresetStore, SchemaMismatch_KeepsData_FlagsRepaired) {
     ASSERT_TRUE(WriteTomlString(path, text));
 
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.repaired);
+    EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
     EXPECT_EQ(state.user_presets[0].id, user.id);
     ASSERT_TRUE(state.live.has_value());

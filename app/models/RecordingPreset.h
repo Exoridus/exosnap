@@ -25,10 +25,11 @@ namespace exosnap {
 // there is no more startup-default preset, only a live config and, always,
 // the built-in Default preset it can fall back to. Loading no longer resets
 // the whole store on a schema mismatch: every field is repaired
-// individually (missing/invalid values fall back to their model default),
-// and Load() reports whether a repair happened so the caller can tell the
-// user. This subsumes the v19->v20 colour-range exception below, which is
-// now just one more field-wise repair rule instead of a special case.
+// individually (missing/invalid values fall back to their model default).
+// A version bump alone is not reported to the user — only an actual parse
+// failure or dropped item is; see PersistedPresetState::repaired. This
+// subsumes the v19->v20 colour-range exception below, which is now just one
+// more field-wise migration rule instead of a special case.
 //
 // v21: adds output.hdr_mode (Off/TonemapSdr/Hdr10).
 //

@@ -1139,40 +1139,46 @@ PersistedPresetState RecordingPresetStore::Load() const {
     if (!maybe_doc.has_value()) {
         PersistedPresetState state;
         state.selected_id = std::string(kDefaultPresetId);
-        state.repaired = true;
+        state.repaired = true; // Unparseable file — nothing survived.
         return state;
     }
     const toml::table& doc = *maybe_doc;
 
-    // A schema mismatch is repaired field by field below instead of resetting
-    // the whole file; it only flips the reported repaired flag.
+    // A schema mismatch alone is a routine version re-stamp, not a repair —
+    // every field still parses cleanly and nothing is discarded. `repaired`
+    // instead tracks whether an item actually had to be dropped below.
     const int64_t schema_version = TomlInt(doc["schema_version"], -1);
-    const bool repaired = (schema_version != kPresetSchemaVersion);
     // Files at or below this schema carry the ADR-0032 targeted color-range
     // rewrite on top of the ordinary field-wise repair (see RecordingPreset.h).
     const bool migrate_color_range = (schema_version >= 0 && schema_version <= kPresetSchemaColorRangeMigratedThrough);
 
+    bool item_dropped = false;
     std::vector<RecordingPreset> accepted;
     std::set<std::string> seen_ids;
 
     if (const toml::array* presets_arr = doc["presets"].as_array()) {
         for (const auto& elem : *presets_arr) {
             const auto* item_tbl = elem.as_table();
-            if (!item_tbl)
+            if (!item_tbl) {
+                item_dropped = true; // Malformed item — not even a table.
                 continue;
+            }
             const auto maybe = PresetFromToml(*item_tbl);
             if (!maybe.has_value()) {
-                continue; // Malformed item — skip.
+                item_dropped = true; // Malformed item — skip.
+                continue;
             }
             const RecordingPreset& raw = *maybe;
             if (raw.id.empty()) {
+                item_dropped = true;
                 continue;
             }
             if (IsBuiltInPresetId(raw.id)) {
                 continue; // Built-ins are code-defined — never loaded from disk.
             }
             if (seen_ids.count(raw.id) > 0) {
-                continue; // Duplicate id — drop later occurrence.
+                item_dropped = true; // Duplicate id — drop later occurrence.
+                continue;
             }
             seen_ids.insert(raw.id);
             RecordingPreset sanitized = SanitizePreset(raw);
@@ -1213,7 +1219,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
     state.user_presets = std::move(accepted);
     state.selected_id = std::move(selected_id);
     state.live = std::move(live);
-    state.repaired = repaired;
+    state.repaired = item_dropped;
     return state;
 }
 

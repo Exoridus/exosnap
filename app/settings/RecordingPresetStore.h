@@ -19,9 +19,12 @@ struct PersistedPresetState {
     std::vector<RecordingPreset> user_presets; // built-ins are code-defined, never persisted
     std::string selected_id;                   // repaired to kDefaultPresetId when unknown
     std::optional<RecordingPresetConfig> live; // nullopt: [live] missing/unreadable -> boot Default
-    // True when the file needed field-wise repair on load (parse failure,
-    // schema mismatch, or a dropped/clamped item). False on a first run
-    // (missing file) — there is nothing to repair yet.
+    // True when the file could not be parsed at all, or when loading it
+    // required dropping something (a malformed entry, an unreadable table, a
+    // duplicate id). A pure schema-version bump that parses cleanly, or a
+    // field clamped to a valid value, is normal sanitization and does not set
+    // this. False on a first run (missing file) — there is nothing to repair
+    // yet.
     bool repaired = false;
 };
 
@@ -43,8 +46,8 @@ class RecordingPresetStore {
 
     // Load the persisted state from the file.  A parse failure or schema
     // mismatch is repaired field by field instead of resetting the whole
-    // file — see PersistedPresetState::repaired.  Individual malformed items
-    // are silently skipped.
+    // file.  Individual malformed items are silently skipped — see
+    // PersistedPresetState::repaired for when that is reported.
     [[nodiscard]] PersistedPresetState Load() const;
 
     // Persist the live config and the given (non-built-in) presets.  Built-in
@@ -59,24 +62,24 @@ class RecordingPresetStore {
     // ---------------------------------------------------------------------------
     // Export / import helpers
     //
-    // All three methods use the same IniFormat serialization as Save/Load so
+    // All three methods use the same TOML serialization as Save/Load so
     // there is exactly one serialization code path.  kPresetSchemaVersion is
     // embedded in every exported file so future Load() callers can reject
     // incompatible files.
     // ---------------------------------------------------------------------------
 
-    // Write a single preset to a standalone .ini file.
+    // Write a single preset to a standalone .toml file.
     // Returns true on success; on failure writes a human-readable message into
     // *err (if non-null) and returns false.
     [[nodiscard]] static bool ExportPresetToFile(const RecordingPreset& preset, const QString& path, QString* err);
 
-    // Write all given user presets to one .ini file using the same multi-item
-    // array layout the live store uses for presets.ini.
+    // Write all given user presets to one .toml file using the same multi-item
+    // array layout the live store uses for presets.toml.
     // Returns true on success.
     [[nodiscard]] static bool ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
                                                          QString* err);
 
-    // Read one or more presets from a .ini file previously created by
+    // Read one or more presets from a .toml file previously created by
     // ExportPresetToFile or ExportAllUserPresetsToFile.
     //
     // existing_ids: the caller supplies the current live preset ids so that

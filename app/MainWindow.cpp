@@ -3562,7 +3562,7 @@ void MainWindow::initNotificationToasts() {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::SettingsRepaired;
         event.title = QStringLiteral("Settings repaired");
-        event.body = QStringLiteral("Some saved recording settings were invalid and were reset to their defaults.");
+        event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
         notification_manager_->Enqueue(std::move(event));
     }
 
