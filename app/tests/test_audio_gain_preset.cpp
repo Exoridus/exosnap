@@ -60,15 +60,15 @@ TEST(AudioGainPreset, RoundTrip_GainAndMuted) {
     const QString path = UniqueTempPath();
 
     RecordingPreset preset = MakeGainPreset(6.0f, false, -12.0f, true);
-    preset.id = std::string(kDefaultPresetId);
+    preset.id = GeneratePresetId();
     preset.name = "Gain Test";
 
     RecordingPresetStore store(path);
-    store.Save({preset}, preset.id, preset.id);
+    store.Save({preset}, preset.id, preset.config);
 
     const PersistedPresetState loaded = store.Load();
-    ASSERT_FALSE(loaded.presets.empty());
-    const auto& lp = loaded.presets.front();
+    ASSERT_FALSE(loaded.user_presets.empty());
+    const auto& lp = loaded.user_presets.front();
 
     ASSERT_EQ(lp.config.audio.source_rows.size(), 3u);
 
@@ -92,12 +92,13 @@ TEST(AudioGainPreset, RoundTrip_DefaultGain_UnchangedBehavior) {
     const QString path = UniqueTempPath();
 
     RecordingPreset preset = MakeDefaultPreset();
+    preset.id = GeneratePresetId(); // non-built-in id so Save() actually writes it
     RecordingPresetStore store(path);
-    store.Save({preset}, preset.id, preset.id);
+    store.Save({preset}, preset.id, preset.config);
 
     const PersistedPresetState loaded = store.Load();
-    ASSERT_FALSE(loaded.presets.empty());
-    const auto& lp = loaded.presets.front();
+    ASSERT_FALSE(loaded.user_presets.empty());
+    const auto& lp = loaded.user_presets.front();
 
     for (const auto& row : lp.config.audio.source_rows) {
         EXPECT_NEAR(row.gain_db, 0.0f, 0.01f);

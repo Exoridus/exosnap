@@ -14,15 +14,13 @@ namespace exosnap {
 RecordingPresetRegistry::RecordingPresetRegistry() {
     presets_ = MakeBuiltInPresets();
     selected_id_ = std::string(kDefaultPresetId);
-    default_id_ = std::string(kDefaultPresetId);
 }
 
 // ---------------------------------------------------------------------------
 // LoadState
 // ---------------------------------------------------------------------------
 
-void RecordingPresetRegistry::LoadState(std::vector<RecordingPreset> presets, std::string selected_id,
-                                        std::string default_id) {
+void RecordingPresetRegistry::LoadState(std::vector<RecordingPreset> presets, std::string selected_id) {
     // 1. Seed the four built-ins first; they always win over any persisted
     //    copy of the same id (a stale/tampered built-in snapshot is ignored).
     presets_ = MakeBuiltInPresets();
@@ -48,31 +46,10 @@ void RecordingPresetRegistry::LoadState(std::vector<RecordingPreset> presets, st
         presets_.push_back(std::move(sanitized));
     }
 
-    // 3. Repair selected_id.
+    // 3. Repair selected_id: kDefaultPresetId is a built-in and therefore
+    //    always present, so it is the only fallback selection ever needs.
     const bool selected_valid = (IndexById(selected_id) != std::string::npos);
-    if (!selected_valid) {
-        // Try default_id as fallback.
-        const bool default_valid = (IndexById(default_id) != std::string::npos);
-        if (default_valid) {
-            selected_id = default_id;
-        } else {
-            selected_id = presets_.front().id;
-        }
-    }
-    selected_id_ = std::move(selected_id);
-
-    // 4. Repair default_id.
-    const bool default_valid = (IndexById(default_id) != std::string::npos);
-    if (!default_valid) {
-        // Prefer kDefaultPresetId if it is in the list.
-        const bool canonical_present = (IndexById(kDefaultPresetId) != std::string::npos);
-        if (canonical_present) {
-            default_id = std::string(kDefaultPresetId);
-        } else {
-            default_id = presets_.front().id;
-        }
-    }
-    default_id_ = std::move(default_id);
+    selected_id_ = selected_valid ? std::move(selected_id) : std::string(kDefaultPresetId);
 }
 
 // ---------------------------------------------------------------------------
@@ -89,10 +66,6 @@ std::size_t RecordingPresetRegistry::Count() const noexcept {
 
 const std::string& RecordingPresetRegistry::SelectedId() const noexcept {
     return selected_id_;
-}
-
-const std::string& RecordingPresetRegistry::DefaultId() const noexcept {
-    return default_id_;
 }
 
 const RecordingPreset* RecordingPresetRegistry::FindById(std::string_view id) const {
@@ -118,14 +91,6 @@ bool RecordingPresetRegistry::SetSelected(std::string id) {
         return false;
     }
     selected_id_ = std::move(id);
-    return true;
-}
-
-bool RecordingPresetRegistry::SetDefault(std::string id) {
-    if (IndexById(id) == std::string::npos) {
-        return false;
-    }
-    default_id_ = std::move(id);
     return true;
 }
 
@@ -233,15 +198,10 @@ bool RecordingPresetRegistry::DeleteSelected() {
         return false; // Invariant violation.
     }
 
-    const bool was_default = (selected_id_ == default_id_);
-
     presets_.erase(presets_.begin() + static_cast<std::ptrdiff_t>(del_idx));
 
     // kDefaultPresetId is a built-in and therefore always present.
     selected_id_ = std::string(kDefaultPresetId);
-    if (was_default) {
-        default_id_ = std::string(kDefaultPresetId);
-    }
 
     return true;
 }
@@ -253,7 +213,6 @@ RecordingPresetConfig RecordingPresetRegistry::SelectedSavedConfig() const {
 void RecordingPresetRegistry::ResetAllToDefault() {
     presets_ = MakeBuiltInPresets();
     selected_id_ = std::string(kDefaultPresetId);
-    default_id_ = std::string(kDefaultPresetId);
 }
 
 bool RecordingPresetRegistry::IsSelectedDirty(const RecordingPresetConfig& live_config) const {

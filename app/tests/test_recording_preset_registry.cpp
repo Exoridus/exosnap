@@ -33,7 +33,6 @@ TEST(RecordingPresetRegistry, Constructor_SeedsDefault) {
     RecordingPresetRegistry reg;
     EXPECT_EQ(reg.Count(), 4u);
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
-    EXPECT_EQ(reg.DefaultId(), std::string(kDefaultPresetId));
     EXPECT_EQ(reg.SelectedPreset().id, std::string(kDefaultPresetId));
 }
 
@@ -218,35 +217,6 @@ TEST(RecordingPresetRegistry, DeleteSelected_UserPreset_RemovesIt_FallsBackToDef
     EXPECT_EQ(reg.FindById(id2), nullptr);
 }
 
-// A user preset set as the startup default: deleting it repairs default_id_
-// back to the built-in Default (kDefaultPresetId can never itself be
-// deleted, so this is the only way default_id_ needs repairing now).
-TEST(RecordingPresetRegistry, DeleteSelected_UserPresetWasDefault_DefaultFallsBackToBuiltInDefault) {
-    RecordingPresetRegistry reg;
-    const std::string id2 = reg.AddDefaultPreset();
-    ASSERT_TRUE(reg.SetDefault(id2));
-    ASSERT_EQ(reg.SelectedId(), id2);
-
-    EXPECT_TRUE(reg.DeleteSelected());
-    EXPECT_EQ(reg.DefaultId(), std::string(kDefaultPresetId));
-}
-
-// ===========================================================================
-// SetDefault
-// ===========================================================================
-
-TEST(RecordingPresetRegistry, SetDefault_InvalidId_ReturnsFalse) {
-    RecordingPresetRegistry reg;
-    EXPECT_FALSE(reg.SetDefault("preset.doesnotexist1234567890"));
-}
-
-TEST(RecordingPresetRegistry, SetDefault_ValidId_ReturnsTrueAndPersists) {
-    RecordingPresetRegistry reg;
-    const std::string id2 = reg.AddDefaultPreset();
-    EXPECT_TRUE(reg.SetDefault(id2));
-    EXPECT_EQ(reg.DefaultId(), id2);
-}
-
 // ===========================================================================
 // SelectedSavedConfig
 // ===========================================================================
@@ -270,7 +240,6 @@ TEST(RecordingPresetRegistry, ResetAllToDefault_Count1_IdsReset) {
     reg.ResetAllToDefault();
     EXPECT_EQ(reg.Count(), 4u);
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
-    EXPECT_EQ(reg.DefaultId(), std::string(kDefaultPresetId));
 }
 
 // ===========================================================================
@@ -387,10 +356,9 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_RevertingCaptureMutation_StillClea
 
 TEST(RecordingPresetRegistry, LoadState_EmptyList_SeedsDefault) {
     RecordingPresetRegistry reg;
-    reg.LoadState({}, "", "");
+    reg.LoadState({}, "");
     EXPECT_EQ(reg.Count(), 4u);
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
-    EXPECT_EQ(reg.DefaultId(), std::string(kDefaultPresetId));
 }
 
 TEST(RecordingPresetRegistry, LoadState_InvalidSelectedFallsToDefault) {
@@ -398,23 +366,18 @@ TEST(RecordingPresetRegistry, LoadState_InvalidSelectedFallsToDefault) {
     presets.push_back(MakeDefaultPreset());
 
     RecordingPresetRegistry reg;
-    reg.LoadState(presets, "preset.doesnotexist1234", std::string(kDefaultPresetId));
+    reg.LoadState(presets, "preset.doesnotexist1234");
     // selected should fall back to kDefaultPresetId.
     EXPECT_EQ(reg.SelectedId(), std::string(kDefaultPresetId));
 }
 
-// The built-in Default is always seeded, so an invalid persisted default_id
-// now falls back to it rather than to an arbitrary first preset.
-TEST(RecordingPresetRegistry, LoadState_InvalidDefaultFallsToBuiltInDefault) {
-    std::vector<RecordingPreset> presets;
-    RecordingPreset p;
-    p.id = "preset.abc1234567890abcd";
-    p.name = "A";
-    presets.push_back(p);
-
+// Case (c) of the spec: the selected preset vanished -> selection falls to
+// Default; live config (held by MainWindow) is untouched and now compares
+// against Default, typically showing (changed).
+TEST(RecordingPresetRegistry, LoadState_SelectedMissing_FallsToDefault) {
     RecordingPresetRegistry reg;
-    reg.LoadState(presets, "preset.abc1234567890abcd", "preset.doesnotexist1234");
-    EXPECT_EQ(reg.DefaultId(), std::string(kDefaultPresetId));
+    reg.LoadState({}, "preset.feedbeefdeadbeef");
+    EXPECT_EQ(reg.SelectedId(), kDefaultPresetId);
 }
 
 TEST(RecordingPresetRegistry, LoadState_DuplicateIds_Deduped) {
@@ -429,7 +392,7 @@ TEST(RecordingPresetRegistry, LoadState_DuplicateIds_Deduped) {
     presets.push_back(p2);
 
     RecordingPresetRegistry reg;
-    reg.LoadState(presets, "preset.aabbccddeeff0011", "preset.aabbccddeeff0011");
+    reg.LoadState(presets, "preset.aabbccddeeff0011");
     EXPECT_EQ(reg.Count(), 5u);                    // 4 built-ins + the kept user preset
     EXPECT_EQ(reg.SelectedPreset().name, "First"); // First kept.
 }
@@ -443,7 +406,7 @@ TEST(RecordingPresetRegistry, LoadState_EachPresetSanitized) {
     presets.push_back(p);
 
     RecordingPresetRegistry reg;
-    reg.LoadState(presets, "preset.aabbccddeeff0011", "preset.aabbccddeeff0011");
+    reg.LoadState(presets, "preset.aabbccddeeff0011");
     ASSERT_EQ(reg.Count(), 5u); // 4 built-ins + the user preset
     EXPECT_EQ(reg.SelectedPreset().name, "Trimmed");
     EXPECT_EQ(reg.SelectedPreset().config.countdown_seconds, 0);
@@ -526,7 +489,7 @@ TEST(RecordingPresetRegistry, LoadState_DropsPersistedBuiltInIds_DedupesReserved
     user.config = MakeDefaultPreset().config;
 
     RecordingPresetRegistry reg;
-    reg.LoadState({stale_default, user}, user.id, std::string(kDefaultPresetId));
+    reg.LoadState({stale_default, user}, user.id);
     EXPECT_EQ(reg.Count(), 5u);
     EXPECT_EQ(reg.FindById(kDefaultPresetId)->config.video.cq, 19u);
     EXPECT_EQ(reg.FindById(user.id)->name, "quality (2)");

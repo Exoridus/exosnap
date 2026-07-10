@@ -558,7 +558,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Default"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-modified: dirty state — presetDirtyIndicator visible,
@@ -568,7 +567,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = true},
 
     // settings-preset-saved: clean state after a save on a non-default preset.
@@ -577,7 +575,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Tutorial"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-menu: Manage overflow menu shown with all actions.
@@ -586,7 +583,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false,
      .preset_menu_open = true},
 
@@ -596,7 +592,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 5,
      .preset_selected_name = QStringLiteral("Streaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-default-badge: selected == default so presetDefaultBadge is
@@ -606,7 +601,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 4,
      .preset_selected_name = QStringLiteral("Default"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false},
 
     // settings-preset-delete-confirm: represents the delete-confirmation intent
@@ -619,7 +613,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = false,
      .preset_menu_open = true},
 
@@ -630,7 +623,6 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .preset_count = 3,
      .preset_selected_name = QStringLiteral("Gaming"),
-     .preset_default_name = QStringLiteral("Default"),
      .preset_dirty = true,
      .preset_save_error = true},
 
@@ -985,7 +977,6 @@ const QVector<VisualScenario> kScenarios = {
      true,
      0,
      QString(),
-     QString(),
      false,
      false,
      false,
@@ -1044,7 +1035,6 @@ const QVector<VisualScenario> kScenarios = {
      QString(),
      true,
      0,
-     QString(),
      QString(),
      false,
      false,
@@ -1105,7 +1095,6 @@ const QVector<VisualScenario> kScenarios = {
      true,
      0,
      QString(),
-     QString(),
      false,
      false,
      false,
@@ -1165,7 +1154,6 @@ const QVector<VisualScenario> kScenarios = {
      true,
      0,
      QString(),
-     QString(),
      false,
      false,
      false,
@@ -1224,7 +1212,6 @@ const QVector<VisualScenario> kScenarios = {
      QString(),
      true,
      0,
-     QString(),
      QString(),
      false,
      false,

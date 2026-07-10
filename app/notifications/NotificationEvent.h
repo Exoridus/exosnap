@@ -17,6 +17,7 @@ enum class NotificationType : uint8_t {
     RecoveryAvailable, // startup scan found recoverable sessions
     UpdateAvailable,   // a newer release exists on the active channel (ADR 0012)
     FramesDropped,     // encoder backpressure dropped real frames during recording (DROP-NOTIFY)
+    SettingsRepaired,  // the preset store needed a field-wise repair on load
 };
 
 // ---------------------------------------------------------------------------

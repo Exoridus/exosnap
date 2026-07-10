@@ -17,25 +17,35 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 //
+// v23: the store's persisted unit changes from "the preset list plus a
+// startup-default id" to "the live configuration plus named snapshots".
+// A [live] table holds the config the app is actually running (restored
+// verbatim on the next launch); built-in presets are never written to disk
+// (they are code-defined and reseeded on every load); default_id is gone —
+// there is no more startup-default preset, only a live config and, always,
+// the built-in Default preset it can fall back to. Loading no longer resets
+// the whole store on a schema mismatch: every field is repaired
+// individually (missing/invalid values fall back to their model default),
+// and Load() reports whether a repair happened so the caller can tell the
+// user. This subsumes the v19->v20 colour-range exception below, which is
+// now just one more field-wise repair rule instead of a special case.
+//
 // v21: adds output.hdr_mode (Off/TonemapSdr/Hdr10).
-// Pre-1.0 policy: schema-20-and-older files are NOT migrated — they reset to
-// the default preset via the ordinary version-mismatch path below, same as
-// every bump except the v19->v20 colour-range exception documented below.
 //
 // v20 (fix/color-range-signaling): default colour range flipped Full ->
-// Limited. Schema-19 files are NOT reset — they load through a targeted
-// field migration: color_range=="full" is rewritten to "limited", because
-// under schema <=19 "full" was the materialized old code default, never an
-// informed user choice (the ConfigPage combo had a hydration bug and always
-// displayed "Full (PC)" regardless of the model, so a deliberate Full
-// selection could not exist). A schema-20 file with explicit "full" is a
-// deliberate post-flip opt-in and is respected. See ADR 0032.
+// Limited. Schema-19-and-older files rewrite color_range=="full" to
+// "limited", because under schema <=19 "full" was the materialized old code
+// default, never an informed user choice (the ConfigPage combo had a
+// hydration bug and always displayed "Full (PC)" regardless of the model, so
+// a deliberate Full selection could not exist). A schema-20-and-newer file
+// with explicit "full" is a deliberate post-flip opt-in and is respected.
+// See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 22;
+inline constexpr int kPresetSchemaVersion = 23;
 
-// Highest schema version that loads via targeted migration instead of a full
-// reset (see RecordingPresetStore::Load). Files older than this still reset.
-inline constexpr int kPresetSchemaMigratableFrom = 19;
+// Files at or below this schema get the targeted color_range full->limited
+// rewrite (ADR 0032) on top of the ordinary field-wise repair.
+inline constexpr int kPresetSchemaColorRangeMigratedThrough = 19;
 
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;

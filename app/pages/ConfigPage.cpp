@@ -770,10 +770,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename preset\xe2\x80\xa6"));
         delete_preset_action_ = profile_menu->addAction(QStringLiteral("Delete preset"));
         profile_menu->addSeparator();
-        // Section 3: Default assignment.
-        set_default_preset_action_ = profile_menu->addAction(QStringLiteral("Set as default preset"));
-        profile_menu->addSeparator();
-        // Section 4: Reset -- two CLEARLY SEPARATE actions.
+        // Section 3: Reset -- two CLEARLY SEPARATE actions.
         reset_changes_action_ = profile_menu->addAction(QStringLiteral("Reset changes"));
         profile_menu->addSeparator();
         // Destructive reset is separated so it cannot be confused with "Reset changes".
@@ -2332,7 +2329,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(duplicate_preset_action_, &QAction::triggered, this, &ConfigPage::onDuplicatePreset);
     connect(rename_preset_action_, &QAction::triggered, this, &ConfigPage::onRenamePreset);
     connect(delete_preset_action_, &QAction::triggered, this, &ConfigPage::onDeletePreset);
-    connect(set_default_preset_action_, &QAction::triggered, this, &ConfigPage::onSetDefaultPreset);
     connect(reset_changes_action_, &QAction::triggered, this, &ConfigPage::onResetChanges);
     connect(reset_to_defaults_action_, &QAction::triggered, this, &ConfigPage::onResetToDefaults);
     connect(manage_presets_action_, &QAction::triggered, this, &ConfigPage::onManagePresets);
@@ -3570,11 +3566,9 @@ void ConfigPage::setActiveProfileName(const QString& profile_name) {
     updateExampleFilename();
 }
 
-void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
-                                  const QString& default_id, bool dirty) {
+void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id, bool dirty) {
     profile_options_ = options;
     active_preset_id_ = selected_id;
-    default_preset_id_ = default_id;
     preset_dirty_ = dirty;
 
     const QSignalBlocker blocker(profile_combo_);
@@ -3582,12 +3576,7 @@ void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, con
     int active_index = -1;
     for (std::size_t i = 0; i < options.size(); ++i) {
         const auto& opt = options[i];
-        // All non-selected default entries get the ★ suffix so users can identify
-        // the startup default while browsing the list.
-        QString label = opt.label;
-        if (!default_id.isEmpty() && opt.id == default_id && opt.id != selected_id)
-            label += QStringLiteral(" ★");
-        profile_combo_->addItem(label, opt.id);
+        profile_combo_->addItem(opt.label, opt.id);
         if (opt.id == selected_id) {
             active_index = static_cast<int>(i);
             active_preset_is_built_in_ = opt.built_in;
@@ -3608,7 +3597,6 @@ void ConfigPage::setPresetDirty(bool dirty) {
 }
 
 void ConfigPage::updatePresetActionState() {
-    const bool is_default = !default_preset_id_.isEmpty() && (active_preset_id_ == default_preset_id_);
     const bool has_preset = !active_preset_id_.isEmpty();
     const bool locked = controls_locked_;
 
@@ -3657,9 +3645,6 @@ void ConfigPage::updatePresetActionState() {
         rename_preset_action_->setEnabled(has_preset && !active_preset_is_built_in_);
     if (delete_preset_action_)
         delete_preset_action_->setEnabled(has_preset && !active_preset_is_built_in_);
-    // "Set as default" is available only when the selected preset is NOT already the default.
-    if (set_default_preset_action_)
-        set_default_preset_action_->setEnabled(has_preset && !is_default);
     if (reset_changes_action_)
         reset_changes_action_->setEnabled(preset_dirty_);
     if (reset_to_defaults_action_)
@@ -3716,10 +3701,6 @@ void ConfigPage::onResetToDefaults() {
     if (answer != QMessageBox::Yes)
         return;
     emit resetToDefaultsRequested();
-}
-
-void ConfigPage::onSetDefaultPreset() {
-    emit setDefaultPresetRequested();
 }
 
 void ConfigPage::onManagePresets() {

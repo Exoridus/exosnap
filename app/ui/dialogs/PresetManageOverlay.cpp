@@ -142,7 +142,12 @@ class PresetManagePanel : public QFrame {
     // Populate the list from the registry snapshot.
     void refreshPresets(const RecordingPresetRegistry& registry) {
         selected_id_ = QString::fromStdString(registry.SelectedId());
-        default_id_ = QString::fromStdString(registry.DefaultId());
+        // There is no more startup-default preset (the live config is the
+        // persisted truth) — the built-in Default is the closest remaining
+        // concept, kept only so the "Set as default" button's enabled state
+        // still means something. The button itself is now a no-op: nothing
+        // listens for setDefaultRequested.
+        default_id_ = QString::fromStdString(std::string(kDefaultPresetId));
 
         // Rebuild the list, preserving focus on the previously-selected row id.
         const QString was_focused = currentId();

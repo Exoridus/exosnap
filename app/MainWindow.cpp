@@ -524,23 +524,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         settings_store_.Save(persisted_settings_);
     }
 
-    // ---- Load preset store ----
+    // ---- Load preset store (live config is the truth; presets are snapshots) ----
     PersistedPresetState loaded_presets = preset_store_.Load();
-    if (loaded_presets.was_reset) {
-        diagnostics::AppLog::warning(QStringLiteral("presets"),
-                                     QStringLiteral("Preset store missing/incompatible — reset to defaults"));
-        preset_store_.Save(loaded_presets.presets, loaded_presets.selected_id, loaded_presets.default_id);
+    preset_registry_.LoadState(std::move(loaded_presets.user_presets), loaded_presets.selected_id);
+    if (loaded_presets.live.has_value()) {
+        boot_live_config_ = SanitizePresetConfig(*loaded_presets.live);
+    } else {
+        // No readable live config: start on Default, not (changed).
+        preset_registry_.SetSelected(std::string(kDefaultPresetId));
+        boot_live_config_ = preset_registry_.SelectedSavedConfig();
     }
-    preset_registry_.LoadState(loaded_presets.presets, loaded_presets.selected_id, loaded_presets.default_id);
-    // Startup: boot to the DEFAULT preset.
-    preset_registry_.SetSelected(preset_registry_.DefaultId());
+    if (loaded_presets.repaired) {
+        preset_store_repaired_ = true;
+        diagnostics::AppLog::warning(QStringLiteral("presets"),
+                                     QStringLiteral("Preset store repaired field-wise on load"));
+        preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), boot_live_config_);
+    }
 
-    // Initialize live mirrors from the selected preset.
-    const RecordingPresetConfig& startup_cfg = preset_registry_.SelectedSavedConfig();
-    output_settings_ = startup_cfg.output;
-    video_settings_ = startup_cfg.video;
-    live_audio_ = startup_cfg.audio;
-    live_webcam_ = startup_cfg.webcam;
+    // Initialize live mirrors from the restored live config.
+    output_settings_ = boot_live_config_.output;
+    video_settings_ = boot_live_config_.video;
+    live_audio_ = boot_live_config_.audio;
+    live_webcam_ = boot_live_config_.webcam;
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("settings loaded"));
     diagnostics::AppLog::info(QStringLiteral("perf"),
@@ -637,7 +642,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     record_page_->setVideoSettings(video_settings_);
     record_page_->setWebcamSettings(live_webcam_);
     record_page_->applyPersistedAudioSettings(live_audio_);
-    record_page_->setCountdownSeconds(startup_cfg.countdown_seconds);
+    record_page_->setCountdownSeconds(boot_live_config_.countdown_seconds);
     record_page_->restoreRecordingHistory();
     // NOTE: config_page_ initial setters and signal connects are wired in buildConfigPage().
 
@@ -756,9 +761,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         live_audio_ = state;
         if (config_page_)
             config_page_->setAudioUiState(state);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         refreshDiagnosticsData();
     });
 
@@ -766,9 +769,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::recordingConfigChanged, this, [this]() {
         if (applying_preset_)
             return;
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
 
     // NOTE: webcam_page_ settingsChanged is wired in buildWebcamPage() after deferred construction.
@@ -783,9 +784,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             config_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
 
     // NOTE: config_page_ preset-management connects are wired in buildConfigPage().
@@ -797,8 +796,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             &MainWindow::onRenamePreset);
     connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::deletePresetRequested, this,
             &MainWindow::onDeletePreset);
-    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::setDefaultPresetRequested, this,
-            &MainWindow::onSetDefaultPreset);
+    // setDefaultPresetRequested is intentionally left unconnected: there is no
+    // more startup-default preset to set (the live config is the persisted
+    // truth). The overlay's "Set as default" button is a harmless no-op.
     connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportSelectedPresetRequested, this,
             &MainWindow::onExportSelectedProfile);
     connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportAllPresetsRequested, this,
@@ -823,7 +823,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // preset applied in the constructor.  This connection restores the exact audio
     // rows and capture target from the preset after all init work is done.
     connect(record_page_, &RecordPage::coordinatorInitialized, this,
-            [this]() { applyPresetConfig(preset_registry_.SelectedSavedConfig()); });
+            [this]() { applyPresetConfig(boot_live_config_); });
 
     // F1 hardening (feat/updater-swap): wire the real RecordingCoordinator into
     // UpdateService now that RecordPage has built it, so LaunchUpdater's
@@ -1043,8 +1043,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     }
 
     record_page_->rebroadcastChromeState();
-    // Apply the startup preset config to all pages.
-    applyPresetConfig(startup_cfg);
+    // Apply the boot live config to all pages.
+    applyPresetConfig(boot_live_config_);
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructed"));
     diagnostics::AppLog::info(QStringLiteral("perf"),
@@ -2212,6 +2212,13 @@ void MainWindow::changeEvent(QEvent* event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    // Flush a pending debounced live-config save so a quit within the 750 ms
+    // window never loses the last edit.
+    if (live_persist_timer_ && live_persist_timer_->isActive()) {
+        live_persist_timer_->stop();
+        persistPresetState();
+    }
+
     saveWindowGeometry();
 
     // TRAY-CLOSE-TO-TRAY-R1: if close-to-tray is enabled and this is NOT a
@@ -2552,8 +2559,7 @@ void MainWindow::refreshPresetUi() {
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
     syncing_preset_ui_ = true;
     if (config_page_) {
-        config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()),
-                                       QString::fromStdString(preset_registry_.DefaultId()), dirty);
+        config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     if (output_page_) {
@@ -2566,7 +2572,24 @@ void MainWindow::refreshPresetUi() {
 }
 
 void MainWindow::persistPresetState() {
-    preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), preset_registry_.DefaultId());
+    preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), captureLiveConfig());
+}
+
+void MainWindow::onLiveConfigChanged() {
+    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+    if (config_page_)
+        config_page_->setPresetDirty(dirty);
+    schedulePersistLiveState();
+}
+
+void MainWindow::schedulePersistLiveState() {
+    if (!live_persist_timer_) {
+        live_persist_timer_ = new QTimer(this);
+        live_persist_timer_->setSingleShot(true);
+        live_persist_timer_->setInterval(750); // coalesce slider drags into one write
+        connect(live_persist_timer_, &QTimer::timeout, this, [this]() { persistPresetState(); });
+    }
+    live_persist_timer_->start();
 }
 
 void MainWindow::initHotkeyService() {
@@ -2630,7 +2653,7 @@ void MainWindow::onPresetSelected(const QString& id) {
     }
     if (!preset_registry_.SetSelected(id.toStdString()))
         return;
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     persistPresetState();
 }
 
@@ -2687,9 +2710,11 @@ void MainWindow::onDeletePreset() {
 }
 
 void MainWindow::onResetChanges() {
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     refreshPresetUi();
-    // No persistence needed (no registry mutation).
+    // No registry mutation, but the live config just changed back to the
+    // preset's saved values, so the persisted live state must follow.
+    persistPresetState();
 }
 
 void MainWindow::onResetToDefaults() {
@@ -2702,12 +2727,6 @@ void MainWindow::onResetToDefaults() {
     persistPresetState();
     QMessageBox::information(this, QStringLiteral("Reset Complete"),
                              QStringLiteral("Settings and presets were reset to defaults."));
-}
-
-void MainWindow::onSetDefaultPreset() {
-    preset_registry_.SetDefault(preset_registry_.SelectedId());
-    refreshPresetUi();
-    persistPresetState();
 }
 
 // ---------------------------------------------------------------------------
@@ -3074,12 +3093,11 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
         // Capture scenario fields by value for the deferred lambda.
         const int count = scenario.preset_count > 0 ? scenario.preset_count : 3;
         const QString selected_name = scenario.preset_selected_name;
-        const QString default_name = scenario.preset_default_name;
         const bool dirty = scenario.preset_dirty;
         const bool save_error = scenario.preset_save_error;
         const bool menu_open = scenario.preset_menu_open;
 
-        QTimer::singleShot(20, this, [this, count, selected_name, default_name, dirty, save_error, menu_open]() {
+        QTimer::singleShot(20, this, [this, count, selected_name, dirty, save_error, menu_open]() {
             if (!config_page_)
                 return;
 
@@ -3100,17 +3118,14 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
                 opts.push_back(opt);
             }
 
-            // Match selected_id and default_id to the scenario's named fields.
+            // Match selected_id to the scenario's named field.
             QString selected_id = opts.front().id;
-            QString default_id = opts.front().id;
             for (const auto& opt : opts) {
                 if (opt.label == selected_name)
                     selected_id = opt.id;
-                if (opt.label == default_name)
-                    default_id = opt.id;
             }
 
-            config_page_->setPresetOptions(opts, selected_id, default_id, dirty);
+            config_page_->setPresetOptions(opts, selected_id, dirty);
 
             // Inline save-error affordance (no modal — entirely deterministic).
             config_page_->applyVisualPresetSaveError(save_error);
@@ -3539,6 +3554,17 @@ void MainWindow::initNotificationToasts() {
     // toast by the time this fires.
     connect(notification_toast_window_, &ui::overlay::NotificationToastWindow::actionTriggered, this,
             &MainWindow::dispatchNotificationAction);
+
+    // The preset store needed a field-wise repair before toasts existed to report
+    // it (see the ctor's preset-load block) — raise it now that they do.
+    if (preset_store_repaired_) {
+        preset_store_repaired_ = false;
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::SettingsRepaired;
+        event.title = QStringLiteral("Settings repaired");
+        event.body = QStringLiteral("Some saved recording settings were invalid and were reset to their defaults.");
+        notification_manager_->Enqueue(std::move(event));
+    }
 
     // NOTE: config_page_ setShowNotifications + showNotificationsChanged connect are
     // wired in buildConfigPage() (config_page_ does not exist yet at this call site).
@@ -4142,9 +4168,7 @@ void MainWindow::buildConfigPage() {
         // selections never reached output_settings_ (and thus never the recording).
         MergeFormatSelection(output_settings_, settings);
         record_page_->setOutputSettings(output_settings_);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         // CRASH-WIRE-R1: container/codec context changed — refresh the sidecar.
         refreshCrashSessionContext();
         refreshDiagnosticsData();
@@ -4155,9 +4179,7 @@ void MainWindow::buildConfigPage() {
             return;
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         refreshDiagnosticsData();
     });
     connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
@@ -4166,9 +4188,7 @@ void MainWindow::buildConfigPage() {
         live_audio_ = state;
         if (record_page_)
             record_page_->applyPersistedAudioSettings(state);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
         refreshDiagnosticsData();
     });
     connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
@@ -4178,9 +4198,7 @@ void MainWindow::buildConfigPage() {
         record_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
 
     // Shared webcam capture: the Settings panel is a consumer of the coordinator's single
@@ -4205,7 +4223,6 @@ void MainWindow::buildConfigPage() {
     connect(config_page_, &ConfigPage::deletePresetRequested, this, &MainWindow::onDeletePreset);
     connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
     connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
-    connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
     connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
     connect(config_page_, &ConfigPage::exportCurrentPresetRequested, this, &MainWindow::onExportSelectedProfile);
     connect(config_page_, &ConfigPage::importPresetsRequested, this, &MainWindow::onImportProfiles);
@@ -4356,11 +4373,13 @@ void MainWindow::buildConfigPage() {
     });
 
     // ---- Fan-out replay ----
-    // applyPresetConfig delivers the full preset-applied config (output/video/audio/webcam/
-    // folder/name) to the freshly-built page. refreshPresetUi delivers preset combo options
-    // + active profile name + dirty flag. Both are safe regardless of runtime_caps_ready_
-    // because they only update UI from in-memory state (same as what a ctor call would do).
-    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    // applyPresetConfig delivers the full live config (output/video/audio/webcam/
+    // folder/name) to the freshly-built page — the CURRENT live state, not the
+    // boot snapshot, since the page can be built well after startup.
+    // refreshPresetUi delivers preset combo options + active profile name +
+    // dirty flag. Both are safe regardless of runtime_caps_ready_ because they
+    // only update UI from in-memory state (same as what a ctor call would do).
+    applyPresetConfig(captureLiveConfig());
     refreshPresetUi();
 
     // Chrome-state replay: deliver the current readiness + lock status that was last set by
@@ -4457,8 +4476,7 @@ void MainWindow::buildDiagnosticsPage() {
                     config_page_->setVideoSettings(video_settings_);
                 if (record_page_)
                     record_page_->setVideoSettings(video_settings_);
-                if (config_page_)
-                    config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                onLiveConfigChanged();
                 refreshDiagnosticsData();
                 diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
                 return;
@@ -4505,8 +4523,7 @@ void MainWindow::buildDiagnosticsPage() {
                 config_page_->setOutputSettings(output_settings_);
             if (record_page_)
                 record_page_->setOutputSettings(output_settings_);
-            if (config_page_)
-                config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+            onLiveConfigChanged();
             refreshCrashSessionContext();
             refreshDiagnosticsData();
             diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
@@ -4642,9 +4659,7 @@ void MainWindow::buildWebcamPage() {
         record_page_->setWebcamSettings(settings);
         if (config_page_)
             config_page_->setWebcamSettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
+        onLiveConfigChanged();
     });
     connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(webcam_page_, &WebcamPage::rescanRequested, &webcam_notifier_, &WebcamDeviceNotifier::rescan);

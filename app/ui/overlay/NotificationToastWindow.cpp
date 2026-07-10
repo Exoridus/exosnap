@@ -148,7 +148,8 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
     case notifications::NotificationType::RecoveryAvailable:
         return {kInfoC, kInfoDim, kInfoB};
     case notifications::NotificationType::UpdateAvailable:
-        return {kInfoC, kInfoDim, kInfoB}; // azure/info tone
+    case notifications::NotificationType::SettingsRepaired: // info tone, shared with UpdateAvailable
+        return {kInfoC, kInfoDim, kInfoB};                  // azure/info tone
     }
     return {kInfoC, kInfoDim, kInfoB};
 }
@@ -169,6 +170,8 @@ bool isSticky(notifications::NotificationType type) noexcept {
         return notifications::NotificationManager::kDismissMs_UpdateAvailable == 0;
     case notifications::NotificationType::FramesDropped:
         return notifications::NotificationManager::kDismissMs_FramesDropped == 0;
+    case notifications::NotificationType::SettingsRepaired:
+        return notifications::NotificationManager::kDismissMs_SettingsRepaired == 0;
     }
     return true;
 }
@@ -228,7 +231,8 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
         p.drawLine(QPointF(cx, cy - r * 0.05f), QPointF(cx, cy + r * 0.38f));
         break;
     }
-    case notifications::NotificationType::UpdateAvailable: {
+    case notifications::NotificationType::UpdateAvailable:
+    case notifications::NotificationType::SettingsRepaired: { // shares UpdateAvailable's glyph
         // download: down-arrow into a tray (Lucide "download").
         p.setPen(QPen(color, 1.6f, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         // Vertical shaft.

@@ -130,24 +130,22 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
     RecordingPreset r3 = MakeWebcamPreset();
 
     const std::string sel_id = r2.id;
-    const std::string def_id = r1.id;
 
     {
         RecordingPresetStore store(path);
-        store.Save({r1, r2, r3}, sel_id, def_id);
+        store.Save({r1, r2, r3}, sel_id, MakeDefaultPreset().config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 3u);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 3u);
         EXPECT_EQ(state.selected_id, sel_id);
-        EXPECT_EQ(state.default_id, def_id);
 
         // Match by id (order is preserved by Save/Load).
         const auto find = [&](const std::string& id) -> const RecordingPreset* {
-            for (const auto& p : state.presets)
+            for (const auto& p : state.user_presets)
                 if (p.id == id)
                     return &p;
             return nullptr;
@@ -191,16 +189,16 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_HevcTenBit) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.bit_depth, capability::BitDepth::Bit10);
-        EXPECT_EQ(state.presets[0].config.output.video_codec, capability::VideoCodec::HevcNvenc);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.bit_depth, capability::BitDepth::Bit10);
+        EXPECT_EQ(state.user_presets[0].config.output.video_codec, capability::VideoCodec::HevcNvenc);
     }
 
     CleanupFile(path);
@@ -217,15 +215,15 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.bit_depth, capability::BitDepth::Bit8);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.bit_depth, capability::BitDepth::Bit8);
     }
 
     CleanupFile(path);
@@ -247,15 +245,15 @@ TEST(RecordingPresetStore, ColorRangePersists_DefaultLimited) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
     }
 
     CleanupFile(path);
@@ -273,15 +271,15 @@ TEST(RecordingPresetStore, ColorRangePersists_Full) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Full);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Full);
     }
 
     CleanupFile(path);
@@ -302,15 +300,15 @@ TEST(RecordingPresetStore, NvencPresetPersists_DefaultP4) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
     }
 
     CleanupFile(path);
@@ -327,15 +325,15 @@ TEST(RecordingPresetStore, NvencPresetPersists_P7) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P7);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P7);
     }
 
     CleanupFile(path);
@@ -355,15 +353,15 @@ TEST(RecordingPresetStore, HdrModePersists_DefaultTonemapSdr) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
     }
 
     CleanupFile(path);
@@ -380,15 +378,15 @@ TEST(RecordingPresetStore, HdrModePersists_Hdr10) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::Hdr10);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::Hdr10);
     }
 
     CleanupFile(path);
@@ -400,9 +398,9 @@ TEST(RecordingPresetStore, HdrModePersists_Hdr10) {
 // Under schema <=19 "full" was the MATERIALIZED old code default, not an
 // informed user choice (the colour-range combo had a hydration bug and always
 // displayed "Full (PC)" regardless of the stored value), so Load() rewrites
-// schema-19 color_range=="full" to "limited" instead of resetting the store.
-// A schema-20 file with explicit "full" is a deliberate post-flip opt-in and
-// is respected.
+// schema-19-and-older color_range=="full" to "limited" as a field-wise repair
+// instead of resetting the store. A schema-20-and-newer file with explicit
+// "full" is a deliberate post-flip opt-in and is respected.
 // ===========================================================================
 
 namespace {
@@ -411,7 +409,6 @@ namespace {
 QString MakeSinglePresetToml(int schema_version, const QString& color_range) {
     return QStringLiteral("schema_version = %1\n"
                           "selected_id = \"preset.migrate0011\"\n"
-                          "default_id  = \"preset.migrate0011\"\n"
                           "\n"
                           "[[presets]]\n"
                           "id   = \"preset.migrate0011\"\n"
@@ -487,7 +484,7 @@ QString MakeSinglePresetToml(int schema_version, const QString& color_range) {
 
 } // namespace
 
-// NVENC-PRESET-R1 additive-load proof: MakeSinglePresetToml() writes a schema-20
+// NVENC-PRESET-R1 additive-load proof: MakeSinglePresetToml() writes a schema-current
 // preset file that never had an "nvenc_preset" key (it predates this feature, same
 // as it never had a "bit_depth" key). Loading it must NOT reset the store and must
 // leave the field at its struct default (P4) — proving the additive-TOML contract
@@ -498,9 +495,9 @@ TEST(RecordingPresetStore, NvencPresetMissingKey_DefaultsToP4) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
 
     CleanupFile(path);
 }
@@ -518,14 +515,14 @@ TEST(RecordingPresetStore, NvencPresetInvalidValue_DefaultsToP4_NoReset) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
 
     CleanupFile(path);
 }
 
-// A schema-21 (current) file that never had an "hdr_mode" key leaves the field
+// A schema-current file that never had an "hdr_mode" key leaves the field
 // at its struct default (TonemapSdr) instead of resetting the store — same
 // additive-TOML contract as NvencPresetMissingKey_DefaultsToP4 above.
 TEST(RecordingPresetStore, HdrModeMissingKey_DefaultsToTonemapSdr) {
@@ -534,9 +531,9 @@ TEST(RecordingPresetStore, HdrModeMissingKey_DefaultsToTonemapSdr) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
 
     CleanupFile(path);
 }
@@ -553,9 +550,9 @@ TEST(RecordingPresetStore, HdrModeInvalidValue_DefaultsToTonemapSdr_NoReset) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.hdr_mode, recorder_core::HdrMode::TonemapSdr);
 
     CleanupFile(path);
 }
@@ -570,40 +567,42 @@ TEST(RecordingPresetStore, WebcamOpacityMissingKey_DefaultsTo1) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_FLOAT_EQ(state.presets[0].config.webcam.opacity, 1.0f);
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_FLOAT_EQ(state.user_presets[0].config.webcam.opacity, 1.0f);
 
     CleanupFile(path);
 }
 
-// A schema-20 file — one version behind current — resets rather than
-// migrating, per pre-1.0 policy (no backward-compat acrobatics; only the
-// v19->v20 colour-range bump gets a targeted migration, documented above it).
-TEST(RecordingPresetStore, SchemaV20_OneVersionBehindCurrent_Resets) {
+// A schema-22 file — one version behind current — is repaired field-wise
+// (kept, not reset) per pre-1.0 policy; only the version stamp itself is
+// stale, so the flag simply reports that a repair happened.
+TEST(RecordingPresetStore, SchemaV22_OneVersionBehindCurrent_KeepsData_FlagsRepaired) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion - 1, QStringLiteral("limited"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
+    EXPECT_TRUE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, "preset.migrate0011");
 
     CleanupFile(path);
 }
 
-// A schema-19 file with the materialized old default ("full") loads WITHOUT a
-// reset (user presets preserved) and the colour range is migrated to Limited.
+// A schema-19 file with the materialized old default ("full") is repaired
+// field-wise (user preset kept) and the colour range is migrated to Limited.
 TEST(RecordingPresetStore, MigrationV19_MaterializedFullBecomesLimited) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("full"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset) << "schema-19 files must migrate, not reset";
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].id, "preset.migrate0011");
-    EXPECT_EQ(state.presets[0].name, "User Preset");
-    EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited)
+    EXPECT_TRUE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, "preset.migrate0011");
+    EXPECT_EQ(state.user_presets[0].name, "User Preset");
+    EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Limited)
         << "materialized old-default \"full\" must be rewritten to Limited";
 
     CleanupFile(path);
@@ -616,61 +615,67 @@ TEST(RecordingPresetStore, MigrationV19_LimitedStaysLimited) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
+    EXPECT_TRUE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
 
     CleanupFile(path);
 }
 
-// A schema-20 (current) file with explicit "full" is a deliberate post-flip
-// opt-in and must be respected — the migration only applies to schema 19.
+// A schema-current file with explicit "full" is a deliberate post-flip
+// opt-in and must be respected — the migration only applies at or below
+// kPresetSchemaColorRangeMigratedThrough.
 TEST(RecordingPresetStore, MigrationV20_ExplicitFullRespected) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("full"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Full)
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Full)
         << "explicit Full under the current schema is a deliberate opt-in and must survive";
 
     CleanupFile(path);
 }
 
-// Idempotence: migrated state saved back (as schema 20) and reloaded stays
-// Limited — the migration is one-shot and a second load changes nothing.
+// Idempotence: migrated state saved back (as the current schema) and
+// reloaded stays Limited — the migration is one-shot and a second load
+// changes nothing.
 TEST(RecordingPresetStore, MigrationV19_IdempotentAfterSaveReload) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("full"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState migrated = store.Load();
-    ASSERT_EQ(migrated.presets.size(), 1u);
-    ASSERT_EQ(migrated.presets[0].config.output.color_range, capability::ColorRange::Limited);
+    ASSERT_EQ(migrated.user_presets.size(), 1u);
+    ASSERT_EQ(migrated.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
 
     // Persist the migrated state (writes the current schema version).
-    store.Save(migrated.presets, migrated.selected_id, migrated.default_id);
+    store.Save(migrated.user_presets, migrated.selected_id, MakeDefaultPreset().config);
 
     const PersistedPresetState reloaded = store.Load();
-    EXPECT_FALSE(reloaded.was_reset);
-    ASSERT_EQ(reloaded.presets.size(), 1u);
-    EXPECT_EQ(reloaded.presets[0].id, "preset.migrate0011");
-    EXPECT_EQ(reloaded.presets[0].config.output.color_range, capability::ColorRange::Limited);
+    EXPECT_FALSE(reloaded.repaired);
+    ASSERT_EQ(reloaded.user_presets.size(), 1u);
+    EXPECT_EQ(reloaded.user_presets[0].id, "preset.migrate0011");
+    EXPECT_EQ(reloaded.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
 
     CleanupFile(path);
 }
 
-// Schema versions older than 19 still take the full-reset path (the targeted
-// migration deliberately covers only 19 -> 20).
-TEST(RecordingPresetStore, MigrationV18_StillResets) {
+// Schema versions well below the current one still get the same field-wise
+// repair (kept, not reset); a schema this old also falls at-or-below the
+// color-range migration ceiling, so "full" is rewritten to Limited too.
+TEST(RecordingPresetStore, Migration_Schema18_FieldwiseRepair_AndColorRangeRewritten) {
     const QString path = UniqueTempPath();
     ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(18, QStringLiteral("full"))));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
+    EXPECT_TRUE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, "preset.migrate0011");
+    EXPECT_EQ(state.user_presets[0].config.output.color_range, capability::ColorRange::Limited);
 
     CleanupFile(path);
 }
@@ -691,16 +696,16 @@ TEST(RecordingPresetStore, FrameRatePersists_50fps) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 50u);
-        EXPECT_EQ(state.presets[0].config.video.frame_rate_den, 1u);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_num, 50u);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_den, 1u);
     }
 
     CleanupFile(path);
@@ -718,16 +723,16 @@ TEST(RecordingPresetStore, FrameRate120Unavailable_ResetsTo60fps) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 60u);
-        EXPECT_EQ(state.presets[0].config.video.frame_rate_den, 1u);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_num, 60u);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_den, 1u);
     }
 
     CleanupFile(path);
@@ -747,17 +752,17 @@ TEST(RecordingPresetStore, OutputResolutionPersists_1440p) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.resolution.mode, OutputResolutionMode::QHD1440);
-        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 30u);
-        EXPECT_FALSE(state.presets[0].config.video.cfr);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.resolution.mode, OutputResolutionMode::QHD1440);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_num, 30u);
+        EXPECT_FALSE(state.user_presets[0].config.video.cfr);
     }
 
     CleanupFile(path);
@@ -776,17 +781,17 @@ TEST(RecordingPresetStore, OutputResolutionPersists_Custom) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.resolution.mode, OutputResolutionMode::Custom);
-        EXPECT_EQ(state.presets[0].config.output.resolution.custom_width, 2560u);
-        EXPECT_EQ(state.presets[0].config.output.resolution.custom_height, 1440u);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.resolution.mode, OutputResolutionMode::Custom);
+        EXPECT_EQ(state.user_presets[0].config.output.resolution.custom_width, 2560u);
+        EXPECT_EQ(state.user_presets[0].config.output.resolution.custom_height, 1440u);
     }
 
     CleanupFile(path);
@@ -804,16 +809,16 @@ TEST(RecordingPresetStore, SplitSettingsPersist_Custom) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.split.mode, SplitRecordingMode::Custom);
-        EXPECT_EQ(state.presets[0].config.output.split.custom_minutes, 45u);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.split.mode, SplitRecordingMode::Custom);
+        EXPECT_EQ(state.user_presets[0].config.output.split.custom_minutes, 45u);
     }
 
     CleanupFile(path);
@@ -830,14 +835,14 @@ TEST(RecordingPresetStore, SplitSettingsPersist_PresetDuration) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.split.mode, SplitRecordingMode::Every30Min);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.split.mode, SplitRecordingMode::Every30Min);
     }
 
     CleanupFile(path);
@@ -856,16 +861,16 @@ TEST(RecordingPresetStore, SplitSizeSettingsPersist_Custom) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.split.size_mode, SplitSizeMode::Custom);
-        EXPECT_EQ(state.presets[0].config.output.split.custom_size_mb, 512u);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.split.size_mode, SplitSizeMode::Custom);
+        EXPECT_EQ(state.user_presets[0].config.output.split.custom_size_mb, 512u);
     }
 
     CleanupFile(path);
@@ -882,33 +887,33 @@ TEST(RecordingPresetStore, SplitSizeSettingsPersist_Off) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.split.size_mode, SplitSizeMode::Off);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.output.split.size_mode, SplitSizeMode::Off);
     }
 
     CleanupFile(path);
 }
 
 // ===========================================================================
-// Absent file → seeded default
+// Absent file → empty defaults, not a repair (first run)
 // ===========================================================================
 
-TEST(RecordingPresetStore, AbsentFile_ReturnsResetDefault) {
+TEST(RecordingPresetStore, AbsentFile_ReturnsEmptyDefaults_NotRepaired) {
     // A path that does not exist.
     const QString path = UniqueTempPath(); // created unique, but never written.
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_FALSE(state.repaired);
+    EXPECT_TRUE(state.user_presets.empty());
     EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId));
-    EXPECT_EQ(state.default_id, std::string(kDefaultPresetId));
+    EXPECT_FALSE(state.live.has_value());
 }
 
 // ===========================================================================
@@ -921,7 +926,6 @@ TEST(RecordingPresetStore, MalformedItem_EmptyId_Skipped_ValidKept) {
     // Hand-write a TOML fixture: one valid preset + one with empty id.
     const QString toml = QStringLiteral("schema_version = %1\n"
                                         "selected_id = \"preset.aabbccddeeff0011\"\n"
-                                        "default_id  = \"preset.aabbccddeeff0011\"\n"
                                         "\n"
                                         "[[presets]]\n"
                                         "id   = \"preset.aabbccddeeff0011\"\n"
@@ -1064,10 +1068,10 @@ TEST(RecordingPresetStore, MalformedItem_EmptyId_Skipped_ValidKept) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_FALSE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].id, "preset.aabbccddeeff0011");
-    EXPECT_EQ(state.presets[0].name, "Good Item");
+    EXPECT_FALSE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, "preset.aabbccddeeff0011");
+    EXPECT_EQ(state.user_presets[0].name, "Good Item");
 
     CleanupFile(path);
 }
@@ -1153,7 +1157,6 @@ TEST(RecordingPresetStore, DuplicateIds_Repaired_OneKeepedFirst) {
 
     const QString toml = QStringLiteral("schema_version = %1\n"
                                         "selected_id = \"preset.aabbccddeeff0011\"\n"
-                                        "default_id  = \"preset.aabbccddeeff0011\"\n"
                                         "\n")
                              .arg(kPresetSchemaVersion) +
                          preset_block.arg(QStringLiteral("First")) +
@@ -1163,17 +1166,17 @@ TEST(RecordingPresetStore, DuplicateIds_Repaired_OneKeepedFirst) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    ASSERT_EQ(state.presets.size(), 1u);
-    EXPECT_EQ(state.presets[0].name, "First");
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].name, "First");
 
     CleanupFile(path);
 }
 
 // ===========================================================================
-// Invalid selectedId falls back to defaultId
+// Invalid selectedId falls back to the built-in Default preset
 // ===========================================================================
 
-TEST(RecordingPresetStore, InvalidSelectedId_FallsBackToDefaultId) {
+TEST(RecordingPresetStore, InvalidSelectedId_FallsBackToDefaultPreset) {
     const QString path = UniqueTempPath();
 
     RecordingPreset p;
@@ -1183,62 +1186,14 @@ TEST(RecordingPresetStore, InvalidSelectedId_FallsBackToDefaultId) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, "preset.doesnotexist1234567", p.id); // selected invalid
+        store.Save({p}, "preset.doesnotexist1234567", p.config); // selected invalid
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        EXPECT_EQ(state.selected_id, p.id); // falls back to default_id
-    }
-
-    CleanupFile(path);
-}
-
-// ===========================================================================
-// Invalid defaultId falls back to first / kDefaultPresetId
-// ===========================================================================
-
-TEST(RecordingPresetStore, InvalidDefaultId_FallsBackToFirst) {
-    const QString path = UniqueTempPath();
-
-    RecordingPreset p;
-    p.id = GeneratePresetId();
-    p.name = "Solo Preset";
-    p.config = MakeDefaultPreset().config;
-
-    {
-        RecordingPresetStore store(path);
-        store.Save({p}, p.id, "preset.doesnotexist1234567"); // default invalid
-    }
-
-    {
-        RecordingPresetStore store(path);
-        const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        // No kDefaultPresetId in list → default falls to first preset.
-        EXPECT_EQ(state.default_id, p.id);
-    }
-
-    CleanupFile(path);
-}
-
-TEST(RecordingPresetStore, InvalidDefaultId_FallsBackToKDefaultPresetId_WhenPresent) {
-    const QString path = UniqueTempPath();
-
-    RecordingPreset def = MakeDefaultPreset();
-
-    {
-        RecordingPresetStore store(path);
-        store.Save({def}, std::string(kDefaultPresetId), "preset.doesnotexist1234567");
-    }
-
-    {
-        RecordingPresetStore store(path);
-        const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        EXPECT_EQ(state.default_id, std::string(kDefaultPresetId));
+        EXPECT_FALSE(state.repaired);
+        EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId)); // falls back to the built-in Default
     }
 
     CleanupFile(path);
@@ -1268,61 +1223,66 @@ TEST(RecordingPresetStore, SaveFewer_RemovesStaleItems) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p1, p2, p3}, p1.id, p1.id);
+        store.Save({p1, p2, p3}, p1.id, p1.config);
     }
 
     // Save only p1.
     {
         RecordingPresetStore store(path);
-        store.Save({p1}, p1.id, p1.id);
+        store.Save({p1}, p1.id, p1.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].id, p1.id);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].id, p1.id);
     }
 
     CleanupFile(path);
 }
 
 // ===========================================================================
-// Empty-path store — Load seeds default, no crash; Save no-op
+// Empty-path store — Load returns defaults, no crash; Save no-op
+//
+// These two are the ONLY tests allowed to use an empty path — they exist
+// purely for the no-crash contract. Every other test runs against a real
+// temp file so it exercises the same parse path MainWindow's ctor hits.
 // ===========================================================================
 
 TEST(RecordingPresetStore, EmptyPath_Load_SeedsDefault_NoCrash) {
     const QString empty_path;
     RecordingPresetStore store(empty_path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_FALSE(state.repaired);
+    EXPECT_TRUE(state.user_presets.empty());
     EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId));
+    EXPECT_FALSE(state.live.has_value());
 }
 
 TEST(RecordingPresetStore, EmptyPath_Save_NoCrash) {
     const QString empty_path;
     RecordingPresetStore store(empty_path);
     // Should not crash or throw.
-    store.Save({MakeDefaultPreset()}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+    store.Save({MakeDefaultPreset()}, std::string(kDefaultPresetId), MakeDefaultPreset().config);
 }
 
 // ===========================================================================
-// Schema version mismatch → reset
+// Schema version mismatch → field-wise repair, not a reset
 // ===========================================================================
 
-TEST(RecordingPresetStore, WrongSchemaVersion_ReturnsReset) {
+TEST(RecordingPresetStore, WrongSchemaVersion_KeepsData_FlagsRepaired) {
     const QString path = UniqueTempPath();
 
-    // Write a TOML file with schema_version one higher than current — must reset.
+    // Write a TOML file with schema_version one higher than current — must be
+    // repaired field-wise (data kept), not reset.
     const QString toml = QStringLiteral("schema_version = %1\n"
-                                        "selected_id = \"preset.default\"\n"
-                                        "default_id  = \"preset.default\"\n"
+                                        "selected_id = \"preset.userpreset0001\"\n"
                                         "\n"
                                         "[[presets]]\n"
-                                        "id   = \"preset.default\"\n"
-                                        "name = \"Default\"\n"
+                                        "id   = \"preset.userpreset0001\"\n"
+                                        "name = \"Mine\"\n"
                                         "countdown_seconds = 0\n"
                                         "[presets.capture]\n"
                                         "kind = \"display\"\n"
@@ -1393,7 +1353,9 @@ TEST(RecordingPresetStore, WrongSchemaVersion_ReturnsReset) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
+    EXPECT_TRUE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, "preset.userpreset0001");
 
     CleanupFile(path);
 }
@@ -1409,7 +1371,7 @@ TEST(RecordingPresetStore, TomlOnDisk_IsValidTomlWithExpectedKeys) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+        store.Save({}, std::string(kDefaultPresetId), p.config);
     }
 
     // Re-parse the file independently and verify expected keys exist.
@@ -1423,18 +1385,19 @@ TEST(RecordingPresetStore, TomlOnDisk_IsValidTomlWithExpectedKeys) {
     EXPECT_FALSE(raw.isEmpty());
     const QString content = QString::fromUtf8(raw);
     EXPECT_TRUE(content.contains(QStringLiteral("schema_version")));
-    EXPECT_TRUE(content.contains(QStringLiteral("[[presets]]")));
-    EXPECT_TRUE(content.contains(QStringLiteral("[presets.audio]")));
-    EXPECT_TRUE(content.contains(QStringLiteral("[presets.webcam]")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[live]")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[live.audio]")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[live.webcam]")));
+    EXPECT_FALSE(content.contains(QStringLiteral("default_id")));
 
     CleanupFile(path);
 }
 
 // ===========================================================================
-// New: Malformed TOML → Load returns reset; no crash
+// New: Malformed TOML → Load returns defaults, flags repaired; no crash
 // ===========================================================================
 
-TEST(RecordingPresetStore, MalformedToml_Load_ReturnsReset_NoCrash) {
+TEST(RecordingPresetStore, MalformedToml_Load_ReturnsDefaults_FlagsRepaired_NoCrash) {
     const QString path = UniqueTempPath();
 
     // Syntactically broken TOML.
@@ -1442,33 +1405,34 @@ TEST(RecordingPresetStore, MalformedToml_Load_ReturnsReset_NoCrash) {
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
-    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_TRUE(state.repaired);
+    ASSERT_TRUE(state.user_presets.empty());
     EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId));
 
     CleanupFile(path);
 }
 
 // ===========================================================================
-// New: Incompatible schema (old version) → Load returns reset
+// New: Incompatible schema (old version) → field-wise repair, not a reset
 // ===========================================================================
 
-TEST(RecordingPresetStore, OldSchemaVersion_Load_ReturnsReset) {
+TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_FlagsRepaired) {
     const QString path = UniqueTempPath();
 
-    // kPresetSchemaVersion - 2 (= 18): genuinely below the migration floor.
-    // (kPresetSchemaVersion - 1 = 19 no longer resets — it takes the targeted
-    // colour-range migration path instead; covered by the Migration* tests.)
+    // kPresetSchemaVersion - 2: genuinely below the migration ceiling too, so
+    // it is repaired the same way SchemaV22_OneVersionBehindCurrent is, plus
+    // the color-range rewrite (covered separately by Migration_Schema18_*).
     const QString toml = QStringLiteral("schema_version = %1\n"
-                                        "selected_id = \"preset.default\"\n"
-                                        "default_id  = \"preset.default\"\n")
+                                        "selected_id = \"preset.default\"\n")
                              .arg(kPresetSchemaVersion - 2);
 
     ASSERT_TRUE(WriteTomlString(path, toml));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
-    EXPECT_TRUE(state.was_reset);
+    EXPECT_TRUE(state.repaired);
+    EXPECT_TRUE(state.user_presets.empty());                     // no [[presets]] array in this minimal fixture
+    EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId)); // "preset.default" is a built-in
 
     CleanupFile(path);
 }
@@ -1494,15 +1458,15 @@ TEST(RecordingPresetStore, FramePacingRoundtrips) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.video.frame_pacing, FramePacingMode::Newest);
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_pacing, FramePacingMode::Newest);
     }
 
     CleanupFile(path);
@@ -1530,15 +1494,15 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Custom) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        ASSERT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        const auto& ck = state.presets[0].config.webcam.chroma_key;
+        ASSERT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        const auto& ck = state.user_presets[0].config.webcam.chroma_key;
         EXPECT_TRUE(ck.enabled);
         EXPECT_EQ(ck.color_mode, WebcamChromaKeyColorMode::Custom);
         EXPECT_EQ(ck.custom_r, 128u);
@@ -1564,19 +1528,148 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Magenta) {
 
     {
         RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
+        store.Save({p}, p.id, p.config);
     }
 
     {
         RecordingPresetStore store(path);
         const PersistedPresetState state = store.Load();
-        ASSERT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        const auto& ck = state.presets[0].config.webcam.chroma_key;
+        ASSERT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        const auto& ck = state.user_presets[0].config.webcam.chroma_key;
         EXPECT_EQ(ck.color_mode, WebcamChromaKeyColorMode::Magenta);
         EXPECT_NEAR(ck.spill_reduction, 0.20f, 1e-4f);
     }
 
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// [live] table (this task's new persisted unit)
+// ===========================================================================
+
+// Production call site: MainWindow::persistPresetState() (Save) and the
+// MainWindow ctor preset-load block (Load).
+TEST(RecordingPresetStore, LiveTable_RoundTrips) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.video.cq = 33;
+    live.output.container = capability::Container::Mp4;
+    live.output.video_codec = capability::VideoCodec::H264Nvenc;
+    live.output.audio_codec = capability::AudioCodec::AacMf;
+    live.output.bit_depth = capability::BitDepth::Bit8;
+
+    store.Save({}, std::string(kDefaultPresetId), live);
+    const PersistedPresetState state = store.Load();
+
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_TRUE(NormalizedConfigEquals(*state.live, SanitizePresetConfig(live)));
+    EXPECT_EQ(state.selected_id, kDefaultPresetId);
+    EXPECT_FALSE(state.repaired);
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, Save_ExcludesBuiltIns_KeepsUserPresets) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset user = MakeRegionPreset();
+    std::vector<RecordingPreset> all = MakeBuiltInPresets();
+    all.push_back(user);
+
+    store.Save(all, user.id, MakeDefaultPreset().config);
+    const PersistedPresetState state = store.Load();
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, user.id);
+    EXPECT_EQ(state.selected_id, user.id);
+    CleanupFile(path);
+}
+
+// default_id must be gone from the on-disk format.
+TEST(RecordingPresetStore, TomlOnDisk_HasLiveTable_NoDefaultId) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    store.Save({}, std::string(kDefaultPresetId), MakeDefaultPreset().config);
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromUtf8(f.readAll());
+    EXPECT_TRUE(text.contains(QStringLiteral("[live]")));
+    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 23")));
+    EXPECT_FALSE(text.contains(QStringLiteral("default_id")));
+    CleanupFile(path);
+}
+
+// Field-wise repair replaces the full reset on version mismatch.
+// Production call site: MainWindow ctor load — a schema-22 file keeps its
+// user presets and live values instead of resetting.
+TEST(RecordingPresetStore, SchemaMismatch_KeepsData_FlagsRepaired) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    RecordingPreset user = MakeRegionPreset();
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.video.cq = 27;
+    store.Save({user}, user.id, live);
+
+    // Rewrite the version stamp to the previous schema.
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    QString text = QString::fromUtf8(f.readAll());
+    f.close();
+    text.replace(QStringLiteral("schema_version = 23"), QStringLiteral("schema_version = 22"));
+    ASSERT_TRUE(WriteTomlString(path, text));
+
+    const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.repaired);
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].id, user.id);
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_EQ(state.live->video.cq, 27u);
+    CleanupFile(path);
+}
+
+// Case (a) of the spec: a corrupted live VALUE is clamped field-wise; a
+// missing/unreadable [live] table yields nullopt (caller boots Default).
+TEST(RecordingPresetStore, LiveTable_CorruptField_ClampedNotReset) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = 23\n"
+                                                     "selected_id = \"preset.default\"\n"
+                                                     "presets = []\n"
+                                                     "[live]\n"
+                                                     "countdown_seconds = 7\n" // invalid -> clamped to 0
+                                                     "[live.video]\n"
+                                                     "cq = 9999\n"))); // out of range -> struct default kept
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_EQ(state.live->countdown_seconds, 0);
+    // Out-of-range cq is dropped by the field parser, leaving the struct
+    // default (VideoSettingsModel's Balanced CQ), not the built-in Default
+    // preset's High CQ — SanitizePresetConfig does not range-clamp cq itself.
+    EXPECT_EQ(state.live->video.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, LiveTable_Missing_ReturnsNullopt) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(
+        WriteTomlString(path, QStringLiteral("schema_version = 23\nselected_id = \"preset.default\"\npresets = []\n")));
+    RecordingPresetStore store(path);
+    EXPECT_FALSE(store.Load().live.has_value());
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, UnparseableFile_ReturnsDefaults_Repaired) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("this is not toml [ ===")));
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.user_presets.empty());
+    EXPECT_FALSE(state.live.has_value());
+    EXPECT_EQ(state.selected_id, kDefaultPresetId);
+    EXPECT_TRUE(state.repaired);
     CleanupFile(path);
 }
 

@@ -38,6 +38,7 @@
 
 class QShowEvent;
 class QPaintEvent;
+class QTimer;
 
 namespace exosnap {
 
@@ -230,10 +231,19 @@ class MainWindow : public QMainWindow {
     void onDeletePreset();
     void onResetChanges();
     void onResetToDefaults();
-    void onSetDefaultPreset();
 
-    // Persist the full preset store state.
+    // Persist the full preset store state (live config + user presets).
     void persistPresetState();
+
+    // Recomputes the dirty flag against the live config and schedules a
+    // debounced persist. Wired to every live-config-changed signal so a save
+    // never depends on the user remembering to press "Save preset".
+    void onLiveConfigChanged();
+
+    // Starts (or restarts) the debounce timer; persistPresetState() runs once
+    // it elapses. Coalesces bursts of live edits (e.g. a slider drag) into a
+    // single write instead of one per intermediate value.
+    void schedulePersistLiveState();
 
     // Export / import handlers (wired to OutputPage signals).
     void onExportSelectedProfile(const QString& path);
@@ -394,6 +404,15 @@ class MainWindow : public QMainWindow {
     // Preset system (replaces legacy profile_registry_).
     RecordingPresetRegistry preset_registry_;
     RecordingPresetStore preset_store_;
+    // The config the app booted with (from [live] or a fresh Default).
+    // Re-applied once more after the deferred coordinator init resets things.
+    RecordingPresetConfig boot_live_config_;
+    // 750 ms single-shot debounce for schedulePersistLiveState(); created on
+    // first use.
+    QTimer* live_persist_timer_ = nullptr;
+    // Set when RecordingPresetStore::Load() had to repair the file; consumed
+    // (and cleared) once the notification toast system exists to report it.
+    bool preset_store_repaired_ = false;
 
     // Reduced AppSettingsStore: hotkeys + window geometry only.
     AppSettingsStore settings_store_;

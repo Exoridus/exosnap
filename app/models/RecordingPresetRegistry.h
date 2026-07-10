@@ -13,19 +13,21 @@ namespace exosnap {
 // RecordingPresetRegistry
 //
 // Qt-independent in-memory registry for the user's saved presets.
-// Holds the saved list plus the currently selected and startup-default ids.
-// The registry does NOT hold the live working config — callers pass the live
+// Holds the saved list plus the currently selected preset id. The registry
+// does NOT hold the live working config — callers pass the live
 // RecordingPresetConfig explicitly to operations that compare or snapshot it.
+// There is no startup-default preset: the live config is the persisted
+// truth, and kDefaultPresetId (the built-in Default, always present) is the
+// only fallback selection ever needs.
 //
 // Invariants maintained at all times:
 //   - presets_ is non-empty.
 //   - selected_id_ refers to a preset in presets_.
-//   - default_id_  refers to a preset in presets_.
 // ---------------------------------------------------------------------------
 
 class RecordingPresetRegistry {
   public:
-    // Seeds presets_ with MakeBuiltInPresets(); selected = default = kDefaultPresetId.
+    // Seeds presets_ with MakeBuiltInPresets(); selected = kDefaultPresetId.
     RecordingPresetRegistry();
 
     // Replace state from a loaded snapshot, repairing invariants:
@@ -34,8 +36,9 @@ class RecordingPresetRegistry {
     //   - Dedup ids among the remaining (user) presets (keep first occurrence).
     //   - Sanitize each accepted preset via SanitizePreset(); names colliding
     //     with a built-in or an already-accepted name are deduped ("(2)", "(3)").
-    //   - Repair selected_id / default_id if they point to non-existent presets.
-    void LoadState(std::vector<RecordingPreset> presets, std::string selected_id, std::string default_id);
+    //   - Repair selected_id to kDefaultPresetId if it points to a non-existent
+    //     preset (kDefaultPresetId is a built-in and therefore always present).
+    void LoadState(std::vector<RecordingPreset> presets, std::string selected_id);
 
     // -----------------------------------------------------------------------
     // Observers
@@ -44,19 +47,15 @@ class RecordingPresetRegistry {
     [[nodiscard]] const std::vector<RecordingPreset>& Presets() const noexcept;
     [[nodiscard]] std::size_t Count() const noexcept;
     [[nodiscard]] const std::string& SelectedId() const noexcept;
-    [[nodiscard]] const std::string& DefaultId() const noexcept;
     [[nodiscard]] const RecordingPreset* FindById(std::string_view id) const;
     [[nodiscard]] const RecordingPreset& SelectedPreset() const; // always valid (invariant)
 
     // -----------------------------------------------------------------------
-    // Selection / default
+    // Selection
     // -----------------------------------------------------------------------
 
     // Returns false if id is not found.
     bool SetSelected(std::string id);
-
-    // Returns false if id is not found.
-    bool SetDefault(std::string id);
 
     // -----------------------------------------------------------------------
     // Mutations
@@ -87,8 +86,6 @@ class RecordingPresetRegistry {
 
     // Remove the selected preset. Returns false for a built-in preset.
     // Selection always falls back to kDefaultPresetId (always present).
-    // If the deleted preset was the default, default falls back to
-    // kDefaultPresetId.
     bool DeleteSelected();
 
     // Returns the selected preset's saved config (for "Reset changes").
@@ -102,7 +99,7 @@ class RecordingPresetRegistry {
     // The newly imported preset is NOT auto-selected (unlike AddPreset).
     void ImportPreset(RecordingPreset preset);
 
-    // Clear to a single MakeDefaultPreset(); selected = default = kDefaultPresetId.
+    // Clear to the four built-ins; selected = kDefaultPresetId.
     void ResetAllToDefault();
 
     // Returns true when live_config differs from the selected preset's saved config
@@ -130,7 +127,6 @@ class RecordingPresetRegistry {
     // -----------------------------------------------------------------------
     std::vector<RecordingPreset> presets_;
     std::string selected_id_;
-    std::string default_id_;
 };
 
 } // namespace exosnap
