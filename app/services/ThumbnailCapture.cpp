@@ -76,9 +76,13 @@ CaptureSourceKey KeyOf(const ThumbnailTarget& t) {
 // the CPU as a few hundred kilobytes instead of thirty-three megabytes, which is
 // the whole reason a tile can update at a live rate at all.
 //
-// Both textures are cached and only reallocated when the source size changes. If
-// the mip chain cannot be built -- an adapter that refuses GENERATE_MIPS for this
-// format -- the full-resolution path still works, just slowly.
+// One of these per tile, not one shared. Its textures are keyed by source size,
+// and a grid of differently sized windows and displays would otherwise reallocate
+// a full mip chain -- tens of megabytes for a 4K display -- on every tile of every
+// update.
+//
+// If the mip chain cannot be built -- an adapter that refuses GENERATE_MIPS for
+// this format -- the full-resolution path still works, just slowly.
 class Readback {
   public:
     Readback(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11DeviceContext> context)
@@ -89,20 +93,24 @@ class Readback {
         if (!frame.texture || frame.width == 0 || frame.height == 0)
             return {};
 
+        // A mip chain that was allocated but not written this call holds whatever
+        // the driver left there. Only read it when this call filled it.
         uint32_t level = 0;
-        if (EnsureMipChain(frame.width, frame.height) && desired.width() > 0 && desired.height() > 0) {
+        bool use_mips = false;
+        if (desired.width() > 0 && desired.height() > 0 && EnsureMipChain(frame.width, frame.height)) {
             context_->CopySubresourceRegion(mip_.get(), 0, 0, 0, 0, frame.texture.get(), 0, nullptr);
             context_->GenerateMips(mip_srv_.get());
             level = ChooseMipLevel(frame.width, frame.height, mip_levels_, static_cast<uint32_t>(desired.width()),
                                    static_cast<uint32_t>(desired.height()));
+            use_mips = true;
         }
 
-        const uint32_t width = mip_ ? MipExtent(frame.width, level) : frame.width;
-        const uint32_t height = mip_ ? MipExtent(frame.height, level) : frame.height;
+        const uint32_t width = use_mips ? MipExtent(frame.width, level) : frame.width;
+        const uint32_t height = use_mips ? MipExtent(frame.height, level) : frame.height;
         if (!EnsureStaging(width, height))
             return {};
 
-        if (mip_)
+        if (use_mips)
             context_->CopySubresourceRegion(staging_.get(), 0, 0, 0, 0, mip_.get(), level, nullptr);
         else
             context_->CopyResource(staging_.get(), frame.texture.get());
@@ -196,9 +204,13 @@ class Readback {
     uint32_t staging_height_ = 0;
 };
 
-// One tile's view of its hub: what it last showed, and whether it has ever
-// shown anything.
+// One tile's view of its hub: what it last showed, whether it has ever shown
+// anything, and the GPU scratch it reads back through.
 struct Tile {
+    explicit Tile(Readback rb) : readback(std::move(rb)) {
+    }
+
+    Readback readback;
     CaptureSubscription subscription;
     int target_index = -1;
     Clock::time_point subscribed_at{};
@@ -253,7 +265,6 @@ void ThumbnailCapture::WorkerMain(std::stop_token stop_token) {
         }
     }
 
-    Readback readback(device, context);
     CaptureHubRegistry registry([device](const CaptureSourceKey& key) -> std::unique_ptr<HubSourceProducer> {
         return std::make_unique<WgcSourceProducer>(key, device);
     });
@@ -307,7 +318,7 @@ void ThumbnailCapture::WorkerMain(std::stop_token stop_token) {
             for (const auto& [key, target] : wanted) {
                 auto it = tiles.find(key);
                 if (it == tiles.end()) {
-                    Tile tile;
+                    Tile tile{Readback(device, context)};
                     tile.target_index = target.target_index;
                     tile.subscribed_at = now;
                     // No push callback: a tile reads HeldFrame() on its own, far
@@ -353,7 +364,7 @@ void ThumbnailCapture::WorkerMain(std::stop_token stop_token) {
             if (tile.last_generation != 0 && now - tile.last_emit < kEmitInterval)
                 continue;
 
-            QImage image = readback.ToImage(frame, desired_size);
+            QImage image = tile.readback.ToImage(frame, desired_size);
             if (image.isNull())
                 continue;
 

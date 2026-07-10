@@ -116,6 +116,17 @@ ProducerPoll WgcSourceProducer::PollFrame(HubFrame& out) {
         if (frame == nullptr)
             return ProducerPoll::NoFrame; // A quiet desktop is not a lost one.
 
+        // TryGetNextFrame hands back the OLDEST queued frame. A source producing
+        // at refresh rate outruns any hub that polls slower, so taking the first
+        // frame would walk a backlog: the consumer would see old images and the
+        // queue would never drain. Drain to the newest and drop the rest.
+        for (;;) {
+            auto newer = frame_pool_.TryGetNextFrame();
+            if (newer == nullptr)
+                break;
+            frame = newer;
+        }
+
         const auto content = frame.ContentSize();
         if (content.Width != pool_size_.Width || content.Height != pool_size_.Height) {
             // The source renegotiated its resolution. Resize the pool to match

@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QImage>
+#include <QLabel>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QTimer>
@@ -332,6 +333,16 @@ ui::widgets::CaptureTargetCard* VisibleCard(ui::dialogs::SourcePickerDialog& dia
     return nullptr;
 }
 
+// The card's state message lives in a label it does not expose. A card that was
+// never shown has no visible children, so ask whether the label would be drawn.
+bool HasShownLabel(const ui::widgets::CaptureTargetCard& card, const QString& text) {
+    for (auto* label : card.findChildren<QLabel*>()) {
+        if (label->text() == text && !label->isHidden())
+            return true;
+    }
+    return false;
+}
+
 // The panel drops thumbnails while hidden, so these tests must show it.
 ui::dialogs::SourcePickerPanel* ShownPanel(ui::dialogs::SourcePickerDialog& dialog) {
     dialog.show();
@@ -390,6 +401,57 @@ TEST_F(SourcePickerRefreshTest, FailureDoesNotWipeAThumbnailTheTileAlreadyHas) {
 
     EXPECT_TRUE(VisibleCard(dialog, QStringLiteral("App A"))->hasThumbnail())
         << "a held image is quieter than \"Preview unavailable\"";
+}
+
+// A live tile asks for Ready on every frame. The card must not repolish its
+// style for a state it is already in -- that is the black flash -- but it must
+// still act on a state that genuinely changed.
+TEST_F(SourcePickerRefreshTest, CardStateTransitionsSurviveTheUnchangedStateShortcut) {
+    QPixmap red(4, 4);
+    red.fill(Qt::red);
+    QPixmap blue(4, 4);
+    blue.fill(Qt::blue);
+
+    ui::widgets::CaptureTargetCard card;
+    EXPECT_FALSE(card.hasThumbnail()) << "a fresh card has no picture";
+
+    card.setThumbnail(red);
+    EXPECT_TRUE(card.hasThumbnail());
+
+    // The steady case: a new frame, the same state. Still Ready.
+    card.setThumbnail(blue);
+    EXPECT_TRUE(card.hasThumbnail());
+
+    card.setThumbnailFailureText(QStringLiteral("Preview unavailable"));
+    EXPECT_FALSE(card.hasThumbnail()) << "the shortcut swallowed a real state change";
+
+    card.setThumbnail(red);
+    EXPECT_TRUE(card.hasThumbnail());
+
+    card.setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+    EXPECT_FALSE(card.hasThumbnail());
+}
+
+// The first state a card is ever put into is Loading, which is also the field's
+// default. A shortcut that compares the state alone would conclude there is
+// nothing to do and never show the text.
+TEST_F(SourcePickerRefreshTest, TheFirstStateIsAppliedEvenWhenItMatchesTheDefault) {
+    ui::widgets::CaptureTargetCard card;
+    card.setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+
+    EXPECT_TRUE(HasShownLabel(card, QStringLiteral("Loading preview...")))
+        << "the card never displayed the state it was put into";
+}
+
+// Two different messages are two different states, however equal their kind.
+TEST_F(SourcePickerRefreshTest, ANewMessageForTheSameKindIsStillApplied) {
+    ui::widgets::CaptureTargetCard card;
+    card.setThumbnailUnavailableText(QStringLiteral("Minimized"));
+    ASSERT_TRUE(HasShownLabel(card, QStringLiteral("Minimized")));
+
+    card.setThumbnailUnavailableText(QStringLiteral("Unavailable"));
+    EXPECT_TRUE(HasShownLabel(card, QStringLiteral("Unavailable")));
+    EXPECT_FALSE(HasShownLabel(card, QStringLiteral("Minimized")));
 }
 
 TEST_F(SourcePickerRefreshTest, ASourceThatNeverProducedStillReportsUnavailable) {

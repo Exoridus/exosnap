@@ -75,6 +75,12 @@ class CaptureTargetCard : public QFrame {
     QLabel* help_label_ = nullptr;
     QString title_text_;
     QString status_text_;
+    // What the thumbnail area last said. A live tile swaps its pixmap several
+    // times a second while this never changes, and repolishing the style for an
+    // unchanged state strips the surface's background for a frame.
+    ThumbnailState thumbnail_state_ = ThumbnailState::Loading;
+    QString thumbnail_state_text_;
+    bool thumbnail_state_applied_ = false;
     bool selected_ = false;
     bool click_armed_ = false;
     bool has_thumbnail_ = false;

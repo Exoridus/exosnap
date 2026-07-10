@@ -207,6 +207,17 @@ void CaptureTargetCard::setThumbnailUnavailableText(const QString& text) {
 }
 
 void CaptureTargetCard::setThumbnailState(ThumbnailState state, const QString& text) {
+    // A tile that keeps showing a picture asks for Ready on every new frame. Only
+    // the pixmap changed; unpolishing and repolishing the surface for that would
+    // drop its background between the two, which reads as a black flash.
+    if (thumbnail_state_applied_ && state == thumbnail_state_ && text == thumbnail_state_text_) {
+        has_thumbnail_ = state == ThumbnailState::Ready;
+        return;
+    }
+    thumbnail_state_ = state;
+    thumbnail_state_text_ = text;
+    thumbnail_state_applied_ = true;
+
     has_thumbnail_ = false;
     if (state != ThumbnailState::Ready) {
         thumbnail_label_->setPixmap({});

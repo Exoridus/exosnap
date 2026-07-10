@@ -39,7 +39,7 @@ struct GridPageWidgets {
     QLabel* empty_label = nullptr;
 };
 
-GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text, const QString& empty_text) {
+GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& empty_text) {
     GridPageWidgets result;
 
     auto* scroll = new QScrollArea(parent);
@@ -51,13 +51,6 @@ GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text
     auto* content_layout = new QVBoxLayout(content);
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(10);
-
-    if (!hint_text.isEmpty()) {
-        auto* hint_label = new QLabel(hint_text, content);
-        hint_label->setWordWrap(true);
-        hint_label->setProperty("labelRole", "captureTargetPickerNote");
-        content_layout->addWidget(hint_label);
-    }
 
     auto* empty_label = new QLabel(empty_text, content);
     empty_label->setWordWrap(true);
@@ -202,7 +195,7 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     pages_ = new QStackedWidget(this);
     pages_->setObjectName("sourcePickerPages");
 
-    const auto screens_page = makeScrollableCardGrid(pages_, QString(), QStringLiteral("No displays detected."));
+    const auto screens_page = makeScrollableCardGrid(pages_, QStringLiteral("No displays detected."));
     screens_grid_.scroll = screens_page.scroll;
     screens_grid_.content_layout = screens_page.content_layout;
     screens_grid_.host = screens_page.host;
@@ -210,9 +203,7 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     screens_grid_.empty_label = screens_page.empty_label;
     pages_->addWidget(screens_grid_.scroll);
 
-    const auto windows_page =
-        makeScrollableCardGrid(pages_, QStringLiteral("Find the right app/window quickly from preview cards."),
-                               QStringLiteral("No capturable windows found."));
+    const auto windows_page = makeScrollableCardGrid(pages_, QStringLiteral("No capturable windows found."));
     windows_grid_.scroll = windows_page.scroll;
     windows_grid_.content_layout = windows_page.content_layout;
     windows_grid_.host = windows_page.host;
