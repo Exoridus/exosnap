@@ -228,6 +228,14 @@ hubs exist for — arrives in Phase 3, before any duplication is opened.
 3. **WGC hub.** Window preview and picker tiles — window and display — become consumers.
    Picker tiles and the window preview hold their last frame through a Snipping Tool
    session instead of going empty. **No duplication is opened; none of the idle risk.**
+
+   *Landed for the picker tiles only.* The "window preview" named here is
+   `DxgiPreviewRenderer` — the name is a misnomer: it captures windows *and* monitors
+   through WGC (`InitCaptureItem`) and merely renders into a native child HWND. It owns
+   its own D3D device, render thread, pushed-source mode and webcam compositor, so a hub
+   would have to hand it textures across devices. That is a separate decision, not a
+   consumer swap, and it is deliberately not folded into this phase. The tiles' hold is
+   independent of it and ships without it.
 4. **DXGI hub, and the preview moves onto it** — probe the idle-duplication risk first.
    Display preview and recording share a backend; the preview holds through an unplug.
    This is the phase that can be abandoned.
@@ -272,6 +280,12 @@ Requires real hardware, and a human:
 - HDR desktop: idle hub preview colour against WGC's
 
 ## A latent bug to fix on the way
+
+Fixed. Both services now bind queued delivery to a receiver object rather than to the
+application, so Qt drops a frame whose receiver has died. The webcam's production
+registration still reaches the service through a single-argument forwarder in the
+coordinator and guards its own lifetime at the call site until that forwarder can carry a
+receiver. The original defect, for the record:
 
 `WebcamService::PostFrame` (`WebcamService.cpp:574-581`) copies `frame_callback_` and posts
 it to `QCoreApplication::instance()`, so Qt binds delivery to the application's lifetime,
