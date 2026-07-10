@@ -2993,6 +2993,50 @@ QLabel[labelRole="deviceAdapterCardActiveBadge"] {
     padding: 2px 8px;
 }
 
+/* Diagnostics — verdict hero (canon suite-diag2.jsx CompactVerdict) */
+QLabel#diagVerdictGlyph {
+    border-radius: 12px;
+    border: 1px solid ${line2};
+    background: ${bg3};
+}
+
+QLabel#diagVerdictGlyph[verdictTone="ready"] {
+    background: ${ok-a12};
+    border-color: ${ok-a48};
+}
+
+QLabel#diagVerdictGlyph[verdictTone="warn"] {
+    background: ${warn-a12};
+    border-color: ${warn-a48};
+}
+
+QLabel#diagVerdictGlyph[verdictTone="blocked"] {
+    background: ${err-a12};
+    border-color: ${err-a48};
+}
+
+QLabel[labelRole="diagVerdictHeadline"] {
+    font-size: 19px;
+    font-weight: 700;
+    color: ${text0};
+}
+
+QLabel[labelRole="diagVerdictSub"] {
+    font-size: 13px;
+    color: ${text2};
+}
+
+QProgressBar#diagDiskBar {
+    background: ${line2};
+    border: none;
+    border-radius: 2px;
+}
+
+QProgressBar#diagDiskBar::chunk {
+    background: ${accent};
+    border-radius: 2px;
+}
+
 /* Device page — capability matrix card (selected adapter) */
 QLabel#deviceMatrixAvatar {
     background: ${accent-dim};

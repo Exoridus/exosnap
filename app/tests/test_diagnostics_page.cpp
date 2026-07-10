@@ -296,13 +296,13 @@ TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassTileTone) {
 
     bool has_ready_pill = false;
     for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
-            lbl->text().contains(QStringLiteral("READY")))
+        if (lbl->property("labelRole").toString() == QLatin1String("diagVerdictHeadline") &&
+            lbl->text().contains(QStringLiteral("Ready to record")))
             has_ready_pill = true;
     EXPECT_TRUE(has_ready_pill) << "Expected READY in status pill for a clean baseline config";
 
-    // The Readiness tile is pass-toned and shows an "N / M checks passed" value.
-    EXPECT_EQ(TileTone(page, QStringLiteral("readinessTileReadiness")), QStringLiteral("pass"));
+    // The Readiness tile stays calm (neutral frame) and shows an "N / M" value.
+    EXPECT_EQ(TileTone(page, QStringLiteral("readinessTileReadiness")), QStringLiteral("neutral"));
     EXPECT_TRUE(TileValue(page, QStringLiteral("readinessTileReadiness")).contains(QStringLiteral("/")))
         << "Readiness tile should show an N / M checks value in the clear verdict";
 }
@@ -347,9 +347,10 @@ TEST_F(DiagnosticsPageTest, ReadinessTilesPopulateAfterData) {
     run->click();
 
     const QString dash = QString::fromUtf8("\xe2\x80\x94");
-    // Encoder tile reflects the active video codec (AV1 baseline in LoadData).
-    EXPECT_TRUE(TileValue(page, QStringLiteral("readinessTileEncoder")).contains(QStringLiteral("AV1")))
-        << "Encoder tile should show the active video codec";
+    // Encoder tile leads with the GPU carrying the encode (canon); the codec
+    // moves to the sub line, or becomes the value when no adapter is known.
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileEncoder")), dash)
+        << "Encoder tile should show the active encoder";
     // Display tile shows a resolution (× glyph), never the em-dash, once a screen exists.
     EXPECT_NE(TileValue(page, QStringLiteral("readinessTileDisplay")), dash);
 }
@@ -393,8 +394,8 @@ TEST_F(DiagnosticsPageTest, VerdictClearPillTextIsJustReady) {
 
     bool pill_exact_ready = false;
     for (auto* lbl : page.findChildren<QLabel*>()) {
-        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
-            lbl->text() == QStringLiteral("READY"))
+        if (lbl->property("labelRole").toString() == QLatin1String("diagVerdictHeadline") &&
+            lbl->text() == QStringLiteral("Ready to record"))
             pill_exact_ready = true;
     }
     EXPECT_TRUE(pill_exact_ready) << "Status pill must read exactly 'READY' (no notice count) in a clear verdict";
@@ -820,14 +821,15 @@ TEST_F(DiagnosticsPageTest, TipsOnlyConfigStaysReadyWithTipChipAndNoCards) {
     // Verdict: READY (tips-only is the calm ready state, not ATTENTION).
     bool pill_ready = false;
     for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
-            lbl->text() == QStringLiteral("READY"))
+        if (lbl->property("labelRole").toString() == QLatin1String("diagVerdictHeadline") &&
+            lbl->text() == QStringLiteral("Ready to record"))
             pill_ready = true;
     EXPECT_TRUE(pill_ready) << "Tips-only config must stay READY (Tier-3 never alarms the verdict)";
 
-    // Readiness tile: pass tone, not amber.
-    EXPECT_EQ(TileTone(page, QStringLiteral("readinessTileReadiness")), QStringLiteral("pass"))
-        << "Readiness tile must not be amber for optimisation tips";
+    // Readiness tile: calm neutral frame (canon: the check icon alone marks the
+    // pass; a tinted border is reserved for problems), and never amber for tips.
+    EXPECT_EQ(TileTone(page, QStringLiteral("readinessTileReadiness")), QStringLiteral("neutral"))
+        << "Readiness tile must stay calm (neutral) for optimisation tips";
 
     // The tip is bundled in the chip…
     auto* chip = page.findChild<QWidget*>(QStringLiteral("diagTipChip"));
@@ -864,8 +866,8 @@ TEST_F(DiagnosticsPageTest, ColorRangeFull_IsTipNotCard_VerdictStaysReady) {
     // Verdict stays READY.
     bool pill_ready = false;
     for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
-            lbl->text() == QStringLiteral("READY"))
+        if (lbl->property("labelRole").toString() == QLatin1String("diagVerdictHeadline") &&
+            lbl->text() == QStringLiteral("Ready to record"))
             pill_ready = true;
     EXPECT_TRUE(pill_ready) << "Full colour range is a Tier-3 tip and must not turn the verdict amber";
 
@@ -902,8 +904,8 @@ TEST_F(DiagnosticsPageTest, BlockerShowsCardInSimpleViewAndBlocksVerdict) {
 
     bool pill_blocked = false;
     for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
-            lbl->text().contains(QStringLiteral("CAN'T RECORD")))
+        if (lbl->property("labelRole").toString() == QLatin1String("diagVerdictHeadline") &&
+            lbl->text().contains(QStringLiteral("to fix before recording")))
             pill_blocked = true;
     EXPECT_TRUE(pill_blocked) << "A blocker must gate the verdict (CAN'T RECORD)";
 
@@ -954,8 +956,8 @@ TEST_F(DiagnosticsPageTest, MeasuredJudderNoticeIsCardNotTip) {
     // Verdict reflects the measured problem (amber), which is correct for Tier-2.
     bool pill_attention = false;
     for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
-            lbl->text().contains(QStringLiteral("ATTENTION")))
+        if (lbl->property("labelRole").toString() == QLatin1String("diagVerdictHeadline") &&
+            lbl->text().contains(QStringLiteral("could hurt the result")))
             pill_attention = true;
     EXPECT_TRUE(pill_attention) << "A Tier-2 measured problem must turn the verdict amber";
 }
