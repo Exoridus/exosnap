@@ -234,6 +234,7 @@ qt_add_executable(exosnap WIN32
     services/CaptureSourceHub.h
     services/CaptureSourceHub.cpp
     services/CaptureSourceKey.h
+    services/ThumbnailMip.h
     services/CaptureHubRegistry.h
     services/CaptureHubRegistry.cpp
     services/WgcSourceProducer.h
@@ -1630,6 +1631,13 @@ exosnap_add_gtest(
         services/CaptureSourceHub.cpp
     LIBRARIES recorder_core)
 target_include_directories(capture_hub_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Which mip a tile is read back from. Pure arithmetic; no D3D, no Qt.
+exosnap_add_gtest(
+    NAME thumbnail_mip_tests
+    TEST_PREFIX capture.
+    SOURCES tests/test_thumbnail_mip.cpp)
+target_include_directories(thumbnail_mip_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME display_device_notifier_tests

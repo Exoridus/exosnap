@@ -2,6 +2,7 @@
 
 #include "services/CaptureHubRegistry.h"
 #include "services/CaptureSourceKey.h"
+#include "services/ThumbnailMip.h"
 #include "services/WgcSourceProducer.h"
 
 #include <QMetaObject>
@@ -33,14 +34,11 @@ constexpr auto kPumpInterval = std::chrono::milliseconds(100);
 // How often a tile is read back, downscaled and pushed to the UI. The first
 // frame is never throttled -- a tile that has nothing must show something at once.
 //
-// This is the expensive constant. Each emit costs one full-resolution GPU copy,
-// one staging map, and a smooth downscale on the worker thread: measured at
-// roughly 31 ms for a 4K tile, 9 ms at 1080p and 3 ms for a window (debug build;
-// release is several times cheaper). Two 4K tiles at 2 Hz cost a low tens of
-// milliseconds per second. Video rates do not fit -- 15 fps would spend most of
-// a core on a grid of thumbnails -- and would need the downscale moved onto the
-// GPU first.
-constexpr auto kEmitInterval = std::chrono::milliseconds(500);
+// The readback maps a mip barely larger than the tile, so the CPU no longer sees
+// the source resolution and this is cheap. What it now costs is one UI-thread
+// repaint per tile per interval; a large grid, not a large desktop, is what would
+// make this hurt.
+constexpr auto kEmitInterval = std::chrono::milliseconds(100);
 
 // A source that has produced nothing for this long has failed to start. It keeps
 // retrying underneath; if a frame ever arrives the tile recovers on its own.
@@ -71,52 +69,128 @@ CaptureSourceKey KeyOf(const ThumbnailTarget& t) {
                             t.native_id};
 }
 
-// Pulls a hub frame down to the CPU. The staging texture is cached and only
-// reallocated when the frame's size changes, so a steady tile costs one map per
-// readback and no allocation at all.
+// Pulls a hub frame down to the CPU, small.
+//
+// The frame is copied into the top level of a mip chain, the GPU builds the rest,
+// and only a level barely larger than the tile is mapped. A 4K desktop reaches
+// the CPU as a few hundred kilobytes instead of thirty-three megabytes, which is
+// the whole reason a tile can update at a live rate at all.
+//
+// Both textures are cached and only reallocated when the source size changes. If
+// the mip chain cannot be built -- an adapter that refuses GENERATE_MIPS for this
+// format -- the full-resolution path still works, just slowly.
 class Readback {
   public:
     Readback(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11DeviceContext> context)
         : device_(std::move(device)), context_(std::move(context)) {
     }
 
-    QImage ToImage(const HubFrame& frame) {
+    QImage ToImage(const HubFrame& frame, QSize desired) {
         if (!frame.texture || frame.width == 0 || frame.height == 0)
             return {};
 
-        if (!staging_ || staging_width_ != frame.width || staging_height_ != frame.height) {
-            staging_ = nullptr;
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = frame.width;
-            desc.Height = frame.height;
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            desc.SampleDesc.Count = 1;
-            desc.Usage = D3D11_USAGE_STAGING;
-            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            if (FAILED(device_->CreateTexture2D(&desc, nullptr, staging_.put())))
-                return {};
-            staging_width_ = frame.width;
-            staging_height_ = frame.height;
+        uint32_t level = 0;
+        if (EnsureMipChain(frame.width, frame.height) && desired.width() > 0 && desired.height() > 0) {
+            context_->CopySubresourceRegion(mip_.get(), 0, 0, 0, 0, frame.texture.get(), 0, nullptr);
+            context_->GenerateMips(mip_srv_.get());
+            level = ChooseMipLevel(frame.width, frame.height, mip_levels_, static_cast<uint32_t>(desired.width()),
+                                   static_cast<uint32_t>(desired.height()));
         }
 
-        context_->CopyResource(staging_.get(), frame.texture.get());
+        const uint32_t width = mip_ ? MipExtent(frame.width, level) : frame.width;
+        const uint32_t height = mip_ ? MipExtent(frame.height, level) : frame.height;
+        if (!EnsureStaging(width, height))
+            return {};
+
+        if (mip_)
+            context_->CopySubresourceRegion(staging_.get(), 0, 0, 0, 0, mip_.get(), level, nullptr);
+        else
+            context_->CopyResource(staging_.get(), frame.texture.get());
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(context_->Map(staging_.get(), 0, D3D11_MAP_READ, 0, &mapped)))
             return {};
 
-        QImage view(static_cast<const uchar*>(mapped.pData), static_cast<int>(frame.width),
-                    static_cast<int>(frame.height), static_cast<int>(mapped.RowPitch), QImage::Format_ARGB32);
+        QImage view(static_cast<const uchar*>(mapped.pData), static_cast<int>(width), static_cast<int>(height),
+                    static_cast<int>(mapped.RowPitch), QImage::Format_ARGB32);
         QImage copy = view.copy();
         context_->Unmap(staging_.get(), 0);
         return copy;
     }
 
   private:
+    bool EnsureMipChain(uint32_t width, uint32_t height) {
+        if (mip_ && mip_width_ == width && mip_height_ == height)
+            return true;
+        if (mip_failed_ && mip_width_ == width && mip_height_ == height)
+            return false;
+
+        mip_ = nullptr;
+        mip_srv_ = nullptr;
+        mip_width_ = width;
+        mip_height_ = height;
+        mip_failed_ = true;
+
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 0; // full chain
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        if (FAILED(device_->CreateTexture2D(&desc, nullptr, mip_.put()))) {
+            mip_ = nullptr;
+            return false;
+        }
+        if (FAILED(device_->CreateShaderResourceView(mip_.get(), nullptr, mip_srv_.put()))) {
+            mip_ = nullptr;
+            mip_srv_ = nullptr;
+            return false;
+        }
+
+        D3D11_TEXTURE2D_DESC actual{};
+        mip_->GetDesc(&actual);
+        mip_levels_ = actual.MipLevels;
+        mip_failed_ = false;
+        return true;
+    }
+
+    bool EnsureStaging(uint32_t width, uint32_t height) {
+        if (staging_ && staging_width_ == width && staging_height_ == height)
+            return true;
+
+        staging_ = nullptr;
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(device_->CreateTexture2D(&desc, nullptr, staging_.put()))) {
+            staging_ = nullptr;
+            return false;
+        }
+        staging_width_ = width;
+        staging_height_ = height;
+        return true;
+    }
+
     winrt::com_ptr<ID3D11Device> device_;
     winrt::com_ptr<ID3D11DeviceContext> context_;
+
+    winrt::com_ptr<ID3D11Texture2D> mip_;
+    winrt::com_ptr<ID3D11ShaderResourceView> mip_srv_;
+    uint32_t mip_width_ = 0;
+    uint32_t mip_height_ = 0;
+    uint32_t mip_levels_ = 1;
+    bool mip_failed_ = false;
+
     winrt::com_ptr<ID3D11Texture2D> staging_;
     uint32_t staging_width_ = 0;
     uint32_t staging_height_ = 0;
@@ -279,7 +353,7 @@ void ThumbnailCapture::WorkerMain(std::stop_token stop_token) {
             if (tile.last_generation != 0 && now - tile.last_emit < kEmitInterval)
                 continue;
 
-            QImage image = readback.ToImage(frame);
+            QImage image = readback.ToImage(frame, desired_size);
             if (image.isNull())
                 continue;
 
