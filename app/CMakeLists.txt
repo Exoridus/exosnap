@@ -231,6 +231,8 @@ qt_add_executable(exosnap WIN32
     services/PreviewService.h
     services/PreviewService.cpp
     services/PreviewHelpers.h
+    services/CaptureSourceHub.h
+    services/CaptureSourceHub.cpp
     services/ThumbnailCapture.h
     services/ThumbnailCapture.cpp
     services/DxgiPreviewRenderer.h
@@ -1577,6 +1579,18 @@ exosnap_add_gtest(
 target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
+
+# The hub's loop against a fake producer: refcounted open/close, the held frame
+# across loss and unbounded reopen, and the lease handover. No GPU, no WGC, no
+# threads -- Pump() is stepped by hand.
+exosnap_add_gtest(
+    NAME capture_source_hub_tests
+    TEST_PREFIX capture.
+    SOURCES
+        tests/test_capture_source_hub.cpp
+        services/CaptureSourceHub.cpp
+    LIBRARIES recorder_core)
+target_include_directories(capture_source_hub_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME display_device_notifier_tests
