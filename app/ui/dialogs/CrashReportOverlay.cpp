@@ -36,7 +36,6 @@ CrashReportOverlay::CrashReportOverlay(const CrashReportModel& model, QWidget* p
 
     // Forward the panel's action signals so the host can connect to the overlay.
     connect(panel_, &CrashReportPanel::sendReportRequested, this, &CrashReportOverlay::sendReportRequested);
-    connect(panel_, &CrashReportPanel::restartRequested, this, &CrashReportOverlay::restartRequested);
     connect(panel_, &CrashReportPanel::reportOnGitHubRequested, this, &CrashReportOverlay::reportOnGitHubRequested);
     connect(panel_, &CrashReportPanel::openCrashFolderRequested, this, &CrashReportOverlay::openCrashFolderRequested);
     connect(panel_, &CrashReportPanel::autoSendToggled, this, &CrashReportOverlay::autoSendToggled);

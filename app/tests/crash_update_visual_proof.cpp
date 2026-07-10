@@ -235,12 +235,22 @@ TEST_F(CrashUpdateVisualProofTest, Crash_CardPaintsItsSurfaceWhenEmbedded) {
 
     const QImage shot = host.grab().toImage();
     const QColor magenta(0xff, 0x00, 0xff);
-    // Sample the card's own padding: inside its border, below the chrome bar, left of
-    // every child widget. Only the card itself can paint here.
-    const int y = 120;
+    // The card's own padding: inside its border, below the chrome bar, left of every
+    // child widget. Only the card itself can paint here.
     for (const int x : {5, 8, 12}) {
-        EXPECT_NE(shot.pixelColor(x, y), magenta)
+        EXPECT_NE(shot.pixelColor(x, 120), magenta)
             << "at x=" << x << ": the card does not paint its surface; the parent shows through";
+    }
+    // The chrome bar shares the card's surface colour on purpose, so no tone comparison
+    // can tell whether it paints — the card behind it would look the same.
+
+    // The card has a fixed width, so a long label silently clips. Only a rendered,
+    // laid-out panel knows the real widths.
+    for (const auto* button : panel->findChildren<QPushButton*>()) {
+        if (button->text().isEmpty())
+            continue; // icon-only chrome close button
+        EXPECT_GE(button->width(), button->sizeHint().width())
+            << "button label is clipped: " << button->text().toStdString();
     }
 }
 

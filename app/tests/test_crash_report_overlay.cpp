@@ -113,14 +113,19 @@ TEST_F(CrashReportTest, SendButtonEmitsSendReportRequested) {
     EXPECT_EQ(count, 1);
 }
 
-TEST_F(CrashReportTest, RestartButtonEmitsRestartRequested) {
+// The panel appears on the launch *after* a crash, so the app is already running. The
+// secondary action must dismiss the report, not restart what was just started.
+TEST_F(CrashReportTest, SecondaryButtonDeclinesInsteadOfRestarting) {
     ui::dialogs::CrashReportPanel panel(SampleModel());
-    auto* restart = panel.findChild<QPushButton*>(QStringLiteral("crashRestartButton"));
-    ASSERT_NE(restart, nullptr);
+    EXPECT_EQ(panel.findChild<QPushButton*>(QStringLiteral("crashRestartButton")), nullptr)
+        << "restarting an app that just started offers the user nothing";
+
+    auto* decline = panel.findChild<QPushButton*>(QStringLiteral("crashDeclineButton"));
+    ASSERT_NE(decline, nullptr);
 
     int count = 0;
-    QObject::connect(&panel, &ui::dialogs::CrashReportPanel::restartRequested, &panel, [&count]() { ++count; });
-    restart->click();
+    QObject::connect(&panel, &ui::dialogs::CrashReportPanel::dontSendRequested, &panel, [&count]() { ++count; });
+    decline->click();
     EXPECT_EQ(count, 1);
 }
 
