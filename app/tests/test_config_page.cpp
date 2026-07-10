@@ -345,18 +345,21 @@ TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
         << "Expected 8 token chips ({datetime},{date},{time},{app},{title},{target},{profile},{container})";
 }
 
-TEST_F(ConfigPageTest, FilenameTokenChips_AlwaysVisible) {
-    // v10 (Task #4): token chips are permanently visible — no toggle needed.
+TEST_F(ConfigPageTest, FilenameTokenChips_SitBehindTheTokensDisclosure) {
+    // Canon (suite-settings.jsx): the chips are collapsed by default and open
+    // from the small "tokens" disclosure on the filename-pattern row.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // The token chip flow widget must not be explicitly hidden right after construction.
     auto* chip_flow = page.findChild<QWidget*>(QStringLiteral("tokenChipFlow"));
     ASSERT_NE(chip_flow, nullptr) << "tokenChipFlow widget must exist";
-    EXPECT_FALSE(chip_flow->isHidden()) << "Token chips must be permanently visible (no toggle)";
+    EXPECT_TRUE(chip_flow->isHidden()) << "Token chips start collapsed";
 
-    // The old tokenHelpToggle button must not exist.
-    auto* old_toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
-    EXPECT_EQ(old_toggle, nullptr) << "tokenHelpToggle button must not exist in v10";
+    auto* toggle = page.findChild<QToolButton*>(QStringLiteral("tokensToggle"));
+    ASSERT_NE(toggle, nullptr) << "tokens disclosure must exist";
+    toggle->setChecked(true);
+    EXPECT_FALSE(chip_flow->isHidden()) << "The disclosure reveals the chips";
+    toggle->setChecked(false);
+    EXPECT_TRUE(chip_flow->isHidden()) << "…and collapses them again";
 }
 
 TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {

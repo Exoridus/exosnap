@@ -1197,6 +1197,21 @@ QLabel[labelRole="subtle"] {
 }
 
 /* Settings - filename token reference chips (Output card) */
+/* Output card — the "tokens" disclosure on the filename-pattern row */
+QToolButton#tokensToggle {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    color: ${text2};
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+}
+
+QToolButton#tokensToggle:checked,
+QToolButton#tokensToggle:hover {
+    color: ${accent};
+}
+
 QLabel[labelRole="tokenChip"] {
     font-family: ${font-mono};
     font-size: 11px;

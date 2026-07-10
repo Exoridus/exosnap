@@ -437,7 +437,7 @@ class ConfigPage : public QWidget {
     uint32_t stashed_custom_height_ = 0;
     QLabel* folder_validation_label_ = nullptr;
     QLabel* pattern_validation_label_ = nullptr;
-    QLabel* example_filename_label_ = nullptr;
+    QToolButton* tokens_toggle_ = nullptr;
 
     QFrame* readiness_panel_ = nullptr;
     QLabel* readiness_badge_label_ = nullptr;
