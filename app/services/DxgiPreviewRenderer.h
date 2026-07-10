@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include <recorder_core/overlay_shader.h>
 #include <recorder_core/recorder_session.h>
 
 #include <d3d11.h>
@@ -53,9 +54,12 @@ class DxgiPreviewRenderer {
     // The native child HWND occludes Qt painting, so the live PiP (and its edit
     // chrome) is drawn here for true WYSIWYG. Placement is normalized to the same
     // content rectangle the recording compositor uses, so preview and output match.
+    // Mirror, opacity and the chroma key are handed to the same shader the recording
+    // compositor runs (recorder_core/overlay_shader.h), so the PiP the user sets up
+    // here is pixel-for-pixel the PiP the encoder writes.
     // Thread-safe: called from the UI thread; applied on the render thread.
     void SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh, bool mirror,
-                               float opacity);
+                               float opacity, const recorder_core::ChromaKeyParams& chroma);
     // bgra: tightly indexable BGRA pixels (stride bytes per row). nullptr clears it.
     void SetWebcamOverlayFrame(const uint8_t* bgra, int width, int height, int stride);
 
@@ -141,6 +145,8 @@ class DxgiPreviewRenderer {
     // Constant-colour blend state for the webcam PiP quad: SrcBlend/DestBlend read the
     // BLEND_FACTOR passed to OMSetBlendState, so a single state serves any opacity.
     Microsoft::WRL::ComPtr<ID3D11BlendState> overlayBlendState_;
+    // Feeds the shared overlay shader's b0 slot; rewritten per draw.
+    Microsoft::WRL::ComPtr<ID3D11Buffer> constantBuffer_;
 
     mutable std::mutex frameMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrame_;
@@ -169,12 +175,14 @@ class DxgiPreviewRenderer {
     bool overlaySelected_ = false;
     bool overlayMirror_ = false;
     float overlayOpacity_ = 1.0f;
+    recorder_core::ChromaKeyParams overlayChroma_{};
     float overlayNx_ = 0.0f;
     float overlayNy_ = 0.0f;
     float overlayNw_ = 0.25f;
     float overlayNh_ = 0.25f;
-    std::vector<uint8_t> overlayBgra_; // latest webcam frame, tightly packed BGRA (unmirrored)
-    std::vector<uint8_t> overlayScratch_;
+    // Latest webcam frame, tightly packed BGRA. Always unmirrored: the shader flips
+    // the texcoord, so a mirror toggle costs no re-upload.
+    std::vector<uint8_t> overlayBgra_;
     int overlayW_ = 0;
     int overlayH_ = 0;
     bool overlayDirty_ = false;

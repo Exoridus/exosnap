@@ -737,6 +737,15 @@ exosnap_add_gtest(
 target_include_directories(test_gpu_compositor PRIVATE src)
 target_compile_definitions(test_gpu_compositor PRIVATE NOMINMAX)
 
+# The overlay shader as the DXGI preview uses it: compiled standalone, no compositor.
+exosnap_add_gtest(
+    NAME test_overlay_shader
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_overlay_shader.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_compile_definitions(test_overlay_shader PRIVATE NOMINMAX)
+
 # HDR tone-map (scRGB FP16 -> SDR BT.709): pure curve math + OD capture-format x
 # HDR-mode negotiation. No GPU — the compute shader replicates the same math.
 exosnap_add_gtest(
