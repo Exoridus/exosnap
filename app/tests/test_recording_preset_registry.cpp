@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <capability/audio_ui_state.h>
@@ -422,6 +424,44 @@ TEST(RecordingPresetRegistry, AddPreset_StripsEnvironmentFields) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(reg.FindById(id)->config.output.bit_depth, defaults.bit_depth);
     EXPECT_TRUE(reg.FindById(id)->config.capture.display_key.empty());
+}
+
+// ===========================================================================
+// Selecting a built-in never reports (changed)
+// ===========================================================================
+
+// Regression guard: selecting a built-in preset must leave the live config
+// clean — the "(changed)" hint must not appear without a user edit.
+//
+// This reproduces MainWindow::onPresetSelected → applyPresetConfig →
+// captureLiveConfig exactly: the applied live config is the selected preset's
+// saved config carried through WithEnvironmentFields (the previous selection's
+// environment) and SanitizePresetConfig, and the dirty check compares that
+// against the newly-selected preset via IsSelectedDirty. It runs the full
+// from→to matrix so every built-in is verified both as the switch source and
+// the switch target (Efficiency's cq 30 = CanonicalCq(Small) is the case that
+// historically snapped to a canonical value and produced a spurious dirty).
+TEST(RecordingPresetRegistry, SelectingBuiltIn_NeverReportsDirty_AllTransitions) {
+    const std::array<std::string_view, 4> ids = {kDefaultPresetId, kQualityPresetId, kEfficiencyPresetId,
+                                                 kCompatibilityPresetId};
+    for (const auto from_id : ids) {
+        for (const auto to_id : ids) {
+            RecordingPresetRegistry reg;
+            ASSERT_TRUE(reg.SetSelected(std::string(from_id)));
+            // Environment carried from the previous selection's live config.
+            const RecordingPresetConfig env = reg.SelectedSavedConfig();
+
+            ASSERT_TRUE(reg.SetSelected(std::string(to_id)));
+            // applyPresetConfig stages the mirror as SanitizePresetConfig(...);
+            // captureLiveConfig sanitizes once more before the dirty compare.
+            const RecordingPresetConfig applied =
+                SanitizePresetConfig(WithEnvironmentFields(reg.SelectedSavedConfig(), env));
+            const RecordingPresetConfig live = SanitizePresetConfig(applied);
+
+            EXPECT_FALSE(reg.IsSelectedDirty(live)) << "selecting built-in '" << to_id << "' (from '" << from_id
+                                                    << "') must not report (changed) without a user edit";
+        }
+    }
 }
 
 } // namespace

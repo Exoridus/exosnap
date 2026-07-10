@@ -111,9 +111,10 @@ Presets neither store nor override them, and a difference in them never counts a
 presets therefore leaves the capture target alone. The existing H.264 8-bit clamp is the one
 sanctioned exception.
 
-Settings hosts the preset dropdown directly — there is no separate preset manager surface. Next to it
-a `…` overflow menu holds **Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and
-**Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
+Settings hosts the preset dropdown directly — there is no separate preset manager surface. Built-in
+presets carry a small **Built-in** badge inside their dropdown option row, so the marker never sits
+beside the dropdown and shifts the toolbar. Next to the dropdown a `…` overflow menu holds
+**Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and **Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
 appear; **Delete** appears whenever a user preset is selected, independent of the changed state, and
 never for a built-in. The Output page carries the same row. Switching presets applies immediately and
 raises a notification offering **Undo**, which restores both the previous live configuration and the
@@ -414,7 +415,8 @@ the Edit/Output/Save "Review" step.)
 boundaries stay keyframe-safe; counters reset per segment. Split is supported for MKV, WebM, and MP4.
 For MP4, each completed segment is remuxed to progressive MP4 in the background while recording
 continues; "Saved" is reported only once all segment remuxes finish. Manual split is independent of
-automatic split.
+automatic split. Under Expert mode the split controls are laid out inline within the Output card
+(time and size sub-sections), not tucked behind a popover.
 
 **Low-disk guard.** A configurable soft **warning threshold** (default around 2 GB free) shows a
 Diagnostics notice but still allows recording; a lower **hard-stop threshold** (default around

@@ -85,8 +85,7 @@ struct PersistedAppSettings {
     // SETTINGS-TIERS-R1: global Expert mode toggle (default OFF).
     bool expert_mode_enabled = false;
 
-    // SETTINGS-TIERS-R1: per-card expander expanded states (default collapsed).
-    bool output_split_expander_expanded = false;
+    // SETTINGS-TIERS-R1: per-card expander expanded state (default collapsed).
     bool audio_separate_expander_expanded = false;
 
     // ELEVATION-FOUNDATION-R1 (ADR 0033): opt-in for elevation-gated present /

@@ -104,9 +104,7 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.beginGroup(QStringLiteral("settings_tiers"));
     // SETTINGS-TIERS-R1: expert mode toggle (default OFF).
     persisted.expert_mode_enabled = settings.value(QStringLiteral("expert_mode_enabled"), false).toBool();
-    // SETTINGS-TIERS-R1: per-card expander expanded states (default collapsed).
-    persisted.output_split_expander_expanded =
-        settings.value(QStringLiteral("output_split_expander_expanded"), false).toBool();
+    // SETTINGS-TIERS-R1: per-card expander expanded state (default collapsed).
     persisted.audio_separate_expander_expanded =
         settings.value(QStringLiteral("audio_separate_expander_expanded"), false).toBool();
     settings.endGroup();
@@ -202,9 +200,7 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.beginGroup(QStringLiteral("settings_tiers"));
     // SETTINGS-TIERS-R1: expert mode toggle.
     settings.setValue(QStringLiteral("expert_mode_enabled"), settings_snapshot.expert_mode_enabled);
-    // SETTINGS-TIERS-R1: per-card expander expanded states.
-    settings.setValue(QStringLiteral("output_split_expander_expanded"),
-                      settings_snapshot.output_split_expander_expanded);
+    // SETTINGS-TIERS-R1: per-card expander expanded state.
     settings.setValue(QStringLiteral("audio_separate_expander_expanded"),
                       settings_snapshot.audio_separate_expander_expanded);
     settings.endGroup();
