@@ -1,4 +1,6 @@
 #include "AboutPage.h"
+
+#include "../ui/theme/LucideIcon.h"
 #include "ExoSnapBuildInfo.h"
 
 #include "../ui/brand/BrandMarkWidget.h"
@@ -183,6 +185,8 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     github_btn->setObjectName(QStringLiteral("aboutGitHubButton"));
     github_btn->setProperty("role", "ghost");
     github_btn->setProperty("url", QString::fromLatin1(kGitHubUrl));
+    github_btn->setIcon(ui::theme::lucideIcon(QStringLiteral("github"), QString::fromUtf8(ui::theme::ActiveTheme().mut),
+                                              14, github_btn->devicePixelRatioF()));
     github_btn->setCursor(Qt::PointingHandCursor);
     connect(github_btn, &QPushButton::clicked, this,
             []() { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kGitHubUrl))); });
@@ -190,6 +194,8 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     auto* copy_btn = new QPushButton(QStringLiteral("Copy details"), card);
     copy_btn->setObjectName(QStringLiteral("aboutCopyButton"));
     copy_btn->setProperty("role", "ghost");
+    copy_btn->setIcon(ui::theme::lucideIcon(QStringLiteral("copy"), QString::fromUtf8(ui::theme::ActiveTheme().mut), 14,
+                                            copy_btn->devicePixelRatioF()));
     copy_btn->setCursor(Qt::PointingHandCursor);
     connect(copy_btn, &QPushButton::clicked, this, [this, version, build_config, commit, author]() {
         const QString ch = channel_value_ ? channel_value_->text() : QStringLiteral("Stable");
@@ -201,6 +207,9 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     auto* release_notes_btn = new QPushButton(QStringLiteral("Release notes"), card);
     release_notes_btn->setObjectName(QStringLiteral("aboutReleaseNotesButton"));
     release_notes_btn->setProperty("role", "quiet");
+    release_notes_btn->setIcon(ui::theme::lucideIcon(QStringLiteral("external-link"),
+                                                     QString::fromUtf8(ui::theme::ActiveTheme().mut), 14,
+                                                     release_notes_btn->devicePixelRatioF()));
     release_notes_btn->setCursor(Qt::PointingHandCursor);
     connect(release_notes_btn, &QPushButton::clicked, this,
             []() { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kReleasesUrl))); });
