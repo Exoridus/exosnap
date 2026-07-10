@@ -24,6 +24,7 @@ void restyle(QWidget* widget) {
 
 constexpr int kThumbnailWidth = 304;
 constexpr int kThumbnailHeight = 171;
+constexpr int kCardPadding = 12;
 
 } // namespace
 
@@ -34,10 +35,11 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     setProperty("captureCardState", "normal");
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::StrongFocus);
+    // Width is owned by SourcePickerPanel, which sizes the responsive grid.
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(12, 12, 12, 12);
+    root->setContentsMargins(kCardPadding, kCardPadding, kCardPadding, kCardPadding);
     root->setSpacing(10);
 
     thumbnail_surface_ = new QFrame(this);

@@ -893,6 +893,88 @@ QLabel[labelRole="sourcePickerSubtitle"] {
     color: ${text2};
 }
 
+/* Source picker - display and window cards.
+   These carry the same surface and border as the region preset cards below:
+   without them the card is a transparent frame and dissolves into the panel. */
+QFrame#captureTargetCard {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QFrame#captureTargetCard:hover {
+    background: ${bg3};
+    border-color: ${line3};
+}
+
+QFrame#captureTargetCard[selected="true"] {
+    background: ${ac-a12};
+    border-color: ${accent};
+}
+
+QFrame#captureTargetCard:focus {
+    border-color: ${accent};
+    background: ${ac-a16};
+}
+
+/* A target that cannot be recorded reads as recessed rather than alarming. */
+QFrame#captureTargetCard[captureCardUnavailable="true"] {
+    background: ${bg1};
+    border-style: dashed;
+    border-color: ${line2};
+}
+
+QFrame#captureTargetCard[captureCardTone="warning"] {
+    border-color: ${warn-a42};
+}
+
+/* The thumbnail sits on its own recessed plate so an empty or letterboxed
+   preview still reads as a picture area rather than a hole in the card. */
+QFrame#captureCardThumbnailSurface {
+    background: ${bg0};
+    border: 1px solid ${line1};
+    border-radius: ${radius-md}px;
+}
+
+QLabel[labelRole="captureCardTitle"] {
+    font-size: 14px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="captureCardSubtitle"] {
+    font-size: 12px;
+    color: ${text2};
+}
+
+QLabel[labelRole="captureCardHelp"] {
+    font-size: 12px;
+    color: ${text3};
+}
+
+/* "Primary" and friends: a quiet chip, anchored to the card's right edge. */
+QLabel[labelRole="captureCardStatus"] {
+    font-size: 11px;
+    color: ${text2};
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 1px 6px;
+}
+
+QLabel[labelRole="captureCardThumbnailState"] {
+    font-size: 12px;
+    color: ${text3};
+}
+
+QLabel[labelRole="captureCardCheckBadge"] {
+    background: ${accent};
+    color: ${accent-ink};
+    border-radius: 11px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
 /* Source picker - region preset cards */
 QFrame#regionPresetCard {
     background: ${bg2};
