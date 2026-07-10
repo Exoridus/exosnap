@@ -130,6 +130,31 @@ TEST_F(OperationalTitleBarTest, StatusPill_ReflectsReadyRecordingPaused) {
     EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Info);
 }
 
+// A longer label must widen the pill: "Ready" → "Checking" once clipped the
+// pill to the previous text ("Checki") because the enclosing layouts kept the
+// stale size hint. Pin: after a text change and a layout pass, the pill is at
+// least as wide as its own hint.
+TEST_F(OperationalTitleBarTest, StatusPill_GrowsWithALongerLabel) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.resize(1600, 52);
+    bar.show();
+    QCoreApplication::processEvents();
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    bar.setStatusLabel(QStringLiteral("READY"));
+    QCoreApplication::processEvents();
+    const int ready_width = pill->width();
+
+    bar.setStatusLabel(QStringLiteral("CHECK"));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(pill->text(), QStringLiteral("Checking"));
+    EXPECT_GE(pill->width(), pill->sizeHint().width()) << "pill still clipped to the previous label's width";
+    EXPECT_GT(pill->width(), ready_width);
+}
+
 TEST_F(OperationalTitleBarTest, StatusPill_ShowsSavedAfterCompletedRecording) {
     ui::chrome::OperationalTitleBar bar;
     bar.setNavItems(DefaultNavItems());

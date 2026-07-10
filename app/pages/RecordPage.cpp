@@ -1241,6 +1241,13 @@ RecordPage::~RecordPage() {
 }
 
 void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
+    // A visual scenario set its own output/format truth; the deferred config
+    // hydration arriving afterwards must not re-sync the view-model state from
+    // the coordinator (stuck at LoadingCapabilities in the harness) or restart
+    // the preview over the fixture frame.
+    if (visual_test_mode_)
+        return;
+
     current_output_settings_ = settings;
     current_container_ = settings.container;
     current_video_codec_ = settings.video_codec;
@@ -1273,6 +1280,11 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
 }
 
 void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
+    // A visual scenario is a frozen fixture: the async probe landing afterwards
+    // must not rebuild the coordinator or re-enumerate targets over it.
+    if (visual_test_mode_)
+        return;
+
     shared_runtime_caps_ = caps;
     shared_runtime_caps_received_ = true;
 
@@ -1301,6 +1313,10 @@ void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
 }
 
 void RecordPage::setRuntimeCapabilitiesFailed(const QString& reason) {
+    // Frozen visual fixture — same rule as setRuntimeCapabilities above.
+    if (visual_test_mode_)
+        return;
+
     // The async HW probe threw. Resolve the coordinator into its capability-failure
     // state so init never hangs armed and the Record button is not permanently dead.
     // shared_runtime_caps_received_ stays false: there are no valid caps to validate
@@ -1577,6 +1593,10 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
 }
 
 void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
+    // Frozen visual fixture — same rule as setOutputSettings above.
+    if (visual_test_mode_)
+        return;
+
     current_frame_rate_num_ = settings.frame_rate_num == 0 ? 60 : settings.frame_rate_num;
     current_frame_rate_den_ = settings.frame_rate_den == 0 ? 1 : settings.frame_rate_den;
     current_cfr_ = settings.cfr;
@@ -1731,6 +1751,13 @@ QImage MakeVisualTestWebcamFrame() {
 
 void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     visual_test_mode_ = true;
+    // Deterministic ordering: build the coordinator NOW, before the scenario
+    // state below. Since the deferred-init startup change it otherwise runs
+    // 150 ms+ AFTER this method (or whenever the async capability probe lands)
+    // and clobbers the scenario — real targets replace the synthetic ones and
+    // the coordinator's Idle push erases the scenario's recording state, so a
+    // capture raced its own fixture.
+    ensureCoordinatorInit();
     // Harness isolation (VR-003): scenarios must never write into — or render
     // from — the user's real recording history. Persistence is disabled before
     // any SetResult below; the loaded history is replaced by scenario state.
@@ -2509,6 +2536,11 @@ void RecordPage::initCoordinator() {
     }
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
+        // A visual scenario is a frozen fixture: the coordinator's queued state
+        // posts (its initial Idle/Ready among them) arrive AFTER the scenario
+        // applied its own state and must not overwrite it.
+        if (visual_test_mode_)
+            return;
         // Wall-clock fallback timer: track elapsed independently of backend stats
         // so the dock timer always shows a live count immediately, not --:--:--.
         const UiRecordingState prev = view_model_.state;
