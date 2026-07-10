@@ -94,6 +94,16 @@ void ApplyNativeWindowIcons(QWidget& window) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+#if defined(Q_OS_WIN)
+    // Restrict the loader's default DLL search order before anything else can run
+    // (including Qt's own initialization, which may LoadLibrary plugins). Without
+    // this, the implicit search order can fall back to directories that let a
+    // planted DLL sitting next to a portable-ZIP extraction get preferred over the
+    // real one. LOAD_LIBRARY_SEARCH_APPLICATION_DIR keeps the app's own directory
+    // (where the Qt/FFmpeg DLLs deployed by windeployqt live) searchable.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+#endif
+
     // PERF-MEASURE: start the process-global startup clock before anything else so
     // first-paint / preview-live milestones measure true start→milestone latency.
     exosnap::diagnostics::StartupClock().start();

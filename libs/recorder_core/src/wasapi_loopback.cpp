@@ -69,27 +69,26 @@ bool WasapiLoopback::Init(std::string& out_error) {
         return false;
     }
 
-    WAVEFORMATEX* pwfx = nullptr;
-    hr = m_pAudioClient->GetMixFormat(&pwfx);
-    if (FAILED(hr) || !pwfx) {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "GetMixFormat 0x%08lX", static_cast<unsigned long>(hr));
-        out_error = buf;
-        return false;
-    }
+    // The render endpoint's shared-mode mix format is whatever the user has
+    // configured (e.g. a 44.1 kHz DAC, or a 5.1/7.1 speaker layout) — it is not
+    // guaranteed to be 48 kHz/stereo. Rather than rejecting those endpoints,
+    // request our fixed 48 kHz/2 ch float format and set
+    // AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM so the audio engine's own sample-rate
+    // converter and channel matrixer resample/downmix into it, mirroring the
+    // process-loopback path (see wasapi_process_loopback_src.cpp).
+    WAVEFORMATEX fmt{};
+    fmt.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+    fmt.nChannels = static_cast<WORD>(kRequiredChannels);
+    fmt.nSamplesPerSec = kRequiredSampleRate;
+    fmt.wBitsPerSample = 32;
+    fmt.nBlockAlign = static_cast<WORD>(fmt.nChannels * fmt.wBitsPerSample / 8);
+    fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
+    fmt.cbSize = 0;
 
-    if (pwfx->nSamplesPerSec != kRequiredSampleRate || pwfx->nChannels != kRequiredChannels) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "mix format mismatch: %u Hz %u ch (need %u Hz 2 ch)", pwfx->nSamplesPerSec,
-                 pwfx->nChannels, kRequiredSampleRate);
-        CoTaskMemFree(pwfx);
-        out_error = buf;
-        return false;
-    }
-
-    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, kHnsBuffer, 0, pwfx,
-                                    nullptr);
-    CoTaskMemFree(pwfx);
+    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                                        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                                    kHnsBuffer, 0, &fmt, nullptr);
     if (FAILED(hr)) {
         char buf[80];
         snprintf(buf, sizeof(buf), "IAudioClient::Initialize(LOOPBACK) 0x%08lX", static_cast<unsigned long>(hr));
