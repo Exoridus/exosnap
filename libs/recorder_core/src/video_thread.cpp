@@ -2239,6 +2239,11 @@ void VideoThread::Run() {
         // Seed the first WGC frame from the wait loop so a static window still
         // encodes from t=0 (WGC only delivers frames on repaint).
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex = std::move(seedWgcTex);
+        // The last screen frame that was encoded, kept alive after it was consumed.
+        // A still desktop produces no new frames, but the webcam keeps moving; the
+        // held screen is what the live webcam gets composited onto. The OD path needs
+        // no equivalent — odCapturedTex is persistent and already holds the last frame.
+        winrt::com_ptr<ID3D11Texture2D> heldWgcTex;
 
         // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
         uint64_t cfrLastPresentQpc = 0;
@@ -2578,12 +2583,23 @@ void VideoThread::Run() {
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
-                // OD recovery: during a hold the drain is skipped, so no fresh source
-                // frame arrives and rawSourceTex is null — the CFR duplicate path below
-                // re-emits the last frame (frozen) so the timeline keeps advancing until
-                // Reopen() succeeds. Re-compositing a live webcam onto the held screen
-                // during the gap is intentionally NOT done here: it touches display-tied
-                // GPU resources while the captured output is gone (crash risk).
+                // A screen capture only yields a frame when the screen changes, but the
+                // webcam does not stop moving with it. Without this, a still desktop
+                // duplicates the last composited frame and the picture-in-picture freezes
+                // inside the recording. Composite the live webcam onto the held screen
+                // instead and encode it as a real frame.
+                //
+                // OD recovery: during a hold the drain is skipped, so rawSourceTex is null
+                // and the CFR duplicate path below re-emits the last frame (frozen) until
+                // Reopen() succeeds. Re-compositing is forbidden there — it touches
+                // display-tied GPU resources while the captured output is gone.
+                ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
+                if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding,
+                                                m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable,
+                                                heldScreenTex != nullptr)) {
+                    rawSourceTex = heldScreenTex;
+                }
+
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).
@@ -2601,7 +2617,7 @@ void VideoThread::Run() {
                     if (useOdCapture) {
                         odCapturedTexValid = false;
                     } else {
-                        pendingWgcTex = nullptr;
+                        heldWgcTex = std::move(pendingWgcTex);
                     }
                     const auto conv_t0 = std::chrono::steady_clock::now();
                     if (!encodeNativeHdrSlot(nativeSrc, slot)) {
@@ -2639,7 +2655,7 @@ void VideoThread::Run() {
                     if (useOdCapture) {
                         odCapturedTexValid = false;
                     } else {
-                        pendingWgcTex = nullptr;
+                        heldWgcTex = std::move(pendingWgcTex);
                     }
 
                     // Live WYSIWYG preview tap: share the composited pre-encode frame.

@@ -350,7 +350,11 @@ preview keeps its own capture and shows the same SDR approximation used elsewher
 
 **Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a
-selectable overlay placement. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
+selectable overlay placement. In a constant-frame-rate recording the PiP keeps moving at the encode
+cadence even while the desktop is perfectly still: a screen capture only produces a frame when the
+screen changes, so the held screen is composited again with the current camera image rather than
+repeating the previous composited frame. During a capture-loss recovery the picture is held frozen
+instead, until the capture source is reopened. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
 applied identically in the Record-page preview and the recorded output. Its on/off is a single control
 surfaced in two always-in-sync places — Settings → Webcam and the Record-page transport dock (camera
 button) — and is off by default. Turning it on both includes the webcam in the recording and starts the

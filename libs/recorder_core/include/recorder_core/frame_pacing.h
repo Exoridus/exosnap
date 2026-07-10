@@ -35,4 +35,32 @@ struct PacingDecision {
 [[nodiscard]] PacingDecision SelectFrameForSlot(std::span<const uint64_t> ring_present_qpc, uint64_t slot_qpc,
                                                 uint64_t last_emitted_present_qpc, FramePacingMode mode);
 
+// ---------------------------------------------------------------------------
+// Held-screen re-composition
+//
+// A screen capture only produces a frame when the screen changes: DXGI Output
+// Duplication yields nothing on a still desktop, and WGC only delivers on
+// repaint. The webcam, however, keeps moving. Duplicating the last *composited*
+// frame therefore freezes the webcam inside the recording whenever the desktop
+// is still — which is exactly when the webcam is the only thing worth watching.
+//
+// When the screen produced no fresh frame but the webcam overlay is live, the
+// held screen is composited again with the current webcam image and encoded as a
+// real frame. The result is a picture-in-picture that moves at the encode
+// cadence rather than at the desktop's change rate.
+//
+// Two conditions forbid it. Without a held screen there is nothing to composite
+// onto. And while the OD source is holding (mid-reopen after a display loss) the
+// capture's display-tied GPU resources are gone, so the frame must stay frozen
+// until Reopen() succeeds.
+// ---------------------------------------------------------------------------
+[[nodiscard]] constexpr bool ShouldRecompositeHeldScreen(bool has_fresh_source, bool od_holding,
+                                                         bool webcam_overlay_active, bool has_held_screen) noexcept {
+    if (has_fresh_source)
+        return false; // a real frame is available; composite that instead
+    if (od_holding || !has_held_screen)
+        return false;
+    return webcam_overlay_active;
+}
+
 } // namespace recorder_core
