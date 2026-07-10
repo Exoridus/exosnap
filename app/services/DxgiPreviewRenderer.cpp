@@ -144,6 +144,42 @@ bool DxgiPreviewRenderer::StartCapture(const recorder_core::CaptureTarget& targe
         }
     }
 
+    pushedOnlyMode_ = false;
+
+    const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
+    active_.store(true);
+
+    renderThread_ = std::jthread([this, target, intervalMs](std::stop_token st) {
+        RenderThreadProc(target, intervalMs, std::move(st));
+        active_.store(false);
+    });
+
+    return true;
+}
+
+bool DxgiPreviewRenderer::StartPushedOnly(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                                          uint32_t frame_rate_den) {
+    if (!initialized_.load())
+        return false;
+
+    StopCapture();
+
+    cropBox_.reset();
+
+    // The pushed frames will show this monitor; the cursor sprite maps the live
+    // pointer against its rectangle. Same fence as StartCapture's cropBox_.
+    cursorSpriteBoundsValid_ = false;
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &mi) != FALSE) {
+            cursorSpriteBounds_ = mi.rcMonitor;
+            cursorSpriteBoundsValid_ = true;
+        }
+    }
+
+    pushedOnlyMode_ = true;
+
     const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
     active_.store(true);
 
@@ -239,7 +275,7 @@ void DxgiPreviewRenderer::Shutdown() {
 // --- Pushed source mode ---
 
 void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height,
-                                            recorder_core::PreviewTapDesc tap) {
+                                            recorder_core::PreviewTapDesc tap, bool raw_source_frames) {
     if (nt_handle == nullptr || width == 0 || height == 0)
         return;
     // Store dimensions + transform first, then the handle with release ordering:
@@ -248,6 +284,7 @@ void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uin
     pushedPendingHeight_.store(height, std::memory_order_relaxed);
     pushedPendingTransform_.store(static_cast<uint8_t>(tap.transform), std::memory_order_relaxed);
     pushedPendingPeakScale_.store(tap.peak_scale, std::memory_order_relaxed);
+    pushedPendingRaw_.store(raw_source_frames, std::memory_order_relaxed);
     // A fresh handoff cancels any pending revert from the previous recording.
     pushedEndRequested_.store(false, std::memory_order_release);
     // If a prior pending handle was never adopted, close it before overwriting.
@@ -301,7 +338,18 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
     const uint32_t w = pushedPendingWidth_.load(std::memory_order_relaxed);
     const uint32_t h = pushedPendingHeight_.load(std::memory_order_relaxed);
 
-    // Opening a new handle supersedes any previously opened one (session restart).
+    // Opening a new handle supersedes any previously opened one (session restart,
+    // or an idle-hub -> engine handover). Keep the last presented image as the
+    // fallback frame so the swap shows a hold instead of a black flash — in
+    // pushed-only mode there is no WGC image to fall back to. The displayable
+    // surface is the tone-mapped SDR one when the old source was FP16.
+    if (pushedLocalTex_ && pushedWidth_ > 0 && pushedHeight_ > 0) {
+        std::lock_guard lock(frameMutex_);
+        latestFrame_ = pushedSdrTex_ ? pushedSdrTex_ : pushedLocalTex_;
+        latestFrameSRV_ = pushedSdrSRV_ ? pushedSdrSRV_ : pushedLocalSRV_;
+        srcWidth_ = pushedWidth_;
+        srcHeight_ = pushedHeight_;
+    }
     ReleasePushedResources();
 
     // Track the actual failing stage + HRESULT so the log points at the real cause
@@ -411,9 +459,9 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
                             pushedWidth_ = w;
                             pushedHeight_ = h;
                             // Engine frames arrive with cursor + webcam PiP baked in
-                            // exactly as recorded; raw hub frames come through the
-                            // pushed-only start path instead.
-                            pushed_.OnSourceOpened(/*raw_source_frames=*/false);
+                            // exactly as recorded; raw hub frames carry neither and
+                            // the renderer draws both itself.
+                            pushed_.OnSourceOpened(pushedPendingRaw_.load(std::memory_order_relaxed));
                             opened = true;
                             diagnostics::AppLog::debug(
                                 QStringLiteral("dxgi-preview"),
@@ -1246,23 +1294,29 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
                                      QStringLiteral("render thread: shader init failed"));
         return;
     }
-    if (!InitCaptureItem(target)) {
-        if (comInited && SUCCEEDED(coHr))
-            CoUninitialize();
-        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
-                                     QStringLiteral("render thread: capture item init failed"));
-        return;
-    }
-    if (!InitFramePool()) {
-        if (comInited && SUCCEEDED(coHr))
-            CoUninitialize();
-        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
-                                     QStringLiteral("render thread: frame pool init failed"));
-        return;
+    // Pushed-only mode never opens a capture of its own: the thread presents
+    // whatever BeginPushedSource feeds it. Everything WGC below stays null.
+    if (!pushedOnlyMode_) {
+        if (!InitCaptureItem(target)) {
+            if (comInited && SUCCEEDED(coHr))
+                CoUninitialize();
+            diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                         QStringLiteral("render thread: capture item init failed"));
+            return;
+        }
+        if (!InitFramePool()) {
+            if (comInited && SUCCEEDED(coHr))
+                CoUninitialize();
+            diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                         QStringLiteral("render thread: frame pool init failed"));
+            return;
+        }
     }
 
     diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
-                               QStringLiteral("render thread running interval=%1ms").arg(frame_interval_ms));
+                               QStringLiteral("render thread running interval=%1ms%2")
+                                   .arg(frame_interval_ms)
+                                   .arg(pushedOnlyMode_ ? QStringLiteral(" (pushed-only)") : QString{}));
 
     // Fixed-cadence frame pacing via a high-resolution waitable timer. The old
     // Sleep(1) busy-poll depended on the ~15 ms system timer granularity, so the
@@ -1290,11 +1344,25 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
             resizeRequested_.store(false);
         }
 
-        // Recording stopped: leave pushed mode and rebuild the preview's own WGC
-        // capture in place. Handled before the begin-request so a stale revert never
-        // runs after a fresh handoff (BeginPushedSource clears the end flag anyway).
+        // The pushed source ended. In WGC mode: rebuild the preview's own capture
+        // in place. In pushed-only mode there is nothing to revert TO — hold the
+        // last presented image as the fallback frame and wait for the feeder's
+        // next BeginPushedSource. Handled before the begin-request so a stale
+        // revert never runs after a fresh handoff (BeginPushedSource clears the
+        // end flag anyway).
         if (pushedEndRequested_.exchange(false, std::memory_order_acq_rel)) {
-            RevertToWgcCapture(target);
+            if (pushedOnlyMode_) {
+                if (pushedLocalTex_ && pushedWidth_ > 0 && pushedHeight_ > 0) {
+                    std::lock_guard lock(frameMutex_);
+                    latestFrame_ = pushedSdrTex_ ? pushedSdrTex_ : pushedLocalTex_;
+                    latestFrameSRV_ = pushedSdrSRV_ ? pushedSdrSRV_ : pushedLocalSRV_;
+                    srcWidth_ = pushedWidth_;
+                    srcHeight_ = pushedHeight_;
+                }
+                ReleasePushedResources();
+            } else {
+                RevertToWgcCapture(target);
+            }
         }
 
         if (pushedRequested_.load(std::memory_order_acquire)) {
