@@ -1315,6 +1315,41 @@ TEST(RecordingPreset, WithEnvironmentFields_H264Clamp_StillForcesEightBit) {
     EXPECT_EQ(applied.output.bit_depth, capability::BitDepth::Bit8);
 }
 
+// Production call site: MainWindow::dispatchNotificationAction's
+// UndoPresetSwitch case wraps the pre-switch snapshot in
+// WithEnvironmentFields(undo.previous_live, captureLiveConfig()) before
+// applyPresetConfig, mirroring onPresetSelected. Without the overlay, Undo
+// would restore whatever capture target/bit depth/HDR mode was live when the
+// switch happened, clobbering a display/HDR change that occurred afterward.
+TEST(RecordingPreset, WithEnvironmentFields_UndoOverlaysCurrentEnvironment_NotPreSwitchSnapshot) {
+    // The snapshot captured immediately before the preset switch (what Undo
+    // would restore verbatim, pre-fix): an older capture target/bit depth/HDR.
+    RecordingPresetConfig pre_switch_snapshot = MakeDefaultPreset().config;
+    pre_switch_snapshot.output.bit_depth = capability::BitDepth::Bit10;
+    pre_switch_snapshot.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    pre_switch_snapshot.capture.kind = PresetCaptureKind::Window;
+    pre_switch_snapshot.capture.window_key = "old-game.exe";
+    pre_switch_snapshot.video.cq = 22; // intent field the snapshot must restore
+
+    // Environment changed (display/HDR) while the "Switched to '<name>'" toast
+    // was on screen, before the user clicked Undo.
+    RecordingPresetConfig current_env = MakeDefaultPreset().config;
+    current_env.output.bit_depth = capability::BitDepth::Bit8;
+    current_env.output.hdr_mode = recorder_core::HdrMode::Off;
+    current_env.capture.kind = PresetCaptureKind::Display;
+    current_env.capture.window_key.clear();
+
+    const RecordingPresetConfig undone = WithEnvironmentFields(pre_switch_snapshot, current_env);
+
+    // Environment fields come from the CURRENT state, not the stale snapshot.
+    EXPECT_EQ(undone.output.bit_depth, capability::BitDepth::Bit8);
+    EXPECT_EQ(undone.output.hdr_mode, recorder_core::HdrMode::Off);
+    EXPECT_EQ(undone.capture.kind, PresetCaptureKind::Display);
+    // Everything else (the user's actual intent being restored) still comes
+    // from the pre-switch snapshot.
+    EXPECT_EQ(undone.video.cq, 22u);
+}
+
 // Production call site: RecordingPresetRegistry::AddPreset snapshots via
 // StripEnvironmentFields so exported preset files carry no environment claims.
 TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {

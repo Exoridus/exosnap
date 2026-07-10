@@ -2642,7 +2642,7 @@ void MainWindow::onPresetSelected(const QString& id) {
     applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     persistPresetState();
 
-    if (notification_manager_) {
+    if (persisted_settings_.show_notifications && notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::PresetSwitched;
         event.title =
@@ -3476,11 +3476,13 @@ void MainWindow::initNotificationToasts() {
     // it (see the ctor's preset-load block) — raise it now that they do.
     if (preset_store_repaired_) {
         preset_store_repaired_ = false;
-        notifications::NotificationEvent event;
-        event.type = notifications::NotificationType::SettingsRepaired;
-        event.title = QStringLiteral("Settings repaired");
-        event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
-        notification_manager_->Enqueue(std::move(event));
+        if (persisted_settings_.show_notifications && notification_manager_) {
+            notifications::NotificationEvent event;
+            event.type = notifications::NotificationType::SettingsRepaired;
+            event.title = QStringLiteral("Settings repaired");
+            event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
+            notification_manager_->Enqueue(std::move(event));
+        }
     }
 
     // NOTE: config_page_ setShowNotifications + showNotificationsChanged connect are
@@ -3751,7 +3753,10 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         pending_preset_undo_.reset();
         if (!preset_registry_.SetSelected(undo.previous_selected_id))
             preset_registry_.SetSelected(std::string(kDefaultPresetId)); // previous preset was deleted meanwhile
-        applyPresetConfig(undo.previous_live);                           // restores live state AND environment fields
+        // Overlay the *current* environment fields (capture target, bit depth, HDR
+        // mode) rather than the ones captured before the switch — the display/HDR
+        // state may have changed in the meantime, and Undo must not stomp it.
+        applyPresetConfig(WithEnvironmentFields(undo.previous_live, captureLiveConfig()));
         persistPresetState();
         break;
     }
