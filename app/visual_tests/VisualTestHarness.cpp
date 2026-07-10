@@ -520,6 +520,14 @@ int RunVisualTest(QApplication& app, MainWindow& window, const VisualTestOptions
         return app.exec();
 
     QTimer::singleShot(120, &window, [&app, &window, scenario, options]() {
+        // A state pushed between the show and this timer (e.g. the async
+        // capability probe flipping the titlebar pill to "Checking") may still
+        // have a pending layout pass; grab() renders without laying out, so
+        // flush pending LayoutRequest events (and only those — a general
+        // processEvents() would let live device enumeration overwrite the
+        // scenario's synthetic capture target) or the capture shows stale
+        // geometry, e.g. a status pill clipped to its previous text.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
         const bool manifest_written =
             options.manifest_path.isEmpty() || WriteVisualManifest(window, *scenario, options.manifest_path);
         const bool screenshot_written =
