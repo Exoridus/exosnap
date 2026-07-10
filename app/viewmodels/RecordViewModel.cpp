@@ -342,7 +342,6 @@ bool RecordViewModel::ShouldShowStats() const noexcept {
 // ---------------------------------------------------------------------------
 
 void RecordViewModel::SetState(UiRecordingState new_state) {
-    std::fprintf(stderr, "[trace] SetState %d -> %d\n", int(state), int(new_state)); // TEMP B2 trace
     state = new_state;
 
     switch (new_state) {
