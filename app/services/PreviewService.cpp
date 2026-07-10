@@ -22,6 +22,14 @@ PreviewService::~PreviewService() {
 
 void PreviewService::SetFrameCallback(FrameCallback cb) {
     frame_callback_ = std::move(cb);
+    receiver_ = nullptr;
+    receiver_bound_ = false;
+}
+
+void PreviewService::SetFrameCallback(QObject* receiver, FrameCallback cb) {
+    frame_callback_ = std::move(cb);
+    receiver_ = receiver;
+    receiver_bound_ = true;
 }
 
 bool PreviewService::Start(const recorder_core::CaptureTarget& target) {
@@ -49,10 +57,20 @@ bool PreviewService::IsRunning() const noexcept {
 void PreviewService::PostFrame(QImage frame) {
     if (!frame_callback_)
         return;
+    // Scope delivery to the bound receiver so Qt drops the queued frame if the
+    // receiver dies before it is delivered. A receiver that is already gone means
+    // there is nothing to deliver to; fall back to the application only for a
+    // legacy (unbound) registration.
+    QObject* target = QCoreApplication::instance();
+    if (receiver_bound_) {
+        target = receiver_.data();
+        if (target == nullptr)
+            return;
+    }
     auto cb = frame_callback_;
     QMetaObject::invokeMethod(
-        QCoreApplication::instance(),
-        [cb = std::move(cb), frame = std::move(frame)]() mutable { cb(std::move(frame)); }, Qt::QueuedConnection);
+        target, [cb = std::move(cb), frame = std::move(frame)]() mutable { cb(std::move(frame)); },
+        Qt::QueuedConnection);
 }
 
 void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_token stop_token) {

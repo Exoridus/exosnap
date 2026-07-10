@@ -422,6 +422,14 @@ std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& dev
 
 void WebcamService::SetFrameCallback(FrameCallback cb) {
     frame_callback_ = std::move(cb);
+    receiver_ = nullptr;
+    receiver_bound_ = false;
+}
+
+void WebcamService::SetFrameCallback(QObject* receiver, FrameCallback cb) {
+    frame_callback_ = std::move(cb);
+    receiver_ = receiver;
+    receiver_bound_ = true;
 }
 
 bool WebcamService::Start(const std::string& device_id, int width, int height, int fps) {
@@ -574,10 +582,19 @@ void WebcamService::StoreFrame(int w, int h, std::vector<uint8_t> bgra) {
 void WebcamService::PostFrame(QImage img) {
     if (!frame_callback_)
         return;
+    // Scope delivery to the bound receiver so Qt drops the queued frame if the
+    // receiver dies before it is delivered. A receiver that is already gone means
+    // there is nothing to deliver to; fall back to the application only for a
+    // legacy (unbound) registration.
+    QObject* target = QCoreApplication::instance();
+    if (receiver_bound_) {
+        target = receiver_.data();
+        if (target == nullptr)
+            return;
+    }
     auto cb = frame_callback_;
     QMetaObject::invokeMethod(
-        QCoreApplication::instance(), [cb, img = std::move(img)]() mutable { cb(std::move(img)); },
-        Qt::QueuedConnection);
+        target, [cb, img = std::move(img)]() mutable { cb(std::move(img)); }, Qt::QueuedConnection);
 }
 
 } // namespace exosnap

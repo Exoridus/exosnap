@@ -19,7 +19,7 @@
 // ends the recording on a timer — only an explicit user stop / unrecoverable
 // failure does. The bounded branch remains supported and pinned below.
 
-#include "dxgi_od_capture_src.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include <chrono>
 #include <optional>

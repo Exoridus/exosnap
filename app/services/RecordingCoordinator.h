@@ -216,12 +216,27 @@ class RecordingCoordinator {
 
     // Register a callback fired (from the engine's video thread) once the shared
     // WYSIWYG preview texture is ready. nt_handle is a Windows HANDLE passed as
-    // void*; ownership transfers to the callee (open then CloseHandle). Fires only
-    // for SDR / tone-map / 4:4:4 sessions, and only when the callback is set before
-    // StartRecording. The callback must return fast and must not make D3D calls on
-    // the calling thread.
-    using PreviewSharedHandleReadyCallback = std::function<void(void* nt_handle, uint32_t width, uint32_t height)>;
+    // void*; ownership transfers to the callee (open then CloseHandle). `tap`
+    // names the display transform the consumer must apply before drawing
+    // (recorder_core/preview_tap.h — a native HDR10 session shares FP16 scRGB,
+    // which the preview tone-maps). Fires for every session except the
+    // already-PQ 10-bit native sub-path, and only when the callback is set before
+    // StartRecording. The callback must return fast and must not make D3D calls
+    // on the calling thread.
+    using PreviewSharedHandleReadyCallback =
+        std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
     void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
+
+    // Invoked synchronously on the UI thread immediately before the recording
+    // thread starts — after every validation and guard, so it never fires for a
+    // start that is rejected. The idle preview's DXGI capture hub releases its
+    // duplication here (an output can only be duplicated once per process, and
+    // the engine is about to open its own). The hook must block until the
+    // release has actually happened. The lease is returned page-side when the
+    // recording reaches Ready/Completed/Failed, alongside the pushed-source
+    // revert.
+    using PreviewCaptureReleaseHook = std::function<void()>;
+    void SetPreviewCaptureReleaseHook(PreviewCaptureReleaseHook hook);
 
     // Request cooperative cancellation of any in-progress remux job.
     // Safe to call from the Qt main thread at any time; no-op if no remux is running.
@@ -438,6 +453,7 @@ class RecordingCoordinator {
     RecordingMeterCallback on_recording_meter_updated_;
     FrameCapturedCallback on_frame_captured_;
     PreviewSharedHandleReadyCallback on_preview_shared_handle_ready_;
+    PreviewCaptureReleaseHook preview_capture_release_hook_;
     std::function<QImage()> ready_frame_source_;
 
     std::optional<std::string> mic_meter_device_id_;

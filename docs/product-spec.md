@@ -337,17 +337,33 @@ Three capture targets:
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
 
-**Live preview (WYSIWYG during recording).** Before recording, the Record-page preview runs its own
-lightweight capture of the selected target. **Once recording starts, the preview shows exactly the
+**Source-picker tiles hold their last image.** Each tile in the source picker shows a live thumbnail
+of its display or window, refreshed about once a second while the picker is open. When another
+application takes a source over — dragging the Snipping Tool across the desktop is the everyday case
+— Windows stops producing frames for it. The tile then **freezes on the last image it received** and
+resumes when frames come back. It never goes empty and never goes black. A tile that has *never*
+produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
+picker releases every capture it opened.
+
+**Idle live preview.** Before recording, the Record-page preview of a **display** is fed by the same
+DXGI Output Duplication backend the recording uses, owned by a shared capture hub: the preview is
+VRR- and HDR-true, shows no OS capture indicator, draws the live cursor, and **holds its last frame
+through a monitor unplug/replug** instead of blanking — production resumes when the display returns.
+The capture exists only while the preview is visible and is closed with it. Window and Region
+previews run their own Windows Graphics Capture of the selected target (see KNOWN_LIMITATIONS for
+the exact boundary).
+
+**Live preview (WYSIWYG during recording).** **Once recording starts, the preview shows exactly the
 frame the engine is encoding** — the composited, pre-encode source (cursor and webcam PiP already
 baked in) is shared to the preview through a GPU texture, and the preview's own capture stops. There
 is no second capture running alongside the recording, and the preview reflects what is actually being
 recorded (so a black-screen or swap-chain problem is visible in the preview, not hidden by an
 independent capture). During the pre-record countdown the preview holds its last live image until the
-first recorded frame arrives, so there is no black flash. The one exception is **native HDR10**
-recording: it has no SDR intermediate to share cheaply, so during a native-HDR10 recording the
-preview keeps its own capture and shows the same SDR approximation used elsewhere for HDR monitoring
-(see KNOWN_LIMITATIONS).
+first recorded frame arrives, so there is no black flash. This includes **native HDR10** recording:
+the engine shares its HDR frame and the preview tone-maps it to SDR for display, so what is shown is
+the recorded frame, rendered the way SDR players will approximate it. The one exception is the rare
+already-PQ 10-bit desktop, where no shareable frame exists and the preview keeps its own capture (see
+KNOWN_LIMITATIONS).
 
 **Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a

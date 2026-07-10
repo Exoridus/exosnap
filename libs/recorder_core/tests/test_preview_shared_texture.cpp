@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "preview_shared_texture.h"
+#include <recorder_core/preview_shared_texture.h>
 
 #include <d3d11.h>
 #include <d3d11_1.h>

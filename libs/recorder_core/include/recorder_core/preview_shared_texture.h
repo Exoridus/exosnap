@@ -19,15 +19,17 @@ namespace recorder_core {
 inline constexpr UINT64 kPreviewSharedProducerKey = 0;
 inline constexpr UINT64 kPreviewSharedConsumerKey = 1;
 
-// Producer-side shared GPU texture for the live WYSIWYG preview tap.
+// Producer-side shared GPU texture for the live preview: the engine's WYSIWYG
+// tap during recording, and the DXGI capture hub's idle feed.
 //
-// Creates an NT-handle + keyed-mutex texture on the engine's D3D11 device, hands
-// out exactly one shared handle (ownership passes to the caller/consumer, which
-// opens it with ID3D11Device1::OpenSharedResource1 and then CloseHandle's it), and
-// publishes composited pre-encode frames into it. The publish path NEVER stalls the
-// encode thread: a 0 ms keyed-mutex acquire drops the preview frame on contention.
+// Creates an NT-handle + keyed-mutex texture on the producer's D3D11 device,
+// hands out exactly one shared handle (ownership passes to the caller/consumer,
+// which opens it with ID3D11Device1::OpenSharedResource1 and then CloseHandle's
+// it), and publishes frames into it. The publish path NEVER stalls the producer:
+// a 0 ms keyed-mutex acquire drops the preview frame on contention.
 //
-// Not thread-safe; all methods are called from the engine's video thread.
+// Not thread-safe; all methods run on the producer's one thread (the engine's
+// video thread, or the hub's pump thread).
 class PreviewSharedTexture {
   public:
     PreviewSharedTexture() = default;

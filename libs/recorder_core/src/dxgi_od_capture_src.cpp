@@ -1,4 +1,4 @@
-#include "dxgi_od_capture_src.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include <recorder_core/hdr_color_space.h>
 #include <recorder_core/sdr_white_level.h>

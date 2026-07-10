@@ -57,14 +57,24 @@ class PreviewSurface : public QWidget {
     // Pass std::nullopt for Display and Window targets (no crop).
     bool tryStartDxgiPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
                              uint32_t frame_rate_den, std::optional<exosnap::PreviewCropBox> crop_box = std::nullopt);
+
+    // Start the DXGI preview renderer with no capture of its own: frames arrive
+    // exclusively through beginPushedSource (the DXGI capture hub, and the
+    // engine during recording). See DxgiPreviewRenderer::StartPushedOnly.
+    bool tryStartDxgiPushedPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                                   uint32_t frame_rate_den);
     void stopDxgiPreview();
     [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
     void repositionDxgiPreview();
 
-    // Switch the active DXGI preview to the engine's shared source texture during
-    // recording (WYSIWYG). No-op if no DXGI preview is running. Ownership of the NT
-    // handle transfers to the renderer. See DxgiPreviewRenderer::BeginPushedSource.
-    void beginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    // Switch the active DXGI preview to a shared source texture: the engine's
+    // WYSIWYG tap during recording (raw_source_frames = false), or the DXGI
+    // capture hub's raw feed (true — the renderer draws cursor + PiP itself).
+    // No-op if no DXGI preview is running. Ownership of the NT handle transfers
+    // to the renderer; `tap` names the display transform the renderer must
+    // apply. See DxgiPreviewRenderer::BeginPushedSource.
+    void beginPushedSource(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap,
+                           bool raw_source_frames = false);
     // Revert to the DXGI preview's own WGC capture. No-op if no renderer exists.
     void endPushedSource();
 

@@ -231,6 +231,18 @@ qt_add_executable(exosnap WIN32
     services/PreviewService.h
     services/PreviewService.cpp
     services/PreviewHelpers.h
+    services/CaptureSourceHub.h
+    services/CaptureSourceHub.cpp
+    services/CaptureSourceKey.h
+    services/ThumbnailMip.h
+    services/CaptureHubRegistry.h
+    services/CaptureHubRegistry.cpp
+    services/WgcSourceProducer.h
+    services/WgcSourceProducer.cpp
+    services/DxgiSourceProducer.h
+    services/DxgiSourceProducer.cpp
+    services/DxgiCaptureHubService.h
+    services/DxgiCaptureHubService.cpp
     services/ThumbnailCapture.h
     services/ThumbnailCapture.cpp
     services/DxgiPreviewRenderer.h
@@ -542,11 +554,14 @@ exosnap_add_app_test_support(exosnap_source_picker_test_support
     # DESIGN-SYNC-R1: SourcePickerPanel's "Select region…" checkbox is now ExoCheckBox.
     ui/widgets/ExoCheckBox.cpp
     services/ThumbnailCapture.cpp
+    services/CaptureSourceHub.cpp
+    services/CaptureHubRegistry.cpp
+    services/WgcSourceProducer.cpp
     # THEME-SLICE-2C: SourcePickerOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
     ui/theme/ExoSnapTheme.cpp
 )
 target_link_libraries(exosnap_source_picker_test_support PUBLIC
-    Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    Qt6::Core Qt6::Gui Qt6::Widgets recorder_core d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
 
 exosnap_add_gtest(
@@ -1577,6 +1592,56 @@ exosnap_add_gtest(
 target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
+
+# The hub's loop against a fake producer: refcounted open/close, the held frame
+# across loss and unbounded reopen, and the lease handover. No GPU, no WGC, no
+# threads -- Pump() is stepped by hand.
+exosnap_add_gtest(
+    NAME capture_source_hub_tests
+    TEST_PREFIX capture.
+    SOURCES
+        tests/test_capture_source_hub.cpp
+        services/CaptureSourceHub.cpp
+    LIBRARIES recorder_core)
+target_include_directories(capture_source_hub_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Delivery-lifetime contract for PreviewService / WebcamService PostFrame: queued
+# frames are dropped once the bound receiver QObject is destroyed, so the callback
+# is never invoked against a freed page (the latent use-after-free fix). Drives the
+# protected PostFrame directly -- no camera, no WGC. WebcamService is provided by
+# the device-service support lib; PreviewService is compiled in for its D3D/WGC bits.
+exosnap_add_gtest(
+    NAME service_frame_delivery_tests
+    TEST_PREFIX service.
+    SOURCES
+        tests/test_service_frame_delivery.cpp
+        services/PreviewService.cpp
+    LIBRARIES
+        exosnap_device_service_test_support
+        Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        d3d11.lib dxgi.lib runtimeobject.lib ole32.lib)
+target_include_directories(service_frame_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(service_frame_delivery_tests PRIVATE NOMINMAX)
+set_target_properties(service_frame_delivery_tests PROPERTIES AUTOMOC ON)
+
+# Sharing and disposal: one hub per source key, born with the first consumer and
+# discarded with the last. Same fake-producer seam, no GPU.
+exosnap_add_gtest(
+    NAME capture_hub_registry_tests
+    TEST_PREFIX capture.
+    SOURCES
+        tests/test_capture_hub_registry.cpp
+        services/CaptureHubRegistry.cpp
+        services/CaptureSourceHub.cpp
+    LIBRARIES recorder_core)
+target_include_directories(capture_hub_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Which mip a tile is read back from. Pure arithmetic; no D3D, no Qt.
+exosnap_add_gtest(
+    NAME thumbnail_mip_tests
+    TEST_PREFIX capture.
+    SOURCES tests/test_thumbnail_mip.cpp)
+target_include_directories(thumbnail_mip_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME display_device_notifier_tests

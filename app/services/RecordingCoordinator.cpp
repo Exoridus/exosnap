@@ -926,7 +926,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     if (on_preview_shared_handle_ready_) {
         auto cb = on_preview_shared_handle_ready_;
         session_.SetPreviewSharedHandleCallback(
-            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h) { cb(reinterpret_cast<void*>(nt_handle), w, h); });
+            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h, recorder_core::PreviewTapDesc tap) {
+                cb(reinterpret_cast<void*>(nt_handle), w, h, tap);
+            });
     } else {
         session_.SetPreviewSharedHandleCallback(nullptr);
     }
@@ -1007,6 +1009,13 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             is_mp4 ? recorder_core::DeriveTransientMkvPath(output_path) : std::filesystem::path{};
         StartDiskMonitor(EffectiveOutputFolder(), is_mp4, transient_mkv);
     }
+
+    // The idle preview's capture hub may hold the one allowed duplication of
+    // the target display; the engine opens its own in the thread below. The
+    // hook blocks until the hub's is closed, so the two never overlap. Fires
+    // only here — after every guard — so a rejected start never releases.
+    if (preview_capture_release_hook_)
+        preview_capture_release_hook_();
 
     recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
         RecordingThreadProc(cfg, op);
@@ -1982,6 +1991,10 @@ void RecordingCoordinator::SetFrameCapturedCallback(FrameCapturedCallback cb) {
 
 void RecordingCoordinator::SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb) {
     on_preview_shared_handle_ready_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetPreviewCaptureReleaseHook(PreviewCaptureReleaseHook hook) {
+    preview_capture_release_hook_ = std::move(hook);
 }
 
 void RecordingCoordinator::SetReadyFrameSource(std::function<QImage()> getter) {

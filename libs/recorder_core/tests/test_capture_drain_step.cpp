@@ -9,7 +9,7 @@
 //
 // Draining "the other backend" is never correct. Holding must drain nothing.
 
-#include "dxgi_od_capture_src.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include <gtest/gtest.h>
 

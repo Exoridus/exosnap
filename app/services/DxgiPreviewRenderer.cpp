@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 // High-resolution waitable timer flag (Windows 10 1803+). Define defensively in
 // case the configured SDK headers predate it.
@@ -131,6 +132,54 @@ bool DxgiPreviewRenderer::StartCapture(const recorder_core::CaptureTarget& targe
     // without synchronization (jthread constructor provides the memory fence).
     cropBox_ = std::move(crop_box);
 
+    // Resolve the captured monitor's virtual-screen rectangle for the cursor
+    // sprite (raw pushed frames carry no cursor). Same fence as cropBox_.
+    cursorSpriteBoundsValid_ = false;
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &mi) != FALSE) {
+            cursorSpriteBounds_ = mi.rcMonitor;
+            cursorSpriteBoundsValid_ = true;
+        }
+    }
+
+    pushedOnlyMode_ = false;
+
+    const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
+    active_.store(true);
+
+    renderThread_ = std::jthread([this, target, intervalMs](std::stop_token st) {
+        RenderThreadProc(target, intervalMs, std::move(st));
+        active_.store(false);
+    });
+
+    return true;
+}
+
+bool DxgiPreviewRenderer::StartPushedOnly(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                                          uint32_t frame_rate_den) {
+    if (!initialized_.load())
+        return false;
+
+    StopCapture();
+
+    cropBox_.reset();
+
+    // The pushed frames will show this monitor; the cursor sprite maps the live
+    // pointer against its rectangle. Same fence as StartCapture's cropBox_.
+    cursorSpriteBoundsValid_ = false;
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(reinterpret_cast<HMONITOR>(target.native_id), &mi) != FALSE) {
+            cursorSpriteBounds_ = mi.rcMonitor;
+            cursorSpriteBoundsValid_ = true;
+        }
+    }
+
+    pushedOnlyMode_ = true;
+
     const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
     active_.store(true);
 
@@ -225,13 +274,17 @@ void DxgiPreviewRenderer::Shutdown() {
 
 // --- Pushed source mode ---
 
-void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height) {
+void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height,
+                                            recorder_core::PreviewTapDesc tap, bool raw_source_frames) {
     if (nt_handle == nullptr || width == 0 || height == 0)
         return;
-    // Store dimensions first, then the handle with release ordering: the render
-    // thread reads the handle with acquire ordering and then the dimensions.
+    // Store dimensions + transform first, then the handle with release ordering:
+    // the render thread reads the handle with acquire ordering and then these.
     pushedPendingWidth_.store(width, std::memory_order_relaxed);
     pushedPendingHeight_.store(height, std::memory_order_relaxed);
+    pushedPendingTransform_.store(static_cast<uint8_t>(tap.transform), std::memory_order_relaxed);
+    pushedPendingPeakScale_.store(tap.peak_scale, std::memory_order_relaxed);
+    pushedPendingRaw_.store(raw_source_frames, std::memory_order_relaxed);
     // A fresh handoff cancels any pending revert from the previous recording.
     pushedEndRequested_.store(false, std::memory_order_release);
     // If a prior pending handle was never adopted, close it before overwriting.
@@ -285,7 +338,18 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
     const uint32_t w = pushedPendingWidth_.load(std::memory_order_relaxed);
     const uint32_t h = pushedPendingHeight_.load(std::memory_order_relaxed);
 
-    // Opening a new handle supersedes any previously opened one (session restart).
+    // Opening a new handle supersedes any previously opened one (session restart,
+    // or an idle-hub -> engine handover). Keep the last presented image as the
+    // fallback frame so the swap shows a hold instead of a black flash — in
+    // pushed-only mode there is no WGC image to fall back to. The displayable
+    // surface is the tone-mapped SDR one when the old source was FP16.
+    if (pushedLocalTex_ && pushedWidth_ > 0 && pushedHeight_ > 0) {
+        std::lock_guard lock(frameMutex_);
+        latestFrame_ = pushedSdrTex_ ? pushedSdrTex_ : pushedLocalTex_;
+        latestFrameSRV_ = pushedSdrSRV_ ? pushedSdrSRV_ : pushedLocalSRV_;
+        srcWidth_ = pushedWidth_;
+        srcHeight_ = pushedHeight_;
+    }
     ReleasePushedResources();
 
     // Track the actual failing stage + HRESULT so the log points at the real cause
@@ -335,17 +399,77 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
                         failStage = "local-srv";
                         failHr = srvHr;
                     } else {
-                        pushedSharedTex_ = sharedTex;
-                        pushedMutex_ = km;
-                        pushedLocalTex_ = localTex;
-                        pushedLocalSRV_ = srv;
-                        pushedWidth_ = w;
-                        pushedHeight_ = h;
-                        pushed_.OnSourceOpened();
-                        opened = true;
-                        diagnostics::AppLog::debug(
-                            QStringLiteral("dxgi-preview"),
-                            QStringLiteral("pushed source active %1x%2 on preview device").arg(w).arg(h));
+                        // FP16 scRGB tap (native HDR10 session): build this thread's
+                        // own tone-map pass and the SDR surface the draw samples
+                        // instead of the raw FP16 copy. Any failure here fails the
+                        // adopt as a whole, so the preview keeps its own WGC capture
+                        // (same fallback as a cross-GPU open failure).
+                        const auto transform = static_cast<recorder_core::PreviewTapTransform>(
+                            pushedPendingTransform_.load(std::memory_order_relaxed));
+                        const float peakScale = pushedPendingPeakScale_.load(std::memory_order_relaxed);
+                        std::unique_ptr<recorder_core::HdrToneMapper> toneMapper;
+                        Microsoft::WRL::ComPtr<ID3D11Texture2D> sdrTex;
+                        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> sdrSrv;
+                        bool toneMapOk = true;
+                        if (transform != recorder_core::PreviewTapTransform::None) {
+                            toneMapOk = false;
+                            if (td.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                                failStage = "tap-transform-format";
+                                failHr = E_INVALIDARG;
+                            } else {
+                                D3D11_TEXTURE2D_DESC sd = td;
+                                sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                                sd.MiscFlags = 0;
+                                sd.CPUAccessFlags = 0;
+                                sd.Usage = D3D11_USAGE_DEFAULT;
+                                sd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                                HRESULT sdrHr = d3dDevice_->CreateTexture2D(&sd, nullptr, sdrTex.GetAddressOf());
+                                HRESULT sdrSrvHr = E_FAIL;
+                                if (FAILED(sdrHr)) {
+                                    failStage = "tonemap-target";
+                                    failHr = sdrHr;
+                                } else if (sdrSrvHr = d3dDevice_->CreateShaderResourceView(sdrTex.Get(), nullptr,
+                                                                                           sdrSrv.GetAddressOf());
+                                           FAILED(sdrSrvHr)) {
+                                    failStage = "tonemap-srv";
+                                    failHr = sdrSrvHr;
+                                } else {
+                                    toneMapper = std::make_unique<recorder_core::HdrToneMapper>();
+                                    std::string tmErr;
+                                    const bool sdrScrgb = transform == recorder_core::PreviewTapTransform::ScrgbSdr;
+                                    if (!toneMapper->Init(d3dDevice_.Get(), d3dContext_.Get(), td.Width, td.Height,
+                                                          peakScale, sdrScrgb, tmErr)) {
+                                        failStage = "tonemap-init";
+                                        failHr = E_FAIL;
+                                        toneMapper.reset();
+                                    } else {
+                                        toneMapOk = true;
+                                    }
+                                }
+                            }
+                        }
+                        if (toneMapOk) {
+                            pushedSharedTex_ = sharedTex;
+                            pushedMutex_ = km;
+                            pushedLocalTex_ = localTex;
+                            pushedLocalSRV_ = srv;
+                            pushedToneMapper_ = std::move(toneMapper);
+                            pushedSdrTex_ = sdrTex;
+                            pushedSdrSRV_ = sdrSrv;
+                            pushedWidth_ = w;
+                            pushedHeight_ = h;
+                            // Engine frames arrive with cursor + webcam PiP baked in
+                            // exactly as recorded; raw hub frames carry neither and
+                            // the renderer draws both itself.
+                            pushed_.OnSourceOpened(pushedPendingRaw_.load(std::memory_order_relaxed));
+                            opened = true;
+                            diagnostics::AppLog::debug(
+                                QStringLiteral("dxgi-preview"),
+                                QStringLiteral("pushed source active %1x%2 on preview device%3")
+                                    .arg(w)
+                                    .arg(h)
+                                    .arg(pushedToneMapper_ ? QStringLiteral(" (FP16 tone-map)") : QString{}));
+                        }
                     }
                 }
             }
@@ -405,11 +529,24 @@ void DxgiPreviewRenderer::ConsumePushedFrame() {
     if (pushedMutex_->AcquireSync(kPushedConsumerKey, 0) == S_OK) {
         d3dContext_->CopyResource(pushedLocalTex_.Get(), pushedSharedTex_.Get());
         pushedMutex_->ReleaseSync(kPushedProducerKey);
+        // FP16 scRGB tap: tone-map the fresh copy down to the SDR surface the
+        // draw samples. Runs once per consumed frame, not per present tick.
+        if (pushedToneMapper_ && pushedSdrTex_) {
+            std::string tmErr;
+            if (!pushedToneMapper_->Convert(pushedLocalTex_.Get(), pushedSdrTex_.Get(), tmErr)) {
+                diagnostics::AppLog::warning(
+                    QStringLiteral("dxgi-preview"),
+                    QStringLiteral("pushed tone-map failed: %1").arg(QString::fromStdString(tmErr)));
+            }
+        }
         pushed_.OnFrameConsumed();
     }
 }
 
 void DxgiPreviewRenderer::ReleasePushedResources() {
+    pushedToneMapper_.reset();
+    pushedSdrSRV_.Reset();
+    pushedSdrTex_.Reset();
     pushedLocalSRV_.Reset();
     pushedLocalTex_.Reset();
     pushedMutex_.Reset();
@@ -651,6 +788,12 @@ void DxgiPreviewRenderer::CleanupCapture() {
     }
     // Pushed-source resources live on this device; release before the device.
     ReleasePushedResources();
+    // Cursor-sprite cache lives on this device too.
+    cursorSpriteTex_.Reset();
+    cursorSpriteSRV_.Reset();
+    cursorSpriteTexClip_ = {};
+    cursorSpriteHandle_ = nullptr;
+    cursorSpriteBitmap_ = {};
     // Drain any handle that was signalled but never adopted (avoid a handle leak).
     void* stalePushed = pushedPendingHandle_.exchange(nullptr, std::memory_order_acq_rel);
     if (stalePushed != nullptr)
@@ -917,6 +1060,120 @@ void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int co
     d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
 }
 
+void DxgiPreviewRenderer::RenderCursorSprite(int contentX, int contentY, int contentW, int contentH) {
+    if (contentW <= 0 || contentH <= 0 || !cursorSpriteBoundsValid_ || pushedWidth_ == 0 || pushedHeight_ == 0)
+        return;
+
+    CURSORINFO cursorInfo{};
+    cursorInfo.cbSize = sizeof(cursorInfo);
+    if (GetCursorInfo(&cursorInfo) == FALSE || (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
+        cursorInfo.hCursor == nullptr)
+        return;
+
+    if (cursorInfo.hCursor != cursorSpriteHandle_ || cursorSpriteBitmap_.bgra.empty()) {
+        recorder_core::Win32CursorBitmap next;
+        if (!recorder_core::CaptureWin32CursorBitmap(cursorInfo.hCursor, next))
+            return;
+        cursorSpriteHandle_ = cursorInfo.hCursor;
+        cursorSpriteBitmap_ = std::move(next);
+        cursorSpriteTex_.Reset();
+        cursorSpriteSRV_.Reset();
+        cursorSpriteTexClip_ = {};
+    }
+
+    const int32_t boundsW = static_cast<int32_t>(cursorSpriteBounds_.right - cursorSpriteBounds_.left);
+    const int32_t boundsH = static_cast<int32_t>(cursorSpriteBounds_.bottom - cursorSpriteBounds_.top);
+    if (boundsW <= 0 || boundsH <= 0)
+        return;
+
+    // Screen position -> source-frame pixels (1:1 for a native-resolution monitor
+    // duplication; the shared helper covers a mismatch), hotspot-adjusted. The
+    // same arithmetic the recording compositor runs, so the preview's sprite
+    // lands where the recorded one would.
+    const auto srcW = static_cast<int32_t>(pushedWidth_);
+    const auto srcH = static_cast<int32_t>(pushedHeight_);
+    const int32_t sx = recorder_core::ScaleCoordinateToSource(
+                           static_cast<int32_t>(cursorInfo.ptScreenPos.x - cursorSpriteBounds_.left), srcW, boundsW) -
+                       cursorSpriteBitmap_.hotspot_x;
+    const int32_t sy = recorder_core::ScaleCoordinateToSource(
+                           static_cast<int32_t>(cursorInfo.ptScreenPos.y - cursorSpriteBounds_.top), srcH, boundsH) -
+                       cursorSpriteBitmap_.hotspot_y;
+
+    const recorder_core::CursorSpriteDraw draw = recorder_core::PlaceCursorSprite(
+        sx, sy, cursorSpriteBitmap_.width, cursorSpriteBitmap_.height, srcW, srcH, static_cast<float>(contentX),
+        static_cast<float>(contentY), static_cast<float>(contentW), static_cast<float>(contentH));
+    if (!draw.visible)
+        return;
+
+    // (Re)upload the cropped sprite region only when the crop changed. Fully
+    // inside the source (the common case) the crop equals the whole bitmap and
+    // the cached texture holds; the per-frame recreation happens only while the
+    // cursor slides along a source edge.
+    if (!cursorSpriteSRV_ || draw.clip.w != cursorSpriteTexClip_.w || draw.clip.h != cursorSpriteTexClip_.h ||
+        draw.clip.bitmap_off_x != cursorSpriteTexClip_.bitmap_off_x ||
+        draw.clip.bitmap_off_y != cursorSpriteTexClip_.bitmap_off_y) {
+        std::vector<uint8_t> cropped(static_cast<size_t>(draw.clip.w) * draw.clip.h * 4u);
+        for (int32_t row = 0; row < draw.clip.h; ++row) {
+            const size_t srcOff = (static_cast<size_t>(draw.clip.bitmap_off_y + row) * cursorSpriteBitmap_.width +
+                                   draw.clip.bitmap_off_x) *
+                                  4u;
+            std::memcpy(cropped.data() + static_cast<size_t>(row) * draw.clip.w * 4u,
+                        cursorSpriteBitmap_.bgra.data() + srcOff, static_cast<size_t>(draw.clip.w) * 4u);
+        }
+
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = static_cast<UINT>(draw.clip.w);
+        td.Height = static_cast<UINT>(draw.clip.h);
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc = {1, 0};
+        td.Usage = D3D11_USAGE_IMMUTABLE;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init{};
+        init.pSysMem = cropped.data();
+        init.SysMemPitch = static_cast<UINT>(draw.clip.w) * 4u;
+
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+        if (FAILED(d3dDevice_->CreateTexture2D(&td, &init, tex.GetAddressOf())) ||
+            FAILED(d3dDevice_->CreateShaderResourceView(tex.Get(), nullptr, srv.GetAddressOf())))
+            return;
+        cursorSpriteTex_ = std::move(tex);
+        cursorSpriteSRV_ = std::move(srv);
+        cursorSpriteTexClip_ = draw.clip;
+    }
+
+    // Draw through the shared overlay shader as a cursor sprite: source alpha
+    // preserved (OverlayMode::Cursor), no chroma key, no mirror, full opacity.
+    const float blendFactor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    d3dContext_->OMSetBlendState(overlayBlendState_.Get(), blendFactor, 0xffffffff);
+    const recorder_core::OverlayPixelConstants pc = recorder_core::MakeOverlayPixelConstants(
+        recorder_core::ChromaKeyParams{}, /*mirror=*/false, /*force_opaque=*/false, /*opacity=*/1.0f,
+        /*hdr_linear=*/false, /*ref_white_scale=*/1.0f);
+    d3dContext_->UpdateSubresource(constantBuffer_.Get(), 0, nullptr, &pc, 0, 0);
+
+    d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+    d3dContext_->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
+    d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    D3D11_VIEWPORT vp{};
+    vp.TopLeftX = draw.dst_x;
+    vp.TopLeftY = draw.dst_y;
+    vp.Width = draw.dst_w;
+    vp.Height = draw.dst_h;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    d3dContext_->RSSetViewports(1, &vp);
+    ID3D11ShaderResourceView* srv = cursorSpriteSRV_.Get();
+    d3dContext_->PSSetShaderResources(0, 1, &srv);
+    d3dContext_->Draw(3, 0);
+
+    d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+}
+
 void DxgiPreviewRenderer::RenderFrame() {
     if (!swapChain_ || !d3dContext_)
         return;
@@ -982,7 +1239,9 @@ void DxgiPreviewRenderer::RenderFrame() {
     };
 
     if (drawPushed) {
-        drawSource(pushedLocalSRV_.Get(), pushedWidth_, pushedHeight_);
+        // An FP16 scRGB tap is drawn from its tone-mapped SDR surface; every other
+        // format samples the raw private copy directly.
+        drawSource(pushedSdrSRV_ ? pushedSdrSRV_.Get() : pushedLocalSRV_.Get(), pushedWidth_, pushedHeight_);
     } else {
         std::lock_guard lock(frameMutex_);
         if (latestFrame_ && latestFrameSRV_ && srcWidth_ > 0 && srcHeight_ > 0)
@@ -991,10 +1250,19 @@ void DxgiPreviewRenderer::RenderFrame() {
 
     // Composite the webcam PiP (+ chrome) over the main frame's content rect — but
     // NOT when drawing a pushed engine frame, which already has the PiP baked in
-    // (drawing it again would double the overlay).
-    if (!drawPushed) {
+    // (drawing it again would double the overlay). A RAW pushed frame (idle
+    // DXGI-hub source) carries no PiP, so the renderer keeps drawing its own.
+    if (!drawPushed || pushed_.raw_source) {
         RenderWebcamOverlay(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
                             static_cast<int>(contentH));
+    }
+
+    // A raw pushed frame carries no cursor either (Output Duplication composites
+    // none) — draw the live sprite above the PiP, matching the recording
+    // compositor's draw order.
+    if (drawPushed && pushed_.raw_source) {
+        RenderCursorSprite(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
+                           static_cast<int>(contentH));
     }
 
     swapChain_->Present(1, 0);
@@ -1026,23 +1294,29 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
                                      QStringLiteral("render thread: shader init failed"));
         return;
     }
-    if (!InitCaptureItem(target)) {
-        if (comInited && SUCCEEDED(coHr))
-            CoUninitialize();
-        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
-                                     QStringLiteral("render thread: capture item init failed"));
-        return;
-    }
-    if (!InitFramePool()) {
-        if (comInited && SUCCEEDED(coHr))
-            CoUninitialize();
-        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
-                                     QStringLiteral("render thread: frame pool init failed"));
-        return;
+    // Pushed-only mode never opens a capture of its own: the thread presents
+    // whatever BeginPushedSource feeds it. Everything WGC below stays null.
+    if (!pushedOnlyMode_) {
+        if (!InitCaptureItem(target)) {
+            if (comInited && SUCCEEDED(coHr))
+                CoUninitialize();
+            diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                         QStringLiteral("render thread: capture item init failed"));
+            return;
+        }
+        if (!InitFramePool()) {
+            if (comInited && SUCCEEDED(coHr))
+                CoUninitialize();
+            diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                         QStringLiteral("render thread: frame pool init failed"));
+            return;
+        }
     }
 
     diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
-                               QStringLiteral("render thread running interval=%1ms").arg(frame_interval_ms));
+                               QStringLiteral("render thread running interval=%1ms%2")
+                                   .arg(frame_interval_ms)
+                                   .arg(pushedOnlyMode_ ? QStringLiteral(" (pushed-only)") : QString{}));
 
     // Fixed-cadence frame pacing via a high-resolution waitable timer. The old
     // Sleep(1) busy-poll depended on the ~15 ms system timer granularity, so the
@@ -1070,11 +1344,25 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
             resizeRequested_.store(false);
         }
 
-        // Recording stopped: leave pushed mode and rebuild the preview's own WGC
-        // capture in place. Handled before the begin-request so a stale revert never
-        // runs after a fresh handoff (BeginPushedSource clears the end flag anyway).
+        // The pushed source ended. In WGC mode: rebuild the preview's own capture
+        // in place. In pushed-only mode there is nothing to revert TO — hold the
+        // last presented image as the fallback frame and wait for the feeder's
+        // next BeginPushedSource. Handled before the begin-request so a stale
+        // revert never runs after a fresh handoff (BeginPushedSource clears the
+        // end flag anyway).
         if (pushedEndRequested_.exchange(false, std::memory_order_acq_rel)) {
-            RevertToWgcCapture(target);
+            if (pushedOnlyMode_) {
+                if (pushedLocalTex_ && pushedWidth_ > 0 && pushedHeight_ > 0) {
+                    std::lock_guard lock(frameMutex_);
+                    latestFrame_ = pushedSdrTex_ ? pushedSdrTex_ : pushedLocalTex_;
+                    latestFrameSRV_ = pushedSdrSRV_ ? pushedSdrSRV_ : pushedLocalSRV_;
+                    srcWidth_ = pushedWidth_;
+                    srcHeight_ = pushedHeight_;
+                }
+                ReleasePushedResources();
+            } else {
+                RevertToWgcCapture(target);
+            }
         }
 
         if (pushedRequested_.load(std::memory_order_acquire)) {

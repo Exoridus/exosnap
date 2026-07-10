@@ -10,7 +10,7 @@
 //   ACCESS_LOST   -> Recover (duplication handle stale, device alive: recreate)
 //   DEVICE_REMOVED/HUNG/RESET or any unexpected HRESULT -> Fail (stop cleanly)
 
-#include "dxgi_od_capture_src.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include <gtest/gtest.h>
 

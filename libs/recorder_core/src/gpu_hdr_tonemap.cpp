@@ -1,4 +1,4 @@
-#include "gpu_hdr_tonemap.h"
+#include <recorder_core/gpu_hdr_tonemap.h>
 
 #include "hdr_tonemap.h"
 

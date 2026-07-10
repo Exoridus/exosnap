@@ -39,7 +39,7 @@ struct GridPageWidgets {
     QLabel* empty_label = nullptr;
 };
 
-GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text, const QString& empty_text) {
+GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& empty_text) {
     GridPageWidgets result;
 
     auto* scroll = new QScrollArea(parent);
@@ -51,13 +51,6 @@ GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text
     auto* content_layout = new QVBoxLayout(content);
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(10);
-
-    if (!hint_text.isEmpty()) {
-        auto* hint_label = new QLabel(hint_text, content);
-        hint_label->setWordWrap(true);
-        hint_label->setProperty("labelRole", "captureTargetPickerNote");
-        content_layout->addWidget(hint_label);
-    }
 
     auto* empty_label = new QLabel(empty_text, content);
     empty_label->setWordWrap(true);
@@ -202,7 +195,7 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     pages_ = new QStackedWidget(this);
     pages_->setObjectName("sourcePickerPages");
 
-    const auto screens_page = makeScrollableCardGrid(pages_, QString(), QStringLiteral("No displays detected."));
+    const auto screens_page = makeScrollableCardGrid(pages_, QStringLiteral("No displays detected."));
     screens_grid_.scroll = screens_page.scroll;
     screens_grid_.content_layout = screens_page.content_layout;
     screens_grid_.host = screens_page.host;
@@ -210,9 +203,7 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     screens_grid_.empty_label = screens_page.empty_label;
     pages_->addWidget(screens_grid_.scroll);
 
-    const auto windows_page =
-        makeScrollableCardGrid(pages_, QStringLiteral("Find the right app/window quickly from preview cards."),
-                               QStringLiteral("No capturable windows found."));
+    const auto windows_page = makeScrollableCardGrid(pages_, QStringLiteral("No capturable windows found."));
     windows_grid_.scroll = windows_page.scroll;
     windows_grid_.content_layout = windows_page.content_layout;
     windows_grid_.host = windows_page.host;
@@ -555,18 +546,32 @@ void SourcePickerPanel::onPickRegionNow() {
     emit accepted();
 }
 
+std::optional<SourcePickerPanel::ThumbnailKey> SourcePickerPanel::thumbnailKeyFor(Section section,
+                                                                                  int target_index) const {
+    SourceOption option;
+    if (!findOption(section, target_index, &option) || option.native_id == 0) {
+        return std::nullopt;
+    }
+    return ThumbnailKey{section == Section::Screens, option.native_id};
+}
+
 void SourcePickerPanel::onThumbnailReady(int target_index, int token, const QImage thumbnail) {
     if (!isVisible() || token != refresh_generation_)
         return;
+    Section section = Section::Screens;
     auto* card = findOptionCard(Section::Screens, target_index);
     if (!card) {
         card = findOptionCard(Section::Windows, target_index);
+        section = Section::Windows;
     }
     if (!card || !card->card) {
         return;
     }
 
     QPixmap pixmap = QPixmap::fromImage(thumbnail);
+    if (const auto key = thumbnailKeyFor(section, target_index)) {
+        thumbnail_cache_[*key] = pixmap;
+    }
     card->card->setThumbnail(pixmap);
 }
 
@@ -581,6 +586,12 @@ void SourcePickerPanel::onThumbnailFailed(int target_index, int token) {
         return;
     }
     if (card->card->isUnavailable()) {
+        return;
+    }
+    // A source that once produced an image keeps showing it. Replacing a good
+    // picture with "Preview unavailable" is louder than a still one, and the hub
+    // is retrying underneath anyway.
+    if (card->card->hasThumbnail()) {
         return;
     }
     card->card->setThumbnailFailureText(QStringLiteral("Preview unavailable"));
@@ -611,6 +622,29 @@ void SourcePickerPanel::rebuildOptionCards() {
     updateWindowsUnavailableToggle();
     refreshSelectionVisuals();
     updateSummaryLabel();
+
+    // Sources that are gone keep no image.
+    std::map<ThumbnailKey, QPixmap> live;
+    for (const auto& option : screen_options_) {
+        if (option.native_id != 0) {
+            if (auto it = thumbnail_cache_.find(ThumbnailKey{true, option.native_id}); it != thumbnail_cache_.end())
+                live.emplace(it->first, it->second);
+        }
+    }
+    for (const auto& option : window_options_) {
+        if (option.native_id != 0) {
+            if (auto it = thumbnail_cache_.find(ThumbnailKey{false, option.native_id}); it != thumbnail_cache_.end())
+                live.emplace(it->first, it->second);
+        }
+    }
+    thumbnail_cache_.swap(live);
+
+    // Both sections were just torn down and rebuilt, but only the section whose
+    // data changed re-requests its thumbnails. Without this, a card rebuilt as
+    // collateral waits for the next periodic refresh before it ever loads.
+    if (isVisible() && selected_section_ != Section::Region) {
+        requestThumbnailsForSection(selected_section_);
+    }
 }
 
 void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
@@ -713,7 +747,20 @@ void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
                 help_text = option.validation_summary;
             }
             card->setHelpText(help_text);
-            card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+            // A rebuilt card resumes where the old one left off. "Loading
+            // preview..." is only honest the first time a source is seen.
+            const auto key = thumbnailKeyFor(section, option.target_index);
+            const QPixmap* cached_thumb = nullptr;
+            if (key) {
+                const auto cached = thumbnail_cache_.find(*key);
+                if (cached != thumbnail_cache_.end())
+                    cached_thumb = &cached->second;
+            }
+            if (cached_thumb != nullptr) {
+                card->setThumbnail(*cached_thumb);
+            } else {
+                card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+            }
         }
 
         card->setAccessibleName(
@@ -1127,13 +1174,20 @@ void SourcePickerPanel::updateWindowsUnavailableToggle() {
 }
 
 void SourcePickerPanel::requestThumbnailsForSection(Section section) {
-    if (!thumbnail_capture_ || section == Section::Region) {
+    if (!thumbnail_capture_) {
+        return;
+    }
+    if (section == Section::Region) {
+        // The region section shows no tiles, so no source may stay captured.
+        thumbnail_capture_->releaseAll();
         return;
     }
 
-    thumbnail_capture_->cancelAll();
     const int token = ++refresh_generation_;
 
+    // The complete set of tiles that should be capturing. Sources already in it
+    // keep their hub across this call, and with it the frame they last showed.
+    std::vector<ThumbnailTarget> targets;
     const auto& options = section == Section::Screens ? screen_options_ : window_options_;
     for (const auto& option : options) {
         if (!shouldShowOption(option, section)) {
@@ -1150,12 +1204,10 @@ void SourcePickerPanel::requestThumbnailsForSection(Section section) {
             oc->card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
         }
 
-        if (section == Section::Screens) {
-            thumbnail_capture_->requestMonitorThumbnail(option.target_index, option.native_id, kThumbnailSize, token);
-        } else {
-            thumbnail_capture_->requestWindowThumbnail(option.target_index, option.native_id, kThumbnailSize, token);
-        }
+        targets.push_back(ThumbnailTarget{option.target_index, option.native_id, section == Section::Screens});
     }
+
+    thumbnail_capture_->setTargets(std::move(targets), kThumbnailSize, token);
 }
 
 SourcePickerPanel::SectionGrid* SourcePickerPanel::sectionGrid(Section section) {
@@ -1227,7 +1279,9 @@ void SourcePickerPanel::hideEvent(QHideEvent* event) {
     }
     ++refresh_generation_;
     if (thumbnail_capture_) {
-        thumbnail_capture_->cancelAll();
+        // Nobody is watching: the last consumer of every hub leaves, and no
+        // capture stays open behind a hidden picker.
+        thumbnail_capture_->releaseAll();
     }
     QWidget::hideEvent(event);
 }

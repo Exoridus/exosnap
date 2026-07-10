@@ -6,12 +6,16 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
 
+#include <recorder_core/cursor_sprite.h>
+#include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/overlay_shader.h>
+#include <recorder_core/preview_tap.h>
 #include <recorder_core/recorder_session.h>
 
 #include <d3d11.h>
@@ -42,6 +46,15 @@ class DxgiPreviewRenderer {
     // std::nullopt captures the full monitor (Display and Window targets).
     bool StartCapture(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num, uint32_t frame_rate_den,
                       std::optional<PreviewCropBox> crop_box = std::nullopt);
+
+    // Start the render thread with NO capture of its own: the preview is fed
+    // exclusively through BeginPushedSource (a DXGI-hub producer, or the engine
+    // during recording). The thread brings up D3D, the swap chain and the
+    // shaders, then presents pushed frames; WGC is never initialised, and
+    // EndPushedSource drops the source instead of rebuilding a WGC graph — the
+    // feeder decides what is pushed next. `target` names the monitor the frames
+    // will show (cursor-sprite bounds only); nothing is captured from it here.
+    bool StartPushedOnly(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num, uint32_t frame_rate_den);
 
     void StopCapture();
 
@@ -75,10 +88,17 @@ class DxgiPreviewRenderer {
     //
     // nt_handle: the shared NT handle; ownership transfers to the renderer, which
     // opens it via OpenSharedResource1 on its render thread and CloseHandle's it.
+    // tap: the display transform the shared surface needs before drawing
+    // (recorder_core/preview_tap.h). A native HDR10 session shares linear scRGB
+    // FP16; the render thread tone-maps it to SDR with its own HdrToneMapper.
+    // raw_source_frames: true when the frames are RAW captures (an idle DXGI-hub
+    // source) carrying neither cursor nor webcam PiP — the renderer then draws
+    // both itself; false for the engine's recording frames (overlays baked in).
     // Thread-safe: may be called from any thread; only stashes the handle + signals
     // the render thread (no D3D on the caller's thread). Until the first shared
-    // frame arrives the preview holds its last WGC image (no black flash).
-    void BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    // frame arrives the preview holds its last presented image (no black flash).
+    void BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap,
+                           bool raw_source_frames = false);
     // Revert to the normal WGC preview path. Signals the render thread to release the
     // engine's shared resources and rebuild its OWN WGC capture graph IN PLACE — the
     // D3D device, swap chain and shaders stay alive, so there is no teardown and no
@@ -123,6 +143,13 @@ class DxgiPreviewRenderer {
     void EnsureChromeTexture();
     // Draw the PiP video + (optional) edit chrome into the content rectangle.
     void RenderWebcamOverlay(int contentX, int contentY, int contentW, int contentH);
+    // Draw the live mouse cursor over a RAW pushed background (an idle DXGI-hub
+    // frame — Output Duplication composites no cursor). Queries the Win32 cursor,
+    // maps it from the captured monitor into the content rectangle with the same
+    // shared arithmetic the recording compositor uses, and draws it through the
+    // shared overlay shader (OverlayMode::Cursor). Render-thread only; a no-op
+    // without valid monitor bounds.
+    void RenderCursorSprite(int contentX, int contentY, int contentW, int contentH);
 
     HWND parentHwnd_ = nullptr;
     HWND childHwnd_ = nullptr;
@@ -169,6 +196,25 @@ class DxgiPreviewRenderer {
     // Stores the monitor-relative crop rectangle for Region preview targets.
     std::optional<PreviewCropBox> cropBox_{};
 
+    // True for a StartPushedOnly thread: no WGC graph exists at any point, and a
+    // pushed-source end drops the source instead of rebuilding one. Set before
+    // thread creation (same fence as cropBox_); immutable during rendering.
+    bool pushedOnlyMode_ = false;
+
+    // --- Cursor sprite over raw pushed frames (render-thread owned) ---
+    // The captured monitor's rectangle in virtual-screen coordinates, resolved in
+    // StartCapture for Monitor targets (immutable during rendering, like cropBox_).
+    // Maps GetCursorInfo's screen position into source-frame pixels.
+    RECT cursorSpriteBounds_{};
+    bool cursorSpriteBoundsValid_ = false;
+    // Cursor bitmap cache, keyed by (HCURSOR, clip) — recreated only when the
+    // cursor image or its edge crop changes, not per frame.
+    HCURSOR cursorSpriteHandle_ = nullptr;
+    recorder_core::Win32CursorBitmap cursorSpriteBitmap_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> cursorSpriteTex_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cursorSpriteSRV_;
+    recorder_core::CursorSpriteClip cursorSpriteTexClip_{};
+
     // --- Webcam PiP overlay state (guarded by overlayMutex_) ---
     mutable std::mutex overlayMutex_;
     bool overlayEnabled_ = false;
@@ -199,6 +245,13 @@ class DxgiPreviewRenderer {
     std::atomic<void*> pushedPendingHandle_{nullptr};
     std::atomic<uint32_t> pushedPendingWidth_{0};
     std::atomic<uint32_t> pushedPendingHeight_{0};
+    // Display transform for the pending shared surface (PreviewTapTransform as
+    // its underlying integer + the ScrgbHdr peak scale). Published before the
+    // handle store; read by the render thread after claiming the handle.
+    std::atomic<uint8_t> pushedPendingTransform_{0};
+    std::atomic<float> pushedPendingPeakScale_{1.0f};
+    // True when the pending frames are raw captures (no baked-in overlays).
+    std::atomic<bool> pushedPendingRaw_{false};
     std::atomic<bool> pushedRequested_{false};
     // Set by EndPushedSource (any thread); consumed by the render thread, which then
     // reverts to its own WGC capture. A fresh BeginPushedSource clears it so a pending
@@ -209,6 +262,12 @@ class DxgiPreviewRenderer {
     Microsoft::WRL::ComPtr<IDXGIKeyedMutex> pushedMutex_;             // keyed mutex on the shared surface
     Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedLocalTex_;          // private copy (decoupled cadence)
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> pushedLocalSRV_; // SRV over the private copy
+    // FP16 scRGB tap only: the render thread's own tone-map pass (the same class
+    // the engine's tone-mapped sessions run) and the SDR surface it renders into,
+    // which then feeds the ordinary draw instead of pushedLocalSRV_.
+    std::unique_ptr<recorder_core::HdrToneMapper> pushedToneMapper_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedSdrTex_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> pushedSdrSRV_;
     uint32_t pushedWidth_ = 0;
     uint32_t pushedHeight_ = 0;
     // Pure switch-over state (active / has-frame / wgc-stopped); render-thread-owned.

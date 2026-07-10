@@ -1,4 +1,4 @@
-#include "preview_shared_texture.h"
+#include <recorder_core/preview_shared_texture.h>
 
 #include <cstdio>
 

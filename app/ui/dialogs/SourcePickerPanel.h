@@ -1,10 +1,15 @@
 #pragma once
 
+#include <QPixmap>
 #include <QRect>
 #include <QSize>
 #include <QWidget>
 
+#include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
 class QGridLayout;
@@ -165,6 +170,11 @@ class SourcePickerPanel : public QWidget {
     bool findOption(Section section, int target_index, SourceOption* out) const;
     OptionCard* findOptionCard(Section section, int target_index);
     void requestThumbnailsForSection(Section section);
+
+    // The source a card stands for, independent of its position in the list. A
+    // target index shifts when a window closes; the cached image must not.
+    using ThumbnailKey = std::pair<bool, uintptr_t>; // is_monitor, native id
+    std::optional<ThumbnailKey> thumbnailKeyFor(Section section, int target_index) const;
     bool shouldShowOption(const SourceOption& option, Section section) const;
     void updateWindowsUnavailableToggle();
     SectionGrid* sectionGrid(Section section);
@@ -223,7 +233,20 @@ class SourcePickerPanel : public QWidget {
     bool show_unavailable_windows_ = false;
     int refresh_generation_ = 0;
 
+    // The last image each source showed. A card is destroyed and rebuilt whenever
+    // any source's title or availability changes, which is often; without this the
+    // rebuilt card would fall back to "Loading preview..." and the grid would
+    // flicker on every list refresh. Pruned to the live sources on each rebuild.
+    std::map<ThumbnailKey, QPixmap> thumbnail_cache_;
+
     ThumbnailCapture* thumbnail_capture_ = nullptr;
+
+  public:
+    // The token a thumbnail must carry to be accepted right now. Tests need it to
+    // stand in for the capture thread; nothing else should read it.
+    [[nodiscard]] int refreshGenerationForTest() const {
+        return refresh_generation_;
+    }
 };
 
 } // namespace exosnap::ui::dialogs

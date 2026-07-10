@@ -21,7 +21,7 @@ TEST(PushedSourceState, IdlePreviewPollsWgcAndDrawsOwnOverlay) {
 
 TEST(PushedSourceState, RecordingOpensSourceAndStopsWgcOnce) {
     PushedSourceState s;
-    s.OnSourceOpened(); // engine shared handle adopted on the render device
+    s.OnSourceOpened(/*raw_source_frames=*/false); // engine shared handle adopted on the render device
 
     EXPECT_TRUE(s.active);
     EXPECT_FALSE(s.PollsWgc());          // stop polling the second capture
@@ -33,7 +33,7 @@ TEST(PushedSourceState, RecordingOpensSourceAndStopsWgcOnce) {
 
 TEST(PushedSourceState, CountdownHoldsLastWgcImageUntilFirstPushedFrame) {
     PushedSourceState s;
-    s.OnSourceOpened();
+    s.OnSourceOpened(/*raw_source_frames=*/false);
     s.OnWgcGraphStopped();
 
     // Active but no engine frame yet: hold the last WGC image (no black flash) and
@@ -49,7 +49,7 @@ TEST(PushedSourceState, CountdownHoldsLastWgcImageUntilFirstPushedFrame) {
 
 TEST(PushedSourceState, StopRevertsToWgcAndRedrawsOwnOverlay) {
     PushedSourceState s;
-    s.OnSourceOpened();
+    s.OnSourceOpened(/*raw_source_frames=*/false);
     s.OnWgcGraphStopped();
     s.OnFrameConsumed();
     ASSERT_TRUE(s.DrawsPushedBackground());
@@ -64,14 +64,14 @@ TEST(PushedSourceState, StopRevertsToWgcAndRedrawsOwnOverlay) {
 
 TEST(PushedSourceState, SessionRestartReArmsWgcStopAndClearsFrame) {
     PushedSourceState s;
-    s.OnSourceOpened();
+    s.OnSourceOpened(/*raw_source_frames=*/false);
     s.OnWgcGraphStopped();
     s.OnFrameConsumed();
     s.Reset();
 
     // A fresh recording (new shared handle) must stop the WGC graph again and start
     // from no-frame (hold) rather than inheriting the previous session's has_frame.
-    s.OnSourceOpened();
+    s.OnSourceOpened(/*raw_source_frames=*/false);
     EXPECT_TRUE(s.ShouldStopWgcGraph());
     EXPECT_FALSE(s.DrawsPushedBackground());
     EXPECT_TRUE(s.DrawsWebcamOverlay());
@@ -86,7 +86,7 @@ TEST(PushedSourceState, RevertRebuildsWgcOnlyAfterTheGraphWasStopped) {
     PushedSourceState s;
     EXPECT_FALSE(s.NeedsWgcRebuildOnRevert()); // idle: the WGC graph was never stopped
 
-    s.OnSourceOpened();
+    s.OnSourceOpened(/*raw_source_frames=*/false);
     EXPECT_FALSE(s.NeedsWgcRebuildOnRevert()); // handle open, graph not yet torn down
 
     s.OnWgcGraphStopped();
@@ -109,4 +109,53 @@ TEST(PushedSourceState, RevertAfterFailedOpenLeavesWgcRunningSoNoRebuild) {
     EXPECT_FALSE(s.NeedsWgcRebuildOnRevert());
     EXPECT_TRUE(s.PollsWgc());
     EXPECT_FALSE(s.ShouldStopWgcGraph());
+}
+
+// --- Raw pushed frames: an idle DXGI-hub source, not the recording engine ---
+// Raw frames carry neither cursor nor webcam PiP, so the renderer draws both
+// itself; engine frames carry both baked in, so drawing either would double it.
+
+TEST(PushedSourceState, RawSourceKeepsOwnOverlayAndDrawsCursorSprite) {
+    PushedSourceState s;
+    s.OnSourceOpened(/*raw_source_frames=*/true);
+    s.OnWgcGraphStopped();
+    s.OnFrameConsumed();
+
+    ASSERT_TRUE(s.DrawsPushedBackground());
+    EXPECT_TRUE(s.DrawsWebcamOverlay()); // no PiP in a raw frame -> renderer draws its own
+    EXPECT_TRUE(s.DrawsCursorSprite());  // no cursor in a raw frame -> renderer draws it
+}
+
+TEST(PushedSourceState, EngineSourceSuppressesBothOverlays) {
+    PushedSourceState s;
+    s.OnSourceOpened(/*raw_source_frames=*/false);
+    s.OnWgcGraphStopped();
+    s.OnFrameConsumed();
+
+    ASSERT_TRUE(s.DrawsPushedBackground());
+    EXPECT_FALSE(s.DrawsWebcamOverlay()); // PiP baked into the engine frame
+    EXPECT_FALSE(s.DrawsCursorSprite());  // cursor baked into the engine frame
+}
+
+TEST(PushedSourceState, CursorSpriteWaitsForTheFirstRawFrame) {
+    PushedSourceState s;
+    s.OnSourceOpened(/*raw_source_frames=*/true);
+    // Still holding the last WGC image, which carries WGC's own cursor — a sprite
+    // on top would double it.
+    EXPECT_FALSE(s.DrawsCursorSprite());
+    s.OnFrameConsumed();
+    EXPECT_TRUE(s.DrawsCursorSprite());
+}
+
+TEST(PushedSourceState, ResetClearsRawSource) {
+    PushedSourceState s;
+    s.OnSourceOpened(/*raw_source_frames=*/true);
+    s.OnFrameConsumed();
+    s.Reset();
+    EXPECT_FALSE(s.DrawsCursorSprite());
+    // The next source decides again; a stale raw flag must not leak in.
+    s.OnSourceOpened(/*raw_source_frames=*/false);
+    s.OnFrameConsumed();
+    EXPECT_FALSE(s.DrawsWebcamOverlay());
+    EXPECT_FALSE(s.DrawsCursorSprite());
 }

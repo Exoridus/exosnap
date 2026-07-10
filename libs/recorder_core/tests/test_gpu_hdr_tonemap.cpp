@@ -6,8 +6,9 @@
 
 #include <gtest/gtest.h>
 
-#include "gpu_hdr_tonemap.h"
 #include "hdr_tonemap.h"
+
+#include <recorder_core/gpu_hdr_tonemap.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>
