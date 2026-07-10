@@ -43,8 +43,8 @@ no telemetry, no account, no cloud.
   short recordings.
 - **Container/codec compatibility registry** — invalid combinations are rejected before recording
   starts, never mid-session.
-- Recording split (by time and/or size, first limit reached wins) with per-segment background MP4
-  remux.
+- Recording split (by time and/or size, first limit reached wins) with
+  per-segment background MP4 remux.
 
 ### Diagnostics as a feature
 
