@@ -121,6 +121,31 @@ TEST(CaptureHubRegistry, KindDisambiguatesAnIdenticalNativeId) {
     EXPECT_EQ(f.registry.HubCountForTest(), 2u);
 }
 
+TEST(CaptureHubRegistry, LeasePassthroughClosesAndReopensTheCapture) {
+    Fixture f;
+    auto sub = f.SubscribeIgnoring(kDxgiDisplay1);
+    ASSERT_EQ(f.Producer(kDxgiDisplay1).open_calls, 1);
+
+    // The engine takes the source: the hub's capture closes, the subscription
+    // stays, and the consumer keeps seeing the held frame.
+    f.DeliverFrame(kDxgiDisplay1);
+    EXPECT_TRUE(f.registry.RequestLease(kDxgiDisplay1));
+    EXPECT_EQ(f.Producer(kDxgiDisplay1).close_calls, 1);
+    EXPECT_EQ(sub.Frame(), HubFrameKind::Held);
+
+    // The engine is done: the hub reopens for its still-subscribed consumer.
+    f.registry.ReturnLease(kDxgiDisplay1);
+    EXPECT_EQ(f.Producer(kDxgiDisplay1).open_calls, 2);
+}
+
+TEST(CaptureHubRegistry, LeaseForAnUnknownKeyIsRefusedAndReturnIsANoOp) {
+    Fixture f;
+    // No hub for this key: nothing to release, the engine may open directly.
+    EXPECT_FALSE(f.registry.RequestLease(kDxgiDisplay2));
+    f.registry.ReturnLease(kDxgiDisplay2); // must not crash or create a hub
+    EXPECT_EQ(f.registry.HubCountForTest(), 0u);
+}
+
 TEST(CaptureHubRegistry, DxgiKeysAreToldApartByDeviceNameAlone) {
     Fixture f;
     auto one = f.SubscribeIgnoring(kDxgiDisplay1);

@@ -2395,20 +2395,21 @@ void RecordPage::stopHubFeed() {
 }
 
 void RecordPage::resumeHubPreviewIfHeld() {
-    // The recording released the hub's duplication (doStartRecording); take it
-    // back now that the engine's capture is gone, on the SAME renderer — it is
-    // still running in pushed-only mode and holds the last recorded frame, so
-    // the handover is a hold, not a flash.
-    if (!hub_preview_active_ || hub_preview_monitor_ == 0)
+    // The recording took the hub's lease (the coordinator's capture release
+    // hook); return it now that the engine's capture is gone. The subscription
+    // survived the lease, so the hub simply reopens and the feed re-announces
+    // on the SAME renderer — it is still running in pushed-only mode and holds
+    // the last recorded frame, so the handover is a hold, not a flash.
+    if (!hub_preview_active_ || !dxgi_capture_hub_)
         return;
-    if (!preview_surface_ || !preview_surface_->isDxgiPreviewActive())
-        return;
-    if (!subscribeHubFeed(hub_preview_monitor_)) {
-        // The display may be gone; the normal preview restart path takes over.
-        hub_preview_active_ = false;
-        hub_preview_monitor_ = 0;
+    if (!preview_surface_ || !preview_surface_->isDxgiPreviewActive()) {
+        // The preview died meanwhile; drop the feed and let the normal preview
+        // restart path decide fresh.
+        stopHubFeed();
         last_preview_key_ = {};
+        return;
     }
+    dxgi_capture_hub_->ReturnEngineLease();
 }
 
 void RecordPage::ensureCoordinatorInit() {
@@ -2500,6 +2501,16 @@ void RecordPage::initCoordinator() {
                 },
                 Qt::QueuedConnection);
         });
+
+    // The engine may only duplicate an output this process is not already
+    // duplicating: hand the hub's lease over right before the recording thread
+    // starts (blocking; fires after every validation, so a rejected start never
+    // touches the idle feed). Returned at Ready/Completed/Failed alongside the
+    // pushed-source revert (resumeHubPreviewIfHeld).
+    coordinator_->SetPreviewCaptureReleaseHook([this]() {
+        if (hub_preview_active_ && dxgi_capture_hub_)
+            dxgi_capture_hub_->RequestEngineLease();
+    });
 
     // Deliver capabilities only when they are already available. When the async HW
     // probe hasn't landed yet, latch coordinator_awaiting_caps_ and deliver later from
@@ -3789,20 +3800,11 @@ void RecordPage::doStartRecording(std::optional<recorder_core::CaptureRegion> cr
     view_model_.ResetStats();
     syncCoordinatorTargetContext();
 
-    // The hub owns the only duplication of the previewed display, and the engine
-    // is about to open its own (an output can be duplicated once per process).
-    // Release it BEFORE the session starts — blocking, so the close has really
-    // happened. The renderer keeps its last image until the engine's WYSIWYG
-    // tap takes over; the hub feed resumes when the recording ends.
-    if (hub_preview_active_ && dxgi_capture_hub_)
-        dxgi_capture_hub_->ReleaseForRecording();
-
-    if (!coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state,
-                                      crop_region)) {
-        // The start was rejected before a session existed (validation/guards):
-        // no state change will fire, so take the idle feed back here.
-        resumeHubPreviewIfHeld();
-    }
+    // The hub's duplication is released through the coordinator's capture
+    // release hook, which fires after every validation and guard — a rejected
+    // start therefore never touches the idle feed.
+    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state,
+                                 crop_region);
 }
 
 void RecordPage::populateMicDeviceCombo() {

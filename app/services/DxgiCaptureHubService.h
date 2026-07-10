@@ -59,17 +59,25 @@ class DxgiCaptureHubService {
     // still arrive; the sink owner guards its own lifetime (QPointer marshal).
     void Unsubscribe();
 
-    // Unsubscribe and BLOCK until the pump thread has actually closed the
-    // duplication. The recording engine is about to duplicate the same output,
-    // and an output can only be duplicated once per process — the close must
-    // have happened before StartRecording proceeds, not merely be queued.
-    // Bounded wait; logs and returns anyway if the pump thread is wedged (the
-    // recording then fails to open its capture rather than the UI hanging).
-    void ReleaseForRecording();
+    // The recording engine is about to duplicate the previewed output. Takes
+    // the hub's lease — the subscription and held frame stay alive, but the
+    // duplication is closed — and BLOCKS until the pump thread has actually
+    // closed it: an output can only be duplicated once per process, so the
+    // close must have happened before StartRecording proceeds, not merely be
+    // queued. Bounded wait; logs and returns anyway if the pump thread is
+    // wedged (the recording then fails to open its capture rather than the UI
+    // hanging).
+    void RequestEngineLease();
+
+    // The recording ended: return the lease. The hub reopens its duplication
+    // and the sink re-announces a fresh shared texture with the first frame
+    // (the producer's device is recreated per open). Asynchronous.
+    void ReturnEngineLease();
 
   private:
     struct Command {
-        bool subscribe = false; // false: unsubscribe
+        enum class Op { Subscribe, Unsubscribe, LeaseRequest, LeaseReturn };
+        Op op = Op::Unsubscribe;
         std::wstring device_name;
         HandleSink sink;
         uint64_t serial = 0;

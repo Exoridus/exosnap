@@ -92,4 +92,18 @@ void CaptureHubRegistry::PumpAll() {
         hub->Pump();
 }
 
+bool CaptureHubRegistry::RequestLease(const CaptureSourceKey& key) {
+    const auto it = hubs_.find(key);
+    if (it == hubs_.end())
+        return false;
+    return it->second->RequestLease();
+}
+
+void CaptureHubRegistry::ReturnLease(const CaptureSourceKey& key) {
+    const auto it = hubs_.find(key);
+    if (it == hubs_.end())
+        return;
+    it->second->ReturnLease();
+}
+
 } // namespace exosnap

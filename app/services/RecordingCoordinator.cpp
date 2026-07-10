@@ -1010,6 +1010,13 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         StartDiskMonitor(EffectiveOutputFolder(), is_mp4, transient_mkv);
     }
 
+    // The idle preview's capture hub may hold the one allowed duplication of
+    // the target display; the engine opens its own in the thread below. The
+    // hook blocks until the hub's is closed, so the two never overlap. Fires
+    // only here — after every guard — so a rejected start never releases.
+    if (preview_capture_release_hook_)
+        preview_capture_release_hook_();
+
     recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
         RecordingThreadProc(cfg, op);
     });
@@ -1984,6 +1991,10 @@ void RecordingCoordinator::SetFrameCapturedCallback(FrameCapturedCallback cb) {
 
 void RecordingCoordinator::SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb) {
     on_preview_shared_handle_ready_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetPreviewCaptureReleaseHook(PreviewCaptureReleaseHook hook) {
+    preview_capture_release_hook_ = std::move(hook);
 }
 
 void RecordingCoordinator::SetReadyFrameSource(std::function<QImage()> getter) {

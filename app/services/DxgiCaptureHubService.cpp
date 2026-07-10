@@ -81,7 +81,7 @@ bool DxgiCaptureHubService::Subscribe(HMONITOR monitor, HandleSink sink) {
     }
 
     Command cmd;
-    cmd.subscribe = true;
+    cmd.op = Command::Op::Subscribe;
     cmd.device_name = info.szDevice;
     cmd.sink = std::move(sink);
     PostCommand(std::move(cmd));
@@ -90,27 +90,33 @@ bool DxgiCaptureHubService::Subscribe(HMONITOR monitor, HandleSink sink) {
 
 void DxgiCaptureHubService::Unsubscribe() {
     Command cmd;
-    cmd.subscribe = false;
+    cmd.op = Command::Op::Unsubscribe;
     PostCommand(std::move(cmd));
 }
 
-void DxgiCaptureHubService::ReleaseForRecording() {
+void DxgiCaptureHubService::RequestEngineLease() {
     Command cmd;
-    cmd.subscribe = false;
+    cmd.op = Command::Op::LeaseRequest;
     const uint64_t serial = PostCommand(std::move(cmd));
 
     std::unique_lock lock(mutex_);
     // A later command's serial also satisfies the wait: the pump processes the
-    // newest pending command, and its handler always resets the old capture
-    // first, so "processed anything >= our serial" implies the duplication is
-    // closed.
+    // newest pending command, and every command handler leaves no duplication
+    // open unless it (re)subscribed — which only this thread could have asked
+    // for after the lease request. "Processed >= our serial" therefore implies
+    // the duplication is closed.
     const bool released =
         ack_cv_.wait_for(lock, std::chrono::milliseconds(750), [&] { return processed_serial_ >= serial; });
     if (!released) {
-        diagnostics::AppLog::warning(
-            QStringLiteral("dxgi-hub"),
-            QStringLiteral("release for recording timed out; the engine's capture open may fail"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-hub"),
+                                     QStringLiteral("lease request timed out; the engine's capture open may fail"));
     }
+}
+
+void DxgiCaptureHubService::ReturnEngineLease() {
+    Command cmd;
+    cmd.op = Command::Op::LeaseReturn;
+    PostCommand(std::move(cmd));
 }
 
 uint64_t DxgiCaptureHubService::PostCommand(Command cmd) {
@@ -138,6 +144,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     CaptureSubscription subscription;
     HandleSink sink;
+    CaptureSourceKey currentKey;
 
     // Publisher state: the shared texture lives on the producer's device and is
     // recreated whenever the desktop's size or format changes.
@@ -193,21 +200,47 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             break;
 
         if (command) {
-            // Old subscription first: refcount to zero closes the duplication
-            // BEFORE any new one opens (one duplication per output, ever).
-            subscription.Reset();
-            producer = nullptr;
-            sink = nullptr;
-            resetPublisher();
+            switch (command->op) {
+            case Command::Op::Subscribe:
+                // Old subscription first: refcount to zero closes the duplication
+                // BEFORE any new one opens (one duplication per output, ever).
+                subscription.Reset();
+                producer = nullptr;
+                sink = nullptr;
+                resetPublisher();
 
-            if (command->subscribe) {
                 sink = std::move(command->sink);
-                CaptureSourceKey key;
-                key.kind = CaptureSourceKey::Kind::DxgiMonitor;
-                key.device_name = std::move(command->device_name);
+                currentKey = {};
+                currentKey.kind = CaptureSourceKey::Kind::DxgiMonitor;
+                currentKey.device_name = std::move(command->device_name);
                 subscription = registry.Subscribe(
-                    key, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
+                    currentKey, [&publish](const HubFrame& frame, recorder_core::HubFrameKind) { publish(frame); });
                 diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("subscribed to display feed"));
+                break;
+
+            case Command::Op::Unsubscribe:
+                subscription.Reset();
+                producer = nullptr;
+                sink = nullptr;
+                currentKey = {};
+                resetPublisher();
+                break;
+
+            case Command::Op::LeaseRequest:
+                // The engine takes the capture; the subscription and the hub's
+                // held frame stay. The producer's device dies with its close,
+                // so the publisher must rebuild on the next frame after return.
+                if (subscription)
+                    registry.RequestLease(currentKey);
+                resetPublisher();
+                diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("lease granted to the engine"));
+                break;
+
+            case Command::Op::LeaseReturn:
+                if (subscription)
+                    registry.ReturnLease(currentKey);
+                diagnostics::AppLog::debug(QStringLiteral("dxgi-hub"), QStringLiteral("lease returned; reopening"));
+                break;
             }
 
             {

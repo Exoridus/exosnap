@@ -81,6 +81,14 @@ class CaptureHubRegistry {
     // nothing to own.
     void PumpAll();
 
+    // The recording engine is about to capture / has released this source. A
+    // display may only be duplicated once per process, so the hub's capture is
+    // closed before the lease is granted and reopened on return. Returns false
+    // for a key without a live hub (nothing to release — the engine may open
+    // its capture directly). Consumers stay subscribed and see the held frame.
+    bool RequestLease(const CaptureSourceKey& key);
+    void ReturnLease(const CaptureSourceKey& key);
+
     [[nodiscard]] size_t HubCountForTest() const {
         return hubs_.size();
     }
