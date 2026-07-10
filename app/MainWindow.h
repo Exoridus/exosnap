@@ -421,6 +421,10 @@ class MainWindow : public QMainWindow {
     // Reduced AppSettingsStore: hotkeys + window geometry only.
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
+    // Set when AppSettingsStore::Load() found settings.ini unreadable (corrupt
+    // or locked) and fell back to defaults; consumed (and cleared) once the
+    // notification toast system exists to report it — mirrors preset_store_repaired_.
+    bool app_settings_corrupted_ = false;
 
     // Recovery manifest + service (owned by MainWindow; coordinator gets a pointer).
     RecoveryManifestStore recovery_manifest_store_;

@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <array>
+#include <vector>
 
 namespace exosnap {
 
@@ -52,7 +53,11 @@ class GlobalHotkeyService : public QObject {
     explicit GlobalHotkeyService(QObject* parent = nullptr);
 
     // Called once the HWND is available; registers all current bindings.
-    void SetRegistrar(IHotkeyRegistrar* registrar);
+    // Returns the actions whose persisted binding could not be (re-)registered
+    // (e.g. already held by Windows or another application) so the caller can
+    // surface it — this stays as UI/log-agnostic as TrySetBinding: it reports
+    // structured failures instead of logging or notifying itself.
+    [[nodiscard]] std::vector<HotkeyAction> SetRegistrar(IHotkeyRegistrar* registrar);
 
     // Attempt to set/change a binding.
     // Validates, checks conflicts, attempts Win32 registration with rollback.

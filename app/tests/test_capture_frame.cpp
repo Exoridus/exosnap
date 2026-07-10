@@ -92,7 +92,7 @@ struct FakeRegistrar : public IHotkeyRegistrar {
 TEST_F(CaptureFrameTest, ServiceInitializesCaptureFrameAsUnset) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
     EXPECT_TRUE(svc.GetBinding(HotkeyAction::CaptureFrame).isEmpty());
 }
 
@@ -101,7 +101,7 @@ TEST_F(CaptureFrameTest, ServiceInitializesCaptureFrameAsUnset) {
 TEST_F(CaptureFrameTest, CaptureFrameCanBeRebound) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const QKeySequence seq(Qt::CTRL | Qt::SHIFT | Qt::Key_F5);
     auto result = svc.TrySetBinding(HotkeyAction::CaptureFrame, seq);
@@ -117,7 +117,7 @@ TEST_F(CaptureFrameTest, CaptureFrameCanBeRebound) {
 TEST_F(CaptureFrameTest, CaptureFrameBindingPersistsRoundTrip) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const QKeySequence seq(Qt::ALT | Qt::Key_F7);
     [[maybe_unused]] auto r = svc.TrySetBinding(HotkeyAction::CaptureFrame, seq);
@@ -126,7 +126,7 @@ TEST_F(CaptureFrameTest, CaptureFrameBindingPersistsRoundTrip) {
     svc.SaveToStrings(stored);
 
     GlobalHotkeyService svc2;
-    svc2.SetRegistrar(&reg);
+    (void)svc2.SetRegistrar(&reg);
     svc2.LoadFromStrings(stored);
     EXPECT_EQ(svc2.GetBinding(HotkeyAction::CaptureFrame), seq);
 }

@@ -102,6 +102,13 @@ struct PersistedAppSettings {
     // wired, and Debug lines (DxgiPreviewRenderer, target enumeration, ...) are
     // exactly what support cases need. The filter only narrows on explicit user choice.
     QString developer_log_level = QStringLiteral("Debug");
+
+    // Transient — not written by Save(). False when settings.ini existed but
+    // QSettings::status() reported an error while reading it (corrupt/locked
+    // file); every field above is then the built-in default rather than a
+    // faithful read of whatever was on disk. True on a normal load, including
+    // a missing file (first run).
+    bool load_ok = true;
 };
 
 class AppSettingsStore {

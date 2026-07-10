@@ -282,6 +282,39 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {
     EXPECT_FALSE(raw.childGroups().contains(QStringLiteral("webcam")));
 }
 
+// ---------------------------------------------------------------------------
+// load_ok surfaces a corrupt/unreadable settings.ini instead of silently
+// returning built-in defaults with no way for the caller to notice.
+// ---------------------------------------------------------------------------
+
+TEST(AppSettingsStoreTest, AppSettingsStore_NormalLoad_LoadOkIsTrue) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    // Missing file (first run) is not a corruption — still load_ok.
+    EXPECT_TRUE(store.Load().load_ok);
+
+    PersistedAppSettings settings;
+    store.Save(settings);
+    EXPECT_TRUE(store.Load().load_ok);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_UnreadableFile_SetsLoadOkFalse) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // A directory sitting at the settings path can never be parsed as an INI
+    // file — QSettings reports this via status(), which is exactly the
+    // corrupt/locked-file scenario load_ok exists to surface.
+    ASSERT_TRUE(QDir().mkpath(settings_path));
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.load_ok);
+}
+
 TEST(AppSettingsStoreTest, AppSettingsStore_EmptyPath_LoadReturnsDefaults) {
     const QString empty_path;
     AppSettingsStore store{empty_path};

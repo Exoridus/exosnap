@@ -104,7 +104,8 @@ of them.
 The **live configuration is the source of truth**. It is persisted silently and continuously, so the
 app restarts into exactly the state it was closed in. A preset is a named snapshot the live
 configuration is compared against: when the two differ, the selector shows `Name (changed)` as a calm
-hint. There is no Save button, no unsaved-changes warning, and no discard dialog.
+hint. There is no Save button, no unsaved-changes warning, and no discard dialog. A write failure
+(disk full, file locked, …) is not silent either — the change may be lost, so a notification says so.
 
 Capture identity, video bit depth, and HDR mode are **environment facts**, not preset content.
 Presets neither store nor override them, and a difference in them never counts as a change. Switching
@@ -522,8 +523,9 @@ release (0.11 per ADR 0022).
   the toasts — the hub records regardless.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
   hosting the ExoSnap window**. A notification is **timed** when it reports something that already
-  finished (saved, update available, frames dropped, settings repaired) and **standing** when it
-  reports a condition that still holds (low storage, unexpected stop, recovery available). At most
+  finished (saved, update available, frames dropped, settings repaired, a hotkey unavailable at
+  startup, a settings save failure) and **standing** when it reports a condition that still holds
+  (low storage, unexpected stop, recovery available). At most
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent
@@ -546,6 +548,10 @@ to Unset. Hotkeys live as an embedded card inside Settings.
 
 If a hotkey starts recording while the app window is visible, the Record view is activated; if the
 window is minimized, it is not restored.
+
+If a persisted hotkey can no longer be registered at startup (another app or Windows already holds
+it), it does not fail silently: a notification names the affected action, and the hotkey is inert
+until rebound in Settings.
 
 ---
 

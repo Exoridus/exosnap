@@ -143,9 +143,11 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
         return {kSuccessC, kSuccessDim, kSuccessB};
     case notifications::NotificationType::FramesDropped: // caution tone, shared with LowStorage
     case notifications::NotificationType::OverlayOmitted:
+    case notifications::NotificationType::HotkeyConflict: // caution tone, shared with FramesDropped
     case notifications::NotificationType::LowStorage:
         return {kCautionC, kCautionDim, kCautionB};
     case notifications::NotificationType::UnexpectedStop:
+    case notifications::NotificationType::SettingsSaveFailed: // error tone, shared with UnexpectedStop
         return {kErrorC, kErrorDim, kErrorB};
     case notifications::NotificationType::RecoveryAvailable:
         return {kInfoC, kInfoDim, kInfoB};
@@ -189,6 +191,7 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
     }
     case notifications::NotificationType::FramesDropped: // caution glyph, shared with LowStorage
     case notifications::NotificationType::OverlayOmitted:
+    case notifications::NotificationType::HotkeyConflict: // caution glyph, shared with FramesDropped
     case notifications::NotificationType::LowStorage: {
         // alertTriangle: equilateral triangle + ! inside
         const float h = sz * 0.86f;
@@ -203,7 +206,8 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
         p.drawPoint(QPointF(cx, cy + h * 0.27f));
         break;
     }
-    case notifications::NotificationType::UnexpectedStop: {
+    case notifications::NotificationType::UnexpectedStop:
+    case notifications::NotificationType::SettingsSaveFailed: { // error glyph, shared with UnexpectedStop
         // error / circle-x
         p.drawEllipse(circle);
         const float d = r * 0.38f;
