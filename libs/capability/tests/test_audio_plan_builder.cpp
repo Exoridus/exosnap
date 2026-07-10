@@ -211,8 +211,11 @@ TEST(AudioPlanBuilderTest, WindowTarget_SysOnly) {
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
     ExpectSingleSourceTrack(result, 0, K::Sys);
-    // Sys alone without App → no PID needed.
-    EXPECT_FALSE(result.audio_target_process_id.has_value());
+    // Sys is the App row's complement: it captures every process except the target's
+    // tree, so it needs that pid even when App itself is off. The engine rejects a
+    // Sys source without one.
+    ASSERT_TRUE(result.audio_target_process_id.has_value());
+    EXPECT_EQ(result.audio_target_process_id.value(), 1002u);
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Separate) {
@@ -277,7 +280,9 @@ TEST(AudioPlanBuilderTest, WindowTarget_SysAndMic_Separate) {
     ASSERT_EQ(result.plan.tracks.size(), 2u);
     ExpectSingleSourceTrack(result, 0, K::Sys);
     ExpectSingleSourceTrack(result, 1, K::Mic);
-    EXPECT_FALSE(result.audio_target_process_id.has_value());
+    // Sys still scopes to the window's process — see WindowTarget_SysOnly.
+    ASSERT_TRUE(result.audio_target_process_id.has_value());
+    EXPECT_EQ(result.audio_target_process_id.value(), 1006u);
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AppSysMic_AllMerged) {
@@ -468,6 +473,49 @@ TEST(AudioPlanBuilderTest, Preview_NoAudio_ReturnsEmpty) {
 
     const std::vector<AudioTrackPreview> preview = BuildAudioTrackPreview(result);
     EXPECT_TRUE(preview.empty());
+}
+
+// ---------------------------------------------------------------------------
+// A display target has no process. Rows stored while a window was the target must
+// not follow it there: the plan would demand a process id nobody can supply and
+// the recording would refuse to start with "Window target PID unavailable".
+// ---------------------------------------------------------------------------
+
+TEST(AudioPlanBuilderTest, DisplayTarget_StoredSysRow_BecomesSystemOutputWithoutPid) {
+    AudioUiState state = DisplaySep();
+    state.source_rows = {{K::Sys, true, false}};
+    state.selected_window_pid = 2001u;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.record_audio) << "the user still asked for system audio";
+    ASSERT_EQ(result.plan.tracks.size(), 1u);
+    ExpectSingleSourceTrack(result, 0, K::SystemOutput);
+    EXPECT_FALSE(result.audio_target_process_id.has_value());
+}
+
+TEST(AudioPlanBuilderTest, DisplayTarget_StoredAppRow_Disappears) {
+    AudioUiState state = DisplaySep();
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Mic, true, false},
+    };
+    state.selected_window_pid = 2002u;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    ASSERT_EQ(result.plan.tracks.size(), 1u);
+    ExpectSingleSourceTrack(result, 0, K::Mic);
+    EXPECT_FALSE(result.audio_target_process_id.has_value());
+}
+
+TEST(AudioPlanBuilderTest, DisplayTarget_AppOnly_RecordsNoAudioRatherThanFailing) {
+    AudioUiState state = DisplaySep();
+    state.source_rows = {{K::App, true, false}};
+    state.selected_window_pid = 2003u;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.record_audio);
+    EXPECT_TRUE(result.plan.tracks.empty());
+    EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, TrackIndices_AreSequential) {

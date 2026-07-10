@@ -56,6 +56,15 @@ struct AudioTrackPlan {
     std::vector<ResolvedAudioTrack> tracks;
 };
 
+// Drop the rows a non-window capture target cannot serve, and rewrite the ones it
+// can serve differently. `window_target` false means Display or Region.
+//
+// This is the single home of the rule "App and Sys are process-scoped". Both the
+// live UI plan and the persisted preset run through it, so a stored row can never
+// reach the engine demanding a process id nobody can supply.
+[[nodiscard]] std::vector<AudioSourceRow> NormalizeSourceRowsForTarget(std::vector<AudioSourceRow> rows,
+                                                                       bool window_target);
+
 [[nodiscard]] AudioTrackPlan ResolveAudioTracks(const std::vector<AudioSourceRow>& rows);
 
 } // namespace recorder_core
