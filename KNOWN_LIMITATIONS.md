@@ -258,6 +258,24 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   is deferred to 0.12.x (RC stabilization wave).
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
+## Capture previews
+
+- **Source-picker tiles hold their last image** when a source stops producing
+  frames (another app takes the surface — dragging the Snipping Tool across the
+  desktop is the common case). The tile freezes rather than going empty or black,
+  and resumes when frames return. A source that has **never** produced a frame
+  shows "Preview unavailable" instead, because there is nothing to hold.
+- **The live preview and the recording still use separate capture backends before
+  recording.** The Record-page preview runs its own Windows Graphics Capture of
+  the selected target; only once recording starts does it switch to the engine's
+  shared frame (ADR 0040). Unifying the idle preview onto the recording's DXGI
+  Output Duplication backend is designed (ADR 0041) but **not shipped**, because
+  an Output Duplication held open while merely previewing has desktop-wide side
+  effects — it can force DWM out of multiplane-overlay and fullscreen-optimisation
+  paths, degrading a game running on the previewed monitor. That change is gated
+  behind a hardware probe and may be abandoned if the probe shows regressions; the
+  tile/preview hold above does not depend on it.
+
 ## Crash reporting and updates (0.6.0)
 
 - **Crash reporting is opt-in and consent-gated.** Capture is local-first (out-of-process Crashpad).

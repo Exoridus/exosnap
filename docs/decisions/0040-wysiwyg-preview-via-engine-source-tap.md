@@ -82,3 +82,16 @@ preview through a GPU texture, and the preview **stops its own capture**.
   which has since gained a packed-AYUV decode, so single-frame snapshots work on
   the 4:4:4 (AYUV) path as well.
 - Preview behavior while NOT recording is unchanged (its own WGC capture).
+
+## Superseding note (ADR 0041)
+
+The shared-texture transport this ADR introduced — `PreviewSharedTexture` +
+`PreviewPublishGate`, keyed-mutex producer key 0 / consumer key 1, 0 ms acquire
+with drop-on-contention — is the transport the capture hubs reuse unchanged (ADR
+0041). A future DXGI hub becomes another producer on this exact seam: during
+recording it is the engine, and were the idle preview ever moved onto the hub it
+would be the hub, with the renderer's `BeginPushedSource` consumer untouched. The
+tap here does **not** go away; the hub does not replace it. The one open item this
+ADR left — native HDR10 preview stays approximate because there is no SDR
+intermediate to tap — is ADR 0041's Phase 1 (tap the raw FP16 capture and add a
+preview-side scRGB→SDR tone-map, a port of `hdr_tonemap.h`).
