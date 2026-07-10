@@ -2,10 +2,12 @@
 
 ## Status
 
-Accepted — partially implemented. The WGC hub and its first consumer (the source
-picker's tiles) have shipped. The DXGI hub, the lease wiring, and the FP16 tap
-are designed but not built; this ADR records the model so those phases land
-against a fixed decision rather than re-deriving it.
+Accepted — implemented. The WGC hub and its first consumer (the source picker's
+tiles) shipped first; the FP16 preview tap, the DXGI hub with the idle display
+preview as its consumer, and the lease wiring have since landed. The
+idle-duplication hardware probe (MPO / fullscreen behaviour beside a running
+game) is still outstanding and remains the off-ramp for the DXGI hub's idle
+duplication specifically — the rest does not depend on it.
 
 Design source: `docs/superpowers/specs/2026-07-10-capture-hubs-design.md`.
 Related: ADR 0013 (OD for monitor capture, format policy), ADR 0040 (WYSIWYG
@@ -61,12 +63,14 @@ engine before the engine takes it. `StepCaptureHub` emits `close_capture` and
 `grant_lease` from a single decision, so no interleaving can put them in the
 wrong order.
 
-The lease API (`RequestLease` / `ReturnLease` / `ForwardFrame`) is implemented
-and unit-pinned but **has no caller yet**. It is deliberately pre-built: the
-constraint it enforces is load-bearing for the DXGI hub, and pinning the ordering
-now is cheaper than reconstructing it when Phase 4/5 wire it in. It is dead code
-by design, not by oversight, and removing it would only cost the tests that hold
-the ordering.
+The lease API (`RequestLease` / `ReturnLease`) is wired: the coordinator fires a
+blocking release hook immediately before the recording thread starts — after
+every validation and guard, so a rejected start never touches the idle feed —
+and the Record page returns the lease at Ready/Completed/Failed, where the
+pushed-source revert already lives. The subscription and the held frame survive
+the lease, so both hand-overs read as a hold, never a flash. `ForwardFrame`
+remains callerless: during a recording the preview consumes the engine's
+WYSIWYG tap directly (ADR 0040), so there is no hub-side fan-out to feed.
 
 ### The WGC hub ships first, and alone fixes the blanking
 
@@ -102,8 +106,29 @@ exactly as today.
   that never produced reports itself unavailable. Readback shrinks the frame on
   the GPU (mip chain, `ThumbnailMip::ChooseMipLevel`) so the CPU never sees the
   source resolution.
+- **The FP16 preview tap** (`ResolvePreviewTapPlan`, `PreviewTapDesc`) — a native
+  HDR10 session shares its linear scRGB pre-encode surface and the preview
+  tone-maps it on its own render thread with the same `HdrToneMapper` the
+  tone-mapped recording path runs. The one untapped session is the already-PQ
+  R10G10B10A2 desktop, which has no linear surface to share.
+- **`DxgiSourceProducer`** — a `HubSourceProducer` over `DxgiOdCaptureSrc`. Owns
+  an adapter-matched device recreated per (re)open (which is what makes even a
+  `DEVICE_REMOVED` recoverable here, unlike the engine mid-session), resolves the
+  stable GDI device name back to the current `HMONITOR`, and paces its own reopen
+  attempts under the hub's unbounded retry.
+- **`DxgiCaptureHubService`** — the DXGI hub's home: its own ~60 Hz pump thread,
+  a per-key registry (in practice one key: the previewed display), and the
+  publisher that feeds the preview renderer's pushed-only mode over the same
+  NT-handle + keyed-mutex transport as the engine's tap. Raw frames are
+  transformed by the pure `ResolveRawCaptureTapDesc` (HDR desktops tone-mapped,
+  Advanced-Color SDR desktops sRGB-encoded); the renderer draws the live cursor
+  (`cursor_sprite.h`, extracted from the recording compositor and unit-pinned)
+  and its own webcam PiP, since Output Duplication composites neither.
+- **The lease wiring** — see above. Strictly refcounted: at most one duplication
+  ever, none with the preview closed, none while the engine records.
 
-The lease API and the DXGI hub are **not** wired. No idle duplication is opened.
+Window and Region previews, and displays on a different adapter than the preview
+(explicit subscribe failure, D5), keep their own WGC capture.
 
 ## Consequences
 
@@ -111,11 +136,17 @@ The lease API and the DXGI hub are **not** wired. No idle duplication is opened.
   cheapest visible win in the design and independent of the risky later phases.
 - Held frames are user-visible behaviour and are recorded in
   `docs/product-spec.md`.
-- The FP16 preview tap for native HDR10 (Phase 1) and the DXGI hub with its idle
-  duplication (Phase 4) remain open. Phase 4 carries an explicit off-ramp: if its
-  hardware probe shows degraded DWM / fullscreen behaviour beside a running game,
-  the preview stays on WGC — by then a WGC *hub* consumer, so the hold survives
-  either way. See KNOWN_LIMITATIONS.
+- A plain display preview and its recording now share one capture backend: no
+  double capture in any state, a VRR- and HDR-true idle preview with no OS
+  capture indicator, and a preview that holds through a monitor hot-plug.
+- The idle duplication's hardware probe is outstanding: if MPO / fullscreen
+  behaviour degrades beside a running game on the previewed monitor, the
+  off-ramp is to route the display preview back to WGC — as a WGC *hub*
+  consumer, so the hold survives either way. Only the DXGI-hub idle feed is at
+  stake; the tap, the hold and the lease ordering stay. See KNOWN_LIMITATIONS.
+- Two product questions remain open: whether a kill-switch setting ships for
+  the idle duplication, and whether a held (still) frame gets a "reconnecting"
+  affordance or holds silently. The hub exposes the state either way.
 
 ## The latent bug fixed on the way
 

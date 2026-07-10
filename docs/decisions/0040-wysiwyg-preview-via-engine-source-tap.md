@@ -32,9 +32,11 @@ preview through a GPU texture, and the preview **stops its own capture**.
   BEFORE the NV12/P010 VideoProcessorBlt and BEFORE the RGB→AYUV 4:4:4 conversion.
   It already contains the cursor and webcam PiP exactly as recorded. This covers
   **SDR, HDR-tone-map, and 4:4:4** sessions (4:4:4 preview is re-enabled for free,
-  since the tap precedes the AYUV pack). **Native HDR10** has no SDR intermediate
-  (it encodes straight from an FP16 scRGB surface) and does not tap; the preview
-  keeps its own capture there (approximate SDR — see KNOWN_LIMITATIONS).
+  since the tap precedes the AYUV pack). **Native HDR10** taps too, since ADR
+  0041's Phase 1: the linear scRGB FP16 pre-encode surface is shared as-is and the
+  preview tone-maps it on its own render thread (a `PreviewTapDesc` travels with
+  the handle). The one untapped session is the already-PQ R10G10B10A2 desktop,
+  which has no linear surface to share; the preview keeps its own capture there.
 
 - **Transport:** a producer-side D3D11 texture with
   `D3D11_RESOURCE_MISC_SHARED_NTHANDLE | SHARED_KEYEDMUTEX`, created lazily from
@@ -70,7 +72,9 @@ preview through a GPU texture, and the preview **stops its own capture**.
 - No second capture during recording; no re-introduced VSync coupling.
 - The preview reflects the engine's actual encoded content (diagnostic truth).
 - WYSIWYG preview during **4:4:4** recording is restored (previously disabled).
-- **Native HDR10** preview stays approximate (independent capture); documented.
+- **Native HDR10** preview is WYSIWYG since ADR 0041 Phase 1: the recorded FP16
+  frame is shared and tone-mapped preview-side. Only the already-PQ 10-bit
+  desktop keeps an independent capture; documented.
 - **Cross-GPU** handle sharing is unsupported: if the preview and engine devices
   resolve to different adapters, `OpenSharedResource1` fails. Because the preview's
   own WGC capture is stopped only after a successful open, on failure it was never
@@ -88,10 +92,10 @@ preview through a GPU texture, and the preview **stops its own capture**.
 The shared-texture transport this ADR introduced — `PreviewSharedTexture` +
 `PreviewPublishGate`, keyed-mutex producer key 0 / consumer key 1, 0 ms acquire
 with drop-on-contention — is the transport the capture hubs reuse unchanged (ADR
-0041). A future DXGI hub becomes another producer on this exact seam: during
-recording it is the engine, and were the idle preview ever moved onto the hub it
-would be the hub, with the renderer's `BeginPushedSource` consumer untouched. The
-tap here does **not** go away; the hub does not replace it. The one open item this
-ADR left — native HDR10 preview stays approximate because there is no SDR
-intermediate to tap — is ADR 0041's Phase 1 (tap the raw FP16 capture and add a
-preview-side scRGB→SDR tone-map, a port of `hdr_tonemap.h`).
+0041). The DXGI hub is now another producer on this exact seam: the idle display
+preview is fed by the hub in the renderer's pushed-only mode, and during
+recording the engine takes over on the same `BeginPushedSource` consumer. The
+tap here does **not** go away; the hub does not replace it. The one open item
+this ADR left — native HDR10 preview stayed approximate for want of an SDR
+intermediate — closed with ADR 0041's Phase 1 (the FP16 capture is shared raw
+and tone-mapped preview-side by the engine's own `HdrToneMapper`).

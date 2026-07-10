@@ -222,6 +222,11 @@ hubs exist for — arrives in Phase 3, before any duplication is opened.
 1. **Native HDR10 tap.** Drop the `hdrNativeActive` guard where a composited FP16 surface
    exists; tap the raw FP16 capture where it does not; add the preview FP16 sampling and
    tone-map shader. Removes the double capture during HDR10 recording. **No hub.**
+
+   *Landed.* The "shader" turned out to be a port of nothing: the preview runs its own
+   instance of the engine's `HdrToneMapper` (moved to the public include tree) on its
+   render thread. The tap decision is the pure `ResolvePreviewTapPlan`, and the transform
+   travels with the NT handle as a `PreviewTapDesc`.
 2. **Hub skeleton, pure arbitration.** Consumer registry, `ResolveHubState`, hold state,
    lease grant/return, refcounted open/close. Shared by both hubs, compiled and
    unit-pinned, wired to nothing. **No behaviour change.**
@@ -239,8 +244,24 @@ hubs exist for — arrives in Phase 3, before any duplication is opened.
 4. **DXGI hub, and the preview moves onto it** — probe the idle-duplication risk first.
    Display preview and recording share a backend; the preview holds through an unplug.
    This is the phase that can be abandoned.
+
+   *Landed* — with the probe still outstanding, so the off-ramp remains armed: if the
+   probe shows DWM regressions, the display preview routes back to WGC (as a hub
+   consumer) and only this phase's idle feed is reverted. Built as `DxgiSourceProducer`
+   over `DxgiOdCaptureSrc` (adapter-matched device recreated per open; reopen by stable
+   GDI device name) plus `DxgiCaptureHubService` (own ~60 Hz pump thread, publisher over
+   the ADR-0040 transport into the renderer's new pushed-only mode). The renderer draws
+   the live cursor and its own webcam PiP over the raw frames; FP16 desktops resolve
+   through `ResolveRawCaptureTapDesc`. Region and Window previews, and cross-adapter
+   displays (D5), keep WGC.
 5. **Lease wiring.** The coordinator sequences preview release → recording start, and the
    reverse on stop. Only reachable if Phase 4 landed.
+
+   *Landed.* The coordinator fires a blocking release hook immediately before the
+   recording thread starts (after all guards, so a rejected start never releases); the
+   Record page returns the lease at Ready/Completed/Failed alongside the pushed-source
+   revert. The subscription and held frame survive the lease. `ForwardFrame` stays
+   callerless: during recording the preview consumes the engine's tap directly.
 6. **Docs.** New ADR for hub + lease; amend ADR 0040 (FP16 tap; the hub does not replace
    the tap); update KNOWN_LIMITATIONS and `docs/product-spec.md` (held frames are
    user-visible behaviour).
