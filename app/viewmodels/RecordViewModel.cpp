@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
-#include <cstdio>
 #include <filesystem>
 #include <string_view>
 #include <windows.h>

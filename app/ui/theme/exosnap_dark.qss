@@ -21,8 +21,7 @@ QWidget#operationalTitleBar {
 
 QWidget#titlebarBrandSlot,
 QWidget#titlebarNav,
-QWidget#titlebarDragSlot,
-QWidget#titlebarStatusSlot {
+QWidget#titlebarDragSlot {
     background: transparent;
 }
 

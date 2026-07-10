@@ -520,9 +520,11 @@ class RecordPage : public QWidget {
     // Report card dismiss button (inside resultDetailsPanel)
     QPushButton* report_card_dismiss_btn_ = nullptr;
 
-#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // True while a visual-test scenario freezes this page as a fixture. Only
+    // the harness build ever sets it (applyVisualScenario), but the flag is
+    // declared unconditionally so the fixture guards need no ifdef trellis —
+    // in Release it is constant false and the guards fold away.
     bool visual_test_mode_ = false;
-#endif
 };
 
 } // namespace exosnap

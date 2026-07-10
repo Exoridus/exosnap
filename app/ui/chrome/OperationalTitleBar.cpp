@@ -67,18 +67,15 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     drag_slot->setObjectName("titlebarDragSlot");
     drag_slot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
-    // Compact status pill bound to recording state.
-    auto* status_slot = new QWidget(this);
-    status_slot->setObjectName("titlebarStatusSlot");
-    auto* status_layout = new QHBoxLayout(status_slot);
-    status_layout->setContentsMargins(12, 0, 12, 0);
-    status_layout->setSpacing(0);
-
-    status_pill_ = new ui::widgets::StatusPill(status_slot);
+    // Compact status pill bound to recording state. The pill sits DIRECTLY in
+    // the root layout: a wrapper widget used to hold it for its 12px margins,
+    // but that second layout hop swallowed the size-hint invalidation when the
+    // label changed — the root kept the wrapper's cached hint and a longer
+    // label ("Ready" → "Checking") rendered clipped to the old width.
+    status_pill_ = new ui::widgets::StatusPill(this);
     status_pill_->setObjectName("titlebarStatusChip");
     status_pill_->setText(QStringLiteral("Ready"));
     status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
-    status_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
 
     // PS-PHASE-B: Notification bell — sits between the status pill and the window buttons.
     auto* bell_spacer = new QWidget(this);
@@ -113,7 +110,9 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     root->addWidget(brand_slot);
     root->addWidget(nav_container);
     root->addWidget(drag_slot, 1);
-    root->addWidget(status_slot, 0, Qt::AlignVCenter);
+    root->addSpacing(12);
+    root->addWidget(status_pill_, 0, Qt::AlignVCenter);
+    root->addSpacing(12);
     root->addWidget(bell_spacer);
     root->addWidget(bell_, 0, Qt::AlignVCenter);
     root->addWidget(controls);
