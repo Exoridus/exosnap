@@ -17,14 +17,15 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 # because CMake already adds /FS for Ninja+MSVC. /Z7 embeds debug info in each
 # .obj file; debugging experience is equivalent to /Zi.
 #
-# EXOSNAP_RELEASE_PDB (default OFF): the release pipeline turns this ON so the
-# Release config emits a SEPARATE .pdb (/Zi + linker /DEBUG) that CI can archive
-# for offline symbolication of crash minidumps (ADR 0017 § Symbol pipeline). The
-# default OFF build is unchanged: plain Release stays PDB-free, and the install
-# tree never ships a .pdb regardless (install(TARGETS) deploys RUNTIME only).
+# EXOSNAP_RELEASE_PDB (default ON): the Release config emits a SEPARATE .pdb
+# (/Zi + linker /DEBUG) so crash minidumps can be symbolicated offline (ADR 0017
+# § Symbol pipeline). This defaults ON because a minidump without symbols is a
+# list of addresses, not a diagnosis — and a Release build is what users run when
+# they hit a crash. The install tree never ships a .pdb regardless
+# (install(TARGETS) deploys RUNTIME only), so nothing leaks to end users.
 option(EXOSNAP_RELEASE_PDB
-    "Emit a separate PDB for the Release config so the release pipeline can archive symbols."
-    OFF)
+    "Emit a separate PDB for the Release config so crash dumps can be symbolicated."
+    ON)
 if(MSVC)
     if(EXOSNAP_RELEASE_PDB)
         set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>$<$<CONFIG:Release>:ProgramDatabase>")

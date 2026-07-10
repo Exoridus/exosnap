@@ -5,13 +5,19 @@
 //                 Uploads are still gated by require_user_consent=1 until the
 //                 user opts in via GiveUserConsent().
 //   When NOT defined: sentry_init() is called WITHOUT a DSN.
-//                     No network traffic occurs; local minidumps only.
+//                     No network traffic occurs; Crashpad still writes dumps.
+//
+// EXOSNAP_SENTRY_AVAILABLE gate (independent of the one above):
+//   When sentry-native is not linked there is no Crashpad handler at all. The
+//   in-process fallback in local_minidump.h is installed instead, so a dump is
+//   written on crash in every build configuration.
 //
 // The before_send hook runs in-process (crashpad out-of-process handler still
 // writes the minidump; before_send runs for structured Sentry events).
 
 #include <crash_capture/crash_capture.h>
 #include <crash_capture/crash_scrubber.h>
+#include <crash_capture/local_minidump.h>
 
 #include <atomic>
 #include <filesystem>
@@ -239,10 +245,23 @@ bool Initialize(const CrashCaptureConfig& config) {
 
     int rc = sentry_init(options);
     if (rc != 0) {
-        // Init failed — crash capture disabled, process continues normally
+        // Crashpad never came up, so no out-of-process handler is watching.
+        // Fall back to the in-process filter rather than leaving the process
+        // with no crash capture at all.
+        InstallLocalMinidumpHandler(s_crash_dir);
         return false;
     }
+    constexpr bool kCrashpadActive = true;
+#else
+    constexpr bool kCrashpadActive = false;
 #endif // EXOSNAP_SENTRY_AVAILABLE
+
+    // Without sentry-native there is no Crashpad handler, so nothing would write
+    // a dump when the process dies. Install the in-process fallback instead; it
+    // is the only reason a self-build can produce a stack for a crash.
+    if (ShouldInstallLocalMinidumpHandler(kCrashpadActive)) {
+        InstallLocalMinidumpHandler(s_crash_dir);
+    }
 
     s_initialized = true;
     return true;

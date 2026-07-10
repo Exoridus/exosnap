@@ -53,8 +53,11 @@ struct CrashCaptureConfig {
 //   - Uploads are still gated by user consent (require_user_consent=1).
 //
 // When EXOSNAP_OFFICIAL_BUILD is NOT defined:
-//   - No DSN is configured; Crashpad writes local minidumps only.
+//   - No DSN is configured; nothing is ever uploaded.
 //   - No network traffic ever occurs.
+//
+// Dumps are written in every configuration: by Crashpad when sentry-native is
+// linked, otherwise by the in-process fallback (see local_minidump.h).
 //
 // Returns true on success.  On failure, crash capture is silently disabled
 // (the process continues normally).

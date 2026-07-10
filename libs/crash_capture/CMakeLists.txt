@@ -15,9 +15,10 @@
 #
 # sentry-native integration:
 #   Optional. When sentry-native is found and EXOSNAP_CRASH_CAPTURE_AVAILABLE
-#   is set, the library links sentry::sentry. When absent, all sentry calls
-#   are compiled out and the library builds as a pure stub (local minidump /
-#   scrubber / sentinel only).
+#   is set, the library links sentry::sentry and Crashpad captures crashes
+#   out-of-process. When absent, all sentry calls are compiled out and the
+#   library installs the in-process minidump fallback (local_minidump.h)
+#   instead, so every build writes a dump on crash.
 
 cmake_minimum_required(VERSION 3.27)
 
@@ -27,6 +28,7 @@ cmake_minimum_required(VERSION 3.27)
 add_library(exosnap_crash_capture STATIC
     src/crash_scrubber.cpp
     src/crash_capture.cpp
+    src/local_minidump.cpp
 )
 
 add_library(exosnap::crash_capture ALIAS exosnap_crash_capture)
@@ -42,6 +44,7 @@ target_link_libraries(exosnap_crash_capture
         shlwapi.lib   # SHGetKnownFolderPath
         ole32.lib     # CoTaskMemFree
         shell32.lib   # KF path resolution
+        dbghelp.lib   # MiniDumpWriteDump (in-process fallback)
 )
 
 target_compile_definitions(exosnap_crash_capture PRIVATE NOMINMAX)
@@ -68,7 +71,7 @@ if(TARGET sentry::sentry)
     )
     message(STATUS "crash_capture: sentry-native linked (EXOSNAP_CRASH_CAPTURE_AVAILABLE=1)")
 else()
-    message(STATUS "crash_capture: sentry-native not found — building stub (local minidump only)")
+    message(STATUS "crash_capture: sentry-native not found — in-process minidump fallback active")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -94,5 +97,12 @@ exosnap_add_gtest(
     NAME test_crash_capture_engine
     TEST_PREFIX crash.
     SOURCES tests/test_crash_capture_engine.cpp
+    LIBRARIES exosnap_crash_capture
+)
+
+exosnap_add_gtest(
+    NAME test_local_minidump
+    TEST_PREFIX crash.
+    SOURCES tests/test_local_minidump.cpp
     LIBRARIES exosnap_crash_capture
 )

@@ -618,6 +618,9 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
 
 - **Opt-in and consent-gated**, local-first (out-of-process Crashpad). Nothing leaves the machine
   without an explicit choice on the next-launch crash dialog.
+- **A crash always leaves a local minidump.** Official builds capture it out-of-process via
+  Crashpad; builds without it fall back to an in-process handler. The dump stays on the machine
+  and is never uploaded without consent.
 - **Next-launch only** — crashes are offered for reporting on the following launch.
 - **Two-stage delivery:** Stage 0 is an assisted GitHub issue (always available); Stage 1 is an
   automated upload to **Sentry with EU data residency**, compiled in only for official builds — so
