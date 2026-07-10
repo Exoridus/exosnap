@@ -86,6 +86,12 @@ class CaptureSourceHub {
     [[nodiscard]] recorder_core::HubFrameKind Frame() const;
     [[nodiscard]] HubFrame HeldFrame() const;
 
+    // Zero means nobody is watching: the capture is closed and the hub may be
+    // discarded. The registry's disposal rule reads this.
+    [[nodiscard]] int ConsumerCount() const {
+        return state_.consumers;
+    }
+
     // The recording engine is about to capture this source. Returns true once
     // the hub's own capture is released and the engine may open its own. A
     // display may only be duplicated once per process, so this ordering is the

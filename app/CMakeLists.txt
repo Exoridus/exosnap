@@ -233,6 +233,11 @@ qt_add_executable(exosnap WIN32
     services/PreviewHelpers.h
     services/CaptureSourceHub.h
     services/CaptureSourceHub.cpp
+    services/CaptureSourceKey.h
+    services/CaptureHubRegistry.h
+    services/CaptureHubRegistry.cpp
+    services/WgcSourceProducer.h
+    services/WgcSourceProducer.cpp
     services/ThumbnailCapture.h
     services/ThumbnailCapture.cpp
     services/DxgiPreviewRenderer.h
@@ -544,11 +549,14 @@ exosnap_add_app_test_support(exosnap_source_picker_test_support
     # DESIGN-SYNC-R1: SourcePickerPanel's "Select region…" checkbox is now ExoCheckBox.
     ui/widgets/ExoCheckBox.cpp
     services/ThumbnailCapture.cpp
+    services/CaptureSourceHub.cpp
+    services/CaptureHubRegistry.cpp
+    services/WgcSourceProducer.cpp
     # THEME-SLICE-2C: SourcePickerOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
     ui/theme/ExoSnapTheme.cpp
 )
 target_link_libraries(exosnap_source_picker_test_support PUBLIC
-    Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    Qt6::Core Qt6::Gui Qt6::Widgets recorder_core d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
 
 exosnap_add_gtest(
@@ -1610,6 +1618,18 @@ exosnap_add_gtest(
 target_include_directories(service_frame_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(service_frame_delivery_tests PRIVATE NOMINMAX)
 set_target_properties(service_frame_delivery_tests PROPERTIES AUTOMOC ON)
+
+# Sharing and disposal: one hub per source key, born with the first consumer and
+# discarded with the last. Same fake-producer seam, no GPU.
+exosnap_add_gtest(
+    NAME capture_hub_registry_tests
+    TEST_PREFIX capture.
+    SOURCES
+        tests/test_capture_hub_registry.cpp
+        services/CaptureHubRegistry.cpp
+        services/CaptureSourceHub.cpp
+    LIBRARIES recorder_core)
+target_include_directories(capture_hub_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME display_device_notifier_tests

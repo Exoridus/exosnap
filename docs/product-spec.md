@@ -337,6 +337,14 @@ Three capture targets:
 Cursor capture is a toggle (on by default). Single-frame capture (a "capture frame" action) is
 available during recording via an on-screen dock control and a hotkey.
 
+**Source-picker tiles hold their last image.** Each tile in the source picker shows a live thumbnail
+of its display or window, refreshed about once a second while the picker is open. When another
+application takes a source over — dragging the Snipping Tool across the desktop is the everyday case
+— Windows stops producing frames for it. The tile then **freezes on the last image it received** and
+resumes when frames come back. It never goes empty and never goes black. A tile that has *never*
+produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
+picker releases every capture it opened.
+
 **Live preview (WYSIWYG during recording).** Before recording, the Record-page preview runs its own
 lightweight capture of the selected target. **Once recording starts, the preview shows exactly the
 frame the engine is encoding** — the composited, pre-encode source (cursor and webcam PiP already

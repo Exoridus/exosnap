@@ -1127,13 +1127,20 @@ void SourcePickerPanel::updateWindowsUnavailableToggle() {
 }
 
 void SourcePickerPanel::requestThumbnailsForSection(Section section) {
-    if (!thumbnail_capture_ || section == Section::Region) {
+    if (!thumbnail_capture_) {
+        return;
+    }
+    if (section == Section::Region) {
+        // The region section shows no tiles, so no source may stay captured.
+        thumbnail_capture_->releaseAll();
         return;
     }
 
-    thumbnail_capture_->cancelAll();
     const int token = ++refresh_generation_;
 
+    // The complete set of tiles that should be capturing. Sources already in it
+    // keep their hub across this call, and with it the frame they last showed.
+    std::vector<ThumbnailTarget> targets;
     const auto& options = section == Section::Screens ? screen_options_ : window_options_;
     for (const auto& option : options) {
         if (!shouldShowOption(option, section)) {
@@ -1150,12 +1157,10 @@ void SourcePickerPanel::requestThumbnailsForSection(Section section) {
             oc->card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
         }
 
-        if (section == Section::Screens) {
-            thumbnail_capture_->requestMonitorThumbnail(option.target_index, option.native_id, kThumbnailSize, token);
-        } else {
-            thumbnail_capture_->requestWindowThumbnail(option.target_index, option.native_id, kThumbnailSize, token);
-        }
+        targets.push_back(ThumbnailTarget{option.target_index, option.native_id, section == Section::Screens});
     }
+
+    thumbnail_capture_->setTargets(std::move(targets), kThumbnailSize, token);
 }
 
 SourcePickerPanel::SectionGrid* SourcePickerPanel::sectionGrid(Section section) {
@@ -1227,7 +1232,9 @@ void SourcePickerPanel::hideEvent(QHideEvent* event) {
     }
     ++refresh_generation_;
     if (thumbnail_capture_) {
-        thumbnail_capture_->cancelAll();
+        // Nobody is watching: the last consumer of every hub leaves, and no
+        // capture stays open behind a hidden picker.
+        thumbnail_capture_->releaseAll();
     }
     QWidget::hideEvent(event);
 }
