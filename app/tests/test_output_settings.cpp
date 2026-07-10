@@ -5,6 +5,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 
 #include <QCoreApplication>
@@ -18,6 +19,7 @@
 #include "services/RecordingCoordinator.h"
 
 #include <capability/capability_builder.h>
+#include <capability/translation.h>
 
 namespace exosnap {
 
@@ -1196,6 +1198,71 @@ TEST(DisplayFactsRefreshTest, AnEmptyQueryKeepsThePreviousFacts) {
 
     ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
     EXPECT_TRUE(coordinator.DisplayFacts()[0].hdr_active);
+}
+
+// ---------------------------------------------------------------------------
+// A start failure must report the configured format, not the struct defaults
+// ---------------------------------------------------------------------------
+// The error dialog shows the result's container/codec context. The early
+// failure paths in StartRecording used to post results without filling it, so
+// the dialog claimed "WebM · AV1 · Opus" (UiRecordingResult's defaults) while
+// the footer and the output path said MKV.
+
+TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::ResolveResult validation;
+    validation.succeeded = true;
+    // MP4 + H.264 + AAC: validated as-is by the static baseline, and distinct
+    // from every UiRecordingResult default, so a leak of the defaults cannot
+    // pass by coincidence.
+    validation.resolved_config.container = capability::Container::Mp4;
+    validation.resolved_config.video_codec = capability::VideoCodec::H264Nvenc;
+    validation.resolved_config.audio_codec = capability::AudioCodec::AacMf;
+    coordinator.OnCapabilitiesReady(caps, validation);
+
+    std::optional<UiRecordingResult> failure;
+    coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
+
+    // Point the output at a FILE so the folder guard rejects the start before
+    // any engine work — the earliest of the failure paths that used to leave
+    // the format fields at their defaults.
+    const std::filesystem::path file_as_folder = UniqueTempPath(L"not_a_folder.bin");
+    {
+        std::ofstream out(file_as_folder);
+        out << "x";
+    }
+    OutputSettingsModel settings;
+    settings.output_folder = file_as_folder;
+    // SetOutputSettings re-stamps the resolved config's format from this model,
+    // so the format under test must live here, not only in the ResolveResult.
+    settings.container = capability::Container::Mp4;
+    settings.video_codec = capability::VideoCodec::H264Nvenc;
+    settings.audio_codec = capability::AudioCodec::AacMf;
+    coordinator.SetOutputSettings(settings);
+
+    recorder_core::CaptureTarget target;
+    target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    target.native_id = 1; // never touched: the folder guard fires first
+    target.description = "\\\\.\\DISPLAY1";
+    EXPECT_FALSE(coordinator.StartRecording(target, capability::AudioUiState{}, std::nullopt));
+
+    QCoreApplication::processEvents();
+    ASSERT_TRUE(failure.has_value());
+    EXPECT_FALSE(failure->succeeded);
+    // The contract: the dialog's format context equals what the recording
+    // itself would have used — the same translation StartRecording runs.
+    const auto expected = capability::ToRecorderCoreConfig(validation.resolved_config, caps);
+    EXPECT_EQ(failure->container, expected.container);
+    EXPECT_EQ(failure->video_codec, expected.video_codec);
+    EXPECT_EQ(failure->audio_codec, expected.audio_codec);
+    EXPECT_EQ(failure->container, recorder_core::Container::Mp4); // not the WebM default
+
+    std::error_code cleanup_ec;
+    std::filesystem::remove(file_as_folder, cleanup_ec);
 }
 
 } // namespace

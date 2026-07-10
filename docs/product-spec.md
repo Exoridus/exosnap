@@ -411,6 +411,12 @@ degrades gracefully when not elevated.
 point to a different physical monitor after a reboot or reconnect — re-select in that case. Hot-swap
 of the capture device mid-recording is not supported: stop and restart after reconnecting.
 
+**Displays are numbered sequentially everywhere.** The internal GDI names skip numbers after
+plug/unplug cycles (`\\.\DISPLAY6`, `\\.\DISPLAY7` on a two-display desktop); the user-facing
+"Display N" label re-sequences the attached displays to 1, 2, 3… and the source picker, the Record
+header and the output filename all use the same numbering. A display that just left the topology
+falls back to its raw number rather than borrowing another display's.
+
 ---
 
 ## 8. Recording lifecycle

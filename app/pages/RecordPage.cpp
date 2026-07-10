@@ -3,6 +3,7 @@
 #include "../diagnostics/AppLog.h"
 #include "../diagnostics/StartupClock.h"
 #include "../models/RecordingPreset.h"
+#include "../services/DisplayNumbering.h"
 #include "../services/DxgiCaptureHubService.h"
 #include "../ui/CodecLabels.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
@@ -429,24 +430,9 @@ QString QueryProcessFriendlyName(HWND hwnd) {
     return QString::fromWCharArray(desc).trimmed();
 }
 
-// Maps each active display's DeviceName (e.g. L"\\.\DISPLAY6") to a stable
-// sequential 1-based index by iterating EnumDisplayDevices in its enumeration
-// order.  After plug/unplug cycles the internal names may skip numbers
-// ("DISPLAY1", "DISPLAY6") — this re-sequences them to 1, 2, 3...
-std::unordered_map<std::wstring, int> BuildDisplaySequenceMap() {
-    std::unordered_map<std::wstring, int> map;
-    int seq = 1;
-    DISPLAY_DEVICEW dd{};
-    dd.cb = sizeof(dd);
-    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); ++i) {
-        if (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
-            map[dd.DeviceName] = seq++;
-        }
-        dd = {};
-        dd.cb = sizeof(dd);
-    }
-    return map;
-}
+// BuildDisplaySequenceMap moved to services/DisplayNumbering.{h,cpp}: the
+// recording coordinator (Record header, output filename) numbers displays
+// through the same map, so picker and recording never disagree.
 
 QString QueryWindowTitle(HWND hwnd) {
     constexpr int kTitleBufferSize = 512;

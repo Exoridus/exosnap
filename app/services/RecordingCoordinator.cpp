@@ -1,5 +1,6 @@
 #include "RecordingCoordinator.h"
 
+#include "services/DisplayNumbering.h"
 #include "services/TargetDisplayFacts.h"
 
 #include "../../../libs/recorder_core/src/loopback_meter_service.h"
@@ -76,22 +77,6 @@ static std::string TrimAscii(const std::string& value) {
     return value.substr(first, last - first);
 }
 
-static bool StartsWithAsciiInsensitive(const std::string_view value, const std::string_view prefix) {
-    if (prefix.size() > value.size()) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < prefix.size(); ++i) {
-        const unsigned char a = static_cast<unsigned char>(value[i]);
-        const unsigned char b = static_cast<unsigned char>(prefix[i]);
-        if (std::tolower(a) != std::tolower(b)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings& settings) {
     const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
     recorder_core::WebcamOverlayLive overlay;
@@ -116,28 +101,10 @@ static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings
 }
 
 static std::string DisplayLabelFromTargetDescription(const std::string& raw_description) {
-    std::string value = TrimAscii(raw_description);
-    if (value.empty()) {
-        return "Display";
-    }
-
-    if (StartsWithAsciiInsensitive(value, R"(\\.\)")) {
-        value.erase(0, 4);
-    } else if (StartsWithAsciiInsensitive(value, "//./")) {
-        value.erase(0, 4);
-    }
-
-    if (value.size() > 7 && StartsWithAsciiInsensitive(value, "DISPLAY")) {
-        const std::string suffix = value.substr(7);
-        const bool digits_only = !suffix.empty() && std::all_of(suffix.begin(), suffix.end(), [](const char ch) {
-            return std::isdigit(static_cast<unsigned char>(ch)) != 0;
-        });
-        if (digits_only) {
-            return "Display " + suffix;
-        }
-    }
-
-    return value;
+    // Sequential numbering, shared with the source picker: the user who
+    // selected "Display 2" must find "Display 2" in the Record header and the
+    // output filename, not the raw GDI number ("DISPLAY7") behind it.
+    return SequentialDisplayLabel(raw_description, BuildDisplaySequenceMap());
 }
 
 struct WindowTargetParts {
@@ -679,6 +646,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             result.succeeded = false;
             result.error_phase = L"DiskSpace";
             result.error_detail = kDiskSpaceStopReason;
+            FillResultFormat(result);
             PostResult(std::move(result));
             return false;
         }
@@ -697,6 +665,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.succeeded = false;
         result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
         result.error_detail = FolderValidationMessage(folder_check);
+        FillResultFormat(result);
         PostResult(std::move(result));
 
         return false;
@@ -726,6 +695,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.output_path = output_path.wstring();
         result.error_detail =
             L"Could not create a unique output filename. Change the filename pattern or output folder.";
+        FillResultFormat(result);
         PostResult(std::move(result));
         return false;
     }
@@ -744,6 +714,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         UiRecordingResult result;
         result.succeeded = false;
         result.error_detail = L"Failed to create output directory: " + ToWide(ec.message());
+        FillResultFormat(result);
         PostResult(std::move(result));
         return false;
     }
@@ -894,6 +865,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.output_path = output_path.wstring();
         result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
         result.error_detail = L"Window target PID unavailable; the selected window may have been closed.";
+        FillResultFormat(result);
         PostResult(std::move(result));
         return false;
     }
@@ -913,6 +885,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.error_phase = FormatErrorPhase(validate_result.error_phase);
         result.hresult_text = FormatHResult(validate_result.error_code);
         result.error_detail = ToWide(validate_result.error_detail);
+        FillResultFormat(result);
         PostResult(std::move(result));
         return false;
     }
@@ -2193,6 +2166,16 @@ void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
         return;
     auto cb = on_state_changed_;
     QMetaObject::invokeMethod(QCoreApplication::instance(), [cb, new_state]() { cb(new_state); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::FillResultFormat(UiRecordingResult& result) const {
+    // The same translation the recording itself runs (StartRecording, line
+    // where `config` is built) — one home for the capability -> engine format
+    // mapping, so the dialog can never disagree with the file.
+    const auto core = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
+    result.container = core.container;
+    result.video_codec = core.video_codec;
+    result.audio_codec = core.audio_codec;
 }
 
 void RecordingCoordinator::PostResult(UiRecordingResult result) {

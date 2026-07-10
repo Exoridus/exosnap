@@ -251,6 +251,8 @@ qt_add_executable(exosnap WIN32
     services/WebcamService.cpp
     services/RecordingCoordinator.h
     services/RecordingCoordinator.cpp
+    services/DisplayNumbering.h
+    services/DisplayNumbering.cpp
     services/TargetDisplayFacts.h
     services/RecordingCountdownController.h
     services/RecordingCountdownController.cpp
@@ -738,6 +740,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
         exosnap_output_model_test_support
@@ -757,6 +760,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_mp4_split_remux.cpp
         services/RecordingCoordinator.cpp
+        services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
         exosnap_output_model_test_support
@@ -1643,6 +1647,16 @@ exosnap_add_gtest(
     SOURCES tests/test_thumbnail_mip.cpp)
 target_include_directories(thumbnail_mip_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The sequential "Display N" label shared by picker, Record header and output
+# filename. Pure given the sequence map; no Qt.
+exosnap_add_gtest(
+    NAME display_numbering_tests
+    TEST_PREFIX record.
+    SOURCES
+        tests/test_display_numbering.cpp
+        services/DisplayNumbering.cpp)
+target_include_directories(display_numbering_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 exosnap_add_gtest(
     NAME display_device_notifier_tests
     TEST_PREFIX device.
@@ -1675,6 +1689,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
             visual_tests/VisualScenario.cpp
@@ -1769,6 +1784,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_capture_frame_button.cpp
         services/RecordingCoordinator.cpp
+        services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
         notifications/NotificationManager.cpp
         ui/widgets/TransportDock.cpp
@@ -1888,6 +1904,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
             visual_tests/VisualScenario.cpp

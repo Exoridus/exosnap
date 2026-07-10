@@ -259,6 +259,11 @@ class RecordingCoordinator {
     // (Re)start or stop the shared webcam capture based on enabled/recording/preview state.
     void SyncWebcamService(bool force_restart);
     void PostStateChange(UiRecordingState new_state);
+    // Stamp the configured container/codecs onto a result before posting it.
+    // The error dialog shows this format context; a result that omits it falls
+    // back to the struct defaults (WebM · AV1 · Opus) and contradicts the
+    // Record footer and the output filename.
+    void FillResultFormat(UiRecordingResult& result) const;
     void PostResult(UiRecordingResult result);
     void PostStats(recorder_core::SessionStats stats);
     void PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot);
