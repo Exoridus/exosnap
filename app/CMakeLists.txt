@@ -1592,6 +1592,25 @@ exosnap_add_gtest(
     LIBRARIES recorder_core)
 target_include_directories(capture_source_hub_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Delivery-lifetime contract for PreviewService / WebcamService PostFrame: queued
+# frames are dropped once the bound receiver QObject is destroyed, so the callback
+# is never invoked against a freed page (the latent use-after-free fix). Drives the
+# protected PostFrame directly -- no camera, no WGC. WebcamService is provided by
+# the device-service support lib; PreviewService is compiled in for its D3D/WGC bits.
+exosnap_add_gtest(
+    NAME service_frame_delivery_tests
+    TEST_PREFIX service.
+    SOURCES
+        tests/test_service_frame_delivery.cpp
+        services/PreviewService.cpp
+    LIBRARIES
+        exosnap_device_service_test_support
+        Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        d3d11.lib dxgi.lib runtimeobject.lib ole32.lib)
+target_include_directories(service_frame_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(service_frame_delivery_tests PRIVATE NOMINMAX)
+set_target_properties(service_frame_delivery_tests PROPERTIES AUTOMOC ON)
+
 exosnap_add_gtest(
     NAME display_device_notifier_tests
     TEST_PREFIX device.

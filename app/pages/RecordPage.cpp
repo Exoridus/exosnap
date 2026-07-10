@@ -2349,7 +2349,10 @@ void RecordPage::initCoordinator() {
 
     preview_service_ = std::make_unique<PreviewService>();
     QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
-    preview_service_->SetFrameCallback([this, safeSurface](QImage frame) {
+    // Bind delivery to this page: PreviewService enqueues onto `this`, so Qt drops
+    // any in-flight frame if the page is destroyed. That is what makes the raw
+    // `this` capture below safe -- the lambda never runs after the page is gone.
+    preview_service_->SetFrameCallback(this, [this, safeSurface](QImage frame) {
         // Store the latest frame for Ready-state capture frame action.
         latest_preview_frame_ = frame;
         if (safeSurface && !safeSurface->isDxgiPreviewActive())
@@ -2358,14 +2361,21 @@ void RecordPage::initCoordinator() {
 
     // Live webcam frames feed the preview PiP (Qt paint or DXGI overlay). The
     // coordinator marshals these onto the main thread.
-    coordinator_->SetWebcamFrameCallback([this, safeSurface](QImage frame) {
+    // The webcam callback reaches WebcamService only through RecordingCoordinator's
+    // single-argument forwarder, so this page cannot hand the service a receiver to
+    // bind delivery to (as the preview above does). Guard the lambda itself instead:
+    // capture a QPointer to this page and touch nothing raw, so a frame delivered
+    // after the page dies is a no-op rather than a use-after-free on `emit`.
+    QPointer<RecordPage> safeSelf = this;
+    coordinator_->SetWebcamFrameCallback([safeSelf, safeSurface](QImage frame) {
         // Fan the single shared capture out to both consumers: the Record PiP overlay
         // and (via webcamFrameReady → MainWindow → Settings panel) the Settings preview.
         // The Settings panel no longer opens its own reader, so there is only ever one
         // capture on the device.
         if (safeSurface)
             safeSurface->setWebcamFrame(frame);
-        emit webcamFrameReady(frame);
+        if (safeSelf)
+            emit safeSelf->webcamFrameReady(frame);
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
 

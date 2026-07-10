@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QImage>
+#include <QObject>
+#include <QPointer>
 #include <recorder_core/recorder_session.h>
 
 #include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
@@ -104,7 +106,17 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     static std::vector<WebcamFormat> EnumerateFormats(const std::string& device_id);
 
     // Set callback invoked on main thread with each new QImage frame.
+    // Legacy registration: delivery is bound to the application's lifetime, so the
+    // callback must own no receiver it cannot outlive (see WebcamPage, which
+    // captures a QPointer guard only).
     void SetFrameCallback(FrameCallback cb);
+
+    // Preferred registration: binds queued frame delivery to `receiver`'s
+    // lifetime. PostFrame enqueues onto `receiver`, so Qt drops any in-flight
+    // frame the moment the receiver is destroyed and the callback is never invoked
+    // against a freed receiver. Fixes the latent use-after-free where a frame
+    // posted just before the receiving page died was still delivered.
+    void SetFrameCallback(QObject* receiver, FrameCallback cb);
 
     // Start capture; stops any existing capture first.
     // device_id: MF symbolic link (from EnumerateDevices). Empty opens no device
@@ -118,12 +130,21 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // WebcamFrameProvider — called by VideoThread (thread-safe).
     bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) override;
 
+  protected:
+    // Marshals `img` to the callback on the main thread. Protected (not private)
+    // so the delivery-lifetime contract can be exercised directly by a unit test
+    // without a live capture device.
+    void PostFrame(QImage img);
+
   private:
     void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
     void StoreFrame(int width, int height, std::vector<uint8_t> bgra);
-    void PostFrame(QImage img);
 
     FrameCallback frame_callback_;
+    // When receiver_bound_ is true, delivery is scoped to receiver_: a null
+    // receiver_ means the receiver has been destroyed and the frame is dropped.
+    QPointer<QObject> receiver_;
+    bool receiver_bound_ = false;
     std::jthread thread_;
     std::atomic<bool> running_{false};
 
