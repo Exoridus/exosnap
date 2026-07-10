@@ -5,6 +5,7 @@
 #include <QString>
 #include <array>
 #include <map>
+#include <vector>
 
 #include "services/GlobalHotkeyService.h"
 
@@ -92,7 +93,7 @@ TEST_F(HotkeyServiceTest, ValidSequencePassesValidation) {
 TEST_F(HotkeyServiceTest, InternalConflictDetected) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const QKeySequence seq(Qt::ALT | Qt::Key_F9);
     // ToggleRecording already has Alt+F9 by default.
@@ -106,7 +107,7 @@ TEST_F(HotkeyServiceTest, InternalConflictDetected) {
 TEST_F(HotkeyServiceTest, IdempotentRebindSucceedsWithoutReregistration) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const int calls_before = reg.register_calls;
     RebindResult result = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F9));
@@ -119,7 +120,7 @@ TEST_F(HotkeyServiceTest, IdempotentRebindSucceedsWithoutReregistration) {
 TEST_F(HotkeyServiceTest, SuccessfulRebindUnregistersOldAndRegistersNew) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const int id = GlobalHotkeyService::Win32IdForAction(HotkeyAction::ToggleRecording);
     EXPECT_TRUE(reg.IsRegistered(id)); // default Alt+F9 was registered by SetRegistrar
@@ -135,7 +136,7 @@ TEST_F(HotkeyServiceTest, SuccessfulRebindUnregistersOldAndRegistersNew) {
 TEST_F(HotkeyServiceTest, FailedRebindRestoresOldBinding) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const QKeySequence original = svc.GetBinding(HotkeyAction::ToggleRecording);
     reg.fail_next_n = 1; // make the next Register call fail
@@ -152,11 +153,39 @@ TEST_F(HotkeyServiceTest, FailedRebindRestoresOldBinding) {
     EXPECT_TRUE(reg.IsRegistered(id));
 }
 
+// 9b. SetRegistrar reports which persisted bindings could not be registered
+// (e.g. another app already holds the shortcut at startup) instead of
+// silently swallowing the failure.
+TEST_F(HotkeyServiceTest, SetRegistrarReportsFailedBindings) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    // Only one non-empty binding exists by default (ToggleRecording = Alt+F9);
+    // make its Register() call fail to simulate an external conflict at startup.
+    reg.fail_next_n = 1;
+
+    const std::vector<HotkeyAction> failed = svc.SetRegistrar(&reg);
+    ASSERT_EQ(failed.size(), 1u);
+    EXPECT_EQ(failed[0], HotkeyAction::ToggleRecording);
+
+    // The binding model itself is untouched — SetRegistrar only reports, it
+    // never mutates state on failure.
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::ToggleRecording),
+              GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording));
+}
+
+// 9c. SetRegistrar reports nothing when every registration succeeds.
+TEST_F(HotkeyServiceTest, SetRegistrarReportsNoFailuresOnSuccess) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    const std::vector<HotkeyAction> failed = svc.SetRegistrar(&reg);
+    EXPECT_TRUE(failed.empty());
+}
+
 // 10. Persistence strings are only updated after successful binding.
 TEST_F(HotkeyServiceTest, PersistenceNotUpdatedOnFailure) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     HotkeyBindings before{};
     svc.SaveToStrings(before);
@@ -174,7 +203,7 @@ TEST_F(HotkeyServiceTest, PersistenceNotUpdatedOnFailure) {
 TEST_F(HotkeyServiceTest, UnsetBindingRemovesRegistration) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const int id = GlobalHotkeyService::Win32IdForAction(HotkeyAction::ToggleRecording);
     EXPECT_TRUE(reg.IsRegistered(id));
@@ -188,7 +217,7 @@ TEST_F(HotkeyServiceTest, UnsetBindingRemovesRegistration) {
 TEST_F(HotkeyServiceTest, ResetToDefaultRestoresDefaultBinding) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     [[maybe_unused]] auto rb = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F8));
     EXPECT_NE(svc.GetBinding(HotkeyAction::ToggleRecording),
@@ -204,7 +233,7 @@ TEST_F(HotkeyServiceTest, ResetToDefaultRestoresDefaultBinding) {
 TEST_F(HotkeyServiceTest, ResetAllToDefaultsRestoresAll) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     [[maybe_unused]] auto r0 =
         svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::AltModifier | Qt::Key_F8));
@@ -250,7 +279,7 @@ TEST_F(HotkeyServiceTest, Win32IdsAreStable) {
 TEST_F(HotkeyServiceTest, SignalEmittedOnSuccess) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     int signal_count = 0;
     QObject::connect(&svc, &GlobalHotkeyService::bindingChanged, &svc,
@@ -265,7 +294,7 @@ TEST_F(HotkeyServiceTest, SignalEmittedOnSuccess) {
 TEST_F(HotkeyServiceTest, SignalNotEmittedOnFailure) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     int signal_count = 0;
     QObject::connect(&svc, &GlobalHotkeyService::bindingChanged, &svc,
@@ -282,7 +311,7 @@ TEST_F(HotkeyServiceTest, SignalNotEmittedOnFailure) {
 TEST_F(HotkeyServiceTest, ResetPauseToDefaultIsEmpty) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     // First set Pause to a non-empty binding.
     const QKeySequence alt_f10(Qt::AltModifier | Qt::Key_F10);
@@ -316,7 +345,7 @@ TEST_F(HotkeyServiceTest, SplitRecordingUnsetByDefault) {
 TEST_F(HotkeyServiceTest, SplitRecordingRebindAndConflict) {
     GlobalHotkeyService svc;
     FakeRegistrar reg;
-    svc.SetRegistrar(&reg);
+    (void)svc.SetRegistrar(&reg);
 
     const QKeySequence seq(Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_S);
     RebindResult ok = svc.TrySetBinding(HotkeyAction::SplitRecording, seq);

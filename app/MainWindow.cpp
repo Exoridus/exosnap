@@ -465,6 +465,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
+    if (!persisted_settings_.load_ok) {
+        app_settings_corrupted_ = true;
+        diagnostics::AppLog::warning(
+            QStringLiteral("settings"),
+            QStringLiteral("Settings file could not be read cleanly and was reset to defaults: %1")
+                .arg(settings_store_.SettingsFilePath()));
+    }
     // SETTINGS-HONESTY-R1: narrow AppLog's recording filter to the persisted developer
     // log-level now that it is known. AppLog::init() (above) already ran with the
     // "record everything" default, so early-startup entries are unaffected.
@@ -1688,7 +1695,27 @@ void MainWindow::showEvent(QShowEvent* event) {
         HWND hwnd = reinterpret_cast<HWND>(winId());
         if (hwnd && hotkey_service_) {
             win32_hotkey_registrar_ = std::make_unique<Win32HotkeyRegistrar>(hwnd);
-            hotkey_service_->SetRegistrar(win32_hotkey_registrar_.get());
+            const std::vector<HotkeyAction> failed_hotkeys =
+                hotkey_service_->SetRegistrar(win32_hotkey_registrar_.get());
+            if (!failed_hotkeys.empty()) {
+                QStringList names;
+                for (const HotkeyAction action : failed_hotkeys)
+                    names << GlobalHotkeyService::ActionDisplayName(action);
+                const QString joined = names.join(QStringLiteral(", "));
+                diagnostics::AppLog::warning(
+                    QStringLiteral("hotkeys"),
+                    QStringLiteral("Hotkey registration failed at startup (in use elsewhere): %1").arg(joined));
+                if (notification_manager_) {
+                    notifications::NotificationEvent hotkey_conflict_event;
+                    hotkey_conflict_event.type = notifications::NotificationType::HotkeyConflict;
+                    hotkey_conflict_event.title = QStringLiteral("Hotkey unavailable");
+                    hotkey_conflict_event.body =
+                        QStringLiteral("%1: already in use by Windows or another app. It won't respond "
+                                       "until you rebind it in Settings.")
+                            .arg(joined);
+                    notification_manager_->Enqueue(std::move(hotkey_conflict_event));
+                }
+            }
         }
 #endif
     }
@@ -2549,7 +2576,18 @@ void MainWindow::refreshPresetUi() {
 }
 
 void MainWindow::persistPresetState() {
-    preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), captureLiveConfig());
+    QString err;
+    if (!preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), captureLiveConfig(), &err)) {
+        diagnostics::AppLog::warning(QStringLiteral("presets"),
+                                     QStringLiteral("Failed to save recording settings: %1").arg(err));
+        if (notification_manager_) {
+            notifications::NotificationEvent event;
+            event.type = notifications::NotificationType::SettingsSaveFailed;
+            event.title = QStringLiteral("Settings could not be saved");
+            event.body = QStringLiteral("Your latest changes could not be written to disk and may be lost.");
+            notification_manager_->Enqueue(std::move(event));
+        }
+    }
 }
 
 void MainWindow::onLiveConfigChanged() {
@@ -3489,6 +3527,19 @@ void MainWindow::initNotificationToasts() {
             event.type = notifications::NotificationType::SettingsRepaired;
             event.title = QStringLiteral("Settings repaired");
             event.body = QStringLiteral("Some saved settings were invalid and have been repaired.");
+            notification_manager_->Enqueue(std::move(event));
+        }
+    }
+
+    // AppSettingsStore::Load() found settings.ini unreadable before toasts existed
+    // to report it (see the ctor's settings-load block) — raise it now that they do.
+    if (app_settings_corrupted_) {
+        app_settings_corrupted_ = false;
+        if (notification_manager_) {
+            notifications::NotificationEvent event;
+            event.type = notifications::NotificationType::SettingsRepaired;
+            event.title = QStringLiteral("Settings reset");
+            event.body = QStringLiteral("Your saved app settings could not be read and were reset to defaults.");
             notification_manager_->Enqueue(std::move(event));
         }
     }

@@ -121,6 +121,13 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Debug")).toString();
     settings.endGroup();
 
+    // A corrupt or otherwise unreadable settings.ini does not throw — QSettings
+    // silently falls back to defaults for every key above. Surface that via the
+    // status check instead of pretending the load was faithful.
+    if (settings.status() != QSettings::NoError) {
+        persisted.load_ok = false;
+    }
+
     return persisted;
 }
 

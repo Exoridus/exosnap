@@ -53,9 +53,12 @@ class RecordingPresetStore {
     // Persist the live config and the given (non-built-in) presets.  Built-in
     // ids are silently skipped — they are code-defined and never round-trip
     // through disk.  Creates parent directories as needed.
-    // Empty file_path → no-op.
-    void Save(const std::vector<RecordingPreset>& presets, const std::string& selected_id,
-              const RecordingPresetConfig& live) const;
+    // Empty file_path → no-op, returns true (nothing to persist).
+    // Returns true on success; on failure (disk full, file locked by another
+    // process, ...) writes a human-readable message into *err (if non-null)
+    // and returns false — the caller decides whether/how to surface that.
+    bool Save(const std::vector<RecordingPreset>& presets, const std::string& selected_id,
+              const RecordingPresetConfig& live, QString* err = nullptr) const;
 
     [[nodiscard]] const QString& FilePath() const;
 

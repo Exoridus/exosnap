@@ -55,6 +55,10 @@ class NotificationManager : public QObject {
     static constexpr int kDismissMs_PresetSwitched = 8000;
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_OverlayOmitted = 8000;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_HotkeyConflict = 8000;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_SettingsSaveFailed = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

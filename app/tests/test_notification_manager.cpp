@@ -93,6 +93,8 @@ TEST_F(NotificationManagerTest, Standing_Types_AreExactlyTheConditionReports) {
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::SettingsRepaired));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::OverlayOmitted));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::PresetSwitched));
+    EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::HotkeyConflict));
+    EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::SettingsSaveFailed));
 }
 
 TEST_F(NotificationManagerTest, DismissInterval_Saved_IsExactly5000ms) {

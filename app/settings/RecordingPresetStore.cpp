@@ -1250,14 +1250,18 @@ PersistedPresetState RecordingPresetStore::Load() const {
 // Save
 // ---------------------------------------------------------------------------
 
-void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, const std::string& selected_id,
-                                const RecordingPresetConfig& live) const {
+bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, const std::string& selected_id,
+                                const RecordingPresetConfig& live, QString* err) const {
     if (file_path_.isEmpty()) {
-        return;
+        return true; // Nothing to persist — not a failure.
     }
 
     const QFileInfo info(file_path_);
-    QDir().mkpath(info.absolutePath());
+    if (!QDir().mkpath(info.absolutePath())) {
+        if (err)
+            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
+        return false;
+    }
 
     toml::table doc;
     doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
@@ -1272,7 +1276,7 @@ void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
     }
     doc.emplace("presets", std::move(presets_arr));
 
-    WriteTomlAtomic(doc, file_path_, nullptr);
+    return WriteTomlAtomic(doc, file_path_, err);
 }
 
 // ---------------------------------------------------------------------------

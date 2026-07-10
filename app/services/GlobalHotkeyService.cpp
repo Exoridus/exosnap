@@ -116,10 +116,11 @@ GlobalHotkeyService::GlobalHotkeyService(QObject* parent) : QObject(parent) {
     bindings_[4] = DefaultBinding(HotkeyAction::SplitRecording);
 }
 
-void GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
+std::vector<HotkeyAction> GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
     registrar_ = registrar;
+    std::vector<HotkeyAction> failed;
     if (!registrar_)
-        return;
+        return failed;
     // Register all current non-empty bindings now that we have a HWND.
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         const auto action = static_cast<HotkeyAction>(i);
@@ -131,9 +132,11 @@ void GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
         UINT vk = QtKeyToVk(combo.key());
         if (vk == 0)
             continue;
-        registrar_->Register(Win32IdForAction(action), QtModifiersToWin32(combo.keyboardModifiers()), vk);
+        if (!registrar_->Register(Win32IdForAction(action), QtModifiersToWin32(combo.keyboardModifiers()), vk))
+            failed.push_back(action);
 #endif
     }
+    return failed;
 }
 
 RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequence seq) {

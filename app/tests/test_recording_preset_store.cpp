@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QString>
 #include <QTemporaryDir>
@@ -1268,8 +1269,40 @@ TEST(RecordingPresetStore, EmptyPath_Load_SeedsDefault_NoCrash) {
 TEST(RecordingPresetStore, EmptyPath_Save_NoCrash) {
     const QString empty_path;
     RecordingPresetStore store(empty_path);
-    // Should not crash or throw.
-    store.Save({MakeDefaultPreset()}, std::string(kDefaultPresetId), MakeDefaultPreset().config);
+    // Should not crash or throw, and an intentional no-op path is a success.
+    QString err;
+    EXPECT_TRUE(store.Save({MakeDefaultPreset()}, std::string(kDefaultPresetId), MakeDefaultPreset().config, &err));
+    EXPECT_TRUE(err.isEmpty());
+}
+
+// ===========================================================================
+// Save() reports success/failure instead of swallowing write errors
+// ===========================================================================
+
+TEST(RecordingPresetStore, Save_Success_ReturnsTrueWithNoError) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    QString err;
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_TRUE(store.Save({p}, p.id, p.config, &err));
+    EXPECT_TRUE(err.isEmpty());
+    EXPECT_TRUE(QFileInfo::exists(path));
+}
+
+TEST(RecordingPresetStore, Save_WriteFailure_ReturnsFalseWithMessage) {
+    // Force the atomic-rename commit to fail: create a directory AT the target
+    // path so QSaveFile can write its temp file next to it but can never rename
+    // that temp file onto an existing directory.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("presets.toml"));
+    ASSERT_TRUE(QDir().mkpath(path));
+
+    RecordingPresetStore store(path);
+    QString err;
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_FALSE(store.Save({p}, p.id, p.config, &err));
+    EXPECT_FALSE(err.isEmpty());
 }
 
 // ===========================================================================
