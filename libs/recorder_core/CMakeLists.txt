@@ -273,6 +273,8 @@ add_library(recorder_core STATIC
     src/fdk_aac_encoder.cpp
     src/gpu_compositor.cpp
     src/gpu_compositor.h
+    src/cursor_sprite.cpp
+    include/recorder_core/cursor_sprite.h
     src/gpu_hdr_tonemap.cpp
     include/recorder_core/gpu_hdr_tonemap.h
     src/gpu_rgb_to_ayuv.cpp
@@ -397,6 +399,15 @@ exosnap_add_gtest(
     NAME test_preview_tap_plan
     TEST_PREFIX recorder_core.
     SOURCES tests/test_preview_tap_plan.cpp
+    LIBRARIES recorder_core
+)
+
+# Cursor-sprite placement: the clip/scale arithmetic shared by the recording
+# compositor and the preview's cursor sprite. Pure, GPU-free.
+exosnap_add_gtest(
+    NAME test_cursor_sprite
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_cursor_sprite.cpp
     LIBRARIES recorder_core
 )
 

@@ -15,13 +15,19 @@ namespace exosnap {
 //     -> first engine frame copied into the local texture  : OnFrameConsumed()
 //     -> recording stops / resources released              : Reset()
 struct PushedSourceState {
-    bool active = false;      // a shared engine handle is open; engine is the source
-    bool has_frame = false;   // >= 1 engine frame copied into the local present target
+    bool active = false;      // a shared handle is open; the pushed source is the background
+    bool has_frame = false;   // >= 1 pushed frame copied into the local present target
     bool wgc_stopped = false; // the preview's own WGC capture graph has been closed
+    // True when the pushed frames are RAW captures (an idle DXGI-hub source):
+    // they carry neither the cursor nor the webcam PiP, so the renderer draws
+    // both itself. False for the engine's recording frames, which arrive with
+    // the overlays baked in exactly as encoded.
+    bool raw_source = false;
 
-    void OnSourceOpened() noexcept {
+    void OnSourceOpened(bool raw_source_frames) noexcept {
         active = true;
         has_frame = false;
+        raw_source = raw_source_frames;
     }
     void OnWgcGraphStopped() noexcept {
         wgc_stopped = true;
@@ -33,23 +39,31 @@ struct PushedSourceState {
         active = false;
         has_frame = false;
         wgc_stopped = false;
+        raw_source = false;
     }
 
-    // The engine frame is the background this present tick (it already contains the
-    // cursor + webcam PiP exactly as recorded). Until the first engine frame lands
-    // the renderer holds its last WGC image instead — no black flash on countdown.
+    // The pushed frame is the background this present tick. Until the first pushed
+    // frame lands the renderer holds its last WGC image instead — no black flash
+    // on countdown.
     [[nodiscard]] bool DrawsPushedBackground() const noexcept {
         return active && has_frame;
     }
-    // Poll the WGC frame pool only while the engine is NOT the source.
+    // Poll the WGC frame pool only while a pushed source is NOT active.
     [[nodiscard]] bool PollsWgc() const noexcept {
         return !active;
     }
-    // Draw the renderer's OWN webcam overlay everywhere EXCEPT when a pushed engine
-    // frame is the background (that frame already has the PiP — drawing it again
-    // would double it). The overlay still draws during the countdown hold.
+    // Draw the renderer's OWN webcam overlay unless the background is an engine
+    // frame with the PiP already baked in (drawing it again would double it).
+    // A raw pushed background carries no PiP, so the renderer keeps drawing its
+    // own — same as during the countdown hold.
     [[nodiscard]] bool DrawsWebcamOverlay() const noexcept {
-        return !DrawsPushedBackground();
+        return !DrawsPushedBackground() || raw_source;
+    }
+    // Draw the renderer's own cursor sprite only over a raw pushed background:
+    // engine frames carry the recorded cursor, and the WGC preview's frames
+    // carry the cursor WGC composites itself.
+    [[nodiscard]] bool DrawsCursorSprite() const noexcept {
+        return DrawsPushedBackground() && raw_source;
     }
     // Stop the preview's own WGC capture graph exactly once, when pushed mode first
     // becomes active (no second capture running alongside the engine).

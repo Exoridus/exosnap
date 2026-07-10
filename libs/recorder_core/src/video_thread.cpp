@@ -15,6 +15,7 @@
 #include "preview_shared_texture.h"
 #include "session_internal.h"
 #include "yuv_to_bgra.h"
+#include <recorder_core/cursor_sprite.h>
 #include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/preview_tap.h>
@@ -109,103 +110,9 @@ int RectHeight(const RECT& r) noexcept {
     return r.bottom - r.top;
 }
 
-struct Win32CursorBitmap {
-    std::vector<uint8_t> bgra;
-    int width = 0;
-    int height = 0;
-    int hotspot_x = 0;
-    int hotspot_y = 0;
-};
-
-bool CaptureWin32CursorBitmap(HCURSOR cursor, Win32CursorBitmap& out) {
-    if (cursor == nullptr) {
-        return false;
-    }
-
-    ICONINFO icon{};
-    if (GetIconInfo(cursor, &icon) == FALSE) {
-        return false;
-    }
-
-    auto cleanup = [&]() {
-        if (icon.hbmColor != nullptr) {
-            DeleteObject(icon.hbmColor);
-        }
-        if (icon.hbmMask != nullptr) {
-            DeleteObject(icon.hbmMask);
-        }
-    };
-
-    BITMAP bitmap{};
-    int width = 0;
-    int height = 0;
-    if (icon.hbmColor != nullptr && GetObjectW(icon.hbmColor, sizeof(bitmap), &bitmap) != 0) {
-        width = bitmap.bmWidth;
-        height = bitmap.bmHeight;
-    } else if (icon.hbmMask != nullptr && GetObjectW(icon.hbmMask, sizeof(bitmap), &bitmap) != 0) {
-        width = bitmap.bmWidth;
-        height = bitmap.bmHeight / 2;
-    }
-
-    if (width <= 0 || height <= 0 || width > 256 || height > 256) {
-        cleanup();
-        return false;
-    }
-
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HDC dc = CreateCompatibleDC(nullptr);
-    if (dc == nullptr) {
-        cleanup();
-        return false;
-    }
-    HBITMAP dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (dib == nullptr || bits == nullptr) {
-        if (dib != nullptr) {
-            DeleteObject(dib);
-        }
-        DeleteDC(dc);
-        cleanup();
-        return false;
-    }
-
-    HGDIOBJ old = SelectObject(dc, dib);
-    std::memset(bits, 0, static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
-    const BOOL drawn = DrawIconEx(dc, 0, 0, cursor, width, height, 0, nullptr, DI_NORMAL);
-    if (old != nullptr) {
-        SelectObject(dc, old);
-    }
-
-    if (drawn != FALSE) {
-        out.width = width;
-        out.height = height;
-        out.hotspot_x = static_cast<int>(icon.xHotspot);
-        out.hotspot_y = static_cast<int>(icon.yHotspot);
-        out.bgra.assign(static_cast<const uint8_t*>(bits),
-                        static_cast<const uint8_t*>(bits) + static_cast<size_t>(width) * height * 4u);
-    }
-
-    DeleteObject(dib);
-    DeleteDC(dc);
-    cleanup();
-    return drawn != FALSE;
-}
-
-int ScaleCoordinateToSource(LONG screen_delta, int source_pixels, int bounds_pixels) noexcept {
-    if (bounds_pixels <= 0 || source_pixels <= 0) {
-        return static_cast<int>(screen_delta);
-    }
-    const int64_t numerator = static_cast<int64_t>(screen_delta) * source_pixels;
-    const int64_t rounded = numerator >= 0 ? numerator + bounds_pixels / 2 : numerator - bounds_pixels / 2;
-    return static_cast<int>(rounded / bounds_pixels);
-}
+// Win32CursorBitmap / CaptureWin32CursorBitmap / ScaleCoordinateToSource /
+// ClipCursorSprite moved to <recorder_core/cursor_sprite.h>, shared with the
+// DXGI preview's cursor sprite.
 
 // A 10-bit R10G10B10A2 tone-map intermediate must be a supported VideoProcessor
 // *input* on this driver, or every CreateVideoProcessorInputView call for it
@@ -1257,33 +1164,11 @@ void VideoThread::Run() {
             return true;
         }
 
-        int32_t cx = odCursorPosX;
-        int32_t cy = odCursorPosY;
-        int32_t cw = static_cast<int32_t>(odCursorShapeInfo.Width);
-        int32_t ch = static_cast<int32_t>(odCursorShapeInfo.Height);
-
-        int32_t bitmapOffX = 0;
-        int32_t bitmapOffY = 0;
-        if (cx < 0) {
-            bitmapOffX = -cx;
-            cw += cx;
-            cx = 0;
-        }
-        if (cy < 0) {
-            bitmapOffY = -cy;
-            ch += cy;
-            cy = 0;
-        }
-
-        const int32_t targetW = static_cast<int32_t>(compositorWidth);
-        const int32_t targetH = static_cast<int32_t>(compositorHeight);
-        const int32_t maxW = targetW - cx;
-        const int32_t maxH = targetH - cy;
-        if (cw > maxW)
-            cw = maxW;
-        if (ch > maxH)
-            ch = maxH;
-        if (cw <= 0 || ch <= 0 || cw > 256 || ch > 256)
+        const CursorSpriteClip clip =
+            ClipCursorSprite(odCursorPosX, odCursorPosY, static_cast<int32_t>(odCursorShapeInfo.Width),
+                             static_cast<int32_t>(odCursorShapeInfo.Height), static_cast<int32_t>(compositorWidth),
+                             static_cast<int32_t>(compositorHeight));
+        if (!clip.visible)
             return true;
 
         const uint32_t pitch =
@@ -1294,22 +1179,23 @@ void VideoThread::Run() {
             return true;
         }
 
-        odCursorUploadBgra.resize(static_cast<size_t>(cw) * ch * 4);
-        for (int32_t row = 0; row < ch; ++row) {
-            const size_t srcOff = static_cast<size_t>(bitmapOffY + row) * pitch + static_cast<size_t>(bitmapOffX) * 4;
+        odCursorUploadBgra.resize(static_cast<size_t>(clip.w) * clip.h * 4);
+        for (int32_t row = 0; row < clip.h; ++row) {
+            const size_t srcOff =
+                static_cast<size_t>(clip.bitmap_off_y + row) * pitch + static_cast<size_t>(clip.bitmap_off_x) * 4;
             const uint8_t* srcRow = odCursorBitmap.data() + srcOff;
-            uint8_t* dstRow = odCursorUploadBgra.data() + static_cast<size_t>(row) * cw * 4;
-            std::memcpy(dstRow, srcRow, static_cast<size_t>(cw) * 4);
+            uint8_t* dstRow = odCursorUploadBgra.data() + static_cast<size_t>(row) * clip.w * 4;
+            std::memcpy(dstRow, srcRow, static_cast<size_t>(clip.w) * 4);
         }
 
         WebcamPixelRect rect;
-        rect.x = cx;
-        rect.y = cy;
-        rect.w = cw;
-        rect.h = ch;
+        rect.x = clip.x;
+        rect.y = clip.y;
+        rect.w = clip.w;
+        rect.h = clip.h;
 
         std::string compErr;
-        if (!gpuCompositor.DrawCursor(odCursorUploadBgra.data(), cw, ch, rect, compErr)) {
+        if (!gpuCompositor.DrawCursor(odCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU cursor composite: " + compErr);
             return false;
         }
@@ -1343,56 +1229,36 @@ void VideoThread::Run() {
             return true;
         }
 
-        int32_t cx = ScaleCoordinateToSource(cursorInfo.ptScreenPos.x - wgcCursorBounds.left,
-                                             static_cast<int>(sourceWidth), boundsW) -
-                     wgcCursorBitmap.hotspot_x;
-        int32_t cy = ScaleCoordinateToSource(cursorInfo.ptScreenPos.y - wgcCursorBounds.top,
-                                             static_cast<int>(sourceHeight), boundsH) -
-                     wgcCursorBitmap.hotspot_y;
-        int32_t cw = wgcCursorBitmap.width;
-        int32_t ch = wgcCursorBitmap.height;
-
-        int32_t bitmapOffX = 0;
-        int32_t bitmapOffY = 0;
-        if (cx < 0) {
-            bitmapOffX = -cx;
-            cw += cx;
-            cx = 0;
-        }
-        if (cy < 0) {
-            bitmapOffY = -cy;
-            ch += cy;
-            cy = 0;
-        }
-
-        const int32_t targetW = static_cast<int32_t>(sourceWidth);
-        const int32_t targetH = static_cast<int32_t>(sourceHeight);
-        const int32_t maxW = targetW - cx;
-        const int32_t maxH = targetH - cy;
-        if (cw > maxW)
-            cw = maxW;
-        if (ch > maxH)
-            ch = maxH;
-        if (cw <= 0 || ch <= 0 || cw > 256 || ch > 256) {
+        const int32_t cx = ScaleCoordinateToSource(cursorInfo.ptScreenPos.x - wgcCursorBounds.left,
+                                                   static_cast<int32_t>(sourceWidth), boundsW) -
+                           wgcCursorBitmap.hotspot_x;
+        const int32_t cy = ScaleCoordinateToSource(cursorInfo.ptScreenPos.y - wgcCursorBounds.top,
+                                                   static_cast<int32_t>(sourceHeight), boundsH) -
+                           wgcCursorBitmap.hotspot_y;
+        const CursorSpriteClip clip =
+            ClipCursorSprite(cx, cy, wgcCursorBitmap.width, wgcCursorBitmap.height, static_cast<int32_t>(sourceWidth),
+                             static_cast<int32_t>(sourceHeight));
+        if (!clip.visible) {
             return true;
         }
 
-        wgcCursorUploadBgra.resize(static_cast<size_t>(cw) * ch * 4);
-        for (int32_t row = 0; row < ch; ++row) {
-            const size_t srcOff = (static_cast<size_t>(bitmapOffY + row) * wgcCursorBitmap.width + bitmapOffX) * 4u;
+        wgcCursorUploadBgra.resize(static_cast<size_t>(clip.w) * clip.h * 4);
+        for (int32_t row = 0; row < clip.h; ++row) {
+            const size_t srcOff =
+                (static_cast<size_t>(clip.bitmap_off_y + row) * wgcCursorBitmap.width + clip.bitmap_off_x) * 4u;
             const uint8_t* srcRow = wgcCursorBitmap.bgra.data() + srcOff;
-            uint8_t* dstRow = wgcCursorUploadBgra.data() + static_cast<size_t>(row) * cw * 4u;
-            std::memcpy(dstRow, srcRow, static_cast<size_t>(cw) * 4u);
+            uint8_t* dstRow = wgcCursorUploadBgra.data() + static_cast<size_t>(row) * clip.w * 4u;
+            std::memcpy(dstRow, srcRow, static_cast<size_t>(clip.w) * 4u);
         }
 
         WebcamPixelRect rect;
-        rect.x = cx;
-        rect.y = cy;
-        rect.w = cw;
-        rect.h = ch;
+        rect.x = clip.x;
+        rect.y = clip.y;
+        rect.w = clip.w;
+        rect.h = clip.h;
 
         std::string compErr;
-        if (!gpuCompositor.DrawCursor(wgcCursorUploadBgra.data(), cw, ch, rect, compErr)) {
+        if (!gpuCompositor.DrawCursor(wgcCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor composite: " + compErr);
             return false;
         }

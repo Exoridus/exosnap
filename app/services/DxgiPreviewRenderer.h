@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include <recorder_core/cursor_sprite.h>
 #include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/overlay_shader.h>
 #include <recorder_core/preview_tap.h>
@@ -129,6 +130,13 @@ class DxgiPreviewRenderer {
     void EnsureChromeTexture();
     // Draw the PiP video + (optional) edit chrome into the content rectangle.
     void RenderWebcamOverlay(int contentX, int contentY, int contentW, int contentH);
+    // Draw the live mouse cursor over a RAW pushed background (an idle DXGI-hub
+    // frame — Output Duplication composites no cursor). Queries the Win32 cursor,
+    // maps it from the captured monitor into the content rectangle with the same
+    // shared arithmetic the recording compositor uses, and draws it through the
+    // shared overlay shader (OverlayMode::Cursor). Render-thread only; a no-op
+    // without valid monitor bounds.
+    void RenderCursorSprite(int contentX, int contentY, int contentW, int contentH);
 
     HWND parentHwnd_ = nullptr;
     HWND childHwnd_ = nullptr;
@@ -174,6 +182,20 @@ class DxgiPreviewRenderer {
     // Set in StartCapture before the render thread begins; immutable during rendering.
     // Stores the monitor-relative crop rectangle for Region preview targets.
     std::optional<PreviewCropBox> cropBox_{};
+
+    // --- Cursor sprite over raw pushed frames (render-thread owned) ---
+    // The captured monitor's rectangle in virtual-screen coordinates, resolved in
+    // StartCapture for Monitor targets (immutable during rendering, like cropBox_).
+    // Maps GetCursorInfo's screen position into source-frame pixels.
+    RECT cursorSpriteBounds_{};
+    bool cursorSpriteBoundsValid_ = false;
+    // Cursor bitmap cache, keyed by (HCURSOR, clip) — recreated only when the
+    // cursor image or its edge crop changes, not per frame.
+    HCURSOR cursorSpriteHandle_ = nullptr;
+    recorder_core::Win32CursorBitmap cursorSpriteBitmap_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> cursorSpriteTex_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> cursorSpriteSRV_;
+    recorder_core::CursorSpriteClip cursorSpriteTexClip_{};
 
     // --- Webcam PiP overlay state (guarded by overlayMutex_) ---
     mutable std::mutex overlayMutex_;
