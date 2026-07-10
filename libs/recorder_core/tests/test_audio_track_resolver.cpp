@@ -135,4 +135,94 @@ TEST(AudioTrackResolverTest, TrackIndicesAreSequential) {
     ExpectTrack(plan, 2, 2u, {AudioSourceKind::App, AudioSourceKind::Mic});
 }
 
+// ---------------------------------------------------------------------------
+// NormalizeSourceRowsForTarget
+//
+// App and Sys both address a window's process — App captures its tree, Sys
+// captures everything outside it. A display target has no such process, and a row
+// that survives into the plan there blocks the recording with "Window target PID
+// unavailable".
+// ---------------------------------------------------------------------------
+
+using recorder_core::NormalizeSourceRowsForTarget;
+
+std::vector<AudioSourceKind> KindsOf(const std::vector<AudioSourceRow>& rows) {
+    std::vector<AudioSourceKind> kinds;
+    kinds.reserve(rows.size());
+    for (const AudioSourceRow& row : rows) {
+        kinds.push_back(row.kind);
+    }
+    return kinds;
+}
+
+TEST(NormalizeSourceRowsForTargetTest, WindowTargetKeepsEveryRowUntouched) {
+    const std::vector<AudioSourceRow> rows = {
+        {AudioSourceKind::App, true, false},
+        {AudioSourceKind::Sys, true, false},
+        {AudioSourceKind::Mic, true, false},
+    };
+
+    EXPECT_EQ(KindsOf(NormalizeSourceRowsForTarget(rows, /*window_target=*/true)), KindsOf(rows));
+}
+
+TEST(NormalizeSourceRowsForTargetTest, DisplayTargetDropsAppAndKeepsMic) {
+    const std::vector<AudioSourceRow> rows = {
+        {AudioSourceKind::App, true, false},
+        {AudioSourceKind::Mic, true, false},
+    };
+
+    const std::vector<AudioSourceKind> kinds = KindsOf(NormalizeSourceRowsForTarget(rows, /*window_target=*/false));
+    EXPECT_EQ(kinds, (std::vector<AudioSourceKind>{AudioSourceKind::Mic}));
+}
+
+TEST(NormalizeSourceRowsForTargetTest, DisplayTargetRewritesSysToSystemOutput) {
+    // The user asked for system audio and must still get it: with no app to
+    // exclude, "everything but the app" is the full system output.
+    const std::vector<AudioSourceRow> rows = {{AudioSourceKind::Sys, true, false}};
+
+    const std::vector<AudioSourceKind> kinds = KindsOf(NormalizeSourceRowsForTarget(rows, /*window_target=*/false));
+    EXPECT_EQ(kinds, (std::vector<AudioSourceKind>{AudioSourceKind::SystemOutput}));
+}
+
+TEST(NormalizeSourceRowsForTargetTest, DisplayTargetPreservesRowSettings) {
+    std::vector<AudioSourceRow> rows = {{AudioSourceKind::Sys, true, false}};
+    rows[0].gain_db = -6.0f;
+    rows[0].muted = true;
+
+    const std::vector<AudioSourceRow> out = NormalizeSourceRowsForTarget(rows, /*window_target=*/false);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_FLOAT_EQ(out[0].gain_db, -6.0f);
+    EXPECT_TRUE(out[0].muted);
+}
+
+TEST(NormalizeSourceRowsForTargetTest, RewrittenSysDoesNotDuplicateAnExistingSystemOutput) {
+    // Two full loopbacks would record the same audio twice.
+    const std::vector<AudioSourceRow> rows = {
+        {AudioSourceKind::SystemOutput, true, false},
+        {AudioSourceKind::Sys, true, false},
+    };
+
+    const std::vector<AudioSourceKind> kinds = KindsOf(NormalizeSourceRowsForTarget(rows, /*window_target=*/false));
+    EXPECT_EQ(kinds, (std::vector<AudioSourceKind>{AudioSourceKind::SystemOutput}));
+}
+
+TEST(NormalizeSourceRowsForTargetTest, DisplayTargetPlanNeverAsksForAProcessId) {
+    // The end-to-end property the failure was about: whatever the stored rows, a
+    // display plan contains no process-scoped source.
+    const std::vector<AudioSourceRow> rows = {
+        {AudioSourceKind::App, true, false},
+        {AudioSourceKind::Sys, true, false},
+        {AudioSourceKind::Mic, true, false},
+    };
+
+    const AudioTrackPlan plan = ResolveAudioTracks(NormalizeSourceRowsForTarget(rows, /*window_target=*/false));
+    for (const auto& track : plan.tracks) {
+        for (const AudioSourceKind kind : track.sources) {
+            EXPECT_NE(kind, AudioSourceKind::App);
+            EXPECT_NE(kind, AudioSourceKind::Sys);
+        }
+    }
+    EXPECT_FALSE(plan.tracks.empty()) << "system audio and the microphone survive";
+}
+
 } // namespace

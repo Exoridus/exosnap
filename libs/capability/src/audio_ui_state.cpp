@@ -61,10 +61,23 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.audio_bit_depth = state.audio_bit_depth;
     result.flac_compression_level = state.flac_compression_level;
 
-    result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
+    // A Display or Region target has no process to scope App/Sys to. Normalize before
+    // resolving, or a stored app row survives into the plan and the engine refuses to
+    // prepare for want of a process id.
+    const bool window_target = state.target_kind == CaptureTargetKind::Window;
+    result.plan = recorder_core::ResolveAudioTracks(
+        recorder_core::NormalizeSourceRowsForTarget(state.source_rows, window_target));
 
-    const bool app_active = state.IsAppEnabled();
-    if (app_active && state.target_kind == CaptureTargetKind::Window) {
+    // Sys is the App row's complement and is just as process-scoped, so the pid has to
+    // follow the plan rather than the App row alone: a window recording with Sys on and
+    // App off still needs the process it excludes.
+    const bool plan_needs_pid =
+        std::any_of(result.plan.tracks.begin(), result.plan.tracks.end(), [](const auto& track) {
+            return std::any_of(track.sources.begin(), track.sources.end(), [](recorder_core::AudioSourceKind kind) {
+                return kind == recorder_core::AudioSourceKind::App || kind == recorder_core::AudioSourceKind::Sys;
+            });
+        });
+    if (window_target && plan_needs_pid) {
         result.audio_target_process_id = state.selected_window_pid;
     }
 

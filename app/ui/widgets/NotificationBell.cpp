@@ -17,6 +17,7 @@ NotificationBell::NotificationBell(QWidget* parent) : QToolButton(parent) {
     setFocusPolicy(Qt::NoFocus);
     setFixedSize(34, 34);
     setIconSize(QSize(17, 17));
+    setCursor(Qt::PointingHandCursor);
     updateIcon();
 }
 

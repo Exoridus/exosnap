@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 
+#include "../../models/WebcamSettings.h"
 #include "../../services/PreviewHelpers.h"
 #include <recorder_core/recorder_session.h>
 
@@ -100,6 +101,14 @@ class PreviewSurface : public QWidget {
         return webcam_opacity_;
     }
 
+    // Chroma key for the PiP. Only the DXGI overlay applies it — it runs the same
+    // shader as the recording compositor. The Qt fallback paint path draws the raw
+    // camera image; it is only reached before a capture target has a live preview.
+    void setWebcamChromaKey(const WebcamChromaKeySettings& chroma);
+    [[nodiscard]] const WebcamChromaKeySettings& webcamChromaKey() const noexcept {
+        return webcam_chroma_;
+    }
+
     // Editing lock. When locked the PiP video stays visible but selection/drag/resize
     // and edit chrome are disabled and pointer events pass through. RecordPage
     // keeps this unlocked in states whose overlay edits are live-applied to the
@@ -171,6 +180,7 @@ class PreviewSurface : public QWidget {
     bool aspect_ratio_locked_ = true;
     bool webcam_mirror_ = false;
     float webcam_opacity_ = 1.0f;
+    WebcamChromaKeySettings webcam_chroma_{};
     bool webcam_selected_ = false;
     bool webcam_edit_locked_ = false;
     double webcam_aspect_ratio_ = 16.0 / 9.0;

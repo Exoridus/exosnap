@@ -1623,6 +1623,7 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
         preview_surface_->setAspectRatioLocked(s.aspect_ratio_locked);
         preview_surface_->setWebcamMirror(s.mirror);
         preview_surface_->setWebcamOpacity(s.opacity);
+        preview_surface_->setWebcamChromaKey(s.chroma_key);
         preview_surface_->setWebcamOverlayRect(
             QRectF(s.overlay.x_norm, s.overlay.y_norm, s.overlay.w_norm, s.overlay.h_norm));
         preview_surface_->setWebcamOverlayEnabled(s.enabled);
@@ -1663,6 +1664,7 @@ void RecordPage::updateWebcamOverlay() {
     preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled && !engine_omits_webcam_overlay_);
     preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
     preview_surface_->setWebcamOpacity(current_webcam_settings_.opacity);
+    preview_surface_->setWebcamChromaKey(current_webcam_settings_.chroma_key);
     preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
     // Overlay placement/mirror/chroma are live-applied to the running session
     // via RecorderSession::UpdateWebcamOverlay, so editing is allowed while

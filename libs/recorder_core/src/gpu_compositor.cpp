@@ -10,122 +10,6 @@
 namespace recorder_core {
 namespace {
 
-const char* kVertexShaderSrc = R"(
-struct VS_OUTPUT {
-    float4 position : SV_POSITION;
-    float2 texcoord : TEXCOORD0;
-};
-
-VS_OUTPUT main(uint id : SV_VertexID) {
-    VS_OUTPUT output;
-    output.texcoord = float2((id << 1) & 2, id & 2);
-    output.position = float4(output.texcoord * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
-    return output;
-}
-)";
-
-// Chroma-distance algorithm: YCbCr (BT.601) chroma-only distance.
-// Separating luminance from chroma makes the key robust to lighting variation.
-//
-// PixelConstants layout:
-//   key_color : float4  r, g, b (0-1) + tolerance (0-1)
-//   params    : float4  mirror | mode | spill_reduction | softness
-//     mode 0 = cursor (preserve source alpha)
-//     mode 1 = chroma key enabled
-//     mode 2 = force opaque (webcam, chroma disabled)
-//
-// Spill reduction: reduces key-color chrominance contamination in partially
-// keyed edge pixels. Weight is proportional to (1 - alpha) so only edges
-// are corrected; fully opaque non-keyed regions are unaffected.
-const char* kPixelShaderSrc = R"(
-Texture2D frameTex : register(t0);
-SamplerState frameSamp : register(s0);
-
-cbuffer DrawConstants : register(b0) {
-    float4 keyColor; // r, g, b, tolerance
-    float4 params;   // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
-    float4 params2;  // x=hdrLinear, y=refWhiteScale, z=opacity, w=reserved
-};
-
-// BT.601 RGB->CbCr. Output range [0,1] with neutral at 0.5.
-float2 RgbToCbCr(float3 c) {
-    float cb = -0.169f * c.r - 0.331f * c.g + 0.500f * c.b + 0.5f;
-    float cr =  0.500f * c.r - 0.419f * c.g - 0.081f * c.b + 0.5f;
-    return float2(cb, cr);
-}
-
-// sRGB electro-optical transfer (gamma decode) -> linear light, component-wise.
-float3 SrgbToLinear(float3 c) {
-    float3 lo = c / 12.92f;
-    float3 hi = pow(max((c + 0.055f) / 1.055f, 0.0f), 2.4f);
-    return lerp(hi, lo, step(c, 0.04045f));
-}
-
-float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
-    float2 uv = texcoord;
-    if (params.x > 0.5f)
-        uv.x = 1.0f - uv.x;
-
-    float4 color = frameTex.Sample(frameSamp, uv);
-    const float mode = params.y;
-
-    if (mode > 1.5f) {
-        // mode 2: opaque webcam, no chroma key
-        color.a = 1.0f;
-    } else if (mode > 0.5f) {
-        // mode 1: chroma key via YCbCr chroma distance
-        const float2 cbcr_sample = RgbToCbCr(color.rgb);
-        const float2 cbcr_key    = RgbToCbCr(keyColor.rgb);
-        const float  dist        = distance(cbcr_sample, cbcr_key);
-
-        const float tol       = keyColor.a;
-        const float soft      = max(params.w, 0.001f);
-        const float softTotal = tol + soft;
-
-        if (dist <= tol) {
-            color.a = 0.0f;
-        } else if (dist >= softTotal) {
-            color.a = 1.0f;
-        } else {
-            color.a = (dist - tol) / (softTotal - tol);
-        }
-
-        // Spill reduction: suppress key chrominance on partially-keyed edges.
-        // Compute key luminance and its chroma direction, then remove the
-        // projection of the sample onto that direction, weighted by (1-alpha).
-        const float spill = params.z;
-        if (spill > 0.001f && color.a > 0.001f) {
-            const float key_lum      = dot(keyColor.rgb, float3(0.2126f, 0.7152f, 0.0722f));
-            const float3 key_chroma  = keyColor.rgb - float3(key_lum, key_lum, key_lum);
-            const float  key_lensq   = dot(key_chroma, key_chroma);
-            if (key_lensq > 0.001f) {
-                const float  clum        = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
-                const float3 col_chroma  = color.rgb - float3(clum, clum, clum);
-                const float  proj        = dot(col_chroma, key_chroma);
-                if (proj > 0.0f) {
-                    const float strength = spill * (1.0f - color.a);
-                    color.rgb -= key_chroma * (proj / key_lensq) * strength;
-                    color.rgb  = saturate(color.rgb);
-                }
-            }
-        }
-    }
-    // else mode 0: cursor — preserve source alpha unchanged
-
-    // HDR-linear output: the background is linear scRGB (1.0 = 80 nits). Overlay
-    // sprites are sRGB-encoded, so decode to linear and scale to the HDR overlay
-    // reference white before the (linear-light) alpha blend, so soft chroma-keyed
-    // edges — which carry partial alpha — composite correctly. The overall overlay
-    // opacity is a caller-supplied uniform blend factor applied to alpha.
-    if (params2.x > 0.5f) {
-        color.rgb = SrgbToLinear(color.rgb) * params2.y;
-    }
-    color.a *= params2.z;
-
-    return color;
-}
-)";
-
 void SetHResultError(std::string& err, const char* what, HRESULT hr) {
     char buf[128];
     std::snprintf(buf, sizeof(buf), "%s failed 0x%08lX", what, static_cast<unsigned long>(hr));
@@ -166,16 +50,17 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     winrt::com_ptr<ID3DBlob> ps_blob;
     winrt::com_ptr<ID3DBlob> error_blob;
 
-    HRESULT hr = D3DCompile(kVertexShaderSrc, std::strlen(kVertexShaderSrc), "gpu_compositor_vs", nullptr, nullptr,
-                            "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
+    HRESULT hr =
+        D3DCompile(kOverlayVertexShaderSrc, std::strlen(kOverlayVertexShaderSrc), "gpu_compositor_vs", nullptr, nullptr,
+                   "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vs_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(vertex shader)", hr);
         return false;
     }
 
     error_blob = nullptr;
-    hr = D3DCompile(kPixelShaderSrc, std::strlen(kPixelShaderSrc), "gpu_compositor_ps", nullptr, nullptr, "main",
-                    "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps_blob.put(), error_blob.put());
+    hr = D3DCompile(kOverlayPixelShaderSrc, std::strlen(kOverlayPixelShaderSrc), "gpu_compositor_ps", nullptr, nullptr,
+                    "main", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, ps_blob.put(), error_blob.put());
     if (FAILED(hr)) {
         SetHResultError(err, "D3DCompile(pixel shader)", hr);
         return false;
@@ -249,7 +134,7 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     }
 
     D3D11_BUFFER_DESC const_desc{};
-    const_desc.ByteWidth = sizeof(PixelConstants);
+    const_desc.ByteWidth = sizeof(OverlayPixelConstants);
     const_desc.Usage = D3D11_USAGE_DEFAULT;
     const_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 
@@ -360,32 +245,12 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
         return false;
     }
 
-    PixelConstants pc{};
-    pc.key_color[0] = static_cast<float>(chroma.r) / 255.0f;
-    pc.key_color[1] = static_cast<float>(chroma.g) / 255.0f;
-    pc.key_color[2] = static_cast<float>(chroma.b) / 255.0f;
-    pc.key_color[3] = chroma.tolerance;
-    pc.params[0] = mirror ? 1.0f : 0.0f;
-    // mode: 1 = chroma active, 2 = force opaque (webcam/no-chroma), 0 = cursor
-    if (chroma.enabled) {
-        pc.params[1] = 1.0f;
-    } else if (force_opaque) {
-        pc.params[1] = 2.0f;
-    } else {
-        pc.params[1] = 0.0f;
-    }
-    pc.params[2] = chroma.spill_reduction;
-    pc.params[3] = chroma.softness;
     // HDR-linear compositing (native HDR10): decode overlay sprites to linear and
     // scale to the configured overlay reference white (in scRGB, where 1.0 = 80
     // nits) — the display's SDR content brightness when known, else the 203
     // cd/m^2 fallback (see GpuCompositor::Init / EffectiveOverlayReferenceWhiteNits).
-    // opacity is the caller-supplied uniform overlay opacity, clamped to [0,1];
-    // non-finite input (e.g. NaN) falls back to fully opaque.
-    const float safe_opacity = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
-    pc.params2[0] = hdr_linear_ ? 1.0f : 0.0f;
-    pc.params2[1] = overlay_ref_white_nits_ / kScrgbReferenceWhiteNits;
-    pc.params2[2] = safe_opacity;
+    const OverlayPixelConstants pc = MakeOverlayPixelConstants(chroma, mirror, force_opaque, opacity, hdr_linear_,
+                                                               overlay_ref_white_nits_ / kScrgbReferenceWhiteNits);
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
     D3D11_VIEWPORT viewport{};

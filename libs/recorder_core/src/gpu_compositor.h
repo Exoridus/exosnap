@@ -1,5 +1,6 @@
 #pragma once
 
+#include <recorder_core/overlay_shader.h>
 #include <recorder_core/sdr_white_level.h>
 #include <recorder_core/webcam_placement.h>
 
@@ -17,15 +18,9 @@ namespace recorder_core {
 // not take ownership of the device/context and must not be used from UI code.
 class GpuCompositor {
   public:
-    struct ChromaKeyParams {
-        bool enabled = false;
-        uint8_t r = 0;
-        uint8_t g = 255;
-        uint8_t b = 0;
-        float tolerance = 0.40f;
-        float softness = 0.15f;
-        float spill_reduction = 0.30f;
-    };
+    // The key parameters and the shader that consumes them live in
+    // <recorder_core/overlay_shader.h>, shared with the DXGI live preview.
+    using ChromaKeyParams = recorder_core::ChromaKeyParams;
 
     // render_format: format of the composite render target. Must match the
     // capture source's frame format (BeginFrame copies the background via
@@ -59,14 +54,6 @@ class GpuCompositor {
         winrt::com_ptr<ID3D11ShaderResourceView> srv;
         UINT width = 0;
         UINT height = 0;
-    };
-
-    struct PixelConstants {
-        float key_color[4]; // r, g, b (0-1) + tolerance
-        // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
-        float params[4];
-        // x=hdrLinear (0/1), y=refWhiteScale, z=opacity, w=reserved
-        float params2[4];
     };
 
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,

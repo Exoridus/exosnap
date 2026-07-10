@@ -485,6 +485,13 @@ void PreviewSurface::setWebcamMirror(bool mirror) {
         update();
 }
 
+void PreviewSurface::setWebcamChromaKey(const WebcamChromaKeySettings& chroma) {
+    if (webcam_chroma_ == chroma)
+        return;
+    webcam_chroma_ = chroma;
+    syncWebcamOverlayToDxgi();
+}
+
 void PreviewSurface::setWebcamOpacity(float opacity) {
     const float clamped = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
     if (qFuzzyCompare(webcam_opacity_, clamped))
@@ -573,10 +580,21 @@ void PreviewSurface::syncWebcamOverlayToDxgi() {
         return;
     const bool show = webcam_enabled_;
     const bool selected = webcam_selected_ && webcamEditingAllowed();
+
+    const WebcamChromaKeySettings::ActiveRgb key = webcam_chroma_.active_color();
+    recorder_core::ChromaKeyParams chroma;
+    chroma.enabled = webcam_chroma_.enabled;
+    chroma.r = key.r;
+    chroma.g = key.g;
+    chroma.b = key.b;
+    chroma.tolerance = webcam_chroma_.tolerance;
+    chroma.softness = webcam_chroma_.softness;
+    chroma.spill_reduction = webcam_chroma_.spill_reduction;
+
     dxgi_renderer_->SetWebcamOverlayState(
         show, selected, static_cast<float>(webcam_rect_norm_.x()), static_cast<float>(webcam_rect_norm_.y()),
         static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_,
-        webcam_opacity_);
+        webcam_opacity_, chroma);
     if (show && !webcam_frame_.isNull()) {
         const QImage& img = webcam_frame_;
         dxgi_renderer_->SetWebcamOverlayFrame(img.constBits(), img.width(), img.height(),

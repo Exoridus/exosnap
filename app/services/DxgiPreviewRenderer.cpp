@@ -2,6 +2,7 @@
 
 #include "../diagnostics/AppLog.h"
 
+#include <recorder_core/overlay_shader.h>
 #include <recorder_core/webcam_placement.h>
 
 #include <cstring>
@@ -38,28 +39,19 @@ constexpr const wchar_t* kChildWindowClass = L"ExoSnapDxgiPreviewChild";
 constexpr UINT64 kPushedProducerKey = 0;
 constexpr UINT64 kPushedConsumerKey = 1;
 
-const char* kVertexShaderSrc = R"(
-struct VS_OUTPUT {
-    float4 position : SV_POSITION;
-    float2 texcoord : TEXCOORD0;
-};
+// The preview swap chain is SDR BGRA8, so overlay sprites never take the shader's
+// HDR-linear branch and the reference-white scale stays neutral.
+constexpr bool kPreviewHdrLinear = false;
+constexpr float kPreviewRefWhiteScale = 1.0f;
 
-VS_OUTPUT main(uint id : SV_VertexID) {
-    VS_OUTPUT output;
-    output.texcoord = float2((id << 1) & 2, id & 2);
-    output.position = float4(output.texcoord * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
-    return output;
+// Every quad the preview draws goes through the shared overlay shader, so it needs
+// constants. A frame blit (WGC or pushed engine frame) is an opaque sprite with no
+// key and no mirror; so is the amber edit chrome.
+[[nodiscard]] recorder_core::OverlayPixelConstants OpaqueQuadConstants() {
+    const recorder_core::ChromaKeyParams none; // enabled == false
+    return recorder_core::MakeOverlayPixelConstants(none, /*mirror=*/false, /*force_opaque=*/true, /*opacity=*/1.0f,
+                                                    kPreviewHdrLinear, kPreviewRefWhiteScale);
 }
-)";
-
-const char* kPixelShaderSrc = R"(
-Texture2D frameTex : register(t0);
-SamplerState frameSamp : register(s0);
-
-float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
-    return frameTex.Sample(frameSamp, texcoord);
-}
-)";
 
 } // namespace
 
@@ -181,7 +173,8 @@ void DxgiPreviewRenderer::GetSourceSize(uint32_t& outWidth, uint32_t& outHeight)
 }
 
 void DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh,
-                                                bool mirror, float opacity) {
+                                                bool mirror, float opacity,
+                                                const recorder_core::ChromaKeyParams& chroma) {
     std::lock_guard lock(overlayMutex_);
     overlayEnabled_ = enabled;
     overlaySelected_ = selected;
@@ -190,10 +183,10 @@ void DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, flo
     overlayNw_ = nw;
     overlayNh_ = nh;
     overlayOpacity_ = std::isfinite(static_cast<double>(opacity)) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
-    if (overlayMirror_ != mirror) {
-        overlayMirror_ = mirror;
-        overlayDirty_ = true; // re-upload with the new flip
-    }
+    // Mirror and chroma reach the GPU as shader constants, so neither invalidates
+    // the uploaded texture.
+    overlayMirror_ = mirror;
+    overlayChroma_ = chroma;
 }
 
 void DxgiPreviewRenderer::SetWebcamOverlayFrame(const uint8_t* bgra, int width, int height, int stride) {
@@ -498,8 +491,9 @@ bool DxgiPreviewRenderer::InitShaders() {
     Microsoft::WRL::ComPtr<ID3DBlob> psBlob;
     Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
 
-    HRESULT hr = D3DCompile(kVertexShaderSrc, strlen(kVertexShaderSrc), "vs_main", nullptr, nullptr, "main", "vs_5_0",
-                            0, 0, vsBlob.GetAddressOf(), errorBlob.GetAddressOf());
+    HRESULT hr =
+        D3DCompile(recorder_core::kOverlayVertexShaderSrc, strlen(recorder_core::kOverlayVertexShaderSrc), "vs_main",
+                   nullptr, nullptr, "main", "vs_5_0", 0, 0, vsBlob.GetAddressOf(), errorBlob.GetAddressOf());
     if (FAILED(hr)) {
         if (errorBlob)
             diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
@@ -507,8 +501,8 @@ bool DxgiPreviewRenderer::InitShaders() {
         return false;
     }
 
-    hr = D3DCompile(kPixelShaderSrc, strlen(kPixelShaderSrc), "ps_main", nullptr, nullptr, "main", "ps_5_0", 0, 0,
-                    psBlob.GetAddressOf(), errorBlob.GetAddressOf());
+    hr = D3DCompile(recorder_core::kOverlayPixelShaderSrc, strlen(recorder_core::kOverlayPixelShaderSrc), "ps_main",
+                    nullptr, nullptr, "main", "ps_5_0", 0, 0, psBlob.GetAddressOf(), errorBlob.GetAddressOf());
     if (FAILED(hr)) {
         if (errorBlob)
             diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"), QStringLiteral("pixel shader compile failed"));
@@ -538,13 +532,13 @@ bool DxgiPreviewRenderer::InitShaders() {
     if (FAILED(hr))
         return false;
 
-    // Constant-colour blend for the webcam PiP quad: BLEND_FACTOR set per-draw via
-    // OMSetBlendState carries the current overlay opacity, so this single state
-    // covers every opacity value without per-frame pipeline-state churn.
+    // Straight source-alpha blend, identical to the recording compositor's. The
+    // shader writes the final alpha (chroma key × uniform opacity), so a single
+    // state covers a keyed edge, a translucent PiP and the opaque edit chrome.
     D3D11_BLEND_DESC bd{};
     bd.RenderTarget[0].BlendEnable = TRUE;
-    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
-    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_BLEND_FACTOR;
+    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
     bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
     bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
     bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
@@ -552,6 +546,15 @@ bool DxgiPreviewRenderer::InitShaders() {
     bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 
     hr = d3dDevice_->CreateBlendState(&bd, overlayBlendState_.GetAddressOf());
+    if (FAILED(hr))
+        return false;
+
+    D3D11_BUFFER_DESC cbDesc{};
+    cbDesc.ByteWidth = sizeof(recorder_core::OverlayPixelConstants);
+    cbDesc.Usage = D3D11_USAGE_DEFAULT;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+    hr = d3dDevice_->CreateBuffer(&cbDesc, nullptr, constantBuffer_.GetAddressOf());
     if (FAILED(hr))
         return false;
 
@@ -823,28 +826,10 @@ void DxgiPreviewRenderer::UploadOverlayTexture() {
         overlayTexH_ = overlayH_;
     }
 
-    const int rowBytes = overlayW_ * 4;
-    if (overlayMirror_) {
-        // Real horizontal flip (no vertical flip) — matches the recording compositor.
-        overlayScratch_.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(overlayH_));
-        for (int y = 0; y < overlayH_; ++y) {
-            const uint8_t* src = overlayBgra_.data() + static_cast<size_t>(y) * rowBytes;
-            uint8_t* dst = overlayScratch_.data() + static_cast<size_t>(y) * rowBytes;
-            for (int x = 0; x < overlayW_; ++x) {
-                const uint8_t* sp = src + static_cast<size_t>(overlayW_ - 1 - x) * 4;
-                uint8_t* dp = dst + static_cast<size_t>(x) * 4;
-                dp[0] = sp[0];
-                dp[1] = sp[1];
-                dp[2] = sp[2];
-                dp[3] = sp[3];
-            }
-        }
-        d3dContext_->UpdateSubresource(overlayTex_.Get(), 0, nullptr, overlayScratch_.data(),
-                                       static_cast<UINT>(rowBytes), 0);
-    } else {
-        d3dContext_->UpdateSubresource(overlayTex_.Get(), 0, nullptr, overlayBgra_.data(), static_cast<UINT>(rowBytes),
-                                       0);
-    }
+    // Uploaded unmirrored; the shader flips the texcoord (params.x), exactly as the
+    // recording compositor does.
+    const UINT rowBytes = static_cast<UINT>(overlayW_) * 4u;
+    d3dContext_->UpdateSubresource(overlayTex_.Get(), 0, nullptr, overlayBgra_.data(), rowBytes, 0);
 }
 
 void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int contentW, int contentH) {
@@ -868,7 +853,7 @@ void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int co
     placement.y = overlayNy_;
     placement.w = overlayNw_;
     placement.h = overlayNh_;
-    placement.mirror = overlayMirror_; // mirror already baked into the texture
+    placement.mirror = overlayMirror_; // geometry only; the flip happens in the shader
     const recorder_core::WebcamPixelRect r =
         recorder_core::MapWebcamPlacementToContent(placement, contentX, contentY, contentW, contentH);
     if (!r.IsValid())
@@ -878,6 +863,11 @@ void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int co
     d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
     d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
     d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    auto setConstants = [&](const recorder_core::OverlayPixelConstants& pc) {
+        d3dContext_->UpdateSubresource(constantBuffer_.Get(), 0, nullptr, &pc, 0, 0);
+        d3dContext_->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
+    };
 
     auto drawQuad = [&](ID3D11ShaderResourceView* srv, int x, int y, int w, int h) {
         if (w <= 0 || h <= 0)
@@ -894,21 +884,21 @@ void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int co
         d3dContext_->Draw(3, 0);
     };
 
-    // PiP video (stretched to the rect — same as the recording compositor). Blended
-    // toward the frame beneath it when opacity < 1; edit chrome always stays opaque.
-    if (overlayOpacity_ < 1.0f && overlayBlendState_) {
-        const float f[4] = {overlayOpacity_, overlayOpacity_, overlayOpacity_, overlayOpacity_};
-        d3dContext_->OMSetBlendState(overlayBlendState_.Get(), f, 0xffffffff);
-        drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
-        d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-    } else {
-        drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
-    }
+    // PiP video (stretched to the rect — same as the recording compositor). One pass
+    // carries the chroma key, the mirror and the opacity; alpha out of the shader
+    // drives the blend, so a keyed background and a translucent PiP compose together.
+    const float blendFactor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    d3dContext_->OMSetBlendState(overlayBlendState_.Get(), blendFactor, 0xffffffff);
+    setConstants(recorder_core::MakeOverlayPixelConstants(overlayChroma_, overlayMirror_, /*force_opaque=*/true,
+                                                          overlayOpacity_, kPreviewHdrLinear, kPreviewRefWhiteScale));
+    drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
 
-    // Edit chrome (border + corner handles) only while selected.
+    // Edit chrome (border + corner handles) only while selected — never keyed, never
+    // dimmed by the PiP opacity.
     if (overlaySelected_) {
         EnsureChromeTexture();
         if (chromeSRV_) {
+            setConstants(OpaqueQuadConstants());
             ID3D11ShaderResourceView* c = chromeSRV_.Get();
             constexpr int t = 2;  // border thickness
             constexpr int hs = 8; // handle size
@@ -922,6 +912,9 @@ void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int co
             drawQuad(c, r.x + r.w - hs / 2, r.y + r.h - hs / 2, hs, hs);
         }
     }
+
+    // The background blit of the next frame draws unblended.
+    d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
 }
 
 void DxgiPreviewRenderer::RenderFrame() {
@@ -974,10 +967,16 @@ void DxgiPreviewRenderer::RenderFrame() {
         vp.MaxDepth = 1.0f;
         d3dContext_->RSSetViewports(1, &vp);
 
+        // The shared overlay shader keys, mirrors and fades by constant; a frame blit
+        // wants none of that, so it runs as an opaque, unmirrored sprite.
+        const recorder_core::OverlayPixelConstants pc = OpaqueQuadConstants();
+        d3dContext_->UpdateSubresource(constantBuffer_.Get(), 0, nullptr, &pc, 0, 0);
+
         d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
         d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
         d3dContext_->PSSetShaderResources(0, 1, &srv);
         d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+        d3dContext_->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
         d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         d3dContext_->Draw(3, 0);
     };
