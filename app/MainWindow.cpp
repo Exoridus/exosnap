@@ -2968,9 +2968,8 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     config_page_->setAudioMeterLevels(0.37f, 0.56f, 0.42f, true, true, true);
 
     // Settings-tiers progressive-disclosure state (SETTINGS-TIERS-R1): drive the
-    // Expert-mode reveal + Advanced expander deterministically for visual scenarios.
+    // Expert-mode reveal deterministically for visual scenarios.
     config_page_->setExpertModeEnabled(scenario.settings_expert_mode);
-    config_page_->setOutputSplitExpanderExpanded(scenario.settings_advanced_expanded);
 
     // ADR 0034: drive the Updates-card state and/or scroll to a section so
     // below-the-fold cards are captured. Deferred (40 ms) so it runs after layout
@@ -4063,7 +4062,6 @@ void MainWindow::buildConfigPage() {
 
     // SETTINGS-TIERS-R1: expert mode toggle + per-card expander state.
     config_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
-    config_page_->setOutputSplitExpanderExpanded(persisted_settings_.output_split_expander_expanded);
     config_page_->setAudioSeparateExpanderExpanded(persisted_settings_.audio_separate_expander_expanded);
     connect(config_page_, &ConfigPage::expertModeChanged, this, [this](bool enabled) {
         persisted_settings_.expert_mode_enabled = enabled;
@@ -4071,10 +4069,6 @@ void MainWindow::buildConfigPage() {
         // Single global Expert state: mirror onto the Diagnostics page (no-op guarded).
         if (diagnostics_page_)
             diagnostics_page_->setExpertModeEnabled(enabled);
-    });
-    connect(config_page_, &ConfigPage::outputSplitExpanderChanged, this, [this](bool expanded) {
-        persisted_settings_.output_split_expander_expanded = expanded;
-        settings_store_.Save(persisted_settings_);
     });
     connect(config_page_, &ConfigPage::audioSeparateExpanderChanged, this, [this](bool expanded) {
         persisted_settings_.audio_separate_expander_expanded = expanded;

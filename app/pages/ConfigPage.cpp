@@ -2384,9 +2384,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emit expertModeChanged(expert_mode_enabled_);
     });
 
-    // Wave 2: output_split_expander_ dissolved; outputSplitExpanderChanged is kept as
-    // a no-op signal for MainWindow compat (AppSettingsStore field still persists).
-
     // The CQ value IS the model: the named presets are derived from it, never the
     // other way round. (Deriving a preset and then re-seeding the spinbox from that
     // preset is what previously snapped every keystroke back to 19/24/30.)
@@ -4154,16 +4151,6 @@ bool ConfigPage::expertModeEnabled() const noexcept {
     return expert_mode_enabled_;
 }
 
-void ConfigPage::setOutputSplitExpanderExpanded(bool /*expanded*/) {
-    // Wave 2: output_split_expander_ dissolved; split controls are now expert-gated.
-    // No-op kept for MainWindow backward compat (store field still persists).
-}
-
-bool ConfigPage::outputSplitExpanderExpanded() const noexcept {
-    // Wave 2: always false — no expander widget exists.
-    return false;
-}
-
 void ConfigPage::setAudioSeparateExpanderExpanded(bool /*expanded*/) {
     // Phase 1b + Wave 2: audio_separate_expander_ removed; no-op for compat.
 }
@@ -4837,17 +4824,14 @@ void ConfigPage::buildSplitExpertSection() {
         split_size_custom_layout->addWidget(split_custom_size_spin_);
         split_size_custom_widget_->setVisible(false);
 
-        // --- Build the popover row. ---
-        auto* split_popover_row =
-            new ui::widgets::SettingsPopoverRow(QStringLiteral("Automatic split"), split_expert_section_);
-        split_popover_row->setInfoHint(ui::hints::kSplitRecording);
-        split_expert_layout->addWidget(split_popover_row);
+        // --- Lay the split controls out inline inside the Output card so they
+        // fill the card instead of hiding behind a popover row. ---
+        split_expert_layout->addWidget(makeHRule(split_expert_section_));
+        split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Automatic split"),
+                                                                  ui::hints::kSplitRecording, split_expert_section_));
 
-        // "Split recording" sub-section inside the popover.
-        auto* pcl = split_popover_row->popoverContentLayout();
-
-        auto* time_lbl = makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_);
-        pcl->addWidget(time_lbl);
+        // "Split recording" (by time) sub-section.
+        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_));
 
         auto* split_row = new QWidget(split_expert_section_);
         auto* split_row_hl = new QHBoxLayout(split_row);
@@ -4856,12 +4840,11 @@ void ConfigPage::buildSplitExpertSection() {
         split_row_hl->addWidget(split_mode_combo_, 0);
         split_row_hl->addWidget(split_custom_widget_, 0);
         split_row_hl->addStretch();
-        pcl->addWidget(split_row);
-        pcl->addWidget(split_summary_label_);
+        split_expert_layout->addWidget(split_row);
+        split_expert_layout->addWidget(split_summary_label_);
 
-        // "Split by size" sub-section inside the popover.
-        auto* size_lbl = makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_);
-        pcl->addWidget(size_lbl);
+        // "Split by size" sub-section.
+        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_));
 
         auto* split_size_row = new QWidget(split_expert_section_);
         auto* split_size_row_hl = new QHBoxLayout(split_size_row);
@@ -4870,7 +4853,7 @@ void ConfigPage::buildSplitExpertSection() {
         split_size_row_hl->addWidget(split_size_mode_combo_, 0);
         split_size_row_hl->addWidget(split_size_custom_widget_, 0);
         split_size_row_hl->addStretch();
-        pcl->addWidget(split_size_row);
+        split_expert_layout->addWidget(split_size_row);
     }
     if (auto* out_panel_layout = qobject_cast<QVBoxLayout*>(out_panel_->layout())) {
         out_panel_layout->insertWidget(split_expert_insert_index_, split_expert_section_);

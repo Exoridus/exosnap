@@ -114,10 +114,8 @@ class ConfigPage : public QWidget {
     void setExpertModeEnabled(bool enabled);
     [[nodiscard]] bool expertModeEnabled() const noexcept;
 
-    // SETTINGS-TIERS-R1: Per-card expander state — no-op stubs kept for MainWindow compat.
-    // Wave 2: the output-split expander was dissolved; split controls are now expert-gated.
-    void setOutputSplitExpanderExpanded(bool expanded);
-    [[nodiscard]] bool outputSplitExpanderExpanded() const noexcept;
+    // SETTINGS-TIERS-R1: Per-card expander state — no-op stub kept for MainWindow compat.
+    // Wave 2: the split controls are now expert-gated (no per-card expander).
     void setAudioSeparateExpanderExpanded(bool expanded);
     [[nodiscard]] bool audioSeparateExpanderExpanded() const noexcept;
 
@@ -184,8 +182,6 @@ class ConfigPage : public QWidget {
     // SETTINGS-HONESTY-R1: emitted when the Developer card's log-level combo changes.
     // MainWindow persists the value and applies it via AppLog::setMinSeverity.
     void developerLogLevelChanged(const QString& level);
-    // Emitted when the output-split expander is toggled.
-    void outputSplitExpanderChanged(bool expanded);
     // Emitted when the audio-separate expander is toggled.
     void audioSeparateExpanderChanged(bool expanded);
 

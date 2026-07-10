@@ -77,24 +77,6 @@ TEST(AppSettingsTiersStoreTest, ExpertModeEnabled_SaveAndLoad_False) {
     EXPECT_FALSE(loaded.expert_mode_enabled);
 }
 
-TEST(AppSettingsTiersStoreTest, OutputSplitExpanderExpanded_DefaultIsFalse) {
-    PersistedAppSettings settings;
-    EXPECT_FALSE(settings.output_split_expander_expanded);
-}
-
-TEST(AppSettingsTiersStoreTest, OutputSplitExpanderExpanded_SaveAndLoad_True) {
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    AppSettingsStore store(QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini")));
-    PersistedAppSettings settings;
-    settings.output_split_expander_expanded = true;
-    store.Save(settings);
-
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_TRUE(loaded.output_split_expander_expanded);
-}
-
 TEST(AppSettingsTiersStoreTest, AudioSeparateExpanderExpanded_DefaultIsFalse) {
     // audio_separate_expander_expanded is kept in the store for forward-compat
     // (Phase 1b removed the audio expander from the UI; the store field is harmless).
@@ -189,7 +171,6 @@ TEST(AppSettingsTiersStoreTest, MissingSettingsTiersGroup_DefaultsToFalse) {
     AppSettingsStore store(path);
     const PersistedAppSettings loaded = store.Load();
     EXPECT_FALSE(loaded.expert_mode_enabled);
-    EXPECT_FALSE(loaded.output_split_expander_expanded);
     EXPECT_FALSE(loaded.audio_separate_expander_expanded);
 }
 
@@ -295,12 +276,6 @@ TEST_F(SettingsTiersTest, ConfigPage_OutputSplitExpanderExists) {
     EXPECT_NE(combo, nullptr);
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_OutputSplitExpander_DefaultCollapsed) {
-    // Wave 2: API is a no-op; always returns false.
-    ConfigPage page(output_defaults_, video_defaults_);
-    EXPECT_FALSE(page.outputSplitExpanderExpanded());
-}
-
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_HiddenByDefault) {
     // Wave 2: splitModeCombo is now inside split_expert_section_ (expert-gated).
     // It is hidden by default because expert mode is off.
@@ -321,15 +296,6 @@ TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_VisibleWhenExpande
     // The combo is findable.
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
     ASSERT_NE(combo, nullptr);
-}
-
-TEST_F(SettingsTiersTest, ConfigPage_SetOutputSplitExpanderExpanded_RoundTrip) {
-    // Wave 2: setOutputSplitExpanderExpanded is a no-op; outputSplitExpanderExpanded always false.
-    ConfigPage page(output_defaults_, video_defaults_);
-    page.setOutputSplitExpanderExpanded(true);
-    EXPECT_FALSE(page.outputSplitExpanderExpanded());
-    page.setOutputSplitExpanderExpanded(false);
-    EXPECT_FALSE(page.outputSplitExpanderExpanded());
 }
 
 // Phase 1b: the audio-separate expander was removed (per-row toggles stay beside
