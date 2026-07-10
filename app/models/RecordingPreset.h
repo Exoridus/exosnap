@@ -163,6 +163,23 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 [[nodiscard]] bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
 
 // ---------------------------------------------------------------------------
+// Environment fields
+// ---------------------------------------------------------------------------
+
+// Environment fields describe the machine/display, not the user's recording
+// intent: capture identity, video bit depth, HDR handling. Presets neither
+// set nor override them, and they never count toward the (changed) state.
+
+// Returns `config` with the environment fields copied from `env` — used when
+// applying a preset so a switch never overrides the live environment.
+[[nodiscard]] RecordingPresetConfig WithEnvironmentFields(RecordingPresetConfig config,
+                                                          const RecordingPresetConfig& env);
+
+// Returns `config` with the environment fields reset to model defaults —
+// used when snapshotting the live config into a named preset.
+[[nodiscard]] RecordingPresetConfig StripEnvironmentFields(RecordingPresetConfig config);
+
+// ---------------------------------------------------------------------------
 // Filename token helpers (previously in RecordingProfile.h)
 // ---------------------------------------------------------------------------
 

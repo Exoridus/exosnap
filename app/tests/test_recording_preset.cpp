@@ -240,7 +240,7 @@ TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
     b.output.bit_depth = capability::BitDepth::Bit10;
 
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
-    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
 }
 
 // The default preset uses Limited colour range (fix/color-range-signaling: common
@@ -1189,6 +1189,89 @@ TEST(RecordingPreset, SanitizePreset_NonEmptyId_Preserved) {
     p.name = "test";
     const RecordingPreset s = SanitizePreset(p);
     EXPECT_EQ(s.id, "preset.somespecificid1");
+}
+
+// ===========================================================================
+// Environment fields — bit_depth / hdr_mode never count as (changed)
+// ===========================================================================
+
+// Production call site: RecordingPresetRegistry::IsSelectedDirty
+// (RecordingPresetRegistry.cpp) -> MainWindow dirty recompute on every
+// settings-changed handler.
+TEST(RecordingPreset, DirtyEquivalent_BitDepthDifference_NotChanged) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.video_codec = capability::VideoCodec::HevcNvenc;
+    RecordingPresetConfig b = a;
+    b.output.bit_depth = capability::BitDepth::Bit10;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b)); // persistence equality stays strict
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));   // environment field: not (changed)
+}
+
+TEST(RecordingPreset, DirtyEquivalent_HdrModeDifference_NotChanged) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+// Production call site: MainWindow::onPresetSelected / onResetChanges wrap the
+// preset's saved config in WithEnvironmentFields(saved, captureLiveConfig())
+// before applyPresetConfig, so a switch never overrides the environment.
+TEST(RecordingPreset, WithEnvironmentFields_PreservesLiveEnvironment) {
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.output.video_codec = capability::VideoCodec::HevcNvenc;
+    live.output.bit_depth = capability::BitDepth::Bit10;
+    live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    live.capture.kind = PresetCaptureKind::Window;
+    live.capture.window_key = "game.exe";
+
+    RecordingPresetConfig preset = MakeDefaultPreset().config;
+    preset.video.cq = 16; // intent field — must come from the preset
+
+    const RecordingPresetConfig applied = WithEnvironmentFields(preset, live);
+    EXPECT_EQ(applied.output.bit_depth, capability::BitDepth::Bit10);
+    EXPECT_EQ(applied.output.hdr_mode, recorder_core::HdrMode::Hdr10);
+    EXPECT_EQ(applied.capture.kind, PresetCaptureKind::Window);
+    EXPECT_EQ(applied.capture.window_key, "game.exe");
+    EXPECT_EQ(applied.video.cq, 16u);
+}
+
+// The H.264 clamp remains the only sanctioned override (spec exception):
+// applying an H.264 preset onto a 10-bit environment sanitizes to 8-bit.
+TEST(RecordingPreset, WithEnvironmentFields_H264Clamp_StillForcesEightBit) {
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.output.bit_depth = capability::BitDepth::Bit10;
+
+    RecordingPresetConfig preset = MakeDefaultPreset().config;
+    preset.output.container = capability::Container::Mp4;
+    preset.output.video_codec = capability::VideoCodec::H264Nvenc;
+    preset.output.audio_codec = capability::AudioCodec::AacMf;
+
+    const RecordingPresetConfig applied = SanitizePresetConfig(WithEnvironmentFields(preset, live));
+    EXPECT_EQ(applied.output.bit_depth, capability::BitDepth::Bit8);
+}
+
+// Production call site: RecordingPresetRegistry::AddPreset snapshots via
+// StripEnvironmentFields so exported preset files carry no environment claims.
+TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.output.video_codec = capability::VideoCodec::HevcNvenc;
+    live.output.bit_depth = capability::BitDepth::Bit10;
+    live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
+    live.capture.kind = PresetCaptureKind::Region;
+    live.capture.has_region = true;
+    live.capture.region = recorder_core::CaptureRegion{0, 0, 1280, 720};
+
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    const RecordingPresetConfig stripped = StripEnvironmentFields(live);
+    EXPECT_EQ(stripped.output.bit_depth, defaults.bit_depth);
+    EXPECT_EQ(stripped.output.hdr_mode, defaults.hdr_mode);
+    EXPECT_EQ(stripped.capture.kind, PresetCaptureKind::Display);
+    EXPECT_FALSE(stripped.capture.has_region);
+    EXPECT_EQ(stripped.output.video_codec, capability::VideoCodec::HevcNvenc); // intent kept
 }
 
 } // namespace

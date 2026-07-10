@@ -722,11 +722,16 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 
 bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
     // Capture identity (kind, display_key, window_key, has_region, region,
-    // region_display_key) is intentionally NOT compared here.  Capture depends
-    // on transient device availability and auto-resolution, so comparing it
-    // would cause spurious/unstable dirty state (e.g. default preset appears
-    // dirty at startup because the live policy resolves an empty display_key to
-    // a concrete monitor key, or because a monitor is replugged).
+    // region_display_key), output.bit_depth, and output.hdr_mode are
+    // intentionally NOT compared here: all three are environment fields
+    // (see WithEnvironmentFields/StripEnvironmentFields) describing the
+    // machine/display rather than the user's recording intent. Capture
+    // depends on transient device availability and auto-resolution; bit depth
+    // and HDR mode depend on the connected display and source. Comparing any
+    // of them would cause spurious/unstable dirty state (e.g. default preset
+    // appears dirty at startup because the live policy resolves an empty
+    // display_key to a concrete monitor key, or because a monitor is
+    // replugged, or because the desktop's HDR toggle changes).
     // Per spec: temporary availability changes must not make the preset dirty.
     // NormalizedConfigEquals (full structural equality) is kept for persistence
     // round-trip verification and must NOT be changed.
@@ -743,9 +748,6 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     if (a.output.video_codec != b.output.video_codec) {
         return false;
     }
-    if (a.output.bit_depth != b.output.bit_depth) {
-        return false;
-    }
     if (a.output.chroma_subsampling != b.output.chroma_subsampling) {
         return false;
     }
@@ -753,9 +755,6 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.nvenc_preset != b.output.nvenc_preset) {
-        return false;
-    }
-    if (a.output.hdr_mode != b.output.hdr_mode) {
         return false;
     }
     if (a.output.audio_codec != b.output.audio_codec) {
@@ -983,6 +982,25 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Environment fields
+// ---------------------------------------------------------------------------
+
+RecordingPresetConfig WithEnvironmentFields(RecordingPresetConfig config, const RecordingPresetConfig& env) {
+    config.capture = env.capture;
+    config.output.bit_depth = env.output.bit_depth;
+    config.output.hdr_mode = env.output.hdr_mode;
+    return config;
+}
+
+RecordingPresetConfig StripEnvironmentFields(RecordingPresetConfig config) {
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    config.capture = PresetCaptureTarget{};
+    config.output.bit_depth = defaults.bit_depth;
+    config.output.hdr_mode = defaults.hdr_mode;
+    return config;
 }
 
 // ---------------------------------------------------------------------------
