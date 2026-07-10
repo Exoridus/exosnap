@@ -1,9 +1,30 @@
 # DXGI Output-Duplication Shared Hub — Design
 
 **Date:** 2026-07-09
-**Status:** Proposed (design only; no implementation yet)
+**Status:** SUPERSEDED by `2026-07-10-capture-hubs-design.md` (2026-07-10). Do not plan
+against this document.
 **Related:** ADR 0013 (OD for monitor capture, format policy), ADR 0040 (WYSIWYG preview
 via engine source-tap), `OdCaptureMode::SdrScrgb` (SDR Advanced-Color desktops).
+
+> **Why it was superseded.** Three of its positions did not survive:
+>
+> - It treats a WGC hub as a Non-Goal, on the grounds that WGC permits several captures of
+>   one source so sharing buys only efficiency. That misses the point of a hub: frame
+>   control. WGC blanks under the Snipping Tool, and only the owner of the sole capture can
+>   hold the last good frame. The WGC hub now ships *first*, and picker tiles sit behind it.
+> - It rejects a per-key registry ("the product previews one target at a time"). Picker
+>   tiles are several sources at once.
+> - Two of its factual claims are wrong. `PreviewSharedTexture::Create` applies no format
+>   restriction, so its migration step 1 ("allow FP16") is not a task; and the composited
+>   FP16 surface it proposes to publish exists only when `needsGpuCompositor` holds, so a
+>   native HDR10 session with no webcam and no cursor has nothing to tap.
+>
+> What survives, and is carried over verbatim: the driver-lease model (D1), the
+> NT-handle/keyed-mutex transport (D2), cross-GPU honesty (D5), recreate-on-transition
+> (D7), and — above all — the idle-duplication risk and the off-ramp it argues for. That
+> analysis is the most valuable thing in this file and is the reason the DXGI hub is
+> sequenced last. Read §"Risks / open questions" below; the successor summarises it but
+> does not reproduce its detail.
 
 ## Problem
 
