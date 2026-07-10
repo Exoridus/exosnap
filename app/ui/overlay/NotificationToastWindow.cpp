@@ -149,6 +149,7 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
         return {kInfoC, kInfoDim, kInfoB};
     case notifications::NotificationType::UpdateAvailable:
     case notifications::NotificationType::SettingsRepaired: // info tone, shared with UpdateAvailable
+    case notifications::NotificationType::PresetSwitched:   // info tone, shared with UpdateAvailable
         return {kInfoC, kInfoDim, kInfoB};                  // azure/info tone
     }
     return {kInfoC, kInfoDim, kInfoB};
@@ -172,6 +173,8 @@ bool isSticky(notifications::NotificationType type) noexcept {
         return notifications::NotificationManager::kDismissMs_FramesDropped == 0;
     case notifications::NotificationType::SettingsRepaired:
         return notifications::NotificationManager::kDismissMs_SettingsRepaired == 0;
+    case notifications::NotificationType::PresetSwitched:
+        return notifications::NotificationManager::kDismissMs_PresetSwitched == 0;
     }
     return true;
 }
@@ -222,7 +225,8 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
         p.drawLine(QPointF(cx + d, cy - d), QPointF(cx - d, cy + d));
         break;
     }
-    case notifications::NotificationType::RecoveryAvailable: {
+    case notifications::NotificationType::RecoveryAvailable:
+    case notifications::NotificationType::PresetSwitched: { // info glyph, shared with RecoveryAvailable
         // info: circle + "i"
         p.drawEllipse(circle);
         p.setPen(QPen(color, 1.8f, Qt::SolidLine, Qt::RoundCap));
@@ -355,6 +359,9 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
         break;
     case NotificationAction::Discard:
         buttons.push_back({QStringLiteral("Discard"), false, NotificationAction::Discard});
+        break;
+    case NotificationAction::UndoPresetSwitch:
+        buttons.push_back({QStringLiteral("Undo"), true, NotificationAction::UndoPresetSwitch});
         break;
     case NotificationAction::None:
     default:

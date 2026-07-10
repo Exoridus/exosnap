@@ -140,6 +140,18 @@ TEST(RecordingPresetRegistry, DeleteSelected_UserPreset_RemovesIt_FallsBackToDef
     EXPECT_EQ(reg.FindById(id2), nullptr);
 }
 
+// Undo restores the previous selection; when that preset has since been
+// deleted, the selection falls to Default (the fallback the dispatch uses).
+TEST(RecordingPresetRegistry, UndoSelectionFallback_MissingPrevious_FallsToDefault) {
+    RecordingPresetRegistry reg;
+    const std::string mine = reg.AddPreset(MakeDefaultPreset().config, "Mine");
+    ASSERT_TRUE(reg.SetSelected(std::string(kQualityPresetId)));
+    ASSERT_TRUE(reg.SetSelected(mine)); // undo target exists -> restored
+    ASSERT_TRUE(reg.DeleteSelected());  // now it is gone; selection sits on Default
+    EXPECT_FALSE(reg.SetSelected(mine));
+    EXPECT_EQ(reg.SelectedId(), kDefaultPresetId);
+}
+
 // ===========================================================================
 // SelectedSavedConfig
 // ===========================================================================

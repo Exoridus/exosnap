@@ -397,6 +397,18 @@ class MainWindow : public QMainWindow {
     // Preset system (replaces legacy profile_registry_).
     RecordingPresetRegistry preset_registry_;
     RecordingPresetStore preset_store_;
+
+    // Snapshot needed to undo a preset switch: the live config and selection
+    // as they were immediately before the switch that raised the pending
+    // "Switched to '<name>'" toast. Single-slot — a later switch overwrites it,
+    // so only the most recent switch can ever be undone (matches the toast: the
+    // superseded toast's Undo button, if clicked, undoes the LATEST switch, not
+    // the one it was shown for).
+    struct PresetSwitchUndo {
+        RecordingPresetConfig previous_live;
+        std::string previous_selected_id;
+    };
+    std::optional<PresetSwitchUndo> pending_preset_undo_;
     // The config the app booted with (from [live] or a fresh Default).
     // Re-applied once more after the deferred coordinator init resets things.
     RecordingPresetConfig boot_live_config_;

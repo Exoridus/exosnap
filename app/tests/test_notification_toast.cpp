@@ -279,6 +279,7 @@ TEST_F(NotificationToastTest, PaintEvent_AllTypes_WithActions_NoFatalFailure) {
          "A recording from 14:02 wasn't finalized."},
         {NotificationType::FramesDropped, NotificationAction::OpenDiagnostics, "Frames dropped",
          "42 frames were dropped because the encoder couldn't keep up."},
+        {NotificationType::PresetSwitched, NotificationAction::UndoPresetSwitch, "Switched to 'Quality'", ""},
     };
 
     for (const auto& c : cases) {
@@ -599,6 +600,40 @@ TEST_F(NotificationToastTest, Manager_DismissIntervalMs_MatchesPerTypeConstants)
               NotificationManager::kDismissMs_UpdateAvailable);
     EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::FramesDropped),
               NotificationManager::kDismissMs_FramesDropped);
+}
+
+// ── Preset-switch Undo (PresetSwitched type) ──────────────────────────────────
+
+TEST(NotificationManager, PresetSwitched_AutoDismissesAfter8s) {
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::PresetSwitched), 8000);
+}
+
+// A "Switched to '<name>'" toast built with the UndoPresetSwitch action exposes
+// exactly one ✕ target and one primary "Undo" pill carrying that action tag —
+// same hit-target pattern the OpenFolder/Edit cases above use.
+TEST_F(NotificationToastTest, PresetSwitched_ShowsUndoPrimaryButton) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::PresetSwitched;
+    e.title = QStringLiteral("Switched to 'Quality'");
+    e.action = NotificationAction::UndoPresetSwitch;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    int dismiss_count = 0;
+    int undo_count = 0;
+    for (const auto& h : hits) {
+        if (h.is_dismiss) {
+            ++dismiss_count;
+        } else {
+            ++undo_count;
+            EXPECT_EQ(h.action, NotificationAction::UndoPresetSwitch);
+        }
+    }
+    EXPECT_EQ(dismiss_count, 1);
+    EXPECT_EQ(undo_count, 1);
 }
 
 } // namespace

@@ -2618,6 +2618,8 @@ void MainWindow::refreshDiagnosticsData() {
 void MainWindow::onPresetSelected(const QString& id) {
     if (syncing_preset_ui_)
         return;
+    if (id.toStdString() == preset_registry_.SelectedId())
+        return; // combo refresh echo (e.g. OutputPage's profile combo) — not a switch
     if (!record_page_ || !record_page_->canApplyPresetNow()) {
         // Reject switch during recording — revert the selector.
         refreshPresetUi();
@@ -2625,10 +2627,26 @@ void MainWindow::onPresetSelected(const QString& id) {
                                      QStringLiteral("preset switch rejected: recording in progress"));
         return;
     }
+
+    PresetSwitchUndo undo;
+    undo.previous_live = captureLiveConfig();
+    undo.previous_selected_id = preset_registry_.SelectedId();
+
     if (!preset_registry_.SetSelected(id.toStdString()))
         return;
+    pending_preset_undo_ = std::move(undo);
+
     applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     persistPresetState();
+
+    if (notification_manager_) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::PresetSwitched;
+        event.title =
+            QStringLiteral("Switched to '%1'").arg(QString::fromStdString(preset_registry_.SelectedPreset().name));
+        event.action = notifications::NotificationAction::UndoPresetSwitch;
+        notification_manager_->Enqueue(std::move(event));
+    }
 }
 
 void MainWindow::onSavePresetAs(const QString& name) {
@@ -3746,6 +3764,17 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         diagnostics::AppLog::info(QStringLiteral("diagnostics"),
                                   QStringLiteral("User accepted relaunch as administrator."));
         qApp->quit();
+        break;
+    }
+    case NotificationAction::UndoPresetSwitch: {
+        if (!pending_preset_undo_)
+            break; // already consumed by a later Undo click, or never set
+        const PresetSwitchUndo undo = std::move(*pending_preset_undo_);
+        pending_preset_undo_.reset();
+        if (!preset_registry_.SetSelected(undo.previous_selected_id))
+            preset_registry_.SetSelected(std::string(kDefaultPresetId)); // previous preset was deleted meanwhile
+        applyPresetConfig(undo.previous_live);                           // restores live state AND environment fields
+        persistPresetState();
         break;
     }
     case NotificationAction::Discard:
