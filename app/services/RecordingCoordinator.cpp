@@ -413,54 +413,67 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
 
     diagnostics::IDiskSpaceProvider* provider = disk_space_provider_;
 
-    disk_monitor_thread_ =
-        std::jthread([this, output_folder, is_mp4, transient_mkv, provider](std::stop_token stop_token) {
-            // Poll every 5 seconds.
-            constexpr auto kPollInterval = std::chrono::seconds(5);
+    disk_monitor_thread_ = std::jthread([this, output_folder, is_mp4, transient_mkv,
+                                         provider](std::stop_token stop_token) {
+        // Poll every 5 seconds.
+        constexpr auto kPollInterval = std::chrono::seconds(5);
 
-            while (!stop_token.stop_requested()) {
-                // Interruptible sleep.
-                {
-                    std::this_thread::sleep_for(kPollInterval);
-                    if (stop_token.stop_requested())
-                        break;
-                }
+        // A share that cannot be queried stays unqueryable for the whole
+        // session in practice; warn once instead of every five seconds.
+        bool reported_unavailable = false;
 
-                if (!is_recording_.load())
+        while (!stop_token.stop_requested()) {
+            // Interruptible sleep.
+            {
+                std::this_thread::sleep_for(kPollInterval);
+                if (stop_token.stop_requested())
                     break;
-
-                const uint64_t free_bytes = provider->FreeBytesForPath(output_folder);
-                if (free_bytes == 0) {
-                    // Query failed — skip this poll, do not trigger a false stop.
-                    continue;
-                }
-
-                // For MP4 sessions compute the remux reserve as the sum of:
-                //   (a) the current live transient MKV (segment being recorded now), and
-                //   (b) all segment MKV files that have an outstanding background remux
-                //       job (MP4-SPLIT-REMUX-R1: these coexist until each job finishes).
-                // This is conservative but correct: at worst we require enough space for
-                // all in-progress MKVs to have simultaneous output MP4 copies.
-                uint64_t remux_reserve = 0;
-                if (is_mp4) {
-                    // (a) current live segment
-                    if (!transient_mkv.empty()) {
-                        std::error_code ec;
-                        const auto mkv_size = std::filesystem::file_size(transient_mkv, ec);
-                        if (!ec)
-                            remux_reserve += static_cast<uint64_t>(mkv_size);
-                    }
-                    // (b) segments awaiting background remux
-                    remux_reserve += this->PendingRemuxReserveBytes();
-                }
-
-                const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
-                if (free_bytes <= threshold) {
-                    OnDiskSpaceLow(free_bytes, threshold);
-                    break; // stop monitoring — we already triggered the stop
-                }
             }
-        });
+
+            if (!is_recording_.load())
+                break;
+
+            const std::optional<uint64_t> queried = provider->FreeBytesForPath(output_folder);
+            if (!queried.has_value()) {
+                // The volume cannot be queried, so there is nothing to compare
+                // against. Skipping is right — but silence is not: without this
+                // the user believes a guard is running that never can fire.
+                if (!reported_unavailable) {
+                    reported_unavailable = true;
+                    diagnostics::AppLog::warning(QStringLiteral("disk_guard"),
+                                                 QStringLiteral("free space unavailable for the output folder; "
+                                                                "low-disk protection is inactive for this session"));
+                }
+                continue;
+            }
+            const uint64_t free_bytes = *queried;
+
+            // For MP4 sessions compute the remux reserve as the sum of:
+            //   (a) the current live transient MKV (segment being recorded now), and
+            //   (b) all segment MKV files that have an outstanding background remux
+            //       job (MP4-SPLIT-REMUX-R1: these coexist until each job finishes).
+            // This is conservative but correct: at worst we require enough space for
+            // all in-progress MKVs to have simultaneous output MP4 copies.
+            uint64_t remux_reserve = 0;
+            if (is_mp4) {
+                // (a) current live segment
+                if (!transient_mkv.empty()) {
+                    std::error_code ec;
+                    const auto mkv_size = std::filesystem::file_size(transient_mkv, ec);
+                    if (!ec)
+                        remux_reserve += static_cast<uint64_t>(mkv_size);
+                }
+                // (b) segments awaiting background remux
+                remux_reserve += this->PendingRemuxReserveBytes();
+            }
+
+            const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
+            if (free_bytes <= threshold) {
+                OnDiskSpaceLow(free_bytes, threshold);
+                break; // stop monitoring — we already triggered the stop
+            }
+        }
+    });
 }
 
 void RecordingCoordinator::StopDiskMonitor() {
@@ -641,11 +654,19 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             }
             disk_space_provider_ = default_disk_space_provider_.get();
         }
-        const uint64_t free_bytes = disk_space_provider_->FreeBytesForPath(effective_folder);
+        const std::optional<uint64_t> queried = disk_space_provider_->FreeBytesForPath(effective_folder);
         // Use the base threshold (no remux reserve) for the pre-start check;
         // at this point we do not yet know the MKV size.
         const uint64_t threshold = diagnostics::kHardStopFreeBytes;
-        if (free_bytes > 0 && free_bytes <= threshold) {
+        if (!queried.has_value()) {
+            // Unreachable share or denied volume: we cannot prove the drive is
+            // too full, so the recording proceeds. Say so — a guard that cannot
+            // measure must not pretend it is protecting anything.
+            diagnostics::AppLog::warning(
+                QStringLiteral("disk_guard"),
+                QStringLiteral("free space unavailable for the output folder; low-disk protection is inactive"));
+        } else if (*queried <= threshold) {
+            const uint64_t free_bytes = *queried;
             const double free_gb = static_cast<double>(free_bytes) / (1024.0 * 1024.0 * 1024.0);
             diagnostics::AppLog::error(QStringLiteral("disk_guard"),
                                        QStringLiteral("pre-start blocked: free_bytes=%1 threshold_bytes=%2 free_gb=%3")

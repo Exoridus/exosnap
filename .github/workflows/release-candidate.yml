@@ -68,12 +68,12 @@ jobs:
           restore-keys: |
             es-fetchcontent-${{ runner.os }}-vs2022-
 
-      # Pre-configure the Release tree with EXOSNAP_RELEASE_PDB=ON so the linker
-      # emits a separate exosnap.pdb the symbol-archiving step can collect. The
-      # release script is then invoked with -SkipConfigure so it builds + packages
-      # against this already-configured tree (its build dir is build/windows-x64-
-      # release, matching this preset). The .pdb stays in the build tree; the
-      # install/ZIP/MSI never ship it (install deploys RUNTIME only).
+      # Pre-configure the Release tree. The Release link always passes /DEBUG, so
+      # the linker emits a separate exosnap.pdb the symbol-archiving step can
+      # collect. The release script is then invoked with -SkipConfigure so it builds
+      # + packages against this already-configured tree (its build dir is
+      # build/windows-x64-release, matching this preset). The .pdb stays in the build
+      # tree; the install/ZIP/MSI never ship it (install deploys RUNTIME only).
       #
       # Official build: when the EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo VARIABLE is set,
       # this enables the full 0.4.0 feature set — crash capture (out-of-process
@@ -88,7 +88,7 @@ jobs:
         env:
           PUBKEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
         run: |
-          $cfgArgs = @('--preset', 'windows-x64-release', '-DEXOSNAP_RELEASE_PDB=ON')
+          $cfgArgs = @('--preset', 'windows-x64-release')
           if ($env:PUBKEY) {
             Write-Host "Official build: crash capture (Sentry DSN) + update checking ENABLED."
             $cfgArgs += @(

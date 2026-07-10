@@ -22,8 +22,12 @@ struct DpcLatencyReading {
 
 class RecommendationEngine {
   public:
+    // output_drive_free_bytes: nullopt when the volume could not be queried, in
+    // which case the disk checks stay silent rather than guessing. A queried 0
+    // is a full disk and raises the blocker.
     RecommendationEngine(const capability::CapabilitySet& caps, const capability::UserRecorderConfig& config,
-                         uint32_t monitor_refresh_rate = 0, uint64_t output_drive_free_bytes = 0,
+                         uint32_t monitor_refresh_rate = 0,
+                         std::optional<uint64_t> output_drive_free_bytes = std::nullopt,
                          bool is_profile_supported = true, std::string output_filesystem_name = {},
                          const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot = nullptr,
                          const PresentSample* present = nullptr);
@@ -73,7 +77,7 @@ class RecommendationEngine {
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
     uint32_t monitor_refresh_rate_;
-    uint64_t output_drive_free_bytes_;
+    std::optional<uint64_t> output_drive_free_bytes_; // nullopt = volume not queryable
     bool is_profile_supported_;
     std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
     bool output_path_writable_ = true;       // false => emit the not-writable blocker (set by caller)

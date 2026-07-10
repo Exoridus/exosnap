@@ -64,6 +64,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_SettingsRepaired; // timed (8 s)
     case NotificationType::PresetSwitched:
         return kDismissMs_PresetSwitched; // timed (8 s)
+    case NotificationType::OverlayOmitted:
+        return kDismissMs_OverlayOmitted; // timed (8 s)
     }
     return kDismissMs_Saved;
 }

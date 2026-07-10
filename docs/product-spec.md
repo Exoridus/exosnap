@@ -111,9 +111,10 @@ Presets neither store nor override them, and a difference in them never counts a
 presets therefore leaves the capture target alone. The existing H.264 8-bit clamp is the one
 sanctioned exception.
 
-Settings hosts the preset dropdown directly — there is no separate preset manager surface. Next to it
-a `…` overflow menu holds **Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and
-**Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
+Settings hosts the preset dropdown directly — there is no separate preset manager surface. Built-in
+presets carry a small **Built-in** badge inside their dropdown option row, so the marker never sits
+beside the dropdown and shifts the toolbar. Next to the dropdown a `…` overflow menu holds
+**Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and **Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
 appear; **Delete** appears whenever a user preset is selected, independent of the changed state, and
 never for a built-in. The Output page carries the same row. Switching presets applies immediately and
 raises a notification offering **Undo**, which restores both the previous live configuration and the
@@ -350,13 +351,24 @@ preview keeps its own capture and shows the same SDR approximation used elsewher
 
 **Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a
-selectable overlay placement. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
+selectable overlay placement. In a constant-frame-rate recording the PiP keeps moving at the encode
+cadence even while the desktop is perfectly still: a screen capture only produces a frame when the
+screen changes, so the held screen is composited again with the current camera image rather than
+repeating the previous composited frame. During a capture-loss recovery the picture is held frozen
+instead, until the capture source is reopened.
+
+On the rare HDR10 display whose desktop frames arrive already in PQ, the engine cannot composite
+overlays and records **without the webcam and cursor**. When that happens the Record preview drops
+its picture-in-picture to match the file, and a notification says so. The preview never shows an
+overlay the recording will not contain. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
 applied identically in the Record-page preview and the recorded output. Its on/off is a single control
 surfaced in two always-in-sync places — Settings → Webcam and the Record-page transport dock (camera
 button) — and is off by default. Turning it on both includes the webcam in the recording and starts the
 live setup preview; the camera opens only while it is on (opening Settings → Webcam no longer turns the
 camera on by itself). The webcam is never recorded without a selected device (the first available
-camera is pre-selected when one exists). The device, resolution, mirror, opacity and
+camera is pre-selected when one exists). With **no camera attached** the Record dock's webcam
+control is unavailable and says so; attaching one makes it available again. Unplugging the last
+camera never loses the stored choice — it returns when the device does. The device, resolution, mirror, opacity and
 chroma-key options stay editable regardless of the on/off state. The webcam is the only feature that depends
 on Windows Media Foundation: on Windows N/KN editions without the Media Feature Pack, the app still
 launches and records normally, but the webcam UI is disabled with a notice referencing the Media
@@ -410,7 +422,8 @@ the Edit/Output/Save "Review" step.)
 boundaries stay keyframe-safe; counters reset per segment. Split is supported for MKV, WebM, and MP4.
 For MP4, each completed segment is remuxed to progressive MP4 in the background while recording
 continues; "Saved" is reported only once all segment remuxes finish. Manual split is independent of
-automatic split.
+automatic split. Under Expert mode the split controls are laid out inline within the Output card
+(time and size sub-sections), not tucked behind a popover.
 
 **Low-disk guard.** A configurable soft **warning threshold** (default around 2 GB free) shows a
 Diagnostics notice but still allows recording; a lower **hard-stop threshold** (default around
@@ -418,6 +431,11 @@ Diagnostics notice but still allows recording; a lower **hard-stop threshold** (
 effective hard-stop threshold is raised to account for the transient MKV and output MP4 coexisting
 during remux (roughly 2× file size), and for split MP4 sessions it is raised further by the sum of
 pending background remux jobs plus the live segment estimate.
+
+When the output volume **cannot be queried at all** (an unreachable network share, a denied volume),
+the guard cannot measure and therefore does not fire: recording proceeds and a warning is written to
+the log stating that low-disk protection is inactive for that session. A volume that reports **zero
+bytes free** is a full disk, not a failed query, and is blocked like any other hard-stop.
 
 **Filesystem checks.** ExoSnap detects the output volume's filesystem. A **FAT32** volume raises a
 Diagnostics **notice** about the 4 GiB per-file limit; recording is **not** blocked and short clips
@@ -618,6 +636,9 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
 
 - **Opt-in and consent-gated**, local-first (out-of-process Crashpad). Nothing leaves the machine
   without an explicit choice on the next-launch crash dialog.
+- **A crash always leaves a local minidump.** Official builds capture it out-of-process via
+  Crashpad; builds without it fall back to an in-process handler. The dump stays on the machine
+  and is never uploaded without consent.
 - **Next-launch only** — crashes are offered for reporting on the following launch.
 - **Two-stage delivery:** Stage 0 is an assisted GitHub issue (always available); Stage 1 is an
   automated upload to **Sentry with EU data residency**, compiled in only for official builds — so

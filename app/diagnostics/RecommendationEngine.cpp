@@ -38,7 +38,7 @@ DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, Diagno
 
 RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps,
                                            const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
-                                           uint64_t output_drive_free_bytes, bool is_profile_supported,
+                                           std::optional<uint64_t> output_drive_free_bytes, bool is_profile_supported,
                                            std::string output_filesystem_name,
                                            const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot,
                                            const PresentSample* present)
@@ -400,15 +400,17 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
         checklist.results.push_back(std::move(r));
     }
 
-    if (output_drive_free_bytes_ == 0) {
-        // 0 means "not queried" — skip to avoid false positives.
+    if (!output_drive_free_bytes_.has_value()) {
+        // The volume could not be queried (unreachable share, access denied).
+        // Stay silent rather than guess; a zero here would be a full disk.
         return;
     }
 
-    const double free_gb = static_cast<double>(output_drive_free_bytes_) / (1024.0 * 1024.0 * 1024.0);
+    const uint64_t free_bytes = *output_drive_free_bytes_;
+    const double free_gb = static_cast<double>(free_bytes) / (1024.0 * 1024.0 * 1024.0);
     const std::string free_gb_str = std::to_string(free_gb).substr(0, 4);
 
-    if (output_drive_free_bytes_ <= kHardStopFreeBytes) {
+    if (free_bytes <= kHardStopFreeBytes) {
         // rec.007: hard-stop blocker — recording is blocked until free space is recovered.
         DiagnosticResult r = MakeResult("rec.007", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
                                         "Insufficient disk space — recording blocked",
@@ -431,7 +433,7 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
         return;
     }
 
-    if (output_drive_free_bytes_ < kWarnFreeBytes) {
+    if (free_bytes < kWarnFreeBytes) {
         // rec.005: soft warning — recording is still allowed but space is getting low.
         DiagnosticResult r =
             MakeResult("rec.005", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,

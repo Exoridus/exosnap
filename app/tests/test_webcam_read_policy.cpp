@@ -139,3 +139,22 @@ TEST(ShouldOpenWebcamPreviewTest, DisabledAndNoDeviceDoesNotOpen) {
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// ShouldEnableWebcamToggle — the Record dock toggle follows the hardware.
+// ---------------------------------------------------------------------------
+TEST(ShouldEnableWebcamToggleTest, NoCameraLeavesNothingToTurnOn) {
+    EXPECT_FALSE(ShouldEnableWebcamToggle(/*has_device=*/false, /*transport_locked=*/false));
+}
+
+TEST(ShouldEnableWebcamToggleTest, CameraAttachedEnablesTheToggle) {
+    EXPECT_TRUE(ShouldEnableWebcamToggle(/*has_device=*/true, /*transport_locked=*/false));
+}
+
+TEST(ShouldEnableWebcamToggleTest, LockedTransportWinsOverAnAttachedCamera) {
+    EXPECT_FALSE(ShouldEnableWebcamToggle(/*has_device=*/true, /*transport_locked=*/true));
+}
+
+TEST(ShouldEnableWebcamToggleTest, NoCameraAndLockedIsStillDisabled) {
+    EXPECT_FALSE(ShouldEnableWebcamToggle(false, true));
+}

@@ -49,3 +49,42 @@ TEST(SelectFrame, EmptyRingDuplicates) {
     auto d = SelectFrameForSlot(std::span<const uint64_t>(), 100, 0, FramePacingMode::Smooth);
     EXPECT_FALSE(d.emit);
 }
+
+// ---------------------------------------------------------------------------
+// ShouldRecompositeHeldScreen — a still desktop must not freeze the webcam.
+// ---------------------------------------------------------------------------
+using recorder_core::ShouldRecompositeHeldScreen;
+
+TEST(HeldScreenRecomposite, StillDesktopWithLiveWebcamRecomposites) {
+    EXPECT_TRUE(ShouldRecompositeHeldScreen(/*has_fresh_source=*/false, /*od_holding=*/false,
+                                            /*webcam_overlay_active=*/true, /*has_held_screen=*/true));
+}
+
+TEST(HeldScreenRecomposite, FreshFrameCompositesThatInstead) {
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(true, false, true, true));
+}
+
+TEST(HeldScreenRecomposite, NoWebcamKeepsCheapDuplicate) {
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, false, /*webcam_overlay_active=*/false, true));
+}
+
+// Mid-reopen the capture's display-tied resources are gone; touching them is a crash.
+TEST(HeldScreenRecomposite, HoldingNeverRecomposites) {
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, /*od_holding=*/true, true, true));
+}
+
+TEST(HeldScreenRecomposite, NothingHeldNothingToCompositeOnto) {
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, false, true, /*has_held_screen=*/false));
+}
+
+// The invariant the crash fix depends on: re-composition never happens while holding,
+// whatever else is true.
+TEST(HeldScreenRecomposite, HoldingDominatesEveryOtherInput) {
+    for (const bool fresh : {false, true}) {
+        for (const bool webcam : {false, true}) {
+            for (const bool held : {false, true}) {
+                EXPECT_FALSE(ShouldRecompositeHeldScreen(fresh, /*od_holding=*/true, webcam, held));
+            }
+        }
+    }
+}

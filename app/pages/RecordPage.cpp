@@ -1657,7 +1657,10 @@ void RecordPage::setSettingsWebcamPreviewActive(bool active) {
 void RecordPage::updateWebcamOverlay() {
     if (!preview_surface_)
         return;
-    preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled);
+    // The engine cannot composite overlays onto an already-PQ HDR10 desktop and
+    // records without them. Showing the picture-in-picture here would promise a
+    // frame the file does not contain.
+    preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled && !engine_omits_webcam_overlay_);
     preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
     preview_surface_->setWebcamOpacity(current_webcam_settings_.opacity);
     preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
@@ -2410,6 +2413,12 @@ void RecordPage::initCoordinator() {
         // Wall-clock fallback timer: track elapsed independently of backend stats
         // so the dock timer always shows a live count immediately, not --:--:--.
         const UiRecordingState prev = view_model_.state;
+        // The overlay-omitted verdict belongs to one session's capture format. Clear it
+        // when a session ends, or the preview would stay stripped for the next one.
+        if (state != UiRecordingState::Recording && state != UiRecordingState::Paused && engine_omits_webcam_overlay_) {
+            engine_omits_webcam_overlay_ = false;
+            updateWebcamOverlay();
+        }
         if (state == UiRecordingState::Recording && prev != UiRecordingState::Recording) {
             if (prev == UiRecordingState::Paused) {
                 // Resume: keep accumulated time, restart the running clock.
@@ -2465,6 +2474,17 @@ void RecordPage::initCoordinator() {
     coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {
         view_model_.UpdateStats(stats);
         updateStatsDisplay();
+
+        // The engine reports that it is recording without the webcam and cursor
+        // overlays. Match the preview to the file, and say so once — a preview that
+        // keeps showing a picture-in-picture the recording does not contain is worse
+        // than no preview at all.
+        if (stats.webcam_overlay_omitted != engine_omits_webcam_overlay_) {
+            engine_omits_webcam_overlay_ = stats.webcam_overlay_omitted;
+            updateWebcamOverlay();
+            if (engine_omits_webcam_overlay_ && current_webcam_settings_.enabled)
+                emit webcamOverlayOmitted();
+        }
     });
     coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
         emit diagnosticsUpdated(snapshot);
@@ -4121,9 +4141,13 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setToggleState(QStringLiteral("app"), view_model_.audio_ui_state.IsAppEnabled(),
                                     toggles_interactive);
     // Webcam overlay is live-mutable via coordinator->SetWebcamSettings(), so it
-    // stays interactive during recording. Only block during transient states.
-    const bool webcam_interactive = !(blocked || failed);
+    // stays interactive during recording. Only block during transient states, and
+    // when no camera is attached there is nothing to turn on.
+    const bool webcam_interactive = ShouldEnableWebcamToggle(webcam_device_present_, blocked || failed);
     transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, webcam_interactive);
+    transport_dock_->setToggleTooltip(QStringLiteral("webcam"), webcam_device_present_
+                                                                    ? QStringLiteral("Webcam")
+                                                                    : QStringLiteral("No camera connected"));
 
     // v10: no Completed dock state. The dock always returns to Ready after a
     // recording finishes; the result is surfaced via the NotificationManager
@@ -4668,9 +4692,29 @@ void RecordPage::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& sna
     if (!coordinator_)
         return;
 
+    // The dock toggle follows the hardware: unplug the last camera and it greys out,
+    // plug one back in and it returns.
+    webcam_device_present_ = !snap.devices.isEmpty();
+    updateTransportDock();
+
     const std::string configured_id = current_webcam_settings_.device_id;
-    if (configured_id.empty())
+    if (configured_id.empty()) {
+        // Nothing chosen yet. With cameras attached, adopt one so enabling the toggle
+        // records something instead of refusing. This is a runtime convenience, not a
+        // configuration change: it is not persisted and must not mark the preset
+        // changed (see MainWindow::onWebcamDevicesChanged).
+        std::vector<WebcamDeviceInfo> devices;
+        devices.reserve(static_cast<std::size_t>(snap.devices.size()));
+        for (const auto& dev : snap.devices)
+            devices.push_back(dev);
+        const std::string resolved = ResolveWebcamDeviceId(std::string(), devices);
+        if (!resolved.empty()) {
+            WebcamSettings s = current_webcam_settings_;
+            s.device_id = resolved;
+            setWebcamSettings(s);
+        }
         return;
+    }
 
     // Check whether the configured device is present in the new snapshot.
     bool present = false;

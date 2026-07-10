@@ -7,6 +7,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
 #include <QPushButton>
 #include <QSize>
 #include <QString>
@@ -48,6 +49,10 @@ QWidget* makeDetailLine(const QString& key, const QString& value, QWidget* paren
 
     auto* value_label = new QLabel(value, row);
     value_label->setWordWrap(true);
+    // A word-wrapped label reports the height of a single line as its minimum.
+    // Without this the row can be squeezed to one line and the wrapped text is
+    // painted over the row below it.
+    value_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
     value_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     value_label->setStyleSheet(
         QStringLiteral(
@@ -141,6 +146,8 @@ QWidget* RecordingErrorPanel::buildDetailBox() {
     auto* body = new QVBoxLayout(frame);
     body->setContentsMargins(15, 13, 15, 13);
     body->setSpacing(6);
+    // The box grows to fit its rows rather than collapsing onto them.
+    body->setSizeConstraint(QLayout::SetMinimumSize);
 
     if (!model_.phase.isEmpty())
         body->addWidget(makeDetailLine(QStringLiteral("PHASE"), model_.phase, frame));

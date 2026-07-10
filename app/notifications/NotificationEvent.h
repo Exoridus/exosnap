@@ -19,6 +19,7 @@ enum class NotificationType : uint8_t {
     FramesDropped,     // encoder backpressure dropped real frames during recording (DROP-NOTIFY)
     SettingsRepaired,  // the preset store needed a field-wise repair on load
     PresetSwitched,    // a preset switch applied immediately; offers an Undo
+    OverlayOmitted,    // this display's HDR10 format cannot carry the webcam/cursor overlays
 };
 
 // ---------------------------------------------------------------------------

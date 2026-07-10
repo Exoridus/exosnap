@@ -141,6 +141,7 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
     case notifications::NotificationType::Saved:
         return {kSuccessC, kSuccessDim, kSuccessB};
     case notifications::NotificationType::FramesDropped: // caution tone, shared with LowStorage
+    case notifications::NotificationType::OverlayOmitted:
     case notifications::NotificationType::LowStorage:
         return {kCautionC, kCautionDim, kCautionB};
     case notifications::NotificationType::UnexpectedStop:
@@ -175,6 +176,8 @@ bool isSticky(notifications::NotificationType type) noexcept {
         return notifications::NotificationManager::kDismissMs_SettingsRepaired == 0;
     case notifications::NotificationType::PresetSwitched:
         return notifications::NotificationManager::kDismissMs_PresetSwitched == 0;
+    case notifications::NotificationType::OverlayOmitted:
+        return notifications::NotificationManager::kDismissMs_OverlayOmitted == 0;
     }
     return true;
 }
@@ -203,6 +206,7 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
         break;
     }
     case notifications::NotificationType::FramesDropped: // caution glyph, shared with LowStorage
+    case notifications::NotificationType::OverlayOmitted:
     case notifications::NotificationType::LowStorage: {
         // alertTriangle: equilateral triangle + ! inside
         const float h = sz * 0.86f;

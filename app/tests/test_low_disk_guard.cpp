@@ -17,6 +17,7 @@
 #include <capability/user_config.h>
 
 #include <filesystem>
+#include <optional>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -25,15 +26,16 @@ namespace {
 
 class StubDiskSpaceProvider final : public IDiskSpaceProvider {
   public:
-    explicit StubDiskSpaceProvider(uint64_t free_bytes) : free_bytes_(free_bytes) {
+    // Pass std::nullopt to simulate a volume that cannot be queried.
+    explicit StubDiskSpaceProvider(std::optional<uint64_t> free_bytes) : free_bytes_(free_bytes) {
     }
 
-    [[nodiscard]] uint64_t FreeBytesForPath(const std::filesystem::path& /*path*/) const override {
+    [[nodiscard]] std::optional<uint64_t> FreeBytesForPath(const std::filesystem::path& /*path*/) const override {
         return free_bytes_;
     }
 
   private:
-    uint64_t free_bytes_;
+    std::optional<uint64_t> free_bytes_;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -86,21 +88,40 @@ TEST(DiskSpaceThresholdsTest, ComputeHardStopThreshold_LargeReserve) {
     EXPECT_EQ(ComputeHardStopThreshold(reserve), expected);
 }
 
-// ─── RecommendationEngine — no disk-space entries when value is 0 ─────────────
+// ─── RecommendationEngine — unqueryable volume vs. full disk ──────────────────
 
-TEST(LowDiskGuardRecommendationTest, ZeroFreeBytes_NoDiskEntries) {
-    // 0 means "not queried"; must not produce any disk-space result.
+TEST(LowDiskGuardRecommendationTest, UnqueryableVolume_NoDiskEntries) {
+    // The volume could not be queried (unreachable share). Guessing either way
+    // would be wrong, so no disk result is emitted.
     const capability::CapabilitySet caps = MakeBasicCaps();
     const capability::UserRecorderConfig config = MakeBasicConfig();
 
-    RecommendationEngine engine(caps, config, 0, /*output_drive_free_bytes=*/0, true);
+    RecommendationEngine engine(caps, config, 0, /*output_drive_free_bytes=*/std::nullopt, true);
     const DiagnosticChecklist cl = engine.Generate();
 
     for (const auto& r : cl.results) {
-        EXPECT_NE(r.id, "rec.005") << "rec.005 must not fire when free_bytes=0";
-        EXPECT_NE(r.id, "rec.007") << "rec.007 must not fire when free_bytes=0";
+        EXPECT_NE(r.id, "rec.005") << "rec.005 must not fire when the volume is unqueryable";
+        EXPECT_NE(r.id, "rec.007") << "rec.007 must not fire when the volume is unqueryable";
     }
     EXPECT_FALSE(cl.has_blocker);
+}
+
+TEST(LowDiskGuardRecommendationTest, ZeroFreeBytes_IsAFullDisk_Blocks) {
+    // A queried zero is the fullest possible disk. It must raise the hard-stop
+    // blocker — this is the exact case the guard exists for.
+    const capability::CapabilitySet caps = MakeBasicCaps();
+    const capability::UserRecorderConfig config = MakeBasicConfig();
+
+    RecommendationEngine engine(caps, config, 0, /*output_drive_free_bytes=*/0ULL, true);
+    const DiagnosticChecklist cl = engine.Generate();
+
+    bool found_rec007 = false;
+    for (const auto& r : cl.results) {
+        if (r.id == "rec.007")
+            found_rec007 = true;
+    }
+    EXPECT_TRUE(found_rec007) << "a full disk must raise the hard-stop blocker";
+    EXPECT_TRUE(cl.has_blocker);
 }
 
 // ─── rec.005 — soft Notice tier ───────────────────────────────────────────────
@@ -289,12 +310,21 @@ TEST(LowDiskGuardRecommendationTest, GetAllRecommendationCodes_IncludesRec007) {
 TEST(DiskSpaceProviderTest, Stub_ReturnsConfiguredValue) {
     const uint64_t expected = 3ULL * 1024 * 1024 * 1024;
     StubDiskSpaceProvider stub(expected);
-    EXPECT_EQ(stub.FreeBytesForPath(std::filesystem::path(L"C:\\fake\\path")), expected);
+    EXPECT_EQ(stub.FreeBytesForPath(std::filesystem::path(L"C:\\fake\\path")), std::optional<uint64_t>(expected));
 }
 
-TEST(DiskSpaceProviderTest, Stub_ZeroReturnsMeansNotQueried) {
+// A full disk reports zero free bytes. That is an answer, not a failure, and it
+// must survive the round trip so the guard can act on it.
+TEST(DiskSpaceProviderTest, Stub_ZeroIsAFullDiskNotAFailure) {
     StubDiskSpaceProvider stub(0);
-    EXPECT_EQ(stub.FreeBytesForPath(std::filesystem::path(L"C:\\whatever")), 0u);
+    const auto free = stub.FreeBytesForPath(std::filesystem::path(L"C:\\whatever"));
+    ASSERT_TRUE(free.has_value());
+    EXPECT_EQ(*free, 0u);
+}
+
+TEST(DiskSpaceProviderTest, Stub_NulloptMeansNotQueryable) {
+    StubDiskSpaceProvider stub(std::nullopt);
+    EXPECT_FALSE(stub.FreeBytesForPath(std::filesystem::path(L"\\\\nas\\share")).has_value());
 }
 
 // ─── Win32DiskSpaceProvider — compile-time check ─────────────────────────────
@@ -304,18 +334,14 @@ TEST(DiskSpaceProviderTest, Stub_ZeroReturnsMeansNotQueried) {
 
 TEST(DiskSpaceProviderTest, Win32Provider_ReturnsNonNegativeOnExistingRoot) {
     Win32DiskSpaceProvider provider;
-    // C:\ must always exist on a Windows test host.
-    const uint64_t free = provider.FreeBytesForPath(std::filesystem::path(L"C:\\"));
-    // We cannot assert a specific value, but it must not throw or return a
-    // nonsensical value (ULARGE_INTEGER wraps to a huge number if misused).
-    // Simply verify it compiled and ran without crashing.
-    (void)free;
-    SUCCEED();
+    // C:\ must always exist on a Windows test host, so the query must succeed.
+    const auto free = provider.FreeBytesForPath(std::filesystem::path(L"C:\\"));
+    EXPECT_TRUE(free.has_value());
 }
 
-TEST(DiskSpaceProviderTest, Win32Provider_ReturnsZeroOnEmptyPath) {
+TEST(DiskSpaceProviderTest, Win32Provider_EmptyPathIsNotQueryable) {
     Win32DiskSpaceProvider provider;
-    EXPECT_EQ(provider.FreeBytesForPath(std::filesystem::path{}), 0u);
+    EXPECT_FALSE(provider.FreeBytesForPath(std::filesystem::path()).has_value());
 }
 
 } // namespace

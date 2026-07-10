@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QDebug>
+#include <QDir>
 #include <QFile>
 #include <QIcon>
 #include <QProcess>
@@ -104,6 +105,22 @@ int main(int argc, char* argv[]) {
     const qint64 main_start_ms = exosnap::diagnostics::StartupClock().elapsed();
 
     QApplication app(argc, argv);
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // The visual-test harness runs the real application, and the real application
+    // persists its live configuration while it runs. Pointed at the developer's
+    // config directory it silently overwrites their settings with the scenario's
+    // synthetic ones. Isolate before anything can read or write that directory —
+    // an opt-in environment variable is not enough, because forgetting it is
+    // exactly the mistake that destroys data.
+    if (exosnap::visual::HasVisualTestRequest(QCoreApplication::arguments()) &&
+        !qEnvironmentVariableIsSet("EXOSNAP_CONFIG_DIR")) {
+        const QString isolated = QDir(QDir::tempPath()).filePath(QStringLiteral("exosnap-visual-test"));
+        QDir().mkpath(isolated);
+        qputenv("EXOSNAP_CONFIG_DIR", isolated.toUtf8());
+        qInfo().noquote() << "visual test: isolated config dir" << isolated;
+    }
+#endif
     const qint64 qapplication_created_ms = exosnap::diagnostics::StartupClock().elapsed();
     app.setApplicationName("ExoSnap");
 

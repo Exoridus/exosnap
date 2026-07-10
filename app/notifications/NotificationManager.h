@@ -63,6 +63,11 @@ class NotificationManager : public QObject {
     // applied; Undo just needs a window to be seen, not to force a decision).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_PresetSwitched = 8000;
+    // caution / "Webcam not recorded" — auto-dismiss 8 s. The recording is running and
+    // correct; only the overlays are absent, and nothing the user can do mid-session
+    // brings them back. Diagnostics carries the explanation.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_OverlayOmitted = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

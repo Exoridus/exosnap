@@ -30,6 +30,8 @@
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QStyle>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QSvgRenderer>
 #include <QTimer>
 #include <QToolButton>
@@ -74,6 +76,57 @@ namespace exosnap {
 namespace {
 
 using M = ui::theme::ExoSnapMetrics;
+
+// Draws the preset combo's option rows and, for built-in presets, a small
+// "Built-in" badge pill at the right edge of the row. Keeping the badge inside
+// the option means it no longer sits beside the combo and shifts the toolbar
+// layout. Built-in-ness is carried per item in ConfigPage::kPresetBuiltInRole.
+class PresetOptionDelegate : public QStyledItemDelegate {
+  public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+  protected:
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        // Base draws the row background, selection highlight, and label text.
+        QStyledItemDelegate::paint(painter, option, index);
+
+        if (!index.data(ConfigPage::kPresetBuiltInRole).toBool())
+            return;
+
+        const QString badge = QStringLiteral("Built-in");
+        QFont badge_font = option.font;
+        const int base_px = badge_font.pixelSize();
+        badge_font.setPixelSize(base_px > 0 ? qMax(9, base_px - 2) : 11);
+        const QFontMetrics fm(badge_font);
+
+        constexpr int kPadX = 7;
+        constexpr int kMargin = 8;
+        const int badge_w = fm.horizontalAdvance(badge) + 2 * kPadX;
+        const int badge_h = qMin(option.rect.height() - 4, fm.height() + 4);
+        const QRect badge_rect(option.rect.right() - badge_w - kMargin,
+                               option.rect.top() + (option.rect.height() - badge_h) / 2, badge_w, badge_h);
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const auto& th = ui::theme::ActiveTheme();
+        QPainterPath pill;
+        pill.addRoundedRect(badge_rect, badge_h / 2.0, badge_h / 2.0);
+        painter->setPen(QPen(ui::theme::ParseThemeColor(th.line2), 1.0));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawPath(pill);
+        painter->setFont(badge_font);
+        painter->setPen(ui::theme::ParseThemeColor(th.mut));
+        painter->drawText(badge_rect, Qt::AlignCenter, badge);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        QSize s = QStyledItemDelegate::sizeHint(option, index);
+        if (index.data(ConfigPage::kPresetBuiltInRole).toBool())
+            s.setWidth(s.width() + 72); // reserve room for the "Built-in" badge
+        return s;
+    }
+};
 
 // Upper bound for the Config form width. Settings is a wide product surface;
 // the cap prevents absurd stretching on ultra-wide displays while preserving
@@ -718,6 +771,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_combo_->setMinimumWidth(0);
         profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         profile_combo_->setMaximumWidth(260);
+        // Draw the "Built-in" badge inside the dropdown rows (see PresetOptionDelegate).
+        profile_combo_->setItemDelegate(new PresetOptionDelegate(profile_combo_));
         toolbar_hl->addWidget(profile_combo_, 1, Qt::AlignVCenter);
 
         profile_status_label_ = new QLabel(toolbar_row);
@@ -774,15 +829,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         expert_mode_label_->setProperty("expertOn", false);
         toolbar_hl->addWidget(expert_mode_label_, 0, Qt::AlignVCenter);
 
+        // Info-i sits directly right of the label so the toggle stays flush to the
+        // right edge, vertically aligned with the cards below.
+        auto* expert_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertMode, toolbar_row);
+        expert_info->setObjectName(QStringLiteral("expertModeInfoHint"));
+        toolbar_hl->addWidget(expert_info, 0, Qt::AlignVCenter);
+
         expert_mode_toggle_ = new ui::widgets::ExoToggle(toolbar_row);
         expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
         expert_mode_toggle_->setOn(false);
         toolbar_hl->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
-
-        // Info-i to the right of the Expert toggle (replaces the expert_warn_label_ banner).
-        auto* expert_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertMode, toolbar_row);
-        expert_info->setObjectName(QStringLiteral("expertModeInfoHint"));
-        toolbar_hl->addWidget(expert_info, 0, Qt::AlignVCenter);
 
         header_vl->addWidget(toolbar_row);
 
@@ -2328,9 +2384,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emit expertModeChanged(expert_mode_enabled_);
     });
 
-    // Wave 2: output_split_expander_ dissolved; outputSplitExpanderChanged is kept as
-    // a no-op signal for MainWindow compat (AppSettingsStore field still persists).
-
     // The CQ value IS the model: the named presets are derived from it, never the
     // other way round. (Deriving a preset and then re-seeding the spinbox from that
     // preset is what previously snapped every keystroke back to 19/24/30.)
@@ -3544,6 +3597,8 @@ void ConfigPage::setPresetOptions(const std::vector<ProfileOption>& options, con
     for (std::size_t i = 0; i < options.size(); ++i) {
         const auto& opt = options[i];
         profile_combo_->addItem(opt.label, opt.id);
+        // Carry built-in-ness so PresetOptionDelegate can badge the option row.
+        profile_combo_->setItemData(static_cast<int>(i), opt.built_in, kPresetBuiltInRole);
         if (opt.id == selected_id) {
             active_index = static_cast<int>(i);
             active_preset_is_built_in_ = opt.built_in;
@@ -3567,15 +3622,15 @@ void ConfigPage::updatePresetActionState() {
     const bool locked = controls_locked_;
     const bool user_preset = !active_preset_id_.isEmpty() && !active_preset_is_built_in_;
 
-    // Status badge (built-in / unavailable): separate label in toolbar.
+    // Status badge (unavailable only): a separate toolbar label. The built-in
+    // marker now renders as a "Built-in" badge inside the combo option rows
+    // (PresetOptionDelegate) so it no longer sits beside the combo and shifts
+    // the toolbar layout.
     if (profile_status_label_) {
         QString badge;
         if (!active_preset_is_available_) {
             badge = QStringLiteral("Unavailable");
             profile_status_label_->setProperty("stateRole", "blocked");
-        } else if (active_preset_is_built_in_) {
-            badge = QStringLiteral("Built-in preset");
-            profile_status_label_->setProperty("stateRole", "ready");
         }
         profile_status_label_->setText(badge);
         profile_status_label_->setVisible(!badge.isEmpty());
@@ -4094,16 +4149,6 @@ void ConfigPage::setExpertModeEnabled(bool enabled) {
 
 bool ConfigPage::expertModeEnabled() const noexcept {
     return expert_mode_enabled_;
-}
-
-void ConfigPage::setOutputSplitExpanderExpanded(bool /*expanded*/) {
-    // Wave 2: output_split_expander_ dissolved; split controls are now expert-gated.
-    // No-op kept for MainWindow backward compat (store field still persists).
-}
-
-bool ConfigPage::outputSplitExpanderExpanded() const noexcept {
-    // Wave 2: always false — no expander widget exists.
-    return false;
 }
 
 void ConfigPage::setAudioSeparateExpanderExpanded(bool /*expanded*/) {
@@ -4779,17 +4824,14 @@ void ConfigPage::buildSplitExpertSection() {
         split_size_custom_layout->addWidget(split_custom_size_spin_);
         split_size_custom_widget_->setVisible(false);
 
-        // --- Build the popover row. ---
-        auto* split_popover_row =
-            new ui::widgets::SettingsPopoverRow(QStringLiteral("Automatic split"), split_expert_section_);
-        split_popover_row->setInfoHint(ui::hints::kSplitRecording);
-        split_expert_layout->addWidget(split_popover_row);
+        // --- Lay the split controls out inline inside the Output card so they
+        // fill the card instead of hiding behind a popover row. ---
+        split_expert_layout->addWidget(makeHRule(split_expert_section_));
+        split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Automatic split"),
+                                                                  ui::hints::kSplitRecording, split_expert_section_));
 
-        // "Split recording" sub-section inside the popover.
-        auto* pcl = split_popover_row->popoverContentLayout();
-
-        auto* time_lbl = makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_);
-        pcl->addWidget(time_lbl);
+        // "Split recording" (by time) sub-section.
+        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_));
 
         auto* split_row = new QWidget(split_expert_section_);
         auto* split_row_hl = new QHBoxLayout(split_row);
@@ -4798,12 +4840,11 @@ void ConfigPage::buildSplitExpertSection() {
         split_row_hl->addWidget(split_mode_combo_, 0);
         split_row_hl->addWidget(split_custom_widget_, 0);
         split_row_hl->addStretch();
-        pcl->addWidget(split_row);
-        pcl->addWidget(split_summary_label_);
+        split_expert_layout->addWidget(split_row);
+        split_expert_layout->addWidget(split_summary_label_);
 
-        // "Split by size" sub-section inside the popover.
-        auto* size_lbl = makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_);
-        pcl->addWidget(size_lbl);
+        // "Split by size" sub-section.
+        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_));
 
         auto* split_size_row = new QWidget(split_expert_section_);
         auto* split_size_row_hl = new QHBoxLayout(split_size_row);
@@ -4812,7 +4853,7 @@ void ConfigPage::buildSplitExpertSection() {
         split_size_row_hl->addWidget(split_size_mode_combo_, 0);
         split_size_row_hl->addWidget(split_size_custom_widget_, 0);
         split_size_row_hl->addStretch();
-        pcl->addWidget(split_size_row);
+        split_expert_layout->addWidget(split_size_row);
     }
     if (auto* out_panel_layout = qobject_cast<QVBoxLayout*>(out_panel_->layout())) {
         out_panel_layout->insertWidget(split_expert_insert_index_, split_expert_section_);

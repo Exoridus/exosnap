@@ -1268,9 +1268,10 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
         encoder_tile_sub_->setText(QStringLiteral("active codec"));
     }
 
-    // Tile 3 — Disk (free space on the output drive).
-    if (data_ready_ && output_drive_free_bytes_ > 0) {
-        disk_tile_value_->setText(humanBytes(output_drive_free_bytes_));
+    // Tile 3 — Disk (free space on the output drive). A queried zero is a full
+    // drive and must read "0 B", not blank; only an unqueryable volume shows the dash.
+    if (data_ready_ && output_drive_free_bytes_.has_value()) {
+        disk_tile_value_->setText(humanBytes(*output_drive_free_bytes_));
         QString drive = QString::fromStdString(output_folder_.root_name().string());
         if (drive.isEmpty())
             drive = QString::fromStdString(output_folder_.string());
