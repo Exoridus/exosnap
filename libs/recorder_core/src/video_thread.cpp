@@ -3,21 +3,21 @@
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "codec_private.h"
-#include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
-#include "preview_shared_texture.h"
 #include "session_internal.h"
 #include "yuv_to_bgra.h"
 #include <recorder_core/cursor_sprite.h>
 #include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/hdr_native.h>
+#include <recorder_core/preview_shared_texture.h>
 #include <recorder_core/preview_tap.h>
 
 #include <recorder_core/frame_pacing.h>

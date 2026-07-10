@@ -239,6 +239,10 @@ qt_add_executable(exosnap WIN32
     services/CaptureHubRegistry.cpp
     services/WgcSourceProducer.h
     services/WgcSourceProducer.cpp
+    services/DxgiSourceProducer.h
+    services/DxgiSourceProducer.cpp
+    services/DxgiCaptureHubService.h
+    services/DxgiCaptureHubService.cpp
     services/ThumbnailCapture.h
     services/ThumbnailCapture.cpp
     services/DxgiPreviewRenderer.h

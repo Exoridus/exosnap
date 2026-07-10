@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include <dxgiformat.h>
+
 // ---------------------------------------------------------------------------
 // The WYSIWYG preview tap publishes the engine's pre-encode surface to the
 // preview renderer through a shared texture (see preview_shared_texture.h and
@@ -42,6 +44,16 @@ struct PreviewTapPlan {
     bool tap_enabled = true;
     PreviewTapDesc desc{};
 };
+
+// Pure: the display transform for a RAW captured desktop frame (an idle
+// DXGI-hub source, no session policy applied). An FP16 desktop is linear scRGB:
+// tone-mapped when the display is actively HDR, sRGB-encoded when it is an SDR
+// Advanced-Color desktop (no headroom to roll off — encoding it with the HDR
+// roll-off + BT.709 OETF darkens the whole image; see OdCaptureMode::SdrScrgb).
+// BGRA8 and the 10 bpc SDR desktop draw as-is. display_max_luminance_nits feeds
+// HdrPeakScale and is only trusted while the display is HDR-active.
+[[nodiscard]] PreviewTapDesc ResolveRawCaptureTapDesc(DXGI_FORMAT format, bool display_hdr_active,
+                                                      float display_max_luminance_nits) noexcept;
 
 // Pure: decide whether a session's pre-encode surface can be tapped and which
 // transform the consumer must apply. hdr_peak_scale is the session's already

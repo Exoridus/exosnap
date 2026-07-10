@@ -268,16 +268,22 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   desktop is the common case). The tile freezes rather than going empty or black,
   and resumes when frames return. A source that has **never** produced a frame
   shows "Preview unavailable" instead, because there is nothing to hold.
-- **The live preview and the recording still use separate capture backends before
-  recording.** The Record-page preview runs its own Windows Graphics Capture of
-  the selected target; only once recording starts does it switch to the engine's
-  shared frame (ADR 0040). Unifying the idle preview onto the recording's DXGI
-  Output Duplication backend is designed (ADR 0041) but **not shipped**, because
-  an Output Duplication held open while merely previewing has desktop-wide side
-  effects — it can force DWM out of multiplane-overlay and fullscreen-optimisation
-  paths, degrading a game running on the previewed monitor. That change is gated
-  behind a hardware probe and may be abandoned if the probe shows regressions; the
-  tile/preview hold above does not depend on it.
+- **A plain display preview shares the recording's capture backend.** The idle
+  Record-page preview of a display is fed by a DXGI Output Duplication capture
+  hub — the same backend the recording uses — so it is VRR- and HDR-true, shows
+  no OS capture indicator, and holds its last frame through a monitor hot-plug
+  instead of blanking (ADR 0041). The hub is strictly refcounted: at most one
+  duplication ever (the selected display), none while no preview is visible, and
+  it is released to the engine for the duration of a recording. **Window and
+  Region previews stay on Windows Graphics Capture**, as does a display driven
+  by a different GPU than the preview (cross-adapter texture sharing is not
+  supported; the preview falls back to WGC rather than opening a second
+  duplication).
+- **An idle duplication has potential desktop-wide side effects.** An Output
+  Duplication held open while merely previewing can force DWM out of
+  multiplane-overlay and fullscreen-optimisation paths on some systems,
+  degrading a game running on the previewed monitor. Closing the preview (or
+  leaving the Record page) closes the duplication.
 
 ## Crash reporting and updates (0.6.0)
 

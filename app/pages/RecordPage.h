@@ -63,6 +63,8 @@ struct VisualScenario;
 }
 #endif
 
+class DxgiCaptureHubService;
+
 namespace ui::widgets {
 class PreviewSurface;
 class TransportDock;
@@ -349,6 +351,13 @@ class RecordPage : public QWidget {
     void emitChromeState();
     void syncCoordinatorTargetContext();
     void startPreviewIfIdle();
+    // DXGI capture-hub idle preview (plain display targets): the hub owns the
+    // one duplication and feeds the renderer in pushed-only mode.
+    bool tryStartHubPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                            uint32_t frame_rate_den);
+    bool subscribeHubFeed(uintptr_t monitor_native_id);
+    void stopHubFeed();
+    void resumeHubPreviewIfHeld();
     // Push webcam enable/mirror/aspect/placement and the state-driven edit lock to
     // the preview surface. Live-editable states are defined by IsWebcamOverlayEditable().
     void updateWebcamOverlay();
@@ -378,6 +387,12 @@ class RecordPage : public QWidget {
     RecordingHistoryStore history_store_;
     std::unique_ptr<RecordingCoordinator> coordinator_;
     std::unique_ptr<PreviewService> preview_service_;
+    // DXGI capture hub for the idle display preview (created lazily on the
+    // first eligible preview). Released before every recording start — the
+    // engine needs the one duplication — and re-subscribed after it ends.
+    std::unique_ptr<exosnap::DxgiCaptureHubService> dxgi_capture_hub_;
+    bool hub_preview_active_ = false;
+    uintptr_t hub_preview_monitor_ = 0;
     // Injected by MainWindow before first show; forwarded to the coordinator.
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 

@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
-#include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
 #include "session_internal.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include <d3d11.h>
 #include <winrt/base.h>

@@ -345,8 +345,15 @@ resumes when frames come back. It never goes empty and never goes black. A tile 
 produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
 picker releases every capture it opened.
 
-**Live preview (WYSIWYG during recording).** Before recording, the Record-page preview runs its own
-lightweight capture of the selected target. **Once recording starts, the preview shows exactly the
+**Idle live preview.** Before recording, the Record-page preview of a **display** is fed by the same
+DXGI Output Duplication backend the recording uses, owned by a shared capture hub: the preview is
+VRR- and HDR-true, shows no OS capture indicator, draws the live cursor, and **holds its last frame
+through a monitor unplug/replug** instead of blanking — production resumes when the display returns.
+The capture exists only while the preview is visible and is closed with it. Window and Region
+previews run their own Windows Graphics Capture of the selected target (see KNOWN_LIMITATIONS for
+the exact boundary).
+
+**Live preview (WYSIWYG during recording).** **Once recording starts, the preview shows exactly the
 frame the engine is encoding** — the composited, pre-encode source (cursor and webcam PiP already
 baked in) is shared to the preview through a GPU texture, and the preview's own capture stops. There
 is no second capture running alongside the recording, and the preview reflects what is actually being

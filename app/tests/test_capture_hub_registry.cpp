@@ -20,12 +20,17 @@ namespace {
 using namespace exosnap;
 using recorder_core::HubFrameKind;
 
-constexpr CaptureSourceKey kWindowA{CaptureSourceKey::Kind::Window, 0x1000};
-constexpr CaptureSourceKey kWindowB{CaptureSourceKey::Kind::Window, 0x2000};
+// Not constexpr: the key carries the DXGI hub's device-name string now.
+const CaptureSourceKey kWindowA{CaptureSourceKey::Kind::Window, 0x1000};
+const CaptureSourceKey kWindowB{CaptureSourceKey::Kind::Window, 0x2000};
 
 // A monitor and a window may share a native id value without being the same
 // source; the key's kind is what tells them apart.
-constexpr CaptureSourceKey kMonitorA{CaptureSourceKey::Kind::Monitor, 0x1000};
+const CaptureSourceKey kMonitorA{CaptureSourceKey::Kind::Monitor, 0x1000};
+
+// DXGI keys ignore native_id and are told apart by device name alone.
+const CaptureSourceKey kDxgiDisplay1{CaptureSourceKey::Kind::DxgiMonitor, 0, L"\\\\.\\DISPLAY1"};
+const CaptureSourceKey kDxgiDisplay2{CaptureSourceKey::Kind::DxgiMonitor, 0, L"\\\\.\\DISPLAY2"};
 
 class FakeProducer : public HubSourceProducer {
   public:
@@ -114,6 +119,18 @@ TEST(CaptureHubRegistry, KindDisambiguatesAnIdenticalNativeId) {
     auto monitor = f.SubscribeIgnoring(kMonitorA);
 
     EXPECT_EQ(f.registry.HubCountForTest(), 2u);
+}
+
+TEST(CaptureHubRegistry, DxgiKeysAreToldApartByDeviceNameAlone) {
+    Fixture f;
+    auto one = f.SubscribeIgnoring(kDxgiDisplay1);
+    auto two = f.SubscribeIgnoring(kDxgiDisplay2);
+    auto again = f.SubscribeIgnoring(kDxgiDisplay1);
+
+    // Same name shares a hub; a different name gets its own, native_id unused.
+    EXPECT_EQ(f.registry.HubCountForTest(), 2u);
+    EXPECT_EQ(f.built.size(), 2u);
+    EXPECT_EQ(f.Producer(kDxgiDisplay1).open_calls, 1);
 }
 
 TEST(CaptureHubRegistry, TheLastConsumerLeavingClosesAndDiscardsTheHub) {

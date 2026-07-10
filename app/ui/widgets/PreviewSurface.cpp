@@ -287,6 +287,49 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     return true;
 }
 
+bool PreviewSurface::tryStartDxgiPushedPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                                               uint32_t frame_rate_den) {
+    stopDxgiPreview();
+
+    setAttribute(Qt::WA_NativeWindow);
+    winId();
+    HWND hwnd = reinterpret_cast<HWND>(effectiveWinId());
+    if (!hwnd) {
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("no native window handle for PreviewSurface"));
+        return false;
+    }
+
+    SetWindowLongPtrW(hwnd, GWL_STYLE, GetWindowLongPtrW(hwnd, GWL_STYLE) | WS_CLIPCHILDREN);
+
+    dxgi_renderer_ = std::make_unique<exosnap::DxgiPreviewRenderer>();
+
+    const qreal dpr = devicePixelRatioF();
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    if (!dxgi_renderer_->Initialize(hwnd, hwndW, hwndH, hwndW, hwndH)) {
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("DxgiPreviewRenderer init failed (pushed-only)"));
+        dxgi_renderer_.reset();
+        return false;
+    }
+
+    if (!dxgi_renderer_->StartPushedOnly(target, frame_rate_num, frame_rate_den)) {
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("DxgiPreviewRenderer StartPushedOnly failed"));
+        dxgi_renderer_->Shutdown();
+        dxgi_renderer_.reset();
+        return false;
+    }
+
+    applyDxgiPreviewResize();
+    dxgi_active_ = true;
+    current_frame_ = QImage{};
+    syncWebcamOverlayToDxgi();
+    update();
+    return true;
+}
+
 void PreviewSurface::stopDxgiPreview() {
     dxgi_active_ = false;
     if (dxgi_renderer_) {
@@ -301,9 +344,9 @@ bool PreviewSurface::isDxgiPreviewActive() const noexcept {
 }
 
 void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height,
-                                       recorder_core::PreviewTapDesc tap) {
+                                       recorder_core::PreviewTapDesc tap, bool raw_source_frames) {
     if (dxgi_renderer_)
-        dxgi_renderer_->BeginPushedSource(nt_handle, width, height, tap);
+        dxgi_renderer_->BeginPushedSource(nt_handle, width, height, tap, raw_source_frames);
 }
 
 void PreviewSurface::endPushedSource() {

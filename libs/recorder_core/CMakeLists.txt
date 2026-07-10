@@ -264,6 +264,7 @@ add_library(recorder_core STATIC
     src/audio_meter.cpp
     src/wgc_capture.cpp
     src/dxgi_od_capture_src.cpp
+    include/recorder_core/dxgi_od_capture_src.h
     src/frame_pacing.cpp
     src/nvenc_encoder.cpp
     src/nvenc_video_encoder.cpp
@@ -288,6 +289,7 @@ add_library(recorder_core STATIC
     src/hdr_preview.cpp
     include/recorder_core/hdr_native.h
     include/recorder_core/preview_tap.h
+    src/preview_tap.cpp
     src/mixed_audio_src.cpp
     src/brickwall_limiter.cpp
     src/brickwall_limiter.h
@@ -321,7 +323,7 @@ add_library(recorder_core STATIC
     src/yuv_to_bgra.h
     src/yuv_to_bgra.cpp
     src/preview_publish_gate.h
-    src/preview_shared_texture.h
+    include/recorder_core/preview_shared_texture.h
     src/preview_shared_texture.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
@@ -937,7 +939,7 @@ exosnap_add_gtest(
             src/preview_shared_texture.cpp
     LIBRARIES d3d11.lib dxgi.lib
 )
-target_include_directories(test_preview_shared_texture PRIVATE src)
+target_include_directories(test_preview_shared_texture PRIVATE src include)
 target_compile_definitions(test_preview_shared_texture PRIVATE NOMINMAX)
 
 exosnap_add_gtest(

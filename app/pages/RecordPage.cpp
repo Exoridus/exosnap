@@ -3,6 +3,7 @@
 #include "../diagnostics/AppLog.h"
 #include "../diagnostics/StartupClock.h"
 #include "../models/RecordingPreset.h"
+#include "../services/DxgiCaptureHubService.h"
 #include "../ui/CodecLabels.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
@@ -1759,6 +1760,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     setInteractionMode(InteractionMode::None);
     if (preview_service_)
         preview_service_->Stop();
+    stopHubFeed();
     if (preview_surface_) {
         preview_surface_->stopDxgiPreview();
         QImage test_frame(1280, 720, QImage::Format_RGB32);
@@ -2229,6 +2231,7 @@ void RecordPage::startPreviewIfIdle() {
     // --- Stop current preview and clear tracked config ---
     // A preview (re)start means the target/region/crop changed: drop any transient
     // PiP interaction and selection so no stale pointer capture or handles survive.
+    stopHubFeed();
     if (preview_surface_) {
         preview_surface_->cancelWebcamInteraction();
         preview_surface_->setWebcamSelected(false);
@@ -2306,6 +2309,22 @@ void RecordPage::startPreviewIfIdle() {
         active_key.region_h = view_model_.region.height;
     }
 
+    // Capture-hub route for a plain display: the preview is fed by the same
+    // backend the recording uses (Output Duplication, owned by the hub), so it
+    // is VRR- and HDR-true and holds its last frame through a hot-plug instead
+    // of blanking. Region (crop) and Window targets, and displays on another
+    // adapter (D5), keep the WGC path below.
+    const bool hubEligible = target.kind == recorder_core::CaptureTarget::Kind::Monitor && !crop_box.has_value();
+    if (hubEligible && preview_surface_ && tryStartHubPreview(target, cfg.frame_rate_num, cfg.frame_rate_den)) {
+        last_preview_key_ = active_key;
+        hub_preview_active_ = true;
+        hub_preview_monitor_ = static_cast<uintptr_t>(target.native_id);
+        diagnostics::AppLog::debug(QStringLiteral("record"), QStringLiteral("DXGI hub preview started for display"));
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("preview-live %1 ms").arg(diagnostics::StartupClock().elapsed()));
+        return;
+    }
+
     if (preview_surface_ &&
         preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
         last_preview_key_ = active_key;
@@ -2320,6 +2339,76 @@ void RecordPage::startPreviewIfIdle() {
 
     diagnostics::AppLog::warning(QStringLiteral("record"), QStringLiteral("falling back to QImage preview"));
     preview_service_->Start(target);
+}
+
+bool RecordPage::tryStartHubPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                                    uint32_t frame_rate_den) {
+    if (!preview_surface_)
+        return false;
+    if (!dxgi_capture_hub_)
+        dxgi_capture_hub_ = std::make_unique<exosnap::DxgiCaptureHubService>();
+
+    if (!preview_surface_->tryStartDxgiPushedPreview(target, frame_rate_num, frame_rate_den))
+        return false;
+
+    if (!subscribeHubFeed(static_cast<uintptr_t>(target.native_id))) {
+        preview_surface_->stopDxgiPreview();
+        return false;
+    }
+    return true;
+}
+
+bool RecordPage::subscribeHubFeed(uintptr_t monitor_native_id) {
+    if (!dxgi_capture_hub_ || !preview_surface_)
+        return false;
+
+    // Same marshal contract as the engine's shared-handle callback above: the
+    // sink fires on the hub's pump thread; only atomic stores and the queued
+    // hop happen there, and a dropped delivery closes the handle (no leak).
+    QPointer<ui::widgets::PreviewSurface> safeSurface(preview_surface_);
+    return dxgi_capture_hub_->Subscribe(
+        reinterpret_cast<HMONITOR>(monitor_native_id),
+        [safeSurface](void* nt_handle, uint32_t w, uint32_t h, recorder_core::PreviewTapDesc tap) {
+            QPointer<ui::widgets::PreviewSurface> surface = safeSurface;
+            QObject* context = surface ? static_cast<QObject*>(surface.data()) : static_cast<QObject*>(qApp);
+            auto handle_owner = std::make_shared<QueuedSharedHandle>(nt_handle);
+            QMetaObject::invokeMethod(
+                context,
+                [surface, handle_owner, w, h, tap]() {
+                    void* raw = handle_owner->handle;
+                    if (raw == nullptr)
+                        return;
+                    if (surface && surface->isDxgiPreviewActive()) {
+                        handle_owner->handle = nullptr; // claim: renderer now owns + closes it
+                        surface->beginPushedSource(raw, w, h, tap, /*raw_source_frames=*/true);
+                    }
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void RecordPage::stopHubFeed() {
+    if (dxgi_capture_hub_ && hub_preview_active_)
+        dxgi_capture_hub_->Unsubscribe();
+    hub_preview_active_ = false;
+    hub_preview_monitor_ = 0;
+}
+
+void RecordPage::resumeHubPreviewIfHeld() {
+    // The recording released the hub's duplication (doStartRecording); take it
+    // back now that the engine's capture is gone, on the SAME renderer — it is
+    // still running in pushed-only mode and holds the last recorded frame, so
+    // the handover is a hold, not a flash.
+    if (!hub_preview_active_ || hub_preview_monitor_ == 0)
+        return;
+    if (!preview_surface_ || !preview_surface_->isDxgiPreviewActive())
+        return;
+    if (!subscribeHubFeed(hub_preview_monitor_)) {
+        // The display may be gone; the normal preview restart path takes over.
+        hub_preview_active_ = false;
+        hub_preview_monitor_ = 0;
+        last_preview_key_ = {};
+    }
 }
 
 void RecordPage::ensureCoordinatorInit() {
@@ -2473,13 +2562,16 @@ void RecordPage::initCoordinator() {
             diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("stopping"));
         else if (ShouldRevertPreviewFromPushedMode(state)) {
             // Ready / Completed / Failed: leave pushed mode so the preview returns to
-            // its own live WGC capture. endPushedSource signals the renderer to revert
-            // IN PLACE (rebuilds its WGC graph); a failed recording must revert too or
-            // the preview stays frozen on the engine's last frame behind the error
-            // state. startPreviewIfIdle then no-ops via its idempotency guard unless
-            // the target actually changed.
+            // its own live source. endPushedSource signals the renderer to revert
+            // IN PLACE (rebuilds its WGC graph — or, in pushed-only mode, holds the
+            // last image); a failed recording must revert too or the preview stays
+            // frozen on the engine's last frame behind the error state. A hub-fed
+            // preview then re-subscribes its display feed on the same renderer;
+            // startPreviewIfIdle no-ops via its idempotency guard unless the target
+            // actually changed.
             if (preview_surface_)
                 preview_surface_->endPushedSource();
+            resumeHubPreviewIfHeld();
             startPreviewIfIdle();
         }
         refresh();
@@ -3696,8 +3788,21 @@ void RecordPage::doStartRecording(std::optional<recorder_core::CaptureRegion> cr
 
     view_model_.ResetStats();
     syncCoordinatorTargetContext();
-    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state,
-                                 crop_region);
+
+    // The hub owns the only duplication of the previewed display, and the engine
+    // is about to open its own (an output can be duplicated once per process).
+    // Release it BEFORE the session starts — blocking, so the close has really
+    // happened. The renderer keeps its last image until the engine's WYSIWYG
+    // tap takes over; the hub feed resumes when the recording ends.
+    if (hub_preview_active_ && dxgi_capture_hub_)
+        dxgi_capture_hub_->ReleaseForRecording();
+
+    if (!coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state,
+                                      crop_region)) {
+        // The start was rejected before a session existed (validation/guards):
+        // no state change will fire, so take the idle feed back here.
+        resumeHubPreviewIfHeld();
+    }
 }
 
 void RecordPage::populateMicDeviceCombo() {
@@ -4815,6 +4920,7 @@ void RecordPage::onDisplaysChanged(const exosnap::DisplaySnapshot& snap) {
             if (preview_service_) {
                 preview_service_->Stop();
             }
+            stopHubFeed();
             if (preview_surface_) {
                 preview_surface_->stopDxgiPreview();
                 preview_surface_->setLiveFrame(QImage{});

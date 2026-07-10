@@ -3,8 +3,8 @@
 // HdrToneMapChannel/Bt709Oetf verbatim, so pinning the CPU reference here pins
 // the on-screen result too.
 
-#include "dxgi_od_capture_src.h"
 #include "hdr_tonemap.h"
+#include <recorder_core/dxgi_od_capture_src.h>
 
 #include <recorder_core/hdr_color_space.h>
 
