@@ -281,5 +281,19 @@ TEST_F(NotificationManagerTest, HasAction_SecondaryAction_ReturnsTrue) {
     EXPECT_TRUE(e.hasAction());
 }
 
+// ---------------------------------------------------------------------------
+// "Webcam not recorded" reports a condition of the running session that the user
+// can do nothing about mid-recording. It states the fact and leaves on its own.
+// ---------------------------------------------------------------------------
+TEST(NotificationManagerOverlayOmitted, AutoDismisses) {
+    EXPECT_GT(NotificationManager::DismissIntervalMs(NotificationType::OverlayOmitted), 0)
+        << "the recording is unaffected; the notice must not demand a decision";
+}
+
+TEST(NotificationManagerOverlayOmitted, IsNotStickyLikeAFailure) {
+    EXPECT_NE(NotificationManager::DismissIntervalMs(NotificationType::OverlayOmitted),
+              NotificationManager::DismissIntervalMs(NotificationType::UnexpectedStop));
+}
+
 } // namespace
 } // namespace exosnap::notifications

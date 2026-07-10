@@ -355,7 +355,12 @@ selectable overlay placement. In a constant-frame-rate recording the PiP keeps m
 cadence even while the desktop is perfectly still: a screen capture only produces a frame when the
 screen changes, so the held screen is composited again with the current camera image rather than
 repeating the previous composited frame. During a capture-loss recovery the picture is held frozen
-instead, until the capture source is reopened. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
+instead, until the capture source is reopened.
+
+On the rare HDR10 display whose desktop frames arrive already in PQ, the engine cannot composite
+overlays and records **without the webcam and cursor**. When that happens the Record preview drops
+its picture-in-picture to match the file, and a notification says so. The preview never shows an
+overlay the recording will not contain. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
 applied identically in the Record-page preview and the recorded output. Its on/off is a single control
 surfaced in two always-in-sync places — Settings → Webcam and the Record-page transport dock (camera
 button) — and is off by default. Turning it on both includes the webcam in the recording and starts the

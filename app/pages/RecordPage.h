@@ -227,6 +227,11 @@ class RecordPage : public QWidget {
     // a failed recording always warrants a prominent, dismissible dialog.
     void recordingFailed(const ui::dialogs::RecordingErrorModel& model);
 
+    // Emitted once per session when the engine reports it is recording without the
+    // webcam and cursor overlays (an already-PQ HDR10 desktop cannot composite them).
+    // The preview drops its picture-in-picture to match; this tells the user why.
+    void webcamOverlayOmitted();
+
     // CAPTURE-FRAME-BUTTON-R1: emitted on a successful frame capture so MainWindow
     // can enqueue a "Frame saved" success toast.
     // frame_path: full path to the saved PNG file.
@@ -429,6 +434,9 @@ class RecordPage : public QWidget {
     // probe resolved. Cleared on BOTH success (caps delivered) and failure. Gates the
     // early-start latch below: a Record click is latched only while this is true.
     bool coordinator_awaiting_caps_ = false;
+    // The engine is recording without webcam/cursor overlays; the preview must not
+    // promise what the file will not contain.
+    bool engine_omits_webcam_overlay_ = false;
     // Latched intent for a recording start requested before caps resolved; replayed
     // from the caps-delivery path (setRuntimeCapabilities) so the click is never dropped.
     bool start_requested_awaiting_caps_ = false;

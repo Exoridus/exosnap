@@ -1657,7 +1657,10 @@ void RecordPage::setSettingsWebcamPreviewActive(bool active) {
 void RecordPage::updateWebcamOverlay() {
     if (!preview_surface_)
         return;
-    preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled);
+    // The engine cannot composite overlays onto an already-PQ HDR10 desktop and
+    // records without them. Showing the picture-in-picture here would promise a
+    // frame the file does not contain.
+    preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled && !engine_omits_webcam_overlay_);
     preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
     preview_surface_->setWebcamOpacity(current_webcam_settings_.opacity);
     preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
@@ -2410,6 +2413,12 @@ void RecordPage::initCoordinator() {
         // Wall-clock fallback timer: track elapsed independently of backend stats
         // so the dock timer always shows a live count immediately, not --:--:--.
         const UiRecordingState prev = view_model_.state;
+        // The overlay-omitted verdict belongs to one session's capture format. Clear it
+        // when a session ends, or the preview would stay stripped for the next one.
+        if (state != UiRecordingState::Recording && state != UiRecordingState::Paused && engine_omits_webcam_overlay_) {
+            engine_omits_webcam_overlay_ = false;
+            updateWebcamOverlay();
+        }
         if (state == UiRecordingState::Recording && prev != UiRecordingState::Recording) {
             if (prev == UiRecordingState::Paused) {
                 // Resume: keep accumulated time, restart the running clock.
@@ -2465,6 +2474,17 @@ void RecordPage::initCoordinator() {
     coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {
         view_model_.UpdateStats(stats);
         updateStatsDisplay();
+
+        // The engine reports that it is recording without the webcam and cursor
+        // overlays. Match the preview to the file, and say so once — a preview that
+        // keeps showing a picture-in-picture the recording does not contain is worse
+        // than no preview at all.
+        if (stats.webcam_overlay_omitted != engine_omits_webcam_overlay_) {
+            engine_omits_webcam_overlay_ = stats.webcam_overlay_omitted;
+            updateWebcamOverlay();
+            if (engine_omits_webcam_overlay_ && current_webcam_settings_.enabled)
+                emit webcamOverlayOmitted();
+        }
     });
     coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
         emit diagnosticsUpdated(snapshot);

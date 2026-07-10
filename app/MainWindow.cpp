@@ -3581,6 +3581,21 @@ void MainWindow::initNotificationToasts() {
     connect(record_page_, &RecordPage::recordingFailed, this,
             [this](const ui::dialogs::RecordingErrorModel& model) { openRecordingErrorOverlay(model); });
 
+    // The engine is recording this HDR10 display without the webcam and cursor
+    // overlays. The preview has already dropped its picture-in-picture to match; say
+    // why, rather than leaving the user to notice the absence in the finished file.
+    connect(record_page_, &RecordPage::webcamOverlayOmitted, this, [this]() {
+        if (!persisted_settings_.show_notifications || !notification_manager_)
+            return;
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::OverlayOmitted;
+        event.title = QStringLiteral("Webcam not recorded");
+        event.body = QStringLiteral("This display's HDR10 format cannot carry the webcam or cursor overlay. "
+                                    "The recording itself is unaffected.");
+        event.action = notifications::NotificationAction::OpenDiagnostics;
+        notification_manager_->Enqueue(std::move(event));
+    });
+
     // ── CAPTURE-FRAME-BUTTON-R1: "Frame saved" success toast ──
     // Triggered by RecordPage::captureFrameSaved when a frame PNG is written.
     connect(record_page_, &RecordPage::captureFrameSaved, this, [this](const QString& frame_path) {
