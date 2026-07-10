@@ -6,7 +6,6 @@
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
 #include "gpu_hdr_pq.h"
-#include "gpu_hdr_tonemap.h"
 #include "gpu_rgb_to_ayuv.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
@@ -16,7 +15,9 @@
 #include "preview_shared_texture.h"
 #include "session_internal.h"
 #include "yuv_to_bgra.h"
+#include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/hdr_native.h>
+#include <recorder_core/preview_tap.h>
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -2153,18 +2154,21 @@ void VideoThread::Run() {
 
     // --- Live WYSIWYG preview tap: shared GPU texture ---
     // The preview shows exactly what the encoder receives by sharing the
-    // composited, pre-encode source frame (vpInput) with the preview renderer via
-    // an NT-handle + keyed-mutex texture. Zero CPU copies; the encode path is never
+    // composited, pre-encode source frame with the preview renderer via an
+    // NT-handle + keyed-mutex texture. Zero CPU copies; the encode path is never
     // stalled (0 ms keyed-mutex acquire, drop on contention). Zero cost when no
     // consumer registered the callback.
     //
-    // The shared texture is created lazily from the FIRST composited vpInput so it
+    // The shared texture is created lazily from the FIRST tapped frame so it
     // matches that surface's exact format (B8G8R8A8 for SDR/tone-map, R10G10B10A2
-    // for 10-bit). The NT handle is handed to the consumer once, on creation.
+    // for 10-bit, R16G16B16A16_FLOAT for native HDR10). The NT handle is handed
+    // to the consumer once, on creation, together with the display transform the
+    // consumer must apply (an FP16 scRGB tap is tone-mapped preview-side).
     //
-    // Native HDR10 sessions never reach this tap: they encode straight from an FP16
-    // scRGB surface (no vpInput / SDR intermediate), so the preview keeps its own
-    // WGC capture there. See product-spec / KNOWN_LIMITATIONS.
+    // The only untapped session is the already-PQ R10G10B10A2 native sub-path:
+    // its surface is non-linear PQ with no linear intermediate, so the preview
+    // keeps its own WGC capture there. See product-spec / KNOWN_LIMITATIONS.
+    const PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
@@ -2172,7 +2176,7 @@ void VideoThread::Run() {
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
         if (!m_state.preview_shared_handle_cb)
             return; // no consumer registered -- zero cost beyond this check
-        if (previewSharedInitFailed || vpInput == nullptr || hdrNativeActive)
+        if (previewSharedInitFailed || vpInput == nullptr || !previewTapPlan.tap_enabled)
             return;
         if (!previewGate.ShouldPublish(pts_ns))
             return; // throttle to ~30 Hz
@@ -2192,7 +2196,7 @@ void VideoThread::Run() {
             // One-shot: ownership of the NT handle transfers to the consumer, which
             // opens it on its render device and CloseHandle's it. Must return fast
             // and must not touch D3D on this (video) thread.
-            m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height);
+            m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height, previewTapPlan.desc);
         }
 
         // Non-blocking publish of the composited frame (observation-only; the encode
@@ -2619,6 +2623,12 @@ void VideoThread::Run() {
                     } else {
                         heldWgcTex = std::move(pendingWgcTex);
                     }
+
+                    // Live WYSIWYG preview tap: share the composited (or raw) FP16
+                    // scRGB frame; the preview tone-maps it for display. Throttled and
+                    // non-blocking; never stalls the encode below.
+                    tapPreviewSource(nativeSrc, pts_ns);
+
                     const auto conv_t0 = std::chrono::steady_clock::now();
                     if (!encodeNativeHdrSlot(nativeSrc, slot)) {
                         nvenc.ReleaseSlot(slot);
@@ -2632,8 +2642,6 @@ void VideoThread::Run() {
                         refNv12Valid = true;
                     }
                     performSnapshotIfRequested(slot);
-                    // Native HDR10 has no SDR vpInput to share; the preview keeps its
-                    // own WGC capture (see product-spec / KNOWN_LIMITATIONS).
                     frameWritten = true;
                 } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
@@ -2971,6 +2979,11 @@ void VideoThread::Run() {
                     if (useOdCapture) {
                         odCapturedTexValid = false;
                     }
+
+                    // Live WYSIWYG preview tap: share the composited (or raw) FP16
+                    // scRGB frame; the preview tone-maps it for display (see CFR path).
+                    tapPreviewSource(nativeSrc, framePts_ns);
+
                     const auto conv_t0 = std::chrono::steady_clock::now();
                     if (!encodeNativeHdrSlot(nativeSrc, slot)) {
                         nvenc.ReleaseSlot(slot);
@@ -2982,7 +2995,6 @@ void VideoThread::Run() {
                     latestTex = nullptr;
 
                     performSnapshotIfRequested(slot);
-                    // Native HDR10 has no SDR vpInput to share (see CFR path / spec).
                     maybeArmSplit(framePts_ns);
 
                     EncodedVideoPacket pkt;

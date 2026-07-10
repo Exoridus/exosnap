@@ -493,8 +493,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         // Bridge the public uintptr_t handle callback to the internal HANDLE-typed one.
         if (m_impl->preview_shared_handle_callback) {
             auto pub_cb = m_impl->preview_shared_handle_callback;
-            st.preview_shared_handle_cb = [pub_cb](HANDLE h, uint32_t w, uint32_t ht) {
-                pub_cb(reinterpret_cast<uintptr_t>(h), w, ht);
+            st.preview_shared_handle_cb = [pub_cb](HANDLE h, uint32_t w, uint32_t ht, PreviewTapDesc tap) {
+                pub_cb(reinterpret_cast<uintptr_t>(h), w, ht, tap);
             };
         } else {
             st.preview_shared_handle_cb = nullptr;

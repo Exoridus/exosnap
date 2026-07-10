@@ -926,7 +926,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     if (on_preview_shared_handle_ready_) {
         auto cb = on_preview_shared_handle_ready_;
         session_.SetPreviewSharedHandleCallback(
-            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h) { cb(reinterpret_cast<void*>(nt_handle), w, h); });
+            [cb](uintptr_t nt_handle, uint32_t w, uint32_t h, recorder_core::PreviewTapDesc tap) {
+                cb(reinterpret_cast<void*>(nt_handle), w, h, tap);
+            });
     } else {
         session_.SetPreviewSharedHandleCallback(nullptr);
     }

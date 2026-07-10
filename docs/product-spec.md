@@ -352,10 +352,11 @@ baked in) is shared to the preview through a GPU texture, and the preview's own 
 is no second capture running alongside the recording, and the preview reflects what is actually being
 recorded (so a black-screen or swap-chain problem is visible in the preview, not hidden by an
 independent capture). During the pre-record countdown the preview holds its last live image until the
-first recorded frame arrives, so there is no black flash. The one exception is **native HDR10**
-recording: it has no SDR intermediate to share cheaply, so during a native-HDR10 recording the
-preview keeps its own capture and shows the same SDR approximation used elsewhere for HDR monitoring
-(see KNOWN_LIMITATIONS).
+first recorded frame arrives, so there is no black flash. This includes **native HDR10** recording:
+the engine shares its HDR frame and the preview tone-maps it to SDR for display, so what is shown is
+the recorded frame, rendered the way SDR players will approximate it. The one exception is the rare
+already-PQ 10-bit desktop, where no shareable frame exists and the preview keeps its own capture (see
+KNOWN_LIMITATIONS).
 
 **Webcam PiP.** A webcam picture-in-picture overlay is **composited into the recording** (it is an
 in-video element, not an on-screen-only overlay) and rendered WYSIWYG with a real mirror option and a

@@ -222,9 +222,11 @@ struct SessionState {
     // WYSIWYG preview shared-texture callback (set before Record(); bridged from
     // RecorderSession::SetPreviewSharedHandleCallback). VideoThread fires it once
     // when the shared preview texture is ready, passing the NT handle whose
-    // ownership transfers to the consumer. Unset == the tap is disabled at zero
-    // cost (the shared texture is never created).
-    std::function<void(HANDLE, uint32_t, uint32_t)> preview_shared_handle_cb;
+    // ownership transfers to the consumer, plus the display transform the
+    // consumer must apply (preview_tap.h — FP16 scRGB taps need a tone-map).
+    // Unset == the tap is disabled at zero cost (the shared texture is never
+    // created).
+    std::function<void(HANDLE, uint32_t, uint32_t, PreviewTapDesc)> preview_shared_handle_cb;
 
     // Record config captured at Record() time
     RecorderConfig config;

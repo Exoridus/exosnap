@@ -300,9 +300,10 @@ bool PreviewSurface::isDxgiPreviewActive() const noexcept {
     return dxgi_active_ && dxgi_renderer_ && dxgi_renderer_->IsActive();
 }
 
-void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height) {
+void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height,
+                                       recorder_core::PreviewTapDesc tap) {
     if (dxgi_renderer_)
-        dxgi_renderer_->BeginPushedSource(nt_handle, width, height);
+        dxgi_renderer_->BeginPushedSource(nt_handle, width, height, tap);
 }
 
 void PreviewSurface::endPushedSource() {

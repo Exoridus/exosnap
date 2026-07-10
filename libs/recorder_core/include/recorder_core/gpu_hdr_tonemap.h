@@ -15,8 +15,11 @@ namespace recorder_core {
 // an ordinary SDR desktop surface that the existing VideoProcessor path converts
 // to NV12/P010 unchanged.
 //
-// Threading: all methods are VideoThread-exclusive (ADR-0009). The class does
-// not take ownership of the device/context and must not be used from UI code.
+// Threading: an instance is single-thread — every method runs on the thread that
+// owns the passed device context. The engine's instance is VideoThread-exclusive
+// (ADR-0009); the DXGI preview runs its own instance on its render thread to
+// display the engine's FP16 tap. The class does not take ownership of the
+// device/context.
 class HdrToneMapper {
   public:
     // peak_scale: display peak luminance in reference-white multiples that maps

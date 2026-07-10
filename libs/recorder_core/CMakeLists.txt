@@ -274,7 +274,7 @@ add_library(recorder_core STATIC
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/gpu_hdr_tonemap.cpp
-    src/gpu_hdr_tonemap.h
+    include/recorder_core/gpu_hdr_tonemap.h
     src/gpu_rgb_to_ayuv.cpp
     src/gpu_rgb_to_ayuv.h
     src/gpu_hdr_pq.cpp
@@ -285,6 +285,7 @@ add_library(recorder_core STATIC
     src/hdr_preview.h
     src/hdr_preview.cpp
     include/recorder_core/hdr_native.h
+    include/recorder_core/preview_tap.h
     src/mixed_audio_src.cpp
     src/brickwall_limiter.cpp
     src/brickwall_limiter.h
@@ -387,6 +388,15 @@ exosnap_add_gtest(
     NAME test_capture_hub_policy
     TEST_PREFIX recorder_core.
     SOURCES tests/test_capture_hub_policy.cpp
+    LIBRARIES recorder_core
+)
+
+# Preview-tap plan: which sessions share their pre-encode surface with the
+# preview and which display transform the consumer applies. Pure, GPU-free.
+exosnap_add_gtest(
+    NAME test_preview_tap_plan
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_preview_tap_plan.cpp
     LIBRARIES recorder_core
 )
 

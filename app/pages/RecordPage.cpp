@@ -2386,30 +2386,31 @@ void RecordPage::initCoordinator() {
     // renderer handle is owned; only D3D-free atomic stores happen there. Ownership
     // of the NT handle transfers to the renderer (which closes it); if no DXGI
     // preview is active we close the handle on the UI thread instead (no leak).
-    coordinator_->SetPreviewSharedHandleReadyCallback([safeSurface](void* nt_handle, uint32_t w, uint32_t h) {
-        QPointer<ui::widgets::PreviewSurface> surface = safeSurface;
-        QObject* context = surface ? static_cast<QObject*>(surface.data()) : static_cast<QObject*>(qApp);
-        // Self-closing handle owner: if the queued lambda is ever dropped (the target
-        // QObject is destroyed before delivery) the owner's destructor closes the NT
-        // handle, so it never leaks. When the lambda runs and hands the handle to the
-        // renderer it "claims" the handle (nulls the owner) first, so the destructor
-        // does not double-close what the renderer now owns.
-        auto handle_owner = std::make_shared<QueuedSharedHandle>(nt_handle);
-        QMetaObject::invokeMethod(
-            context,
-            [surface, handle_owner, w, h]() {
-                void* raw = handle_owner->handle;
-                if (raw == nullptr)
-                    return;
-                if (surface && surface->isDxgiPreviewActive()) {
-                    handle_owner->handle = nullptr; // claim: renderer now owns + closes it
-                    surface->beginPushedSource(raw, w, h);
-                }
-                // Otherwise the owner's destructor closes the handle when this lambda
-                // returns (no active preview to hand it to).
-            },
-            Qt::QueuedConnection);
-    });
+    coordinator_->SetPreviewSharedHandleReadyCallback(
+        [safeSurface](void* nt_handle, uint32_t w, uint32_t h, recorder_core::PreviewTapDesc tap) {
+            QPointer<ui::widgets::PreviewSurface> surface = safeSurface;
+            QObject* context = surface ? static_cast<QObject*>(surface.data()) : static_cast<QObject*>(qApp);
+            // Self-closing handle owner: if the queued lambda is ever dropped (the target
+            // QObject is destroyed before delivery) the owner's destructor closes the NT
+            // handle, so it never leaks. When the lambda runs and hands the handle to the
+            // renderer it "claims" the handle (nulls the owner) first, so the destructor
+            // does not double-close what the renderer now owns.
+            auto handle_owner = std::make_shared<QueuedSharedHandle>(nt_handle);
+            QMetaObject::invokeMethod(
+                context,
+                [surface, handle_owner, w, h, tap]() {
+                    void* raw = handle_owner->handle;
+                    if (raw == nullptr)
+                        return;
+                    if (surface && surface->isDxgiPreviewActive()) {
+                        handle_owner->handle = nullptr; // claim: renderer now owns + closes it
+                        surface->beginPushedSource(raw, w, h, tap);
+                    }
+                    // Otherwise the owner's destructor closes the handle when this lambda
+                    // returns (no active preview to hand it to).
+                },
+                Qt::QueuedConnection);
+        });
 
     // Deliver capabilities only when they are already available. When the async HW
     // probe hasn't landed yet, latch coordinator_awaiting_caps_ and deliver later from

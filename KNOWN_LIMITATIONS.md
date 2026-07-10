@@ -118,11 +118,12 @@ Invalid combinations are not offered.
   it. Content-light (MaxCLL/MaxFALL) metadata is only emitted when present; the
   current native path fills mastering-display data but leaves MaxCLL/MaxFALL
   absent (no per-frame content-light analysis). Current boundaries: no HLG, and
-  the in-app recording preview shows an approximate SDR tone-map. That last point
-  is also the one exception to the WYSIWYG-during-recording preview (below): for
-  **native HDR10** the engine has no SDR intermediate to share, so during a
-  native-HDR10 recording the Record-page preview keeps its own capture and shows
-  the same approximate SDR tone-map rather than the exact encoded frame.
+  the in-app recording preview shows an approximate SDR tone-map of the HDR
+  content. The preview is still WYSIWYG during a native-HDR10 recording: the
+  engine shares its pre-encode HDR frame and the preview tone-maps it for
+  display — what is shown is the recorded frame, viewed through the same
+  roll-off an SDR player would approximate. The exception is the rare
+  already-PQ 10-bit desktop (below), which has no shareable frame.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -205,15 +206,17 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 
 ## Other current limitations
 
-- **Live preview during recording is WYSIWYG** for SDR, HDR-tone-map, and 4:4:4
-  sessions: the preview shares the engine's composited pre-encode frame over a GPU
-  texture and stops its own capture, so there is no second capture and the preview
-  reflects the actual encoded content. **Native HDR10 is the exception** — the
-  preview keeps its own capture and shows an approximate SDR tone-map there (see
-  the HDR section above). Cross-GPU handle sharing is not supported: if the
-  preview and engine devices resolve to different adapters the shared frame cannot
-  be opened, so the preview never switches sources and simply keeps running its own
-  live WGC capture (recording is unaffected).
+- **Live preview during recording is WYSIWYG** for SDR, HDR-tone-map, 4:4:4, and
+  native-HDR10 sessions: the preview shares the engine's composited pre-encode
+  frame over a GPU texture and stops its own capture, so there is no second
+  capture and the preview reflects the actual encoded content. A native-HDR10
+  frame is tone-mapped to SDR by the preview for display (see the HDR section
+  above). **The already-PQ 10-bit desktop is the exception** — it has no
+  shareable frame, so the preview keeps its own capture there. Cross-GPU handle
+  sharing is not supported: if the preview and engine devices resolve to
+  different adapters the shared frame cannot be opened, so the preview never
+  switches sources and simply keeps running its own live WGC capture (recording
+  is unaffected).
 - Update checking is **notify-only**: the official build checks GitHub Releases and points you to
   the releases page. There is no in-place download, no auto-install, and no silent restart (see the
   Crash reporting and updates section below).

@@ -216,11 +216,15 @@ class RecordingCoordinator {
 
     // Register a callback fired (from the engine's video thread) once the shared
     // WYSIWYG preview texture is ready. nt_handle is a Windows HANDLE passed as
-    // void*; ownership transfers to the callee (open then CloseHandle). Fires only
-    // for SDR / tone-map / 4:4:4 sessions, and only when the callback is set before
-    // StartRecording. The callback must return fast and must not make D3D calls on
-    // the calling thread.
-    using PreviewSharedHandleReadyCallback = std::function<void(void* nt_handle, uint32_t width, uint32_t height)>;
+    // void*; ownership transfers to the callee (open then CloseHandle). `tap`
+    // names the display transform the consumer must apply before drawing
+    // (recorder_core/preview_tap.h — a native HDR10 session shares FP16 scRGB,
+    // which the preview tone-maps). Fires for every session except the
+    // already-PQ 10-bit native sub-path, and only when the callback is set before
+    // StartRecording. The callback must return fast and must not make D3D calls
+    // on the calling thread.
+    using PreviewSharedHandleReadyCallback =
+        std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
     void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
 
     // Request cooperative cancellation of any in-progress remux job.

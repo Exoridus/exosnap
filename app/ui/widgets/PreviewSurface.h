@@ -63,8 +63,9 @@ class PreviewSurface : public QWidget {
 
     // Switch the active DXGI preview to the engine's shared source texture during
     // recording (WYSIWYG). No-op if no DXGI preview is running. Ownership of the NT
-    // handle transfers to the renderer. See DxgiPreviewRenderer::BeginPushedSource.
-    void beginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    // handle transfers to the renderer; `tap` names the display transform the
+    // renderer must apply. See DxgiPreviewRenderer::BeginPushedSource.
+    void beginPushedSource(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap);
     // Revert to the DXGI preview's own WGC capture. No-op if no renderer exists.
     void endPushedSource();
 

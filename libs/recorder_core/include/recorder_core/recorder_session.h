@@ -9,6 +9,7 @@
 #include "hdr_native.h"
 #include "output_geometry.h"
 #include "pipeline_diagnostics.h"
+#include "preview_tap.h"
 #include "session_stats.h"
 
 #include <cstdint>
@@ -220,12 +221,16 @@ using SegmentCallback = std::function<void(const CompletedSegment&)>;
 // return quickly and MUST NOT make D3D11 calls on the calling (video) thread —
 // stash the handle and hand off to the consumer's render thread.
 //
-// Fires only for SDR / HDR-tone-map / 4:4:4 sessions, where a samplable SDR or
-// 10-bit composited surface exists. Native HDR10 sessions composite in FP16
-// scRGB with no SDR intermediate and never fire this (see product spec /
-// KNOWN_LIMITATIONS). Must be set before Record(); the callback is captured at
-// Record() start and does not survive Stop()/Record() cycles.
-using PreviewSharedHandleCallback = std::function<void(uintptr_t nt_handle, uint32_t width, uint32_t height)>;
+// `tap` describes the display transform the consumer must apply before drawing
+// (preview_tap.h): SDR / HDR-tone-map / 4:4:4 sessions share a samplable SDR or
+// 10-bit surface (PreviewTapTransform::None); a native HDR10 session shares its
+// linear scRGB FP16 pre-encode surface (ScrgbHdr — tone-map before display).
+// The only session that never fires is the already-PQ R10G10B10A2 native
+// sub-path, which has no linear surface to share. Must be set before Record();
+// the callback is captured at Record() start and does not survive
+// Stop()/Record() cycles.
+using PreviewSharedHandleCallback =
+    std::function<void(uintptr_t nt_handle, uint32_t width, uint32_t height, PreviewTapDesc tap)>;
 
 // ---------------------------------------------------------------------------
 // OpusFrameDuration — configurable Opus frame size (ADR 0019)

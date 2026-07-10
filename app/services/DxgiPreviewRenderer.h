@@ -6,12 +6,15 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
 
+#include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/overlay_shader.h>
+#include <recorder_core/preview_tap.h>
 #include <recorder_core/recorder_session.h>
 
 #include <d3d11.h>
@@ -75,10 +78,13 @@ class DxgiPreviewRenderer {
     //
     // nt_handle: the shared NT handle; ownership transfers to the renderer, which
     // opens it via OpenSharedResource1 on its render thread and CloseHandle's it.
+    // tap: the display transform the shared surface needs before drawing
+    // (recorder_core/preview_tap.h). A native HDR10 session shares linear scRGB
+    // FP16; the render thread tone-maps it to SDR with its own HdrToneMapper.
     // Thread-safe: may be called from any thread; only stashes the handle + signals
     // the render thread (no D3D on the caller's thread). Until the first shared
     // frame arrives the preview holds its last WGC image (no black flash).
-    void BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height);
+    void BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap);
     // Revert to the normal WGC preview path. Signals the render thread to release the
     // engine's shared resources and rebuild its OWN WGC capture graph IN PLACE — the
     // D3D device, swap chain and shaders stay alive, so there is no teardown and no
@@ -199,6 +205,11 @@ class DxgiPreviewRenderer {
     std::atomic<void*> pushedPendingHandle_{nullptr};
     std::atomic<uint32_t> pushedPendingWidth_{0};
     std::atomic<uint32_t> pushedPendingHeight_{0};
+    // Display transform for the pending shared surface (PreviewTapTransform as
+    // its underlying integer + the ScrgbHdr peak scale). Published before the
+    // handle store; read by the render thread after claiming the handle.
+    std::atomic<uint8_t> pushedPendingTransform_{0};
+    std::atomic<float> pushedPendingPeakScale_{1.0f};
     std::atomic<bool> pushedRequested_{false};
     // Set by EndPushedSource (any thread); consumed by the render thread, which then
     // reverts to its own WGC capture. A fresh BeginPushedSource clears it so a pending
@@ -209,6 +220,12 @@ class DxgiPreviewRenderer {
     Microsoft::WRL::ComPtr<IDXGIKeyedMutex> pushedMutex_;             // keyed mutex on the shared surface
     Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedLocalTex_;          // private copy (decoupled cadence)
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> pushedLocalSRV_; // SRV over the private copy
+    // FP16 scRGB tap only: the render thread's own tone-map pass (the same class
+    // the engine's tone-mapped sessions run) and the SDR surface it renders into,
+    // which then feeds the ordinary draw instead of pushedLocalSRV_.
+    std::unique_ptr<recorder_core::HdrToneMapper> pushedToneMapper_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pushedSdrTex_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> pushedSdrSRV_;
     uint32_t pushedWidth_ = 0;
     uint32_t pushedHeight_ = 0;
     // Pure switch-over state (active / has-frame / wgc-stopped); render-thread-owned.

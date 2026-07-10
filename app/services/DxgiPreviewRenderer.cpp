@@ -225,13 +225,16 @@ void DxgiPreviewRenderer::Shutdown() {
 
 // --- Pushed source mode ---
 
-void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height) {
+void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uint32_t height,
+                                            recorder_core::PreviewTapDesc tap) {
     if (nt_handle == nullptr || width == 0 || height == 0)
         return;
-    // Store dimensions first, then the handle with release ordering: the render
-    // thread reads the handle with acquire ordering and then the dimensions.
+    // Store dimensions + transform first, then the handle with release ordering:
+    // the render thread reads the handle with acquire ordering and then these.
     pushedPendingWidth_.store(width, std::memory_order_relaxed);
     pushedPendingHeight_.store(height, std::memory_order_relaxed);
+    pushedPendingTransform_.store(static_cast<uint8_t>(tap.transform), std::memory_order_relaxed);
+    pushedPendingPeakScale_.store(tap.peak_scale, std::memory_order_relaxed);
     // A fresh handoff cancels any pending revert from the previous recording.
     pushedEndRequested_.store(false, std::memory_order_release);
     // If a prior pending handle was never adopted, close it before overwriting.
@@ -335,17 +338,74 @@ void DxgiPreviewRenderer::AdoptPendingPushedSource() {
                         failStage = "local-srv";
                         failHr = srvHr;
                     } else {
-                        pushedSharedTex_ = sharedTex;
-                        pushedMutex_ = km;
-                        pushedLocalTex_ = localTex;
-                        pushedLocalSRV_ = srv;
-                        pushedWidth_ = w;
-                        pushedHeight_ = h;
-                        pushed_.OnSourceOpened();
-                        opened = true;
-                        diagnostics::AppLog::debug(
-                            QStringLiteral("dxgi-preview"),
-                            QStringLiteral("pushed source active %1x%2 on preview device").arg(w).arg(h));
+                        // FP16 scRGB tap (native HDR10 session): build this thread's
+                        // own tone-map pass and the SDR surface the draw samples
+                        // instead of the raw FP16 copy. Any failure here fails the
+                        // adopt as a whole, so the preview keeps its own WGC capture
+                        // (same fallback as a cross-GPU open failure).
+                        const auto transform = static_cast<recorder_core::PreviewTapTransform>(
+                            pushedPendingTransform_.load(std::memory_order_relaxed));
+                        const float peakScale = pushedPendingPeakScale_.load(std::memory_order_relaxed);
+                        std::unique_ptr<recorder_core::HdrToneMapper> toneMapper;
+                        Microsoft::WRL::ComPtr<ID3D11Texture2D> sdrTex;
+                        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> sdrSrv;
+                        bool toneMapOk = true;
+                        if (transform != recorder_core::PreviewTapTransform::None) {
+                            toneMapOk = false;
+                            if (td.Format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                                failStage = "tap-transform-format";
+                                failHr = E_INVALIDARG;
+                            } else {
+                                D3D11_TEXTURE2D_DESC sd = td;
+                                sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                                sd.MiscFlags = 0;
+                                sd.CPUAccessFlags = 0;
+                                sd.Usage = D3D11_USAGE_DEFAULT;
+                                sd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                                HRESULT sdrHr = d3dDevice_->CreateTexture2D(&sd, nullptr, sdrTex.GetAddressOf());
+                                HRESULT sdrSrvHr = E_FAIL;
+                                if (FAILED(sdrHr)) {
+                                    failStage = "tonemap-target";
+                                    failHr = sdrHr;
+                                } else if (sdrSrvHr = d3dDevice_->CreateShaderResourceView(sdrTex.Get(), nullptr,
+                                                                                           sdrSrv.GetAddressOf());
+                                           FAILED(sdrSrvHr)) {
+                                    failStage = "tonemap-srv";
+                                    failHr = sdrSrvHr;
+                                } else {
+                                    toneMapper = std::make_unique<recorder_core::HdrToneMapper>();
+                                    std::string tmErr;
+                                    const bool sdrScrgb = transform == recorder_core::PreviewTapTransform::ScrgbSdr;
+                                    if (!toneMapper->Init(d3dDevice_.Get(), d3dContext_.Get(), td.Width, td.Height,
+                                                          peakScale, sdrScrgb, tmErr)) {
+                                        failStage = "tonemap-init";
+                                        failHr = E_FAIL;
+                                        toneMapper.reset();
+                                    } else {
+                                        toneMapOk = true;
+                                    }
+                                }
+                            }
+                        }
+                        if (toneMapOk) {
+                            pushedSharedTex_ = sharedTex;
+                            pushedMutex_ = km;
+                            pushedLocalTex_ = localTex;
+                            pushedLocalSRV_ = srv;
+                            pushedToneMapper_ = std::move(toneMapper);
+                            pushedSdrTex_ = sdrTex;
+                            pushedSdrSRV_ = sdrSrv;
+                            pushedWidth_ = w;
+                            pushedHeight_ = h;
+                            pushed_.OnSourceOpened();
+                            opened = true;
+                            diagnostics::AppLog::debug(
+                                QStringLiteral("dxgi-preview"),
+                                QStringLiteral("pushed source active %1x%2 on preview device%3")
+                                    .arg(w)
+                                    .arg(h)
+                                    .arg(pushedToneMapper_ ? QStringLiteral(" (FP16 tone-map)") : QString{}));
+                        }
                     }
                 }
             }
@@ -405,11 +465,24 @@ void DxgiPreviewRenderer::ConsumePushedFrame() {
     if (pushedMutex_->AcquireSync(kPushedConsumerKey, 0) == S_OK) {
         d3dContext_->CopyResource(pushedLocalTex_.Get(), pushedSharedTex_.Get());
         pushedMutex_->ReleaseSync(kPushedProducerKey);
+        // FP16 scRGB tap: tone-map the fresh copy down to the SDR surface the
+        // draw samples. Runs once per consumed frame, not per present tick.
+        if (pushedToneMapper_ && pushedSdrTex_) {
+            std::string tmErr;
+            if (!pushedToneMapper_->Convert(pushedLocalTex_.Get(), pushedSdrTex_.Get(), tmErr)) {
+                diagnostics::AppLog::warning(
+                    QStringLiteral("dxgi-preview"),
+                    QStringLiteral("pushed tone-map failed: %1").arg(QString::fromStdString(tmErr)));
+            }
+        }
         pushed_.OnFrameConsumed();
     }
 }
 
 void DxgiPreviewRenderer::ReleasePushedResources() {
+    pushedToneMapper_.reset();
+    pushedSdrSRV_.Reset();
+    pushedSdrTex_.Reset();
     pushedLocalSRV_.Reset();
     pushedLocalTex_.Reset();
     pushedMutex_.Reset();
@@ -982,7 +1055,9 @@ void DxgiPreviewRenderer::RenderFrame() {
     };
 
     if (drawPushed) {
-        drawSource(pushedLocalSRV_.Get(), pushedWidth_, pushedHeight_);
+        // An FP16 scRGB tap is drawn from its tone-mapped SDR surface; every other
+        // format samples the raw private copy directly.
+        drawSource(pushedSdrSRV_ ? pushedSdrSRV_.Get() : pushedLocalSRV_.Get(), pushedWidth_, pushedHeight_);
     } else {
         std::lock_guard lock(frameMutex_);
         if (latestFrame_ && latestFrameSRV_ && srcWidth_ > 0 && srcHeight_ > 0)
