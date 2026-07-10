@@ -12,29 +12,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-# Use embedded debug info (/Z7) instead of PDB (/Zi) to prevent parallel-build
-# PDB contention with the Visual Studio generator. Ninja builds are unaffected
-# because CMake already adds /FS for Ninja+MSVC. /Z7 embeds debug info in each
-# .obj file; debugging experience is equivalent to /Zi.
+# Debug info is always EMBEDDED (/Z7), never a compiler-written PDB (/Zi).
 #
-# EXOSNAP_RELEASE_PDB (default ON): the Release config emits a SEPARATE .pdb
-# (/Zi + linker /DEBUG) so crash minidumps can be symbolicated offline (ADR 0017
-# § Symbol pipeline). This defaults ON because a minidump without symbols is a
-# list of addresses, not a diagnosis — and a Release build is what users run when
-# they hit a crash. The install tree never ships a .pdb regardless
-# (install(TARGETS) deploys RUNTIME only), so nothing leaks to end users.
-option(EXOSNAP_RELEASE_PDB
-    "Emit a separate PDB for the Release config so crash dumps can be symbolicated."
-    ON)
+# /Zi makes every cl.exe invocation write to one shared program database. Parallel
+# builds then collide (fatal error C1041), and sccache cannot cache such an object
+# at all, because the debug info lives outside it. /Z7 puts the debug info in the
+# .obj, which keeps the cache working and the build parallel.
+#
+# The Release link still passes /DEBUG, so the LINKER produces exosnap.pdb from
+# those embedded records. That is what symbolicates a crash minidump (ADR 0017
+# § Symbol pipeline) — and a minidump without symbols is a list of addresses, not a
+# diagnosis. The install tree never ships a .pdb (install(TARGETS) deploys RUNTIME
+# only), so nothing leaks to end users.
 if(MSVC)
-    if(EXOSNAP_RELEASE_PDB)
-        set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>$<$<CONFIG:Release>:ProgramDatabase>")
-        # /Zi alone records debug info in the objects; the linker must be told to
-        # produce the .pdb and keep it (Release otherwise strips debug data).
-        add_link_options("$<$<CONFIG:Release>:/DEBUG>" "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
-    else()
-        set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
-    endif()
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo,Release>:Embedded>")
+    add_link_options("$<$<CONFIG:Release>:/DEBUG>" "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
 endif()
 
 option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)

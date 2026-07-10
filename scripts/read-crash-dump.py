@@ -14,7 +14,7 @@ Why this exists: the Windows SDK debugging tools (cdb, WinDbg) are not always
 installed, and without them a minidump is unreadable. This parses the few streams
 that matter by hand and lets dbghelp.dll -- present on every Windows -- resolve
 addresses against the build's PDB. Release builds emit a PDB by default
-(EXOSNAP_RELEASE_PDB), so a crash from a local Release build is symbolicated
+(the Release link always passes /DEBUG), so a crash from a local Release build is symbolicated
 without installing anything.
 
 The stack listing is a scan for values that fall inside a loaded module, not a
