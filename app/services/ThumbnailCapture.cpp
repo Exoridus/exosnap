@@ -32,7 +32,15 @@ constexpr auto kPumpInterval = std::chrono::milliseconds(100);
 
 // How often a tile is read back, downscaled and pushed to the UI. The first
 // frame is never throttled -- a tile that has nothing must show something at once.
-constexpr auto kEmitInterval = std::chrono::milliseconds(1000);
+//
+// This is the expensive constant. Each emit costs one full-resolution GPU copy,
+// one staging map, and a smooth downscale on the worker thread: measured at
+// roughly 31 ms for a 4K tile, 9 ms at 1080p and 3 ms for a window (debug build;
+// release is several times cheaper). Two 4K tiles at 2 Hz cost a low tens of
+// milliseconds per second. Video rates do not fit -- 15 fps would spend most of
+// a core on a grid of thumbnails -- and would need the downscale moved onto the
+// GPU first.
+constexpr auto kEmitInterval = std::chrono::milliseconds(500);
 
 // A source that has produced nothing for this long has failed to start. It keeps
 // retrying underneath; if a frame ever arrives the tile recovers on its own.

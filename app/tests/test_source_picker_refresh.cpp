@@ -2,6 +2,8 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QImage>
+#include <QMetaObject>
 #include <QPushButton>
 #include <QTimer>
 
@@ -306,6 +308,100 @@ TEST(SourcePickerSnapshotTest, AvailabilityChange_ProducesDifferentSnapshot) {
     auto snap2 = ui::dialogs::SourcePickerPanel::buildSnapshot({MakeWindow(10, QStringLiteral("App"), true)});
 
     EXPECT_FALSE(snap1 == snap2);
+}
+
+// A card is destroyed and rebuilt whenever any source's title or availability
+// changes. These pin the tile against the flicker that caused: a rebuilt card
+// resumes its last image, and a source that stops producing keeps showing one.
+
+namespace {
+
+// Stands in for the capture thread handing the panel a frame.
+void FeedThumbnail(ui::dialogs::SourcePickerPanel* panel, int target_index) {
+    QImage image(4, 4, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    QMetaObject::invokeMethod(panel, "onThumbnailReady", Qt::DirectConnection, Q_ARG(int, target_index),
+                              Q_ARG(int, panel->refreshGenerationForTest()), Q_ARG(QImage, image));
+}
+
+ui::widgets::CaptureTargetCard* VisibleCard(ui::dialogs::SourcePickerDialog& dialog, const QString& title) {
+    for (auto* card : dialog.findChildren<ui::widgets::CaptureTargetCard*>()) {
+        if (card->accessibleName().contains(title))
+            return card;
+    }
+    return nullptr;
+}
+
+// The panel drops thumbnails while hidden, so these tests must show it.
+ui::dialogs::SourcePickerPanel* ShownPanel(ui::dialogs::SourcePickerDialog& dialog) {
+    dialog.show();
+    QCoreApplication::processEvents();
+    auto* panel = dialog.findChild<ui::dialogs::SourcePickerPanel*>();
+    return (panel && panel->isVisible()) ? panel : nullptr;
+}
+
+} // namespace
+
+TEST_F(SourcePickerRefreshTest, RebuiltCard_KeepsItsLastThumbnail) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setWindowOptions({MakeWindow(10, QStringLiteral("App A"))});
+    auto* panel = ShownPanel(dialog);
+    ASSERT_NE(panel, nullptr);
+
+    FeedThumbnail(panel, 10);
+    ASSERT_TRUE(VisibleCard(dialog, QStringLiteral("App A"))->hasThumbnail());
+
+    // A title change rebuilds every card in both sections.
+    dialog.setWindowOptions({MakeWindow(10, QStringLiteral("App A renamed"))});
+
+    auto* rebuilt = VisibleCard(dialog, QStringLiteral("App A renamed"));
+    ASSERT_NE(rebuilt, nullptr);
+    EXPECT_TRUE(rebuilt->hasThumbnail()) << "a rebuilt card fell back to \"Loading preview...\"";
+}
+
+TEST_F(SourcePickerRefreshTest, VanishedSource_DoesNotLendItsThumbnailToTheNextOne) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setWindowOptions({MakeWindow(10, QStringLiteral("App A"))});
+    auto* panel = ShownPanel(dialog);
+    ASSERT_NE(panel, nullptr);
+
+    FeedThumbnail(panel, 10);
+    ASSERT_TRUE(VisibleCard(dialog, QStringLiteral("App A"))->hasThumbnail());
+
+    // Index 10 is reused by a different window: same slot, different source.
+    dialog.setWindowOptions({MakeWindow(11, QStringLiteral("App B"))});
+
+    auto* fresh = VisibleCard(dialog, QStringLiteral("App B"));
+    ASSERT_NE(fresh, nullptr);
+    EXPECT_FALSE(fresh->hasThumbnail()) << "the cache is keyed by source, not by list position";
+}
+
+TEST_F(SourcePickerRefreshTest, FailureDoesNotWipeAThumbnailTheTileAlreadyHas) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setWindowOptions({MakeWindow(10, QStringLiteral("App A"))});
+    auto* panel = ShownPanel(dialog);
+    ASSERT_NE(panel, nullptr);
+
+    FeedThumbnail(panel, 10);
+    ASSERT_TRUE(VisibleCard(dialog, QStringLiteral("App A"))->hasThumbnail());
+
+    QMetaObject::invokeMethod(panel, "onThumbnailFailed", Qt::DirectConnection, Q_ARG(int, 10),
+                              Q_ARG(int, panel->refreshGenerationForTest()));
+
+    EXPECT_TRUE(VisibleCard(dialog, QStringLiteral("App A"))->hasThumbnail())
+        << "a held image is quieter than \"Preview unavailable\"";
+}
+
+TEST_F(SourcePickerRefreshTest, ASourceThatNeverProducedStillReportsUnavailable) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setWindowOptions({MakeWindow(10, QStringLiteral("App A"))});
+    auto* panel = ShownPanel(dialog);
+    ASSERT_NE(panel, nullptr);
+
+    QMetaObject::invokeMethod(panel, "onThumbnailFailed", Qt::DirectConnection, Q_ARG(int, 10),
+                              Q_ARG(int, panel->refreshGenerationForTest()));
+
+    EXPECT_FALSE(VisibleCard(dialog, QStringLiteral("App A"))->hasThumbnail());
 }
 
 } // namespace

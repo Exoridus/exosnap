@@ -555,18 +555,32 @@ void SourcePickerPanel::onPickRegionNow() {
     emit accepted();
 }
 
+std::optional<SourcePickerPanel::ThumbnailKey> SourcePickerPanel::thumbnailKeyFor(Section section,
+                                                                                  int target_index) const {
+    SourceOption option;
+    if (!findOption(section, target_index, &option) || option.native_id == 0) {
+        return std::nullopt;
+    }
+    return ThumbnailKey{section == Section::Screens, option.native_id};
+}
+
 void SourcePickerPanel::onThumbnailReady(int target_index, int token, const QImage thumbnail) {
     if (!isVisible() || token != refresh_generation_)
         return;
+    Section section = Section::Screens;
     auto* card = findOptionCard(Section::Screens, target_index);
     if (!card) {
         card = findOptionCard(Section::Windows, target_index);
+        section = Section::Windows;
     }
     if (!card || !card->card) {
         return;
     }
 
     QPixmap pixmap = QPixmap::fromImage(thumbnail);
+    if (const auto key = thumbnailKeyFor(section, target_index)) {
+        thumbnail_cache_[*key] = pixmap;
+    }
     card->card->setThumbnail(pixmap);
 }
 
@@ -581,6 +595,12 @@ void SourcePickerPanel::onThumbnailFailed(int target_index, int token) {
         return;
     }
     if (card->card->isUnavailable()) {
+        return;
+    }
+    // A source that once produced an image keeps showing it. Replacing a good
+    // picture with "Preview unavailable" is louder than a still one, and the hub
+    // is retrying underneath anyway.
+    if (card->card->hasThumbnail()) {
         return;
     }
     card->card->setThumbnailFailureText(QStringLiteral("Preview unavailable"));
@@ -611,6 +631,29 @@ void SourcePickerPanel::rebuildOptionCards() {
     updateWindowsUnavailableToggle();
     refreshSelectionVisuals();
     updateSummaryLabel();
+
+    // Sources that are gone keep no image.
+    std::map<ThumbnailKey, QPixmap> live;
+    for (const auto& option : screen_options_) {
+        if (option.native_id != 0) {
+            if (auto it = thumbnail_cache_.find(ThumbnailKey{true, option.native_id}); it != thumbnail_cache_.end())
+                live.emplace(it->first, it->second);
+        }
+    }
+    for (const auto& option : window_options_) {
+        if (option.native_id != 0) {
+            if (auto it = thumbnail_cache_.find(ThumbnailKey{false, option.native_id}); it != thumbnail_cache_.end())
+                live.emplace(it->first, it->second);
+        }
+    }
+    thumbnail_cache_.swap(live);
+
+    // Both sections were just torn down and rebuilt, but only the section whose
+    // data changed re-requests its thumbnails. Without this, a card rebuilt as
+    // collateral waits for the next periodic refresh before it ever loads.
+    if (isVisible() && selected_section_ != Section::Region) {
+        requestThumbnailsForSection(selected_section_);
+    }
 }
 
 void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
@@ -713,7 +756,15 @@ void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
                 help_text = option.validation_summary;
             }
             card->setHelpText(help_text);
-            card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+            // A rebuilt card resumes where the old one left off. "Loading
+            // preview..." is only honest the first time a source is seen.
+            const auto key = thumbnailKeyFor(section, option.target_index);
+            const auto cached = key ? thumbnail_cache_.find(*key) : thumbnail_cache_.end();
+            if (cached != thumbnail_cache_.end()) {
+                card->setThumbnail(cached->second);
+            } else {
+                card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+            }
         }
 
         card->setAccessibleName(
