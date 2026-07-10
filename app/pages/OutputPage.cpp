@@ -251,6 +251,17 @@ void OutputPage::updateProfileActionState() {
         profile_status_label_->style()->polish(profile_status_label_);
         profile_status_label_->update();
     }
+
+    // "(changed)" hint in the combo text — informative, not a warning; mirrors
+    // ConfigPage::updatePresetActionState so the two preset rows read alike.
+    if (profile_combo_) {
+        const int idx = profile_combo_->currentIndex();
+        if (idx >= 0 && idx < static_cast<int>(profile_options_.size())) {
+            const QSignalBlocker blocker(profile_combo_);
+            const QString base = profile_options_[static_cast<std::size_t>(idx)].label;
+            profile_combo_->setItemText(idx, active_profile_is_modified_ ? base + QStringLiteral(" (changed)") : base);
+        }
+    }
 }
 
 void OutputPage::onImportProfiles() {
@@ -310,12 +321,24 @@ void OutputPage::promptSaveAsNew() {
 }
 
 void OutputPage::promptRenameActiveProfile() {
-    bool ok = false;
-    const QString current_label = profile_combo_->currentText();
-    const QString name = QInputDialog::getText(this, QStringLiteral("Rename Preset"), QStringLiteral("Preset name:"),
-                                               QLineEdit::Normal, current_label, &ok);
-    if (!ok) {
-        return;
+    // Base label from the options model, not currentText(): the combo text
+    // may carry the "(changed)" suffix, which must not seed the rename field.
+    const int idx = profile_combo_ ? profile_combo_->currentIndex() : -1;
+    QString name = (idx >= 0 && idx < static_cast<int>(profile_options_.size()))
+                       ? profile_options_[static_cast<std::size_t>(idx)].label
+                       : QString();
+    for (;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, QStringLiteral("Rename Preset"), QStringLiteral("Preset name:"),
+                                     QLineEdit::Normal, name, &ok);
+        if (!ok) {
+            return;
+        }
+        if (!PresetNameRejected(name, profile_options_, activeProfileId())) {
+            break;
+        }
+        QMessageBox::warning(this, QStringLiteral("Rename Preset"),
+                             QStringLiteral("That name is empty or already in use. Preset names are unique."));
     }
     emit renameActiveProfileRequested(name.trimmed());
 }
