@@ -62,9 +62,9 @@ class RecordingPresetStore {
     // ---------------------------------------------------------------------------
     // Export / import helpers
     //
-    // All three methods use the same TOML serialization as Save/Load so
-    // there is exactly one serialization code path.  kPresetSchemaVersion is
-    // embedded in every exported file so future Load() callers can reject
+    // Both methods use the same TOML serialization as Save/Load so there is
+    // exactly one serialization code path.  kPresetSchemaVersion is embedded
+    // in every exported file so future Load() callers can reject
     // incompatible files.
     // ---------------------------------------------------------------------------
 
@@ -73,14 +73,9 @@ class RecordingPresetStore {
     // *err (if non-null) and returns false.
     [[nodiscard]] static bool ExportPresetToFile(const RecordingPreset& preset, const QString& path, QString* err);
 
-    // Write all given user presets to one .toml file using the same multi-item
-    // array layout the live store uses for presets.toml.
-    // Returns true on success.
-    [[nodiscard]] static bool ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
-                                                         QString* err);
-
     // Read one or more presets from a .toml file previously created by
-    // ExportPresetToFile or ExportAllUserPresetsToFile.
+    // ExportPresetToFile, or any file using the same multi-item array layout
+    // (e.g. hand-edited, or produced by an older build).
     //
     // existing_ids: the caller supplies the current live preset ids so that
     // collision handling can assign fresh ids to any imported preset whose id

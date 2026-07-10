@@ -1,8 +1,9 @@
 // test_preset_export_import.cpp
 //
 // Tests for recording preset export / import (TOML round-trip).
-// Covers: ExportPresetToFile, ExportAllUserPresetsToFile, ImportPresetsFromFile,
-// RecordingPresetRegistry::ImportPreset.
+// Covers: ExportPresetToFile, ImportPresetsFromFile, RecordingPresetRegistry::ImportPreset.
+// (ExportAllUserPresetsToFile was retired — export always targets the single
+// selected preset now; ImportPresetsFromFile still accepts multi-item files.)
 
 #include <gtest/gtest.h>
 
@@ -97,32 +98,40 @@ TEST(PresetExportImport, SinglePreset_ExportImport_ConfigEqual) {
 }
 
 // ===========================================================================
-// Export-all → import-all round-trip
+// Multi-item file → import-all round-trip
+//
+// ExportAllUserPresetsToFile was retired (Export always targets the single
+// selected preset now — see OutputPage/ConfigPage). A hand-written multi-item
+// document stands in for it here: files with several [[presets]] tables are
+// still a supported *import* shape (e.g. a file a user hand-edited, or one
+// produced by an older export-all build), so ImportPresetsFromFile must keep
+// returning every valid item.
 // ===========================================================================
 
-TEST(PresetExportImport, ExportAll_ImportAll_CountAndConfigEqual) {
-    QVector<RecordingPreset> originals;
-    originals.push_back(MakeCustomPreset("Preset A", capability::Container::Matroska, capability::VideoCodec::Av1Nvenc,
-                                         capability::AudioCodec::Opus));
-    originals.push_back(MakeCustomPreset("Preset B", capability::Container::Mp4, capability::VideoCodec::H264Nvenc,
-                                         capability::AudioCodec::AacMf));
-    originals.push_back(MakeDefaultPreset());
-
+TEST(PresetExportImport, MultiItemFile_ImportAll_ReturnsBothPresets) {
     const QString path = UniqueTempPath();
 
-    QString err;
-    ASSERT_TRUE(RecordingPresetStore::ExportAllUserPresetsToFile(originals, path, &err)) << err.toStdString();
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "\n"
+                                        "[[presets]]\n"
+                                        "id = \"preset.hand-a\"\n"
+                                        "name = \"Preset A\"\n"
+                                        "\n"
+                                        "[[presets]]\n"
+                                        "id = \"preset.hand-b\"\n"
+                                        "name = \"Preset B\"\n")
+                             .arg(kPresetSchemaVersion);
+    ASSERT_TRUE(WriteTomlString(path, toml));
 
     const std::vector<std::string> no_existing;
+    QString err;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, no_existing, &err);
-    ASSERT_EQ(imported.size(), originals.size()) << "err=" << err.toStdString();
+    ASSERT_EQ(imported.size(), 2) << "err=" << err.toStdString();
 
-    for (int i = 0; i < originals.size(); ++i) {
-        EXPECT_EQ(imported[i].id, originals[i].id) << "id mismatch at index " << i;
-        EXPECT_EQ(imported[i].name, originals[i].name) << "name mismatch at index " << i;
-        EXPECT_TRUE(NormalizedConfigEquals(imported[i].config, originals[i].config))
-            << "config mismatch at index " << i;
-    }
+    EXPECT_EQ(imported[0].id, "preset.hand-a");
+    EXPECT_EQ(imported[0].name, "Preset A");
+    EXPECT_EQ(imported[1].id, "preset.hand-b");
+    EXPECT_EQ(imported[1].name, "Preset B");
 
     CleanupFile(path);
 }

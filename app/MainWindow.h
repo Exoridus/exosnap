@@ -242,10 +242,6 @@ class MainWindow : public QMainWindow {
 
     // Export / import handlers (wired to OutputPage signals).
     void onExportSelectedProfile(const QString& path);
-    // Kept for OutputPage's "Export user presets…" action, which still uses
-    // RecordingPresetStore::ExportAllUserPresetsToFile; aligning OutputPage's
-    // preset row is a later task.
-    void onExportAllUserProfiles(const QString& path);
     void onImportProfiles(const QString& path);
 
     void saveWindowGeometryToSettings();
@@ -446,7 +442,6 @@ class MainWindow : public QMainWindow {
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
     bool resize_cursor_shown_ = false;
-    bool syncing_preset_ui_ = false;
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
     // PERF-MEASURE: one-shot guard so first-paint latency is logged exactly once.

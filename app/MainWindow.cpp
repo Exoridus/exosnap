@@ -2474,10 +2474,13 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
     live_audio_ = cfg2.audio;
     live_webcam_ = cfg2.webcam;
 
-    // Push to pages (handlers early-return while applying_preset_).
-    // Order matters: applyCapturePolicy can rebuild/reset audio rows via
-    // ApplyTargetKindPreservingAudio; applyPersistedAudioSettings must come LAST
-    // so the preset's exact audio rows win over any kind-default rows.
+    // Push to pages. record_page_->applyCapturePolicy() below can rebuild
+    // audio rows and emit audioSettingsChanged with kind-default rows before
+    // applyPersistedAudioSettings() (LAST) restores the preset's exact rows.
+    // Every live-config listener below early-returns while applying_preset_
+    // is set so those intermediate kind-default emissions never clobber
+    // live_audio_ or trigger a spurious live-config persist mid-apply; order
+    // still matters so the preset's rows are what finally lands.
     if (record_page_) {
         record_page_->setOutputSettings(cfg2.output);
         record_page_->setVideoSettings(cfg2.video);
@@ -2533,7 +2536,10 @@ void MainWindow::refreshPresetUi() {
     }
 
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-    syncing_preset_ui_ = true;
+    // Neither page emits its selection-changed signal from the sync setter
+    // (setPresetOptions/setProfileOptions render only) — see
+    // ConfigPage.cpp's QSignalBlocker on the combo and OutputPage's
+    // applySelectionState split — so this replay cannot re-enter onPresetSelected.
     if (config_page_) {
         config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
@@ -2542,7 +2548,6 @@ void MainWindow::refreshPresetUi() {
         output_page_->setProfileOptions(output_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
         output_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
-    syncing_preset_ui_ = false;
 }
 
 void MainWindow::persistPresetState() {
@@ -2616,8 +2621,6 @@ void MainWindow::refreshDiagnosticsData() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::onPresetSelected(const QString& id) {
-    if (syncing_preset_ui_)
-        return;
     if (id.toStdString() == preset_registry_.SelectedId())
         return; // combo refresh echo (e.g. OutputPage's profile combo) — not a switch
     if (!record_page_ || !record_page_->canApplyPresetNow()) {
@@ -2703,31 +2706,6 @@ void MainWindow::onExportSelectedProfile(const QString& path) {
     QMessageBox::information(
         this, QStringLiteral("Export Successful"),
         QStringLiteral("Preset \"%1\" exported successfully.").arg(QString::fromStdString(selected.name)));
-}
-
-void MainWindow::onExportAllUserProfiles(const QString& path) {
-    const std::vector<RecordingPreset>& all = preset_registry_.Presets();
-    // Collect all presets (no built-in distinction in the current registry).
-    QVector<RecordingPreset> presets_to_export;
-    presets_to_export.reserve(static_cast<int>(all.size()));
-    for (const auto& p : all) {
-        presets_to_export.push_back(p);
-    }
-
-    if (presets_to_export.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("Export Presets"), QStringLiteral("No presets to export."));
-        return;
-    }
-
-    QString err;
-    if (!RecordingPresetStore::ExportAllUserPresetsToFile(presets_to_export, path, &err)) {
-        QMessageBox::warning(this, QStringLiteral("Export Failed"), err);
-        return;
-    }
-    diagnostics::AppLog::info(QStringLiteral("preset"),
-                              QStringLiteral("exported %1 preset(s) to %2").arg(presets_to_export.size()).arg(path));
-    QMessageBox::information(this, QStringLiteral("Export Successful"),
-                             QStringLiteral("Exported %1 preset(s) successfully.").arg(presets_to_export.size()));
 }
 
 void MainWindow::onImportProfiles(const QString& path) {
@@ -4633,23 +4611,13 @@ void MainWindow::buildOutputPage() {
     } else {
         stack_->addWidget(output_page_);
     }
-    // Wire all OutputPage signals that were previously connected in the ctor.
-    // newFromSafeDefaultRequested, duplicateActiveProfileRequested and
-    // resetAllSettingsAndProfilesRequested are intentionally left unconnected:
-    // their handlers depended on registry methods (AddDefaultPreset,
-    // DuplicateSelected, ResetAllToDefault) removed with the Settings preset
-    // row. OutputPage still emits them from its own overflow menu; aligning
-    // OutputPage's preset row to the simplified model is a later task.
+    // Wire OutputPage signals — same handlers as the Settings preset row.
     connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& id) { onPresetSelected(id); });
-    connect(output_page_, &OutputPage::newFromCurrentRequested, this,
-            [this](const QString& name) { onSavePresetAs(name); });
+    connect(output_page_, &OutputPage::saveAsNewRequested, this, &MainWindow::onSavePresetAs);
     connect(output_page_, &OutputPage::renameActiveProfileRequested, this, &MainWindow::onRenamePreset);
     connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, &MainWindow::onDeletePreset);
     connect(output_page_, &OutputPage::resetActiveProfileRequested, this, &MainWindow::onResetChanges);
-    connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this,
-            [this](const QString& name) { onSavePresetAs(name); });
     connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, &MainWindow::onExportSelectedProfile);
-    connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, &MainWindow::onExportAllUserProfiles);
     connect(output_page_, &OutputPage::importProfilesRequested, this, &MainWindow::onImportProfiles);
     // Fan-out replay: OutputPage gets its profile list ONLY from refreshPresetUi().
     // The ctor called refreshPresetUi() → if(output_page_) was false then, so the page

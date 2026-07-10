@@ -1313,38 +1313,6 @@ bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, con
 }
 
 // ---------------------------------------------------------------------------
-// ExportAllUserPresetsToFile
-// ---------------------------------------------------------------------------
-
-bool RecordingPresetStore::ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
-                                                      QString* err) {
-    if (path.isEmpty()) {
-        if (err)
-            *err = QStringLiteral("Export path is empty.");
-        return false;
-    }
-
-    const QFileInfo info(path);
-    if (!QDir().mkpath(info.absolutePath())) {
-        if (err)
-            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
-        return false;
-    }
-
-    toml::table doc;
-    doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
-    doc.emplace("export_kind", std::string("all"));
-
-    toml::array presets_arr;
-    for (const auto& preset : presets) {
-        presets_arr.push_back(PresetToToml(preset));
-    }
-    doc.emplace("presets", std::move(presets_arr));
-
-    return WriteTomlAtomic(doc, path, err);
-}
-
-// ---------------------------------------------------------------------------
 // ImportPresetsFromFile
 // ---------------------------------------------------------------------------
 
