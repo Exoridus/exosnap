@@ -16,6 +16,7 @@
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
+#include <optional>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -406,7 +407,7 @@ TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited; // Full would fire rec.color.range
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
     // MKV selected, no rate mismatch, no drive space warning, profile supported
     // Should have zero results
@@ -427,7 +428,7 @@ TEST(RecommendationEngineTest, Generate_OutputNotWritable_Blocks) {
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     engine.SetOutputPathWritable(false);
     auto checklist = engine.Generate();
 
@@ -453,7 +454,7 @@ TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
     config.video_codec = capability::VideoCodec::H264Nvenc;
     config.audio_codec = capability::AudioCodec::AacMf;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found_mp4_warning = false;
@@ -479,7 +480,7 @@ TEST(RecommendationEngineTest, Generate_Mp4_HasFixAction_Assisted) {
     config.video_codec = capability::VideoCodec::H264Nvenc;
     config.audio_codec = capability::AudioCodec::AacMf;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -508,7 +509,7 @@ TEST(RecommendationEngineTest, Generate_StaticRefreshMismatch_NoLongerWarns) {
     // 144 Hz monitor + 60 fps, no live measurement. The Smooth phase-correct resampler (default)
     // handles this case, so the old static "mismatch" warning no longer fires — rec.001 is now a
     // measured-judder-only check.
-    RecommendationEngine engine(caps, config, 144, 0, true);
+    RecommendationEngine engine(caps, config, 144, std::nullopt, true);
     auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -525,7 +526,7 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
     config.frame_rate_den = 1;
 
     // 60 Hz monitor + 60 fps = no warn
-    RecommendationEngine engine(caps, config, 60, 0, true);
+    RecommendationEngine engine(caps, config, 60, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found_mismatch = false;
@@ -560,7 +561,7 @@ TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
 
     // monitor_refresh = 0 (unknown) → static arm suppressed; the live judder arm fires alone.
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -588,7 +589,7 @@ TEST(RecommendationEngineTest, Generate_LiveCoalesceAlone_NoLongerFires) {
     // than the CFR tick) and is exactly what the Smooth resampler handles — no longer a judder
     // trigger. Only measured present-time jitter fires rec.001 now.
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/1.0, /*coalesce_ratio=*/2.5);
-    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -606,7 +607,7 @@ TEST(RecommendationEngineTest, Generate_LiveJudder_VfrDoesNotFire) {
     // VFR capture: present jitter is expected and not a CFR-judder signal. monitor=0 → no
     // static arm either, so rec.001 must not appear.
     const auto live = MakeJudderSnapshot(/*cfr=*/false, /*jitter_ms=*/9.0, /*coalesce_ratio=*/3.0);
-    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results)
@@ -624,7 +625,7 @@ TEST(RecommendationEngineTest, Generate_LiveBelowThreshold_DoesNotFire) {
     // CFR with sub-threshold jitter (<= 8 ms) → no diagnosis: the Smooth resampler absorbs
     // moderate jitter, so 7 ms is below the raised bar. Coalescing is no longer a trigger.
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/7.0, /*coalesce_ratio=*/2.5);
-    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results)
@@ -641,7 +642,7 @@ TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found_blocker = false;
@@ -694,7 +695,7 @@ TEST(RecommendationEngineTest, Generate_Rec009_OpusMp4_Notice) {
     config.video_codec = capability::VideoCodec::H264Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
 
     bool found = false;
@@ -721,7 +722,7 @@ TEST(RecommendationEngineTest, Generate_Rec009_OpusMkv_NoFire) {
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results) {
@@ -797,7 +798,7 @@ TEST(RecommendationEngineTest, Generate_Rec010_Av1Webm_NoFire) {
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results) {
@@ -831,7 +832,7 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
 
-    RecommendationEngine engine(caps, config, 0, 0, false);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, false);
     auto checklist = engine.Generate();
 
     bool found_blocker = false;
@@ -858,7 +859,7 @@ TEST(RecommendationEngineTest, RecProfileCodec_H264WithAv1Available_FiresNamingA
     config.video_codec = capability::VideoCodec::H264Nvenc; // worse than the available AV1
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
@@ -886,7 +887,7 @@ TEST(RecommendationEngineTest, RecProfileCodec_AlreadyBestAv1_DoesNotFire) {
     config.video_codec = capability::VideoCodec::Av1Nvenc; // already the best
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
@@ -904,7 +905,7 @@ TEST(RecommendationEngineTest, RecProfileCodec_WebmAv1OnlyConfiguredAv1_DoesNotF
     config.video_codec = capability::VideoCodec::Av1Nvenc; // best & only valid WebM codec
     config.audio_codec = capability::AudioCodec::Opus;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
@@ -941,7 +942,7 @@ TEST(RecommendationEngineTest, RecColorRange_Full_FiresNoticeWithAutoFix) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Full;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
@@ -1011,7 +1012,7 @@ TEST(RecommendationEngineTest, RecColorRange_Limited_DoesNotFire) {
     config.audio_codec = capability::AudioCodec::Opus;
     config.color_range = capability::ColorRange::Limited;
 
-    RecommendationEngine engine(caps, config, 0, 0, true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
@@ -1324,7 +1325,7 @@ TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVide
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
 
-    RecommendationEngine engine(caps, config, 0, 0, /*is_profile_supported=*/true);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, /*is_profile_supported=*/true);
     const DiagnosticChecklist checklist = engine.Generate();
 
     bool found_rec003 = false;
@@ -1365,7 +1366,7 @@ TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
     PresentSample present;
     present.available = true;
     present.mode = PresentMode::Composed;
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
@@ -1379,7 +1380,7 @@ TEST(RecommendationEngineTest, HighDiscardRatioRaisesDiscardedNotice) {
     present.mode = PresentMode::Composed;
     present.present_count = 1000;
     present.discarded_count = 100; // 10% > 5% threshold
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; });
@@ -1419,7 +1420,7 @@ TEST(RecommendationEngineTest, RepeatedModeFlipsRaiseModeFlipNotice) {
     present.available = true;
     present.mode = PresentMode::Composed;
     present.mode_flip_count = 6; // >= threshold (5)
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::any_of(list.results.begin(), list.results.end(),
                             [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; }));
@@ -1432,7 +1433,7 @@ TEST(RecommendationEngineTest, FewModeFlipsRaiseNoModeFlipNotice) {
     present.available = true;
     present.mode = PresentMode::Composed;
     present.mode_flip_count = 2; // < threshold
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, &present);
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
                              [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; }));
@@ -1446,7 +1447,7 @@ TEST(RecommendationEngineTest, HighDiskWriteLatencyRaisesWriteStallNotice) {
     snap.disk.peak_write_ms = 150.0; // > 100 ms threshold
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", &snap, nullptr);
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; });
@@ -1495,7 +1496,7 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     present.available = true;
     present.mode = PresentMode::IndependentFlip;
 
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, &present);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", &snap, &present);
     const DiagnosticChecklist list = engine.Generate();
     const auto it = std::find_if(list.results.begin(), list.results.end(),
                                  [](const DiagnosticResult& r) { return r.id == "rec.001"; });
@@ -1507,7 +1508,7 @@ TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     DpcLatencyReading dpc{/*max*/ 2500.0, /*avg*/ 180.0, "nvlddmkm.sys", /*available*/ true};
     engine.SetDpcLatency(dpc);
     const DiagnosticChecklist list = engine.Generate();
@@ -1523,7 +1524,7 @@ TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
     using namespace exosnap::diagnostics;
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetDpcLatency({200.0, 60.0, "", true});
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
@@ -1545,7 +1546,7 @@ TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
     config.frame_pacing = recorder_core::FramePacingMode::Newest; // triggers the pacing result
 
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
     const auto checklist = engine.Generate();
 
     const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
@@ -1571,7 +1572,7 @@ TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
     config.frame_pacing = recorder_core::FramePacingMode::Smooth; // already correct — no fix offered
 
     const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
-    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
     const auto checklist = engine.Generate();
 
     EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
@@ -1598,7 +1599,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplayRaisesBlocker) {
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = recorder_core::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true); // the capture-target display is HDR-active
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1625,7 +1626,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnActiveHdrDisplay_Av1UnavailablePro
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = recorder_core::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1652,7 +1653,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnMp4ProposesHevcDespiteAv1CapableGp
     config.container = capability::Container::Mp4;
     config.hdr_mode = recorder_core::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1672,7 +1673,7 @@ TEST(RecommendationEngineTest, Hdr10PlusH264OnSdrDisplayRaisesNoBlocker) {
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = recorder_core::HdrMode::Hdr10;
 
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(false); // SDR desktop
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1687,7 +1688,7 @@ TEST(RecommendationEngineTest, TonemapSdrPlusH264OnActiveHdrDisplayRaisesNoBlock
     capability::UserRecorderConfig config = MakeH264Config();
     config.hdr_mode = recorder_core::HdrMode::TonemapSdr;
 
-    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
     engine.SetCaptureTargetHdrActive(true);
     const DiagnosticChecklist list = engine.Generate();
 
@@ -1705,7 +1706,7 @@ TEST(RecommendationEngineTest, Hdr10PlusAv1OrHevcOnActiveHdrDisplayRaisesNoBlock
         config.audio_codec = capability::AudioCodec::Opus;
         config.hdr_mode = recorder_core::HdrMode::Hdr10;
 
-        RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+        RecommendationEngine engine(caps, config, 0, std::nullopt, true, "NTFS", nullptr, nullptr);
         engine.SetCaptureTargetHdrActive(true);
         const DiagnosticChecklist list = engine.Generate();
 

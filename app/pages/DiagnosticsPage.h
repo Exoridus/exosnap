@@ -215,7 +215,7 @@ class DiagnosticsPage : public QWidget {
     capability::ResolveResult profile_validation_;
 
     std::filesystem::path output_folder_;
-    uint64_t output_drive_free_bytes_ = 0;
+    std::optional<uint64_t> output_drive_free_bytes_; // nullopt = volume not queryable
     std::string output_filesystem_name_;
 
     recorder_core::RecordingDiagnosticsSnapshot last_live_snapshot_{};

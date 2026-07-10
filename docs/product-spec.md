@@ -419,6 +419,11 @@ effective hard-stop threshold is raised to account for the transient MKV and out
 during remux (roughly 2× file size), and for split MP4 sessions it is raised further by the sum of
 pending background remux jobs plus the live segment estimate.
 
+When the output volume **cannot be queried at all** (an unreachable network share, a denied volume),
+the guard cannot measure and therefore does not fire: recording proceeds and a warning is written to
+the log stating that low-disk protection is inactive for that session. A volume that reports **zero
+bytes free** is a full disk, not a failed query, and is blocked like any other hard-stop.
+
 **Filesystem checks.** ExoSnap detects the output volume's filesystem. A **FAT32** volume raises a
 Diagnostics **notice** about the 4 GiB per-file limit; recording is **not** blocked and short clips
 work correctly. NTFS, exFAT, and others pass silently. There is no automatic split at the 4 GiB

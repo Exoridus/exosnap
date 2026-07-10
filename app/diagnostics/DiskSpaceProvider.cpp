@@ -4,9 +4,9 @@
 
 namespace exosnap::diagnostics {
 
-uint64_t Win32DiskSpaceProvider::FreeBytesForPath(const std::filesystem::path& path) const {
+std::optional<uint64_t> Win32DiskSpaceProvider::FreeBytesForPath(const std::filesystem::path& path) const {
     if (path.empty())
-        return 0;
+        return std::nullopt;
 
     // Query the volume that hosts `path`.  We use the directory component; if
     // the path does not exist yet (the output folder may not have been created
@@ -27,7 +27,7 @@ uint64_t Win32DiskSpaceProvider::FreeBytesForPath(const std::filesystem::path& p
 
     const std::wstring wide_path = query_path.wstring();
     if (!::GetDiskFreeSpaceExW(wide_path.c_str(), &free_bytes_available, &total_bytes, &total_free_bytes)) {
-        return 0;
+        return std::nullopt;
     }
 
     // free_bytes_available is the bytes available to the calling user (respects
