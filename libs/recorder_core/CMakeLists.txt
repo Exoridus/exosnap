@@ -782,6 +782,17 @@ exosnap_add_gtest(
 target_include_directories(test_od_reopen_policy PRIVATE src)
 target_compile_definitions(test_od_reopen_policy PRIVATE NOMINMAX)
 
+# Capture drain selection: the frame loop must never drain the backend it does not
+# own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.
+exosnap_add_gtest(
+    NAME test_capture_drain_step
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_capture_drain_step.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_capture_drain_step PRIVATE src)
+target_compile_definitions(test_capture_drain_step PRIVATE NOMINMAX)
+
 # HDR tone-map render pass on the GPU: WARP-backed proof that the shader renders
 # the curve correctly into both the 8-bit (BGRA8) and 10-bit (R10G10B10A2)
 # intermediates, and that the 10-bit target preserves precision the 8-bit loses.

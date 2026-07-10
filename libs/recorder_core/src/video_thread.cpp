@@ -2313,7 +2313,8 @@ void VideoThread::Run() {
                 }
             }
 
-            if (useOdCapture && !odHolding) {
+            const CaptureDrainStep drainStep = NextCaptureDrainStep(useOdCapture, odHolding);
+            if (drainStep == CaptureDrainStep::DrainOd) {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
                 const auto acq_t0 = std::chrono::steady_clock::now();
@@ -2410,7 +2411,7 @@ void VideoThread::Run() {
                     m_state.diagnostics.OnAcquireLatency(
                         acq_t1, std::chrono::duration<double, std::milli>(acq_t1 - acq_t0).count());
                 }
-            } else {
+            } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
                 const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
@@ -2782,7 +2783,8 @@ void VideoThread::Run() {
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
 
-            if (useOdCapture && !odHolding) {
+            const CaptureDrainStep drainStep = NextCaptureDrainStep(useOdCapture, odHolding);
+            if (drainStep == CaptureDrainStep::DrainOd) {
                 // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
                 while (true) {
                     ID3D11Texture2D* rawTex = nullptr;
@@ -2853,7 +2855,7 @@ void VideoThread::Run() {
                     if (latestFrameTicks100ns == 0)
                         latestFrameTicks100ns = static_cast<int64_t>(Qpc100ns(qpcFreq));
                 }
-            } else {
+            } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
                 try {
                     while (true) {

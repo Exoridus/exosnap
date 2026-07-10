@@ -263,4 +263,28 @@ OdReopenDecision DecideOdReopen(bool reopened, std::chrono::milliseconds elapsed
                                 std::optional<std::chrono::milliseconds> budget,
                                 std::chrono::milliseconds poll_delay) noexcept;
 
+// ---------------------------------------------------------------------------
+// Which capture source the frame loop may drain on this tick.
+//
+// The frame loop owns two mutually exclusive sources: a DXGI OD duplication and
+// a WGC frame pool. Exactly one of them is ever constructed for a session. While
+// an OD capture is holding (waiting for Reopen() after a recoverable acquire
+// loss) it must drain neither — least of all the WGC pool, which for a monitor
+// recording is a null WinRT object and calling into it kills the process.
+// ---------------------------------------------------------------------------
+enum class CaptureDrainStep : uint8_t {
+    DrainOd,  // OD duplication is live: drain it.
+    DrainWgc, // WGC capture: drain the frame pool.
+    Hold,     // OD capture mid-reopen: drain nothing; the held frame carries the timeline.
+};
+
+// Pure: derived only from which backend the session uses and whether the OD
+// source is currently holding. `od_holding` is meaningless when use_od_capture
+// is false and is ignored there.
+[[nodiscard]] constexpr CaptureDrainStep NextCaptureDrainStep(bool use_od_capture, bool od_holding) noexcept {
+    if (!use_od_capture)
+        return CaptureDrainStep::DrainWgc;
+    return od_holding ? CaptureDrainStep::Hold : CaptureDrainStep::DrainOd;
+}
+
 } // namespace recorder_core
