@@ -424,6 +424,15 @@ QLabel[labelRole="recordSourceName"] {
     color: ${text1};
 }
 
+/* Header meta strip: output format readout (canon suite-record.jsx:301) */
+QLabel[labelRole="recordFormatChips"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    color: ${text2};
+    padding-right: 4px;
+}
+
 QLabel[labelRole="recordSourceLock"] {
     font-family: ${font-mono};
     font-size: 10px;
@@ -1188,6 +1197,21 @@ QLabel[labelRole="subtle"] {
 }
 
 /* Settings - filename token reference chips (Output card) */
+/* Output card — the "tokens" disclosure on the filename-pattern row */
+QToolButton#tokensToggle {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    color: ${text2};
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+}
+
+QToolButton#tokensToggle:checked,
+QToolButton#tokensToggle:hover {
+    color: ${accent};
+}
+
 QLabel[labelRole="tokenChip"] {
     font-family: ${font-mono};
     font-size: 11px;
@@ -2982,6 +3006,50 @@ QLabel[labelRole="deviceAdapterCardActiveBadge"] {
     border: 1px solid ${ok-a48};
     border-radius: ${radius-sm}px;
     padding: 2px 8px;
+}
+
+/* Diagnostics — verdict hero (canon suite-diag2.jsx CompactVerdict) */
+QLabel#diagVerdictGlyph {
+    border-radius: 12px;
+    border: 1px solid ${line2};
+    background: ${bg3};
+}
+
+QLabel#diagVerdictGlyph[verdictTone="ready"] {
+    background: ${ok-a12};
+    border-color: ${ok-a48};
+}
+
+QLabel#diagVerdictGlyph[verdictTone="warn"] {
+    background: ${warn-a12};
+    border-color: ${warn-a48};
+}
+
+QLabel#diagVerdictGlyph[verdictTone="blocked"] {
+    background: ${err-a12};
+    border-color: ${err-a48};
+}
+
+QLabel[labelRole="diagVerdictHeadline"] {
+    font-size: 19px;
+    font-weight: 700;
+    color: ${text0};
+}
+
+QLabel[labelRole="diagVerdictSub"] {
+    font-size: 13px;
+    color: ${text2};
+}
+
+QProgressBar#diagDiskBar {
+    background: ${line2};
+    border: none;
+    border-radius: 2px;
+}
+
+QProgressBar#diagDiskBar::chunk {
+    background: ${accent};
+    border-radius: 2px;
 }
 
 /* Device page — capability matrix card (selected adapter) */

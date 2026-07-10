@@ -247,10 +247,15 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     copy_btn_->setObjectName(QStringLiteral("logCopyBtn"));
     copy_btn_->setProperty("role", "ghost");
     copy_btn_->setProperty("logToolbarGhost", true);
+    copy_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("copy"), QString::fromUtf8(ui::theme::ActiveTheme().mut),
+                                             14, copy_btn_->devicePixelRatioF()));
     export_btn_ = new QPushButton(QStringLiteral("Export\xe2\x80\xa6"), right_cluster); // "Export…"
     export_btn_->setObjectName(QStringLiteral("logExportBtn"));
     export_btn_->setProperty("role", "ghost");
     export_btn_->setProperty("logToolbarGhost", true);
+    export_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("download"),
+                                               QString::fromUtf8(ui::theme::ActiveTheme().mut), 14,
+                                               export_btn_->devicePixelRatioF()));
     right_layout->addWidget(copy_btn_);
     right_layout->addWidget(export_btn_);
 

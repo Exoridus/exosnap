@@ -19,6 +19,7 @@
 #include <optional>
 
 class QLabel;
+class QProgressBar;
 class QPushButton;
 class QToolButton;
 class QVBoxLayout;
@@ -153,6 +154,10 @@ class DiagnosticsPage : public QWidget {
     QFrame* readiness_panel_ = nullptr;
     QLabel* readiness_icon_ = nullptr;
     QLabel* status_pill_ = nullptr;
+    // Verdict hero (canon suite-diag2.jsx CompactVerdict).
+    QLabel* verdict_glyph_ = nullptr;
+    QLabel* verdict_headline_ = nullptr;
+    QProgressBar* disk_bar_ = nullptr;
     QLabel* last_check_label_ = nullptr;
     QLabel* summary_label_ = nullptr;
     QPushButton* run_check_btn_ = nullptr;

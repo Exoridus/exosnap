@@ -1775,9 +1775,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         rll->addWidget(res_lbl);
         rll->addWidget(resolution_compare_hint_, 0, Qt::AlignVCenter);
         rll->addStretch();
+        // Canon row language: label left, control right on the same line.
+        output_res_combo_ = new QComboBox(res_label_row);
+        output_res_combo_->setMinimumWidth(170);
+        rll->addWidget(output_res_combo_, 0, Qt::AlignVCenter);
         out_panel_layout->addWidget(res_label_row);
     }
-    output_res_combo_ = new QComboBox(out_panel);
     output_res_combo_->setObjectName(QStringLiteral("outputResCombo"));
     output_res_combo_->addItem(QStringLiteral("Native"), static_cast<int>(OutputResolutionMode::Native));
     output_res_combo_->addItem(QStringLiteral("4K"), static_cast<int>(OutputResolutionMode::UHD2160));
@@ -1785,7 +1788,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_res_combo_->addItem(QStringLiteral("1080p"), static_cast<int>(OutputResolutionMode::FHD1080));
     output_res_combo_->addItem(QStringLiteral("720p"), static_cast<int>(OutputResolutionMode::HD720));
     output_res_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(OutputResolutionMode::Custom));
-    out_panel_layout->addWidget(output_res_combo_);
 
     // Custom resolution width/height fields (CUSTOM-OUTPUT-RESOLUTION-R1).
     custom_resolution_widget_ = new QWidget(out_panel);
@@ -1857,6 +1859,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     destination_edit_->setPlaceholderText(QString::fromStdWString(format_settings_.output_folder.wstring()));
     browse_btn_ = new QPushButton(QStringLiteral("Browse..."), output_fields);
     browse_btn_->setProperty("role", "ghost");
+    browse_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("folder"),
+                                               QString::fromUtf8(ui::theme::ActiveTheme().mut), 14,
+                                               browse_btn_->devicePixelRatioF()));
     dest_row->addWidget(destination_edit_, 1);
     dest_row->addWidget(browse_btn_);
     output_fields_layout->addLayout(dest_row);
@@ -1865,8 +1870,30 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     folder_validation_label_->setVisible(false);
     output_fields_layout->addWidget(folder_validation_label_);
 
-    output_fields_layout->addWidget(
-        makeOutputSubLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, output_fields));
+    {
+        // Canon (suite-settings.jsx FilenamePatternEditor): the token chips sit
+        // behind a small "tokens" disclosure on the label row, not permanently
+        // below the input.
+        auto* fn_row = new QWidget(output_fields);
+        auto* fnl = new QHBoxLayout(fn_row);
+        fnl->setContentsMargins(0, 0, 0, 0);
+        fnl->setSpacing(4);
+        fnl->addWidget(
+            makeOutputSubLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, fn_row));
+        fnl->addStretch();
+        tokens_toggle_ = new QToolButton(fn_row);
+        tokens_toggle_->setObjectName(QStringLiteral("tokensToggle"));
+        tokens_toggle_->setText(QStringLiteral("tokens"));
+        tokens_toggle_->setCheckable(true);
+        tokens_toggle_->setChecked(false);
+        tokens_toggle_->setCursor(Qt::PointingHandCursor);
+        tokens_toggle_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        tokens_toggle_->setIcon(ui::theme::lucideIcon(QStringLiteral("chevron-down"),
+                                                      QString::fromUtf8(ui::theme::ActiveTheme().mut), 12,
+                                                      tokens_toggle_->devicePixelRatioF()));
+        fnl->addWidget(tokens_toggle_, 0, Qt::AlignVCenter);
+        output_fields_layout->addWidget(fn_row);
+    }
     naming_edit_ = new QLineEdit(output_fields);
     naming_edit_->setObjectName(QStringLiteral("namingEdit"));
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
@@ -1888,7 +1915,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             chip->setProperty("labelRole", "tokenChip");
             chip_flow->addChip(chip);
         }
-        // Always visible — no toggle.
+        // Collapsed by default; the "tokens" disclosure on the label row opens it.
+        chip_flow->setVisible(false);
+        if (tokens_toggle_) {
+            connect(tokens_toggle_, &QToolButton::toggled, chip_flow, [this, chip_flow](bool open) {
+                chip_flow->setVisible(open);
+                tokens_toggle_->setIcon(ui::theme::lucideIcon(
+                    open ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
+                    QString::fromUtf8(ui::theme::ActiveTheme().mut), 12, tokens_toggle_->devicePixelRatioF()));
+            });
+        }
         output_fields_layout->addWidget(chip_flow);
     }
 
@@ -1896,8 +1932,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     pattern_validation_label_->setVisible(false);
     output_fields_layout->addWidget(pattern_validation_label_);
 
-    example_filename_label_ = makeHint(QString(), output_fields);
-    output_fields_layout->addWidget(example_filename_label_);
     output_fields_layout->addStretch();
 
     // v10 (Task #4): output_help panel removed — chips are now in output_fields.
@@ -3790,14 +3824,10 @@ void ConfigPage::updateExampleFilename() {
     const auto output_path =
         BuildOutputPath(format_settings_.output_folder, format_settings_.naming_pattern, format_settings_.container,
                         std::time(nullptr), ExamplePreviewContext(active_profile_name_, format_settings_));
-    if (example_filename_label_) {
-        example_filename_label_->setText(QStringLiteral("Example: ") +
-                                         QString::fromStdWString(output_path.filename().wstring()));
-    }
-
-    // v10 (Delta 2): resolved "Saves to …\full\path.ext" footer.
+    // Canon: one resolved footer line — "✓ Saves as <full path>". The separate
+    // "Example:" line said the same thing twice.
     if (output_saves_to_label_) {
-        output_saves_to_label_->setText(QStringLiteral("\xe2\x9c\x93 Saves to  ") +
+        output_saves_to_label_->setText(QStringLiteral("\xe2\x9c\x93 Saves as  ") +
                                         QString::fromStdWString(output_path.wstring()));
     }
 }

@@ -41,6 +41,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <QProgressBar>
+#include <QStorageInfo>
+
 #include <algorithm>
 #include <cmath>
 
@@ -182,6 +185,22 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     mode_caption_->setProperty("labelRole", "subtle");
     tl->addWidget(mode_caption_);
     tl->addStretch(1);
+    // The check actions live in the toolbar row — the verdict below stays a calm,
+    // centred statement (canon suite-diag2.jsx SimpleView).
+    last_check_label_ = new QLabel(QStringLiteral("Last check: â"), toolbar);
+    last_check_label_->setProperty("labelRole", "subtle");
+    tl->addWidget(last_check_label_, 0, Qt::AlignVCenter);
+    run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), toolbar);
+    run_check_btn_->setProperty("role", "primary");
+    run_check_btn_->setProperty("size", "sm");
+    tl->addWidget(run_check_btn_, 0, Qt::AlignVCenter);
+    export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), toolbar);
+    export_report_btn_->setProperty("role", "ghost");
+    export_report_btn_->setProperty("size", "sm");
+    export_report_btn_->setEnabled(false);
+    export_report_btn_->setToolTip(QStringLiteral("Diagnostic report export is planned for a future build."));
+    tl->addWidget(export_report_btn_, 0, Qt::AlignVCenter);
+    tl->addSpacing(M::kSpaceMd);
     expert_mode_label_ = new QLabel(QStringLiteral("Expert mode"), toolbar);
     expert_mode_label_->setObjectName(QStringLiteral("diagExpertModeLabel"));
     expert_mode_label_->setProperty("labelRole", "muted");
@@ -205,55 +224,40 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
-    // ── Verdict banner (kept: readinessBanner + status pill + last-check) ────────
-    readiness_panel_ = makePanel(content);
-    readiness_panel_->setProperty("panelRole", "readinessBanner");
-    auto* rl = new QVBoxLayout(readiness_panel_);
-    rl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
-    rl->setSpacing(M::kSpaceSm);
+    // ── Verdict hero — a calm, centred statement (canon suite-diag2.jsx
+    // CompactVerdict): glyph chip + headline + sub, no panel chrome. The old
+    // status pill object stays alive (its many writers keep working) but is
+    // hidden; the headline carries the verdict now.
+    readiness_panel_ = new QFrame(content);
+    auto* rl = new QHBoxLayout(readiness_panel_);
+    rl->setContentsMargins(0, M::kSpaceLg, 0, 0);
+    rl->setSpacing(M::kSpaceMd + 3);
+    rl->addStretch(1);
 
-    auto* head_row = new QHBoxLayout();
-    head_row->setSpacing(M::kSpaceMd);
-    auto* head_text = new QVBoxLayout();
-    head_text->setSpacing(M::kSpaceXs);
-    status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
-    status_pill_->setProperty("labelRole", "profileStatusBadge");
-    status_pill_->setAlignment(Qt::AlignCenter);
-    readiness_icon_ = new QLabel(readiness_panel_);
-    readiness_icon_->setFixedSize(14, 14);
-    readiness_icon_->setAlignment(Qt::AlignCenter);
-    readiness_icon_->setVisible(false);
-    auto* pill_row = new QHBoxLayout();
-    pill_row->setContentsMargins(0, 0, 0, 0);
-    pill_row->setSpacing(M::kSpaceXs);
-    pill_row->addWidget(readiness_icon_, 0, Qt::AlignVCenter);
-    pill_row->addWidget(status_pill_);
-    pill_row->addStretch();
-    head_text->addLayout(pill_row);
-    last_check_label_ = new QLabel(QStringLiteral("Last check: \xe2\x80\x94"), readiness_panel_);
-    last_check_label_->setProperty("labelRole", "subtle");
-    head_text->addWidget(last_check_label_);
-    head_row->addLayout(head_text, 1);
+    verdict_glyph_ = new QLabel(readiness_panel_);
+    verdict_glyph_->setObjectName(QStringLiteral("diagVerdictGlyph"));
+    verdict_glyph_->setProperty("verdictTone", "neutral");
+    verdict_glyph_->setFixedSize(42, 42);
+    verdict_glyph_->setAlignment(Qt::AlignCenter);
+    rl->addWidget(verdict_glyph_, 0, Qt::AlignVCenter);
 
-    auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(M::kSpaceSm);
-    run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), readiness_panel_);
-    run_check_btn_->setProperty("role", "primary");
-    run_check_btn_->setProperty("size", "sm");
-    export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), readiness_panel_);
-    export_report_btn_->setProperty("role", "ghost");
-    export_report_btn_->setEnabled(false);
-    export_report_btn_->setToolTip(QStringLiteral("Diagnostic report export is planned for a future build."));
-    btn_row->addWidget(run_check_btn_);
-    btn_row->addWidget(export_report_btn_);
-    head_row->addLayout(btn_row, 0);
-    rl->addLayout(head_row);
-
+    auto* verdict_text = new QVBoxLayout();
+    verdict_text->setSpacing(M::kSpaceXs);
+    verdict_headline_ = new QLabel(QStringLiteral("Not checked yet"), readiness_panel_);
+    verdict_headline_->setProperty("labelRole", "diagVerdictHeadline");
+    verdict_text->addWidget(verdict_headline_);
     summary_label_ = new QLabel(QStringLiteral("Run a check to see whether this machine is set up to record well."),
                                 readiness_panel_);
-    summary_label_->setProperty("labelRole", "body");
-    summary_label_->setWordWrap(true);
-    rl->addWidget(summary_label_);
+    summary_label_->setProperty("labelRole", "diagVerdictSub");
+    summary_label_->setMaximumWidth(560);
+    verdict_text->addWidget(summary_label_);
+    rl->addLayout(verdict_text, 0);
+    rl->addStretch(1);
+
+    status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
+    status_pill_->hide();
+    readiness_icon_ = new QLabel(readiness_panel_);
+    readiness_icon_->hide();
     layout->addWidget(readiness_panel_);
 
     // ── Four readiness tiles (the designed calm that replaces the old void) ──────
@@ -276,6 +280,15 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     // Row 0 holds all four on wide windows; the grid naturally wraps nothing, but the
     // four equal columns collapse gracefully within the 900 px content cap. (A 2×2
     // fallback on very narrow windows is acceptable per the mockup intent.)
+    // Disk tile carries a slim usage bar (canon ReadinessTile pct).
+    disk_bar_ = new QProgressBar(disk_tile);
+    disk_bar_->setObjectName(QStringLiteral("diagDiskBar"));
+    disk_bar_->setRange(0, 100);
+    disk_bar_->setTextVisible(false);
+    disk_bar_->setFixedHeight(4);
+    disk_bar_->setVisible(false);
+    if (auto* dl = qobject_cast<QVBoxLayout*>(disk_tile->layout()))
+        dl->addWidget(disk_bar_);
     tiles_grid->addWidget(readiness_tile_, 0, 0);
     tiles_grid->addWidget(encoder_tile, 0, 1);
     tiles_grid->addWidget(disk_tile, 0, 2);
@@ -295,6 +308,11 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     connect(tip_chip_, &ui::widgets::TipChip::applyFixRequested, this, &DiagnosticsPage::applyFixActionRequested);
     connect(tip_chip_, &ui::widgets::TipChip::assistedFixRequested, this, &DiagnosticsPage::openAssistedFixRequested);
     layout->addWidget(tip_chip_);
+
+    // Simple view centres the verdict/tiles block vertically (canon SimpleView:
+    // the empty calm IS the feature): a top stretch balances the ctor's trailing
+    // addStretch(); applyExpertVisibility() flips the weights for Expert.
+    layout->insertStretch(0, 0);
 
     // ── Expert-only container (phases + elevation) ──────────────────────────────
     expert_container_ = new QWidget(content);
@@ -434,7 +452,9 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     auto* go_logs_btn = new QPushButton(QStringLiteral("Open Logs Page"), logs_card);
     go_logs_btn->setProperty("role", "ghost");
     ll->addWidget(go_logs_btn, 0, Qt::AlignVCenter);
-    layout->addWidget(logs_card);
+    // Expert-only: the Simple view keeps the canon calm (verdict + tiles + tip).
+    if (auto* exl = qobject_cast<QVBoxLayout*>(expert_container_->layout()))
+        exl->addWidget(logs_card);
 
     layout->addStretch();
 
@@ -503,6 +523,13 @@ void DiagnosticsPage::showEvent(QShowEvent* event) {
 void DiagnosticsPage::applyExpertVisibility() {
     if (expert_container_)
         expert_container_->setVisible(expert_mode_enabled_);
+    // Simple: centre the calm block vertically. Expert: top-aligned taxonomy.
+    if (auto* content_layout =
+            readiness_panel_ ? qobject_cast<QVBoxLayout*>(readiness_panel_->parentWidget()->layout()) : nullptr) {
+        const int stretch = expert_mode_enabled_ ? 0 : 1;
+        content_layout->setStretch(0, stretch);
+        content_layout->setStretch(content_layout->count() - 1, stretch);
+    }
     if (export_report_btn_)
         export_report_btn_->setVisible(expert_mode_enabled_);
     // suite-diag2.jsx: tips are bundled (collapsed) in Simple, listed open in Expert.
@@ -906,6 +933,24 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
     }
+    if (verdict_glyph_) {
+        QString glyph_name = QStringLiteral("info");
+        QString glyph_color = QString::fromUtf8(Pal::kText2);
+        if (state == QStringLiteral("ready")) {
+            glyph_name = QStringLiteral("check-circle");
+            glyph_color = QString::fromUtf8(Pal::kOk);
+        } else if (state == QStringLiteral("warn")) {
+            glyph_name = QStringLiteral("alert-triangle");
+            glyph_color = QString::fromUtf8(Pal::kWarn);
+        } else if (state == QStringLiteral("blocked")) {
+            glyph_name = QStringLiteral("x-circle");
+            glyph_color = QString::fromUtf8(Pal::kErr);
+        }
+        verdict_glyph_->setPixmap(
+            ui::theme::lucidePixmap(glyph_name, glyph_color, 21, verdict_glyph_->devicePixelRatioF()));
+        verdict_glyph_->setProperty("verdictTone", state);
+        repolish(verdict_glyph_);
+    }
     if (readiness_icon_) {
         QString icon_name;
         QString icon_color;
@@ -925,19 +970,23 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         } else {
             const qreal dpr = readiness_icon_->devicePixelRatioF();
             readiness_icon_->setPixmap(ui::theme::lucidePixmap(icon_name, icon_color, 14, dpr));
-            readiness_icon_->setVisible(true);
+            readiness_icon_->setVisible(false); // replaced by the hero glyph chip
         }
     }
 }
 
 void DiagnosticsPage::onRunCheck() {
     status_pill_->setText(QStringLiteral("CHECKING"));
+    if (verdict_headline_)
+        verdict_headline_->setText(QStringLiteral("Checking\xe2\x80\xa6"));
     setReadinessState(QStringLiteral("checking"));
     last_check_label_->setText(QStringLiteral("Last check: running..."));
     summary_label_->setText(QStringLiteral("Check in progress."));
 
     if (!data_ready_) {
         status_pill_->setText(QStringLiteral("NO DATA"));
+        if (verdict_headline_)
+            verdict_headline_->setText(QStringLiteral("Not checked yet"));
         setReadinessState(QStringLiteral("neutral"));
         last_check_label_->setText(QStringLiteral("Last check: \xe2\x80\x94"));
         summary_label_->setText(QStringLiteral("Diagnostic data has not been loaded. Open the Record page first."));
@@ -1247,7 +1296,7 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
                                                                 QString::fromUtf8(Pal::kOk), 14,
                                                                 readiness_tile_icon_->devicePixelRatioF()));
         readiness_tile_icon_->setVisible(true);
-        setTone(readiness_tile_, "pass");
+        setTone(readiness_tile_, "neutral");
     } else {
         readiness_tile_value_->setText(dash);
         readiness_tile_sub_->setText(QStringLiteral("run a check"));
@@ -1255,23 +1304,40 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
         setTone(readiness_tile_, "neutral");
     }
 
-    // Tile 2 — Encoder (active codec + container; honest config facts).
+    // Tile 2 — Encoder: the GPU carrying the encode, codec as the detail line
+    // (canon suite-diag2.jsx READINESS). Falls back to the codec + container
+    // when the adapter name is unknown.
     if (data_ready_) {
-        encoder_tile_value_->setText(
-            QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec)));
+        const QString gpu = QString::fromStdString(caps_.gpu_adapter_name).trimmed();
+        QString codec = QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec));
+        // The display name carries the backend ("AV1 (NVENC)"); the tile sub adds
+        // its own backend token, so trim to the bare codec.
+        if (const int paren = codec.indexOf(QStringLiteral(" (")); paren > 0)
+            codec.truncate(paren);
+        encoder_tile_value_->setText(gpu.isEmpty() ? codec : gpu);
         encoder_tile_sub_->setText(
-            QString::fromStdString(diagnostics::AudioCodecDisplayName(active_user_config_.audio_codec)) +
-            QStringLiteral(" \xc2\xb7 ") +
-            QString::fromStdString(diagnostics::ContainerDisplayName(active_user_config_.container)));
+            gpu.isEmpty() ? QString::fromStdString(diagnostics::ContainerDisplayName(active_user_config_.container))
+                          : QStringLiteral("%1 \xc2\xb7 NVENC").arg(codec));
     } else {
         encoder_tile_value_->setText(dash);
-        encoder_tile_sub_->setText(QStringLiteral("active codec"));
+        encoder_tile_sub_->setText(QStringLiteral("active encoder"));
     }
 
     // Tile 3 — Disk (free space on the output drive). A queried zero is a full
     // drive and must read "0 B", not blank; only an unqueryable volume shows the dash.
     if (data_ready_ && output_drive_free_bytes_.has_value()) {
         disk_tile_value_->setText(humanBytes(*output_drive_free_bytes_));
+        // Slim usage bar: how full the output volume is (display-only; the
+        // low-disk guard owns the actual policy).
+        const QStorageInfo storage(QString::fromStdWString(output_folder_.wstring()));
+        if (disk_bar_ && storage.isValid() && storage.bytesTotal() > 0) {
+            const double used =
+                1.0 - static_cast<double>(*output_drive_free_bytes_) / static_cast<double>(storage.bytesTotal());
+            disk_bar_->setValue(std::clamp(static_cast<int>(used * 100.0 + 0.5), 0, 100));
+            disk_bar_->setVisible(true);
+        } else if (disk_bar_) {
+            disk_bar_->setVisible(false);
+        }
         QString drive = QString::fromStdString(output_folder_.root_name().string());
         if (drive.isEmpty())
             drive = QString::fromStdString(output_folder_.string());
@@ -1280,6 +1346,8 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
     } else {
         disk_tile_value_->setText(dash);
         disk_tile_sub_->setText(QStringLiteral("output drive"));
+        if (disk_bar_)
+            disk_bar_->setVisible(false);
     }
 
     // Tile 4 — Display (current screen resolution + refresh; honest static fact).
@@ -1356,6 +1424,10 @@ void DiagnosticsPage::refreshOverview() {
     if (blockers > 0) {
         const QString blocker_word = (blockers == 1) ? QStringLiteral("BLOCKER") : QStringLiteral("BLOCKERS");
         status_pill_->setText(QStringLiteral("CAN'T RECORD \xc2\xb7 %1 %2").arg(blockers).arg(blocker_word));
+        if (verdict_headline_)
+            verdict_headline_->setText(blockers == 1
+                                           ? QStringLiteral("1 thing to fix before recording")
+                                           : QStringLiteral("%1 things to fix before recording").arg(blockers));
         setReadinessState(QStringLiteral("blocked"));
         const QString bw = (blockers == 1) ? QStringLiteral("blocker") : QStringLiteral("blockers");
         summary_label_->setText(
@@ -1363,6 +1435,11 @@ void DiagnosticsPage::refreshOverview() {
     } else if (tier2_notices > 0) {
         const QString issue_word = (tier2_notices == 1) ? QStringLiteral("ISSUE") : QStringLiteral("ISSUES");
         status_pill_->setText(QStringLiteral("ATTENTION \xc2\xb7 %1 %2").arg(tier2_notices).arg(issue_word));
+        if (verdict_headline_)
+            verdict_headline_->setText(
+                tier2_notices == 1 ? QStringLiteral("Recording works \xe2\x80\x94 1 thing could hurt the result")
+                                   : QStringLiteral("Recording works \xe2\x80\x94 %1 things could hurt the result")
+                                         .arg(tier2_notices));
         setReadinessState(QStringLiteral("warn"));
         const QString iw = (tier2_notices == 1) ? QStringLiteral("issue") : QStringLiteral("issues");
         summary_label_->setText(
@@ -1372,7 +1449,10 @@ void DiagnosticsPage::refreshOverview() {
     } else {
         status_pill_->setText(QStringLiteral("READY"));
         setReadinessState(QStringLiteral("ready"));
-        summary_label_->setText(QStringLiteral("Everything checks out \xe2\x80\x94 you're ready to record."));
+        if (verdict_headline_)
+            verdict_headline_->setText(QStringLiteral("Ready to record"));
+        summary_label_->setText(
+            QStringLiteral("Everything checks out \xe2\x80\x94 %1 capability checks passed.").arg(cap_passes));
     }
 
     last_check_label_->setText(QStringLiteral("Last check: %1")
