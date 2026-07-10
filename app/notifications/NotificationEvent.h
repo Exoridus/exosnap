@@ -55,8 +55,9 @@ struct NotificationEvent {
     // Extra payload for the action handler (e.g. file path for OpenFolder).
     QString action_payload;
 
-    // Optional secondary action (e.g. "Discard" on RecoveryAvailable,
-    // "Dismiss" on LowStorage). The primary action is in `action`.
+    // Second action, an ordinary part of the model: with one action the toast
+    // card itself is the action; with two, both become named buttons (e.g.
+    // Edit + Open folder on Saved, Recover + Discard on RecoveryAvailable).
     NotificationAction secondary_action = NotificationAction::None;
 
     // Stable ordering key assigned by the manager on enqueue — not set by callers.

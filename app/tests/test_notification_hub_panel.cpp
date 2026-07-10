@@ -82,17 +82,23 @@ TEST_F(NotificationHubPanelTest, SetDemoAdvisories_False_ClearsItems) {
     EXPECT_FALSE(empty->isHidden());
 }
 
-TEST_F(NotificationHubPanelTest, DeepLink_EmitsSignal) {
+TEST_F(NotificationHubPanelTest, DeepLink_EmitsTheActionTarget) {
     ui::chrome::NotificationHubPanel panel;
     int deep_count = 0;
-    QObject::connect(&panel, &ui::chrome::NotificationHubPanel::deepLinkRequested,
-                     [&](const QString&) { ++deep_count; });
+    QString received;
+    QObject::connect(&panel, &ui::chrome::NotificationHubPanel::deepLinkRequested, [&](const QString& target) {
+        ++deep_count;
+        received = target;
+    });
     panel.addAdvisory(QStringLiteral("link-test"), QStringLiteral("caution"), QStringLiteral("Deep link test"),
                       QStringLiteral("Body"), QString(), true, QStringLiteral("dl-id"), QStringLiteral("Open"), true);
     auto* advisory = panel.findChild<ui::widgets::AdvisoryItem*>();
     ASSERT_NE(advisory, nullptr);
-    emit advisory->deepLinkRequested();
+    // The action click carries the ACTION id — the navigation target — not the
+    // advisory id under which the entry is stored.
+    emit advisory->actionTriggered(QStringLiteral("dl-id"));
     EXPECT_EQ(deep_count, 1);
+    EXPECT_EQ(received, QStringLiteral("dl-id"));
 }
 
 TEST_F(NotificationHubPanelTest, Width_VisiblePanelIs380PlusShadowMargin) {

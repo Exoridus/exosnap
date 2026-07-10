@@ -690,6 +690,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                 } else if (target == QStringLiteral("recovery-view")) {
                     // Recovery overlay (if still open) or just navigate to Record.
                     navigateToPage(kRecordPageIndex);
+                } else if (target == QStringLiteral("diagnostics")) {
+                    navigateToPage(kDiagnosticsPageIndex);
+                } else if (target == QStringLiteral("preset-undo")) {
+                    // The hub keeps the record of a preset switch; Undo restores the
+                    // previous live config via the same handler the toast used to.
+                    dispatchNotificationAction(notifications::NotificationEvent{},
+                                               notifications::NotificationAction::UndoPresetSwitch);
+                } else if (target.startsWith(QStringLiteral("reveal:"))) {
+                    // Re-surface a saved file from the hub record.
+                    notifications::NotificationEvent ev;
+                    ev.action_payload = target.mid(QStringLiteral("reveal:").size());
+                    dispatchNotificationAction(ev, notifications::NotificationAction::OpenFolder);
                 } else if (target.startsWith(QStringLiteral("settings/"))) {
                     navigateToPage(kSettingsPageIndex);
                     if (config_page_)
@@ -1153,10 +1165,10 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         QStringLiteral("recovery"),
         QStringLiteral("Found %1 interrupted recording(s) — showing recovery overlay").arg(candidates.size()));
 
-    // NOTIFY-TOASTS-R1 — Trigger 4: RecoveryAvailable.
-    // Mappe spec: "Recover last session?" (info, sticky) — actions "Recover" (primary) + "Discard".
-    // Gated on the show_notifications setting.
-    if (persisted_settings_.show_notifications && notification_manager_) {
+    // Trigger 4: RecoveryAvailable — "Recover last session?" (standing) with
+    // "Recover" (primary) + "Discard". Enqueue() records it in the hub and, when
+    // toasts are enabled, raises the standing toast.
+    if (notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::RecoveryAvailable;
         event.title = QStringLiteral("Recover last session?");
@@ -1167,20 +1179,6 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         event.action = notifications::NotificationAction::OpenRecovery;
         event.secondary_action = notifications::NotificationAction::Discard;
         notification_manager_->Enqueue(std::move(event));
-    }
-
-    // PS-PHASE-E: add a hub advisory for recovery-available.
-    if (notification_hub_) {
-        notification_hub_->removeAdvisoryById(QStringLiteral("recovery-available"));
-        const QString recovery_body =
-            (candidates.size() == 1)
-                ? QStringLiteral("A recording from the last session wasn’t finalized.")
-                : QStringLiteral("%1 recordings from the last session weren’t finalized.").arg(candidates.size());
-        notification_hub_->addAdvisory(QStringLiteral("recovery-available"), QStringLiteral("error"),
-                                       QStringLiteral("Recording recovered"), recovery_body, QStringLiteral("now"),
-                                       /*unread=*/true, QStringLiteral("recovery-view"), QStringLiteral("Recover"),
-                                       /*is_deep_link=*/false);
-        refreshHubUnreadBell();
     }
 
     // Parent to the central widget (same pattern as about_overlay_ / source_picker_overlay_).
@@ -2642,7 +2640,7 @@ void MainWindow::onPresetSelected(const QString& id) {
     applyPresetConfig(WithEnvironmentFields(preset_registry_.SelectedSavedConfig(), captureLiveConfig()));
     persistPresetState();
 
-    if (persisted_settings_.show_notifications && notification_manager_) {
+    if (notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::PresetSwitched;
         event.title =
@@ -3460,9 +3458,20 @@ void MainWindow::initNotificationToasts() {
     // Create the manager (parented to MainWindow — torn down with it).
     notification_manager_ = new notifications::NotificationManager(this);
 
+    // The "Show notifications" setting gates only the toast glance; the hub
+    // record below is fed unconditionally.
+    notification_manager_->SetToastsEnabled(persisted_settings_.show_notifications);
+
+    // The hub is the record: every enqueued notification lands there.
+    connect(notification_manager_, &notifications::NotificationManager::eventRecorded, this,
+            &MainWindow::recordEventInHub);
+
     // Toast window is top-level (no Qt parent) to avoid being clipped by MainWindow.
     // Destroyed explicitly in ~MainWindow().
     notification_toast_window_ = new ui::overlay::NotificationToastWindow(notification_manager_, nullptr);
+
+    // Toasts appear on the screen hosting the app window, not the primary one.
+    notification_toast_window_->setAnchorWidget(this);
 
     // The toast is now interactive: an action-pill click routes here so the toast
     // reuses the existing destinations (folder/reveal/recovery/about/settings)
@@ -3475,7 +3484,7 @@ void MainWindow::initNotificationToasts() {
     // it (see the ctor's preset-load block) — raise it now that they do.
     if (preset_store_repaired_) {
         preset_store_repaired_ = false;
-        if (persisted_settings_.show_notifications && notification_manager_) {
+        if (notification_manager_) {
             notifications::NotificationEvent event;
             event.type = notifications::NotificationType::SettingsRepaired;
             event.title = QStringLiteral("Settings repaired");
@@ -3489,81 +3498,70 @@ void MainWindow::initNotificationToasts() {
 
     // ── Trigger 1 + 2 + 3: recording result ready (Saved / LowStorage / UnexpectedStop) ──
     // Hooked into RecordPage::recordingResultReady emitted from the SetResultReadyCallback.
-    connect(
-        record_page_, &RecordPage::recordingResultReady, this,
-        [this](bool succeeded, const QString& output_path, const QString& error_phase) {
-            if (!persisted_settings_.show_notifications || !notification_manager_)
-                return;
+    connect(record_page_, &RecordPage::recordingResultReady, this,
+            [this](bool succeeded, const QString& output_path, const QString& error_phase) {
+                if (!notification_manager_)
+                    return;
 
-            notifications::NotificationEvent event;
-            if (succeeded) {
-                // Trigger 2: recording saved successfully.
-                event.type = notifications::NotificationType::Saved;
-                event.title = QStringLiteral("Recording saved");
-                // Prefer the filename; fall back to a generic body.
-                if (!output_path.isEmpty()) {
-                    const QString name =
-                        output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
-                            ? output_path.mid(output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) +
-                                              1)
-                            : output_path;
-                    event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
+                notifications::NotificationEvent event;
+                if (succeeded) {
+                    // Trigger 2: recording saved successfully.
+                    event.type = notifications::NotificationType::Saved;
+                    event.title = QStringLiteral("Recording saved");
+                    // Prefer the filename; fall back to a generic body.
+                    if (!output_path.isEmpty()) {
+                        const QString name =
+                            output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
+                                ? output_path.mid(
+                                      output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) + 1)
+                                : output_path;
+                        event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
+                    } else {
+                        event.body = QStringLiteral("File saved to output folder");
+                    }
+                    // Primary action: navigate to the Edit/Output page for the saved
+                    // recording. Secondary action: reveal the file in Explorer.
+                    // Both share action_payload (the output file path).
+                    event.action = notifications::NotificationAction::Edit;
+                    event.secondary_action = notifications::NotificationAction::OpenFolder;
+                    event.action_payload = output_path;
+                } else if (error_phase == QStringLiteral("DiskSpace")) {
+                    // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
+                    // Mappe spec: action "Change folder" (primary) + "Dismiss".
+                    event.type = notifications::NotificationType::LowStorage;
+                    event.title = QStringLiteral("Storage running low");
+                    event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
+                    event.action = notifications::NotificationAction::ChangeFolder;
+                    event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
                 } else {
-                    event.body = QStringLiteral("File saved to output folder");
+                    // RECORDING-ERROR-MODAL-R1: a non-disk-space failure is now surfaced
+                    // by the modal RecordingErrorOverlay (RecordPage::recordingFailed), so
+                    // we no longer enqueue a redundant "stopped unexpectedly" toast here.
+                    // The modal carries the full detail and the opt-in error report.
+                    return;
                 }
-                // Primary action: navigate to the Edit/Output page for the saved
-                // recording. Secondary action: reveal the file in Explorer.
-                // Both share action_payload (the output file path).
-                event.action = notifications::NotificationAction::Edit;
-                event.secondary_action = notifications::NotificationAction::OpenFolder;
-                event.action_payload = output_path;
-            } else if (error_phase == QStringLiteral("DiskSpace")) {
-                // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
-                // Mappe spec: action "Change folder" (primary) + "Dismiss".
-                event.type = notifications::NotificationType::LowStorage;
-                event.title = QStringLiteral("Storage running low");
-                event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
-                event.action = notifications::NotificationAction::ChangeFolder;
-                event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
-                // PS-PHASE-E: also add a hub advisory for low-disk.
-                if (notification_hub_) {
-                    notification_hub_->removeAdvisoryById(QStringLiteral("low-disk"));
-                    notification_hub_->addAdvisory(
-                        QStringLiteral("low-disk"), QStringLiteral("caution"), QStringLiteral("Storage running low"),
-                        QStringLiteral("Recording stopped — output drive is critically low on disk space."),
-                        QStringLiteral("now"), /*unread=*/true, QStringLiteral("settings/output"),
-                        QStringLiteral("Change folder"),
-                        /*is_deep_link=*/true);
-                    refreshHubUnreadBell();
-                }
-            } else {
-                // RECORDING-ERROR-MODAL-R1: a non-disk-space failure is now surfaced
-                // by the modal RecordingErrorOverlay (RecordPage::recordingFailed), so
-                // we no longer enqueue a redundant "stopped unexpectedly" toast here.
-                // The modal carries the full detail and the opt-in error report.
-                return;
-            }
-            notification_manager_->Enqueue(std::move(event));
+                notification_manager_->Enqueue(std::move(event));
 
-            // DROP-NOTIFY: on a successful save, raise a separate caution toast when
-            // REAL frame drops occurred — encoder backpressure only. Benign drops
-            // (capture coalescing / intentional CFR downsampling) are excluded by
-            // design, so this fires only when the encoder genuinely fell behind. The
-            // toast links to the Diagnostics page, which renders the full per-stage
-            // breakdown. A separate event (not folded into "Recording saved") because
-            // that toast's two action slots — Edit + Show in folder — are both taken.
-            if (succeeded && last_backpressure_drops_ > 0) {
-                notifications::NotificationEvent drop_event;
-                drop_event.type = notifications::NotificationType::FramesDropped;
-                drop_event.title = QStringLiteral("Frames dropped");
-                drop_event.body = last_backpressure_drops_ == 1
-                                      ? QStringLiteral("1 frame was dropped because the encoder couldn't keep up.")
-                                      : QStringLiteral("%1 frames were dropped because the encoder couldn't keep up.")
-                                            .arg(last_backpressure_drops_);
-                drop_event.action = notifications::NotificationAction::OpenDiagnostics;
-                notification_manager_->Enqueue(std::move(drop_event));
-            }
-        });
+                // DROP-NOTIFY: on a successful save, raise a separate caution toast when
+                // REAL frame drops occurred — encoder backpressure only. Benign drops
+                // (capture coalescing / intentional CFR downsampling) are excluded by
+                // design, so this fires only when the encoder genuinely fell behind. The
+                // toast links to the Diagnostics page, which renders the full per-stage
+                // breakdown. A separate event (not folded into "Recording saved") because
+                // that toast's two action slots — Edit + Show in folder — are both taken.
+                if (succeeded && last_backpressure_drops_ > 0) {
+                    notifications::NotificationEvent drop_event;
+                    drop_event.type = notifications::NotificationType::FramesDropped;
+                    drop_event.title = QStringLiteral("Frames dropped");
+                    drop_event.body =
+                        last_backpressure_drops_ == 1
+                            ? QStringLiteral("1 frame was dropped because the encoder couldn't keep up.")
+                            : QStringLiteral("%1 frames were dropped because the encoder couldn't keep up.")
+                                  .arg(last_backpressure_drops_);
+                    drop_event.action = notifications::NotificationAction::OpenDiagnostics;
+                    notification_manager_->Enqueue(std::move(drop_event));
+                }
+            });
 
     // DROP-NOTIFY: tee the live diagnostics stream to track the running encoder-
     // backpressure drop count. This is independent of the (lazy) DiagnosticsPage, which
@@ -3585,7 +3583,7 @@ void MainWindow::initNotificationToasts() {
     // overlays. The preview has already dropped its picture-in-picture to match; say
     // why, rather than leaving the user to notice the absence in the finished file.
     connect(record_page_, &RecordPage::webcamOverlayOmitted, this, [this]() {
-        if (!persisted_settings_.show_notifications || !notification_manager_)
+        if (!notification_manager_)
             return;
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::OverlayOmitted;
@@ -3599,7 +3597,7 @@ void MainWindow::initNotificationToasts() {
     // ── CAPTURE-FRAME-BUTTON-R1: "Frame saved" success toast ──
     // Triggered by RecordPage::captureFrameSaved when a frame PNG is written.
     connect(record_page_, &RecordPage::captureFrameSaved, this, [this](const QString& frame_path) {
-        if (!persisted_settings_.show_notifications || !notification_manager_)
+        if (!notification_manager_)
             return;
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::Saved;
@@ -3626,12 +3624,113 @@ void MainWindow::initNotificationToasts() {
 }
 
 void MainWindow::updateNotificationToastsEnabled() {
-    // Nothing to do beyond persisting the setting — the individual enqueue calls
-    // already gate on persisted_settings_.show_notifications. The toast window
-    // auto-hides when the manager's visible set is empty.
+    // The manager owns the gate: with toasts disabled it suppresses (and clears)
+    // the visible set while still recording every event to the hub. The toast
+    // window auto-hides when the manager's visible set empties.
+    if (notification_manager_)
+        notification_manager_->SetToastsEnabled(persisted_settings_.show_notifications);
     if (!persisted_settings_.show_notifications && notification_toast_window_) {
         notification_toast_window_->hide();
     }
+}
+
+void MainWindow::recordEventInHub(const notifications::NotificationEvent& event) {
+    using notifications::NotificationAction;
+    using notifications::NotificationType;
+
+    if (!notification_hub_)
+        return;
+
+    // UpdateAvailable keeps its dedicated hub wiring in onUpdateCheckComplete():
+    // that path also CLEARS the advisory when a later check reports up-to-date,
+    // which a pure append feed cannot do.
+    if (event.type == NotificationType::UpdateAvailable)
+        return;
+
+    // Standing conditions and the preset switch keep one entry each (the newest
+    // state of the condition); finished events append under their sequence.
+    QString id;
+    switch (event.type) {
+    case NotificationType::LowStorage:
+        id = QStringLiteral("low-disk");
+        break;
+    case NotificationType::RecoveryAvailable:
+        id = QStringLiteral("recovery-available");
+        break;
+    case NotificationType::PresetSwitched:
+        // Only the latest switch is undoable (a single undo slot exists).
+        id = QStringLiteral("preset-switched");
+        break;
+    default:
+        id = QStringLiteral("evt-%1").arg(event.sequence);
+        break;
+    }
+
+    QString status = QStringLiteral("info");
+    switch (event.type) {
+    case NotificationType::Saved:
+        status = QStringLiteral("success");
+        break;
+    case NotificationType::LowStorage:
+    case NotificationType::FramesDropped:
+    case NotificationType::OverlayOmitted:
+        status = QStringLiteral("caution");
+        break;
+    case NotificationType::UnexpectedStop:
+    case NotificationType::RecoveryAvailable:
+        status = QStringLiteral("error");
+        break;
+    default:
+        break;
+    }
+
+    // Map the toast's primary action onto the hub's action contract. Navigation
+    // actions ride the deep-link route; file/undo actions carry an opaque target
+    // the deepLinkRequested handler resolves back to dispatchNotificationAction.
+    QString action_id;
+    QString action_label;
+    bool is_deep_link = false;
+    switch (event.action) {
+    case NotificationAction::ChangeFolder:
+        action_id = QStringLiteral("settings/output");
+        action_label = QStringLiteral("Change folder");
+        is_deep_link = true;
+        break;
+    case NotificationAction::OpenRecovery:
+        action_id = QStringLiteral("recovery-view");
+        action_label = QStringLiteral("Recover");
+        break;
+    case NotificationAction::OpenDiagnostics:
+        action_id = QStringLiteral("diagnostics");
+        action_label = QStringLiteral("View diagnostics");
+        is_deep_link = true;
+        break;
+    case NotificationAction::Edit:
+    case NotificationAction::OpenFolder:
+    case NotificationAction::ShowFile:
+        // In the hub the useful leftover of a save is finding the file again.
+        if (!event.action_payload.isEmpty()) {
+            action_id = QStringLiteral("reveal:") + event.action_payload;
+            action_label = QStringLiteral("Show in folder");
+        }
+        break;
+    case NotificationAction::UndoPresetSwitch:
+        action_id = QStringLiteral("preset-undo");
+        action_label = QStringLiteral("Undo");
+        break;
+    case NotificationAction::RelaunchElevated:
+        action_id = QStringLiteral("present-needs-admin");
+        action_label = QStringLiteral("Restart as administrator");
+        is_deep_link = true;
+        break;
+    default:
+        break;
+    }
+
+    notification_hub_->removeAdvisoryById(id);
+    notification_hub_->addAdvisory(id, status, event.title, event.body, QStringLiteral("now"),
+                                   /*unread=*/true, action_id, action_label, is_deep_link);
+    refreshHubUnreadBell();
 }
 
 void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
@@ -3940,8 +4039,7 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
 
     // Transient toast only on an *automatic* check — a manual check already has the
     // user looking at the Settings card, so a popup would be redundant (ADR 0034).
-    if (result.update_available && !manual_update_check_ && persisted_settings_.show_notifications &&
-        notification_manager_) {
+    if (result.update_available && !manual_update_check_ && notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;
         event.title = QStringLiteral("Update available — %1").arg(available_version);

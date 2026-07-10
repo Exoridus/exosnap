@@ -4,6 +4,8 @@
 #include <QVector>
 #include <QWidget>
 
+class QScreen;
+
 #include "notifications/NotificationEvent.h"
 
 class QTimer;
@@ -22,8 +24,9 @@ namespace exosnap::ui::overlay {
 //   - WDA_EXCLUDEFROMCAPTURE (capture exclusion, not click-through)
 //   - If exclusion fails → hide and stay hidden for the session
 //
-// Placement: bottom-right corner of the PRIMARY display (not the recorded
-// monitor). Notifications are app-level events per ADR 0016.
+// Placement: bottom-right corner of the display that hosts the ExoSnap window
+// (falls back to the primary display when no anchor is set). The anchor is
+// recomputed when the app window changes screen.
 //
 // Geometry note: the window is kCardWidth + 2*kShadowMargin wide and
 // kShadowMargin + stack_height + kShadowMargin tall. The card itself is
@@ -43,6 +46,15 @@ class NotificationToastWindow : public QWidget {
 
     explicit NotificationToastWindow(notifications::NotificationManager* manager, QWidget* parent = nullptr);
 
+    // Toasts anchor to the screen hosting this widget's window (the app main
+    // window). Re-anchors live when that window moves to another screen.
+    void setAnchorWidget(QWidget* anchor);
+
+    // The screen the toast stack anchors to: the anchor widget's screen, or the
+    // primary screen when no anchor is set. Public so tests can pin the choice
+    // without a visible window (capture exclusion fails offscreen).
+    [[nodiscard]] QScreen* anchorScreen() const;
+
     // Returns true if SetWindowDisplayAffinity succeeded.
     // When false the window is hidden and will refuse to show.
     [[nodiscard]] bool isExcluded() const noexcept;
@@ -51,12 +63,14 @@ class NotificationToastWindow : public QWidget {
     QSize minimumSizeHint() const override;
 
     // ── Shared hit-test geometry (paint + mouse never drift) ──────────────────
-    // One clickable target inside a rendered toast: either the dismiss ✕ or one
-    // action pill. `is_dismiss` selects which; `action` is meaningful for pills.
+    // One clickable target inside a rendered toast: the dismiss ✕, one action
+    // pill (two-action cards), or the card itself (one-action cards, where the
+    // whole card is the action). `is_dismiss` selects the ✕; `action` is
+    // meaningful for pills and card-wide targets.
     struct ToastHit {
         QRectF rect;             // window-space hit rect
         uint64_t sequence = 0;   // owning event
-        bool is_dismiss = false; // ✕ vs. action pill
+        bool is_dismiss = false; // ✕ vs. action target
         notifications::NotificationAction action = notifications::NotificationAction::None;
     };
 
@@ -85,6 +99,8 @@ class NotificationToastWindow : public QWidget {
     void onVisibleSetChanged();
 
     notifications::NotificationManager* manager_ = nullptr; // non-owning
+    QWidget* anchor_widget_ = nullptr;                      // non-owning; screen host
+    bool anchor_screen_connected_ = false;
     bool excluded_ = false;
     bool exclusion_attempted_ = false;
 

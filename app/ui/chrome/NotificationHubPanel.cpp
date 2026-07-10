@@ -182,13 +182,13 @@ void NotificationHubPanel::addAdvisory(const QString& id, const QString& status,
     if (!time_label.isEmpty())
         item->setTimeLabel(time_label);
     item->setUnread(unread);
-    if (!action_id.isEmpty())
+    if (!action_id.isEmpty()) {
         item->addAction(action_id, action_label, is_deep_link);
-
-    if (is_deep_link) {
-        const QString captured_id = id;
-        connect(item, &ui::widgets::AdvisoryItem::deepLinkRequested, this,
-                [this, captured_id]() { emit deepLinkRequested(captured_id); });
+        // Route every action through the deep-link contract. The emitted target
+        // is the ACTION id ("settings/output", "recovery-view", "reveal:<path>",
+        // …), which the MainWindow handler resolves — not the advisory id.
+        connect(item, &ui::widgets::AdvisoryItem::actionTriggered, this,
+                [this](const QString& target) { emit deepLinkRequested(target); });
     }
 
     addAdvisoryWidget(item, id, unread);
