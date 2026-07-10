@@ -2,18 +2,23 @@
 
 // OutputFormatAudioSrc (ADR 0030 — 0.6.0)
 //
-// IAudioCaptureSource decorator that converts the 48 kHz/stereo/Float32 mix bus
-// to a target {sample_rate, channels} / Float32 using FFmpeg libswresample.
+// IAudioCaptureSource decorator that converts an inner source to a target
+// {sample_rate, channels} / Float32 using FFmpeg libswresample.
+//
+// The decorator always emits Float32 (its SampleFormat() contract). Inner
+// sources deliver Float32 (mix bus, WASAPI loopback, mic DSP) or Int16 (process
+// loopback, some mic endpoints); Int16 inputs are converted up to Float32.
 //
 // Design:
 //   - Wraps an inner source (typically MixedAudioSrc at 48 kHz/stereo/F32).
-//   - If target == inner format (same sample rate AND same channel count) a
-//     `passthrough_` flag is set during Init; no SwrContext is created and
-//     AcquireBuffer returns the inner buffer byte-identical. This preserves the
-//     existing default (48 kHz/stereo) path with zero overhead.
+//   - If target rate AND channel count equal the inner's, a `passthrough_` flag
+//     is set during Init; no SwrContext is created. For a Float32 inner the
+//     buffer is returned byte-identical (zero overhead); for an Int16 inner the
+//     samples are converted to Float32 in AcquireBuffer.
 //   - Otherwise one SwrContext is created using swr_alloc_set_opts2 (modern
-//     channel-layout API; avutil-60 / swresample-6). The resampler converts
-//     inner Float32 → output Float32 in one swr_convert call per AcquireBuffer.
+//     channel-layout API; avutil-60 / swresample-6). The resampler converts the
+//     inner format (S16 or FLT) → output Float32 in one swr_convert call per
+//     AcquireBuffer.
 //
 // Thread-safety: single-threaded (lives on the audio worker thread, like all
 // IAudioCaptureSource implementations in this codebase).
@@ -65,7 +70,12 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     uint32_t target_sample_rate_;
     uint32_t target_channels_;
 
-    bool passthrough_ = false;  // true when target == inner format
+    // Sample format the inner source delivers, captured at Init. The decorator
+    // always emits Float32 (its SampleFormat() contract), so an Int16 inner is
+    // converted to Float32 on both the passthrough and the swr path.
+    AudioSampleFormat inner_format_ = AudioSampleFormat::Float32;
+
+    bool passthrough_ = false;  // true when target rate/channels == inner
     SwrContext* swr_ = nullptr; // null in passthrough mode
 
     // The last buffer acquired from the inner source (valid until ReleaseBuffer).
