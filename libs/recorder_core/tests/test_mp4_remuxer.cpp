@@ -12,6 +12,13 @@
 //   3. CancelAborts           — cancel mid-way: returns failure, output file removed.
 //   4. BadInputReturnsError   — non-existent input → structured failure (av_error_code).
 //   5. MultiTrackRemux        — two audio tracks; output has ≥2 audio streams.
+//   *. WriteFailureMidStreamIsFatal / ReadFailureMidStreamIsFatal — fault injection
+//      for the silent-data-loss defect: a genuine mid-stream write or read failure
+//      must make RemuxToProgressiveMp4 report failure, never a truncated "success".
+//      Faults are injected with a real Windows byte-range lock (LockFile) on a
+//      separate handle to the same file — a mandatory OS-level lock that makes a
+//      concrete WriteFile/ReadFile call fail, without needing admin rights or an
+//      actually-full disk.
 
 // libavformat
 extern "C" {
@@ -44,6 +51,61 @@ static inline const char* av_err2str_cpp_test(int errnum) noexcept {
 #include <fstream>
 #include <string>
 #include <vector>
+
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// ByteRangeLock — holds a mandatory Windows byte-range lock on [offset, EOF)
+// of `path` for the object's lifetime, on a handle separate from whatever
+// RemuxToProgressiveMp4/RemuxToMkv opens. Windows byte-range locks are
+// enforced against ALL other handles to the file (including handles from a
+// different open() call in the same process), so any WriteFile/ReadFile the
+// remuxer issues that overlaps the locked range fails with a genuine I/O
+// error — a real, OS-level fault, not a mock.
+// ---------------------------------------------------------------------------
+class ByteRangeLock {
+  public:
+    // create_if_missing: true for a destination file the remuxer will still
+    // create/truncate (write-fault injection); false for a source file that
+    // must already exist (read-fault injection).
+    ByteRangeLock(const std::string& path, uint64_t offset, bool create_if_missing) {
+        const DWORD disposition = create_if_missing ? OPEN_ALWAYS : OPEN_EXISTING;
+        handle_ = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, disposition,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE)
+            return;
+
+        const uint32_t offset_low = static_cast<uint32_t>(offset & 0xFFFFFFFFu);
+        const uint32_t offset_high = static_cast<uint32_t>(offset >> 32);
+        // Lock to "infinity" (the maximum representable range) so every write/read
+        // at or beyond `offset` — regardless of exact buffering chunk sizes — hits
+        // the lock, without needing to know the file's eventual total size.
+        locked_ = LockFile(handle_, offset_low, offset_high, 0xFFFFFFFFu, 0x7FFFFFFFu) != FALSE;
+    }
+
+    ~ByteRangeLock() {
+        if (handle_ != INVALID_HANDLE_VALUE)
+            CloseHandle(handle_); // also releases the lock
+    }
+
+    ByteRangeLock(const ByteRangeLock&) = delete;
+    ByteRangeLock& operator=(const ByteRangeLock&) = delete;
+
+    [[nodiscard]] bool ok() const {
+        return handle_ != INVALID_HANDLE_VALUE && locked_;
+    }
+
+  private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    bool locked_ = false;
+};
+
+} // namespace
 
 namespace {
 
@@ -457,6 +519,91 @@ TEST_F(RemuxerTest, MultiTrackRemux) {
     EXPECT_EQ(audio_stream_count, kAudioTracks);
 
     avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Test: a write failure mid-stream (av_interleaved_write_frame) must be fatal.
+//
+// Before the fix, a negative return from av_interleaved_write_frame was only
+// logged as a warning and the packet-copy loop continued — the remux still
+// finalized and returned RemuxResult::Ok(), even though part of the recording
+// was never written. That is silent data loss: a caller trusting `success`
+// would then delete the source MKV, leaving neither a complete MP4 nor the
+// original recording.
+//
+// Fault injection: probe once with a clean remux to find where the mdat
+// (payload) box lands, then lock a byte range solidly inside that region on a
+// SEPARATE destination path before remuxing to it. The header/moov-reservation
+// writes (well before the lock) succeed; some packets land safely before the
+// lock too; a later write into the locked range fails with a genuine OS error.
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, WriteFailureMidStreamIsFatal) {
+    ASSERT_FALSE(BuildTestMkv(mkv_path_, /*seconds=*/5.0).empty()) << "Failed to build test MKV fixture";
+
+    // Probe: a normal, unlocked remux to learn the mdat box's location for this
+    // fixture's encoder parameters (frame count/size are stable given the fixture).
+    const std::string probe_path = UniqueRemuxTempPath("probe.mp4");
+    {
+        const auto probe_result = RemuxToProgressiveMp4(mkv_path_, probe_path);
+        ASSERT_TRUE(probe_result.success) << "Probe remux failed: " << probe_result.message;
+    }
+    const auto boxes = ScanBoxHeaders(probe_path, 12);
+    std::remove(probe_path.c_str());
+
+    const BoxHeader* mdat = nullptr;
+    for (const auto& b : boxes) {
+        if (b.type == "mdat") {
+            mdat = &b;
+            break;
+        }
+    }
+    ASSERT_NE(mdat, nullptr) << "Probe output has no mdat box — cannot locate a safe fault-injection offset";
+    ASSERT_GT(mdat->size, 4096u) << "mdat too small for a mid-stream fault-injection offset with safety margin";
+
+    // Lock well inside mdat: past the header/reservation, comfortably before EOF.
+    const uint64_t fault_offset = mdat->offset + (mdat->size / 2);
+
+    ByteRangeLock lock(mp4_path_, fault_offset, /*create_if_missing=*/true);
+    ASSERT_TRUE(lock.ok()) << "Failed to establish the byte-range lock fixture";
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+
+    EXPECT_FALSE(result.success) << "A mid-stream write failure must not report success";
+    EXPECT_NE(result.av_error_code, 0) << "Expected a non-zero av_error_code for the write failure";
+    EXPECT_FALSE(result.message.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Test: a read failure mid-stream (av_read_frame, non-EOF) must be fatal.
+//
+// Before the fix, ANY negative return from av_read_frame — not just the
+// expected AVERROR_EOF — broke out of the packet-copy loop and finalized the
+// output as RemuxResult::Ok(). A genuine read fault partway through the source
+// (disk I/O error, corruption) was therefore indistinguishable from a clean
+// end-of-stream: the remainder of the recording was silently dropped and
+// reported as a successful remux.
+//
+// Fault injection: lock a byte range starting halfway through the (already
+// complete, valid) source MKV. avformat_open_input / avformat_find_stream_info
+// only need the header (EBML/Segment-info/Tracks) near the front of the file
+// and succeed; a later av_read_frame reading a Cluster at/after the halfway
+// point hits the lock and fails with a real (non-EOF) I/O error.
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, ReadFailureMidStreamIsFatal) {
+    ASSERT_FALSE(BuildTestMkv(mkv_path_, /*seconds=*/5.0).empty()) << "Failed to build test MKV fixture";
+
+    const uint64_t mkv_size = std::filesystem::file_size(mkv_path_);
+    ASSERT_GT(mkv_size, 4096u) << "Source MKV fixture unexpectedly small";
+    const uint64_t fault_offset = mkv_size / 2;
+
+    ByteRangeLock lock(mkv_path_, fault_offset, /*create_if_missing=*/false);
+    ASSERT_TRUE(lock.ok()) << "Failed to establish the byte-range lock fixture";
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+
+    EXPECT_FALSE(result.success) << "A mid-stream read failure must not report success";
+    EXPECT_NE(result.av_error_code, 0) << "Expected a non-zero av_error_code for the read failure";
+    EXPECT_FALSE(result.message.empty());
 }
 
 // ---------------------------------------------------------------------------

@@ -356,11 +356,14 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         if (ret == AVERROR_EOF)
             break;
         if (ret < 0) {
+            // A non-EOF read error means the source could not be read to
+            // completion (corruption, disk I/O failure, etc.) — the remaining
+            // packets are lost. Finalizing here would silently hand back an
+            // incomplete file tagged as a success, so this is fatal. AVERROR_EOF
+            // (handled above) remains the only non-fatal termination.
             std::string msg = std::string("av_read_frame failed: ") + av_err2str(ret);
-            LogWarn(msg.c_str());
-            // Treat a mid-stream read error as incomplete but not catastrophic —
-            // try to finalize what we have.
-            break;
+            LogError(msg.c_str());
+            return RemuxResult::Fail(ret, std::move(msg));
         }
 
         const int si = pkt->stream_index;
@@ -423,9 +426,12 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         av_packet_unref(pkt);
 
         if (ret < 0) {
+            // A write failure (e.g. disk full, I/O error) means the output is
+            // incomplete and will only get worse from here — surface it as a
+            // fatal error rather than silently degrading to a truncated "success".
             std::string msg = std::string("av_interleaved_write_frame failed: ") + av_err2str(ret);
-            LogWarn(msg.c_str());
-            // Non-fatal: continue with the remaining packets.
+            LogError(msg.c_str());
+            return RemuxResult::Fail(ret, std::move(msg));
         }
 
         // Progress callback: use video stream PTS (stream 0 is typically video).
@@ -467,9 +473,13 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     {
         int ret = av_write_trailer(out_ctx);
         if (ret < 0) {
+            // The trailer carries the faststart moov (or, for Matroska, the Cues /
+            // SeekHead / Duration) — without it the output is not the well-formed
+            // file the caller is about to treat as the new source of truth. Fatal,
+            // matching the write-failure handling above.
             std::string msg = std::string("av_write_trailer failed: ") + av_err2str(ret);
-            LogWarn(msg.c_str());
-            // Not fatal — file may still be usable.
+            LogError(msg.c_str());
+            return RemuxResult::Fail(ret, std::move(msg));
         }
     }
 
