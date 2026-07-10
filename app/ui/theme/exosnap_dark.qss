@@ -424,6 +424,15 @@ QLabel[labelRole="recordSourceName"] {
     color: ${text1};
 }
 
+/* Header meta strip: output format readout (canon suite-record.jsx:301) */
+QLabel[labelRole="recordFormatChips"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    color: ${text2};
+    padding-right: 4px;
+}
+
 QLabel[labelRole="recordSourceLock"] {
     font-family: ${font-mono};
     font-size: 10px;

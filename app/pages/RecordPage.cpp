@@ -10,6 +10,8 @@
 #include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/RegionGeometry.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
@@ -752,13 +754,22 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     source_lock_label_ = makeLabel("Source locked", "recordSourceLock", source_row_);
     source_lock_label_->setVisible(false);
 
+    // Format readout lives in the header meta strip (canon suite-record.jsx:301),
+    // not on the preview surface — the DXGI frame can't host widgets, and the
+    // Mappe keeps the live surface clean.
+    format_chips_label_ = makeLabel("", "recordFormatChips", source_row_);
+    format_chips_label_->setVisible(false);
+
     // EDIT-OVERLAY-R1: quiet "Recent" button — reopens an older recording, either
     // externally (existing onRecentItemOpen behavior) or in the Edit overlay (new).
     // The menu is rebuilt from view_model_.recent_recordings just before it shows.
     recent_recordings_btn_ = new QToolButton(source_row_);
     recent_recordings_btn_->setObjectName("recordRecentButton");
     recent_recordings_btn_->setText(QStringLiteral("Recent"));
-    recent_recordings_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    // Canon (suite-record.jsx:304): quiet button with the clock glyph.
+    recent_recordings_btn_->setIcon(ui::theme::lucideIcon(
+        QStringLiteral("clock"), QString::fromUtf8(ui::theme::ActiveTheme().mut), 14, devicePixelRatioF()));
+    recent_recordings_btn_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     recent_recordings_btn_->setPopupMode(QToolButton::InstantPopup);
     recent_recordings_btn_->setToolTip(QStringLiteral("Reopen a past recording."));
     recent_recordings_btn_->setEnabled(false);
@@ -771,9 +782,14 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     change_source_btn_ = new QPushButton("Change source", source_row_);
     change_source_btn_->setObjectName("recordChangeSourceButton");
     change_source_btn_->setProperty("role", "ghost");
+    // Canon (suite-record.jsx:304): ghost button with the layers glyph.
+    change_source_btn_->setIcon(ui::theme::lucideIcon(
+        QStringLiteral("layers"), QString::fromUtf8(ui::theme::ActiveTheme().ac), 14, devicePixelRatioF()));
     change_source_btn_->setEnabled(false);
 
+    // Order per canon: [source chip, stretch] [format chips] [Source locked | Recent + Change source]
     source_row_layout->addWidget(source_chip_panel_, 1);
+    source_row_layout->addWidget(format_chips_label_, 0, Qt::AlignVCenter);
     source_row_layout->addWidget(source_lock_label_, 0, Qt::AlignVCenter);
     source_row_layout->addWidget(recent_recordings_btn_, 0, Qt::AlignVCenter);
     source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
@@ -1781,7 +1797,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         preview_surface_->setLiveFrame(test_frame);
         preview_surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
         preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
-        preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM"));
+        preview_surface_->setBottomRightText(QString());
         preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Ready);
     }
 
@@ -4069,23 +4085,26 @@ QString RecordPage::buildPreviewBottomLeftText(bool recording) const {
         .arg(frame_text, bitrate_text, drop_text, drift_text);
 }
 
-QString RecordPage::buildPreviewBottomRightText(bool recording) const {
+QString RecordPage::buildFormatChipsText() const {
     const QString timing = frameRateLabel(current_frame_rate_num_, current_frame_rate_den_) + QStringLiteral(" ") +
                            (current_cfr_ ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-    const QString codec_summary =
-        QStringLiteral("%1 · %2 · %3 · %4 · %5")
-            .arg(resolutionLabel(current_output_resolution_), timing, videoCodecLabel(current_video_codec_),
-                 audioCodecLabel(current_audio_codec_), containerLabel(current_container_));
+    return QStringLiteral("%1 · %2 · %3 · %4 · %5")
+        .arg(resolutionLabel(current_output_resolution_), timing, videoCodecLabel(current_video_codec_),
+             audioCodecLabel(current_audio_codec_), containerLabel(current_container_));
+}
 
+QString RecordPage::buildPreviewBottomRightText(bool recording) const {
+    // The format readout lives in the header meta strip; the preview surface
+    // carries only live telemetry (the running size while recording).
     if (!recording) {
-        return codec_summary;
+        return {};
     }
 
     const uint64_t live_bytes = view_model_.video_bytes + view_model_.audio_bytes;
     const QString size_text = view_model_.live_stats_available
                                   ? QString::fromStdWString(RecordViewModel::FormatBytes(live_bytes))
                                   : QStringLiteral("–");
-    return QStringLiteral("%1 · SIZE %2").arg(codec_summary, size_text);
+    return QStringLiteral("SIZE %1").arg(size_text);
 }
 
 QString RecordPage::buildTimerText(bool recording) const {
@@ -4346,6 +4365,8 @@ void RecordPage::updateStatsDisplay() {
 
     preview_surface_->setBottomLeftText(buildPreviewBottomLeftText(recording));
     preview_surface_->setBottomRightText(buildPreviewBottomRightText(recording));
+    if (format_chips_label_)
+        format_chips_label_->setText(buildFormatChipsText());
 
     QString bitrate_text = QStringLiteral("–");
     if (recording && view_model_.live_stats_available && view_model_.elapsed_seconds > 0.0) {
@@ -4482,6 +4503,13 @@ void RecordPage::updateSourceChip() {
         // open, close it — its actions must not fire into a live capture.
         if (locked && recent_recordings_btn_->menu() && recent_recordings_btn_->menu()->isVisible())
             recent_recordings_btn_->menu()->close();
+    }
+
+    // The format readout shows whenever a source is selected — canon keeps it in
+    // the header meta strip for every state except "no source".
+    if (format_chips_label_) {
+        format_chips_label_->setText(buildFormatChipsText());
+        format_chips_label_->setVisible(has_selection);
     }
 }
 

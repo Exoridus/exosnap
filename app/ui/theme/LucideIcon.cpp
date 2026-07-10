@@ -48,6 +48,11 @@ const QHash<QString, LucideEntry>& iconTable() {
          {"<rect width='18' height='11' x='3' y='11' rx='2' ry='2' stroke='%1'/>"
           "<path stroke='%1' d='M7 11V7a5 5 0 0 1 10 0v4'/>",
           false}},
+        // clock
+        {QStringLiteral("clock"),
+         {"<circle cx='12' cy='12' r='10' stroke='%1'/>"
+          "<path stroke='%1' d='M12 6v6l4 2'/>",
+          false}},
         // layers
         {QStringLiteral("layers"),
          {"<path stroke='%1' d='M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 "

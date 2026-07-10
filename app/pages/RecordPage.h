@@ -369,6 +369,8 @@ class RecordPage : public QWidget {
     QString buildChromeStatusLabel() const;
     QString buildPreviewBottomLeftText(bool recording) const;
     QString buildPreviewBottomRightText(bool recording) const;
+    // Output format summary for the header meta strip (resolution, timing, codecs, container).
+    QString buildFormatChipsText() const;
     QString buildTimerText(bool recording) const;
     bool isSourceSelectionLocked() const;
     void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
@@ -403,6 +405,8 @@ class RecordPage : public QWidget {
     QFrame* source_chip_panel_ = nullptr;
     QLabel* source_name_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
+    // Header meta strip: output format readout (canon suite-record.jsx:301).
+    QLabel* format_chips_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
     // EDIT-OVERLAY-R1: quiet "Recent" button — opens a menu of recent recordings
     // (Open, preserving onRecentItemOpen's existing external-open behavior, plus a
