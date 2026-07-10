@@ -11,9 +11,7 @@ namespace exosnap {
 // Constructor
 // ---------------------------------------------------------------------------
 
-RecordingPresetRegistry::RecordingPresetRegistry() {
-    presets_ = MakeBuiltInPresets();
-    selected_id_ = std::string(kDefaultPresetId);
+RecordingPresetRegistry::RecordingPresetRegistry() : presets_(MakeBuiltInPresets()), selected_id_(kDefaultPresetId) {
 }
 
 // ---------------------------------------------------------------------------
