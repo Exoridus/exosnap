@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QFrame>
 #include <QLabel>
 #include <QPushButton>
 #include <QWidget>
@@ -161,6 +162,53 @@ TEST_F(RecordingErrorTest, OverlayCloseButtonDismissesAndEmitsClosed) {
 
     EXPECT_FALSE(overlay->isOpen());
     EXPECT_EQ(closed_count, 1);
+}
+
+// ---------------------------------------------------------------------------
+// The detail box must not clip its rows.
+//
+// A word-wrapped label reports a single-line minimum height. Embedded in the
+// overlay, the detail frame collapsed to that minimum and the PHASE / FORMAT /
+// DETAIL rows overlapped each other -- unreadable at exactly the moment the user
+// needs to read why a recording failed. The standalone panel rendered fine, so
+// the regression only shows through the real embedding.
+// ---------------------------------------------------------------------------
+TEST(RecordingErrorOverlayLayout, DetailBoxIsTallEnoughForItsRows) {
+    EnsureApplication();
+
+    ui::dialogs::RecordingErrorModel model = SampleModel(/*can_send=*/true);
+    model.phase = QStringLiteral("Prepare");
+    model.code = QString(); // the live failure carries no HRESULT text
+    model.detail = QStringLiteral("Window target PID unavailable; the selected window may have been closed.");
+    model.container = QStringLiteral("MKV");
+    model.video_codec = QStringLiteral("AV1");
+    model.audio_codec = QStringLiteral("Opus");
+
+    QWidget host;
+    host.resize(1310, 663);
+    auto* overlay = new ui::dialogs::RecordingErrorOverlay(model, &host);
+    overlay->setGeometry(host.rect());
+    overlay->show();
+    host.show();
+    QCoreApplication::processEvents();
+
+    auto* detail = host.findChild<QFrame*>(QStringLiteral("recordingErrorDetail"));
+    ASSERT_NE(detail, nullptr);
+
+    // Every row must be given at least the height it needs at its actual width.
+    int needed = 0;
+    int rows = 0;
+    for (QObject* child : detail->children()) {
+        auto* row = qobject_cast<QWidget*>(child);
+        if (row == nullptr)
+            continue;
+        ++rows;
+        const int want = row->hasHeightForWidth() ? row->heightForWidth(row->width()) : row->sizeHint().height();
+        EXPECT_GE(row->height(), want) << "detail row " << rows << " is clipped";
+        needed += want;
+    }
+    ASSERT_GE(rows, 3) << "expected PHASE, FORMAT and DETAIL rows";
+    EXPECT_GE(detail->height(), needed) << "the detail box is shorter than the rows it contains";
 }
 
 } // namespace

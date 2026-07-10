@@ -44,6 +44,9 @@ void CleanupFile(const QString& path) {
 // Build a preset with custom per-row gain/mute.
 RecordingPreset MakeGainPreset(float app_gain, bool app_muted, float mic_gain, bool mic_muted) {
     RecordingPreset p = MakeDefaultPreset();
+    // An application audio row only exists while a window is the capture target;
+    // sanitizing drops it otherwise. This fixture wants the row, so it wants a window.
+    p.config.audio.target_kind = capability::CaptureTargetKind::Window;
     p.config.audio.source_rows = {
         {recorder_core::AudioSourceKind::App, true, false, app_gain, app_muted},
         {recorder_core::AudioSourceKind::Mic, true, false, mic_gain, mic_muted},

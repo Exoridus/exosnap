@@ -307,6 +307,18 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.video.bitrate_kbps = kMaxBitrateKbps;
     }
 
+    // Audio: an application audio source is scoped to one window's process. Paired
+    // with a display or region target there is no process to scope it to. The stored
+    // combination used to survive the load — the Record dock hid the toggle, but the
+    // row stayed in the plan, demanded a process id nobody could supply, and the next
+    // recording refused to start. Drop the row, and the process id with it.
+    if (config.audio.target_kind != capability::CaptureTargetKind::Window) {
+        std::erase_if(config.audio.source_rows, [](const recorder_core::AudioSourceRow& row) {
+            return row.kind == recorder_core::AudioSourceKind::App;
+        });
+        config.audio.selected_window_pid = std::nullopt;
+    }
+
     // Audio: ensure mic_gain_linear is finite and strictly positive.
     if (!std::isfinite(config.audio.mic_gain_linear) || config.audio.mic_gain_linear <= 0.0f) {
         config.audio.mic_gain_linear = 1.0f;

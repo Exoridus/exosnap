@@ -223,6 +223,56 @@ TEST(RecordingPreset, DefaultPreset_SanitizeRoundTrip) {
 }
 
 // ===========================================================================
+// SanitizePresetConfig — the application audio source belongs to a window
+//
+// An App audio row is scoped to a specific window's process. Paired with a
+// display target (a region capture is a display target too) there is no process
+// to scope it to, and the stored combination used to survive the load: the Record
+// dock hid the toggle, but the row stayed in the plan, demanded a process id
+// nobody could supply, and the next recording refused to start with
+// "Window target PID unavailable".
+// ===========================================================================
+
+namespace {
+bool HasAppRow(const RecordingPresetConfig& cfg) {
+    return std::any_of(
+        cfg.audio.source_rows.begin(), cfg.audio.source_rows.end(),
+        [](const recorder_core::AudioSourceRow& r) { return r.kind == recorder_core::AudioSourceKind::App; });
+}
+
+RecordingPresetConfig WithAppRow(capability::CaptureTargetKind target) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.target_kind = target;
+    cfg.audio.source_rows.push_back({recorder_core::AudioSourceKind::App, true, false});
+    cfg.audio.selected_window_pid = 4242u;
+    return cfg;
+}
+} // namespace
+
+TEST(RecordingPreset, Sanitize_AppAudioRow_DroppedForDisplayTarget) {
+    const RecordingPresetConfig sanitized = SanitizePresetConfig(WithAppRow(capability::CaptureTargetKind::Display));
+    EXPECT_FALSE(HasAppRow(sanitized)) << "a display capture has no application process to record";
+    EXPECT_FALSE(sanitized.audio.selected_window_pid.has_value());
+}
+
+TEST(RecordingPreset, Sanitize_AppAudioRow_KeptForWindowTarget) {
+    const RecordingPresetConfig sanitized = SanitizePresetConfig(WithAppRow(capability::CaptureTargetKind::Window));
+    EXPECT_TRUE(HasAppRow(sanitized)) << "a window capture is exactly where app audio belongs";
+    ASSERT_TRUE(sanitized.audio.selected_window_pid.has_value());
+    EXPECT_EQ(*sanitized.audio.selected_window_pid, 4242u);
+}
+
+// Other sources are untouched by the reconcile.
+TEST(RecordingPreset, Sanitize_AppAudioRow_LeavesSystemAndMicAlone) {
+    const RecordingPresetConfig before = WithAppRow(capability::CaptureTargetKind::Display);
+    const RecordingPresetConfig after = SanitizePresetConfig(before);
+    EXPECT_EQ(after.audio.source_rows.size(), before.audio.source_rows.size() - 1);
+    for (const auto& row : after.audio.source_rows) {
+        EXPECT_NE(row.kind, recorder_core::AudioSourceKind::App);
+    }
+}
+
+// ===========================================================================
 // SanitizePresetConfig — video bit depth (0.7.0 — S7)
 // ===========================================================================
 
