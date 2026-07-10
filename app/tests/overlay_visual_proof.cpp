@@ -254,6 +254,48 @@ TEST_F(OverlayVisualProofTest, Toast_Info) {
     toast.hide();
 }
 
+// The card grows to fit its content: no reserved space for an absent body, no
+// button strip for a single action (the card IS the action, marked by ›), a
+// named button row only with two actions. Four proofs pin the four heights.
+TEST_F(OverlayVisualProofTest, Toast_CardHeightVariants) {
+    struct Variant {
+        QString file;
+        QString body;
+        NotificationAction action;
+        NotificationAction secondary;
+    };
+    const Variant variants[] = {
+        {QStringLiteral("toast-title-only.png"), {}, NotificationAction::None, NotificationAction::None},
+        {QStringLiteral("toast-title-body.png"), QStringLiteral("Some saved settings were invalid."),
+         NotificationAction::None, NotificationAction::None},
+        {QStringLiteral("toast-one-action.png"), QStringLiteral("12 frames were dropped."),
+         NotificationAction::OpenDiagnostics, NotificationAction::None},
+        {QStringLiteral("toast-two-actions.png"), QStringLiteral("exosnap_2026-07-10.mkv"), NotificationAction::Edit,
+         NotificationAction::OpenFolder},
+    };
+
+    for (const Variant& v : variants) {
+        NotificationManager mgr;
+        NotificationEvent e;
+        e.type = (v.action == NotificationAction::Edit) ? NotificationType::Saved : NotificationType::SettingsRepaired;
+        if (v.action == NotificationAction::OpenDiagnostics)
+            e.type = NotificationType::FramesDropped;
+        e.title = QStringLiteral("Card height variant");
+        e.body = v.body;
+        e.action = v.action;
+        e.secondary_action = v.secondary;
+        mgr.Enqueue(e);
+
+        NotificationToastWindow toast(&mgr, nullptr);
+        toast.resize(toast.sizeHint());
+        toast.show();
+        QCoreApplication::processEvents();
+
+        EXPECT_TRUE(grabAndSave(toast, v.file)) << "Failed to save " << v.file.toStdString();
+        toast.hide();
+    }
+}
+
 // ── Status pill proof ─────────────────────────────────────────────────────────
 
 TEST_F(OverlayVisualProofTest, StatusPill_RecordingState) {

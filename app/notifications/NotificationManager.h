@@ -4,91 +4,85 @@
 #include <QTimer>
 #include <QVector>
 #include <cstdint>
-#include <deque>
 
 #include "NotificationEvent.h"
 
 namespace exosnap::notifications {
 
 // ---------------------------------------------------------------------------
-// NotificationManager — NOTIFY-TOASTS-R1
+// NotificationManager
 // ---------------------------------------------------------------------------
-// Pure-ish QObject queue manager for transient notification toasts. Drives the
-// lifecycle of NotificationEvents independently of any window implementation.
+// The hub is the record; the toast is a glance at it. Every enqueued event is
+// announced via eventRecorded() so the notification hub can keep the full
+// history. The visible set is only the transient glance:
 //
-// Design rules:
-//  - FIFO queue; at most kMaxVisible events shown concurrently.
-//  - Per-type auto-dismiss timers (PLACEHOLDERS — final timings from NOTIFY-DESIGN-R1).
-//  - Sticky types (UnexpectedStop, RecoveryAvailable) do not auto-dismiss.
-//  - When a visible slot frees up the front of the queue is promoted.
-//  - No Win32 / window code here — fully unit-testable.
+//  - A notification is TIMED when it reports something that already finished
+//    (saved, update available, frames dropped, …) and STANDING when it reports
+//    a condition that still holds (low storage, unexpected stop, recovery
+//    available). Standing == DismissIntervalMs(type) == 0.
+//  - At most one timed toast is visible; a new timed toast replaces the
+//    current one and never displaces a standing one.
+//  - Standing toasts stack without limit and never auto-dismiss.
+//  - The timed toast, when present, is always the LAST element of
+//    VisibleEvents() — the card closest to the screen anchor.
+//  - PresetSwitched is recorded but never shown as a toast: the combo box that
+//    performed the switch already offers the way back.
 //
-// Wiring:
-//  - Call Enqueue() for each new notification event.
-//  - Connect toastShowRequested() → NotificationToastWindow::showEvent().
-//  - Connect toastHideRequested() → NotificationToastWindow::hideEvent().
-//
+// No Win32 / window code here — fully unit-testable.
 class NotificationManager : public QObject {
     Q_OBJECT
 
   public:
-    // Maximum concurrently visible toasts.
-    static constexpr int kMaxVisible = 3;
-
-    // Per-type dwell durations in milliseconds — exact from Mappe spec (NOTIFY-SKIN-R1).
-    // Sticky types use 0 (no auto-dismiss).
-    // success / "Recording saved" — auto-dismiss 5 s (glanceable; file already written).
+    // Per-type dwell durations in milliseconds. 0 means STANDING: the
+    // notification reports a condition that still holds, never auto-dismisses,
+    // and must carry an explicit way out beyond the ✕.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_Saved = 5000;
-    // caution / "Storage running low" — sticky (demands a decision before space runs out).
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_LowStorage = 0; // sticky
-    // error / "Recording stopped unexpectedly" — sticky (failure; never vanish before seen).
+    static constexpr int kDismissMs_LowStorage = 0; // standing
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_UnexpectedStop = 0; // sticky
-    // info / "Recover last session?" — sticky (pending choice on relaunch).
+    static constexpr int kDismissMs_UnexpectedStop = 0; // standing
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_RecoveryAvailable = 0; // sticky
-    // info / "Update available" — auto-dismiss 8 s (non-urgent; the card stays in Settings).
+    static constexpr int kDismissMs_RecoveryAvailable = 0; // standing
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_UpdateAvailable = 8000;
-    // caution / "Frames dropped" — auto-dismiss 8 s (informational; the full per-stage
-    // drop breakdown lives on the Diagnostics page, not in the toast). DROP-NOTIFY.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_FramesDropped = 8000;
-    // info / "Settings repaired" — auto-dismiss 8 s (informational; no action to take).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_SettingsRepaired = 8000;
-    // info / "Switched to '<preset>'" — auto-dismiss 8 s (the live config already
-    // applied; Undo just needs a window to be seen, not to force a decision).
+    // Recorded in the hub only — never a toast (see class note).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_PresetSwitched = 8000;
-    // caution / "Webcam not recorded" — auto-dismiss 8 s. The recording is running and
-    // correct; only the overlays are absent, and nothing the user can do mid-session
-    // brings them back. Diagnostics carries the explanation.
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_OverlayOmitted = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 
-    // Enqueue a new notification event. Thread-safe with respect to the Qt
-    // event loop (must be called on the owning thread / Qt main thread).
+    // Enqueue a new notification event (Qt main thread only). Always emits
+    // eventRecorded(); shows a toast unless the type is record-only
+    // (PresetSwitched) or toasts are disabled.
     void Enqueue(NotificationEvent event);
 
     // Manually dismiss a visible event by its sequence number.
     // No-op when the sequence is not currently visible.
     void Dismiss(uint64_t sequence);
 
-    // Returns the currently visible events (ordered front-to-back).
+    // Master toast switch (the "Show notifications" setting). When disabled no
+    // toast becomes visible, but every event is still recorded to the hub.
+    void SetToastsEnabled(bool enabled);
+
+    // Returns the currently visible events. Standing toasts first (insertion
+    // order), the single timed toast — if any — last.
     [[nodiscard]] const QVector<NotificationEvent>& VisibleEvents() const noexcept;
 
-    // Returns the number of events in the pending queue (not yet visible).
-    [[nodiscard]] int PendingCount() const noexcept;
-
-    // Returns the auto-dismiss interval (ms) for the given type, or 0 for sticky
-    // types. Public so the toast window can drive its countdown bar from the same
-    // per-type timings the manager uses to schedule auto-dismiss.
+    // Returns the auto-dismiss interval (ms) for the given type, or 0 for
+    // standing types. Public so the toast window can drive its countdown bar
+    // from the same per-type timings the manager uses.
     [[nodiscard]] static int DismissIntervalMs(NotificationType type) noexcept;
+
+    // True when the type reports a condition that still holds: it never
+    // auto-dismisses and stacks instead of being replaced.
+    [[nodiscard]] static bool IsStanding(NotificationType type) noexcept;
 
     // Returns the qt-monotonic timestamp (ms since epoch) at which the visible
     // event with the given sequence was promoted into a slot, or -1 if it is not
@@ -96,6 +90,10 @@ class NotificationManager : public QObject {
     [[nodiscard]] qint64 ShownAtMs(uint64_t sequence) const noexcept;
 
   signals:
+    // Emitted exactly once per Enqueue(), after the sequence is assigned and
+    // regardless of whether a toast is shown. The hub listens here.
+    void eventRecorded(const exosnap::notifications::NotificationEvent& event);
+
     // Emitted when the visible set changes. Receivers (toast window) should
     // re-render based on VisibleEvents().
     void visibleSetChanged();
@@ -105,9 +103,6 @@ class NotificationManager : public QObject {
     void actionableEventShown();
 
   private:
-    // Pull events from the queue into visible slots until kMaxVisible or queue empty.
-    void drainQueue();
-
     // Schedule (or cancel) the auto-dismiss timer for the next soonest expiry
     // among all visible events.
     void rescheduleTimer();
@@ -115,7 +110,7 @@ class NotificationManager : public QObject {
     // Timer fires → dismiss all visible events that have exceeded their duration.
     void onTimerFired();
 
-    std::deque<NotificationEvent> pending_queue_;
+    // Standing toasts first, then at most one timed toast as the last element.
     QVector<NotificationEvent> visible_;
 
     // Monotonic counter for stable event identity.
@@ -126,6 +121,8 @@ class NotificationManager : public QObject {
 
     // Single-shot timer that fires when the soonest auto-dismiss is due.
     QTimer* timer_ = nullptr;
+
+    bool toasts_enabled_ = true;
 };
 
 } // namespace exosnap::notifications

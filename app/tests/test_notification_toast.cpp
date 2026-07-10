@@ -301,13 +301,15 @@ TEST_F(NotificationToastTest, PaintEvent_AllTypes_WithActions_NoFatalFailure) {
 // So: h_n = 2*M + n*card_h + (n-1)*gap  where M = kShadowMargin.
 // Derived: h3 = 3*(h1 - 2*M) + 2*gap + 2*M  →  h3 = 3*h1 - 4*M + 2*gap.
 TEST_F(NotificationToastTest, SizeHint_ThreeEvents_HeightIsAdditive) {
+    // Standing toasts stack (a timed one would replace itself), so three
+    // identical standing events give three identical cards.
     NotificationManager mgr;
     for (int i = 0; i < 3; ++i) {
         NotificationEvent e;
-        e.type = NotificationType::Saved;
-        e.title = QStringLiteral("T%1").arg(i);
-        e.body = QStringLiteral("body%1").arg(i);
-        e.action = NotificationAction::OpenFolder;
+        e.type = NotificationType::LowStorage;
+        e.title = QStringLiteral("Storage running low");
+        e.body = QStringLiteral("Drive low.");
+        e.action = NotificationAction::ChangeFolder;
         mgr.Enqueue(e);
     }
 
@@ -317,10 +319,10 @@ TEST_F(NotificationToastTest, SizeHint_ThreeEvents_HeightIsAdditive) {
     // Manually compute a single toast height by querying with 1 event
     NotificationManager mgr1;
     NotificationEvent e1;
-    e1.type = NotificationType::Saved;
-    e1.title = QStringLiteral("T0");
-    e1.body = QStringLiteral("body0");
-    e1.action = NotificationAction::OpenFolder;
+    e1.type = NotificationType::LowStorage;
+    e1.title = QStringLiteral("Storage running low");
+    e1.body = QStringLiteral("Drive low.");
+    e1.action = NotificationAction::ChangeFolder;
     mgr1.Enqueue(e1);
     NotificationToastWindow w1(&mgr1, nullptr);
     const int h1 = w1.sizeHint().height();
@@ -414,7 +416,7 @@ TEST_F(NotificationToastTest, HitTargets_ThreeToasts_DistinctRowsPerSequence) {
     NotificationManager mgr;
     for (int i = 0; i < 3; ++i) {
         NotificationEvent e;
-        e.type = NotificationType::Saved;
+        e.type = NotificationType::LowStorage; // standing — three of them stack
         e.title = QStringLiteral("T%1").arg(i);
         e.body = QStringLiteral("b%1").arg(i);
         mgr.Enqueue(e);
@@ -463,12 +465,12 @@ TEST_F(NotificationToastTest, HitTargets_StickyToast_HasDismiss) {
 TEST_F(NotificationToastTest, HitTargets_DismissCenter_DismissesThatSequence) {
     NotificationManager mgr;
     NotificationEvent a;
-    a.type = NotificationType::Saved;
+    a.type = NotificationType::LowStorage; // standing, so both stay visible
     a.title = QStringLiteral("A");
     a.body = QStringLiteral("a");
     mgr.Enqueue(a);
     NotificationEvent b;
-    b.type = NotificationType::Saved;
+    b.type = NotificationType::UnexpectedStop;
     b.title = QStringLiteral("B");
     b.body = QStringLiteral("b");
     mgr.Enqueue(b);
@@ -602,16 +604,11 @@ TEST_F(NotificationToastTest, Manager_DismissIntervalMs_MatchesPerTypeConstants)
               NotificationManager::kDismissMs_FramesDropped);
 }
 
-// ── Preset-switch Undo (PresetSwitched type) ──────────────────────────────────
+// ── Preset switch: recorded, never a toast ────────────────────────────────────
+// Switching back is a matter of reselecting the previous preset from the same
+// combo box that performed the switch; the hub keeps the record with Undo.
 
-TEST(NotificationManager, PresetSwitched_AutoDismissesAfter8s) {
-    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::PresetSwitched), 8000);
-}
-
-// A "Switched to '<name>'" toast built with the UndoPresetSwitch action exposes
-// exactly one ✕ target and one primary "Undo" pill carrying that action tag —
-// same hit-target pattern the OpenFolder/Edit cases above use.
-TEST_F(NotificationToastTest, PresetSwitched_ShowsUndoPrimaryButton) {
+TEST_F(NotificationToastTest, PresetSwitched_NeverBecomesAToast) {
     NotificationManager mgr;
     NotificationEvent e;
     e.type = NotificationType::PresetSwitched;
@@ -619,21 +616,113 @@ TEST_F(NotificationToastTest, PresetSwitched_ShowsUndoPrimaryButton) {
     e.action = NotificationAction::UndoPresetSwitch;
     mgr.Enqueue(e);
 
+    EXPECT_TRUE(mgr.VisibleEvents().isEmpty());
+    NotificationToastWindow window(&mgr, nullptr);
+    EXPECT_TRUE(window.computeHitTargets().isEmpty());
+}
+
+// ── Card height derives from present content ─────────────────────────────────
+// No reserved space for an absent body; no button strip for a single action.
+
+namespace {
+int singleToastHeight(NotificationType type, const QString& body, NotificationAction action,
+                      NotificationAction secondary = NotificationAction::None) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = type;
+    e.title = QStringLiteral("Title");
+    e.body = body;
+    e.action = action;
+    e.secondary_action = secondary;
+    mgr.Enqueue(e);
+    NotificationToastWindow w(&mgr, nullptr);
+    return w.sizeHint().height();
+}
+} // namespace
+
+TEST_F(NotificationToastTest, CardHeight_AbsentBody_ReservesNoSpace) {
+    const int title_only = singleToastHeight(NotificationType::SettingsRepaired, {}, NotificationAction::None);
+    const int with_body =
+        singleToastHeight(NotificationType::SettingsRepaired, QStringLiteral("Body line"), NotificationAction::None);
+    EXPECT_LT(title_only, with_body);
+}
+
+TEST_F(NotificationToastTest, CardHeight_OneAction_HasNoButtonStrip) {
+    // One action: the card IS the action — same height as an action-less card.
+    const int no_action =
+        singleToastHeight(NotificationType::FramesDropped, QStringLiteral("Body"), NotificationAction::None);
+    const int one_action =
+        singleToastHeight(NotificationType::FramesDropped, QStringLiteral("Body"), NotificationAction::OpenDiagnostics);
+    EXPECT_EQ(no_action, one_action);
+}
+
+TEST_F(NotificationToastTest, CardHeight_TwoActions_AddAButtonRow) {
+    const int one_action =
+        singleToastHeight(NotificationType::Saved, QStringLiteral("Body"), NotificationAction::ShowFile);
+    const int two_actions = singleToastHeight(NotificationType::Saved, QStringLiteral("Body"), NotificationAction::Edit,
+                                              NotificationAction::OpenFolder);
+    EXPECT_GT(two_actions, one_action);
+}
+
+// ── One-action card: the card is the action ──────────────────────────────────
+
+TEST_F(NotificationToastTest, OneActionCard_WholeCardIsTheActionTarget) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::FramesDropped;
+    e.title = QStringLiteral("Frames dropped");
+    e.body = QStringLiteral("12 frames were dropped.");
+    e.action = NotificationAction::OpenDiagnostics;
+    mgr.Enqueue(e);
+
     NotificationToastWindow window(&mgr, nullptr);
     const auto hits = window.computeHitTargets();
 
-    int dismiss_count = 0;
-    int undo_count = 0;
+    ASSERT_EQ(hits.size(), 2); // the ✕ and the card
+    EXPECT_TRUE(hits[0].is_dismiss);
+    EXPECT_FALSE(hits[1].is_dismiss);
+    EXPECT_EQ(hits[1].action, NotificationAction::OpenDiagnostics);
+    // The action target spans the full card width, not a pill.
+    EXPECT_EQ(hits[1].rect.width(), static_cast<qreal>(NotificationToastWindow::kCardWidth));
+    // The ✕ sits inside the card-wide target but is pushed first, so it wins.
+    EXPECT_TRUE(hits[1].rect.contains(hits[0].rect.center()));
+}
+
+TEST_F(NotificationToastTest, TwoActionCard_CardItselfIsNotClickable) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("clip.mkv");
+    e.action = NotificationAction::Edit;
+    e.secondary_action = NotificationAction::OpenFolder;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    ASSERT_EQ(hits.size(), 3); // ✕ + two pills, no card-wide target
     for (const auto& h : hits) {
-        if (h.is_dismiss) {
-            ++dismiss_count;
-        } else {
-            ++undo_count;
-            EXPECT_EQ(h.action, NotificationAction::UndoPresetSwitch);
-        }
+        if (!h.is_dismiss)
+            EXPECT_LT(h.rect.width(), static_cast<qreal>(NotificationToastWindow::kCardWidth));
     }
-    EXPECT_EQ(dismiss_count, 1);
-    EXPECT_EQ(undo_count, 1);
+}
+
+// ── Anchoring follows the app window ─────────────────────────────────────────
+
+TEST_F(NotificationToastTest, Anchor_FollowsTheAnchorWidgetsScreen) {
+    NotificationManager mgr;
+    NotificationToastWindow window(&mgr, nullptr);
+
+    // Without an anchor: primary screen fallback.
+    EXPECT_EQ(window.anchorScreen(), QGuiApplication::primaryScreen());
+
+    // With an anchor: the anchor widget's screen (offscreen platforms expose a
+    // single screen, so the pinned contract is the source of the choice).
+    QWidget anchor;
+    anchor.show();
+    window.setAnchorWidget(&anchor);
+    EXPECT_EQ(window.anchorScreen(), anchor.screen());
 }
 
 } // namespace

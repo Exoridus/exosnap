@@ -171,12 +171,12 @@ TEST_F(CaptureFrameButtonTest, CaptureFrame_RejectedInLoadingCapabilities) {
     EXPECT_FALSE(reported_success);
 }
 
-// ── Test 7: Multiple frame-saved events stack in the queue ───────────────────
+// ── Test 7: A burst of frame saves shows only the newest toast ────────────────
 
-TEST_F(CaptureFrameButtonTest, MultipleFrameSavedEvents_QueueCorrectly) {
+TEST_F(CaptureFrameButtonTest, MultipleFrameSavedEvents_NewestReplacesPrevious) {
     NotificationManager mgr;
 
-    for (int i = 0; i < NotificationManager::kMaxVisible + 2; ++i) {
+    for (int i = 0; i < 5; ++i) {
         NotificationEvent event;
         event.type = NotificationType::Saved;
         event.title = QStringLiteral("Frame saved");
@@ -185,9 +185,10 @@ TEST_F(CaptureFrameButtonTest, MultipleFrameSavedEvents_QueueCorrectly) {
         mgr.Enqueue(event);
     }
 
-    // Visible count is capped at kMaxVisible; the rest are in the pending queue.
-    EXPECT_LE(mgr.VisibleEvents().size(), NotificationManager::kMaxVisible);
-    EXPECT_GE(mgr.VisibleEvents().size(), 1);
+    // "Frame saved" is a timed notification: at most one timed toast is
+    // visible, and a newer one replaces it.
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    EXPECT_EQ(mgr.VisibleEvents()[0].body, QStringLiteral("frame_4.png"));
 }
 
 // ── Test 8: "Frame saved" title is distinct from "Recording saved" ────────────

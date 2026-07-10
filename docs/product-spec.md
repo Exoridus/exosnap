@@ -117,8 +117,9 @@ beside the dropdown and shifts the toolbar. Next to the dropdown a `…` overflo
 **Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and **Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
 appear; **Delete** appears whenever a user preset is selected, independent of the changed state, and
 never for a built-in. The Output page carries the same row. Switching presets applies immediately and
-raises a notification offering **Undo**, which restores both the previous live configuration and the
-previous selection.
+records a notification-hub entry offering **Undo**, which restores both the previous live
+configuration and the previous selection. No toast appears — the combo box that performed the switch
+already offers the way back.
 
 Preset names are unique case-insensitively (leading and trailing whitespace trimmed); built-in names
 are reserved. The naming dialogs reject a collision and let the user correct it; on import a
@@ -514,13 +515,21 @@ release (0.11 per ADR 0022).
 ## 9. Presence and notifications
 
 - **Tray icon** with idle / recording / paused states and an **unread notification badge**.
-- **Toast notifications** (bottom-right, auto-dismiss): recording saved, low storage, unexpected
-  stop, recovery available, frames-dropped caution. Toasts are not visually queued when several
-  arrive at once — the most recent is shown. Windows Focus Assist / Do Not Disturb may suppress them.
 - **Notification hub** — the canonical notification center is a **bell icon with a notification hub
-  panel in the app header**; hub entries persist until dismissed. The **system-tray icon additionally
-  shows an unread badge** for the same items. Toasts remain the transient fire-and-forget layer on
-  top.
+  panel in the app header**. **The hub is the record: every notification lands there**, persists until
+  dismissed, and keeps its action (recover, undo, show in folder, …). The **system-tray icon
+  additionally shows an unread badge** for the same items. The "Show notifications" setting gates only
+  the toasts — the hub records regardless.
+- **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
+  hosting the ExoSnap window**. A notification is **timed** when it reports something that already
+  finished (saved, update available, frames dropped, settings repaired) and **standing** when it
+  reports a condition that still holds (low storage, unexpected stop, recovery available). At most
+  one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
+  auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
+  toasts that leave on their own. The card grows to fit its content: no reserved space for an absent
+  body; with a single action the card itself is clickable (marked `›`); two actions get named
+  buttons. A preset switch raises no toast — only the hub entry with **Undo** (the combo box that
+  switched is the way back).
 - **On-screen overlays** (all capture-excluded and click-through): a recording-status pill + elapsed
   timer (anchored top-right of the recorded monitor), a diagnostics readout overlay (bottom-right,
   **off by default**), a countdown overlay anchored to the recorded monitor's bottom-center, and an

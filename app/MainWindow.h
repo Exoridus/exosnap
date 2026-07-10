@@ -289,6 +289,9 @@ class MainWindow : public QMainWindow {
 
     // NOTIFY-TOASTS-R1: instantiate the manager + toast window; called from constructor.
     void initNotificationToasts();
+    // The hub is the record: every notification the manager records becomes a
+    // hub entry (the toast is only a glance at the most recent one).
+    void recordEventInHub(const notifications::NotificationEvent& event);
     // Gate toasts on the show_notifications setting.
     void updateNotificationToastsEnabled();
     // Execute a toast action pill click (Open folder / Show file / Recover / …).
@@ -304,8 +307,8 @@ class MainWindow : public QMainWindow {
     // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
     // the paused banner) while recording / remuxing.
     void triggerUpdateCheck();
-    // Handle the async result: build the UI model + state, and enqueue a toast when
-    // an update is available and notifications are enabled.
+    // Handle the async result: build the UI model + state, maintain the hub's
+    // update advisory, and enqueue a toast on an automatic check.
     void onUpdateCheckComplete(const update::UpdateCheckResult& result);
 
     // PS-PHASE-E: refresh the bell unread badge from the hub's live unread count.
