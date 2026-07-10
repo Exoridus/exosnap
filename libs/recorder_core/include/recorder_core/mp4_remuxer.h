@@ -25,6 +25,14 @@
 namespace recorder_core {
 
 // Result of a remux operation.
+//
+// success == true is a hard guarantee: the output file was written to
+// completion (every source packet copied, trailer/moov written without
+// error). A write failure, a non-EOF read failure (source corruption/I/O
+// error), or a trailer-write failure all produce success == false with the
+// causing libav error — none of them are downgraded to a "best effort"
+// success. Callers that delete the source input on completion (the MKV a
+// remux was produced from) must gate that deletion on success == true.
 struct RemuxResult {
     bool success = false;
 

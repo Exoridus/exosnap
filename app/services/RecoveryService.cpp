@@ -150,8 +150,14 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
     const auto target = ResolveUniqueOutputPath(preferred);
 
     const auto result = recorder_core::RemuxToProgressiveMp4(artefact, target, WrapProgress(std::move(progress_cb)));
-    if (!result.success)
+    if (!result.success) {
+        // The remux did not complete cleanly — the artefact (playable MKV) is the
+        // only trustworthy recording and must be kept. Remove whatever partial MP4
+        // was left behind so it is never mistaken for a real deliverable.
+        std::error_code cleanup_ec;
+        std::filesystem::remove(target, cleanup_ec);
         return {false, result.message};
+    }
 
     std::error_code rm_ec;
     std::filesystem::remove(artefact, rm_ec);

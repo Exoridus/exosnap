@@ -1775,6 +1775,13 @@ void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job) {
                         .arg(QString::fromStdString(result.message),
                              QString::fromStdWString(transient_mkv.filename().wstring())));
             }
+            // The segment's transient MKV is retained above (it is never deleted on
+            // this path) — it is the only trustworthy artefact for this segment. The
+            // partial MP4 the failed/cancelled remux may have left behind is not; remove
+            // it so it is never mistaken for a real segment output. (Cancellation already
+            // removes it inside RemuxToProgressiveMp4 — this is a harmless no-op there.)
+            std::error_code mp4_ec;
+            std::filesystem::remove(output_mp4, mp4_ec);
             // Manifest entry stays; recovery UI will offer re-export.
         }
     });
