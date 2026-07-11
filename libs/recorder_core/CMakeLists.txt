@@ -1055,6 +1055,21 @@ exosnap_add_gtest(
 )
 target_include_directories(test_remux_trim PRIVATE src)
 
+# Whole-pipeline end-to-end: drive the real AudioThread (real Opus/AAC encoder)
+# + real MuxThread + MatroskaStreamWriter + Finalize to a real file on disk, then
+# validate it with the vendored libavformat (open, read stream info, demux to a
+# clean EOF, check tracks/keyframes/monotone PTS) and remux MKV->MP4 through the
+# real remuxer. No GPU: an in-test seam plays VideoThread's SessionState role.
+# Not `live` — fully deterministic and device-free.
+exosnap_add_gtest(
+    NAME test_session_e2e_real_file
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_session_e2e_real_file.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+)
+target_include_directories(test_session_e2e_real_file PRIVATE src)
+target_compile_definitions(test_session_e2e_real_file PRIVATE NOMINMAX)
+
 # ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
 exosnap_add_gtest(
     NAME frame_pacing_tests
