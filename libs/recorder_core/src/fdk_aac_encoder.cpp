@@ -1,11 +1,23 @@
 #include "fdk_aac_encoder.h"
 
+#include <recorder_core/logging/logging.h>
+
 #include <aacenc_lib.h>
 
 #include <algorithm>
 #include <cstdio>
 
 namespace recorder_core {
+
+namespace {
+constexpr const char* kLogComponent = "fdk_aac_encoder";
+
+void LogEncodeError(const char* where, AACENC_ERROR enc_err) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s: aacEncEncode failed: 0x%08X", where, static_cast<unsigned>(enc_err));
+    logging::log(logging::LogLevel::Warn, kLogComponent, buf);
+}
+} // namespace
 
 // ---------------------------------------------------------------------------
 // SetBitrateKbps / ResolveBitrateKbps
@@ -221,10 +233,14 @@ void FdkAacEncoder::DrainEncoder(std::vector<EncodedAudioPacket>& out_packets) {
         AACENC_OutArgs out_args{};
 
         AACENC_ERROR enc_err = aacEncEncode(m_enc, &in_buf, &out_buf, &in_args, &out_args);
-        if (out_args.numOutBytes == 0) {
+        if (enc_err != AACENC_OK && enc_err != AACENC_ENCODE_EOF) {
+            // A real encode failure while draining the encoder's internal delay line —
+            // previously dropped silently. Log it so a corrupted/truncated audio tail
+            // is visible instead of a mysteriously short track.
+            LogEncodeError("DrainEncoder", enc_err);
             break;
         }
-        if (enc_err != AACENC_OK && enc_err != AACENC_ENCODE_EOF) {
+        if (out_args.numOutBytes == 0) {
             break;
         }
 
@@ -242,6 +258,14 @@ void FdkAacEncoder::Flush(std::vector<EncodedAudioPacket>& out_packets) {
     }
 
     // Pad the remaining samples in m_frame_buf to a full frame with zeros, then encode.
+    //
+    // This padding is already the minimum possible: AAC-LC is a fixed-frame-size
+    // codec (kFrameSizeSamples per channel) and aacEncEncode cannot accept a
+    // partial frame, so a trailing partial frame must either be zero-padded up
+    // to the next frame boundary (adds at most kFrameSizeSamples-1 samples of
+    // silence, ~21.3 ms at 48 kHz) or dropped outright, losing real tail audio.
+    // Padding to the boundary is the smaller loss of the two, and there is no
+    // fdk-aac call that encodes a sub-frame length directly.
     if (!m_frame_buf.empty()) {
         const size_t frame_samples = static_cast<size_t>(kFrameSizeSamples) * m_channels;
         if (m_frame_buf.size() < frame_samples) {
@@ -280,7 +304,12 @@ void FdkAacEncoder::Flush(std::vector<EncodedAudioPacket>& out_packets) {
         AACENC_OutArgs out_args{};
 
         AACENC_ERROR enc_err = aacEncEncode(m_enc, &in_buf, &out_buf, &in_args, &out_args);
-        if ((enc_err == AACENC_OK || enc_err == AACENC_ENCODE_EOF) && out_args.numOutBytes > 0) {
+        if (enc_err != AACENC_OK && enc_err != AACENC_ENCODE_EOF) {
+            // Previously dropped silently: the padded final frame failed to encode,
+            // so the recording's audio track ends without its last ~21 ms of audio
+            // and nothing indicated why.
+            LogEncodeError("Flush", enc_err);
+        } else if (out_args.numOutBytes > 0) {
             EncodedAudioPacket pkt;
             pkt.pts_ns = (m_sample_rate > 0) ? m_accumulated_frames * 1000000000ULL / m_sample_rate : 0;
             m_accumulated_frames += static_cast<uint64_t>(kFrameSizeSamples);

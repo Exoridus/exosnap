@@ -2,7 +2,10 @@
 
 #include "fdk_aac_encoder.h"
 
+#include <recorder_core/logging/logging.h>
+
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -70,6 +73,51 @@ TEST(FdkAacEncoderTest, Flush_DoesNotCrash) {
     EXPECT_NO_FATAL_FAILURE(encoder.Flush(packets));
 
     encoder.Shutdown();
+}
+
+// Flush()/DrainEncoder() now log through the engine's logging facility whenever
+// aacEncEncode reports a real failure (previously dropped silently). This is a
+// happy-path regression check: a normal partial-frame flush must not emit any
+// fdk_aac_encoder log record, i.e. the new error-logging branch must not fire
+// on success. Forcing a genuine aacEncEncode failure deterministically would
+// need a fault-injection seam the encoder does not have; that is not exercised
+// here.
+TEST(FdkAacEncoderTest, Flush_NormalPartialFrame_LogsNoEncoderWarnings) {
+    namespace logging = recorder_core::logging;
+
+    const auto log_path = std::filesystem::temp_directory_path() / "exosnap_fdk_aac_test.jsonl";
+    logging::LoggerConfig config;
+    config.filePath = log_path;
+    config.ringCapacity = 64;
+    config.minimumLevel = logging::LogLevel::Warn;
+    logging::initialize(config);
+
+    {
+        FdkAacEncoder encoder;
+        std::string err;
+        ASSERT_TRUE(encoder.Init(kSampleRate, kChannels, err)) << "Init error: " << err;
+
+        // Partial frame (less than 1024 samples per channel) forces the Flush()
+        // zero-pad-and-encode path, and DrainEncoder() runs right after it.
+        constexpr size_t kPartialSamples = 512;
+        std::vector<float> input(kPartialSamples, 0.0f);
+
+        std::vector<EncodedAudioPacket> packets;
+        uint64_t accumulated_frames = 0;
+        encoder.FeedFloat32(input.data(), input.size(), 0, accumulated_frames, kSampleRate, kChannels, packets);
+        encoder.Flush(packets);
+
+        encoder.Shutdown();
+    }
+
+    const auto records = logging::snapshot_ring_buffer();
+    for (const auto& record : records) {
+        EXPECT_NE(record.component, "fdk_aac_encoder")
+            << "Unexpected fdk_aac_encoder log record on a successful flush: " << record.message;
+    }
+
+    logging::shutdown();
+    std::filesystem::remove(log_path);
 }
 
 TEST(FdkAacEncoderTest, Shutdown_IsIdempotent) {
