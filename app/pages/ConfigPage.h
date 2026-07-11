@@ -328,6 +328,12 @@ class ConfigPage : public QWidget {
     void buildAudioExpertSection();
     void buildSplitExpertSection();
     void buildDeveloperCard();
+    // Startup-perf: the interleaved Expert rate/format subtree (CQ precision row,
+    // rate control + bitrate on the Quality card; bit depth, colour range, encoder
+    // preset, frame pacing, keyframe interval, HDR and chroma on the Container card)
+    // builds on first expert-enable. The two _insert_index_ members record where the
+    // sections slot back into their respective card layouts.
+    void buildFormatQualityExpertSections();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -477,6 +483,14 @@ class ConfigPage : public QWidget {
     // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
+
+    // Startup-perf: the interleaved Expert rate/format subtree (quality_expert_widget_
+    // + quality_rate_section_ + fmt_expert_section_ and their gated rows) builds on
+    // first expert-enable. built_ guards against rebuilds; the insert indices record
+    // each section's slot in the Quality / Container card layouts.
+    bool fmt_quality_expert_built_ = false;
+    int fmt_expert_insert_index_ = -1;
+    int quality_expert_insert_index_ = -1;
 
     // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
     // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.
