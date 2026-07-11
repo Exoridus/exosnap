@@ -397,9 +397,22 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         hnsDefaultDevicePeriod = kFallbackDevicePeriodHns;
     }
 
-    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, hnsDefaultDevicePeriod, 0, initFormat, nullptr);
+    // Event-driven capture: the engine signals buffer_event_ whenever a packet
+    // is ready, so the drain waits on the event instead of polling every 1 ms.
+    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsDefaultDevicePeriod,
+                                   0, initFormat, nullptr);
     if (FAILED(hr)) {
         return failHr("IAudioClient::Initialize(capture)", hr);
+    }
+
+    buffer_event_ = CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr);
+    if (buffer_event_ == nullptr) {
+        return failHr("CreateEvent(capture buffer ready)", HRESULT_FROM_WIN32(GetLastError()));
+    }
+
+    hr = audio_client_->SetEventHandle(buffer_event_);
+    if (FAILED(hr)) {
+        return failHr("IAudioClient::SetEventHandle(capture)", hr);
     }
 
     hr = audio_client_->GetService(IID_PPV_ARGS(&capture_client_));
@@ -528,6 +541,12 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     device_position_tracked_ = true;
     expected_device_position_ = devicePos + numFrames;
 
+    // Device-clock timing for the A/V clock-drift metric. qpcPos is in 100 ns
+    // units; 0 means the engine did not attribute a timestamp to this packet.
+    last_timing_valid_ = (qpcPos != 0);
+    last_device_position_ns_ = DeviceFramesToNs(devicePos, sample_rate_);
+    last_qpc_position_ns_ = qpcPos * 100ULL;
+
     buffer_acquired_ = true;
     acquired_frames_ = numFrames;
 
@@ -640,6 +659,19 @@ int32_t WasapiCaptureSrc::LastCaptureHresult() const {
     return last_capture_hr_;
 }
 
+bool WasapiCaptureSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {
+    if (!last_timing_valid_) {
+        return false;
+    }
+    out_timing.device_position_ns = last_device_position_ns_;
+    out_timing.qpc_position_ns = last_qpc_position_ns_;
+    return true;
+}
+
+void* WasapiCaptureSrc::BufferReadyEvent() const {
+    return buffer_event_;
+}
+
 void WasapiCaptureSrc::UpdateAutoModeFromBuffer(const uint8_t* data, uint32_t num_frames, bool silent) {
     if (requested_channel_mode_ != MicChannelMode::Auto || auto_mode_locked_ || input_channels_ != 2 ||
         num_frames == 0) {
@@ -681,6 +713,9 @@ void WasapiCaptureSrc::Shutdown() {
     mapped_buffer_.clear();
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
+    last_timing_valid_ = false;
+    last_device_position_ns_ = 0;
+    last_qpc_position_ns_ = 0;
 
     if (capture_client_) {
         capture_client_->Release();
@@ -696,6 +731,11 @@ void WasapiCaptureSrc::Shutdown() {
     if (device_) {
         device_->Release();
         device_ = nullptr;
+    }
+
+    if (buffer_event_) {
+        CloseHandle(buffer_event_);
+        buffer_event_ = nullptr;
     }
 
     input_channels_ = 0;

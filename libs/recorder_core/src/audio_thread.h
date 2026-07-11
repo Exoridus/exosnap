@@ -11,6 +11,8 @@
 
 namespace recorder_core {
 
+class IAudioEncoder;
+
 // Ownership contract (shared by all session workers): the object must be owned
 // by a std::shared_ptr, and Start() hands the running thread a shared_ptr to
 // the worker — which in turn holds the SessionState alive. If the session gives
@@ -39,6 +41,13 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
 
   private:
     void Run();
+
+    // Codec-agnostic capture/encode drain: pull raw buffers, gap-fill measured
+    // discontinuities with silence, feed the encoder, route packets, then on
+    // exit flush the encoder, publish final stats, and push the EOS sentinel.
+    // Codec differences live entirely behind IAudioEncoder (frame sizing and
+    // flush semantics are the encoder's own).
+    void EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t channels, AudioSampleFormat source_format);
 
     std::shared_ptr<SessionState> m_state_ptr;
     SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())

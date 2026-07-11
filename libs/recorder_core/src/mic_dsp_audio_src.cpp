@@ -158,6 +158,15 @@ int32_t MicDspAudioSrc::LastCaptureHresult() const {
     return inner_ ? inner_->LastCaptureHresult() : 0;
 }
 
+bool MicDspAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {
+    // DSP stages neither add nor remove samples; the inner device timing holds.
+    return inner_ && inner_->LastBufferDeviceTiming(out_timing);
+}
+
+void* MicDspAudioSrc::BufferReadyEvent() const {
+    return inner_ ? inner_->BufferReadyEvent() : nullptr;
+}
+
 void MicDspAudioSrc::Shutdown() {
     inner_->Shutdown();
     initialized_ = false;

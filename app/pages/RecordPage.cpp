@@ -1884,9 +1884,12 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     stats.audio_bytes = 3ULL * 1024ULL * 1024ULL;
     stats.output_file_bytes = 52ULL * 1024ULL * 1024ULL;
     stats.dropped_or_skipped_video_frames = 0;
-    stats.duration_skew_ms = 2.0;
     stats.per_track_rms = {0.42f, 0.26f, 0.58f};
     view_model_.UpdateStats(stats);
+    // Live drift comes from the diagnostics snapshot in production; seed the
+    // view-model fields directly for the frozen visual fixture.
+    view_model_.av_drift_ms = 2.0;
+    view_model_.av_drift_available = true;
 
     switch (scenario.record_state) {
     case visual::VisualRecordState::Countdown:
@@ -2638,6 +2641,11 @@ void RecordPage::initCoordinator() {
     });
     coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
         emit diagnosticsUpdated(snapshot);
+        // Live A/V drift for the status line / overlay: the snapshot carries the
+        // measured clock drift (audio device clock vs the QPC video timeline).
+        view_model_.av_drift_available =
+            (snapshot.av_drift_availability == recorder_core::MetricAvailability::Available);
+        view_model_.av_drift_ms = view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
         // Accumulate A/V drift peak during Recording lifecycle
         if (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording) {
             if (snapshot.av_drift_availability == recorder_core::MetricAvailability::Available) {
@@ -4077,7 +4085,7 @@ QString RecordPage::buildPreviewBottomLeftText(bool recording) const {
         drop_text = QString::number(view_model_.dropped_frames);
     }
 
-    const QString drift_text = view_model_.live_stats_available
+    const QString drift_text = (view_model_.live_stats_available && view_model_.av_drift_available)
                                    ? QStringLiteral("%1 ms").arg(view_model_.av_drift_ms, 0, 'f', 0)
                                    : QStringLiteral("–");
 
@@ -4381,7 +4389,10 @@ void RecordPage::updateStatsDisplay() {
         recording && view_model_.live_stats_available
             ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.video_bytes + view_model_.audio_bytes))
             : QStringLiteral("-");
-    const double drift_ms = (recording && view_model_.live_stats_available) ? view_model_.av_drift_ms : 0.0;
+    // 0.0 renders as "—" downstream; only a measured drift value is shown.
+    const double drift_ms = (recording && view_model_.live_stats_available && view_model_.av_drift_available)
+                                ? view_model_.av_drift_ms
+                                : 0.0;
     emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text, drift_ms);
 
     updateAudioMeterLevels();

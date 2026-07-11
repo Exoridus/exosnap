@@ -137,10 +137,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
 
-    latest_video_pts_ms_ = 0.0;
-    latest_audio_pts_ms_ = 0.0;
-    have_video_pts_ = false;
-    have_audio_pts_ = false;
+    audio_clock_drift_ms_.fill(0.0);
+    audio_clock_drift_valid_.fill(false);
 
     free_bytes_ = 0;
     free_bytes_known_ = false;
@@ -332,16 +330,13 @@ void PipelineDiagnosticsAggregator::SetSplitPending(bool pending) noexcept {
     split_pending_ = pending;
 }
 
-void PipelineDiagnosticsAggregator::OnVideoPts(double ms) noexcept {
+void PipelineDiagnosticsAggregator::OnAudioClockDrift(uint32_t track_id, double drift_ms) noexcept {
     std::lock_guard lk(mutex_);
-    latest_video_pts_ms_ = ms;
-    have_video_pts_ = true;
-}
-
-void PipelineDiagnosticsAggregator::OnAudioPts(double ms) noexcept {
-    std::lock_guard lk(mutex_);
-    latest_audio_pts_ms_ = ms;
-    have_audio_pts_ = true;
+    if (track_id >= audio_clock_drift_ms_.size()) {
+        return;
+    }
+    audio_clock_drift_ms_[track_id] = drift_ms;
+    audio_clock_drift_valid_[track_id] = true;
 }
 
 void PipelineDiagnosticsAggregator::UpdateFreeDiskBytes(uint64_t free_bytes) noexcept {
@@ -548,15 +543,24 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     }
 
     // ---- A/V drift ----
-    // Computed from the most-recent PTS received from each encoder output path.
-    // Positive = audio leads video; negative = video leads audio.
-    // Marked Unavailable until both streams have produced at least one packet.
-    if (have_video_pts_ && have_audio_pts_) {
-        s.av_drift_ms = latest_audio_pts_ms_ - latest_video_pts_ms_;
+    // Measured clock drift: each audio worker compares its device clock
+    // (WASAPI device-position/QPC pairs) against the QPC timeline video frames
+    // are paced on, normalized at capture start and smoothed over a rolling
+    // window (audio_clock_drift.h). Positive = audio leads video. With several
+    // device-backed tracks the largest-magnitude estimate is surfaced; merged
+    // tracks mix multiple device clocks and never report, so the metric stays
+    // Unavailable rather than guessing.
+    s.av_drift_ms = 0.0;
+    s.av_drift_availability = MetricAvailability::Unavailable;
+    for (std::size_t i = 0; i < audio_clock_drift_ms_.size(); ++i) {
+        if (!audio_clock_drift_valid_[i]) {
+            continue;
+        }
+        if (s.av_drift_availability == MetricAvailability::Unavailable ||
+            std::abs(audio_clock_drift_ms_[i]) > std::abs(s.av_drift_ms)) {
+            s.av_drift_ms = audio_clock_drift_ms_[i];
+        }
         s.av_drift_availability = MetricAvailability::Available;
-    } else {
-        s.av_drift_ms = 0.0;
-        s.av_drift_availability = MetricAvailability::Unavailable;
     }
 
     // ---- Disk-fill ETA ----

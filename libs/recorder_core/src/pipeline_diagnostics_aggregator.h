@@ -11,6 +11,7 @@
 #include <recorder_core/session_stats.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -185,9 +186,11 @@ class PipelineDiagnosticsAggregator {
     void OnMuxFailure() noexcept;
     void OnReorderWindow(uint32_t packets, uint32_t peak_packets, uint64_t bytes, uint64_t peak_bytes) noexcept;
     void SetSplitPending(bool pending) noexcept;
-    // PTS inputs for A/V drift (video: VideoThread after encode; audio: AudioThread after encode)
-    void OnVideoPts(double ms) noexcept;
-    void OnAudioPts(double ms) noexcept;
+    // Measured A/V clock drift for one audio track (AudioThread, smoothed by
+    // AudioClockDriftEstimator from WASAPI device-position/QPC pairs). Positive
+    // = audio leads video. Tracks without an attributable device clock (merged
+    // sources) never report.
+    void OnAudioClockDrift(uint32_t track_id, double drift_ms) noexcept;
     // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
     void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
@@ -288,12 +291,11 @@ class PipelineDiagnosticsAggregator {
     uint64_t last_dropped_total_ = 0;
     uint64_t last_audio_disc_ = 0;
 
-    // A/V drift: latest PTS (ms) received from each encoder output path.
-    // Protected by mutex_. Set to true once the first packet arrives per session.
-    double latest_video_pts_ms_ = 0.0;
-    double latest_audio_pts_ms_ = 0.0;
-    bool have_video_pts_ = false;
-    bool have_audio_pts_ = false;
+    // A/V clock drift: latest smoothed estimate per audio track (audio device
+    // clock vs the QPC timeline video is paced on; see audio_clock_drift.h).
+    // Array size mirrors CodecPrivateData::kMaxAudioTracks. Protected by mutex_.
+    std::array<double, 3> audio_clock_drift_ms_{};
+    std::array<bool, 3> audio_clock_drift_valid_{};
 
     // Disk-fill ETA: free bytes on the output drive, polled externally at ~5 Hz.
     uint64_t free_bytes_ = 0;

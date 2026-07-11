@@ -628,31 +628,52 @@ TEST(PipelineDiagnostics, AvDriftInitiallyZeroAndUnavailable) {
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
 }
 
-TEST(PipelineDiagnostics, AvDriftComputedFromPtsInputs) {
+TEST(PipelineDiagnostics, AvDriftReportsMeasuredClockDrift) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    // audio PTS = 120 ms, video PTS = 100 ms => drift = +20 ms (audio leads)
-    agg.OnVideoPts(100.0);
-    agg.OnAudioPts(120.0);
+    // The audio worker reports its smoothed device-clock-vs-QPC estimate.
+    // Positive = audio leads video.
+    agg.OnAudioClockDrift(0, 2.5);
     const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
-    EXPECT_DOUBLE_EQ(s.av_drift_ms, 20.0);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 2.5);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
 }
 
-TEST(PipelineDiagnostics, AvDriftUnavailableIfOnlyOneStreamHasPts) {
+TEST(PipelineDiagnostics, AvDriftLatestEstimatePerTrackWins) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnVideoPts(100.0); // only video; no audio PTS yet
+    agg.OnAudioClockDrift(0, 2.5);
+    agg.OnAudioClockDrift(0, 3.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 3.0);
+}
+
+TEST(PipelineDiagnostics, AvDriftLargestMagnitudeAcrossTracks_Signed) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // Two device-backed tracks (e.g. SYS render endpoint + MIC capture
+    // endpoint) can drift independently; surface the worst one, signed.
+    agg.OnAudioClockDrift(0, 2.0);
+    agg.OnAudioClockDrift(1, -5.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, -5.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
+}
+
+TEST(PipelineDiagnostics, AvDriftOutOfRangeTrackIgnored) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAudioClockDrift(99, 42.0);
     const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
 }
 
 TEST(PipelineDiagnostics, AvDriftResetClearsState) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnVideoPts(100.0);
-    agg.OnAudioPts(120.0);
-    // After Reset, both "have" flags must clear.
+    agg.OnAudioClockDrift(0, 4.0);
+    // After Reset the per-track estimates must clear.
     agg.Reset(2, MakeConfig());
     const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);

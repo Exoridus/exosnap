@@ -22,6 +22,29 @@ struct RawAudioBuffer {
     uint32_t gap_frames = 0;
 };
 
+// Device-clock timing of a capture packet: the packet's position on the audio
+// device's own timeline paired with the QPC time at which the device recorded
+// that position (both in nanoseconds). WASAPI reports both with every
+// IAudioCaptureClient::GetBuffer call; together they measure the audio device
+// clock against the QPC timeline video frames are paced on — the input to the
+// A/V clock-drift metric (audio_clock_drift.h).
+struct AudioDeviceTiming {
+    uint64_t device_position_ns = 0;
+    uint64_t qpc_position_ns = 0;
+};
+
+// Convert a device sample position (frames) to nanoseconds on that device's
+// timeline without 64-bit overflow (frames * 1e9 would overflow uint64 after
+// a few hours at 48 kHz).
+inline uint64_t DeviceFramesToNs(uint64_t frames, uint32_t sample_rate) noexcept {
+    if (sample_rate == 0) {
+        return 0;
+    }
+    const uint64_t whole_seconds = frames / sample_rate;
+    const uint64_t remainder_frames = frames % sample_rate;
+    return whole_seconds * 1000000000ULL + (remainder_frames * 1000000000ULL) / sample_rate;
+}
+
 class IAudioCaptureSource {
   public:
     virtual ~IAudioCaptureSource() = default;
@@ -50,6 +73,26 @@ class IAudioCaptureSource {
     // Decorators forward their inner source's value; the default is 0.
     virtual int32_t LastCaptureHresult() const {
         return 0;
+    }
+
+    // Device-clock timing of the most recently acquired buffer (valid after a
+    // successful AcquireBuffer until the next one). Returns false when the
+    // source cannot attribute a single device clock — mixed/merged sources,
+    // synthetic test sources — or when the platform did not report a QPC
+    // timestamp. Decorators forward their inner source's value.
+    virtual bool LastBufferDeviceTiming(AudioDeviceTiming& /*out_timing*/) const {
+        return false;
+    }
+
+    // Optional event-driven mode: a Win32 auto-reset event (HANDLE as void* to
+    // keep this header platform-agnostic) the audio engine signals when a
+    // capture buffer becomes ready (AUDCLNT_STREAMFLAGS_EVENTCALLBACK +
+    // SetEventHandle). nullptr when the source only supports polling — the
+    // consumer then falls back to its polling cadence. The handle is owned by
+    // the source and valid between a successful Init() and Shutdown().
+    // Decorators forward their inner source's handle.
+    virtual void* BufferReadyEvent() const {
+        return nullptr;
     }
 
     virtual void Shutdown() = 0;

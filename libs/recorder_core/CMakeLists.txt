@@ -1025,6 +1025,16 @@ exosnap_add_gtest(
 )
 target_include_directories(test_pipeline_diagnostics PRIVATE src)
 
+# A/V clock-drift estimation: the pure device-position/QPC math behind the
+# honest av_drift_ms metric (audio device clock vs the QPC video timeline).
+exosnap_add_gtest(
+    NAME test_audio_clock_drift
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_clock_drift.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_clock_drift PRIVATE src)
+
 # test_mp4_remux_pipeline_flow: pure-logic tests for DeriveTransientMkvPath
 # and codec-container gating rules (ADR-0014).  No FFmpeg runtime needed.
 exosnap_add_gtest(

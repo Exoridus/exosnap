@@ -110,6 +110,13 @@ bool WasapiLoopback::Init(std::string& out_error) {
     // AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM so the audio engine's own sample-rate
     // converter and channel matrixer resample/downmix into it, mirroring the
     // process-loopback path (see wasapi_process_loopback_src.cpp).
+    //
+    // Deliberately NOT event-driven: Windows does not signal capture events for
+    // a loopback-initialized stream on a render endpoint — the documented
+    // workaround is a companion event-driven render client that is polled in
+    // lockstep ("Loopback Recording" in the WASAPI docs), which is more moving
+    // parts than the 1 ms poll it would replace. The process-loopback virtual
+    // device does not share this limitation and runs event-driven.
     WAVEFORMATEX fmt{};
     fmt.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
     fmt.nChannels = static_cast<WORD>(kRequiredChannels);
@@ -177,7 +184,7 @@ UINT32 WasapiLoopback::GetNextPacketSize() {
 // ---------------------------------------------------------------------------
 
 bool WasapiLoopback::GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags, bool* out_silent,
-                                   UINT64* out_device_position) {
+                                   UINT64* out_device_position, UINT64* out_qpc_position) {
     if (!m_pCaptureClient)
         return false;
     UINT64 devicePos = 0, qpcPos = 0;
@@ -196,6 +203,8 @@ bool WasapiLoopback::GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWOR
         *out_silent = (*out_capture_flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
     if (out_device_position)
         *out_device_position = devicePos;
+    if (out_qpc_position)
+        *out_qpc_position = qpcPos;
     return true;
 }
 

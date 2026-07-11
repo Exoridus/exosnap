@@ -255,8 +255,15 @@ struct RecordingDiagnosticsSnapshot {
     DiskDiagnostics disk;
     SplitDiagnostics split;
 
-    // A/V synchronization drift measured from stream PTS.
-    // Positive = audio leads video; negative = video leads audio.
+    // A/V synchronization drift, measured as clock drift: the audio device
+    // clock (WASAPI device-position/QPC pairs reported with every capture
+    // packet) against the QPC timeline video frames are paced on, normalized
+    // at capture start and smoothed over a rolling window (~1 s of packets).
+    // Positive = audio leads video; negative = video leads audio. Unavailable
+    // until a device-backed audio track has reported timing; merged tracks mix
+    // several device clocks and do not report. Note this is deliberately NOT
+    // the difference of the two pipelines' most recent output PTS — that value
+    // only measures encoder/queue latency and can never see device-clock drift.
     double av_drift_ms = 0.0;
     MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
 

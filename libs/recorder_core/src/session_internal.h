@@ -121,8 +121,35 @@ struct SessionFailure {
 // ---------------------------------------------------------------------------
 
 struct SessionState {
+    SessionState() : stop_event(CreateEventW(nullptr, /*manual reset*/ TRUE, FALSE, nullptr)) {
+    }
+
+    ~SessionState() {
+        if (stop_event) {
+            CloseHandle(stop_event);
+            stop_event = nullptr;
+        }
+    }
+
+    SessionState(const SessionState&) = delete;
+    SessionState& operator=(const SessionState&) = delete;
+
     // Cooperative stop token set by Stop() or any fatal worker failure
     std::atomic<bool> stop_requested{false};
+
+    // Win32 mirror of stop_requested for producers that block in
+    // WaitForMultipleObjects (the event-driven WASAPI capture drain): set
+    // wherever stop_requested is raised through Stop()/RecordFailure() so a
+    // blocked wait wakes immediately instead of on its timeout. Manual-reset;
+    // Record()'s state reset re-arms it. May be null if event creation failed —
+    // waiters must treat that as "poll instead".
+    HANDLE stop_event = nullptr;
+
+    void SignalStopEvent() noexcept {
+        if (stop_event) {
+            SetEvent(stop_event);
+        }
+    }
 
     // Cooperative pause token — threads drain their source but discard output.
     // Video threads adjust their epoch on resume so PTS continues seamlessly.
@@ -409,6 +436,7 @@ struct SessionState {
             }
         }
         stop_requested.store(true);
+        SignalStopEvent();
         premux_cv.notify_all();
         mux_cv.notify_all();
         mux_space_cv.notify_all(); // wake producers blocked on the queue bound
