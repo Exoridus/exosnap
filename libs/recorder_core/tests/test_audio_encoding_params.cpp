@@ -3,7 +3,7 @@
 //   - PTS correctness at 10 ms frame size
 //   - Opus bitrate clamping
 //   - SetEncodingParams round-trip through Init
-//   - FDK-AAC / MF-AAC bitrate clamping helpers
+//   - FDK-AAC bitrate clamping helpers
 //   - FrameSizeSamples accessor
 
 #include <gtest/gtest.h>
@@ -12,7 +12,6 @@
 
 #if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
 #include "fdk_aac_encoder.h"
-#include "mf_aac_encoder.h"
 #endif
 
 #include <recorder_core/recorder_session.h>
@@ -30,7 +29,6 @@ using recorder_core::OpusFrameSizeSamples;
 
 #if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
 using recorder_core::FdkAacEncoder;
-using recorder_core::MfAacEncoder;
 #endif
 
 // ---------------------------------------------------------------------------
@@ -157,22 +155,6 @@ TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_Max_IsPassedThrough) {
 
 TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_AboveMax_ClampsTo320) {
     EXPECT_EQ(FdkAacEncoder::ResolveBitrateKbps(999u), 320u);
-}
-
-// ---------------------------------------------------------------------------
-// Bitrate clamping — MF AAC (full build only)
-// ---------------------------------------------------------------------------
-
-TEST(AudioEncodingParamsTest, MfAacBitrateResolve_Zero_IsDefault192) {
-    EXPECT_EQ(MfAacEncoder::ResolveBitrateKbps(0u), 192u);
-}
-
-TEST(AudioEncodingParamsTest, MfAacBitrateResolve_BelowMin_ClampsTo64) {
-    EXPECT_EQ(MfAacEncoder::ResolveBitrateKbps(10u), 64u);
-}
-
-TEST(AudioEncodingParamsTest, MfAacBitrateResolve_AboveMax_ClampsTo320) {
-    EXPECT_EQ(MfAacEncoder::ResolveBitrateKbps(999u), 320u);
 }
 
 #endif // EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC

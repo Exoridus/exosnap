@@ -1,8 +1,8 @@
 // test_accent_theme.cpp — tests for the theme system (THEME-SLICE-1).
-// Covers: legacy ExoSnapAccents table + new ExoTheme table + palette cross-checks.
+// Covers: the ExoTheme table + palette cross-checks.
 //
 // These tests are intentionally headless (no QApplication required) — they
-// only exercise pure data in the accent/theme layer.
+// only exercise pure data in the theme layer.
 
 #include <gtest/gtest.h>
 
@@ -10,7 +10,6 @@
 #include <QString>
 #include <QStringList>
 
-#include "ui/theme/ExoSnapAccents.h"
 #include "ui/theme/ExoSnapPalette.h"
 #include "ui/theme/ExoSnapThemes.h"
 
@@ -18,61 +17,7 @@ namespace exosnap {
 namespace {
 
 // ---------------------------------------------------------------------------
-// Legacy accent table tests (kept for backward compat)
-// ---------------------------------------------------------------------------
-
-TEST(AccentThemeTest, DefaultAccentId_IsMint) {
-    EXPECT_STREQ(exosnap::ui::theme::kDefaultAccentId, "mint");
-}
-
-TEST(AccentThemeTest, DefaultAccentEntry_IsFirstInTable) {
-    EXPECT_STREQ(exosnap::ui::theme::kExoSnapAccents.front().id, "mint");
-    EXPECT_STREQ(exosnap::ui::theme::kExoSnapAccents.front().name, "Studio Mint");
-}
-
-TEST(AccentThemeTest, DefaultAccentBase_MatchesPaletteKAccent) {
-    EXPECT_STREQ(exosnap::ui::theme::kExoSnapAccents.front().base, exosnap::ui::theme::ExoSnapPalette::kAccent);
-}
-
-TEST(AccentThemeTest, DefaultAccentInk_MatchesPaletteKAccentInk) {
-    EXPECT_STREQ(exosnap::ui::theme::kExoSnapAccents.front().ink, exosnap::ui::theme::ExoSnapPalette::kAccentInk);
-}
-
-TEST(AccentThemeTest, AccentTable_HasSevenEntries) {
-    EXPECT_EQ(static_cast<int>(exosnap::ui::theme::kExoSnapAccents.size()), 7);
-}
-
-TEST(AccentThemeTest, AllAccentIds_AreUnique) {
-    const auto& accents = exosnap::ui::theme::kExoSnapAccents;
-    QStringList ids;
-    for (const auto& a : accents)
-        ids.append(QString::fromUtf8(a.id));
-    QStringList deduped = ids;
-    deduped.removeDuplicates();
-    EXPECT_EQ(ids.size(), deduped.size());
-}
-
-TEST(AccentThemeTest, AllAccentBases_AreValidHexColors) {
-    for (const auto& a : exosnap::ui::theme::kExoSnapAccents) {
-        const QColor c(QString::fromUtf8(a.base));
-        EXPECT_TRUE(c.isValid()) << "Accent base invalid: " << a.base;
-    }
-}
-
-TEST(AccentThemeTest, SemanticColors_AreNotPresentAsAccentBases) {
-    const QString kErrHex = QString::fromUtf8(exosnap::ui::theme::ExoSnapPalette::kErr);
-    const QString kOkHex = QString::fromUtf8(exosnap::ui::theme::ExoSnapPalette::kOk);
-    const QString kWarnHex = QString::fromUtf8(exosnap::ui::theme::ExoSnapPalette::kWarn);
-    for (const auto& a : exosnap::ui::theme::kExoSnapAccents) {
-        const QString base = QString::fromUtf8(a.base);
-        EXPECT_NE(base.toLower(), kErrHex.toLower());
-        EXPECT_NE(base.toLower(), kOkHex.toLower());
-        EXPECT_NE(base.toLower(), kWarnHex.toLower());
-    }
-}
-
-// ---------------------------------------------------------------------------
-// New theme table tests (THEME-SLICE-1)
+// Theme table tests (THEME-SLICE-1)
 // ---------------------------------------------------------------------------
 
 TEST(ExoThemeTest, ThemeTable_HasFourEntries) {

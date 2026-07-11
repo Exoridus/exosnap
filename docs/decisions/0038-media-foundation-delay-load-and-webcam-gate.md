@@ -40,11 +40,10 @@ though the entire core recording path needs no MF.
 - ExoSnap launches and records on Windows N/KN without the Media Feature Pack; only the
   webcam overlay is unavailable, clearly surfaced rather than crashing.
 - MF DLLs are not loaded for users who never open the webcam UI (minor startup win).
-- The `recorder_core` test binaries that exercise the legacy `MfAacEncoder`
-  (`test_mf_aac_encoder`) still link MF normally and require MF present — they are not
-  shipped, so there is no runtime impact, but they would fail on a true Windows-N host.
-- The legacy `MfAacEncoder` is still compiled into `recorder_core` though the live
-  pipeline uses FDK-AAC; harmless under delay-load (never invoked). A future cleanup
-  could delete it and retire the `mf_aac` capability.
+- The legacy `MfAacEncoder` (and its unused `IAudioEncoder` adapter,
+  `MfAacAudioEncoder`) has since been deleted along with `test_mf_aac_encoder` — it was
+  never instantiated on any production code path. The `mf_aac` capability probe
+  (`ProbeMfAac`) is unrelated: it queries the OS for MF AAC MFT presence directly via
+  `MFTEnumEx`/`CoCreateInstance` and does not depend on the removed wrapper class.
 - Possible UX follow-up: the gate disables the UI and reports it; it does not offer to
   install the Media Feature Pack or deep-link to Windows settings.
