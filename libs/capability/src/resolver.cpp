@@ -294,6 +294,42 @@ ResolveResult SettingsResolver::ResolveChange(const UserRecorderConfig& current,
     return result;
 }
 
+OutputFormatReconciliation ReconcileOutputFormat(OutputFormatRequest request) noexcept {
+    OutputFormatReconciliation outcome;
+
+    // 1. Container × codec compatibility (ADR 0010): the registry replaces an
+    //    incompatible audio (and, if needed, video) codec with the container's
+    //    preferred codec.
+    const VideoCodec requested_video = request.video_codec;
+    const AudioCodec requested_audio = request.audio_codec;
+    ContainerCompatRegistry::ReconcileCodecs(request.container, request.video_codec, request.audio_codec);
+    outcome.codecs_adjusted = request.video_codec != requested_video || request.audio_codec != requested_audio;
+
+    // 2. 10-bit is HEVC/AV1 only (ADR 0032). Runs after the container rule so a
+    //    stored 10-bit selection that just had H.264 forced onto it demotes too.
+    if (request.bit_depth == BitDepth::Bit10 && !CodecSupports10Bit(request.video_codec)) {
+        request.bit_depth = BitDepth::Bit8;
+        outcome.bit_depth_demoted = true;
+    }
+
+    // 3. 4:4:4 is an 8-bit H.264/HEVC-only expert path. Runs after the
+    //    bit-depth rule so an 8-bit-demoted selection can still keep 4:4:4.
+    if (request.chroma == ChromaSubsampling::Cs444 &&
+        (!CodecSupportsChroma444(request.video_codec) || request.bit_depth != BitDepth::Bit8)) {
+        request.chroma = ChromaSubsampling::Cs420;
+        outcome.chroma_snapped = true;
+    }
+
+    // 4. The MP4 mux path is fixed-rate: VFR timing is forced to CFR.
+    if (request.container == Container::Mp4 && !request.cfr) {
+        request.cfr = true;
+        outcome.cfr_forced = true;
+    }
+
+    outcome.resolved = request;
+    return outcome;
+}
+
 ResolveResult SettingsResolver::ValidateConfig(const UserRecorderConfig& config) const {
     ResolveResult result;
     result.resolved_config = config;

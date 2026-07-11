@@ -64,6 +64,15 @@ exosnap_add_gtest(
   LIBRARIES exosnap_capability
 )
 
+# Pins the static format reconciliation (container×codec, bit-depth demotion,
+# chroma snap, MP4 CFR) the resolver owns and the app layer copies verbatim.
+exosnap_add_gtest(
+  NAME capability_output_format_reconcile_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_output_format_reconcile.cpp
+  LIBRARIES exosnap_capability
+)
+
 exosnap_add_gtest(
   NAME capability_option_query_tests
   TEST_PREFIX capability.
