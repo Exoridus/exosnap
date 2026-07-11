@@ -350,7 +350,7 @@ class RecordingCoordinator {
     std::atomic<bool> is_recording_{false};
     std::atomic<bool> is_paused_{false};
 
-    UiRecordingState state_ = UiRecordingState::LoadingCapabilities;
+    std::atomic<UiRecordingState> state_{UiRecordingState::LoadingCapabilities};
     std::wstring capability_status_text_;
     std::filesystem::path current_output_path_;
 
