@@ -29,6 +29,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -39,7 +40,6 @@
 // this header does not drag third-party headers (and their MSVC warnings) into
 // every translation unit that only needs the interface.
 namespace libebml {
-class IOCallback;
 class EbmlVoid;
 } // namespace libebml
 namespace libmatroska {
@@ -52,6 +52,42 @@ class KaxCues;
 } // namespace libmatroska
 
 namespace recorder_core {
+
+// Owns the writer's output FILE* directly (defined in matroska_stream_writer.cpp).
+// Forward-declared here so MatroskaStreamWriter can hold it by pointer without
+// dragging <cstdio>/<windows.h> into every translation unit that only needs the
+// writer's interface.
+class DurableFileIo;
+
+// Decides when a periodic durability flush (fflush + OS-level FlushFileBuffers)
+// is due, based on wall-clock time elapsed since the previous one. This is pure
+// decision logic with no file I/O and no real timer dependency, so cadence
+// correctness can be unit tested with synthetic steady_clock time points
+// (see test_matroska_stream_writer.cpp) instead of sleeping in real time.
+class DurabilityFlushScheduler {
+  public:
+    explicit DurabilityFlushScheduler(std::chrono::milliseconds interval) noexcept : m_interval(interval) {
+    }
+
+    // True if a flush is due "at" `now`: either none has ever been recorded, or
+    // at least `interval` has elapsed since the last one passed to MarkFlushed().
+    [[nodiscard]] bool IsDue(std::chrono::steady_clock::time_point now) const noexcept {
+        return !m_has_flushed || (now - m_last_flush) >= m_interval;
+    }
+
+    // Record that a flush happened "at" `now`. Call this after actually
+    // performing the flush (regardless of whether it succeeded — a failing
+    // disk should not be retried on every single cluster either).
+    void MarkFlushed(std::chrono::steady_clock::time_point now) noexcept {
+        m_has_flushed = true;
+        m_last_flush = now;
+    }
+
+  private:
+    std::chrono::milliseconds m_interval;
+    bool m_has_flushed = false;
+    std::chrono::steady_clock::time_point m_last_flush{};
+};
 
 // One encoded packet handed to the writer. track_num uses the same placeholder
 // scheme as the old muxer: 1 = video, 2+n = audio track n.
@@ -180,6 +216,24 @@ class MatroskaStreamWriter {
         return m_last_flush_ms;
     }
 
+    // Cumulative number of durability flushes attempted (fflush + FlushFileBuffers),
+    // counted regardless of success/failure. For tests/diagnostics: proves the
+    // cadence below fires far less often than once per cluster.
+    [[nodiscard]] uint64_t durability_flush_count() const noexcept {
+        return m_durability_flush_count;
+    }
+
+    // Minimum spacing between durability flushes performed inside FlushCluster()
+    // (see DurabilityFlushScheduler above and FlushCluster()'s use of it in the
+    // .cpp). Deliberately NOT a user-facing setting (no UI scope). Clusters
+    // already land roughly every 2 s in steady-state recording (kClusterBoundaryMs
+    // in matroska_stream_writer.cpp), so this keeps the added OS-durability
+    // syscall on the same cadence as that steady rhythm instead of firing on
+    // every cluster — a pathological burst of clusters (e.g. Finalize()'s forced
+    // window drain, or an unusually short GOP) must not stall the writer behind
+    // physical I/O.
+    static constexpr std::chrono::milliseconds kDurabilityFlushInterval{2000};
+
   private:
     // Sorted-by-PTS reorder window entry.
     struct WindowEntry {
@@ -200,7 +254,7 @@ class MatroskaStreamWriter {
     MatroskaStreamConfig m_config;
 
     // libebml/libmatroska objects whose lifetime must span Open()..Finalize().
-    libebml::IOCallback* m_io = nullptr;
+    DurableFileIo* m_io = nullptr;
     std::unique_ptr<libmatroska::KaxSegment> m_segment;
     std::unique_ptr<libebml::EbmlVoid> m_seekhead_void;
     std::unique_ptr<libmatroska::KaxInfo> m_info;
@@ -238,6 +292,11 @@ class MatroskaStreamWriter {
     uint64_t m_bytes_written = 0;
     uint64_t m_flush_count = 0;
     double m_last_flush_ms = 0.0;
+
+    // Periodic durability flush (fflush + FlushFileBuffers) cadence gate and
+    // counter. See kDurabilityFlushInterval/durability_flush_count() above.
+    DurabilityFlushScheduler m_durability_flush_scheduler{kDurabilityFlushInterval};
+    uint64_t m_durability_flush_count = 0;
 
     // Optional out-of-thread progress sink (SetProgressSink). Not owned.
     std::atomic<uint64_t>* m_progress_sink = nullptr;
