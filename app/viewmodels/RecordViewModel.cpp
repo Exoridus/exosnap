@@ -420,7 +420,10 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
     audio_bytes = stats.audio_bytes;
     output_file_bytes = stats.output_file_bytes;
     dropped_frames = stats.dropped_or_skipped_video_frames;
-    av_drift_ms = stats.duration_skew_ms;
+    // av_drift_ms is deliberately NOT fed from stats here: duration_skew_ms is
+    // the difference of the two pipelines' emitted durations (a queue/latency
+    // number), not clock drift. The measured drift arrives with the
+    // diagnostics snapshot (see RecordPage's diagnostics callback).
     output_size_text = FormatBytes(stats.output_file_bytes);
     live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
                            (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
@@ -539,6 +542,7 @@ void RecordViewModel::ResetStats() {
     output_file_bytes = 0;
     dropped_frames = 0;
     av_drift_ms = 0.0;
+    av_drift_available = false;
     output_size_text = L"0 KB";
     audio_rms_app = 0.0f;
     audio_rms_sys = 0.0f;

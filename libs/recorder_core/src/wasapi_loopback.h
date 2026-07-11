@@ -51,8 +51,10 @@ class WasapiLoopback {
     // Sets silent=true if AUDCLNT_BUFFERFLAGS_SILENT is set.
     // out_device_position (optional) receives the packet's device position in
     // frames — used to measure the gap a DATA_DISCONTINUITY spans.
+    // out_qpc_position (optional) receives the QPC timestamp (100 ns units) the
+    // device recorded that position at — used by the A/V clock-drift metric.
     bool GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags, bool* out_silent,
-                       UINT64* out_device_position = nullptr);
+                       UINT64* out_device_position = nullptr, UINT64* out_qpc_position = nullptr);
 
     // Release the current packet (must be called after GetNextPacket succeeds).
     bool ReleasePacket(UINT32 num_frames);

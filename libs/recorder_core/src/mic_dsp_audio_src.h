@@ -67,6 +67,7 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
     int32_t LastCaptureHresult() const override;
+    bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
 
     void Shutdown() override;
 

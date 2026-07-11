@@ -403,7 +403,8 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
     UINT32 frames = 0;
     DWORD flags = 0;
     UINT64 devicePos = 0;
-    HRESULT hr = capture_client_->GetBuffer(&data, &frames, &flags, &devicePos, nullptr);
+    UINT64 qpcPos = 0;
+    HRESULT hr = capture_client_->GetBuffer(&data, &frames, &flags, &devicePos, &qpcPos);
     if (hr == AUDCLNT_S_BUFFER_EMPTY) {
         return false;
     }
@@ -432,6 +433,12 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
                                                               expected_device_position_, devicePos, SampleRate());
     device_position_tracked_ = true;
     expected_device_position_ = devicePos + frames;
+
+    // Device-clock timing for the A/V clock-drift metric. qpcPos is in 100 ns
+    // units; 0 means the engine did not attribute a timestamp to this packet.
+    last_timing_valid_ = (qpcPos != 0);
+    last_device_position_ns_ = DeviceFramesToNs(devicePos, SampleRate());
+    last_qpc_position_ns_ = qpcPos * 100ULL;
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
     out_buf.num_frames = frames;
@@ -470,10 +477,22 @@ const std::string& WasapiProcessLoopbackSrc::EndpointName() const {
     return endpoint_name_;
 }
 
+bool WasapiProcessLoopbackSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {
+    if (!last_timing_valid_) {
+        return false;
+    }
+    out_timing.device_position_ns = last_device_position_ns_;
+    out_timing.qpc_position_ns = last_qpc_position_ns_;
+    return true;
+}
+
 void WasapiProcessLoopbackSrc::Shutdown() {
     ReleaseBuffer();
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
+    last_timing_valid_ = false;
+    last_device_position_ns_ = 0;
+    last_qpc_position_ns_ = 0;
 
     if (capture_client_ != nullptr) {
         capture_client_->Release();

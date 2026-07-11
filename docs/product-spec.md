@@ -437,6 +437,13 @@ live status (Healthy / Busy / Bottleneck) with a CPU/GPU tag and one secondary n
 drift and output-size overlay is available. An on-screen diagnostics overlay exists but is **off by
 default** (enabled in Advanced).
 
+A/V drift is measured, not inferred: the audio device clock (WASAPI per-packet device-position/QPC
+timestamps) is compared against the QPC timeline video frames are paced on, normalized at capture
+start and smoothed over roughly one second of packets. Positive values mean audio leads video.
+Pipeline queue depths and encoder output timing play no part in the number. A track that merges
+several audio sources mixes multiple device clocks, so drift reads as unavailable for it rather
+than showing a guess.
+
 **Post-flight report card.** After each recording, a report card surfaces frame-drop %, peak A/V
 drift, and overall pipeline health. When a recording had **real** frame drops (encoder backpressure,
 not benign coalescing/CFR drops), a caution toast ("Frames dropped") appears alongside "Recording

@@ -1,5 +1,6 @@
 #include "audio_thread.h"
 
+#include "audio_clock_drift.h"
 #include "codec_private.h"
 #include "fdk_aac_encoder.h"
 #include "flac_audio_encoder.h"
@@ -301,6 +302,11 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     uint64_t encoderAccumulatedFrames = 0;
     bool failed = false;
 
+    // A/V clock-drift estimation: every capture packet carries the device's
+    // sample position plus the QPC time it was recorded at; the estimator turns
+    // those into a smoothed audio-clock-vs-QPC drift (audio_clock_drift.h).
+    AudioClockDriftEstimator drift_estimator;
+
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
@@ -339,6 +345,14 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
             if (raw.data_discontinuity) {
                 m_state.diagnostics.OnAudioDiscontinuity();
+            }
+
+            {
+                AudioDeviceTiming timing{};
+                if (source_->LastBufferDeviceTiming(timing)) {
+                    drift_estimator.AddObservation(timing.device_position_ns, timing.qpc_position_ns);
+                    m_state.diagnostics.OnAudioClockDrift(track_id_, drift_estimator.DriftMs());
+                }
             }
 
             std::vector<EncodedAudioPacket> pkts;
