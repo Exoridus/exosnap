@@ -1,3 +1,7 @@
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 #include <gtest/gtest.h>
 
 #include <QDir>
@@ -5,6 +9,14 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+}
+
+#include <cstring>
 
 #include "services/RecoveryService.h"
 #include "settings/RecoveryManifestStore.h"
@@ -44,6 +56,111 @@ RecoveryManifestEntry MakeEntry(const QString& id, const QString& artefact,
     e.finalized = finalized;
     return e;
 }
+
+// Build a small but genuinely valid MKV at `path` via libavformat: one
+// PCM_S16LE audio track with `seconds` of silence. No encoder is needed —
+// PCM packets are raw bytes — so this stays lightweight while producing a
+// file the repair-remux path can open and stream-copy from.
+bool BuildPcmMkvFixture(const QString& path, double seconds) {
+    const QByteArray path_utf8 = path.toUtf8();
+    AVFormatContext* ctx = nullptr;
+    if (avformat_alloc_output_context2(&ctx, nullptr, "matroska", path_utf8.constData()) < 0 || ctx == nullptr)
+        return false;
+
+    bool ok = false;
+    do {
+        AVStream* st = avformat_new_stream(ctx, nullptr);
+        if (st == nullptr)
+            break;
+        st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        st->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
+        st->codecpar->sample_rate = 48000;
+        av_channel_layout_default(&st->codecpar->ch_layout, 2);
+        st->codecpar->format = AV_SAMPLE_FMT_S16;
+        st->codecpar->bits_per_coded_sample = 16;
+        st->time_base = AVRational{1, 48000};
+
+        if (avio_open(&ctx->pb, path_utf8.constData(), AVIO_FLAG_WRITE) < 0)
+            break;
+        if (avformat_write_header(ctx, nullptr) < 0)
+            break;
+
+        AVPacket* pkt = av_packet_alloc();
+        if (pkt == nullptr)
+            break;
+        const int samples_per_pkt = 1024;
+        const int bytes_per_pkt = samples_per_pkt * 2 /*ch*/ * 2 /*bytes per sample*/;
+        bool write_failed = false;
+        for (int64_t pts = 0; pts < static_cast<int64_t>(seconds * 48000.0); pts += samples_per_pkt) {
+            if (av_new_packet(pkt, bytes_per_pkt) < 0) {
+                write_failed = true;
+                break;
+            }
+            std::memset(pkt->data, 0, static_cast<size_t>(bytes_per_pkt));
+            pkt->pts = pts;
+            pkt->dts = pts;
+            pkt->duration = samples_per_pkt;
+            pkt->stream_index = 0;
+            av_packet_rescale_ts(pkt, AVRational{1, 48000}, st->time_base);
+            const int ret = av_interleaved_write_frame(ctx, pkt);
+            av_packet_unref(pkt);
+            if (ret < 0) {
+                write_failed = true;
+                break;
+            }
+        }
+        av_packet_free(&pkt);
+        if (write_failed)
+            break;
+        if (av_write_trailer(ctx) < 0)
+            break;
+        ok = true;
+    } while (false);
+
+    if (ctx->pb != nullptr)
+        avio_closep(&ctx->pb);
+    avformat_free_context(ctx);
+    return ok;
+}
+
+// Holds a mandatory Windows byte-range lock on [offset, EOF) of `path` for
+// the object's lifetime, on a handle separate from whatever the repair-remux
+// opens. Windows byte-range locks are enforced against ALL other handles to
+// the file, so any ReadFile the remuxer issues that overlaps the locked range
+// fails with a genuine OS-level I/O error — a real mid-stream read fault, not
+// a mock. (Same fault-injection pattern as the engine's remuxer tests.)
+class ByteRangeLock {
+  public:
+    ByteRangeLock(const QString& path, uint64_t offset) {
+        const QByteArray path_local = path.toLocal8Bit();
+        handle_ = CreateFileA(path_local.constData(), GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE)
+            return;
+        const uint32_t offset_low = static_cast<uint32_t>(offset & 0xFFFFFFFFu);
+        const uint32_t offset_high = static_cast<uint32_t>(offset >> 32);
+        // Lock to "infinity" so every read at or beyond `offset` hits the lock,
+        // regardless of the remuxer's exact buffering chunk sizes.
+        locked_ = LockFile(handle_, offset_low, offset_high, 0xFFFFFFFFu, 0x7FFFFFFFu) != FALSE;
+    }
+
+    ~ByteRangeLock() {
+        if (handle_ != INVALID_HANDLE_VALUE)
+            CloseHandle(handle_); // also releases the lock
+    }
+
+    ByteRangeLock(const ByteRangeLock&) = delete;
+    ByteRangeLock& operator=(const ByteRangeLock&) = delete;
+
+    [[nodiscard]] bool ok() const {
+        return handle_ != INVALID_HANDLE_VALUE && locked_;
+    }
+
+  private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    bool locked_ = false;
+};
 
 // =============================================================================
 // 1. Scan removes orphaned entries (artefact no longer exists)
@@ -271,6 +388,50 @@ TEST(RecoveryServiceTest, FinishFallsBackToConfiguredOutputFolder) {
     EXPECT_FALSE(QFileInfo::exists(artefact));
     const QString expected_in_fallback = QDir(tmp_fallback.path()).filePath(QStringLiteral("rec.mkv"));
     EXPECT_TRUE(QFileInfo::exists(expected_in_fallback));
+}
+
+// 8b. Finish with MKV-intended + finalized=false, repair-remux fails MID-STREAM
+//     (after the output file was created and partially written) → the partial
+//     repair output is removed, the artefact and the manifest entry stay
+//     (symmetric with the MP4 path's cleanup below).
+//
+// Fault injection: the artefact is a genuinely valid MKV; a byte-range lock on
+// its second half lets avformat_open_input / find_stream_info (header reads
+// near the front) succeed, so the repair creates the target file and copies
+// packets until a read hits the lock and fails with a real I/O error. Without
+// the failure-path cleanup this leaves a partial .mkv at the target path.
+TEST(RecoveryServiceTest, FinishMkvNonFinalizedRemovesPartialOutputOnMidStreamFail) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    // Valid MKV artefact (5 s PCM ≈ 1 MB) named like a crash artefact.
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.tmp"));
+    ASSERT_TRUE(BuildPcmMkvFixture(artefact, /*seconds=*/5.0));
+    const qint64 artefact_size = QFileInfo(artefact).size();
+    ASSERT_GT(artefact_size, 4096) << "MKV fixture unexpectedly small";
+
+    auto e = MakeEntry(QStringLiteral("finish-partial-id"), artefact, QStringLiteral("mkv"), /*finalized=*/false);
+    e.final_output_path = QDir(tmp.path()).filePath(QStringLiteral("session.mkv"));
+    store.Add(e);
+
+    // Lock the second half of the artefact → mid-stream read failure.
+    ByteRangeLock lock(artefact, static_cast<uint64_t>(artefact_size) / 2);
+    ASSERT_TRUE(lock.ok()) << "Failed to establish the byte-range lock fixture";
+
+    const auto result = service.Finish(e);
+    EXPECT_FALSE(result.success) << "A mid-stream read failure must not report success";
+    EXPECT_FALSE(result.message.empty());
+    // Artefact and manifest entry are preserved — the artefact is the only
+    // trustworthy recording.
+    EXPECT_TRUE(QFileInfo::exists(artefact));
+    EXPECT_EQ(store.Entries().size(), 1);
+    // The partial repair output must NOT linger at the resolved target path.
+    const QString target = QDir(tmp.path()).filePath(QStringLiteral("session.mkv"));
+    EXPECT_FALSE(QFileInfo::exists(target)) << "Partial repair output was left behind";
 }
 
 // 9. Finish with MP4-intended → does NOT crash on dummy data (graceful failure)

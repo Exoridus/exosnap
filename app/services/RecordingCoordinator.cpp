@@ -1721,8 +1721,10 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job) {
     // job must be fully initialised before this call.
     // The thread writes job.succeeded / job.av_error_code / job.error_message
-    // and then exits; DrainSegmentRemuxJobs joins it.
-    job.thread = std::thread([this, &job]() {
+    // and then exits; DrainSegmentRemuxJobs joins it. job.thread is a jthread
+    // (RAII joiner): if a future code path destroys the job before the drain
+    // gets to it, the destructor joins instead of terminating the process.
+    job.thread = std::jthread([this, &job](std::stop_token) {
         const std::filesystem::path transient_mkv = job.transient_mkv;
         const std::filesystem::path output_mp4 = job.output_mp4;
         const QString manifest_id = job.manifest_id;

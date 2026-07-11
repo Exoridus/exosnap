@@ -350,7 +350,7 @@ class RecordingCoordinator {
     std::atomic<bool> is_recording_{false};
     std::atomic<bool> is_paused_{false};
 
-    UiRecordingState state_ = UiRecordingState::LoadingCapabilities;
+    std::atomic<UiRecordingState> state_{UiRecordingState::LoadingCapabilities};
     std::wstring capability_status_text_;
     std::filesystem::path current_output_path_;
 
@@ -412,7 +412,11 @@ class RecordingCoordinator {
         std::filesystem::path transient_mkv; // input .mkv.tmp
         std::filesystem::path output_mp4;    // desired final .mp4
         QString manifest_id;                 // recovery manifest entry for this segment
-        std::thread thread;                  // background remux thread
+        // Background remux thread. jthread (not thread) so that a future
+        // early-return destroying this job (or the vector holding it) while the
+        // thread is still running joins safely in the destructor instead of
+        // calling std::terminate.
+        std::jthread thread;
         // Written by the thread before it exits; read on the recording thread by DrainSegmentRemuxJobs.
         bool succeeded = false;
         int av_error_code = 0;
