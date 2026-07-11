@@ -1602,6 +1602,12 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateTexture2D(hdrSdrTex) failed 0x%08lX", static_cast<unsigned long>(sdrHr));
             m_state.RecordFailure(sdrHr, ErrorPhase::Prepare, buf);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
             if (com_inited)
                 CoUninitialize();
             return;
@@ -1609,6 +1615,12 @@ void VideoThread::Run() {
         if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
                                 hdrToneMapSdrSource, tmErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
             if (com_inited)
                 CoUninitialize();
             return;
@@ -1636,6 +1648,12 @@ void VideoThread::Run() {
         std::string pqErr;
         if (!hdrPqConverter.Init(d3dDevice.get(), d3dContext.get(), geom, hdrPqInputIsPq, hdrPqSrcFormat, pqErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR10 native converter init: " + pqErr);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
             if (com_inited)
                 CoUninitialize();
             return;
