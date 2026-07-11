@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 namespace recorder_core {
 
@@ -24,6 +25,60 @@ void ConvertInt16ToFloat32(const std::int16_t* src, float* dst, size_t sample_co
     for (size_t i = 0; i < sample_count; ++i) {
         dst[i] = static_cast<float>(src[i]) / 32768.0f;
     }
+}
+
+// Per-codec wiring that differs between the otherwise identical encode loops:
+// which encoder to build, how its init failure reads, and whether an empty
+// codec-private after Init is a hard error (FLAC/AAC produce theirs during
+// Init; PCM legitimately has none; Opus always builds a 19-byte OpusHead).
+struct EncoderSetup {
+    std::unique_ptr<IAudioEncoder> encoder;
+    const char* init_error_prefix = nullptr;
+    const char* empty_codec_private_error = nullptr; // nullptr == empty allowed
+};
+
+EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
+    EncoderSetup setup;
+    switch (config.audio_codec) {
+    case AudioCodec::Opus: {
+        auto enc = std::make_unique<OpusAudioEncoder>();
+        enc->SetEncodingParams(config.audio_bitrate_kbps, config.opus_frame_duration, config.opus_complexity);
+        setup.encoder = std::move(enc);
+        setup.init_error_prefix = "Opus encoder init: ";
+        break;
+    }
+    case AudioCodec::Pcm: {
+        // PCM passthrough "encoder" (MKV-only A_PCM/INT_LIT); no CodecPrivate —
+        // the track is marked ready with empty bytes so the mux thread's
+        // codec-private readiness gate releases the pre-mux buffer.
+        auto enc = std::make_unique<PcmAudioEncoder>();
+        enc->SetBitDepth(config.audio_bit_depth); // ADR 0030: configurable depth
+        setup.encoder = std::move(enc);
+        setup.init_error_prefix = "PCM encoder init: ";
+        break;
+    }
+    case AudioCodec::Flac: {
+        // FLAC lossless encoder (MKV-only A_FLAC via libFLAC). Its CodecPrivate
+        // (native "fLaC" header + STREAMINFO) is produced during Init() via the
+        // write callback and must be non-empty.
+        auto enc = std::make_unique<FlacAudioEncoder>();
+        enc->SetBitDepth(config.audio_bit_depth); // ADR 0030: configurable depth + level
+        enc->SetCompressionLevel(config.flac_compression_level);
+        setup.encoder = std::move(enc);
+        setup.init_error_prefix = "FLAC encoder init: ";
+        setup.empty_codec_private_error = "FLAC codec private is empty after Init";
+        break;
+    }
+    default: {
+        auto enc = std::make_unique<FdkAacEncoder>();
+        enc->SetBitrateKbps(config.audio_bitrate_kbps);
+        setup.encoder = std::move(enc);
+        setup.init_error_prefix = "FDK-AAC encoder init: ";
+        setup.empty_codec_private_error = "FDK-AAC codec private is empty after Init";
+        break;
+    }
+    }
+    return setup;
 }
 
 } // namespace
@@ -76,18 +131,20 @@ void AudioThread::Run() {
         m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
         return;
     }
+    auto uninitCom = [&]() {
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
+    };
 
     if (!source_) {
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare, "Audio source is null");
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
+        uninitCom();
         return;
     }
 
     if (track_id_ >= CodecPrivateData::kMaxAudioTracks) {
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare, "Audio track id is out of range");
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
+        uninitCom();
         return;
     }
 
@@ -112,8 +169,7 @@ void AudioThread::Run() {
         if (!source_->Init(err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, "Audio source init failed: " + err);
             source_->Shutdown();
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
+            uninitCom();
             return;
         }
     }
@@ -125,14 +181,55 @@ void AudioThread::Run() {
     if (kSampleRate == 0 || kChannels == 0) {
         m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, "Audio source reported invalid stream format");
         source_->Shutdown();
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
+        uninitCom();
         return;
     }
 
-    uint64_t lastAudioPts = 0;
-
     m_state.diagnostics.SetAudioFormat(kSampleRate, kChannels);
+
+    // --- Encoder init (the only codec-specific part of this worker) ---
+    EncoderSetup setup = MakeEncoderSetup(m_state.config);
+    IAudioEncoder& encoder = *setup.encoder;
+    {
+        std::string err;
+        if (!encoder.Init(kSampleRate, kChannels, err)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, std::string(setup.init_error_prefix) + err);
+            source_->Shutdown();
+            uninitCom();
+            return;
+        }
+    }
+
+    // --- Publish codec private and mark the track ready so the mux thread's
+    // codec-private readiness gate can release the pre-mux buffer. ---
+    {
+        auto cp = encoder.CodecPrivateBytes();
+        if (setup.empty_codec_private_error != nullptr && cp.empty()) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, setup.empty_codec_private_error);
+            encoder.Shutdown();
+            source_->Shutdown();
+            uninitCom();
+            return;
+        }
+        std::lock_guard lk(m_state.premux_mutex);
+        m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
+        m_state.codec_private.audio_track_ready[track_id_] = true;
+        m_state.premux_cv.notify_all();
+    }
+
+    EncodeLoop(encoder, kSampleRate, kChannels, sourceFormat);
+
+    encoder.Shutdown();
+    uninitCom();
+}
+
+// ---------------------------------------------------------------------------
+// EncodeLoop — capture/encode drain shared by every audio codec
+// ---------------------------------------------------------------------------
+
+void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t channels,
+                             AudioSampleFormat source_format) {
+    uint64_t lastAudioPts = 0;
 
     // M4 Phase 4: one audio producer; Phase 5 will instantiate multiple AudioThread workers.
     auto routeAudioPackets = [&](std::vector<EncodedAudioPacket>& pkts) {
@@ -188,534 +285,21 @@ void AudioThread::Run() {
     // encoder as silence so PTS (derived from the accumulated frame counter)
     // stays continuous. Chunked so a large (clamped) gap never needs a large
     // scratch buffer.
-    auto feedGapSilence = [&](IAudioEncoder& enc, uint32_t gap_frames, uint64_t& accumulated_frames,
+    auto feedGapSilence = [&](uint32_t gap_frames, uint64_t& accumulated_frames,
                               std::vector<EncodedAudioPacket>& out_pkts) {
         constexpr uint32_t kChunkFrames = 4800; // 100 ms at 48 kHz
         const uint32_t first_chunk = gap_frames < kChunkFrames ? gap_frames : kChunkFrames;
-        std::vector<float> zeros(static_cast<size_t>(first_chunk) * kChannels, 0.0f);
+        std::vector<float> zeros(static_cast<size_t>(first_chunk) * channels, 0.0f);
         for (uint32_t remaining = gap_frames; remaining > 0;) {
             const uint32_t n = remaining < kChunkFrames ? remaining : kChunkFrames;
-            enc.FeedFloat32(zeros.data(), static_cast<size_t>(n) * kChannels, 0, accumulated_frames, kSampleRate,
-                            kChannels, out_pkts);
+            enc.FeedFloat32(zeros.data(), static_cast<size_t>(n) * channels, 0, accumulated_frames, sample_rate,
+                            channels, out_pkts);
             remaining -= n;
         }
     };
 
-    if (m_state.config.audio_codec == AudioCodec::Opus) {
-        // --- Opus encoder init ---
-        OpusAudioEncoder opusEnc;
-        opusEnc.SetEncodingParams(m_state.config.audio_bitrate_kbps, m_state.config.opus_frame_duration,
-                                  m_state.config.opus_complexity);
-        {
-            std::string err;
-            if (!opusEnc.Init(kSampleRate, kChannels, err)) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "Opus encoder init: " + err);
-                source_->Shutdown();
-                if (com_inited && hr != RPC_E_CHANGED_MODE)
-                    CoUninitialize();
-                return;
-            }
-        }
-
-        {
-            std::lock_guard lk(m_state.premux_mutex);
-            m_state.codec_private.audio_codec_private[track_id_].bytes = opusEnc.CodecPrivateBytes();
-            m_state.codec_private.audio_track_ready[track_id_] = true;
-            m_state.premux_cv.notify_all();
-        }
-
-        uint64_t encoderAccumulatedFrames = 0;
-
-        // --- Capture / encode loop ---
-        while (!m_state.stop_requested.load()) {
-            if (m_state.pause_requested.load()) {
-                while (source_->PendingFrameCount() > 0) {
-                    RawAudioBuffer raw{};
-                    std::string err;
-                    if (source_->AcquireBuffer(raw, err))
-                        source_->ReleaseBuffer();
-                    else
-                        break;
-                }
-                Sleep(1);
-                continue;
-            }
-
-            uint32_t pendingFrames = source_->PendingFrameCount();
-            m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
-            if (pendingFrames == 0) {
-                Sleep(1);
-                continue;
-            }
-
-            bool anyWork = false;
-            while (source_->PendingFrameCount() > 0) {
-                RawAudioBuffer raw{};
-                std::string captureErr;
-                if (!source_->AcquireBuffer(raw, captureErr)) {
-                    if (!captureErr.empty()) {
-                        const int32_t captureHr = source_->LastCaptureHresult();
-                        m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
-                                              "Audio source AcquireBuffer failed: " + captureErr);
-                        goto end_opus_loop;
-                    }
-                    break;
-                }
-
-                if (raw.data_discontinuity) {
-                    m_state.diagnostics.OnAudioDiscontinuity();
-                }
-
-                std::vector<EncodedAudioPacket> pkts;
-                float new_rms = 0.0f;
-                if (raw.gap_frames > 0) {
-                    feedGapSilence(opusEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
-                }
-                if (raw.silent) {
-                    std::vector<float> silence(static_cast<size_t>(raw.num_frames) * kChannels, 0.0f);
-                    opusEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
-                                        kChannels, pkts);
-                } else if (raw.bytes == nullptr) {
-                    source_->ReleaseBuffer();
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
-                                          "Audio source returned null bytes for non-silent packet");
-                    goto end_opus_loop;
-                } else if (sourceFormat == AudioSampleFormat::Float32) {
-                    const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
-                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
-                    opusEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0,
-                                        encoderAccumulatedFrames, kSampleRate, kChannels, pkts);
-                } else {
-                    const size_t totalSamples = static_cast<size_t>(raw.num_frames) * kChannels;
-                    floatScratch.resize(totalSamples);
-                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
-                                          totalSamples);
-                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
-                    opusEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames,
-                                        kSampleRate, kChannels, pkts);
-                }
-                m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
-
-                source_->ReleaseBuffer();
-
-                // Update stats
-                {
-                    std::lock_guard slk(m_state.stats_mutex);
-                    for (const auto& p : pkts) {
-                        m_state.stats.audio_packets++;
-                        m_state.stats.audio_bytes += p.bytes.size();
-                    }
-                    if (track_id_ < m_state.stats.per_track_rms.size()) {
-                        m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
-                    }
-                }
-
-                if (!routeAudioPackets(pkts))
-                    goto end_opus_loop;
-
-                anyWork = true;
-            }
-
-            if (!anyWork)
-                Sleep(1);
-        }
-
-    end_opus_loop:
-        source_->Shutdown();
-
-        // --- Drain Opus encoder ---
-        {
-            std::vector<EncodedAudioPacket> drainPkts;
-            opusEnc.Flush(drainPkts);
-
-            {
-                std::lock_guard slk(m_state.stats_mutex);
-                for (const auto& p : drainPkts) {
-                    m_state.stats.audio_packets++;
-                    m_state.stats.audio_bytes += p.bytes.size();
-                }
-            }
-
-            routeAudioPackets(drainPkts);
-        }
-
-        // --- Update final stats ---
-        {
-            std::lock_guard lk(m_state.stats_mutex);
-            if (lastAudioPts > m_state.stats.audio_duration_ns) {
-                m_state.stats.audio_duration_ns = lastAudioPts;
-            }
-        }
-
-        // --- Push audio EOS sentinel ---
-        {
-            MuxItem eos;
-            eos.payload = AudioEosSentinel{track_id_};
-            std::lock_guard lk(m_state.mux_mutex);
-            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
-        }
-
-        opusEnc.Shutdown();
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
-        return;
-    }
-
-    if (m_state.config.audio_codec == AudioCodec::Pcm) {
-        // --- PCM passthrough "encoder" init (MKV-only A_PCM/INT_LIT) ---
-        PcmAudioEncoder pcmEnc;
-        pcmEnc.SetBitDepth(m_state.config.audio_bit_depth); // ADR 0030: configurable depth
-        {
-            std::string err;
-            if (!pcmEnc.Init(kSampleRate, kChannels, err)) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "PCM encoder init: " + err);
-                source_->Shutdown();
-                if (com_inited && hr != RPC_E_CHANGED_MODE)
-                    CoUninitialize();
-                return;
-            }
-        }
-
-        // PCM has no CodecPrivate; mark the track ready with empty bytes so the
-        // mux thread's codec-private readiness gate releases the pre-mux buffer.
-        {
-            std::lock_guard lk(m_state.premux_mutex);
-            m_state.codec_private.audio_codec_private[track_id_].bytes = pcmEnc.CodecPrivateBytes();
-            m_state.codec_private.audio_track_ready[track_id_] = true;
-            m_state.premux_cv.notify_all();
-        }
-
-        uint64_t encoderAccumulatedFrames = 0;
-
-        // --- Capture / encode loop ---
-        while (!m_state.stop_requested.load()) {
-            if (m_state.pause_requested.load()) {
-                while (source_->PendingFrameCount() > 0) {
-                    RawAudioBuffer raw{};
-                    std::string err;
-                    if (source_->AcquireBuffer(raw, err))
-                        source_->ReleaseBuffer();
-                    else
-                        break;
-                }
-                Sleep(1);
-                continue;
-            }
-
-            uint32_t pendingFrames = source_->PendingFrameCount();
-            m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
-            if (pendingFrames == 0) {
-                Sleep(1);
-                continue;
-            }
-
-            bool anyWork = false;
-            while (source_->PendingFrameCount() > 0) {
-                RawAudioBuffer raw{};
-                std::string captureErr;
-                if (!source_->AcquireBuffer(raw, captureErr)) {
-                    if (!captureErr.empty()) {
-                        const int32_t captureHr = source_->LastCaptureHresult();
-                        m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
-                                              "Audio source AcquireBuffer failed: " + captureErr);
-                        goto end_pcm_loop;
-                    }
-                    break;
-                }
-
-                if (raw.data_discontinuity) {
-                    m_state.diagnostics.OnAudioDiscontinuity();
-                }
-
-                std::vector<EncodedAudioPacket> pkts;
-                float new_rms = 0.0f;
-                if (raw.gap_frames > 0) {
-                    feedGapSilence(pcmEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
-                }
-                const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
-                if (raw.silent) {
-                    std::vector<float> silence(totalSamples, 0.0f);
-                    pcmEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
-                                       kChannels, pkts);
-                } else if (raw.bytes == nullptr) {
-                    source_->ReleaseBuffer();
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
-                                          "Audio source returned null bytes for non-silent packet");
-                    goto end_pcm_loop;
-                } else if (sourceFormat == AudioSampleFormat::Float32) {
-                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
-                    pcmEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0,
-                                       encoderAccumulatedFrames, kSampleRate, kChannels, pkts);
-                } else {
-                    floatScratch.resize(totalSamples);
-                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
-                                          totalSamples);
-                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
-                    pcmEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames,
-                                       kSampleRate, kChannels, pkts);
-                }
-                m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
-
-                source_->ReleaseBuffer();
-
-                // Update stats
-                {
-                    std::lock_guard slk(m_state.stats_mutex);
-                    for (const auto& p : pkts) {
-                        m_state.stats.audio_packets++;
-                        m_state.stats.audio_bytes += p.bytes.size();
-                    }
-                    if (track_id_ < m_state.stats.per_track_rms.size()) {
-                        m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
-                    }
-                }
-
-                if (!routeAudioPackets(pkts))
-                    goto end_pcm_loop;
-
-                anyWork = true;
-            }
-
-            if (!anyWork)
-                Sleep(1);
-        }
-
-    end_pcm_loop:
-        source_->Shutdown();
-
-        // --- Drain PCM encoder (no-op; PCM holds no buffered state) ---
-        {
-            std::vector<EncodedAudioPacket> drainPkts;
-            pcmEnc.Flush(drainPkts);
-            routeAudioPackets(drainPkts);
-        }
-
-        // --- Update final stats ---
-        {
-            std::lock_guard lk(m_state.stats_mutex);
-            if (lastAudioPts > m_state.stats.audio_duration_ns) {
-                m_state.stats.audio_duration_ns = lastAudioPts;
-            }
-        }
-
-        // --- Push audio EOS sentinel ---
-        {
-            MuxItem eos;
-            eos.payload = AudioEosSentinel{track_id_};
-            std::lock_guard lk(m_state.mux_mutex);
-            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
-        }
-
-        pcmEnc.Shutdown();
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
-        return;
-    }
-
-    if (m_state.config.audio_codec == AudioCodec::Flac) {
-        // --- FLAC lossless encoder init (MKV-only A_FLAC via libFLAC) ---
-        FlacAudioEncoder flacEnc;
-        // ADR 0030: configurable bit depth and compression level
-        flacEnc.SetBitDepth(m_state.config.audio_bit_depth);
-        flacEnc.SetCompressionLevel(m_state.config.flac_compression_level);
-        {
-            std::string err;
-            if (!flacEnc.Init(kSampleRate, kChannels, err)) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FLAC encoder init: " + err);
-                source_->Shutdown();
-                if (com_inited && hr != RPC_E_CHANGED_MODE)
-                    CoUninitialize();
-                return;
-            }
-        }
-
-        // FLAC's CodecPrivate (native "fLaC" header + STREAMINFO) is produced by
-        // the encoder during Init() via its write callback. Publish it now and
-        // mark the track ready so the pre-mux readiness gate releases.
-        {
-            auto cp = flacEnc.CodecPrivateBytes();
-            if (cp.empty()) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FLAC codec private is empty after Init");
-                flacEnc.Shutdown();
-                source_->Shutdown();
-                if (com_inited && hr != RPC_E_CHANGED_MODE)
-                    CoUninitialize();
-                return;
-            }
-            std::lock_guard lk(m_state.premux_mutex);
-            m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
-            m_state.codec_private.audio_track_ready[track_id_] = true;
-            m_state.premux_cv.notify_all();
-        }
-
-        uint64_t encoderAccumulatedFrames = 0;
-
-        // --- Capture / encode loop ---
-        while (!m_state.stop_requested.load()) {
-            if (m_state.pause_requested.load()) {
-                while (source_->PendingFrameCount() > 0) {
-                    RawAudioBuffer raw{};
-                    std::string err;
-                    if (source_->AcquireBuffer(raw, err))
-                        source_->ReleaseBuffer();
-                    else
-                        break;
-                }
-                Sleep(1);
-                continue;
-            }
-
-            uint32_t pendingFrames = source_->PendingFrameCount();
-            m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
-            if (pendingFrames == 0) {
-                Sleep(1);
-                continue;
-            }
-
-            bool anyWork = false;
-            while (source_->PendingFrameCount() > 0) {
-                RawAudioBuffer raw{};
-                std::string captureErr;
-                if (!source_->AcquireBuffer(raw, captureErr)) {
-                    if (!captureErr.empty()) {
-                        const int32_t captureHr = source_->LastCaptureHresult();
-                        m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
-                                              "Audio source AcquireBuffer failed: " + captureErr);
-                        goto end_flac_loop;
-                    }
-                    break;
-                }
-
-                if (raw.data_discontinuity) {
-                    m_state.diagnostics.OnAudioDiscontinuity();
-                }
-
-                std::vector<EncodedAudioPacket> pkts;
-                float new_rms = 0.0f;
-                if (raw.gap_frames > 0) {
-                    feedGapSilence(flacEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
-                }
-                const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
-                if (raw.silent) {
-                    std::vector<float> silence(totalSamples, 0.0f);
-                    flacEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
-                                        kChannels, pkts);
-                } else if (raw.bytes == nullptr) {
-                    source_->ReleaseBuffer();
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
-                                          "Audio source returned null bytes for non-silent packet");
-                    goto end_flac_loop;
-                } else if (sourceFormat == AudioSampleFormat::Float32) {
-                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
-                    flacEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0,
-                                        encoderAccumulatedFrames, kSampleRate, kChannels, pkts);
-                } else {
-                    floatScratch.resize(totalSamples);
-                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
-                                          totalSamples);
-                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
-                    flacEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames,
-                                        kSampleRate, kChannels, pkts);
-                }
-                m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
-
-                source_->ReleaseBuffer();
-
-                // Update stats
-                {
-                    std::lock_guard slk(m_state.stats_mutex);
-                    for (const auto& p : pkts) {
-                        m_state.stats.audio_packets++;
-                        m_state.stats.audio_bytes += p.bytes.size();
-                    }
-                    if (track_id_ < m_state.stats.per_track_rms.size()) {
-                        m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
-                    }
-                }
-
-                if (!routeAudioPackets(pkts))
-                    goto end_flac_loop;
-
-                anyWork = true;
-            }
-
-            if (!anyWork)
-                Sleep(1);
-        }
-
-    end_flac_loop:
-        source_->Shutdown();
-
-        // --- Drain FLAC encoder (finish stream; emits remaining buffered frames) ---
-        {
-            std::vector<EncodedAudioPacket> drainPkts;
-            flacEnc.Flush(drainPkts);
-
-            {
-                std::lock_guard slk(m_state.stats_mutex);
-                for (const auto& p : drainPkts) {
-                    m_state.stats.audio_packets++;
-                    m_state.stats.audio_bytes += p.bytes.size();
-                }
-            }
-
-            routeAudioPackets(drainPkts);
-        }
-
-        // --- Update final stats ---
-        {
-            std::lock_guard lk(m_state.stats_mutex);
-            if (lastAudioPts > m_state.stats.audio_duration_ns) {
-                m_state.stats.audio_duration_ns = lastAudioPts;
-            }
-        }
-
-        // --- Push audio EOS sentinel ---
-        {
-            MuxItem eos;
-            eos.payload = AudioEosSentinel{track_id_};
-            std::lock_guard lk(m_state.mux_mutex);
-            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
-        }
-
-        flacEnc.Shutdown();
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
-        return;
-    }
-
-    // --- Init AAC encoder ---
-    FdkAacEncoder aacEnc;
-    aacEnc.SetBitrateKbps(m_state.config.audio_bitrate_kbps);
-    {
-        std::string err;
-        if (!aacEnc.Init(kSampleRate, kChannels, err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FDK-AAC encoder init: " + err);
-            source_->Shutdown();
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
-            return;
-        }
-    }
-
-    // --- Read AAC codec private from FDK-AAC encoder ---
-    {
-        auto cp = aacEnc.CodecPrivateBytes();
-        if (cp.empty()) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FDK-AAC codec private is empty after Init");
-            aacEnc.Shutdown();
-            source_->Shutdown();
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
-            return;
-        }
-        std::lock_guard lk(m_state.premux_mutex);
-        m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
-        m_state.codec_private.audio_track_ready[track_id_] = true;
-        m_state.premux_cv.notify_all();
-    }
-
-    uint64_t audioAccumulatedFrames = 0;
+    uint64_t encoderAccumulatedFrames = 0;
+    bool failed = false;
 
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
@@ -748,7 +332,7 @@ void AudioThread::Run() {
                     const int32_t captureHr = source_->LastCaptureHresult();
                     m_state.RecordFailure(captureHr != 0 ? captureHr : E_FAIL, ErrorPhase::AudioCapture,
                                           "Audio source AcquireBuffer failed: " + captureErr);
-                    goto end_audio_loop;
+                    failed = true;
                 }
                 break;
             }
@@ -760,30 +344,30 @@ void AudioThread::Run() {
             std::vector<EncodedAudioPacket> pkts;
             float new_rms = 0.0f;
             if (raw.gap_frames > 0) {
-                feedGapSilence(aacEnc, raw.gap_frames, audioAccumulatedFrames, pkts);
+                feedGapSilence(raw.gap_frames, encoderAccumulatedFrames, pkts);
             }
-            const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
-
+            const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(channels);
             if (raw.silent) {
                 std::vector<float> silence(totalSamples, 0.0f);
-                aacEnc.FeedFloat32(silence.data(), silence.size(), 0, audioAccumulatedFrames, kSampleRate, kChannels,
-                                   pkts);
+                enc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, sample_rate, channels,
+                                pkts);
             } else if (raw.bytes == nullptr) {
                 source_->ReleaseBuffer();
                 m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
                                       "Audio source returned null bytes for non-silent packet");
-                goto end_audio_loop;
-            } else if (sourceFormat == AudioSampleFormat::Float32) {
+                failed = true;
+                break;
+            } else if (source_format == AudioSampleFormat::Float32) {
                 new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
-                aacEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0, audioAccumulatedFrames,
-                                   kSampleRate, kChannels, pkts);
+                enc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0, encoderAccumulatedFrames,
+                                sample_rate, channels, pkts);
             } else {
                 floatScratch.resize(totalSamples);
                 ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
                                       totalSamples);
                 new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
-                aacEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, audioAccumulatedFrames, kSampleRate,
-                                   kChannels, pkts);
+                enc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames, sample_rate,
+                                channels, pkts);
             }
             m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
 
@@ -801,23 +385,29 @@ void AudioThread::Run() {
                 }
             }
 
-            if (!routeAudioPackets(pkts))
-                goto end_audio_loop;
+            if (!routeAudioPackets(pkts)) {
+                failed = true;
+                break;
+            }
 
             anyWork = true;
         }
+
+        if (failed)
+            break;
 
         if (!anyWork)
             Sleep(1);
     }
 
-end_audio_loop:
     source_->Shutdown();
 
-    // --- Drain AAC encoder ---
+    // --- Drain the encoder (flush semantics are the encoder's own: Opus pads
+    // the final frame, FLAC finishes the stream, AAC drains its delay line,
+    // PCM holds no buffered state and emits nothing) ---
     {
         std::vector<EncodedAudioPacket> drainPkts;
-        aacEnc.Flush(drainPkts);
+        enc.Flush(drainPkts);
 
         {
             std::lock_guard slk(m_state.stats_mutex);
@@ -845,10 +435,6 @@ end_audio_loop:
         std::lock_guard lk(m_state.mux_mutex);
         m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
     }
-
-    aacEnc.Shutdown();
-    if (com_inited && hr != RPC_E_CHANGED_MODE)
-        CoUninitialize();
 }
 
 } // namespace recorder_core
