@@ -270,7 +270,6 @@ add_library(recorder_core STATIC
     src/nvenc_video_encoder.cpp
     include/recorder_core/hdr_bitstream_metadata.h
     src/hdr_bitstream_metadata.cpp
-    src/mf_aac_encoder.cpp
     src/fdk_aac_encoder.cpp
     src/gpu_compositor.cpp
     src/gpu_compositor.h
@@ -481,14 +480,6 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_audio_thread_source_agnostic PRIVATE src)
-
-exosnap_add_gtest(
-    NAME test_mf_aac_encoder
-    TEST_PREFIX recorder_core.
-    SOURCES tests/test_mf_aac_encoder.cpp
-    LIBRARIES recorder_core
-)
-target_include_directories(test_mf_aac_encoder PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_fdk_aac_encoder
