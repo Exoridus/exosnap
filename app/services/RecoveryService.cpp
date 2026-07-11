@@ -128,8 +128,16 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
 
         // Not finalized — repair-remux via libavformat matroska muxer.
         const auto result = recorder_core::RemuxToMkv(artefact, target, WrapProgress(std::move(progress_cb)));
-        if (!result.success)
+        if (!result.success) {
+            // The repair did not complete cleanly — the artefact (the original,
+            // possibly-unfinalized MKV) is the only trustworthy recording and
+            // must be kept. Remove whatever partial output the failed repair
+            // may have left behind so it is never mistaken for a real result
+            // (symmetric with the MP4 path below).
+            std::error_code cleanup_ec;
+            std::filesystem::remove(target, cleanup_ec);
             return {false, result.message};
+        }
 
         std::error_code rm_ec;
         std::filesystem::remove(artefact, rm_ec);
