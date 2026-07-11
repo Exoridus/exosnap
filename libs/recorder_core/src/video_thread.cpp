@@ -546,6 +546,11 @@ void VideoThread::Run() {
         nvenc.SetCq(m_state.config.nvenc_cq);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
         nvenc.SetPreset(m_state.config.nvenc_preset);
+        // Keyframe interval (Settings → Advanced → Video). Must be set before
+        // Configure() so InitEncoder derives gopLength/idrPeriod from it; without
+        // this the encoder silently stays at its 2 s default and the selector has
+        // no effect.
+        nvenc.SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
         // Color signaling (fix for color-range-signaling bug): the encoded
         // bitstream itself must carry the same color description as the
         // VideoProcessor conversion below and the Matroska Colour element

@@ -665,6 +665,47 @@ RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrat
 }
 
 // ---------------------------------------------------------------------------
+// ComputeGopLength / ApplyGopToNvenc / NextGopKeyframePhase
+// Pure GOP / keyframe helpers (see nvenc_encoder.h). No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept {
+    if (frame_rate_num == 0u || frame_rate_den == 0u) {
+        return 120u; // historical 2 s @ 60 fps fallback for a degenerate frame rate
+    }
+    const float secs = (keyframe_interval_secs > 0.0f) ? keyframe_interval_secs : 2.0f;
+    const uint32_t gop =
+        static_cast<uint32_t>(secs * static_cast<float>(frame_rate_num) / static_cast<float>(frame_rate_den) + 0.5f);
+    return (gop > 0u) ? gop : 1u; // never 0 (which NVENC reads as an all-1-GOP infinite stream)
+}
+
+void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) noexcept {
+    cfg.gopLength = gop_length;
+    switch (codec) {
+    case VideoCodec::H264Nvenc:
+        cfg.encodeCodecConfig.h264Config.idrPeriod = gop_length;
+        break;
+    case VideoCodec::HevcNvenc:
+        cfg.encodeCodecConfig.hevcConfig.idrPeriod = gop_length;
+        break;
+    default:
+        cfg.encodeCodecConfig.av1Config.idrPeriod = gop_length;
+        break;
+    }
+}
+
+GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) noexcept {
+    GopKeyframePhase out;
+    out.is_keyframe = forced_idr || (frame_in_gop == 0u);
+    uint32_t f = out.is_keyframe ? 0u : frame_in_gop;
+    ++f;
+    if (gop_length > 0u && f >= gop_length) {
+        f = 0u;
+    }
+    out.frame_in_gop = f;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // FetchPresetConfig
 // ---------------------------------------------------------------------------
 
@@ -810,15 +851,12 @@ void NvencEncoder::BuildHdrBitstreamPayloads() {
 
 bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_rate_num, uint32_t frame_rate_den,
                                std::string& out_error) {
-    // Keyframe interval: gopLength = round(interval_secs * fps).
-    // m_keyframeIntervalSecs defaults to 2.0 (pre-0.9.0 hardcoded behaviour).
-    const uint32_t kGopFrames =
-        (frame_rate_den > 0 && frame_rate_num > 0)
-            ? static_cast<uint32_t>(m_keyframeIntervalSecs * static_cast<float>(frame_rate_num) /
-                                        static_cast<float>(frame_rate_den) +
-                                    0.5f)
-            : 120u;
-    m_encodeConfig.gopLength = kGopFrames;
+    // Keyframe interval: gopLength = round(interval_secs * fps), applied together
+    // with the codec-specific idrPeriod. m_keyframeIntervalSecs is set from the
+    // user's Settings → Advanced selection (via SetKeyframeIntervalSecs) and
+    // defaults to 2.0 (pre-0.9.0 hardcoded behaviour when unset).
+    const uint32_t kGopFrames = ComputeGopLength(m_keyframeIntervalSecs, frame_rate_num, frame_rate_den);
+    ApplyGopToNvenc(m_encodeConfig, m_codec, kGopFrames);
     // Remember the IDR cadence and (re)build the HDR metadata payloads for this
     // session. m_frameInGop starts at 0 so the first submitted frame — always an
     // IDR — carries the metadata. The submission-side keyframe prediction in
@@ -829,13 +867,6 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     m_gopLength = kGopFrames;
     m_frameInGop = 0;
     BuildHdrBitstreamPayloads();
-    if (m_codec == VideoCodec::H264Nvenc) {
-        m_encodeConfig.encodeCodecConfig.h264Config.idrPeriod = kGopFrames;
-    } else if (m_codec == VideoCodec::HevcNvenc) {
-        m_encodeConfig.encodeCodecConfig.hevcConfig.idrPeriod = kGopFrames;
-    } else {
-        m_encodeConfig.encodeCodecConfig.av1Config.idrPeriod = kGopFrames;
-    }
 
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
     if (m_codec == VideoCodec::H264Nvenc)
@@ -1128,14 +1159,12 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // (enforced in FetchPresetConfig), output order == submission order and IDRs
     // land on submission indices 0, gopLength, 2*gopLength, ...; a forced IDR
     // resets the GOP phase. Advance the phase and decide before submitting.
-    const bool isKeyframe = forcedIdr || (m_frameInGop == 0);
-    if (isKeyframe) {
-        m_frameInGop = 0;
-    }
-    ++m_frameInGop;
-    if (m_gopLength > 0 && m_frameInGop >= m_gopLength) {
-        m_frameInGop = 0;
-    }
+    // NextGopKeyframePhase is the pure form of this cadence (tested with
+    // non-default GOP lengths); it honours the configured m_gopLength, so a
+    // user-selected 1 s / 0.5 s keyframe interval is respected here too.
+    const GopKeyframePhase phase = NextGopKeyframePhase(m_frameInGop, m_gopLength, forcedIdr);
+    const bool isKeyframe = phase.is_keyframe;
+    m_frameInGop = phase.frame_in_gop;
 
     // Attach the precomputed in-band HDR10 metadata on every keyframe, so each
     // segment/split file and mid-stream join point carries it. The payload
