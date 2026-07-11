@@ -100,11 +100,12 @@ cmake_policy(SET CMP0091 NEW)
 FetchContent_Declare(
     sentry_native
     GIT_REPOSITORY    "https://github.com/getsentry/sentry-native.git"
-    GIT_TAG           "0.15.0"
+    GIT_TAG           "42ca73a6c7a8f6638db12ef587ef0ac6fe67d21e" # tag 0.15.0
     GIT_SUBMODULES_RECURSE TRUE   # Initializes Crashpad + mini_chromium
-    # No URL_HASH here — git tags on a specific commit are reproducible.
-    # For a release-tag pin, use the commit SHA for extra security:
-    # GIT_TAG "abc123def456..."  # commit for 0.15.0
+    # No URL_HASH here — this is a git checkout, not a URL/tarball download.
+    # Pinned to the tag's commit SHA (rather than the mutable tag name) so the
+    # dependency resolves to the exact same tree even if the upstream tag were
+    # ever moved or deleted.
 )
 
 FetchContent_MakeAvailable(sentry_native)

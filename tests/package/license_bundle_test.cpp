@@ -47,13 +47,30 @@ fs::path project_root() {
 }
 
 const std::vector<std::string> k_expected_licenses = {
-    "spdlog.txt", "nlohmann_json.txt", "tomlplusplus.txt", "opus.txt", "fdk-aac.txt",
-    "flac.txt",   "libebml.txt",       "libmatroska.txt",  "qt.txt",   "ffmpeg.txt",
+    "spdlog.txt",
+    "nlohmann_json.txt",
+    "tomlplusplus.txt",
+    "opus.txt",
+    "fdk-aac.txt",
+    "flac.txt",
+    "rnnoise.txt",
+    "libebml.txt",
+    "libmatroska.txt",
+    "qt.txt",
+    "ibm-plex-mono.txt",
+    "hanken-grotesk.txt",
+    "ffmpeg.txt",
+    "presentmon.txt",
+    // Official-release-build-only (EXOSNAP_OFFICIAL_BUILD=ON); still documented unconditionally.
+    "sentry-native.txt",
+    "crashpad.txt",
+    "mini_chromium.txt",
 };
 
 const std::vector<std::string> k_expected_notices_sections = {
-    "spdlog", "nlohmann/json", "toml++",     "Opus",       "FDK-AAC",        "FLAC", "libebml", "libmatroska",
-    "Qt",     "FFmpeg",        "GoogleTest", "Build-only", "System/runtime",
+    "spdlog",        "nlohmann/json", "toml++",        "Opus",       "FDK-AAC",    "FLAC",
+    "RNNoise",       "libebml",       "libmatroska",   "Qt",         "FFmpeg",     "PresentMon",
+    "sentry-native", "Crashpad",      "mini_chromium", "GoogleTest", "Build-only", "System/runtime",
 };
 
 } // namespace
