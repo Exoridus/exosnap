@@ -11,7 +11,7 @@
 #include <ebml/EbmlHead.h>
 #include <ebml/EbmlSubHead.h>
 #include <ebml/EbmlVoid.h>
-#include <ebml/StdIOCallback.h>
+#include <ebml/IOCallback.h>
 #include <matroska/KaxBlockData.h>
 #include <matroska/KaxCluster.h>
 #include <matroska/KaxCues.h>
@@ -27,9 +27,20 @@
 #pragma warning(pop)
 #endif
 
+#include <recorder_core/logging/logging.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <exception>
+#include <span>
+#include <stdexcept>
+#include <string>
+
+#include <io.h>
+#include <windows.h>
 
 namespace recorder_core {
 
@@ -44,7 +55,113 @@ constexpr int64_t kMaxClusterRelativeMs = 32767LL;
 // Space reserved for the SeekHead placeholder at the start of the Segment.
 constexpr uint64_t kSeekHeadReservedBytes = 150ULL;
 
+constexpr const char* kLogComponent = "matroska_stream_writer";
+
+void LogDurabilityFlushFailure(const char* message, const std::string& reason) {
+    logging::LogField fields[] = {{"error", reason}};
+    logging::log(logging::LogLevel::Warn, kLogComponent, message, std::span<const logging::LogField>(fields, 1));
+}
+
 } // namespace
+
+// Owns the output FILE* directly, rather than via libebml::StdIOCallback: that
+// class's FILE* member is private with no accessor, so there is no way to reach
+// the CRT stdio buffer (for fflush) or the underlying OS HANDLE (for
+// FlushFileBuffers) through it. Read/write/seek semantics below mirror
+// StdIOCallback exactly (same fopen mode, same exception-on-failure contract)
+// — this is plumbing for durability, not a behavior change.
+class DurableFileIo final : public libebml::IOCallback {
+  public:
+    explicit DurableFileIo(const std::string& path) {
+        m_file = std::fopen(path.c_str(), "wb+");
+        if (m_file == nullptr) {
+            throw std::runtime_error("Can't open stdio file \"" + path + "\" in mode \"wb+\"");
+        }
+    }
+
+    ~DurableFileIo() override {
+        // Defensive: CloseIo() normally calls close() explicitly first; this
+        // only fires on an unexpected teardown path. Never throw from a
+        // destructor.
+        if (m_file != nullptr) {
+            std::fclose(m_file);
+            m_file = nullptr;
+        }
+    }
+
+    DurableFileIo(const DurableFileIo&) = delete;
+    DurableFileIo& operator=(const DurableFileIo&) = delete;
+
+    // NOTE: uint32/int64/uint64 below are libebml's own global typedefs
+    // (ebml/c/libebml_t.h) — the signatures must match IOCallback exactly.
+    uint32 read(void* buffer, size_t size) override {
+        return static_cast<uint32>(std::fread(buffer, 1, size, m_file));
+    }
+
+    void setFilePointer(int64 offset, libebml::seek_mode mode = libebml::seek_beginning) override {
+        if (std::fseek(m_file, static_cast<long>(offset), static_cast<int>(mode)) != 0) {
+            throw std::runtime_error("Failed to seek matroska output file");
+        }
+    }
+
+    size_t write(const void* buffer, size_t size) override {
+        return std::fwrite(buffer, 1, size, m_file);
+    }
+
+    uint64 getFilePointer() override {
+        const long pos = std::ftell(m_file);
+        if (pos < 0) {
+            throw std::runtime_error("Can't tell the current matroska output file position");
+        }
+        return static_cast<uint64>(pos);
+    }
+
+    void close() override {
+        if (m_file == nullptr)
+            return;
+        FILE* file = m_file;
+        m_file = nullptr;
+        if (std::fclose(file) != 0) {
+            throw std::runtime_error("Can't close matroska output file");
+        }
+    }
+
+    // Best-effort durability flush: push the CRT stdio buffer to the OS
+    // (fflush), then force the OS write-back cache for this file out to
+    // physical media (FlushFileBuffers). Returns false with `out_reason` set
+    // on any failure; the caller must NOT treat this as fatal — recording
+    // continues regardless, this is strictly best-effort durability.
+    bool FlushToDisk(std::string* out_reason) {
+        if (m_file == nullptr)
+            return true;
+        if (std::fflush(m_file) != 0) {
+            if (out_reason != nullptr)
+                *out_reason = std::string("fflush failed: ") + std::strerror(errno);
+            return false;
+        }
+        const int fd = _fileno(m_file);
+        if (fd < 0) {
+            if (out_reason != nullptr)
+                *out_reason = "_fileno returned an invalid descriptor";
+            return false;
+        }
+        const HANDLE handle = reinterpret_cast<HANDLE>(static_cast<intptr_t>(_get_osfhandle(fd)));
+        if (handle == INVALID_HANDLE_VALUE) {
+            if (out_reason != nullptr)
+                *out_reason = "_get_osfhandle returned an invalid handle";
+            return false;
+        }
+        if (!FlushFileBuffers(handle)) {
+            if (out_reason != nullptr)
+                *out_reason = "FlushFileBuffers failed (GetLastError=" + std::to_string(GetLastError()) + ")";
+            return false;
+        }
+        return true;
+    }
+
+  private:
+    FILE* m_file = nullptr;
+};
 
 MatroskaStreamWriter::MatroskaStreamWriter() = default;
 
@@ -68,7 +185,7 @@ void MatroskaStreamWriter::Fail(const std::string& reason) {
 void MatroskaStreamWriter::CloseIo() {
     if (m_io != nullptr) {
         try {
-            static_cast<libebml::StdIOCallback*>(m_io)->close();
+            m_io->close();
         } catch (...) {
             // best-effort close
         }
@@ -87,10 +204,10 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
 
     // --- Open output file ---
     try {
-        m_io = new libebml::StdIOCallback(m_config.output_path.c_str(), MODE_CREATE);
+        m_io = new DurableFileIo(m_config.output_path);
     } catch (const std::exception& ex) {
         m_io = nullptr;
-        Fail(std::string("StdIOCallback::open failed: ") + ex.what());
+        Fail(std::string("DurableFileIo::open failed: ") + ex.what());
         return false;
     }
 
@@ -454,6 +571,29 @@ bool MatroskaStreamWriter::FlushCluster() {
     m_cluster = nullptr;
     // Block bytes are now serialized to disk; free them.
     m_cluster_bytes.clear();
+
+    // --- Periodic durability flush (best-effort; never fails the recording) ---
+    // The cluster Render() above only reaches the CRT stdio buffer / OS
+    // write-back cache — a process kill loses at most the in-RAM reorder
+    // window plus the not-yet-rendered cluster (a few seconds), but a power
+    // loss would additionally lose everything still sitting in the OS cache,
+    // which without this flush is unbounded (grows for the whole recording).
+    // Gate by wall-clock time (not "every cluster") so this cannot fire faster
+    // than the interval even if clusters ever land much more often than the
+    // steady-state ~2 s cadence (kClusterBoundaryMs) — e.g. Finalize()'s forced
+    // window drain, which can flush several small clusters back-to-back.
+    if (m_io != nullptr) {
+        const auto now = std::chrono::steady_clock::now();
+        if (m_durability_flush_scheduler.IsDue(now)) {
+            std::string reason;
+            if (!m_io->FlushToDisk(&reason)) {
+                LogDurabilityFlushFailure("durability flush failed", reason);
+            }
+            ++m_durability_flush_count;
+            m_durability_flush_scheduler.MarkFlushed(now);
+        }
+    }
+
     return true;
 }
 
@@ -521,6 +661,21 @@ bool MatroskaStreamWriter::Finalize() {
             Fail(std::string("MatroskaStreamWriter::Finalize failed: ") + ex.what());
             ok = false;
         }
+    }
+
+    // Final durability flush, unconditional on cadence: Finalize() is about to
+    // close the file, so this is the last chance to push whatever was written
+    // (including the Cues/SeekHead/Duration/Segment-size patches above) out of
+    // the OS write-back cache before the handle goes away. Best-effort; a
+    // failure here is logged but does not change the return value — Finalize()
+    // already reports I/O failures via `ok`/failed(), and durability is
+    // strictly best-effort on top of that.
+    if (m_io != nullptr) {
+        std::string reason;
+        if (!m_io->FlushToDisk(&reason)) {
+            LogDurabilityFlushFailure("final durability flush failed", reason);
+        }
+        ++m_durability_flush_count;
     }
 
     CloseIo();

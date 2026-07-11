@@ -4,6 +4,7 @@
 #include "test_unique_temp.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,7 @@
 
 namespace {
 
+using recorder_core::DurabilityFlushScheduler;
 using recorder_core::MatroskaStreamConfig;
 using recorder_core::MatroskaStreamWriter;
 using recorder_core::MuxPacket;
@@ -858,6 +860,87 @@ TEST_F(StreamWriterTest, NonDefaultAudioFormat_OpensAndFinalizes) {
     ASSERT_FALSE(d.empty());
     EXPECT_TRUE(HasLevel1(d, kIdTracks));
     EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
+// --- DurabilityFlushScheduler: pure cadence logic, no file I/O and no real
+//     timer dependency (synthetic steady_clock time points throughout). This
+//     is the unit-testable heart of the periodic durability flush added to
+//     FlushCluster()/Finalize(): fflush()+FlushFileBuffers() should be due
+//     roughly every couple of seconds, never on every single cluster. ---
+
+TEST(DurabilityFlushSchedulerTest, DueBeforeAnyFlushHasBeenRecorded) {
+    DurabilityFlushScheduler sched(std::chrono::milliseconds(2000));
+    // No MarkFlushed() call yet: due immediately, regardless of `now`.
+    EXPECT_TRUE(sched.IsDue(std::chrono::steady_clock::now()));
+}
+
+TEST(DurabilityFlushSchedulerTest, NotDueBeforeIntervalElapses) {
+    DurabilityFlushScheduler sched(std::chrono::milliseconds(2000));
+    const auto t0 = std::chrono::steady_clock::now();
+    sched.MarkFlushed(t0);
+    EXPECT_FALSE(sched.IsDue(t0 + std::chrono::milliseconds(500)));
+    EXPECT_FALSE(sched.IsDue(t0 + std::chrono::milliseconds(1999)));
+}
+
+TEST(DurabilityFlushSchedulerTest, DueAtOrAfterTheConfiguredInterval) {
+    DurabilityFlushScheduler sched(std::chrono::milliseconds(2000));
+    const auto t0 = std::chrono::steady_clock::now();
+    sched.MarkFlushed(t0);
+    EXPECT_TRUE(sched.IsDue(t0 + std::chrono::milliseconds(2000)));
+    EXPECT_TRUE(sched.IsDue(t0 + std::chrono::milliseconds(5000)));
+}
+
+TEST(DurabilityFlushSchedulerTest, MarkFlushedResetsTheClock) {
+    DurabilityFlushScheduler sched(std::chrono::milliseconds(2000));
+    const auto t0 = std::chrono::steady_clock::now();
+    sched.MarkFlushed(t0);
+    const auto t1 = t0 + std::chrono::milliseconds(2500);
+    ASSERT_TRUE(sched.IsDue(t1)) << "sanity: due before the second MarkFlushed()";
+    sched.MarkFlushed(t1);
+    EXPECT_FALSE(sched.IsDue(t1 + std::chrono::milliseconds(100)));
+    EXPECT_TRUE(sched.IsDue(t1 + std::chrono::milliseconds(2000)));
+}
+
+TEST(DurabilityFlushSchedulerTest, WriterUsesTheDocumentedTwoSecondInterval) {
+    // Single source of truth: the writer's cadence constant must be what the
+    // durability-window reasoning (and this test file's comments) assume.
+    EXPECT_EQ(MatroskaStreamWriter::kDurabilityFlushInterval, std::chrono::milliseconds(2000));
+}
+
+// --- MatroskaStreamWriter integration: the periodic flush actually fires
+//     during real Push()/FlushCluster()/Finalize() traffic, without adding a
+//     physical-I/O syscall on every single cluster. ---
+
+// 11. A multi-cluster recording performs at least one durability flush, but far
+//     fewer than one per cluster: the whole synthetic feed below executes in
+//     well under the 2 s durability cadence, so only the very first
+//     FlushCluster() call (nothing flushed yet) should durably flush during
+//     streaming, plus exactly one more forced flush at Finalize().
+TEST_F(StreamWriterTest, DurabilityFlush_FiresButNotOncePerCluster) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, true, false)));
+    FeedSeconds(w, 12.0, 60, 16); // same feed as the multi-cluster test above
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const int clusters = CountClusters(d);
+    ASSERT_GE(clusters, 3) << "test assumes several clusters to prove the flush isn't per-cluster";
+
+    EXPECT_GE(w.durability_flush_count(), 1u) << "recording must be durably flushed at least once";
+    EXPECT_LT(w.durability_flush_count(), static_cast<uint64_t>(clusters))
+        << "durability flush must be gated by cadence, not fired on every FlushCluster()";
+}
+
+// 12. Even a recording with zero packets must still get the unconditional final
+//     flush in Finalize() -- the (minimal) container is durably written.
+TEST_F(StreamWriterTest, EmptySession_StillPerformsFinalDurabilityFlush) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, true, false)));
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+    EXPECT_EQ(w.durability_flush_count(), 1u)
+        << "Finalize() must still durably flush the container even with no clusters";
 }
 
 } // namespace
