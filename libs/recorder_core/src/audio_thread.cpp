@@ -152,9 +152,17 @@ void AudioThread::Run() {
                     lk.unlock();
                     MuxItem mi;
                     mi.payload = std::move(pkt);
-                    std::lock_guard mlk(m_state.mux_mutex);
-                    m_state.mux_queue.push_back(std::move(mi));
-                    m_state.mux_cv.notify_one();
+                    std::unique_lock mlk(m_state.mux_mutex);
+                    // Bounded steady-state queue: block briefly for room, then
+                    // fail cleanly — never drop packets or grow without limit.
+                    if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                        mlk.unlock();
+                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                              "Mux queue limit exceeded: the output destination "
+                                              "cannot keep up with the recording");
+                        return false;
+                    }
+                    m_state.PushMuxItemLocked(std::move(mi));
                 }
             }
         }
@@ -335,8 +343,7 @@ void AudioThread::Run() {
             MuxItem eos;
             eos.payload = AudioEosSentinel{track_id_};
             std::lock_guard lk(m_state.mux_mutex);
-            m_state.mux_queue.push_back(std::move(eos));
-            m_state.mux_cv.notify_one();
+            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
         }
 
         opusEnc.Shutdown();
@@ -487,8 +494,7 @@ void AudioThread::Run() {
             MuxItem eos;
             eos.payload = AudioEosSentinel{track_id_};
             std::lock_guard lk(m_state.mux_mutex);
-            m_state.mux_queue.push_back(std::move(eos));
-            m_state.mux_cv.notify_one();
+            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
         }
 
         pcmEnc.Shutdown();
@@ -660,8 +666,7 @@ void AudioThread::Run() {
             MuxItem eos;
             eos.payload = AudioEosSentinel{track_id_};
             std::lock_guard lk(m_state.mux_mutex);
-            m_state.mux_queue.push_back(std::move(eos));
-            m_state.mux_cv.notify_one();
+            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
         }
 
         flacEnc.Shutdown();
@@ -829,8 +834,7 @@ end_audio_loop:
         MuxItem eos;
         eos.payload = AudioEosSentinel{track_id_};
         std::lock_guard lk(m_state.mux_mutex);
-        m_state.mux_queue.push_back(std::move(eos));
-        m_state.mux_cv.notify_one();
+        m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
     }
 
     aacEnc.Shutdown();

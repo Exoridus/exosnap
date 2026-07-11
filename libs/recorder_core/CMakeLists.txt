@@ -492,6 +492,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_discontinuity_gap PRIVATE src)
 
+# Steady-state mux queue bound: a stalled/slow consumer blocks producers and
+# times out into a deterministic ErrorPhase::Mux failure instead of unbounded
+# RAM growth; drain and failure both wake blocked producers.
+exosnap_add_gtest(
+    NAME test_mux_queue_backpressure
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mux_queue_backpressure.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mux_queue_backpressure PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_fdk_aac_encoder
     TEST_PREFIX recorder_core.

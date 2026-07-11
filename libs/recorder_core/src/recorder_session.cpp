@@ -453,6 +453,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         {
             std::lock_guard lk(st.mux_mutex);
             st.mux_queue.clear();
+            st.mux_queue_bytes = 0;
         }
         {
             std::lock_guard lk(st.stats_mutex);

@@ -531,6 +531,7 @@ void MuxThread::Run() {
         while (!m_state.mux_queue.empty()) {
             MuxItem item = std::move(m_state.mux_queue.front());
             m_state.mux_queue.pop_front();
+            m_state.OnMuxItemPopped(item); // free room; wakes bound-blocked producers
             lk.unlock();
             std::visit([&](auto&& payload) { handle_payload(std::move(payload), videoEos, audioEosReceived); },
                        item.payload);
@@ -553,6 +554,7 @@ void MuxThread::Run() {
         while (!m_state.mux_queue.empty()) {
             MuxItem item = std::move(m_state.mux_queue.front());
             m_state.mux_queue.pop_front();
+            m_state.OnMuxItemPopped(item);
             std::visit([&](auto&& payload) { handle_payload(std::move(payload), videoEos, audioEosReceived); },
                        item.payload);
         }

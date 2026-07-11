@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -199,9 +200,81 @@ struct SessionState {
 
     // Mux queue (post-premux phase): after tracks are initialized, encoded
     // packets are pushed here directly.
+    //
+    // The queue is bounded in steady state (mirror of the premux limits): when
+    // the writer's destination volume cannot keep up (slow NAS, AV scan, low
+    // disk), an unbounded queue grows until OOM with no diagnosis. Producers
+    // block briefly when the queue is full (WaitForMuxQueueSpace) and record an
+    // ErrorPhase::Mux failure if no room appears within the timeout — packets
+    // are never silently dropped. EOS/split sentinels bypass the bound: they
+    // are tiny and shutdown depends on their delivery.
+    static constexpr size_t kMuxQueuePacketLimit = 2048;
+    static constexpr size_t kMuxQueueByteLimit = 256ull * 1024 * 1024;
+    static constexpr unsigned kMuxQueueFullTimeoutMs = 10000;
+
+    // Effective bounds; production leaves the defaults. Tests shrink them to
+    // exercise the overflow path deterministically. Set before Record().
+    size_t mux_queue_packet_limit = kMuxQueuePacketLimit;
+    size_t mux_queue_byte_limit = kMuxQueueByteLimit;
+    unsigned mux_queue_full_timeout_ms = kMuxQueueFullTimeoutMs;
+
     std::mutex mux_mutex;
-    std::condition_variable mux_cv;
+    std::condition_variable mux_cv;       // signals the consumer: items available
+    std::condition_variable mux_space_cv; // signals producers: room freed (or failure)
     std::deque<MuxItem> mux_queue;
+    size_t mux_queue_bytes = 0; // payload bytes queued; guarded by mux_mutex
+
+    // Payload size of a queued item (sentinels count as 0).
+    [[nodiscard]] static size_t MuxItemPayloadBytes(const MuxItem& item) noexcept {
+        if (const auto* v = std::get_if<EncodedVideoPacket>(&item.payload)) {
+            return v->bytes.size();
+        }
+        if (const auto* a = std::get_if<EncodedAudioPacket>(&item.payload)) {
+            return a->bytes.size();
+        }
+        return 0;
+    }
+
+    // Enqueue one item and wake the consumer. Requires mux_mutex to be held.
+    // Does NOT wait for room — payload producers call WaitForMuxQueueSpace
+    // first; sentinel pushes use this directly (they bypass the bound).
+    void PushMuxItemLocked(MuxItem&& item) {
+        mux_queue_bytes += MuxItemPayloadBytes(item);
+        mux_queue.push_back(std::move(item));
+        mux_cv.notify_one();
+    }
+
+    // Dequeue-side accounting: call with mux_mutex held, passing the item just
+    // popped, so blocked producers wake as room frees up.
+    void OnMuxItemPopped(const MuxItem& item) {
+        const size_t bytes = MuxItemPayloadBytes(item);
+        mux_queue_bytes -= (bytes <= mux_queue_bytes) ? bytes : mux_queue_bytes;
+        mux_space_cv.notify_all();
+    }
+
+    // Block (bounded) until the mux queue has room for one more payload packet.
+    // lk must own mux_mutex. Returns false when the queue stayed full for the
+    // whole timeout or the session has already failed — the caller records an
+    // ErrorPhase::Mux failure (first-error-wins makes a duplicate harmless) and
+    // aborts instead of dropping the packet or growing without bound.
+    [[nodiscard]] bool WaitForMuxQueueSpace(std::unique_lock<std::mutex>& lk) {
+        const auto full = [&] {
+            return mux_queue.size() >= mux_queue_packet_limit || mux_queue_bytes >= mux_queue_byte_limit;
+        };
+        if (!full()) {
+            return true;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(mux_queue_full_timeout_ms);
+        while (full()) {
+            if (HasFailure()) {
+                return false; // teardown in progress — never deadlock a producer on the bound
+            }
+            if (mux_space_cv.wait_until(lk, deadline) == std::cv_status::timeout) {
+                return !full() && !HasFailure();
+            }
+        }
+        return true;
+    }
 
     // Live stats (written by worker threads, read by stats timer)
     std::mutex stats_mutex;
@@ -338,6 +411,7 @@ struct SessionState {
         stop_requested.store(true);
         premux_cv.notify_all();
         mux_cv.notify_all();
+        mux_space_cv.notify_all(); // wake producers blocked on the queue bound
     }
 
     bool HasFailure() const {
