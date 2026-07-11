@@ -120,6 +120,39 @@ GitHub-release asset URLs for the tag, and uploads the signed `update-manifest.j
 manifest as a GitHub release asset is a mandatory checklist step for every release from 0.9.0 on (see
 `docs/release-checklist.md`).
 
+### G. PR-CI packaging smoke (path-gated)
+
+The full release gate in `release-candidate.yml` only runs on version tags and `release/**`
+branches, so a harvest-fragment regression, a new runtime DLL `windeployqt` fails to stage, or a
+leaked dev-tree file is invisible until the release tag is pushed — often long after the change
+that caused it merged. `ci.yml` gains a `packaging-smoke` job that runs the fastest slice of the
+release gate on every pull request that touches packaging-relevant paths:
+
+- `cmake --install` into the same pruned staging tree the release script produces
+- presence / absence / leak / exe-metadata validation of that tree
+- the `dumpbin /dependents` static runtime-dependency audit
+- portable ZIP creation + the isolated launch smoke (app exe + updater exe)
+
+It runs `-SkipMsi` — the WiX/MSI build, MSI content assertion, and MSI smoke stay exclusive to the
+release gate, since they require installing the WiX Toolset and add several minutes for a package
+format the portable-ZIP path already exercises structurally (same staging tree, same harvest
+source). It builds from the `windows-x64-ninja-release` preset instead of the canonical
+VS-generator `windows-x64-release` preset the release gate uses: the VS/MSBuild generator ignores
+`CMAKE_CXX_COMPILER_LAUNCHER`, so building with it on every PR would mean a from-scratch compile
+each time, whereas the Ninja preset is sccache-cacheable and already used by `build-test`'s release
+leg in the same workflow.
+
+`build-release-artifacts.ps1` gained a `-Preset` parameter (default `windows-x64-release`, so the
+release gate's invocation is unchanged) and now resolves the built `exosnap.exe` under either a
+multi-config (Visual Studio, `app/Release/exosnap.exe`) or single-config (Ninja, `app/exosnap.exe`)
+generator layout, since that is the only part of the script that assumed the VS-generator directory
+shape.
+
+A `changes` job (`dorny/paths-filter`) gates `packaging-smoke` on pull requests that touch
+`packaging/**`, `scripts/build-release-artifacts.ps1`, `cmake/Vendor*`, the install-rule-bearing
+CMake files (root, `app/`, `apps/updater/`, `third_party/`), or `THIRD_PARTY_NOTICES.md`. It does
+not run on push triggers (main, tags) — those stay covered by the release gate.
+
 ## Consequences
 
 - A missing-DLL defect in the MSI is now caught by three layers: dumpbin audit (import
@@ -136,3 +169,6 @@ manifest as a GitHub release asset is a mandatory checklist step for every relea
 - Advisory unused-code candidates surface for review without blocking any workflow.
 - `CMAKE_EXPORT_COMPILE_COMMANDS=ON` is now set in the `windows-x64-ninja-debug` preset,
   enabling include-cleaner analysis for Ninja-preset users.
+- Packaging drift (harvest gaps, missing runtime DLLs, leaked dev-tree files) surfaces on the
+  pull request that introduces it, for the paths most likely to cause it, instead of only at the
+  next release tag.
