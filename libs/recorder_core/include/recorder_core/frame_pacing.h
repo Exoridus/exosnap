@@ -16,6 +16,24 @@ enum class FramePacingMode : uint8_t {
 // or fps is unknown (0). Sized for the source-faster-than-output case (e.g. 240->60).
 [[nodiscard]] std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_fps);
 
+// Sustained-encoder-lag resync for the CFR scheduler.
+//
+// The CFR scheduler emits at most `max_catch_up_frames` frames per outer iteration so a
+// brief stall (e.g. process suspension) cannot trigger a burst. If the encoder is
+// *persistently* slower than real time, that cap is hit every iteration and the media
+// clock (frame_index x frame_interval) trails the wall clock ever further: the file
+// ends with less video than audio and drifts out of sync with nothing reported. This
+// returns how many frame indices the scheduler must SKIP forward (each counted as a
+// real drop) so the next emitted frame's media time realigns with the wall clock. A
+// one-catch-up-budget cushion (`max_catch_up_frames`, i.e. one second) is retained so
+// the ordinary catch-up loop resumes smoothly instead of snapping exactly to "now".
+//
+// lag_100ns: how far media time currently trails the wall clock (elapsed - next_tick),
+//   in 100 ns units; 0 when on time. Returns 0 while the lag is within one catch-up
+//   budget (the ordinary loop absorbs it) or when frame_interval_100ns is 0.
+[[nodiscard]] uint64_t ComputeCatchUpSkip(uint64_t lag_100ns, uint64_t frame_interval_100ns,
+                                          uint64_t max_catch_up_frames) noexcept;
+
 // Result of SelectFrameForSlot: which ring entry to encode (or duplicate) for a CFR slot.
 // NOTE: this header is included from Qt translation units (via recorder_session.h),
 // where `emit` is a macro. Guard the field name so the struct stays Qt-safe.

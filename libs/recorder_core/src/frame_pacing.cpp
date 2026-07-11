@@ -14,6 +14,17 @@ std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_f
     return std::clamp(ratio + 2, kMin, kMax);
 }
 
+uint64_t ComputeCatchUpSkip(uint64_t lag_100ns, uint64_t frame_interval_100ns, uint64_t max_catch_up_frames) noexcept {
+    if (frame_interval_100ns == 0) {
+        return 0;
+    }
+    const uint64_t frames_behind = lag_100ns / frame_interval_100ns;
+    if (frames_behind <= max_catch_up_frames) {
+        return 0; // within one catch-up budget: the ordinary loop absorbs it
+    }
+    return frames_behind - max_catch_up_frames; // skip the excess, keep a 1 s cushion
+}
+
 PacingDecision SelectFrameForSlot(std::span<const uint64_t> ring_present_qpc, uint64_t slot_qpc,
                                   uint64_t last_emitted_present_qpc, FramePacingMode mode) {
     PacingDecision d;

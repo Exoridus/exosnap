@@ -51,6 +51,95 @@ TEST(SelectFrame, EmptyRingDuplicates) {
 }
 
 // ---------------------------------------------------------------------------
+// ComputeCatchUpSkip — a persistently starving encoder must not compress time.
+// ---------------------------------------------------------------------------
+TEST(CatchUpSkip, WithinBudgetSkipsNothing) {
+    const uint64_t interval = 166667; // 60 fps in 100 ns
+    const uint64_t maxCatchUp = 60;
+    // Behind by exactly one catch-up budget (1 s): the ordinary loop absorbs it.
+    EXPECT_EQ(ComputeCatchUpSkip(maxCatchUp * interval, interval, maxCatchUp), 0u);
+    // Behind by half a budget: still nothing to skip.
+    EXPECT_EQ(ComputeCatchUpSkip(30 * interval, interval, maxCatchUp), 0u);
+}
+TEST(CatchUpSkip, BeyondBudgetSkipsTheExcess) {
+    const uint64_t interval = 166667;
+    const uint64_t maxCatchUp = 60;
+    // Behind by 150 frames → skip 150 - 60 (cushion) = 90.
+    EXPECT_EQ(ComputeCatchUpSkip(150 * interval, interval, maxCatchUp), 90u);
+    // A partial frame past the budget boundary rounds down (whole frames only).
+    EXPECT_EQ(ComputeCatchUpSkip(61 * interval + interval / 2, interval, maxCatchUp), 1u);
+}
+TEST(CatchUpSkip, ZeroIntervalIsSafe) {
+    EXPECT_EQ(ComputeCatchUpSkip(1000000, 0, 60), 0u);
+}
+
+// Simulate the CFR scheduler against an encoder that runs at half real time. The
+// scheduler mirrors video_thread.cpp: wall clock advances, the bounded catch-up
+// loop emits (capped by both the per-iteration budget and the encoder), and — with
+// the fix — sustained lag resyncs the timeline by skipping (and dropping) indices.
+namespace {
+struct SlowEncoderSim {
+    uint64_t frame_idx = 0; // media frames (emitted + skipped) => media time = idx * interval
+    uint64_t drops = 0;     // indices skipped as real drops
+    uint64_t final_lag_frames = 0;
+};
+SlowEncoderSim SimulateSlowEncoder(bool with_resync, int iterations) {
+    const uint64_t interval = 166667;        // 60 fps, 100 ns
+    const uint64_t maxCatchUp = 60;          // one second per iteration
+    const uint64_t wallStepFrames = 60;      // one second of wall time per iteration
+    const uint64_t encoderBudgetFrames = 30; // encoder keeps up with only half real time
+    const int sustainedThreshold = 3;        // consecutive lagging iterations before resync
+    uint64_t elapsed = 0, next_tick = 0;
+    int sustainedLag = 0;
+    SlowEncoderSim s;
+    for (int it = 0; it < iterations; ++it) {
+        elapsed += wallStepFrames * interval;
+        if (with_resync) {
+            const uint64_t lag = (elapsed > next_tick) ? (elapsed - next_tick) : 0;
+            if (lag > maxCatchUp * interval)
+                ++sustainedLag;
+            else
+                sustainedLag = 0;
+            if (sustainedLag >= sustainedThreshold) {
+                const uint64_t skip = ComputeCatchUpSkip(lag, interval, maxCatchUp);
+                s.frame_idx += skip;
+                next_tick += skip * interval;
+                s.drops += skip;
+                sustainedLag = 0;
+            }
+        }
+        uint64_t emitted = 0;
+        while (elapsed >= next_tick && emitted < maxCatchUp && emitted < encoderBudgetFrames) {
+            ++s.frame_idx;
+            next_tick += interval;
+            ++emitted;
+        }
+    }
+    s.final_lag_frames = (elapsed > next_tick) ? (elapsed - next_tick) / interval : 0;
+    return s;
+}
+} // namespace
+
+TEST(CatchUpSkip, WithoutResyncTheTimelineCompressesUnbounded) {
+    const auto s = SimulateSlowEncoder(/*with_resync=*/false, /*iterations=*/100);
+    // The media clock falls ~30 frames behind wall clock every iteration and nothing
+    // catches it up, so it ends thousands of frames (many seconds) behind — and no
+    // drops are ever recorded, so the compression is silent.
+    EXPECT_GT(s.final_lag_frames, 2000u);
+    EXPECT_EQ(s.drops, 0u);
+}
+TEST(CatchUpSkip, WithResyncTheTimelineStaysWallClockTrueAndDropsAreCounted) {
+    const auto s = SimulateSlowEncoder(/*with_resync=*/true, /*iterations=*/100);
+    const auto baseline = SimulateSlowEncoder(/*with_resync=*/false, /*iterations=*/100);
+    // Media time now tracks the wall clock: the residual lag stays within a small
+    // multiple of one catch-up budget instead of growing without bound.
+    EXPECT_LT(s.final_lag_frames, 4u * 60u);
+    EXPECT_LT(s.final_lag_frames, baseline.final_lag_frames / 4u);
+    // The frames the encoder could never emit are counted as real drops, not hidden.
+    EXPECT_GT(s.drops, 0u);
+}
+
+// ---------------------------------------------------------------------------
 // ShouldRecompositeHeldScreen — a still desktop must not freeze the webcam.
 // ---------------------------------------------------------------------------
 using recorder_core::ShouldRecompositeHeldScreen;

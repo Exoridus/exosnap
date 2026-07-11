@@ -111,6 +111,16 @@ captured frame whose source present time is nearest the slot's ideal time:
   duplicate/drop accounting must stay correct (a duplicated slot = no new ring entry near the slot
   time; a dropped frame = a ring entry never selected). The existing drop/dup diagnostics must keep
   reporting truthfully.
+- The CFR scheduler keeps the media clock true to the wall clock. Its per-iteration catch-up is
+  bounded (`kMaxCatchUpFrames`, one second) so a brief stall cannot burst the GPU. A *sustained*
+  encoder lag would therefore compress the timeline: media time (`frame_index x interval`) would fall
+  ever further behind the wall clock and the file would end with less video than audio, silently out
+  of sync. Instead, once the media clock has trailed the wall clock by more than one catch-up budget
+  for three consecutive scheduler iterations, the scheduler **skips** the frame indices it could never
+  emit in real time and counts each as a real (backpressure) drop — the timeline snaps back to the
+  wall clock and the shortfall is visible in the drop count and the live duration-skew metric, not
+  hidden. `ComputeCatchUpSkip` (in `frame_pacing.cpp`) is the pure, unit-tested arithmetic; the
+  three-iteration gate and drop accounting live in the video thread's CFR loop.
 - VFR output is unaffected (it already preserves source timing). The pacer is a CFR-path feature.
 - Closes the loop with ADR 0033: the same `LastPresentTime` signal both **diagnoses** (jitter/coalesce
   → "VRR judder") and **drives the fix** (phase-correct selection). Together they are an uncommon,

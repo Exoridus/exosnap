@@ -1892,6 +1892,11 @@ void VideoThread::Run() {
             m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
             m_state.stats.encoded_video_packets++;
             m_state.stats.video_bytes += pkt_bytes_count;
+            // Publish the video media duration live (previously only at teardown) so
+            // the duration-skew metric — video vs audio media time — is available to
+            // live diagnostics, not just the final snapshot. lastVideoPts is the newest
+            // emitted video PTS and is monotonic.
+            m_state.stats.video_duration_ns = lastVideoPts;
         }
         return true;
     };
@@ -2128,6 +2133,22 @@ void VideoThread::Run() {
 
         bool cfr_was_paused = false;
         uint64_t cfr_pause_start_100ns = 0;
+
+        // --- Sustained-encoder-lag resync (honest timeline) ---
+        // The catch-up loop below emits at most kMaxCatchUpFrames per outer iteration
+        // so a brief stall cannot burst the GPU. If the encoder is *persistently*
+        // slower than real time, that cap is hit every iteration and the media clock
+        // (cfr_frame_idx x frame_interval) falls ever further behind the wall clock —
+        // the file would end with less video than audio, silently out of sync. When
+        // the media clock has trailed the wall clock by more than one full catch-up
+        // budget for kSustainedLagResyncTicks consecutive iterations, the timeline is
+        // resynchronised: the frame indices that could never be emitted in real time
+        // are skipped and counted as real (backpressure) drops so media time snaps
+        // back to the wall clock instead of compressing it. The threshold is one
+        // budget because a shorter lag is, by construction, recoverable within a
+        // single catch-up iteration and needs no resync.
+        constexpr int kSustainedLagResyncTicks = 3;
+        int sustainedLagTicks = 0;
 
         // Seed the first WGC frame from the wait loop so a static window still
         // encodes from t=0 (WGC only delivers frames on repaint).
@@ -2401,6 +2422,34 @@ void VideoThread::Run() {
 
             const uint64_t currentElapsed100ns = Qpc100ns(qpcFreq) - epochQpc100ns;
             bool anyWork = false;
+
+            // Sustained-encoder-lag resync: keep the media clock honest against the
+            // wall clock (see the state declaration above). The lag is how far media
+            // time (next_tick) trails the wall clock right now.
+            const uint64_t lag100ns =
+                (currentElapsed100ns > next_tick_100ns) ? (currentElapsed100ns - next_tick_100ns) : 0;
+            if (lag100ns > kMaxCatchUpFrames * frame_interval_100ns) {
+                ++sustainedLagTicks;
+            } else {
+                sustainedLagTicks = 0;
+            }
+            if (sustainedLagTicks >= kSustainedLagResyncTicks) {
+                const uint64_t skip = ComputeCatchUpSkip(lag100ns, frame_interval_100ns, kMaxCatchUpFrames);
+                if (skip > 0) {
+                    cfr_frame_idx += skip;
+                    next_tick_100ns += skip * frame_interval_100ns;
+                    droppedFrames += skip;
+                    for (uint64_t d = 0; d < skip; ++d)
+                        m_state.diagnostics.OnFrameDroppedBackpressure();
+                    logging::LogField fields[] = {{"skipped_frames", std::to_string(skip)},
+                                                  {"lag_ms", std::to_string(lag100ns / 10000ULL)}};
+                    logging::log(logging::LogLevel::Info, "video_thread",
+                                 "sustained encoder lag: resynchronised the CFR timeline to the wall clock "
+                                 "(skipped frames counted as drops)",
+                                 std::span<const logging::LogField>(fields, std::size(fields)));
+                }
+                sustainedLagTicks = 0;
+            }
 
             // Emit CFR frames while we're behind, capped at 1 second to avoid
             // burst workload after process suspension.
