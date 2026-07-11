@@ -53,6 +53,7 @@ class CompareHint : public QToolButton {
     void hidePopover();
 
   private:
+    void applyTheme();
     void updateIcon(bool highlighted);
     void buildPopover();
     void repositionPopover();

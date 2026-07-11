@@ -31,6 +31,7 @@ class AdvisoryItem : public QWidget {
     void deepLinkRequested();
 
   private:
+    void applyTheme();
     void updateStatusIcon();
     void updateUnreadDot();
 

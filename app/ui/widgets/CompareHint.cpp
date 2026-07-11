@@ -61,7 +61,9 @@ CompareHint::CompareHint(const QString& compare_key, const QString& current_valu
     const QString title = d ? d->title : compare_key_;
     setAccessibleName(QStringLiteral("Compare options: ") + title);
 
-    updateIcon(false);
+    // Paints the glyph now and repaints it (and drops the cached popover) whenever
+    // the theme switches, so the tinted "info" pixmap never keeps its startup colour.
+    ui::theme::OnThemeChanged(this, [this]() { applyTheme(); });
 
     // If no data: widget is a no-op hint icon; skip popover.
     if (!d)
@@ -111,6 +113,27 @@ const QString& CompareHint::compareKey() const {
 
 const QString& CompareHint::currentValue() const {
     return current_value_;
+}
+
+// ── Theme ────────────────────────────────────────────────────────────────────
+
+void CompareHint::applyTheme() {
+    const bool highlighted =
+        popover_pinned_ || popover_hovered_ || hasFocus() || (popover_ != nullptr && popover_->isVisible());
+    updateIcon(highlighted);
+
+    // buildPopover()/rebuildRows() bake the theme colours into the cached popover.
+    // It is never open during a switch (the theme picker lives on another surface),
+    // so drop the cached instance and let the next open rebuild against the active
+    // theme; rebuild in place on the off chance it is visible.
+    if (popover_ != nullptr) {
+        if (popover_->isVisible()) {
+            rebuildRows();
+        } else {
+            popover_->deleteLater();
+            popover_ = nullptr;
+        }
+    }
 }
 
 // ── Icon state ───────────────────────────────────────────────────────────────
