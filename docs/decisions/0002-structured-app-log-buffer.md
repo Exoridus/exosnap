@@ -46,5 +46,7 @@ fields, renders deterministic formatted text, and keeps Copy/Export semantics se
 
 ## Unresolved Issues
 
-- The app session log file is still a simple append-only text file.
+- The app session log file is a plain text file with size-based rotation
+  (5 MiB per file, current file plus two backups: `exosnap.log`, `.1`, `.2`);
+  there is no time-based or per-session rotation.
 - Engine JSON logs and Qt app logs remain separate surfaces.

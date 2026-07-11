@@ -24,6 +24,13 @@ namespace {
 struct LogState {
     QMutex mutex;
     QString log_path;
+    // Kept open for the lifetime of the process (or until rotation) instead of
+    // being opened and closed on every single line: long sessions were paying an
+    // open/write/flush/close syscall round trip per log line for no durability
+    // benefit, since flush() alone already pushes each line to the OS.
+    QFile log_file;
+    qint64 log_file_size = 0;
+    std::optional<qint64> max_log_file_bytes_override;
     std::deque<LogEntry> history;
     QVector<LogEntry> pending_entries;
     int pending_evicted_count = 0;
@@ -69,20 +76,83 @@ bool passesMinSeverity(LogSeverity severity) {
     return static_cast<int>(severity) >= static_cast<int>(*min);
 }
 
+qint64 maxLogFileBytesUnlocked() {
+    auto& s = state();
+    return s.max_log_file_bytes_override.value_or(AppLog::kMaxLogFileBytes);
+}
+
+// Backup path for rotation slot `index`: 0 is the live file (exosnap.log), 1 is
+// exosnap.log.1 (previous), up to kMaxLogFileCount - 1 (oldest kept backup).
+QString rotationPathUnlocked(int index) {
+    auto& s = state();
+    return index == 0 ? s.log_path : s.log_path + QStringLiteral(".%1").arg(index);
+}
+
+// Closes the live file, drops the oldest backup, shifts the remaining backups
+// up by one slot, then reopens a fresh, empty exosnap.log. Windows refuses to
+// rename a file that is still open, so the handle must be closed first; nothing
+// else in the process holds the log file open (the Logs page reads the
+// in-memory history, not the file), so this is safe without extra locking
+// beyond the existing state mutex.
+void rotateLogFileUnlocked() {
+    auto& s = state();
+    s.log_file.close();
+
+    QFile::remove(rotationPathUnlocked(AppLog::kMaxLogFileCount - 1));
+    for (int index = AppLog::kMaxLogFileCount - 2; index >= 0; --index) {
+        const QString from = rotationPathUnlocked(index);
+        if (QFile::exists(from))
+            QFile::rename(from, rotationPathUnlocked(index + 1));
+    }
+
+    s.log_file.setFileName(s.log_path);
+    s.log_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+    s.log_file_size = 0;
+}
+
+bool ensureLogFileOpenUnlocked() {
+    auto& s = state();
+    if (s.log_file.isOpen())
+        return true;
+
+    s.log_file.setFileName(s.log_path);
+    if (!s.log_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        return false;
+
+    // A previous run (or process restart) may have left an oversized file
+    // behind, since the file name is stable across sessions; rotate immediately
+    // so this run's first line lands in a fresh file rather than appending
+    // indefinitely to whatever was already there.
+    s.log_file_size = s.log_file.size();
+    if (s.log_file_size >= maxLogFileBytesUnlocked())
+        rotateLogFileUnlocked();
+
+    return true;
+}
+
 bool writeLineUnlocked(const LogEntry& entry) {
     auto& s = state();
     if (s.log_path.isEmpty())
         return true;
 
-    QFile file(s.log_path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+    if (!ensureLogFileOpenUnlocked())
         return false;
 
-    QTextStream stream(&file);
-    stream.setEncoding(QStringConverter::Utf8);
-    stream << AppLog::formatEntry(entry) << '\n';
-    stream.flush();
-    return stream.status() == QTextStream::Ok;
+    const QByteArray line = (AppLog::formatEntry(entry) + QLatin1Char('\n')).toUtf8();
+    const qint64 written = s.log_file.write(line);
+    if (written < 0)
+        return false;
+
+    // Crash-safety: this is the support-log channel, so every line is flushed
+    // individually (a qFatal -> abort() must not lose the lines leading up to
+    // it) even though the handle now stays open across writes.
+    s.log_file.flush();
+    s.log_file_size += written;
+
+    if (s.log_file_size >= maxLogFileBytesUnlocked())
+        rotateLogFileUnlocked();
+
+    return true;
 }
 
 LogSeverity severityFromQtMessage(QtMsgType type) {
@@ -138,6 +208,10 @@ void resetUnlocked(int max_entries) {
     s.max_entries = std::max(1, max_entries);
     s.next_sequence = 1;
     s.log_path.clear();
+    s.log_file.close();
+    s.log_file.setFileName(QString());
+    s.log_file_size = 0;
+    s.max_log_file_bytes_override.reset();
     s.initialized = false;
     s.timestamp_provider = nullptr;
     s.min_severity = LogSeverity::Debug;
@@ -375,6 +449,11 @@ void AppLog::resetForTesting(int max_entries) {
 void AppLog::setTimestampProviderForTesting(std::function<QDateTime()> provider) {
     QMutexLocker lock(&state().mutex);
     state().timestamp_provider = std::move(provider);
+}
+
+void AppLog::setMaxLogFileBytesForTesting(std::optional<qint64> max_bytes) {
+    QMutexLocker lock(&state().mutex);
+    state().max_log_file_bytes_override = max_bytes;
 }
 
 void AppLog::setMinSeverity(std::optional<LogSeverity> min_severity) {
