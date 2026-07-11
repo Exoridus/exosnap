@@ -18,7 +18,7 @@ endfunction()
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG        v1.14.0
+  GIT_TAG        f8d7d77c06936315286eb55f8de22cd23c188571 # tag v1.14.0
 )
 set(BUILD_GMOCK OFF CACHE INTERNAL "")
 set(INSTALL_GTEST OFF CACHE INTERNAL "")
@@ -28,7 +28,7 @@ FetchContent_MakeAvailable(googletest)
 FetchContent_Declare(
   spdlog
   GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG        v1.14.1
+  GIT_TAG        27cb4c76708608465c413f6d0e6b8d99a4d84302 # tag v1.14.1
 )
 set(SPDLOG_BUILD_TESTS OFF CACHE INTERNAL "")
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
@@ -41,7 +41,7 @@ _exosnap_install_license("spdlog v1.14.1"
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG        v3.11.3
+  GIT_TAG        9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03 # tag v3.11.3
 )
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
@@ -53,7 +53,7 @@ _exosnap_install_license("nlohmann/json v3.11.3"
 FetchContent_Declare(
   tomlplusplus
   GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-  GIT_TAG        v3.4.0
+  GIT_TAG        30172438cee64926dc41fdd9c11fb3ba5b2ba9de # tag v3.4.0
 )
 FetchContent_MakeAvailable(tomlplusplus)
 _exosnap_install_license("toml++ v3.4.0"
@@ -75,7 +75,7 @@ _exosnap_install_license("Hanken Grotesk (SIL OFL 1.1)"
 FetchContent_Declare(
   libopus
   GIT_REPOSITORY https://github.com/xiph/opus.git
-  GIT_TAG        v1.5.2
+  GIT_TAG        ddbe48383984d56acd9e1ab6a090c54ca6b735a6 # tag v1.5.2
 )
 set(OPUS_BUILD_SHARED_LIBRARY        OFF CACHE INTERNAL "")
 set(OPUS_BUILD_TESTING               OFF CACHE INTERNAL "")
@@ -91,7 +91,7 @@ _exosnap_install_license("Opus v1.5.2"
 FetchContent_Declare(
   fdk-aac
   GIT_REPOSITORY https://github.com/mstorsjo/fdk-aac.git
-  GIT_TAG        v2.0.3
+  GIT_TAG        716f4394641d53f0d79c9ddac3fa93b03a49f278 # tag v2.0.3
 )
 set(_exosnap_saved_bsl ${BUILD_SHARED_LIBS})
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -108,7 +108,7 @@ unset(_exosnap_saved_bsl)
 FetchContent_Declare(
   flac
   GIT_REPOSITORY https://github.com/xiph/flac.git
-  GIT_TAG        1.4.3
+  GIT_TAG        28e4f0528c76b296c561e922ba67d43751990599 # tag 1.4.3
 )
 set(BUILD_CXXLIBS      OFF CACHE INTERNAL "")   # only libFLAC (C), not libFLAC++
 set(BUILD_PROGRAMS     OFF CACHE INTERNAL "")
@@ -267,7 +267,7 @@ _exosnap_install_license("RNNoise ${_rnnoise_model_hash}"
 FetchContent_Declare(
   EBML
   GIT_REPOSITORY https://github.com/Matroska-Org/libebml.git
-  GIT_TAG        release-1.4.5
+  GIT_TAG        1878e784321673561039a6a37076b2736f4dc98f # tag release-1.4.5
   OVERRIDE_FIND_PACKAGE
 )
 set(EBML_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
@@ -297,7 +297,7 @@ endif()
 FetchContent_Declare(
   libmatroska
   GIT_REPOSITORY https://github.com/Matroska-Org/libmatroska.git
-  GIT_TAG        release-1.7.1
+  GIT_TAG        f5315fddda2d434e47035c038549a808d8b8eac7 # tag release-1.7.1
 )
 set(MATROSKA_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libmatroska)
