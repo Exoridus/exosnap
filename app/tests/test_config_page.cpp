@@ -1938,6 +1938,7 @@ TEST_F(ConfigPageTest, S7_VideoCodecCombo_IncludesHevcNonDebug) {
 // video bit-depth combo exists with 8-bit / 10-bit items.
 TEST_F(ConfigPageTest, S7_VideoBitDepthControl_ExistsAndMockupsRemoved) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // expert format controls are lazily built on enable
 
     EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("roadmapDummy_hevcCodec")), nullptr)
         << "the HEVC-codec mockup row is superseded by the real codec combo";
@@ -2011,6 +2012,7 @@ TEST_F(ConfigPageTest, S7_CodecChangeToH264_ResetsTenBitToEight) {
 // with 4:2:0 (default) and 4:4:4 items; 4:2:2 is intentionally absent.
 TEST_F(ConfigPageTest, ChromaControl_ExistsAndPlaceholderRemoved) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // expert format controls are lazily built on enable
 
     EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("roadmapDummy_chromaSubsampling")), nullptr)
         << "the chroma mockup row is superseded by the real chroma combo";
@@ -2157,6 +2159,7 @@ TEST_F(ConfigPageTest, Chroma444_StaticRuleAppliesBeforeProbe) {
 // crushed there; Full remains available as an opt-in).
 TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // expert format controls are lazily built on enable
 
     auto* range = page.findChild<QComboBox*>(QStringLiteral("videoColorRangeCombo"));
     ASSERT_NE(range, nullptr);
@@ -2196,6 +2199,7 @@ TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
 // and defaults to P4 (balanced) — replaces the Debug-only roadmapDummy_encoderPreset.
 TEST_F(ConfigPageTest, EncoderPresetControl_ExistsWithAllSevenPresets_DefaultsToP4) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // expert format controls are lazily built on enable
 
     auto* preset = page.findChild<QComboBox*>(QStringLiteral("videoEncoderPresetCombo"));
     ASSERT_NE(preset, nullptr);
@@ -2242,8 +2246,10 @@ TEST_F(ConfigPageTest, EncoderPreset_SelectingP7_EmitsModel_NotGated) {
 // ── ADR 0035 Slice 2: Frame pacing select (Smooth / Newest) ─────────────────
 
 TEST_F(ConfigPageTest, FramePacingSelectReflectsAndSetsModel) {
-    // framePacingSelect must exist in the Expert Video (fmt_expert_section_).
+    // framePacingSelect must exist in the Expert Video (fmt_expert_section_), which is
+    // built lazily on first expert-enable.
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
     auto* sel = page.findChild<QComboBox*>(QStringLiteral("framePacingSelect"));
     ASSERT_NE(sel, nullptr) << "framePacingSelect must exist in Expert Video";
 
@@ -2281,6 +2287,7 @@ TEST_F(ConfigPageTest, FramePacingSelectReflectsAndSetsModel) {
 // never offered. The roadmap mockup is gone.
 TEST_F(ConfigPageTest, HdrModeControl_ExistsWithTonemapAndHdr10_NoOff) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // expert format controls are lazily built on enable
 
     EXPECT_EQ(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("roadmapDummy_hdr10")), nullptr)
         << "the HDR10 mockup toggle is superseded by the real HDR-handling combo";
@@ -2415,6 +2422,9 @@ TEST_F(ConfigPageTest, HdrMode_HydratesFromConstructorSettings) {
     initial.hdr_mode = recorder_core::HdrMode::Hdr10;
 
     ConfigPage page(initial, video_defaults_);
+    // The HDR combo is built lazily on first expert-enable; the constructor setting
+    // must survive the wait and land once the widget exists (hydration replay).
+    page.setExpertModeEnabled(true);
     auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
     ASSERT_NE(hdr, nullptr);
     EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));
@@ -2435,6 +2445,9 @@ TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
     incoming.hdr_mode = recorder_core::HdrMode::Hdr10;
     page.setOutputSettings(incoming);
 
+    // The HDR combo is built lazily; enabling expert mode builds it and re-seeds from
+    // the settings applied above. Neither setOutputSettings nor the lazy build may emit.
+    page.setExpertModeEnabled(true);
     auto* hdr = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
     ASSERT_NE(hdr, nullptr);
     EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));

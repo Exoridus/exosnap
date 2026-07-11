@@ -431,9 +431,11 @@ TEST_F(SettingsTiersTest, ConfigPage_HotkeysCard_ActiveRowsExist) {
 
 TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_HiddenByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
+    // Startup-perf: the Container-card expert section is built lazily on first
+    // expert-enable, so by default it isn't constructed yet — which still means it is
+    // not shown.
     auto* section = page.findChild<QWidget*>(QStringLiteral("fmtExpertSection"));
-    ASSERT_NE(section, nullptr);
-    EXPECT_TRUE(section->isHidden());
+    EXPECT_TRUE(section == nullptr || section->isHidden());
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_VisibleInExpertMode) {
@@ -446,6 +448,7 @@ TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_VisibleInExpertMode) {
 
 TEST_F(SettingsTiersTest, ConfigPage_RateControlCombo_Exists) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // the rate section is built lazily on first enable
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("rateControlCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_GE(combo->findData(static_cast<int>(recorder_core::RateControlMode::ConstantQuality)), 0);

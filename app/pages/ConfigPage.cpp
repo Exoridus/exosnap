@@ -1057,46 +1057,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         quality_layout->addWidget(quality_preset_row_widget_);
     }
 
-    // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
-    {
-        quality_expert_widget_ = new QWidget(quality_panel);
-        quality_expert_widget_->setObjectName(QStringLiteral("qualityExpertWidget"));
-        auto* qevl = new QVBoxLayout(quality_expert_widget_);
-        qevl->setContentsMargins(0, 0, 0, 0);
-        qevl->setSpacing(0);
-        // hairline
-        auto* qerule = new QFrame(quality_expert_widget_);
-        qerule->setFrameShape(QFrame::HLine);
-        qerule->setProperty("frameRole", "sectionRuleLine");
-        qevl->addWidget(qerule);
-        // content row
-        auto* qecontent = new QWidget(quality_expert_widget_);
-        auto* qehl = new QHBoxLayout(qecontent);
-        qehl->setContentsMargins(0, 12, 0, 12);
-        qehl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-        auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
-        qelbl->setProperty("labelRole", "settingsRowLabel");
-        qehl->addWidget(qelbl, 0);
-        auto* qeinfo = new ui::widgets::InfoHintIcon(ui::hints::kConstantQuality, qecontent);
-        qeinfo->setObjectName(QStringLiteral("qualityCqInfoHint"));
-        qehl->addWidget(qeinfo, 0, Qt::AlignVCenter);
-        qehl->addStretch(1);
-        quality_cq_spin_ = new QSpinBox(qecontent);
-        quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
-        quality_cq_spin_->setRange(static_cast<int>(recorder_core::kNvencCqMin),
-                                   static_cast<int>(recorder_core::kNvencCqMax));
-        quality_cq_spin_->setFixedWidth(160); // same column width as every other row input
-        // Scrolling the settings page must not silently retune quality: the wheel
-        // only steps the value once the box has been focused deliberately.
-        quality_cq_spin_->setFocusPolicy(Qt::StrongFocus);
-        quality_cq_spin_->installEventFilter(this);
-        quality_cq_spin_->setProperty("settingsRowInput", true);
-        qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
-        qevl->addWidget(qecontent);
-        quality_expert_widget_->setProperty("settingsRow", true);
-        quality_expert_widget_->setVisible(false); // hidden until expert mode is on
-        quality_layout->addWidget(quality_expert_widget_);
-    }
+    // Wave 2 Part B: the CQ precision spinbox row and the two Expert rate/format
+    // sections below it are the heaviest interleaved subtree on the Quality and
+    // Container cards; they build on first expert-enable (perf — kept off the default
+    // non-expert build path, see buildFormatQualityExpertSections()). Record the
+    // Quality-card slot where the rate section + CQ row get inserted (right after the
+    // Default dropdown, before the frame-rate row).
+    quality_expert_insert_index_ = quality_layout->count();
 
     // --- Frame rate row (Quality & timing card) ---
     frame_rate_combo_ = new QComboBox(quality_panel);
@@ -1143,397 +1110,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                               QString(), cursor_check_));
 
     // --- PS-PHASE-C / v10: Expert sections (split across two cards) ---
-    // v10 places Rate control + Bitrate in the Quality & timing card, and Bit depth +
-    // Colour range (+ roadmap dummies) in the Container & codecs card. Two expert
-    // containers carry these; both are gated on expert_mode_enabled_.
-    // Shown only when expert_mode_enabled_ == true. rate_control is the active row;
-    // quality_expert_widget_ (existing CQ spinbox) stays visible when rate=CQ and hidden
-    // when rate=VBR/CBR (reusing existing logic). bitrate_row is shown for VBR/CBR.
-    {
-        // Quality & timing expert section (Rate control + Bitrate).
-        quality_rate_section_ = new QWidget(quality_panel);
-        quality_rate_section_->setObjectName(QStringLiteral("qualityRateSection"));
-        quality_rate_section_->setVisible(false);
-        auto* qrs_layout = new QVBoxLayout(quality_rate_section_);
-        qrs_layout->setContentsMargins(0, 0, 0, 0);
-        qrs_layout->setSpacing(0);
-
-        // Container & codecs expert section (Bit depth + Colour range + roadmap).
-        fmt_expert_section_ = new QWidget(fmt_panel);
-        fmt_expert_section_->setObjectName(QStringLiteral("fmtExpertSection"));
-        fmt_expert_section_->setVisible(false); // hidden until expert mode on
-        auto* fes_layout = new QVBoxLayout(fmt_expert_section_);
-        fes_layout->setContentsMargins(0, 0, 0, 0);
-        fes_layout->setSpacing(0);
-
-        // --- Rate control dropdown (CQ / VBR / CBR) — Quality card ---
-        // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
-        // itemData carries the recorder_core::RateControlMode enum.
-        rate_control_combo_ = new QComboBox(quality_rate_section_);
-        rate_control_combo_->setObjectName(QStringLiteral("rateControlCombo"));
-        rate_control_combo_->addItem(QStringLiteral("CQ"),
-                                     static_cast<int>(recorder_core::RateControlMode::ConstantQuality));
-        rate_control_combo_->addItem(QStringLiteral("VBR"),
-                                     static_cast<int>(recorder_core::RateControlMode::VariableBitrate));
-        rate_control_combo_->addItem(QStringLiteral("CBR"),
-                                     static_cast<int>(recorder_core::RateControlMode::ConstantBitrate));
-        rate_control_combo_->setFixedWidth(160);
-        rate_control_combo_->setProperty("settingsRowInput", true);
-
-        rate_control_row_widget_ = new QWidget(quality_rate_section_);
-        {
-            auto* rvl = new QVBoxLayout(rate_control_row_widget_);
-            rvl->setContentsMargins(0, 0, 0, 0);
-            rvl->setSpacing(0);
-            auto* rrule = new QFrame(rate_control_row_widget_);
-            rrule->setFrameShape(QFrame::HLine);
-            rrule->setProperty("frameRole", "sectionRuleLine");
-            rvl->addWidget(rrule);
-            auto* rhl = new QHBoxLayout();
-            rhl->setContentsMargins(0, 12, 0, 12);
-            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* rlbl = new QLabel(QStringLiteral("Rate control"), rate_control_row_widget_);
-            rlbl->setProperty("labelRole", "settingsRowLabel");
-            rhl->addWidget(rlbl, 0);
-            rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kRateControlMode, rate_control_row_widget_), 0,
-                           Qt::AlignVCenter);
-            rhl->addStretch(1);
-            rhl->addWidget(rate_control_combo_, 0, Qt::AlignVCenter);
-            rvl->addLayout(rhl);
-            rate_control_row_widget_->setProperty("settingsRow", true);
-        }
-        qrs_layout->addWidget(rate_control_row_widget_);
-
-        // --- Bitrate spinbox (VBR / CBR only) — Quality card ---
-        bitrate_row_widget_ = new QWidget(quality_rate_section_);
-        bitrate_row_widget_->setObjectName(QStringLiteral("bitrateRowWidget"));
-        bitrate_row_widget_->setVisible(false);
-        {
-            auto* bvl = new QVBoxLayout(bitrate_row_widget_);
-            bvl->setContentsMargins(0, 0, 0, 0);
-            bvl->setSpacing(0);
-            auto* brule = new QFrame(bitrate_row_widget_);
-            brule->setFrameShape(QFrame::HLine);
-            brule->setProperty("frameRole", "sectionRuleLine");
-            bvl->addWidget(brule);
-            auto* bhl = new QHBoxLayout();
-            bhl->setContentsMargins(0, 12, 0, 12);
-            bhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* blbl = new QLabel(QStringLiteral("Bitrate"), bitrate_row_widget_);
-            blbl->setProperty("labelRole", "settingsRowLabel");
-            bhl->addWidget(blbl, 0);
-            bhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoBitrate, bitrate_row_widget_), 0,
-                           Qt::AlignVCenter);
-            bhl->addStretch(1);
-            bitrate_kbps_spin_ = new QSpinBox(bitrate_row_widget_);
-            bitrate_kbps_spin_->setObjectName(QStringLiteral("bitrateKbpsSpin"));
-            bitrate_kbps_spin_->setRange(1000, 100000);
-            bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
-            bitrate_kbps_spin_->setValue(static_cast<int>(video_settings_.bitrate_kbps));
-            bitrate_kbps_spin_->setFixedWidth(160);
-            bitrate_kbps_spin_->setProperty("settingsRowInput", true);
-            bhl->addWidget(bitrate_kbps_spin_, 0, Qt::AlignVCenter);
-            bvl->addLayout(bhl);
-            bitrate_row_widget_->setProperty("settingsRow", true);
-        }
-        qrs_layout->addWidget(bitrate_row_widget_);
-
-        // --- Video bit depth (0.7.0 — S7) ---
-        // Real, capability-gated control. 8-bit is universal; 10-bit (HEVC Main10 /
-        // AV1 10-bit P010, SDR BT.709 — ADR 0032) is selectable only when the video
-        // codec is HEVC or AV1. For H.264 the 10-bit item is disabled with a tooltip;
-        // selectability is driven by capability::QueryCombo (single source of truth)
-        // in updateVideoBitDepthControl().
-        {
-            video_bit_depth_row_ = new QWidget(fmt_expert_section_);
-            auto* dvl = new QVBoxLayout(video_bit_depth_row_);
-            dvl->setContentsMargins(0, 0, 0, 0);
-            dvl->setSpacing(0);
-            auto* drule = new QFrame(video_bit_depth_row_);
-            drule->setFrameShape(QFrame::HLine);
-            drule->setProperty("frameRole", "sectionRuleLine");
-            dvl->addWidget(drule);
-            auto* dhl = new QHBoxLayout();
-            dhl->setContentsMargins(0, 12, 0, 12);
-            dhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* dlbl = new QLabel(QStringLiteral("Bit depth"), video_bit_depth_row_);
-            dlbl->setProperty("labelRole", "settingsRowLabel");
-            dhl->addWidget(dlbl, 0);
-            dhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoBitDepth, video_bit_depth_row_), 0,
-                           Qt::AlignVCenter);
-            dhl->addStretch(1);
-            video_bit_depth_combo_ = new QComboBox(video_bit_depth_row_);
-            video_bit_depth_combo_->setObjectName(QStringLiteral("videoBitDepthCombo"));
-            video_bit_depth_combo_->addItem(QStringLiteral("8-bit"), static_cast<int>(capability::BitDepth::Bit8));
-            video_bit_depth_combo_->addItem(QStringLiteral("10-bit"), static_cast<int>(capability::BitDepth::Bit10));
-            video_bit_depth_combo_->setFixedWidth(160);
-            video_bit_depth_combo_->setProperty("settingsRowInput", true);
-            dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
-            dvl->addLayout(dhl);
-            video_bit_depth_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(video_bit_depth_row_);
-        }
-
-        // --- Colour range (0.7.0) ---
-        // Full (0-255) is the native precision of PC/screen content and the default;
-        // Limited (16-235) is the broadcast standard, safest for editors/players that
-        // ignore the range flag. Both are ALWAYS valid for every codec/container, so
-        // this control is never capability-gated — only the recording lock disables it
-        // (see updateVideoColorRangeControl()).
-        {
-            video_color_range_row_ = new QWidget(fmt_expert_section_);
-            auto* rvl = new QVBoxLayout(video_color_range_row_);
-            rvl->setContentsMargins(0, 0, 0, 0);
-            rvl->setSpacing(0);
-            auto* rrule = new QFrame(video_color_range_row_);
-            rrule->setFrameShape(QFrame::HLine);
-            rrule->setProperty("frameRole", "sectionRuleLine");
-            rvl->addWidget(rrule);
-            auto* rhl = new QHBoxLayout();
-            rhl->setContentsMargins(0, 12, 0, 12);
-            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* rlbl = new QLabel(QStringLiteral("Colour range"), video_color_range_row_);
-            rlbl->setProperty("labelRole", "settingsRowLabel");
-            rhl->addWidget(rlbl, 0);
-            rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoColorRange, video_color_range_row_), 0,
-                           Qt::AlignVCenter);
-            rhl->addStretch(1);
-            video_color_range_combo_ = new QComboBox(video_color_range_row_);
-            video_color_range_combo_->setObjectName(QStringLiteral("videoColorRangeCombo"));
-            video_color_range_combo_->addItem(QStringLiteral("Full (PC)"),
-                                              static_cast<int>(capability::ColorRange::Full));
-            video_color_range_combo_->addItem(QStringLiteral("Limited (TV)"),
-                                              static_cast<int>(capability::ColorRange::Limited));
-            video_color_range_combo_->setFixedWidth(160);
-            video_color_range_combo_->setProperty("settingsRowInput", true);
-            rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
-            rvl->addLayout(rhl);
-            video_color_range_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(video_color_range_row_);
-        }
-
-        // --- Encoder preset (NVENC-PRESET-R1) ---
-        // NVENC SDK speed/quality preset P1 (fastest, lowest quality) .. P7
-        // (slowest, best quality). Independent of the quality-tier CQP values
-        // and rate-control mode above — this selects NVENC's internal
-        // encoding-pipeline tradeoff. Always valid for every codec (H.264/HEVC/
-        // AV1) and container, so never capability-gated — only the recording
-        // lock disables it (see updateVideoEncoderPresetControl()).
-        {
-            video_encoder_preset_row_ = new QWidget(fmt_expert_section_);
-            auto* pvl = new QVBoxLayout(video_encoder_preset_row_);
-            pvl->setContentsMargins(0, 0, 0, 0);
-            pvl->setSpacing(0);
-            auto* prule = new QFrame(video_encoder_preset_row_);
-            prule->setFrameShape(QFrame::HLine);
-            prule->setProperty("frameRole", "sectionRuleLine");
-            pvl->addWidget(prule);
-            auto* phl = new QHBoxLayout();
-            phl->setContentsMargins(0, 12, 0, 12);
-            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* plbl = new QLabel(QStringLiteral("Encoder preset (NVENC)"), video_encoder_preset_row_);
-            plbl->setProperty("labelRole", "settingsRowLabel");
-            phl->addWidget(plbl, 0);
-            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kEncoderPreset, video_encoder_preset_row_), 0,
-                           Qt::AlignVCenter);
-            phl->addStretch(1);
-            video_encoder_preset_combo_ = new QComboBox(video_encoder_preset_row_);
-            video_encoder_preset_combo_->setObjectName(QStringLiteral("videoEncoderPresetCombo"));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P1 \xe2\x80\x94 Fastest"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P1));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P2"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P2));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P3"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P3));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P4 \xe2\x80\x94 Balanced (default)"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P4));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P5"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P5));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P6"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P6));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P7 \xe2\x80\x94 Slowest"),
-                                                 static_cast<int>(recorder_core::NvencPreset::P7));
-            video_encoder_preset_combo_->setFixedWidth(200);
-            video_encoder_preset_combo_->setProperty("settingsRowInput", true);
-            phl->addWidget(video_encoder_preset_combo_, 0, Qt::AlignVCenter);
-            pvl->addLayout(phl);
-            video_encoder_preset_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(video_encoder_preset_row_);
-        }
-
-        // --- Frame pacing (ADR 0035 Slice 2) ---
-        // Smooth = phase-correct present-time-nearest selection (default, the recording
-        // use case). Newest = lowest-latency newest-at-tick (WGC fallback behaviour).
-        // Both are always valid — no codec/container gating. Only the recording lock
-        // disables it (see updateFramePacingControl()).
-        {
-            frame_pacing_row_ = new QWidget(fmt_expert_section_);
-            auto* pvl = new QVBoxLayout(frame_pacing_row_);
-            pvl->setContentsMargins(0, 0, 0, 0);
-            pvl->setSpacing(0);
-            auto* prule = new QFrame(frame_pacing_row_);
-            prule->setFrameShape(QFrame::HLine);
-            prule->setProperty("frameRole", "sectionRuleLine");
-            pvl->addWidget(prule);
-            auto* phl = new QHBoxLayout();
-            phl->setContentsMargins(0, 12, 0, 12);
-            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
-            plbl->setProperty("labelRole", "settingsRowLabel");
-            phl->addWidget(plbl, 0);
-            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFramePacing, frame_pacing_row_), 0,
-                           Qt::AlignVCenter);
-            phl->addStretch(1);
-            frame_pacing_combo_ = new QComboBox(frame_pacing_row_);
-            frame_pacing_combo_->setObjectName(QStringLiteral("framePacingSelect"));
-            frame_pacing_combo_->addItem(QStringLiteral("Phase-correct"),
-                                         static_cast<int>(recorder_core::FramePacingMode::Smooth));
-            frame_pacing_combo_->addItem(QStringLiteral("Lowest latency"),
-                                         static_cast<int>(recorder_core::FramePacingMode::Newest));
-            frame_pacing_combo_->setFixedWidth(160);
-            frame_pacing_combo_->setProperty("settingsRowInput", true);
-            phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
-            pvl->addLayout(phl);
-            frame_pacing_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(frame_pacing_row_);
-        }
-
-        // --- Keyframe interval (0.9.0 S1 Quick Trim) ---
-        {
-            auto* ki_row = new QWidget(fmt_expert_section_);
-            auto* kivl = new QVBoxLayout(ki_row);
-            kivl->setContentsMargins(0, 0, 0, 0);
-            kivl->setSpacing(0);
-            auto* kirule = new QFrame(ki_row);
-            kirule->setFrameShape(QFrame::HLine);
-            // "settingsDivider" has no stylesheet rule, so Qt drew its default
-            // (white) frame here instead of the hairline every other row uses.
-            kirule->setProperty("frameRole", "sectionRuleLine");
-            kivl->addWidget(kirule);
-            auto* kihl = new QHBoxLayout();
-            kihl->setContentsMargins(0, 12, 0, 12); // flush with every other settings row
-            kihl->setSpacing(4);                    // label <-> info-i, matches makeSettingsRow
-            auto* kilbl = new QLabel(QStringLiteral("Keyframe interval"), ki_row);
-            kilbl->setProperty("labelRole", "settingsRowLabel");
-            kihl->addWidget(kilbl, 0);
-            kihl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kKeyframeInterval, ki_row), 0, Qt::AlignVCenter);
-            kihl->addStretch(1);
-            keyframe_interval_combo_ = new QComboBox(ki_row);
-            keyframe_interval_combo_->setObjectName(QStringLiteral("keyframeIntervalSelect"));
-            keyframe_interval_combo_->addItem(QStringLiteral("2 s (default)"),
-                                              static_cast<int>(KeyframeIntervalMode::Seconds2));
-            keyframe_interval_combo_->addItem(QStringLiteral("1 s"), static_cast<int>(KeyframeIntervalMode::Seconds1));
-            keyframe_interval_combo_->addItem(QStringLiteral("0.5 s"),
-                                              static_cast<int>(KeyframeIntervalMode::Seconds0_5));
-            keyframe_interval_combo_->setFixedWidth(160);
-            keyframe_interval_combo_->setProperty("settingsRowInput", true);
-            kihl->addWidget(keyframe_interval_combo_, 0, Qt::AlignVCenter);
-            kivl->addLayout(kihl);
-            ki_row->setProperty("settingsRow", true);
-            fes_layout->addWidget(ki_row);
-        }
-
-        // --- HDR handling (expert-only) ---
-        // HDR-capable displays are auto-detected elsewhere; this control only selects
-        // what the pipeline does once one is found. Off is intentionally not offered —
-        // it has no user-facing value ("break my recording") and stays enum/config-
-        // internal. Hdr10 is selectable only when the chosen codec carries a native
-        // HDR10 signal (capability::QueryHdr10Native — HEVC/AV1; never H.264); the
-        // gating mirrors the bit-depth row but does NOT snap the stored value back to
-        // TonemapSdr when the codec changes — the live pre-flight blocker (rec.hdr.h264)
-        // owns that conflict at recording time (see updateVideoHdrModeControl()).
-        {
-            video_hdr_mode_row_ = new QWidget(fmt_expert_section_);
-            auto* hvl = new QVBoxLayout(video_hdr_mode_row_);
-            hvl->setContentsMargins(0, 0, 0, 0);
-            hvl->setSpacing(0);
-            auto* hrule = new QFrame(video_hdr_mode_row_);
-            hrule->setFrameShape(QFrame::HLine);
-            hrule->setProperty("frameRole", "sectionRuleLine");
-            hvl->addWidget(hrule);
-            auto* hhl = new QHBoxLayout();
-            hhl->setContentsMargins(0, 12, 0, 12);
-            hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
-            hlbl->setProperty("labelRole", "settingsRowLabel");
-            hhl->addWidget(hlbl, 0);
-            hhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoHdrMode, video_hdr_mode_row_), 0,
-                           Qt::AlignVCenter);
-            hhl->addStretch(1);
-            video_hdr_mode_combo_ = new QComboBox(video_hdr_mode_row_);
-            video_hdr_mode_combo_->setObjectName(QStringLiteral("videoHdrModeCombo"));
-            video_hdr_mode_combo_->addItem(QStringLiteral("Tone-map to SDR"),
-                                           static_cast<int>(recorder_core::HdrMode::TonemapSdr));
-            video_hdr_mode_combo_->addItem(QStringLiteral("Record native HDR10"),
-                                           static_cast<int>(recorder_core::HdrMode::Hdr10));
-            video_hdr_mode_combo_->setFixedWidth(200);
-            video_hdr_mode_combo_->setProperty("settingsRowInput", true);
-            hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
-            hvl->addLayout(hhl);
-            video_hdr_mode_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(video_hdr_mode_row_);
-
-            // Calm inline hint (never a warning colour) shown only while H.264 disables
-            // the Hdr10 item — mirrors the muted validation-hint idiom used elsewhere.
-            video_hdr_mode_hint_ = makeHint(
-                QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC."), fmt_expert_section_);
-            video_hdr_mode_hint_->setVisible(false);
-            fes_layout->addWidget(video_hdr_mode_hint_);
-        }
-
-        // --- Chroma subsampling (expert): 4:2:0 default / 4:4:4 gated ---
-        // Real control: 4:4:4 is an 8-bit H.264/HEVC-only path (AYUV, NVENC High
-        // 4:4:4 / HEVC FREXT). The 4:4:4 item is capability-gated per selected
-        // codec/bit-depth; 4:2:2 is not offered (Ada NVENC has no 4:2:2).
-        {
-            video_chroma_row_ = new QWidget(fmt_expert_section_);
-            auto* cvl = new QVBoxLayout(video_chroma_row_);
-            cvl->setContentsMargins(0, 0, 0, 0);
-            cvl->setSpacing(0);
-            auto* crule = new QFrame(video_chroma_row_);
-            crule->setFrameShape(QFrame::HLine);
-            crule->setProperty("frameRole", "sectionRuleLine");
-            cvl->addWidget(crule);
-            auto* chl = new QHBoxLayout();
-            chl->setContentsMargins(0, 12, 0, 12);
-            chl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* clbl = new QLabel(QStringLiteral("Chroma subsampling"), video_chroma_row_);
-            clbl->setProperty("labelRole", "settingsRowLabel");
-            chl->addWidget(clbl, 0);
-            chl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kChromaSubsampling, video_chroma_row_), 0,
-                           Qt::AlignVCenter);
-            chl->addStretch(1);
-            video_chroma_combo_ = new QComboBox(video_chroma_row_);
-            video_chroma_combo_->setObjectName(QStringLiteral("videoChromaCombo"));
-            video_chroma_combo_->addItem(QStringLiteral("4:2:0"),
-                                         static_cast<int>(capability::ChromaSubsampling::Cs420));
-            video_chroma_combo_->addItem(QStringLiteral("4:4:4"),
-                                         static_cast<int>(capability::ChromaSubsampling::Cs444));
-            video_chroma_combo_->setFixedWidth(160);
-            video_chroma_combo_->setProperty("settingsRowInput", true);
-            chl->addWidget(video_chroma_combo_, 0, Qt::AlignVCenter);
-            cvl->addLayout(chl);
-            video_chroma_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(video_chroma_row_);
-
-            video_chroma_hint_ =
-                makeHint(QStringLiteral("4:4:4 needs 8-bit H.264 or HEVC \xE2\x80\x94 not available with the current "
-                                        "codec or bit depth."),
-                         fmt_expert_section_);
-            video_chroma_hint_->setVisible(false);
-            fes_layout->addWidget(video_chroma_hint_);
-        }
-
-        // Container & codecs expert rows (Bit depth, Colour range, roadmap) append
-        // to the codecs card; the Quality card's rate section is inserted just before
-        // the CQ spinbox row so the expert order reads Rate control → CQ → Frame rate.
-        fmt_layout->addWidget(fmt_expert_section_);
-        const int cq_index = quality_layout->indexOf(quality_expert_widget_);
-        if (cq_index >= 0)
-            quality_layout->insertWidget(cq_index, quality_rate_section_);
-        else
-            quality_layout->addWidget(quality_rate_section_);
-    }
+    // The two Expert containers (Rate control + Bitrate in the Quality card; Bit
+    // depth, Colour range, Encoder preset, Frame pacing, Keyframe interval, HDR and
+    // Chroma in the Container card) are the heaviest interleaved subtree here; they
+    // build on first expert-enable (buildFormatQualityExpertSections()). Record the
+    // Container-card slot so the lazy build inserts the section before the compat
+    // callout that follows.
+    fmt_expert_insert_index_ = fmt_layout->count();
 
     // --- Compat callout (D6: replaces format_display_label_ visually) ---
     compat_callout_widget_ = new QFrame(fmt_panel);
@@ -2303,34 +1886,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoCodecChanged);
-    connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigPage::onVideoBitDepthChanged);
-    connect(video_chroma_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigPage::onVideoChromaChanged);
-    connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigPage::onVideoColorRangeChanged);
-    connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigPage::onVideoHdrModeChanged);
-    if (video_encoder_preset_combo_) {
-        connect(video_encoder_preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-                &ConfigPage::onVideoEncoderPresetChanged);
-    }
-    connect(frame_pacing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        if (idx < 0 || !frame_pacing_combo_)
-            return;
-        video_settings_.frame_pacing =
-            static_cast<recorder_core::FramePacingMode>(frame_pacing_combo_->itemData(idx).toInt());
-        emitCurrentVideoSettings();
-    });
-    if (keyframe_interval_combo_) {
-        connect(keyframe_interval_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-            if (idx < 0 || !keyframe_interval_combo_)
-                return;
-            video_settings_.keyframe_interval =
-                static_cast<KeyframeIntervalMode>(keyframe_interval_combo_->itemData(idx).toInt());
-            emitCurrentVideoSettings();
-        });
-    }
+    // The Container-card expert control connects (bit depth, chroma, colour range,
+    // HDR, encoder preset, frame pacing, keyframe interval) live in
+    // buildFormatQualityExpertSections() — those widgets don't exist until the first
+    // expert-enable builds them lazily.
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -2418,43 +1977,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emit expertModeChanged(expert_mode_enabled_);
     });
 
-    // The CQ value IS the model: the named presets are derived from it, never the
-    // other way round. (Deriving a preset and then re-seeding the spinbox from that
-    // preset is what previously snapped every keystroke back to 19/24/30.)
-    connect(quality_cq_spin_, &QSpinBox::valueChanged, this, [this](int cq) {
-        video_settings_.cq = static_cast<uint32_t>(cq);
-        // Sync the hidden combo so onQualityChanged path stays consistent.
-        if (quality_combo_) {
-            const QSignalBlocker qb(quality_combo_);
-            const int idx =
-                quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
-            if (idx >= 0)
-                quality_combo_->setCurrentIndex(idx);
-        }
-        updateQualitySegmentSelection();
-        emitCurrentVideoSettings();
-    });
-
-    // PS-PHASE-C: Rate control dropdown — updates video_settings_.rate_control.
-    connect(rate_control_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        if (index < 0 || !rate_control_combo_)
-            return;
-        video_settings_.rate_control =
-            static_cast<recorder_core::RateControlMode>(rate_control_combo_->itemData(index).toInt());
-        const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
-        const bool needs_bitrate = !rate_is_cq;
-        if (quality_expert_widget_)
-            quality_expert_widget_->setVisible(rate_is_cq);
-        if (bitrate_row_widget_)
-            bitrate_row_widget_->setVisible(needs_bitrate);
-        emitCurrentVideoSettings();
-    });
-
-    // PS-PHASE-C: Bitrate spinbox.
-    connect(bitrate_kbps_spin_, &QSpinBox::valueChanged, this, [this](int kbps) {
-        video_settings_.bitrate_kbps = static_cast<uint32_t>(kbps);
-        emitCurrentVideoSettings();
-    });
+    // The Quality-card expert control connects (CQ spinbox, Rate control, Bitrate)
+    // live in buildFormatQualityExpertSections() — those widgets don't exist until
+    // the first expert-enable builds them lazily.
 
     // PS-PHASE-C: Audio expert control connects live in buildAudioExpertSection()
     // (lazy build — the widgets they bind don't exist until first expert-enable).
@@ -5000,7 +4525,567 @@ void ConfigPage::buildDeveloperCard() {
     }
 }
 
+// Startup-perf: the interleaved Expert rate/format subtree spread across the Quality
+// and Container cards (CQ precision row, Rate control + Bitrate, Bit depth, Colour
+// range, Encoder preset, Frame pacing, Keyframe interval, HDR and Chroma — ~430 LOC /
+// ~40 widgets, half of them hidden until a rate/codec toggle) is built on first
+// expert-enable instead of eagerly-then-hidden, so the default non-expert ConfigPage
+// build never pays for it. All external access to these widgets is null-guarded; the
+// tail here re-seeds them from the current models before the section becomes visible.
+void ConfigPage::buildFormatQualityExpertSections() {
+    if (fmt_quality_expert_built_)
+        return;
+    fmt_quality_expert_built_ = true;
+    // Aliases so the moved construction below reads exactly as it did in the ctor.
+    QWidget* fmt_panel = fmt_panel_;
+    QWidget* quality_panel = quality_panel_;
+    auto* fmt_layout = qobject_cast<QVBoxLayout*>(fmt_panel_->layout());
+    auto* quality_layout = qobject_cast<QVBoxLayout*>(quality_panel_->layout());
+
+    // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
+    {
+        quality_expert_widget_ = new QWidget(quality_panel);
+        quality_expert_widget_->setObjectName(QStringLiteral("qualityExpertWidget"));
+        auto* qevl = new QVBoxLayout(quality_expert_widget_);
+        qevl->setContentsMargins(0, 0, 0, 0);
+        qevl->setSpacing(0);
+        // hairline
+        auto* qerule = new QFrame(quality_expert_widget_);
+        qerule->setFrameShape(QFrame::HLine);
+        qerule->setProperty("frameRole", "sectionRuleLine");
+        qevl->addWidget(qerule);
+        // content row
+        auto* qecontent = new QWidget(quality_expert_widget_);
+        auto* qehl = new QHBoxLayout(qecontent);
+        qehl->setContentsMargins(0, 12, 0, 12);
+        qehl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
+        qelbl->setProperty("labelRole", "settingsRowLabel");
+        qehl->addWidget(qelbl, 0);
+        auto* qeinfo = new ui::widgets::InfoHintIcon(ui::hints::kConstantQuality, qecontent);
+        qeinfo->setObjectName(QStringLiteral("qualityCqInfoHint"));
+        qehl->addWidget(qeinfo, 0, Qt::AlignVCenter);
+        qehl->addStretch(1);
+        quality_cq_spin_ = new QSpinBox(qecontent);
+        quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
+        quality_cq_spin_->setRange(static_cast<int>(recorder_core::kNvencCqMin),
+                                   static_cast<int>(recorder_core::kNvencCqMax));
+        quality_cq_spin_->setFixedWidth(160); // same column width as every other row input
+        // Scrolling the settings page must not silently retune quality: the wheel
+        // only steps the value once the box has been focused deliberately.
+        quality_cq_spin_->setFocusPolicy(Qt::StrongFocus);
+        quality_cq_spin_->installEventFilter(this);
+        quality_cq_spin_->setProperty("settingsRowInput", true);
+        qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
+        qevl->addWidget(qecontent);
+        quality_expert_widget_->setProperty("settingsRow", true);
+        quality_expert_widget_->setVisible(false); // hidden until expert mode is on
+    }
+
+    // --- PS-PHASE-C / v10: Expert sections (split across two cards) ---
+    // v10 places Rate control + Bitrate in the Quality & timing card, and Bit depth +
+    // Colour range (+ roadmap dummies) in the Container & codecs card. Two expert
+    // containers carry these; both are gated on expert_mode_enabled_.
+    // Shown only when expert_mode_enabled_ == true. rate_control is the active row;
+    // quality_expert_widget_ (existing CQ spinbox) stays visible when rate=CQ and hidden
+    // when rate=VBR/CBR (reusing existing logic). bitrate_row is shown for VBR/CBR.
+    {
+        // Quality & timing expert section (Rate control + Bitrate).
+        quality_rate_section_ = new QWidget(quality_panel);
+        quality_rate_section_->setObjectName(QStringLiteral("qualityRateSection"));
+        quality_rate_section_->setVisible(false);
+        auto* qrs_layout = new QVBoxLayout(quality_rate_section_);
+        qrs_layout->setContentsMargins(0, 0, 0, 0);
+        qrs_layout->setSpacing(0);
+
+        // Container & codecs expert section (Bit depth + Colour range + roadmap).
+        fmt_expert_section_ = new QWidget(fmt_panel);
+        fmt_expert_section_->setObjectName(QStringLiteral("fmtExpertSection"));
+        fmt_expert_section_->setVisible(false); // hidden until expert mode on
+        auto* fes_layout = new QVBoxLayout(fmt_expert_section_);
+        fes_layout->setContentsMargins(0, 0, 0, 0);
+        fes_layout->setSpacing(0);
+
+        // --- Rate control dropdown (CQ / VBR / CBR) — Quality card ---
+        // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+        // itemData carries the recorder_core::RateControlMode enum.
+        rate_control_combo_ = new QComboBox(quality_rate_section_);
+        rate_control_combo_->setObjectName(QStringLiteral("rateControlCombo"));
+        rate_control_combo_->addItem(QStringLiteral("CQ"),
+                                     static_cast<int>(recorder_core::RateControlMode::ConstantQuality));
+        rate_control_combo_->addItem(QStringLiteral("VBR"),
+                                     static_cast<int>(recorder_core::RateControlMode::VariableBitrate));
+        rate_control_combo_->addItem(QStringLiteral("CBR"),
+                                     static_cast<int>(recorder_core::RateControlMode::ConstantBitrate));
+        rate_control_combo_->setFixedWidth(160);
+        rate_control_combo_->setProperty("settingsRowInput", true);
+
+        rate_control_row_widget_ = new QWidget(quality_rate_section_);
+        {
+            auto* rvl = new QVBoxLayout(rate_control_row_widget_);
+            rvl->setContentsMargins(0, 0, 0, 0);
+            rvl->setSpacing(0);
+            auto* rrule = new QFrame(rate_control_row_widget_);
+            rrule->setFrameShape(QFrame::HLine);
+            rrule->setProperty("frameRole", "sectionRuleLine");
+            rvl->addWidget(rrule);
+            auto* rhl = new QHBoxLayout();
+            rhl->setContentsMargins(0, 12, 0, 12);
+            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* rlbl = new QLabel(QStringLiteral("Rate control"), rate_control_row_widget_);
+            rlbl->setProperty("labelRole", "settingsRowLabel");
+            rhl->addWidget(rlbl, 0);
+            rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kRateControlMode, rate_control_row_widget_), 0,
+                           Qt::AlignVCenter);
+            rhl->addStretch(1);
+            rhl->addWidget(rate_control_combo_, 0, Qt::AlignVCenter);
+            rvl->addLayout(rhl);
+            rate_control_row_widget_->setProperty("settingsRow", true);
+        }
+        qrs_layout->addWidget(rate_control_row_widget_);
+
+        // --- Bitrate spinbox (VBR / CBR only) — Quality card ---
+        bitrate_row_widget_ = new QWidget(quality_rate_section_);
+        bitrate_row_widget_->setObjectName(QStringLiteral("bitrateRowWidget"));
+        bitrate_row_widget_->setVisible(false);
+        {
+            auto* bvl = new QVBoxLayout(bitrate_row_widget_);
+            bvl->setContentsMargins(0, 0, 0, 0);
+            bvl->setSpacing(0);
+            auto* brule = new QFrame(bitrate_row_widget_);
+            brule->setFrameShape(QFrame::HLine);
+            brule->setProperty("frameRole", "sectionRuleLine");
+            bvl->addWidget(brule);
+            auto* bhl = new QHBoxLayout();
+            bhl->setContentsMargins(0, 12, 0, 12);
+            bhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* blbl = new QLabel(QStringLiteral("Bitrate"), bitrate_row_widget_);
+            blbl->setProperty("labelRole", "settingsRowLabel");
+            bhl->addWidget(blbl, 0);
+            bhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoBitrate, bitrate_row_widget_), 0,
+                           Qt::AlignVCenter);
+            bhl->addStretch(1);
+            bitrate_kbps_spin_ = new QSpinBox(bitrate_row_widget_);
+            bitrate_kbps_spin_->setObjectName(QStringLiteral("bitrateKbpsSpin"));
+            bitrate_kbps_spin_->setRange(1000, 100000);
+            bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
+            bitrate_kbps_spin_->setValue(static_cast<int>(video_settings_.bitrate_kbps));
+            bitrate_kbps_spin_->setFixedWidth(160);
+            bitrate_kbps_spin_->setProperty("settingsRowInput", true);
+            bhl->addWidget(bitrate_kbps_spin_, 0, Qt::AlignVCenter);
+            bvl->addLayout(bhl);
+            bitrate_row_widget_->setProperty("settingsRow", true);
+        }
+        qrs_layout->addWidget(bitrate_row_widget_);
+
+        // --- Video bit depth (0.7.0 — S7) ---
+        // Real, capability-gated control. 8-bit is universal; 10-bit (HEVC Main10 /
+        // AV1 10-bit P010, SDR BT.709 — ADR 0032) is selectable only when the video
+        // codec is HEVC or AV1. For H.264 the 10-bit item is disabled with a tooltip;
+        // selectability is driven by capability::QueryCombo (single source of truth)
+        // in updateVideoBitDepthControl().
+        {
+            video_bit_depth_row_ = new QWidget(fmt_expert_section_);
+            auto* dvl = new QVBoxLayout(video_bit_depth_row_);
+            dvl->setContentsMargins(0, 0, 0, 0);
+            dvl->setSpacing(0);
+            auto* drule = new QFrame(video_bit_depth_row_);
+            drule->setFrameShape(QFrame::HLine);
+            drule->setProperty("frameRole", "sectionRuleLine");
+            dvl->addWidget(drule);
+            auto* dhl = new QHBoxLayout();
+            dhl->setContentsMargins(0, 12, 0, 12);
+            dhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* dlbl = new QLabel(QStringLiteral("Bit depth"), video_bit_depth_row_);
+            dlbl->setProperty("labelRole", "settingsRowLabel");
+            dhl->addWidget(dlbl, 0);
+            dhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoBitDepth, video_bit_depth_row_), 0,
+                           Qt::AlignVCenter);
+            dhl->addStretch(1);
+            video_bit_depth_combo_ = new QComboBox(video_bit_depth_row_);
+            video_bit_depth_combo_->setObjectName(QStringLiteral("videoBitDepthCombo"));
+            video_bit_depth_combo_->addItem(QStringLiteral("8-bit"), static_cast<int>(capability::BitDepth::Bit8));
+            video_bit_depth_combo_->addItem(QStringLiteral("10-bit"), static_cast<int>(capability::BitDepth::Bit10));
+            video_bit_depth_combo_->setFixedWidth(160);
+            video_bit_depth_combo_->setProperty("settingsRowInput", true);
+            dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
+            dvl->addLayout(dhl);
+            video_bit_depth_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_bit_depth_row_);
+        }
+
+        // --- Colour range (0.7.0) ---
+        // Full (0-255) is the native precision of PC/screen content and the default;
+        // Limited (16-235) is the broadcast standard, safest for editors/players that
+        // ignore the range flag. Both are ALWAYS valid for every codec/container, so
+        // this control is never capability-gated — only the recording lock disables it
+        // (see updateVideoColorRangeControl()).
+        {
+            video_color_range_row_ = new QWidget(fmt_expert_section_);
+            auto* rvl = new QVBoxLayout(video_color_range_row_);
+            rvl->setContentsMargins(0, 0, 0, 0);
+            rvl->setSpacing(0);
+            auto* rrule = new QFrame(video_color_range_row_);
+            rrule->setFrameShape(QFrame::HLine);
+            rrule->setProperty("frameRole", "sectionRuleLine");
+            rvl->addWidget(rrule);
+            auto* rhl = new QHBoxLayout();
+            rhl->setContentsMargins(0, 12, 0, 12);
+            rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* rlbl = new QLabel(QStringLiteral("Colour range"), video_color_range_row_);
+            rlbl->setProperty("labelRole", "settingsRowLabel");
+            rhl->addWidget(rlbl, 0);
+            rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoColorRange, video_color_range_row_), 0,
+                           Qt::AlignVCenter);
+            rhl->addStretch(1);
+            video_color_range_combo_ = new QComboBox(video_color_range_row_);
+            video_color_range_combo_->setObjectName(QStringLiteral("videoColorRangeCombo"));
+            video_color_range_combo_->addItem(QStringLiteral("Full (PC)"),
+                                              static_cast<int>(capability::ColorRange::Full));
+            video_color_range_combo_->addItem(QStringLiteral("Limited (TV)"),
+                                              static_cast<int>(capability::ColorRange::Limited));
+            video_color_range_combo_->setFixedWidth(160);
+            video_color_range_combo_->setProperty("settingsRowInput", true);
+            rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
+            rvl->addLayout(rhl);
+            video_color_range_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_color_range_row_);
+        }
+
+        // --- Encoder preset (NVENC-PRESET-R1) ---
+        // NVENC SDK speed/quality preset P1 (fastest, lowest quality) .. P7
+        // (slowest, best quality). Independent of the quality-tier CQP values
+        // and rate-control mode above — this selects NVENC's internal
+        // encoding-pipeline tradeoff. Always valid for every codec (H.264/HEVC/
+        // AV1) and container, so never capability-gated — only the recording
+        // lock disables it (see updateVideoEncoderPresetControl()).
+        {
+            video_encoder_preset_row_ = new QWidget(fmt_expert_section_);
+            auto* pvl = new QVBoxLayout(video_encoder_preset_row_);
+            pvl->setContentsMargins(0, 0, 0, 0);
+            pvl->setSpacing(0);
+            auto* prule = new QFrame(video_encoder_preset_row_);
+            prule->setFrameShape(QFrame::HLine);
+            prule->setProperty("frameRole", "sectionRuleLine");
+            pvl->addWidget(prule);
+            auto* phl = new QHBoxLayout();
+            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* plbl = new QLabel(QStringLiteral("Encoder preset (NVENC)"), video_encoder_preset_row_);
+            plbl->setProperty("labelRole", "settingsRowLabel");
+            phl->addWidget(plbl, 0);
+            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kEncoderPreset, video_encoder_preset_row_), 0,
+                           Qt::AlignVCenter);
+            phl->addStretch(1);
+            video_encoder_preset_combo_ = new QComboBox(video_encoder_preset_row_);
+            video_encoder_preset_combo_->setObjectName(QStringLiteral("videoEncoderPresetCombo"));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P1 \xe2\x80\x94 Fastest"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P1));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P2"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P2));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P3"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P3));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P4 \xe2\x80\x94 Balanced (default)"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P4));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P5"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P5));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P6"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P6));
+            video_encoder_preset_combo_->addItem(QStringLiteral("P7 \xe2\x80\x94 Slowest"),
+                                                 static_cast<int>(recorder_core::NvencPreset::P7));
+            video_encoder_preset_combo_->setFixedWidth(200);
+            video_encoder_preset_combo_->setProperty("settingsRowInput", true);
+            phl->addWidget(video_encoder_preset_combo_, 0, Qt::AlignVCenter);
+            pvl->addLayout(phl);
+            video_encoder_preset_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_encoder_preset_row_);
+        }
+
+        // --- Frame pacing (ADR 0035 Slice 2) ---
+        // Smooth = phase-correct present-time-nearest selection (default, the recording
+        // use case). Newest = lowest-latency newest-at-tick (WGC fallback behaviour).
+        // Both are always valid — no codec/container gating. Only the recording lock
+        // disables it (see updateFramePacingControl()).
+        {
+            frame_pacing_row_ = new QWidget(fmt_expert_section_);
+            auto* pvl = new QVBoxLayout(frame_pacing_row_);
+            pvl->setContentsMargins(0, 0, 0, 0);
+            pvl->setSpacing(0);
+            auto* prule = new QFrame(frame_pacing_row_);
+            prule->setFrameShape(QFrame::HLine);
+            prule->setProperty("frameRole", "sectionRuleLine");
+            pvl->addWidget(prule);
+            auto* phl = new QHBoxLayout();
+            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
+            plbl->setProperty("labelRole", "settingsRowLabel");
+            phl->addWidget(plbl, 0);
+            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFramePacing, frame_pacing_row_), 0,
+                           Qt::AlignVCenter);
+            phl->addStretch(1);
+            frame_pacing_combo_ = new QComboBox(frame_pacing_row_);
+            frame_pacing_combo_->setObjectName(QStringLiteral("framePacingSelect"));
+            frame_pacing_combo_->addItem(QStringLiteral("Phase-correct"),
+                                         static_cast<int>(recorder_core::FramePacingMode::Smooth));
+            frame_pacing_combo_->addItem(QStringLiteral("Lowest latency"),
+                                         static_cast<int>(recorder_core::FramePacingMode::Newest));
+            frame_pacing_combo_->setFixedWidth(160);
+            frame_pacing_combo_->setProperty("settingsRowInput", true);
+            phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
+            pvl->addLayout(phl);
+            frame_pacing_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(frame_pacing_row_);
+        }
+
+        // --- Keyframe interval (0.9.0 S1 Quick Trim) ---
+        {
+            auto* ki_row = new QWidget(fmt_expert_section_);
+            auto* kivl = new QVBoxLayout(ki_row);
+            kivl->setContentsMargins(0, 0, 0, 0);
+            kivl->setSpacing(0);
+            auto* kirule = new QFrame(ki_row);
+            kirule->setFrameShape(QFrame::HLine);
+            // "settingsDivider" has no stylesheet rule, so Qt drew its default
+            // (white) frame here instead of the hairline every other row uses.
+            kirule->setProperty("frameRole", "sectionRuleLine");
+            kivl->addWidget(kirule);
+            auto* kihl = new QHBoxLayout();
+            kihl->setContentsMargins(0, 12, 0, 12); // flush with every other settings row
+            kihl->setSpacing(4);                    // label <-> info-i, matches makeSettingsRow
+            auto* kilbl = new QLabel(QStringLiteral("Keyframe interval"), ki_row);
+            kilbl->setProperty("labelRole", "settingsRowLabel");
+            kihl->addWidget(kilbl, 0);
+            kihl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kKeyframeInterval, ki_row), 0, Qt::AlignVCenter);
+            kihl->addStretch(1);
+            keyframe_interval_combo_ = new QComboBox(ki_row);
+            keyframe_interval_combo_->setObjectName(QStringLiteral("keyframeIntervalSelect"));
+            keyframe_interval_combo_->addItem(QStringLiteral("2 s (default)"),
+                                              static_cast<int>(KeyframeIntervalMode::Seconds2));
+            keyframe_interval_combo_->addItem(QStringLiteral("1 s"), static_cast<int>(KeyframeIntervalMode::Seconds1));
+            keyframe_interval_combo_->addItem(QStringLiteral("0.5 s"),
+                                              static_cast<int>(KeyframeIntervalMode::Seconds0_5));
+            keyframe_interval_combo_->setFixedWidth(160);
+            keyframe_interval_combo_->setProperty("settingsRowInput", true);
+            kihl->addWidget(keyframe_interval_combo_, 0, Qt::AlignVCenter);
+            kivl->addLayout(kihl);
+            ki_row->setProperty("settingsRow", true);
+            fes_layout->addWidget(ki_row);
+        }
+
+        // --- HDR handling (expert-only) ---
+        // HDR-capable displays are auto-detected elsewhere; this control only selects
+        // what the pipeline does once one is found. Off is intentionally not offered —
+        // it has no user-facing value ("break my recording") and stays enum/config-
+        // internal. Hdr10 is selectable only when the chosen codec carries a native
+        // HDR10 signal (capability::QueryHdr10Native — HEVC/AV1; never H.264); the
+        // gating mirrors the bit-depth row but does NOT snap the stored value back to
+        // TonemapSdr when the codec changes — the live pre-flight blocker (rec.hdr.h264)
+        // owns that conflict at recording time (see updateVideoHdrModeControl()).
+        {
+            video_hdr_mode_row_ = new QWidget(fmt_expert_section_);
+            auto* hvl = new QVBoxLayout(video_hdr_mode_row_);
+            hvl->setContentsMargins(0, 0, 0, 0);
+            hvl->setSpacing(0);
+            auto* hrule = new QFrame(video_hdr_mode_row_);
+            hrule->setFrameShape(QFrame::HLine);
+            hrule->setProperty("frameRole", "sectionRuleLine");
+            hvl->addWidget(hrule);
+            auto* hhl = new QHBoxLayout();
+            hhl->setContentsMargins(0, 12, 0, 12);
+            hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
+            hlbl->setProperty("labelRole", "settingsRowLabel");
+            hhl->addWidget(hlbl, 0);
+            hhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoHdrMode, video_hdr_mode_row_), 0,
+                           Qt::AlignVCenter);
+            hhl->addStretch(1);
+            video_hdr_mode_combo_ = new QComboBox(video_hdr_mode_row_);
+            video_hdr_mode_combo_->setObjectName(QStringLiteral("videoHdrModeCombo"));
+            video_hdr_mode_combo_->addItem(QStringLiteral("Tone-map to SDR"),
+                                           static_cast<int>(recorder_core::HdrMode::TonemapSdr));
+            video_hdr_mode_combo_->addItem(QStringLiteral("Record native HDR10"),
+                                           static_cast<int>(recorder_core::HdrMode::Hdr10));
+            video_hdr_mode_combo_->setFixedWidth(200);
+            video_hdr_mode_combo_->setProperty("settingsRowInput", true);
+            hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
+            hvl->addLayout(hhl);
+            video_hdr_mode_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_hdr_mode_row_);
+
+            // Calm inline hint (never a warning colour) shown only while H.264 disables
+            // the Hdr10 item — mirrors the muted validation-hint idiom used elsewhere.
+            video_hdr_mode_hint_ = makeHint(
+                QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC."), fmt_expert_section_);
+            video_hdr_mode_hint_->setVisible(false);
+            fes_layout->addWidget(video_hdr_mode_hint_);
+        }
+
+        // --- Chroma subsampling (expert): 4:2:0 default / 4:4:4 gated ---
+        // Real control: 4:4:4 is an 8-bit H.264/HEVC-only path (AYUV, NVENC High
+        // 4:4:4 / HEVC FREXT). The 4:4:4 item is capability-gated per selected
+        // codec/bit-depth; 4:2:2 is not offered (Ada NVENC has no 4:2:2).
+        {
+            video_chroma_row_ = new QWidget(fmt_expert_section_);
+            auto* cvl = new QVBoxLayout(video_chroma_row_);
+            cvl->setContentsMargins(0, 0, 0, 0);
+            cvl->setSpacing(0);
+            auto* crule = new QFrame(video_chroma_row_);
+            crule->setFrameShape(QFrame::HLine);
+            crule->setProperty("frameRole", "sectionRuleLine");
+            cvl->addWidget(crule);
+            auto* chl = new QHBoxLayout();
+            chl->setContentsMargins(0, 12, 0, 12);
+            chl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* clbl = new QLabel(QStringLiteral("Chroma subsampling"), video_chroma_row_);
+            clbl->setProperty("labelRole", "settingsRowLabel");
+            chl->addWidget(clbl, 0);
+            chl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kChromaSubsampling, video_chroma_row_), 0,
+                           Qt::AlignVCenter);
+            chl->addStretch(1);
+            video_chroma_combo_ = new QComboBox(video_chroma_row_);
+            video_chroma_combo_->setObjectName(QStringLiteral("videoChromaCombo"));
+            video_chroma_combo_->addItem(QStringLiteral("4:2:0"),
+                                         static_cast<int>(capability::ChromaSubsampling::Cs420));
+            video_chroma_combo_->addItem(QStringLiteral("4:4:4"),
+                                         static_cast<int>(capability::ChromaSubsampling::Cs444));
+            video_chroma_combo_->setFixedWidth(160);
+            video_chroma_combo_->setProperty("settingsRowInput", true);
+            chl->addWidget(video_chroma_combo_, 0, Qt::AlignVCenter);
+            cvl->addLayout(chl);
+            video_chroma_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_chroma_row_);
+
+            video_chroma_hint_ =
+                makeHint(QStringLiteral("4:4:4 needs 8-bit H.264 or HEVC \xE2\x80\x94 not available with the current "
+                                        "codec or bit depth."),
+                         fmt_expert_section_);
+            video_chroma_hint_->setVisible(false);
+            fes_layout->addWidget(video_chroma_hint_);
+        }
+    }
+
+    // Attach both Expert containers at the slots recorded during construction:
+    // fmt_expert_section_ goes before the compat callout in the Container card; the
+    // rate section and the CQ row (in that order) go right after the Default dropdown
+    // in the Quality card, so the expert order reads Rate control → CQ → Frame rate.
+    if (fmt_layout && fmt_expert_insert_index_ >= 0)
+        fmt_layout->insertWidget(fmt_expert_insert_index_, fmt_expert_section_);
+    if (quality_layout && quality_expert_insert_index_ >= 0) {
+        quality_layout->insertWidget(quality_expert_insert_index_, quality_rate_section_);
+        quality_layout->insertWidget(quality_expert_insert_index_ + 1, quality_expert_widget_);
+    }
+
+    // ---- Connects (Container card expert rows) ----
+    connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoBitDepthChanged);
+    connect(video_chroma_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoChromaChanged);
+    connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoColorRangeChanged);
+    connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoHdrModeChanged);
+    connect(video_encoder_preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoEncoderPresetChanged);
+    connect(frame_pacing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !frame_pacing_combo_)
+            return;
+        video_settings_.frame_pacing =
+            static_cast<recorder_core::FramePacingMode>(frame_pacing_combo_->itemData(idx).toInt());
+        emitCurrentVideoSettings();
+    });
+    connect(keyframe_interval_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !keyframe_interval_combo_)
+            return;
+        video_settings_.keyframe_interval =
+            static_cast<KeyframeIntervalMode>(keyframe_interval_combo_->itemData(idx).toInt());
+        emitCurrentVideoSettings();
+    });
+
+    // ---- Connects (Quality card expert rows) ----
+    // The CQ value IS the model: the named presets are derived from it, never the
+    // other way round. (Deriving a preset and then re-seeding the spinbox from that
+    // preset is what previously snapped every keystroke back to 19/24/30.)
+    connect(quality_cq_spin_, &QSpinBox::valueChanged, this, [this](int cq) {
+        video_settings_.cq = static_cast<uint32_t>(cq);
+        // Sync the hidden combo so onQualityChanged path stays consistent.
+        if (quality_combo_) {
+            const QSignalBlocker qb(quality_combo_);
+            const int idx =
+                quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
+            if (idx >= 0)
+                quality_combo_->setCurrentIndex(idx);
+        }
+        updateQualitySegmentSelection();
+        emitCurrentVideoSettings();
+    });
+    // PS-PHASE-C: Rate control dropdown — updates video_settings_.rate_control.
+    connect(rate_control_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !rate_control_combo_)
+            return;
+        video_settings_.rate_control =
+            static_cast<recorder_core::RateControlMode>(rate_control_combo_->itemData(index).toInt());
+        const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
+        const bool needs_bitrate = !rate_is_cq;
+        if (quality_expert_widget_)
+            quality_expert_widget_->setVisible(rate_is_cq);
+        if (bitrate_row_widget_)
+            bitrate_row_widget_->setVisible(needs_bitrate);
+        emitCurrentVideoSettings();
+    });
+    // PS-PHASE-C: Bitrate spinbox.
+    connect(bitrate_kbps_spin_, &QSpinBox::valueChanged, this, [this](int kbps) {
+        video_settings_.bitrate_kbps = static_cast<uint32_t>(kbps);
+        emitCurrentVideoSettings();
+    });
+
+    // ---- Re-sync the freshly built controls from the current models ----
+    // The gated combos own their own seeding + item enable/disable (all signal-
+    // blocked, none emit). updateExpertModeVisibility() re-runs several of these
+    // right after this build returns; the duplicate calls are idempotent.
+    updateVideoBitDepthControl();
+    updateVideoChromaControl();
+    updateVideoColorRangeControl();
+    updateVideoEncoderPresetControl();
+    updateVideoHdrModeControl();
+    updateFramePacingControl();
+    // Keyframe interval, CQ and rate control are not touched by the update*Control
+    // helpers above — seed them straight from the model (blocked so nothing emits).
+    if (keyframe_interval_combo_) {
+        const QSignalBlocker b(keyframe_interval_combo_);
+        const int idx = keyframe_interval_combo_->findData(static_cast<int>(video_settings_.keyframe_interval));
+        keyframe_interval_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 2 s */);
+        keyframe_interval_combo_->setEnabled(!controls_locked_);
+    }
+    if (quality_cq_spin_) {
+        const QSignalBlocker b(quality_cq_spin_);
+        quality_cq_spin_->setValue(static_cast<int>(video_settings_.cq));
+    }
+    if (rate_control_combo_) {
+        const QSignalBlocker b(rate_control_combo_);
+        const int idx = rate_control_combo_->findData(static_cast<int>(video_settings_.rate_control));
+        if (idx >= 0)
+            rate_control_combo_->setCurrentIndex(idx);
+    }
+    if (bitrate_kbps_spin_) {
+        const QSignalBlocker b(bitrate_kbps_spin_);
+        bitrate_kbps_spin_->setValue(static_cast<int>(video_settings_.bitrate_kbps));
+    }
+    // CQ row + bitrate row visibility follow the rate-control mode (mirrors the
+    // rate-control connect above and updateExpertModeVisibility()).
+    {
+        const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
+        if (quality_expert_widget_)
+            quality_expert_widget_->setVisible(expert_mode_enabled_ && rate_is_cq);
+        if (bitrate_row_widget_)
+            bitrate_row_widget_->setVisible(expert_mode_enabled_ && !rate_is_cq);
+    }
+}
+
 void ConfigPage::updateExpertModeVisibility() {
+    if (expert_mode_enabled_ && !fmt_quality_expert_built_) {
+        buildFormatQualityExpertSections();
+    }
     if (expert_mode_enabled_ && !developer_card_built_) {
         buildDeveloperCard();
     }
