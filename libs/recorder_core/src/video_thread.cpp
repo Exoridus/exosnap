@@ -49,10 +49,11 @@
 // ============================================================================
 // D3D11 threading contract
 // ============================================================================
-// ID3D11DeviceContext (m_d3dContext) and ID3D11VideoContext (m_videoContext) are
-// used EXCLUSIVELY on this VideoThread.  No other thread in RecorderSession may
-// call any method on these interfaces.  The shared ID3D11Device (m_d3dDevice)
-// lifetime is owned by RecorderSession::Impl; VideoThread borrows the pointer.
+// The D3D11 device (d3dDevice), its immediate context (d3dContext) and the
+// video context (videoContext) are created locally in Run() and owned for the
+// lifetime of that call.  They are used EXCLUSIVELY on this VideoThread — no
+// other thread in RecorderSession may call any method on these interfaces.
+// Nothing here is borrowed from the session; the device is not shared.
 // ============================================================================
 
 namespace recorder_core {
@@ -1601,6 +1602,12 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateTexture2D(hdrSdrTex) failed 0x%08lX", static_cast<unsigned long>(sdrHr));
             m_state.RecordFailure(sdrHr, ErrorPhase::Prepare, buf);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
             if (com_inited)
                 CoUninitialize();
             return;
@@ -1608,6 +1615,12 @@ void VideoThread::Run() {
         if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
                                 hdrToneMapSdrSource, tmErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR tone-map init: " + tmErr);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
             if (com_inited)
                 CoUninitialize();
             return;
@@ -1635,6 +1648,12 @@ void VideoThread::Run() {
         std::string pqErr;
         if (!hdrPqConverter.Init(d3dDevice.get(), d3dContext.get(), geom, hdrPqInputIsPq, hdrPqSrcFormat, pqErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR10 native converter init: " + pqErr);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
             if (com_inited)
                 CoUninitialize();
             return;
@@ -1892,6 +1911,11 @@ void VideoThread::Run() {
             m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
             m_state.stats.encoded_video_packets++;
             m_state.stats.video_bytes += pkt_bytes_count;
+            // Publish the video media duration live (previously only at teardown) so
+            // the duration-skew metric — video vs audio media time — is available to
+            // live diagnostics, not just the final snapshot. lastVideoPts is the newest
+            // emitted video PTS and is monotonic.
+            m_state.stats.video_duration_ns = lastVideoPts;
         }
         return true;
     };
@@ -2093,6 +2117,35 @@ void VideoThread::Run() {
         previewSharedTex.TryPublish(d3dContext.get(), vpInput);
     };
 
+    // Cache the VideoProcessor input view across ticks. The encode input handed to
+    // VideoProcessorBlt is usually the SAME texture object every tick — the
+    // compositor's stable Result() texture, or (still desktop / newest-at-tick) the
+    // persistent capture texture — so recreating the input view per frame was pure
+    // churn. The view is a light wrapper that reads the texture's current contents at
+    // Blt time, so reusing it across re-blts is correct. Keyed by the texture pointer;
+    // a new pointer (a phase-correct ring entry, a fresh WGC frame, or a format/size
+    // change — all of which are distinct texture objects) rebuilds it. Returns nullptr
+    // if the view cannot be created (the caller then skips the tick, as before).
+    winrt::com_ptr<ID3D11VideoProcessorInputView> cachedInputView;
+    ID3D11Texture2D* cachedInputViewTex = nullptr;
+    auto acquireInputView = [&](ID3D11Texture2D* vpInput) -> ID3D11VideoProcessorInputView* {
+        if (cachedInputViewTex == vpInput && cachedInputView != nullptr)
+            return cachedInputView.get();
+        cachedInputView = nullptr;
+        cachedInputViewTex = nullptr;
+        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
+        ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+        ivDesc.Texture2D.MipSlice = 0;
+        ivDesc.Texture2D.ArraySlice = 0;
+        winrt::com_ptr<ID3D11VideoProcessorInputView> view;
+        HRESULT ivHr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, view.put());
+        if (FAILED(ivHr) || view == nullptr)
+            return nullptr;
+        cachedInputView = view;
+        cachedInputViewTex = vpInput;
+        return cachedInputView.get();
+    };
+
     if (m_state.config.cfr) {
         // ====================================================================
         // CFR path: QPC-driven scheduler — duplicate/drop to hit constant rate
@@ -2129,6 +2182,22 @@ void VideoThread::Run() {
         bool cfr_was_paused = false;
         uint64_t cfr_pause_start_100ns = 0;
 
+        // --- Sustained-encoder-lag resync (honest timeline) ---
+        // The catch-up loop below emits at most kMaxCatchUpFrames per outer iteration
+        // so a brief stall cannot burst the GPU. If the encoder is *persistently*
+        // slower than real time, that cap is hit every iteration and the media clock
+        // (cfr_frame_idx x frame_interval) falls ever further behind the wall clock —
+        // the file would end with less video than audio, silently out of sync. When
+        // the media clock has trailed the wall clock by more than one full catch-up
+        // budget for kSustainedLagResyncTicks consecutive iterations, the timeline is
+        // resynchronised: the frame indices that could never be emitted in real time
+        // are skipped and counted as real (backpressure) drops so media time snaps
+        // back to the wall clock instead of compressing it. The threshold is one
+        // budget because a shorter lag is, by construction, recoverable within a
+        // single catch-up iteration and needs no resync.
+        constexpr int kSustainedLagResyncTicks = 3;
+        int sustainedLagTicks = 0;
+
         // Seed the first WGC frame from the wait loop so a static window still
         // encodes from t=0 (WGC only delivers frames on repaint).
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex = std::move(seedWgcTex);
@@ -2154,6 +2223,11 @@ void VideoThread::Run() {
         size_t ringHead = 0;                // next physical slot to overwrite (round-robin)
         uint64_t lastEmittedPresentQpc = 0; // present-QPC of the last frame handed to the encoder
         bool phaseRingHasFrame = false;     // true once any live entry exists since last reset
+        // Reused scratch for linearising the round-robin ring into ascending present
+        // order each tick — hoisted out of the hot loop so the two vectors are
+        // allocated once (reserved to the ring size) and only cleared per tick.
+        std::vector<uint64_t> presentQpcsAscending;
+        std::vector<size_t> liveIndexToRingSlot;
         // odCapturedTex is null only if stop was requested before the first OD
         // frame arrived (lazy format negotiation) — no ring needed then.
         bool usePhaseCorrect =
@@ -2168,6 +2242,8 @@ void VideoThread::Run() {
             D3D11_TEXTURE2D_DESC ringDesc{};
             odCapturedTex->GetDesc(&ringDesc); // mirror the OD capture texture exactly
             captureRing.resize(ringN);
+            presentQpcsAscending.reserve(ringN);
+            liveIndexToRingSlot.reserve(ringN);
             for (auto& entry : captureRing) {
                 HRESULT ringHr = d3dDevice->CreateTexture2D(&ringDesc, nullptr, entry.tex.put());
                 if (FAILED(ringHr)) {
@@ -2402,6 +2478,34 @@ void VideoThread::Run() {
             const uint64_t currentElapsed100ns = Qpc100ns(qpcFreq) - epochQpc100ns;
             bool anyWork = false;
 
+            // Sustained-encoder-lag resync: keep the media clock honest against the
+            // wall clock (see the state declaration above). The lag is how far media
+            // time (next_tick) trails the wall clock right now.
+            const uint64_t lag100ns =
+                (currentElapsed100ns > next_tick_100ns) ? (currentElapsed100ns - next_tick_100ns) : 0;
+            if (lag100ns > kMaxCatchUpFrames * frame_interval_100ns) {
+                ++sustainedLagTicks;
+            } else {
+                sustainedLagTicks = 0;
+            }
+            if (sustainedLagTicks >= kSustainedLagResyncTicks) {
+                const uint64_t skip = ComputeCatchUpSkip(lag100ns, frame_interval_100ns, kMaxCatchUpFrames);
+                if (skip > 0) {
+                    cfr_frame_idx += skip;
+                    next_tick_100ns += skip * frame_interval_100ns;
+                    droppedFrames += skip;
+                    for (uint64_t d = 0; d < skip; ++d)
+                        m_state.diagnostics.OnFrameDroppedBackpressure();
+                    logging::LogField fields[] = {{"skipped_frames", std::to_string(skip)},
+                                                  {"lag_ms", std::to_string(lag100ns / 10000ULL)}};
+                    logging::log(logging::LogLevel::Info, "video_thread",
+                                 "sustained encoder lag: resynchronised the CFR timeline to the wall clock "
+                                 "(skipped frames counted as drops)",
+                                 std::span<const logging::LogField>(fields, std::size(fields)));
+                }
+                sustainedLagTicks = 0;
+            }
+
             // Emit CFR frames while we're behind, capped at 1 second to avoid
             // burst workload after process suspension.
             uint64_t catchUpFrames = 0;
@@ -2422,11 +2526,10 @@ void VideoThread::Run() {
                 if (usePhaseCorrect) {
                     // Linearise the round-robin ring to ascending (oldest -> newest)
                     // present order; ringHead points at the oldest physical slot.
-                    std::vector<uint64_t> presentQpcsAscending;
-                    std::vector<size_t> liveIndexToRingSlot;
+                    // Reuses the hoisted scratch (allocated once, cleared per tick).
+                    presentQpcsAscending.clear();
+                    liveIndexToRingSlot.clear();
                     const size_t ringN = captureRing.size();
-                    presentQpcsAscending.reserve(ringN);
-                    liveIndexToRingSlot.reserve(ringN);
                     for (size_t i = 0; i < ringN; ++i) {
                         const size_t phys = (ringHead + i) % ringN;
                         if (captureRing[phys].presentQpc != 0) {
@@ -2560,19 +2663,14 @@ void VideoThread::Run() {
                     // and non-blocking; never stalls the encode below.
                     tapPreviewSource(vpInput, pts_ns);
 
-                    // Convert RGB frame to NV12/P010 via VideoProcessorBlt
-                    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                    ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                    ivDesc.Texture2D.MipSlice = 0;
-                    ivDesc.Texture2D.ArraySlice = 0;
+                    // Convert RGB frame to NV12/P010 via VideoProcessorBlt using the
+                    // per-tick-cached input view (recreated only when vpInput changes).
+                    ID3D11VideoProcessorInputView* inputView = acquireInputView(vpInput);
 
-                    winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                    hr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, inputView.put());
-
-                    if (SUCCEEDED(hr) && inputView != nullptr) {
+                    if (inputView != nullptr) {
                         D3D11_VIDEO_PROCESSOR_STREAM stream{};
                         stream.Enable = TRUE;
-                        stream.pInputSurface = inputView.get();
+                        stream.pInputSurface = inputView;
 
                         const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
@@ -2580,7 +2678,6 @@ void VideoThread::Run() {
                         const auto vp_t1 = std::chrono::steady_clock::now();
                         m_state.diagnostics.OnVpbltSubmit(
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
-                        inputView = nullptr;
 
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
@@ -2926,19 +3023,14 @@ void VideoThread::Run() {
                     // (works for 4:4:4 too; non-blocking, never stalls the encode below).
                     tapPreviewSource(vpInput, framePts_ns);
 
-                    // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's view
-                    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                    ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                    ivDesc.Texture2D.MipSlice = 0;
-                    ivDesc.Texture2D.ArraySlice = 0;
+                    // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's
+                    // view, reusing the per-tick-cached input view (see acquireInputView).
+                    ID3D11VideoProcessorInputView* inputView = acquireInputView(vpInput);
 
-                    winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                    hr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, inputView.put());
-
-                    if (SUCCEEDED(hr) && inputView != nullptr) {
+                    if (inputView != nullptr) {
                         D3D11_VIDEO_PROCESSOR_STREAM stream{};
                         stream.Enable = TRUE;
-                        stream.pInputSurface = inputView.get();
+                        stream.pInputSurface = inputView;
 
                         const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
@@ -2947,7 +3039,6 @@ void VideoThread::Run() {
                         m_state.diagnostics.OnVpbltSubmit(
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
 
-                        inputView = nullptr;
                         latestTex = nullptr;
 
                         std::string ayuvErr;

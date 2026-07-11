@@ -267,6 +267,13 @@ struct RecordingDiagnosticsSnapshot {
     double av_drift_ms = 0.0;
     MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
 
+    // Total media-duration skew: |video media time - audio media time| (ms). Unlike
+    // av_drift_ms (an instantaneous PTS lead/lag), this is the accumulated difference
+    // in how much video vs audio the file holds — the signal that a starving encoder
+    // is compressing the video timeline. Unavailable until both streams have duration.
+    double duration_skew_ms = 0.0;
+    MetricAvailability duration_skew_availability = MetricAvailability::Unavailable;
+
     // Estimated seconds until the output drive fills at current sustained throughput.
     // Negative means unavailable (throughput unknown or free space not provided).
     double disk_fill_eta_seconds = -1.0;

@@ -107,12 +107,13 @@ struct DiagnosticsThresholds {
     double capture_fps_ratio = 0.85; // actual/target below this == capture pressure
     double compositor_budget_ratio = 0.8;
     double encoder_budget_ratio = 0.8;
-    uint64_t encoder_backlog = 2;        // submitted - encoded sustained
-    uint32_t mux_queue_warn = 8;         // mux (video) queue depth
-    double disk_write_ms_warn = 8.0;     // write-call latency ms
-    double audio_queue_warn_ratio = 0.8; // fraction of audio-queue capacity
-    double queue_critical_ratio = 0.9;   // fraction of a bounded queue == critical
-    double warmup_seconds = 1.0;         // below this, evidence is insufficient (Unknown)
+    uint64_t encoder_backlog = 2;         // submitted - encoded sustained
+    uint32_t mux_queue_warn = 8;          // mux (video) queue depth
+    double disk_write_ms_warn = 8.0;      // write-call latency ms
+    double audio_queue_warn_ratio = 0.8;  // fraction of audio-queue capacity
+    double queue_critical_ratio = 0.9;    // fraction of a bounded queue == critical
+    double warmup_seconds = 1.0;          // below this, evidence is insufficient (Unknown)
+    double duration_skew_warn_ms = 250.0; // video/audio media-duration skew that reads as a warning
 };
 
 // Static, per-session configuration not carried in SessionStats.

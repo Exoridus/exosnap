@@ -563,6 +563,21 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         s.av_drift_availability = MetricAvailability::Available;
     }
 
+    // ---- Duration skew ----
+    // Total media-duration mismatch between the video and audio timelines, from the
+    // live SessionStats durations. A large, sustained skew means one timeline is being
+    // compressed relative to the other (e.g. a starving encoder) — the honest
+    // counterpart to the CFR scheduler's wall-clock resync. Distinct from av_drift_ms.
+    if (stats.video_duration_ns > 0 && stats.audio_duration_ns > 0) {
+        const double vd = static_cast<double>(stats.video_duration_ns) / 1e6;
+        const double ad = static_cast<double>(stats.audio_duration_ns) / 1e6;
+        s.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
+        s.duration_skew_availability = MetricAvailability::Available;
+    } else {
+        s.duration_skew_ms = 0.0;
+        s.duration_skew_availability = MetricAvailability::Unavailable;
+    }
+
     // ---- Disk-fill ETA ----
     // throughput is the interval MiB/s already computed above.
     // free_bytes_ is polled externally via UpdateFreeDiskBytes at ~5 Hz.
@@ -644,6 +659,11 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     const int n = thresholds_.sustain_samples;
     const bool warming = s.elapsed_seconds < thresholds_.warmup_seconds || s.video_encoder.frames_encoded == 0;
 
+    // A sustained video/audio media-duration skew means the timeline is diverging
+    // (the honesty signal for a starving-encoder resync). Calm: only above threshold.
+    const bool skew_significant = s.duration_skew_availability == MetricAvailability::Available &&
+                                  s.duration_skew_ms > thresholds_.duration_skew_warn_ms;
+
     PipelineBottleneck bottleneck = PipelineBottleneck::None;
     // Priority: most-downstream sustained constraint wins (it is the true root).
     if (sustain_disk_ >= n) {
@@ -667,6 +687,11 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     } else if (warming) {
         bottleneck = PipelineBottleneck::Unknown;
         reason = "Gathering data";
+    } else if (skew_significant) {
+        // Not a single-stage bottleneck — the timeline itself is diverging. Report it
+        // calmly without pinning a stage as the root.
+        bottleneck = PipelineBottleneck::None;
+        reason = "Video and audio durations diverging";
     } else {
         bottleneck = PipelineBottleneck::None;
         reason.clear();
@@ -679,7 +704,7 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     if (s.mux.failures > 0 || s.disk.write_failures > 0 || s.split.split_failures > 0 || queue_critical) {
         health = PipelineHealth::Critical;
     } else if ((bottleneck != PipelineBottleneck::None && bottleneck != PipelineBottleneck::Unknown) ||
-               (drops_rising && problem_drops > 0)) {
+               (drops_rising && problem_drops > 0) || skew_significant) {
         health = PipelineHealth::Warning;
     } else {
         health = PipelineHealth::Good;

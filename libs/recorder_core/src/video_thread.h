@@ -4,10 +4,10 @@
 //
 // D3D11 threading contract
 // ========================
-// ID3D11DeviceContext and ID3D11VideoContext are used EXCLUSIVELY on VideoThread.
-// No other thread may call any method on these interfaces.
-// The shared ID3D11Device lifetime is owned by RecorderSession::Impl; VideoThread
-// borrows the raw pointer but does not extend its lifetime.
+// The D3D11 device, its immediate context and the video context are created
+// locally in Run() and owned for the lifetime of that call. They are used
+// EXCLUSIVELY on VideoThread — no other thread may call any method on these
+// interfaces. Nothing is borrowed from the session; the device is not shared.
 
 #include "session_internal.h"
 

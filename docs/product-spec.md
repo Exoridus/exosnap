@@ -254,6 +254,13 @@ elevation, and applies to **monitor (DXGI duplication) capture only** — window
 always uses newest-at-tick. VFR output is unaffected. When VRR/CFR judder is measured while in
 Lowest latency, Diagnostics recommends switching to Phase-correct via a fix action.
 
+The CFR timeline stays true to the wall clock. If the encoder cannot keep up in real time for a
+sustained stretch, the recorder **skips** the output frames it could never have encoded in time —
+counting them as **real** frame drops (the same encoder-backpressure signal a caution toast reports)
+rather than letting the video media time fall behind the audio and silently compress the recording.
+The result is an honest, correctly-timed file with a visible drop count, not one that plays back out
+of sync.
+
 **Bit depth.** 8-bit for all final codecs; **10-bit (P010)** is available for HEVC Main10 and AV1
 where the GPU supports it (H.264 stays 8-bit only). 10-bit is **SDR-only** — higher precision, no HDR
 transfer curve or wide gamut.

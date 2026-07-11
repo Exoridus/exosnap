@@ -314,6 +314,19 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     m_refresh_rate_hz = (desc.ModeDesc.RefreshRate.Denominator > 0)
                             ? (desc.ModeDesc.RefreshRate.Numerator / desc.ModeDesc.RefreshRate.Denominator)
                             : 0u;
+    // DXGI_OUTDUPL_DESC.ModeDesc is an unreliable source for the mode timing — for
+    // desktop duplication RefreshRate is frequently {0,0} (the same ModeDesc whose
+    // Format the capture-format policy warns must not be trusted, see the header). Fall
+    // back to the authoritative current display mode via GDI, keyed by the stable
+    // device name captured above. dmDisplayFrequency is whole Hz; 0/1 mean "hardware
+    // default" and are treated as unknown so the ring keeps its conservative fallback.
+    if (m_refresh_rate_hz == 0 && !m_device_name.empty()) {
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(m_device_name.c_str(), ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1) {
+            m_refresh_rate_hz = dm.dmDisplayFrequency;
+        }
+    }
     m_frame_held = false;
     return true;
 }
