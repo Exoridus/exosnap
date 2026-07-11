@@ -12,15 +12,21 @@
 #include <recorder_core/pipeline_diagnostics.h>
 
 class QComboBox;
+class QElapsedTimer;
 class QLabel;
 class QPushButton;
 class QFrame;
 class QProgressBar;
 class QScrollArea;
+class QTimer;
 class QEvent;
 class QObject;
 
 namespace exosnap {
+
+namespace ui::widgets {
+class EditTimeline;
+}
 
 // Context passed to EditExportPage when opening the edit surface.
 // Contains everything needed for the Review, Edit, and Output phases.
@@ -45,19 +51,22 @@ struct EditContext {
     std::vector<RecordingMarker> markers;
     QString marker_sidecar_path; // companion .markers.json path
 
-    // Total recording duration in seconds (0.0 = unknown). Used to place marker
-    // pins proportionally on the Edit timeline; unknown duration renders no pins.
+    // Total recording duration in seconds (0.0 = unknown). Used to place
+    // markers proportionally on the Edit timeline; unknown duration renders an
+    // inert timeline (no handles, playhead, or markers).
     double duration_seconds = 0.0;
 };
 
-// Edit/Export-Surface: Review (post-flight report), Edit (keyframe-accurate trim),
-// Output (container/save-mode choice), and real stream-copy export via mp4_remuxer.
+// Edit/Export-Surface: Review (post-flight report), Edit (trim handles +
+// playhead directly on the timeline), Output (container/save-mode choice), and
+// real stream-copy export via mp4_remuxer. Markers ride along an export as a
+// retimed JSON sidecar (never container chapters).
 class EditExportPage : public QWidget {
     Q_OBJECT
   public:
     enum class Phase {
         Review,    // Post-flight report; read-only
-        Edit,      // Trim handles + marker placement
+        Edit,      // Trim handles + playhead on the timeline
         Output,    // Container / save-mode choice
         Exporting, // Real stream-copy export running
         Done,      // Export complete
@@ -80,6 +89,22 @@ class EditExportPage : public QWidget {
     }
     void setPhase(Phase phase);
 
+    // Preview playback clock: drives the timeline playhead. The video frame
+    // itself is still the deferred 0.11 preview — the clock, playhead, and
+    // scrub semantics are real and a frame view will attach to this position.
+    void setPreviewPlaying(bool playing);
+    [[nodiscard]] bool isPreviewPlaying() const noexcept {
+        return preview_playing_;
+    }
+    void setPreviewPositionMs(qint64 position_ms);
+    [[nodiscard]] qint64 previewPositionMs() const noexcept {
+        return preview_position_ms_;
+    }
+
+    // Trim range in clip milliseconds (visual-harness / test injection; the
+    // interactive path is the timeline's own handles).
+    void setTrimRangeMs(qint64 start_ms, qint64 end_ms);
+
   signals:
     void backRequested();
     void exportCompleted(const QString& output_path);
@@ -92,19 +117,24 @@ class EditExportPage : public QWidget {
     void onOpenFolderClicked();
     void onRevealFileClicked();
     void onRetryExportClicked();
-    void onTrimClicked();
-    void onAddMarkerClicked();
+    void onTrimHandleReleased(qint64 start_ms, qint64 end_ms);
+    void onScrubStarted();
+    void onScrubMoved(qint64 position_ms);
+    void onScrubFinished();
+    void onPreviewTick();
 
   protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
   private:
     void buildUi();
     void refreshPhase();
     void loadMarkers();
-    void saveMarkers();
     void runExport();
-    void renderMarkerPins();
+    void refreshPlayButton();
+    void updatePlayerHeight();
+    [[nodiscard]] qint64 durationMs() const noexcept;
 
     Phase phase_ = Phase::Review;
 
@@ -135,7 +165,14 @@ class EditExportPage : public QWidget {
     std::vector<RecordingMarker> markers_;
     int64_t trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
     int64_t trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
-    double duration_seconds_ = 0.0; // total recording duration; 0 = unknown (no marker pins)
+    double duration_seconds_ = 0.0; // total recording duration; 0 = unknown (inert timeline)
+
+    // Preview playback clock (position only; no decoded frames yet)
+    QTimer* preview_timer_ = nullptr;
+    QElapsedTimer* preview_elapsed_ = nullptr;
+    bool preview_playing_ = false;
+    bool resume_after_scrub_ = false;
+    qint64 preview_position_ms_ = 0;
 
     // Export thread + output path tracking
     std::thread export_thread_;
@@ -147,6 +184,9 @@ class EditExportPage : public QWidget {
     QPushButton* back_btn_ = nullptr;
     QLabel* title_label_ = nullptr;
     QLabel* filename_label_ = nullptr;
+
+    // Bottom action bar (Save button bottom-right, like the Record page dock)
+    QFrame* action_bar_ = nullptr;
     QPushButton* primary_action_btn_ = nullptr;
     QPushButton* secondary_action_btn_ = nullptr;
 
@@ -158,21 +198,11 @@ class EditExportPage : public QWidget {
 
     // Player-Area
     QFrame* player_frame_ = nullptr;
-    QLabel* player_icon_label_ = nullptr;
+    QPushButton* play_pause_btn_ = nullptr;
     QLabel* player_meta_label_ = nullptr;
 
-    // Edit-Controls (all disabled)
-    QWidget* edit_controls_ = nullptr;
-    QPushButton* trim_btn_ = nullptr;
-    QPushButton* add_marker_btn_ = nullptr;
-    QLabel* duration_label_ = nullptr;
-
-    // Timeline (visual, disabled)
-    QFrame* timeline_frame_ = nullptr;
-    QWidget* timeline_waveform_row_ = nullptr; // marker pins are positioned over this row
-    std::vector<QFrame*> marker_pin_widgets_;
-    QLabel* timeline_in_label_ = nullptr;
-    QLabel* timeline_out_label_ = nullptr;
+    // Timeline (interactive: trim handles, markers, playhead)
+    ui::widgets::EditTimeline* timeline_ = nullptr;
 
     // Output-Panel
     QWidget* output_panel_ = nullptr;
@@ -192,7 +222,7 @@ class EditExportPage : public QWidget {
     QPushButton* result_open_folder_btn_ = nullptr;
     QPushButton* result_reveal_btn_ = nullptr;
 
-    // Detail-Rail (right side)
+    // Details card (right rail)
     QFrame* detail_rail_ = nullptr;
     QLabel* fact_duration_val_ = nullptr;
     QLabel* fact_size_val_ = nullptr;

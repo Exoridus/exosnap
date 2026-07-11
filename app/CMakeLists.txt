@@ -184,6 +184,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/PlaceholderRow.cpp
     ui/widgets/TransportDock.h
     ui/widgets/TransportDock.cpp
+    ui/widgets/EditTimeline.h
+    ui/widgets/EditTimeline.cpp
     ui/overlay/CountdownOverlayWindow.h
     ui/overlay/CountdownOverlayWindow.cpp
     ui/overlay/DiagnosticsOverlayWindow.h
@@ -1190,6 +1192,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_edit_export_page.cpp
         pages/EditExportPage.cpp
+        ui/widgets/EditTimeline.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
@@ -1207,6 +1210,7 @@ exosnap_add_gtest(
         tests/test_edit_export_overlay.cpp
         ui/dialogs/EditExportOverlay.cpp
         pages/EditExportPage.cpp
+        ui/widgets/EditTimeline.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
@@ -1221,6 +1225,16 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui
 )
 target_include_directories(test_edit_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Pure logic behind the Edit timeline (timestamp formatting, trim clamping,
+# marker retiming) and the marker sidecar that rides along exports.
+exosnap_add_gtest(
+    NAME edit_timeline_model_tests
+    TEST_PREFIX edit_timeline_model.
+    SOURCES tests/test_edit_timeline_model.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(edit_timeline_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME crash_report_overlay_tests

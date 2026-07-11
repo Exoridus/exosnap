@@ -491,14 +491,36 @@ may not be recoverable.
 **Edit / Output / Save (post-stop surface).** The three-phase Review → Edit → Output overlay lets the
 user trim and export without leaving the app. The primary button steps forward one phase at a time
 (Review → Edit → Output); Back steps back one phase at a time (Output → Edit → Review) before
-finally closing the overlay from Review. The stepper always highlights the current phase.
+finally closing the overlay from Review. The stepper always highlights the current phase. The
+primary action sits **bottom-right** (matching the Record page's transport actions); a **Details**
+card on the right lists duration / size / resolution / frame rate / video / audio / container as
+right-aligned mono values.
 
-Trim is **keyframe-accurate and lossless** (stream copy, no re-encode): a spin-box dialog snaps
-entered cut points to the nearest keyframe and, within 50 ms, to the nearest marker. Markers placed
-during or after a recording render as thin pins on the Edit timeline, positioned proportionally
-between the recording's start and its total duration (a recording with unknown duration shows no
-pins rather than guessing). Markers are edit-view only — they are never written as container
-chapters, and chapter export (Split Chapter) remains out of scope for the MVP.
+The Edit phase is **direct manipulation on the timeline** under the player — there is no button row
+or duration readout above the strip:
+
+- **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the
+  trimmed-away ranges are dimmed. The handles constrain each other (they can never cross), and on
+  release the cut point snaps to the nearest keyframe at or before the requested time and, within
+  50 ms, to the nearest marker — trim stays **keyframe-accurate and lossless** (stream copy, no
+  re-encode). The trim is applied only when the user clicks **Save & export**; until then nothing
+  on disk changes.
+- **Playhead.** A white playhead line moves through the timeline while the preview is playing
+  (play/pause toggle on the player area). **Scrubbing** — dragging the playhead or pressing
+  anywhere on the track — jumps the preview position there; playback pauses for the duration of
+  the drag and resumes on release **only if it was playing before** (paused stays paused).
+- **Drag feedback.** While a handle or the playhead is being dragged, it scales slightly and a
+  centred time label appears above it: `MM:SS.mmm`, with an hour field (`HH:MM:SS.mmm`) only when
+  the recording is one hour or longer.
+- **Markers.** Markers placed during recording render as thin caution-coloured verticals across
+  the timeline, positioned proportionally (a recording with unknown duration shows an inert
+  timeline rather than guessing). Marker editing is not part of the edit surface.
+
+Markers are **never written as container chapters**. Instead, a trimmed/remuxed export writes a
+JSON **marker sidecar** (`<export>.markers.json`, ADR 0042) next to the exported file — but only
+when markers survive the trim. Surviving markers are re-based to the trimmed clip's start;
+markers cut away by the trim are dropped, and an export with no surviving markers removes any
+stale sidecar at the destination instead of writing an empty one.
 
 Output offers container **MKV / MP4** (both stream-copy, lossless) and a save mode of new file
 (`<name>_edit.<ext>`, saved beside the source) or overwrite-original (atomic rename in place). The
@@ -507,9 +529,9 @@ the model leaves nothing else for the user to choose. A **keyframe interval** se
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
 
-**Current boundary:** trim, markers, and stream-copy export are implemented and reachable end to end.
-Video preview playback inside the overlay and the Split Chapter action remain deferred to a later
-release (0.11 per ADR 0022).
+**Current boundary:** trim, markers, and stream-copy export are implemented and reachable end to end,
+including the playhead/scrub interaction (a position clock). Decoded video frames inside the player
+area and the Split Chapter action remain deferred to a later release (0.11 per ADR 0022).
 
 ---
 

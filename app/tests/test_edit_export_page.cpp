@@ -5,12 +5,16 @@
 #include <QFrame>
 #include <QLabel>
 #include <QMetaMethod>
+#include <QMouseEvent>
+#include <QPoint>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QWidget>
 
+#include "models/EditTimelineModel.h"
 #include "models/RecordingMarker.h"
 #include "pages/EditExportPage.h"
+#include "ui/widgets/EditTimeline.h"
 
 namespace exosnap {
 namespace {
@@ -37,6 +41,22 @@ class EditExportPageTest : public ::testing::Test {
 void SettleLayout() {
     for (int i = 0; i < 8; ++i)
         QCoreApplication::processEvents();
+}
+
+// Synthesize mouse events directly (the test binaries link gtest, not Qt Test).
+void SendMouse(QWidget* w, QEvent::Type type, const QPoint& pos) {
+    const Qt::MouseButton button = Qt::LeftButton;
+    const Qt::MouseButtons buttons = (type == QEvent::MouseButtonRelease) ? Qt::NoButton : Qt::MouseButtons(button);
+    QMouseEvent ev(type, QPointF(pos), QPointF(w->mapToGlobal(pos)), button, buttons, Qt::NoModifier);
+    QCoreApplication::sendEvent(w, &ev);
+}
+
+EditContext MakeContext(double duration_seconds, std::vector<RecordingMarker> markers = {}) {
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.duration_seconds = duration_seconds;
+    ctx.markers = std::move(markers);
+    return ctx;
 }
 
 TEST_F(EditExportPageTest, ConstructsWithoutCrash) {
@@ -107,13 +127,26 @@ TEST_F(EditExportPageTest, SetRecordingInfoUpdatesFactLabels) {
     EXPECT_EQ(container->text(), QStringLiteral("MKV"));
 }
 
-TEST_F(EditExportPageTest, ExportButtonIsVisibleInOutputPhase) {
+TEST_F(EditExportPageTest, DetailsCardValuesAreRightAligned) {
+    // Design-suite Details card: mono values right-aligned against the keys.
     EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Output);
+    auto* dur = page.findChild<QLabel*>(QStringLiteral("editFactDuration"));
+    ASSERT_NE(dur, nullptr);
+    EXPECT_TRUE(dur->alignment().testFlag(Qt::AlignRight));
+}
+
+TEST_F(EditExportPageTest, SaveButtonLivesInTheBottomActionBar) {
+    // The primary action sits bottom-right, like the Record page's transport
+    // actions — not in the top mode bar.
+    EditExportPage page;
     auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
     ASSERT_NE(primary, nullptr);
-    EXPECT_FALSE(primary->isHidden()); // isVisible() requires parent shown; isHidden() checks own flag
-    EXPECT_EQ(primary->text(), QStringLiteral("Export"));
+    ASSERT_NE(primary->parentWidget(), nullptr);
+    EXPECT_EQ(primary->parentWidget()->objectName(), QStringLiteral("editExportActionBar"));
+
+    page.setPhase(EditExportPage::Phase::Output);
+    EXPECT_FALSE(primary->isHidden());
+    EXPECT_EQ(primary->text(), QStringLiteral("Save && export"));
 }
 
 TEST_F(EditExportPageTest, BackButtonTriggersSignal) {
@@ -124,14 +157,6 @@ TEST_F(EditExportPageTest, BackButtonTriggersSignal) {
     ASSERT_NE(back_btn, nullptr);
     back_btn->click();
     EXPECT_EQ(signal_count, 1);
-}
-
-TEST_F(EditExportPageTest, PlaceholderBannerRemoved) {
-    // The 0.11 placeholder banner was removed in 0.9.0 when the real engine shipped.
-    // Verify it is no longer present in the widget tree.
-    EditExportPage page;
-    auto* banner = page.findChild<QFrame*>(QStringLiteral("editExportPlaceholderBanner"));
-    EXPECT_EQ(banner, nullptr);
 }
 
 // ---- Three-step flow (Review -> Edit -> Output) reachability ----
@@ -241,6 +266,17 @@ TEST_F(EditExportPageTest, Stepper_HighlightsCurrentPhaseOnly) {
 
 // ---- Dead/placeholder controls removed ----
 
+TEST_F(EditExportPageTest, TimelineHasNoButtonRowAboveIt) {
+    // Trim is direct manipulation on the timeline now: the Trim / Add Marker
+    // button row (and its duration readout) above the strip is gone.
+    EditExportPage page;
+    for (auto* b : page.findChildren<QPushButton*>()) {
+        EXPECT_NE(b->text(), QStringLiteral("Trim"));
+        EXPECT_NE(b->text(), QStringLiteral("Add Marker"));
+    }
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("editExportEditControls")), nullptr);
+}
+
 TEST_F(EditExportPageTest, SplitChapterButtonRemoved) {
     // Chapter export is out of scope (ADR 0022): the button must not exist.
     EditExportPage page;
@@ -277,73 +313,165 @@ TEST_F(EditExportPageTest, FailedResult_NeverShowsHardcodedDiskFull) {
     EXPECT_FALSE(detail->text().contains(QStringLiteral("disk full")));
 }
 
-// ---- Marker pins on the timeline ----
+// ---- Markers on the timeline ----
 
-TEST_F(EditExportPageTest, MarkerPins_OneRenderedPerMarker) {
+TEST_F(EditExportPageTest, MarkersFlowFromContextToTheTimeline) {
     EditExportPage page;
     page.resize(900, 700);
     page.show();
 
-    EditContext ctx;
-    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
-    ctx.duration_seconds = 100.0;
     RecordingMarker m1;
     m1.time_ms = 25000; // 25% through a 100s recording
     RecordingMarker m2;
     m2.time_ms = 75000; // 75%
-    ctx.markers = {m1, m2};
-    page.setEditContext(ctx);
+    page.setEditContext(MakeContext(100.0, {m1, m2}));
     page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
-    auto pins = page.findChildren<QFrame*>(QStringLiteral("editTimelineMarkerPin"));
-    EXPECT_EQ(pins.size(), 2);
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    ASSERT_EQ(timeline->markers().size(), 2u);
+    EXPECT_EQ(timeline->markers()[0].time_ms, 25000u);
+    EXPECT_EQ(timeline->markers()[1].time_ms, 75000u);
+    EXPECT_EQ(timeline->durationMs(), 100000);
 }
 
-TEST_F(EditExportPageTest, MarkerPins_PositionedProportionally) {
+TEST_F(EditExportPageTest, TimelineMapsTimeProportionallyToPixels) {
     EditExportPage page;
     page.resize(900, 700);
     page.show();
 
-    EditContext ctx;
-    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
-    ctx.duration_seconds = 100.0;
-    RecordingMarker mid;
-    mid.time_ms = 50000; // 50% through
-    ctx.markers = {mid};
-    page.setEditContext(ctx);
+    page.setEditContext(MakeContext(100.0));
     page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
-    auto pins = page.findChildren<QFrame*>(QStringLiteral("editTimelineMarkerPin"));
-    ASSERT_EQ(pins.size(), 1);
-    auto* pin = pins.front();
-    auto* container = qobject_cast<QWidget*>(pin->parent());
-    ASSERT_NE(container, nullptr);
-    ASSERT_GT(container->width(), 0);
-    const double fraction = static_cast<double>(pin->x()) / static_cast<double>(container->width());
-    EXPECT_NEAR(fraction, 0.5, 0.1);
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    ASSERT_GT(timeline->width(), 0);
+    const int span = timeline->xForMs(100000) - timeline->xForMs(0);
+    ASSERT_GT(span, 0);
+    const double fraction = static_cast<double>(timeline->xForMs(50000) - timeline->xForMs(0)) / span;
+    EXPECT_NEAR(fraction, 0.5, 0.02);
 }
 
-TEST_F(EditExportPageTest, MarkerPins_NoneWhenDurationUnknown) {
-    // Duration 0/unknown must never crash and must simply render no pins.
+TEST_F(EditExportPageTest, UnknownDurationRendersAnInertTimeline) {
+    // Duration 0/unknown must never crash; the timeline stays inert (no trim
+    // edits, no playback).
     EditExportPage page;
     page.resize(900, 700);
     page.show();
 
-    EditContext ctx;
-    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
-    ctx.duration_seconds = 0.0; // unknown
     RecordingMarker m;
     m.time_ms = 1000;
-    ctx.markers = {m};
-    page.setEditContext(ctx);
+    page.setEditContext(MakeContext(0.0, {m}));
     page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
-    auto pins = page.findChildren<QFrame*>(QStringLiteral("editTimelineMarkerPin"));
-    EXPECT_TRUE(pins.isEmpty());
+    page.setPreviewPlaying(true);
+    EXPECT_FALSE(page.isPreviewPlaying());
+
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    EXPECT_EQ(timeline->durationMs(), 0);
     SUCCEED(); // primarily: constructing/laying out this state must not crash
+}
+
+// ---- Trim handles (direct manipulation) ----
+
+TEST_F(EditExportPageTest, TrimHandlesConstrainEachOtherWhileDragging) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(610, timeline.height());
+    timeline.show();
+    SettleLayout();
+    timeline.setDurationMs(100000);
+    timeline.setTrimRangeMs(0, 50000);
+
+    // Grab the start handle and drag it far past the end handle: it must stop
+    // at the minimum gap before the end handle, never cross it.
+    const int track_y = 48; // inside the track band
+    SendMouse(&timeline, QEvent::MouseButtonPress, QPoint(timeline.xForMs(0), track_y));
+    SendMouse(&timeline, QEvent::MouseMove, QPoint(timeline.xForMs(80000), track_y));
+    SendMouse(&timeline, QEvent::MouseButtonRelease, QPoint(timeline.xForMs(80000), track_y));
+
+    EXPECT_EQ(timeline.trimStartMs(), 50000 - kMinTrimGapMs);
+    EXPECT_EQ(timeline.trimEndMs(), 50000);
+}
+
+TEST_F(EditExportPageTest, TrimHandleDragEmitsReleaseSignalOnce) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(610, timeline.height());
+    timeline.show();
+    SettleLayout();
+    timeline.setDurationMs(100000);
+
+    int released = 0;
+    qint64 released_end = -1;
+    QObject::connect(&timeline, &ui::widgets::EditTimeline::trimHandleReleased, &timeline, [&](qint64, qint64 end_ms) {
+        ++released;
+        released_end = end_ms;
+    });
+
+    // Drag the end handle inward to ~60%.
+    const int track_y = 48;
+    SendMouse(&timeline, QEvent::MouseButtonPress, QPoint(timeline.xForMs(100000), track_y));
+    SendMouse(&timeline, QEvent::MouseMove, QPoint(timeline.xForMs(60000), track_y));
+    SendMouse(&timeline, QEvent::MouseButtonRelease, QPoint(timeline.xForMs(60000), track_y));
+
+    EXPECT_EQ(released, 1);
+    EXPECT_NEAR(static_cast<double>(released_end), 60000.0, 500.0);
+    EXPECT_TRUE(timeline.isTrimmed());
+}
+
+// ---- Scrubbing pause/resume semantics ----
+
+TEST_F(EditExportPageTest, ScrubPausesAndResumesOnlyIfPreviouslyPlaying) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    page.setPhase(EditExportPage::Phase::Edit);
+    SettleLayout();
+
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    ASSERT_GT(timeline->width(), 0);
+
+    page.setPreviewPlaying(true);
+    ASSERT_TRUE(page.isPreviewPlaying());
+
+    // Press mid-track: the preview pauses for the duration of the drag.
+    const QPoint mid(timeline->xForMs(50000), 48);
+    SendMouse(timeline, QEvent::MouseButtonPress, mid);
+    EXPECT_FALSE(page.isPreviewPlaying());
+
+    const QPoint later(timeline->xForMs(70000), 48);
+    SendMouse(timeline, QEvent::MouseMove, later);
+    EXPECT_FALSE(page.isPreviewPlaying());
+    EXPECT_NEAR(static_cast<double>(page.previewPositionMs()), 70000.0, 500.0);
+
+    // Release: the preview was playing before the scrub, so it resumes.
+    SendMouse(timeline, QEvent::MouseButtonRelease, later);
+    EXPECT_TRUE(page.isPreviewPlaying());
+}
+
+TEST_F(EditExportPageTest, ScrubWhilePausedStaysPaused) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    page.setPhase(EditExportPage::Phase::Edit);
+    SettleLayout();
+
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    ASSERT_GT(timeline->width(), 0);
+    ASSERT_FALSE(page.isPreviewPlaying());
+
+    const QPoint mid(timeline->xForMs(40000), 48);
+    SendMouse(timeline, QEvent::MouseButtonPress, mid);
+    SendMouse(timeline, QEvent::MouseButtonRelease, mid);
+    EXPECT_FALSE(page.isPreviewPlaying()) << "paused before the scrub => stays paused after release";
+    EXPECT_NEAR(static_cast<double>(page.previewPositionMs()), 40000.0, 500.0);
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {

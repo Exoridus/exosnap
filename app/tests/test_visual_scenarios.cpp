@@ -135,6 +135,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         // (open the overlay instead of a stack swap) changed, not the scenario data.
         QStringLiteral("edit-review"),
         QStringLiteral("edit-edit"),
+        QStringLiteral("edit-trimmed"),
         QStringLiteral("edit-output"),
         QStringLiteral("edit-done"),
     };

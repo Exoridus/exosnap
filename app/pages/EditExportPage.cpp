@@ -3,18 +3,18 @@
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/widgets/EditTimeline.h"
 
 #include <QByteArray>
 #include <QColor>
 #include <QComboBox>
 #include <QDesktopServices>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QDir>
-#include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QIcon>
 #include <QLabel>
 #include <QPainter>
@@ -27,12 +27,16 @@
 #include <QSize>
 #include <QStyle>
 #include <QSvgRenderer>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
+#include "../models/EditTimelineModel.h"
 #include "../models/MarkerSidecar.h"
 
 namespace exosnap {
@@ -49,6 +53,8 @@ QByteArray editIconPathFor(const QString& key) {
         return QByteArrayLiteral("M14 5l-5 5 5 5");
     if (key == QLatin1String("play"))
         return QByteArrayLiteral("M6 4l14 8-14 8V4z");
+    if (key == QLatin1String("pause"))
+        return QByteArrayLiteral("M9 5v14M15 5v14");
     if (key == QLatin1String("checkCircle"))
         return QByteArrayLiteral("M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM8 12l3 3 5-6");
     if (key == QLatin1String("error"))
@@ -87,14 +93,6 @@ QColor themeColor(const char* css) {
 }
 
 // Derived alpha tokens (mirrors BuildTokens() in ExoSnapTheme.cpp).
-QString acDimToken() {
-    const auto& t = ActiveTheme();
-    return ThemeRgba(themeColor(t.ac), t.kind == ThemeKind::Dark ? 0.14 : 0.12);
-}
-QString acB2Token() {
-    const auto& t = ActiveTheme();
-    return ThemeRgba(themeColor(t.ac), t.kind == ThemeKind::Dark ? 0.60 : 0.52);
-}
 QString okDimToken() {
     const auto& t = ActiveTheme();
     return ThemeRgba(themeColor(t.success), t.kind == ThemeKind::Dark ? 0.13 : 0.12);
@@ -112,9 +110,16 @@ QString errBToken() {
     return ThemeRgba(themeColor(t.error), t.kind == ThemeKind::Dark ? 0.44 : 0.42);
 }
 
+// Preview playback clock granularity (~30 fps playhead updates).
+constexpr int kPreviewTickMs = 33;
+
 } // namespace
 
 EditExportPage::EditExportPage(QWidget* parent) : QWidget(parent) {
+    preview_timer_ = new QTimer(this);
+    preview_timer_->setInterval(kPreviewTickMs);
+    connect(preview_timer_, &QTimer::timeout, this, &EditExportPage::onPreviewTick);
+    preview_elapsed_ = new QElapsedTimer();
     buildUi();
 }
 
@@ -122,6 +127,7 @@ EditExportPage::~EditExportPage() {
     export_cancel_.store(true);
     if (export_thread_.joinable())
         export_thread_.join();
+    delete preview_elapsed_;
 }
 
 void EditExportPage::buildUi() {
@@ -175,18 +181,6 @@ void EditExportPage::buildUi() {
     mode_bar_layout->addWidget(filename_label_, 1);
     mode_bar_layout->addStretch();
 
-    secondary_action_btn_ = new QPushButton(mode_bar);
-    secondary_action_btn_->setObjectName(QStringLiteral("editExportSecondaryBtn"));
-    secondary_action_btn_->setProperty("role", "ghost");
-    secondary_action_btn_->hide();
-
-    primary_action_btn_ = new QPushButton(QStringLiteral("Export"), mode_bar);
-    primary_action_btn_->setObjectName(QStringLiteral("editExportPrimaryBtn"));
-    primary_action_btn_->setProperty("role", "primary");
-
-    mode_bar_layout->addWidget(secondary_action_btn_);
-    mode_bar_layout->addWidget(primary_action_btn_);
-
     root_layout->addWidget(mode_bar);
 
     // ---- Phase Stepper ----
@@ -227,7 +221,7 @@ void EditExportPage::buildUi() {
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(0);
 
-    // ---- Left pane (player + edit + output + exporting + result panels) ----
+    // ---- Left pane (player + timeline + output + exporting + result panels) ----
     auto* left_scroll = new QScrollArea(content_area);
     left_scroll->setWidgetResizable(true);
     left_scroll->setFrameShape(QFrame::NoFrame);
@@ -257,20 +251,27 @@ void EditExportPage::buildUi() {
     auto* player_layout = new QVBoxLayout(player_frame_);
     player_layout->setAlignment(Qt::AlignCenter);
 
-    // 60px circular play button (stroke play-glyph 24px) instead of a text ▶.
-    player_icon_label_ = new QLabel(player_frame_);
-    player_icon_label_->setObjectName(QStringLiteral("editExportPlayerIcon"));
-    player_icon_label_->setFixedSize(60, 60);
-    player_icon_label_->setAlignment(Qt::AlignCenter);
-    player_icon_label_->setPixmap(renderEditIcon(QStringLiteral("play"), 24, themeColor(ActiveTheme().ink)));
-    player_icon_label_->setStyleSheet(QStringLiteral("QLabel#editExportPlayerIcon {"
-                                                     "background: rgba(14, 14, 16, 0.7);"
-                                                     "border: 1px solid %1;"
-                                                     "border-radius: 30px;"
-                                                     "}")
-                                          .arg(ActiveTheme().line2));
+    // 60px circular play/pause toggle. Drives the preview position clock (the
+    // decoded-frame view is still deferred; the playhead and scrub semantics
+    // are real).
+    play_pause_btn_ = new QPushButton(player_frame_);
+    play_pause_btn_->setObjectName(QStringLiteral("editExportPlayPauseBtn"));
+    play_pause_btn_->setFixedSize(60, 60);
+    play_pause_btn_->setCursor(Qt::PointingHandCursor);
+    play_pause_btn_->setIcon(QIcon(renderEditIcon(QStringLiteral("play"), 24, themeColor(ActiveTheme().ink))));
+    play_pause_btn_->setIconSize(QSize(24, 24));
+    play_pause_btn_->setToolTip(QStringLiteral("Play / pause preview"));
+    play_pause_btn_->setStyleSheet(QStringLiteral("QPushButton#editExportPlayPauseBtn {"
+                                                  "background: rgba(14, 14, 16, 0.7);"
+                                                  "border: 1px solid %1;"
+                                                  "border-radius: 30px;"
+                                                  "}"
+                                                  "QPushButton#editExportPlayPauseBtn:hover {"
+                                                  "background: rgba(24, 24, 28, 0.8);"
+                                                  "}")
+                                       .arg(ActiveTheme().line2));
 
-    auto* player_sub = new QLabel(QStringLiteral("Preview playback — coming in 0.11"), player_frame_);
+    auto* player_sub = new QLabel(QStringLiteral("Video preview — coming in 0.11"), player_frame_);
     player_sub->setAlignment(Qt::AlignCenter);
     player_sub->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().dim));
 
@@ -280,7 +281,7 @@ void EditExportPage::buildUi() {
     player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(ActiveTheme().dim));
 
     player_layout->addStretch();
-    player_layout->addWidget(player_icon_label_, 0, Qt::AlignHCenter);
+    player_layout->addWidget(play_pause_btn_, 0, Qt::AlignHCenter);
     player_layout->addWidget(player_sub);
     player_layout->addStretch();
     player_layout->addWidget(player_meta_label_);
@@ -313,93 +314,16 @@ void EditExportPage::buildUi() {
     review_layout->addWidget(review_health_label_);
     left_layout->addWidget(review_panel_);
 
-    // Edit Controls
-    edit_controls_ = new QWidget(left_widget);
-    edit_controls_->setObjectName(QStringLiteral("editExportEditControls"));
-    auto* edit_ctrl_layout = new QHBoxLayout(edit_controls_);
-    edit_ctrl_layout->setContentsMargins(0, 0, 0, 0);
-    edit_ctrl_layout->setSpacing(M::kSpaceSm);
+    // Timeline: trim handles, markers, and the playhead live directly on the
+    // strip — there is no button row or duration readout above it.
+    timeline_ = new ui::widgets::EditTimeline(left_widget);
+    timeline_->setObjectName(QStringLiteral("editTimeline"));
+    left_layout->addWidget(timeline_);
 
-    duration_label_ = new QLabel(QStringLiteral("0:00 / 0:00"), edit_controls_);
-    duration_label_->setObjectName(QStringLiteral("editExportDurationLabel"));
-    duration_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
-
-    trim_btn_ = new QPushButton(QStringLiteral("Trim"), edit_controls_);
-    trim_btn_->setObjectName(QStringLiteral("editExportTrimBtn"));
-    trim_btn_->setProperty("role", "ghost");
-    trim_btn_->setEnabled(false);
-
-    add_marker_btn_ = new QPushButton(QStringLiteral("Add Marker"), edit_controls_);
-    add_marker_btn_->setObjectName(QStringLiteral("editExportAddMarkerBtn"));
-    add_marker_btn_->setProperty("role", "ghost");
-    add_marker_btn_->setEnabled(false);
-
-    // Split Chapter is deliberately out of scope (ADR 0022): markers are an
-    // edit-view-only concept and are never written as container chapters.
-
-    edit_ctrl_layout->addWidget(duration_label_);
-    edit_ctrl_layout->addStretch();
-    edit_ctrl_layout->addWidget(trim_btn_);
-    edit_ctrl_layout->addWidget(add_marker_btn_);
-
-    left_layout->addWidget(edit_controls_);
-
-    // Timeline
-    timeline_frame_ = new QFrame(left_widget);
-    timeline_frame_->setObjectName(QStringLiteral("editTimeline"));
-    timeline_frame_->setFixedHeight(52);
-    timeline_frame_->setEnabled(false);
-    timeline_frame_->setStyleSheet(QStringLiteral("QFrame#editTimeline {"
-                                                  "background:%1;"
-                                                  "border: 1px solid %2;"
-                                                  "border-radius: %3px;"
-                                                  "}")
-                                       .arg(ActiveTheme().surf2, ActiveTheme().line)
-                                       .arg(M::kRadiusMd));
-
-    auto* timeline_layout = new QVBoxLayout(timeline_frame_);
-    timeline_layout->setContentsMargins(M::kSpaceSm, 4, M::kSpaceSm, 4);
-    timeline_layout->setSpacing(4);
-
-    // Mini waveform simulation: 36 small frames. This row also doubles as the
-    // marker-pin container: its full width is the 0%..100% duration reference
-    // (matching the In/Out labels below, which anchor to the same span).
-    timeline_waveform_row_ = new QWidget(timeline_frame_);
-    timeline_waveform_row_->setObjectName(QStringLiteral("editTimelineWaveformRow"));
-    auto* waveform_layout = new QHBoxLayout(timeline_waveform_row_);
-    waveform_layout->setContentsMargins(0, 0, 0, 0);
-    waveform_layout->setSpacing(2);
-    for (int i = 0; i < 36; ++i) {
-        auto* bar = new QFrame(timeline_waveform_row_);
-        bar->setFixedWidth(3);
-        // Varying heights to simulate waveform
-        const int height = 6 + ((i * 7 + 3) % 16);
-        bar->setFixedHeight(height);
-        bar->setStyleSheet(QStringLiteral("QFrame { background: %1; border-radius: 1px; }")
-                               .arg(ThemeRgba(themeColor(ActiveTheme().ac), 0.35)));
-        waveform_layout->addWidget(bar);
-    }
-    waveform_layout->addStretch();
-    timeline_waveform_row_->installEventFilter(this);
-
-    auto* timeline_labels_row = new QWidget(timeline_frame_);
-    auto* tl_labels_layout = new QHBoxLayout(timeline_labels_row);
-    tl_labels_layout->setContentsMargins(0, 0, 0, 0);
-    tl_labels_layout->setSpacing(0);
-
-    timeline_in_label_ = new QLabel(QStringLiteral("In 0:00"), timeline_labels_row);
-    timeline_in_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(ActiveTheme().dim));
-    timeline_out_label_ = new QLabel(QStringLiteral("Out --:--"), timeline_labels_row);
-    timeline_out_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(ActiveTheme().dim));
-
-    tl_labels_layout->addWidget(timeline_in_label_);
-    tl_labels_layout->addStretch();
-    tl_labels_layout->addWidget(timeline_out_label_);
-
-    timeline_layout->addWidget(timeline_waveform_row_);
-    timeline_layout->addWidget(timeline_labels_row);
-
-    left_layout->addWidget(timeline_frame_);
+    connect(timeline_, &ui::widgets::EditTimeline::trimHandleReleased, this, &EditExportPage::onTrimHandleReleased);
+    connect(timeline_, &ui::widgets::EditTimeline::scrubStarted, this, &EditExportPage::onScrubStarted);
+    connect(timeline_, &ui::widgets::EditTimeline::scrubMoved, this, &EditExportPage::onScrubMoved);
+    connect(timeline_, &ui::widgets::EditTimeline::scrubFinished, this, &EditExportPage::onScrubFinished);
 
     // Output Panel (container + save-mode selectors)
     output_panel_ = new QWidget(left_widget);
@@ -543,83 +467,125 @@ void EditExportPage::buildUi() {
 
     left_scroll->setWidget(left_widget);
 
-    // ---- Right pane: Detail Rail ----
-    detail_rail_ = new QFrame(content_area);
+    // ---- Right pane: Details card (right-aligned mono values) ----
+    auto* rail_column = new QWidget(content_area);
+    rail_column->setFixedWidth(280);
+    auto* rail_column_layout = new QVBoxLayout(rail_column);
+    rail_column_layout->setContentsMargins(M::kSpaceSm, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
+    rail_column_layout->setSpacing(0);
+
+    detail_rail_ = new QFrame(rail_column);
     detail_rail_->setObjectName(QStringLiteral("editExportDetailRail"));
-    detail_rail_->setFixedWidth(220);
     detail_rail_->setStyleSheet(QStringLiteral("QFrame#editExportDetailRail {"
                                                "background:%1;"
-                                               "border-left: 1px solid %2;"
+                                               "border: 1px solid %2;"
+                                               "border-radius: %3px;"
                                                "}")
-                                    .arg(ActiveTheme().surf, ActiveTheme().line));
+                                    .arg(ActiveTheme().surf, ActiveTheme().line)
+                                    .arg(M::kRadiusLg));
 
     auto* rail_layout = new QVBoxLayout(detail_rail_);
     rail_layout->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
-    rail_layout->setSpacing(10);
+    rail_layout->setSpacing(0);
 
-    auto* rail_title = new QLabel(QStringLiteral("Recording info"), detail_rail_);
+    auto* rail_title = new QLabel(QStringLiteral("Details"), detail_rail_);
     rail_title->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:11px; text-transform:uppercase; }")
-            .arg(ActiveTheme().dim));
+        QStringLiteral("QLabel { color:%1; font-weight:700; font-size:13.5px; }").arg(ActiveTheme().ink));
     rail_layout->addWidget(rail_title);
+    rail_layout->addSpacing(M::kSpaceSm);
 
-    auto* rail_sep = new QFrame(detail_rail_);
-    rail_sep->setFrameShape(QFrame::HLine);
-    rail_sep->setStyleSheet(QStringLiteral("QFrame { color:%1; }").arg(ActiveTheme().line));
-    rail_layout->addWidget(rail_sep);
-
-    const auto makeFactRow = [&](const QString& key_text, QLabel*& val_label_ref) {
+    const auto makeFactRow = [&](const QString& key_text, QLabel*& val_label_ref, bool first) {
+        if (!first) {
+            auto* sep = new QFrame(detail_rail_);
+            sep->setFixedHeight(1);
+            sep->setStyleSheet(QStringLiteral("QFrame { background:%1; border:none; }").arg(ActiveTheme().line));
+            rail_layout->addWidget(sep);
+        }
         auto* row = new QWidget(detail_rail_);
         auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(0, 0, 0, 0);
+        row_layout->setContentsMargins(0, 7, 0, 7);
         row_layout->setSpacing(M::kSpaceSm);
 
         auto* key = new QLabel(key_text, row);
-        key->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().dim));
-        key->setFixedWidth(70);
+        key->setStyleSheet(
+            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:11px; }")
+                .arg(ActiveTheme().dim));
 
         val_label_ref = new QLabel(QStringLiteral("–"), row);
+        val_label_ref->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         val_label_ref->setStyleSheet(
-            QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ThemeText1Color(ActiveTheme())));
-        val_label_ref->setWordWrap(true);
+            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12px; }")
+                .arg(ActiveTheme().ink));
 
         row_layout->addWidget(key);
         row_layout->addWidget(val_label_ref, 1);
         rail_layout->addWidget(row);
     };
 
-    makeFactRow(QStringLiteral("Duration"), fact_duration_val_);
+    makeFactRow(QStringLiteral("Duration"), fact_duration_val_, true);
     fact_duration_val_->setObjectName(QStringLiteral("editFactDuration"));
 
-    makeFactRow(QStringLiteral("Size"), fact_size_val_);
+    makeFactRow(QStringLiteral("Size"), fact_size_val_, false);
     fact_size_val_->setObjectName(QStringLiteral("editFactSize"));
 
-    makeFactRow(QStringLiteral("Resolution"), fact_res_val_);
+    makeFactRow(QStringLiteral("Resolution"), fact_res_val_, false);
     fact_res_val_->setObjectName(QStringLiteral("editFactResolution"));
 
-    makeFactRow(QStringLiteral("Frame rate"), fact_fps_val_);
+    makeFactRow(QStringLiteral("Frame rate"), fact_fps_val_, false);
     fact_fps_val_->setObjectName(QStringLiteral("editFactFps"));
 
-    makeFactRow(QStringLiteral("Video"), fact_video_val_);
+    makeFactRow(QStringLiteral("Video"), fact_video_val_, false);
     fact_video_val_->setObjectName(QStringLiteral("editFactVideo"));
 
-    makeFactRow(QStringLiteral("Audio"), fact_audio_val_);
+    makeFactRow(QStringLiteral("Audio"), fact_audio_val_, false);
     fact_audio_val_->setObjectName(QStringLiteral("editFactAudio"));
 
-    makeFactRow(QStringLiteral("Container"), fact_container_val_);
+    makeFactRow(QStringLiteral("Container"), fact_container_val_, false);
     fact_container_val_->setObjectName(QStringLiteral("editFactContainer"));
 
-    rail_layout->addStretch();
+    rail_column_layout->addWidget(detail_rail_);
+    rail_column_layout->addStretch();
 
     content_layout->addWidget(left_scroll, 1);
-    content_layout->addWidget(detail_rail_);
+    content_layout->addWidget(rail_column);
 
     root_layout->addWidget(content_area, 1);
 
+    // ---- Bottom action bar: the Save action sits bottom-right, in the same
+    // position the Record page keeps its primary transport actions. ----
+    action_bar_ = new QFrame(this);
+    action_bar_->setObjectName(QStringLiteral("editExportActionBar"));
+    action_bar_->setFixedHeight(64);
+    action_bar_->setStyleSheet(QStringLiteral("QFrame#editExportActionBar {"
+                                              "background:%1;"
+                                              "border-top: 1px solid %2;"
+                                              "}")
+                                   .arg(ActiveTheme().surf, ActiveTheme().line));
+
+    auto* action_layout = new QHBoxLayout(action_bar_);
+    action_layout->setContentsMargins(M::kSpaceMd, 0, M::kSpaceMd, 0);
+    action_layout->setSpacing(M::kSpaceSm);
+    action_layout->addStretch();
+
+    secondary_action_btn_ = new QPushButton(action_bar_);
+    secondary_action_btn_->setObjectName(QStringLiteral("editExportSecondaryBtn"));
+    secondary_action_btn_->setProperty("role", "ghost");
+    secondary_action_btn_->hide();
+
+    // "&&" renders as a literal ampersand (a single "&" would become a mnemonic).
+    primary_action_btn_ = new QPushButton(QStringLiteral("Save && export"), action_bar_);
+    primary_action_btn_->setObjectName(QStringLiteral("editExportPrimaryBtn"));
+    primary_action_btn_->setProperty("role", "primary");
+    primary_action_btn_->setMinimumWidth(150);
+
+    action_layout->addWidget(secondary_action_btn_);
+    action_layout->addWidget(primary_action_btn_);
+
+    root_layout->addWidget(action_bar_);
+
     // Wire signals
-    connect(trim_btn_, &QPushButton::clicked, this, &EditExportPage::onTrimClicked);
-    connect(add_marker_btn_, &QPushButton::clicked, this, &EditExportPage::onAddMarkerClicked);
     connect(back_btn_, &QPushButton::clicked, this, &EditExportPage::onBackClicked);
+    connect(play_pause_btn_, &QPushButton::clicked, this, [this]() { setPreviewPlaying(!preview_playing_); });
     connect(primary_action_btn_, &QPushButton::clicked, this, [this]() {
         switch (phase_) {
         case Phase::Review:
@@ -713,8 +679,14 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             recorder_core::ExtractKeyframeTimestamps(std::filesystem::path(ctx_.mkv_master_path.toStdWString()));
     }
 
-    // --- Load markers from sidecar (falls back to session markers) ---
+    // --- Reset the preview clock and the timeline for the new clip ---
     duration_seconds_ = ctx_.duration_seconds;
+    setPreviewPlaying(false);
+    preview_position_ms_ = 0;
+    if (timeline_)
+        timeline_->setDurationMs(durationMs());
+
+    // --- Load markers from sidecar (falls back to session markers) ---
     loadMarkers();
 }
 
@@ -755,19 +727,130 @@ void EditExportPage::setRecordingInfo(const QString& file_path, const QString& d
     // Update player meta
     if (player_meta_label_)
         player_meta_label_->setText(QStringLiteral("%1  %2  %3").arg(resolution_, fps_, container_));
-
-    // Update timeline labels
-    if (timeline_out_label_)
-        timeline_out_label_->setText(QStringLiteral("Out %1").arg(duration_));
-
-    // Update edit controls duration
-    if (duration_label_)
-        duration_label_->setText(QStringLiteral("0:00 / %1").arg(duration_));
 }
 
 void EditExportPage::setPhase(Phase phase) {
     phase_ = phase;
     refreshPhase();
+}
+
+// ---- Preview playback clock ----
+
+qint64 EditExportPage::durationMs() const noexcept {
+    return duration_seconds_ > 0.0 ? static_cast<qint64>(std::llround(duration_seconds_ * 1000.0)) : 0;
+}
+
+void EditExportPage::setPreviewPlaying(bool playing) {
+    if (playing == preview_playing_)
+        return;
+    if (playing && durationMs() <= 0)
+        return; // unknown duration: nothing to play against
+    preview_playing_ = playing;
+    if (preview_playing_) {
+        preview_elapsed_->restart();
+        preview_timer_->start();
+    } else {
+        preview_timer_->stop();
+    }
+    refreshPlayButton();
+}
+
+void EditExportPage::setPreviewPositionMs(qint64 position_ms) {
+    preview_position_ms_ = ClampPlayheadMs(position_ms, durationMs());
+    if (timeline_)
+        timeline_->setPositionMs(preview_position_ms_);
+}
+
+void EditExportPage::setTrimRangeMs(qint64 start_ms, qint64 end_ms) {
+    if (!timeline_ || durationMs() <= 0)
+        return;
+    timeline_->setTrimRangeMs(start_ms, end_ms);
+    trim_start_us_ =
+        timeline_->trimStartMs() > 0 ? timeline_->trimStartMs() * 1000 : recorder_core::TrimRange::kNoTimestamp;
+    trim_end_us_ =
+        timeline_->trimEndMs() < durationMs() ? timeline_->trimEndMs() * 1000 : recorder_core::TrimRange::kNoTimestamp;
+}
+
+void EditExportPage::refreshPlayButton() {
+    if (!play_pause_btn_)
+        return;
+    const QString glyph = preview_playing_ ? QStringLiteral("pause") : QStringLiteral("play");
+    play_pause_btn_->setIcon(QIcon(renderEditIcon(glyph, 24, themeColor(ActiveTheme().ink))));
+}
+
+void EditExportPage::onPreviewTick() {
+    preview_position_ms_ += preview_elapsed_->restart();
+    const qint64 total = durationMs();
+    if (preview_position_ms_ >= total) {
+        preview_position_ms_ = total;
+        setPreviewPlaying(false); // reached the end: pause there
+    }
+    if (timeline_)
+        timeline_->setPositionMs(preview_position_ms_);
+}
+
+// ---- Timeline interaction ----
+
+void EditExportPage::onTrimHandleReleased(qint64 start_ms, qint64 end_ms) {
+    // Snap to the nearest keyframe at or before the requested time (keyframe-
+    // accurate trim), then to the nearest marker within 50 ms.
+    const auto snapToKeyframe = [&](int64_t us) -> int64_t {
+        if (keyframe_timestamps_.empty())
+            return us;
+        auto it = std::upper_bound(keyframe_timestamps_.begin(), keyframe_timestamps_.end(), us);
+        if (it != keyframe_timestamps_.begin())
+            --it;
+        return *it;
+    };
+    const auto snapToMarker = [&](int64_t us) -> int64_t {
+        for (const auto& m : markers_) {
+            const int64_t m_us = static_cast<int64_t>(m.time_ms) * 1000LL;
+            if (std::abs(m_us - us) <= 50000LL)
+                return m_us;
+        }
+        return us;
+    };
+
+    const qint64 total_ms = durationMs();
+
+    if (start_ms <= 0) {
+        trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
+    } else {
+        trim_start_us_ = snapToMarker(snapToKeyframe(start_ms * 1000));
+    }
+    if (end_ms >= total_ms) {
+        trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    } else {
+        trim_end_us_ = snapToMarker(snapToKeyframe(end_ms * 1000));
+    }
+
+    // Write the snapped values back so the handles land where the cut will be.
+    if (timeline_) {
+        const qint64 snapped_start =
+            trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_start_us_ / 1000 : 0;
+        const qint64 snapped_end =
+            trim_end_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_end_us_ / 1000 : total_ms;
+        timeline_->setTrimRangeMs(snapped_start, snapped_end);
+    }
+}
+
+void EditExportPage::onScrubStarted() {
+    // Scrubbing pauses; whether it resumes on release depends on whether the
+    // preview was playing when the scrub began.
+    resume_after_scrub_ = preview_playing_;
+    setPreviewPlaying(false);
+}
+
+void EditExportPage::onScrubMoved(qint64 position_ms) {
+    // The preview position follows the drag (this is where a decoded frame
+    // view will seek once it exists).
+    preview_position_ms_ = ClampPlayheadMs(position_ms, durationMs());
+}
+
+void EditExportPage::onScrubFinished() {
+    if (resume_after_scrub_)
+        setPreviewPlaying(true);
+    resume_after_scrub_ = false;
 }
 
 void EditExportPage::refreshPhase() {
@@ -793,7 +876,6 @@ void EditExportPage::refreshPhase() {
     // ---- Show/hide panels ----
     const bool show_review_panel = (phase_ == Phase::Review);
     const bool show_player = (phase_ == Phase::Review || phase_ == Phase::Edit);
-    const bool show_edit = (phase_ == Phase::Edit);
     const bool show_timeline = (phase_ == Phase::Edit);
     const bool show_output = (phase_ == Phase::Output);
     const bool show_exporting = (phase_ == Phase::Exporting);
@@ -803,16 +885,8 @@ void EditExportPage::refreshPhase() {
         review_panel_->setVisible(show_review_panel);
     if (player_frame_)
         player_frame_->setVisible(show_player);
-    if (edit_controls_)
-        edit_controls_->setVisible(show_edit);
-    if (timeline_frame_)
-        timeline_frame_->setVisible(show_timeline);
-    if (show_timeline) {
-        // Re-derive pin positions now that the timeline is (becoming) visible —
-        // its width may not have been final the last time markers were loaded.
-        // The resize eventFilter on the waveform row keeps them correct after.
-        renderMarkerPins();
-    }
+    if (timeline_)
+        timeline_->setVisible(show_timeline);
     if (output_panel_)
         output_panel_->setVisible(show_output);
     if (exporting_panel_)
@@ -820,11 +894,12 @@ void EditExportPage::refreshPhase() {
     if (result_panel_)
         result_panel_->setVisible(show_result);
 
-    // Enable trim/marker buttons only in Edit phase
-    if (trim_btn_)
-        trim_btn_->setEnabled(phase_ == Phase::Edit);
-    if (add_marker_btn_)
-        add_marker_btn_->setEnabled(phase_ == Phase::Edit);
+    // The preview clock only makes sense while the player is on screen.
+    if (!show_player)
+        setPreviewPlaying(false);
+
+    // Panel visibility changed: the height budget for the player moved too.
+    updatePlayerHeight();
 
     // Update primary/secondary buttons
     if (!primary_action_btn_ || !secondary_action_btn_)
@@ -842,7 +917,8 @@ void EditExportPage::refreshPhase() {
         primary_action_btn_->setProperty("role", "ghost");
         break;
     case Phase::Output:
-        primary_action_btn_->setText(QStringLiteral("Export"));
+        // "&&" renders as a literal ampersand (a single "&" would become a mnemonic).
+        primary_action_btn_->setText(QStringLiteral("Save && export"));
         primary_action_btn_->setProperty("role", "primary");
         break;
     case Phase::Exporting:
@@ -924,19 +1000,35 @@ void EditExportPage::refreshPhase() {
 }
 
 bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
-    // Keep the player area at a strict 16:9 ratio relative to its current width.
-    if (obj == player_frame_ && event->type() == QEvent::Resize) {
-        const int w = player_frame_->width();
-        const int target = qRound(w * 9.0 / 16.0);
-        if (target > 0 && player_frame_->height() != target)
-            player_frame_->setFixedHeight(target);
-    }
-    // The waveform row is the marker-pin container: its width is the 100% (full
-    // duration) reference for proportional pin positions, so a resize requires
-    // re-laying-out the pins.
-    if (obj == timeline_waveform_row_ && event->type() == QEvent::Resize)
-        renderMarkerPins();
+    if (obj == player_frame_ && event->type() == QEvent::Resize)
+        updatePlayerHeight();
     return QWidget::eventFilter(obj, event);
+}
+
+void EditExportPage::updatePlayerHeight() {
+    // Aim for 16:9 relative to the player's current width, but cap the height
+    // so the content below it (post-recording report / trim timeline) stays
+    // reachable without scrolling — a real video view letterboxes inside the
+    // frame anyway.
+    if (!player_frame_)
+        return;
+    const int w = player_frame_->width();
+    int target = qRound(w * 9.0 / 16.0);
+    int reserved = 52 /* mode bar */ + 40 /* stepper */ + 64 /* action bar */ + 2 * M::kSpaceMd;
+    if (timeline_ && !timeline_->isHidden())
+        reserved += timeline_->height() + M::kSpaceMd;
+    if (review_panel_ && !review_panel_->isHidden())
+        reserved += review_panel_->sizeHint().height() + M::kSpaceMd;
+    const int max_h = std::max(180, height() - reserved);
+    target = std::min(target, max_h);
+    if (target > 0 && player_frame_->height() != target)
+        player_frame_->setFixedHeight(target);
+}
+
+void EditExportPage::hideEvent(QHideEvent* event) {
+    // Overlay dismissed / page hidden: the preview clock must not keep running.
+    setPreviewPlaying(false);
+    QWidget::hideEvent(event);
 }
 
 // ---- Slots ----
@@ -990,108 +1082,6 @@ void EditExportPage::onRetryExportClicked() {
     runExport();
 }
 
-// ---- New slots ----
-
-void EditExportPage::onTrimClicked() {
-    // Simple trim dialog: two spin boxes for start/end seconds.
-    // Cut points snap to the nearest keyframe (keyframe-accurate trim).
-    QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("Set trim points"));
-    auto* layout = new QVBoxLayout(&dlg);
-
-    constexpr double kNoTrim = 0.0;
-    const double current_start =
-        trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_start_us_ / 1e6 : kNoTrim;
-    const double current_end = trim_end_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_end_us_ / 1e6 : kNoTrim;
-
-    auto* start_spin = new QDoubleSpinBox(&dlg);
-    start_spin->setPrefix(QStringLiteral("Start:\xc2\xa0"));
-    start_spin->setSuffix(QStringLiteral("\xc2\xa0s"));
-    start_spin->setDecimals(2);
-    start_spin->setMinimum(0.0);
-    start_spin->setMaximum(1e6);
-    start_spin->setValue(current_start);
-
-    auto* end_spin = new QDoubleSpinBox(&dlg);
-    end_spin->setPrefix(QStringLiteral("End:\xc2\xa0"));
-    end_spin->setSuffix(QStringLiteral("\xc2\xa0s  (0 = no end trim)"));
-    end_spin->setDecimals(2);
-    end_spin->setMinimum(0.0);
-    end_spin->setMaximum(1e6);
-    end_spin->setValue(current_end);
-
-    auto* note =
-        new QLabel(QStringLiteral("Trim is keyframe-accurate: cut points snap to the nearest keyframe."), &dlg);
-    note->setWordWrap(true);
-
-    auto* btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-    layout->addWidget(start_spin);
-    layout->addWidget(end_spin);
-    layout->addWidget(note);
-    layout->addWidget(btns);
-
-    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-    if (dlg.exec() != QDialog::Accepted)
-        return;
-
-    const double start_s = start_spin->value();
-    const double end_s = end_spin->value();
-
-    // Snap to nearest keyframe at or before the requested time.
-    auto snapToKeyframe = [&](double secs) -> int64_t {
-        const int64_t us = static_cast<int64_t>(secs * 1e6);
-        if (keyframe_timestamps_.empty())
-            return us;
-        auto it = std::upper_bound(keyframe_timestamps_.begin(), keyframe_timestamps_.end(), us);
-        if (it != keyframe_timestamps_.begin())
-            --it;
-        return *it;
-    };
-
-    // Snap to the nearest marker if within 50 ms.
-    auto snapToMarker = [&](int64_t us) -> int64_t {
-        for (const auto& m : markers_) {
-            const int64_t m_us = static_cast<int64_t>(m.time_ms) * 1000LL;
-            if (std::abs(m_us - us) <= 50000LL)
-                return m_us;
-        }
-        return us;
-    };
-
-    trim_start_us_ = (start_s > 0.0) ? snapToMarker(snapToKeyframe(start_s)) : recorder_core::TrimRange::kNoTimestamp;
-    trim_end_us_ = (end_s > 0.0) ? snapToMarker(snapToKeyframe(end_s)) : recorder_core::TrimRange::kNoTimestamp;
-
-    // Update timeline labels.
-    auto formatUs = [](int64_t us) -> QString {
-        if (us == recorder_core::TrimRange::kNoTimestamp)
-            return QStringLiteral("\xe2\x80\x93");
-        const int64_t secs = us / 1000000LL;
-        const int m2 = static_cast<int>(secs / 60);
-        const int s2 = static_cast<int>(secs % 60);
-        return QStringLiteral("%1:%2").arg(m2).arg(s2, 2, 10, QLatin1Char('0'));
-    };
-    if (timeline_in_label_)
-        timeline_in_label_->setText(QStringLiteral("In %1").arg(formatUs(trim_start_us_)));
-    if (timeline_out_label_)
-        timeline_out_label_->setText(QStringLiteral("Out %1").arg(formatUs(trim_end_us_)));
-}
-
-void EditExportPage::onAddMarkerClicked() {
-    // Without a live playhead, add a marker at the trim-start position or 0.
-    const uint64_t time_ms = trim_start_us_ != recorder_core::TrimRange::kNoTimestamp
-                                 ? static_cast<uint64_t>(trim_start_us_ / 1000LL)
-                                 : 0ULL;
-    RecordingMarker m;
-    m.time_ms = time_ms;
-    m.type = RecordingMarkerType::General;
-    m.label = "Marker";
-    markers_.push_back(m);
-    saveMarkers();
-    renderMarkerPins();
-}
-
 // ---- Marker sidecar I/O ----
 
 void EditExportPage::loadMarkers() {
@@ -1104,68 +1094,15 @@ void EditExportPage::loadMarkers() {
         std::error_code ec;
         if (std::filesystem::exists(sidecar, ec)) {
             markers_ = ReadMarkerSidecar(sidecar);
-            renderMarkerPins();
+            if (timeline_)
+                timeline_->setMarkers(markers_);
             return;
         }
     }
     // No sidecar on disk: fall back to the markers carried in the result.
     markers_ = ctx_.markers;
-    renderMarkerPins();
-}
-
-// Render one thin vertical pin per marker at its proportional position
-// (marker timestamp / recording duration) over the timeline's waveform row.
-// Uses the accent color (Studio Mint) at full opacity so pins read clearly
-// against the waveform bars, which use the same accent at low (0.35) alpha —
-// amber/coral stay reserved for real caution/error states elsewhere in the app.
-void EditExportPage::renderMarkerPins() {
-    if (!timeline_waveform_row_)
-        return;
-
-    // Direct delete (not deleteLater): renderMarkerPins() is never invoked from
-    // a pin's own event handler, and deferred deletion would leave stale pins in
-    // the widget tree until the event loop drains its DeferredDelete queue.
-    for (auto* pin : marker_pin_widgets_)
-        delete pin;
-    marker_pin_widgets_.clear();
-
-    // Unknown/zero duration: no reference span to place pins against. Render
-    // none rather than guessing — this must never crash.
-    if (duration_seconds_ <= 0.0)
-        return;
-
-    const int row_width = timeline_waveform_row_->width();
-    const int row_height = timeline_waveform_row_->height();
-    if (row_width <= 0 || row_height <= 0)
-        return;
-
-    constexpr int kPinWidth = 2;
-    const QString pin_color = themeColor(ActiveTheme().ac).name(QColor::HexRgb);
-
-    for (const auto& marker : markers_) {
-        const double fraction =
-            std::clamp((static_cast<double>(marker.time_ms) / 1000.0) / duration_seconds_, 0.0, 1.0);
-        const int x = std::clamp(static_cast<int>(fraction * row_width), 0, row_width - kPinWidth);
-
-        auto* pin = new QFrame(timeline_waveform_row_);
-        pin->setObjectName(QStringLiteral("editTimelineMarkerPin"));
-        pin->setStyleSheet(QStringLiteral("QFrame { background: %1; border: none; }").arg(pin_color));
-        pin->setGeometry(x, 0, kPinWidth, row_height);
-        pin->show();
-        pin->raise();
-        marker_pin_widgets_.push_back(pin);
-    }
-}
-
-void EditExportPage::saveMarkers() {
-    if (ctx_.marker_sidecar_path.isEmpty())
-        return;
-    // Write back to the SAME path + format the coordinator uses (one writer).
-    const std::filesystem::path sidecar(ctx_.marker_sidecar_path.toStdWString());
-    QString media;
-    if (!ctx_.output_path.isEmpty())
-        media = QString::fromStdWString(std::filesystem::path(ctx_.output_path.toStdWString()).filename().wstring());
-    WriteMarkerSidecar(sidecar, markers_, media);
+    if (timeline_)
+        timeline_->setMarkers(markers_);
 }
 
 // ---- Real stream-copy export ----
@@ -1201,13 +1138,23 @@ void EditExportPage::runExport() {
     tr.start_us = trim_start_us_;
     tr.end_us = trim_end_us_;
 
+    // Markers ride along the export as a retimed JSON sidecar — never as
+    // container chapters. Plan it now (snapshot markers + trim on the UI
+    // thread) so the export thread races nothing.
+    const qint64 window_start_ms = trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_start_us_ / 1000 : 0;
+    const qint64 window_end_ms = trim_end_us_ != recorder_core::TrimRange::kNoTimestamp
+                                     ? trim_end_us_ / 1000
+                                     : std::numeric_limits<qint64>::max();
+    MarkerExportPlan marker_plan =
+        PlanMarkerSidecarForExport(output_path, RetimeMarkersForTrim(markers_, window_start_ms, window_end_ms));
+
     export_output_path_ = output_path;
 
     if (export_thread_.joinable())
         export_thread_.join();
     export_cancel_.store(false);
 
-    export_thread_ = std::thread([this, master, output_path, to_mp4, tr, overwrite]() {
+    export_thread_ = std::thread([this, master, output_path, to_mp4, tr, marker_plan = std::move(marker_plan)]() {
         std::filesystem::path temp_output = output_path;
         temp_output += L".tmp";
 
@@ -1247,6 +1194,13 @@ void EditExportPage::runExport() {
             // Clean up failed / cancelled temp file.
             std::error_code del_ec;
             std::filesystem::remove(temp_output, del_ec);
+        }
+
+        if (ok) {
+            // Retimed marker sidecar beside the exported file — written only
+            // when markers survived the trim; a stale sidecar at the
+            // destination (overwrite-original export) is removed otherwise.
+            ApplyMarkerExportPlan(marker_plan);
         }
 
         QMetaObject::invokeMethod(

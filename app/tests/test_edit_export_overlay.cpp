@@ -260,7 +260,7 @@ TEST_F(EditExportOverlayTest, HostedPage_PreservesInternalObjectNames) {
     overlay.page()->setPhase(EditExportPage::Phase::Output);
     auto* primary = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
     ASSERT_NE(primary, nullptr);
-    EXPECT_EQ(primary->text(), QStringLiteral("Export"));
+    EXPECT_EQ(primary->text(), QStringLiteral("Save && export"));
 
     auto* back_btn = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
     EXPECT_NE(back_btn, nullptr);

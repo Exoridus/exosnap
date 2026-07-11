@@ -110,4 +110,53 @@ inline std::vector<RecordingMarker> ReadMarkerSidecar(const std::filesystem::pat
     return ParseMarkerSidecar(f.readAll());
 }
 
+// The ONE path convention: "<media>.markers.json" = the media path with its
+// extension replaced.
+[[nodiscard]] inline std::filesystem::path DeriveMarkerSidecarPath(const std::filesystem::path& media_path) {
+    if (media_path.empty())
+        return {};
+    std::filesystem::path sidecar = media_path;
+    sidecar.replace_extension(L".markers.json");
+    return sidecar;
+}
+
+// Plan the marker sidecar that rides along an exported (possibly trimmed)
+// file. Markers are rebased to the trimmed clip's start; markers cut away by
+// the trim are dropped. A sidecar is written ONLY when markers survive —
+// otherwise any stale sidecar already at the destination (e.g. from an
+// overwrite-original export or a previous export run) must be removed so it
+// can never describe timestamps the new file does not have.
+struct MarkerExportPlan {
+    std::filesystem::path sidecar_path;   // "<export>.markers.json"
+    QString media;                        // exported media filename (sidecar "media" field)
+    std::vector<RecordingMarker> markers; // retimed survivors (empty => remove)
+    [[nodiscard]] bool shouldWrite() const noexcept {
+        return !sidecar_path.empty() && !markers.empty();
+    }
+};
+
+[[nodiscard]] inline MarkerExportPlan PlanMarkerSidecarForExport(const std::filesystem::path& export_media_path,
+                                                                 std::vector<RecordingMarker> retimed_markers) {
+    MarkerExportPlan plan;
+    plan.sidecar_path = DeriveMarkerSidecarPath(export_media_path);
+    if (!export_media_path.empty())
+        plan.media = QString::fromStdWString(export_media_path.filename().wstring());
+    plan.markers = std::move(retimed_markers);
+    return plan;
+}
+
+// Apply a MarkerExportPlan on disk: write the sidecar when markers survived,
+// otherwise delete any stale sidecar at the destination (a leftover from an
+// overwritten original or a previous export run). Returns false only when a
+// required write fails (a missing file to remove is not a failure).
+inline bool ApplyMarkerExportPlan(const MarkerExportPlan& plan) {
+    if (plan.sidecar_path.empty())
+        return true;
+    if (plan.shouldWrite())
+        return WriteMarkerSidecar(plan.sidecar_path, plan.markers, plan.media);
+    std::error_code ec;
+    std::filesystem::remove(plan.sidecar_path, ec);
+    return true;
+}
+
 } // namespace exosnap

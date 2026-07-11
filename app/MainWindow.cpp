@@ -4154,6 +4154,15 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     }
     edit_export_overlay_->page()->setEditContext(ctx);
 
+    // Deterministic timeline state (trim handles + playhead) for the Edit phase.
+    if (scenario.edit_export_trim_start_ms >= 0 || scenario.edit_export_trim_end_ms >= 0) {
+        const qint64 duration_ms = static_cast<qint64>(scenario.edit_export_duration_seconds * 1000.0);
+        const qint64 start_ms = std::max<qint64>(scenario.edit_export_trim_start_ms, 0);
+        const qint64 end_ms = scenario.edit_export_trim_end_ms >= 0 ? scenario.edit_export_trim_end_ms : duration_ms;
+        edit_export_overlay_->page()->setTrimRangeMs(start_ms, end_ms);
+    }
+    edit_export_overlay_->page()->setPreviewPositionMs(scenario.edit_export_playhead_ms);
+
     EditExportPage::Phase phase = EditExportPage::Phase::Review;
     if (scenario.edit_export_phase == QStringLiteral("edit"))
         phase = EditExportPage::Phase::Edit;

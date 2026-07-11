@@ -66,8 +66,9 @@ during an active export is ignored, not queued).
 Not-yet-exported trim edits are discarded on dismiss without a confirmation prompt. This mirrors
 the page's pre-existing Back-button behavior (`onBackClicked()`/`onDoneClicked()` have never
 guarded against unsaved trim state) — introducing a confirmation only for Escape/backdrop would
-be inconsistent with Back already discarding silently. Markers are unaffected: they are persisted
-immediately on add via `EditExportPage::saveMarkers()`, so nothing already-committed is at risk.
+be inconsistent with Back already discarding silently. Markers are unaffected: the edit surface
+is a marker *consumer* only (markers are placed during recording), so nothing already-committed
+is at risk.
 
 **Recording start dismisses the overlay.** A capture start (recording or countdown) closes the
 Edit overlay — on the stack-page shape this happened implicitly via the swap-back to Record;
@@ -127,9 +128,15 @@ Review → Edit → Output
 
 - **Review**: post-flight report (frame-drop %, peak A/V drift, pipeline health) populated from
   `RecordingDiagnosticsSnapshot` and peak-drift tracking in `RecordPage`. Video player
-  placeholder (deferred to 0.11). Duration / size / codec / container detail rail on the right.
-- **Edit**: Trim / Marker controls (keyframe-accurate; spin-box dialog snaps to nearest keyframe
-  and nearest marker within 50 ms). Split Chapter button deferred to 0.11.
+  placeholder (decoded frames deferred to 0.11; the play/pause toggle drives a real position
+  clock). Duration / size / codec / container Details card on the right (right-aligned mono
+  values).
+- **Edit**: direct manipulation on the timeline under the player (`app/ui/widgets/EditTimeline`):
+  draggable trim in/out handles (trimmed-away ranges dimmed; keyframe-accurate — see "Trim
+  implementation"), marker verticals, and a scrubbable playhead that follows the preview clock.
+  There is no button row above the strip. Split Chapter deferred to 0.11. The primary action
+  ("Save & export" in Output) sits in a bottom action bar, bottom-right like the Record page's
+  transport actions.
 - **Output**: container combo (MKV / MP4, both stream-copy / lossless) + save-mode combo
   (new file = `<name>_edit.<ext>` / overwrite original = atomic rename). After clicking Export:
   Exporting phase (real progress bar from `RemuxProgressCallback`) → Done or Failed result panel.
@@ -175,13 +182,28 @@ who clip frequently.
 
 ### Trim implementation
 
-Trim uses `ExtractKeyframeTimestamps` to load all video keyframe PTS values from the MKV master,
-then snaps user-entered start/end seconds to the nearest keyframe at or before the requested
-time. An additional snap to the nearest marker within 50 ms is applied if any markers exist. The
-resulting `TrimRange` is passed to the trimmed overloads of `RemuxToProgressiveMp4` /
+Trim is set by dragging the timeline's in/out handles (the former spin-box dialog is gone). The
+handles constrain each other through pure clamp logic (`app/models/EditTimelineModel.h`,
+`kMinTrimGapMs`) so they can never cross. While a handle (or the playhead) is dragged it scales
+slightly and a centred `MM:SS.mmm` time label (hours only for recordings >= 1 h) renders above it.
+
+On handle release, the cut point snaps: `ExtractKeyframeTimestamps` loads all video keyframe PTS
+values from the MKV master, the value snaps to the nearest keyframe at or before the requested
+time, then to the nearest marker within 50 ms if any markers exist. The snapped value is written
+back to the handle so the UI shows the real cut. The resulting `TrimRange` is applied only when
+the user clicks Save & export, passed to the trimmed overloads of `RemuxToProgressiveMp4` /
 `RemuxToMkv`.
 
 Trim is keyframe-accurate and lossless: no decoding occurs.
+
+### Preview playback clock and scrubbing
+
+The player area's play/pause toggle drives a position clock (`QTimer`-advanced, no decoded frames
+yet — the 0.11 frame view will attach to the same position). The timeline playhead follows the
+clock. Scrubbing (dragging the playhead or pressing on the track) seeks the position; playback
+pauses for the duration of the drag and resumes on release only if it was playing when the scrub
+began (paused stays paused). Reaching the end of the clip pauses at the end. Hiding the page (or
+leaving the player phases) stops the clock.
 
 ### Marker sidecar — single canonical format and writer
 
@@ -210,12 +232,15 @@ producer and the edit-surface consumer. The (de)serialization lives in `app/mode
   (dropped during capture by the `AddMarker` hotkey or the transport-dock button), writes the
   sidecar on every `AddMarker()`, again on stop for single-file recordings, and per segment
   (partitioned + rebased to segment-local time) for split recordings — all through the shared writer.
-- `EditExportPage` is the consumer/editor: `loadMarkers()` reads the existing sidecar at
+- `EditExportPage` is a **consumer**: `loadMarkers()` reads the existing sidecar at
   `EditContext::marker_sidecar_path` (authoritative once present; falls back to the markers carried
-  in the result), and `saveMarkers()` writes back to the **same** path and format via the shared
-  writer when the user adds/edits a marker. Trim cut points snap to these markers (within 50 ms).
+  in the result) and renders the markers on the timeline. Markers are not added or edited on the
+  edit surface. Trim cut points snap to these markers (within 50 ms).
+- An **export** writes a retimed sidecar next to the exported file — only when markers survive the
+  trim — via the same serializer (`PlanMarkerSidecarForExport` / `ApplyMarkerExportPlan`). See ADR
+  0042 for the rules (retiming, half-open survival window, stale-sidecar removal).
 
-Markers are never written as container chapters (no metadata change to the video file).
+Markers are never written as container chapters (no metadata change to the video file; ADR 0042).
 
 ### IA decision: overlay, not tab (superseded: was "mode, not tab")
 
@@ -255,5 +280,6 @@ rewritten.)
 
 ## Forward
 
-- 0.11: video preview playback (QMediaPlayer or custom D3D11), Split Chapter button.
+- 0.11: decoded video frames in the player area (attaching to the existing preview position
+  clock), Split Chapter button.
 - Post-1.0: transcription (optional, capability-gated), batch export, GIF/WebP export.
