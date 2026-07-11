@@ -16,6 +16,7 @@
 #include <QObject>
 #include <QString>
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -48,6 +49,21 @@
 // Start <install_dir>\exosnap.exe detached (working dir = install_dir).
 // Shared by the pipeline's Launch step and the window's "Open ..." actions.
 [[nodiscard]] bool LaunchExoSnapFrom(const std::wstring& install_dir);
+
+// Open `path` read-only with a deny-write / deny-delete share mode and return
+// the raw Win32 HANDLE (as void*; INVALID_HANDLE_VALUE on failure — the caller
+// owns and must close it via ClosePackageLock / CloseHandle). While this handle
+// is open the OS refuses every write, rename, and delete open on the file — from
+// any process, same user or not — and its open child handle also pins the parent
+// directories against rename. That is what closes the verify->consume TOCTOU
+// window: the verified bytes cannot be swapped before an elevated msiexec (or
+// the portable extractor) reads them. msiexec still opens the source read-only,
+// which the deny-write lock permits.
+[[nodiscard]] void* OpenPackageWriteLock(const std::wstring& path);
+
+// Close a handle returned by OpenPackageWriteLock (nullptr / INVALID are no-ops).
+// Used as the deleter for the worker's owned lock handle.
+void ClosePackageLock(void* handle) noexcept;
 
 // ---------------------------------------------------------------------------
 // Worker
@@ -93,6 +109,14 @@ class UpdaterWorker : public QObject {
     // looping an unwinnable install.
     [[nodiscard]] bool StagePortablePackage(QString* error, bool* unusable_package = nullptr);
 
+    // Take a deny-write / deny-delete lock on package_path_ and verify its bytes
+    // against `expected_sha256` THROUGH that handle, keeping the handle in
+    // locked_package_ so the verified package cannot be swapped before it is
+    // consumed (elevated msiexec / portable extraction). On a hash mismatch the
+    // file is deleted (no partial binary retained). Any prior lock is released
+    // first so a re-download can replace the file.
+    [[nodiscard]] bool LockAndVerifyPackage(const std::string& expected_sha256, QString* error);
+
     const UpdaterArgs args_;
     std::atomic<bool> cancel_{false};
 
@@ -100,8 +124,13 @@ class UpdaterWorker : public QObject {
     exosnap::update::UpdateManifest manifest_{};
     exosnap::update::SwapPlan plan_{}; // portable swap plan
     std::wstring package_path_;        // downloaded .zip / .msi
+    std::string package_sha256_;       // expected SHA-256 of package_path_ (for the install re-lock guard)
     std::wstring launch_dir_;          // where the Launch step finds exosnap.exe
     bool have_package_ = false;        // Download completed at least once
+
+    // Deny-write / deny-delete lock on package_path_, held from verification
+    // until the package is consumed (closes the verify->consume TOCTOU window).
+    std::unique_ptr<void, decltype(&ClosePackageLock)> locked_package_{nullptr, &ClosePackageLock};
 };
 
 Q_DECLARE_METATYPE(UpStep)

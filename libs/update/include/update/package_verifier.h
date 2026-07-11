@@ -24,6 +24,21 @@ struct VerifyParams {
 // Returns VerifyResult::Ok on success, PackageHashMismatch or PackageNotFound otherwise.
 [[nodiscard]] VerifyResult VerifyPackage(const VerifyParams& params) noexcept;
 
+// Verify the SHA-256 hash of a package through an ALREADY-OPEN file handle
+// (Win32 HANDLE, taken as void* so this header stays WinAPI-free). Hashing the
+// bytes the caller already holds a handle to — rather than re-opening a path —
+// is what closes the verify->consume TOCTOU window: when the caller keeps that
+// handle open with a deny-write / deny-delete share mode, the exact bytes that
+// hash here are the exact bytes later consumed, and no same-user process can
+// swap them in between.
+//
+// Unlike VerifyPackage(), this NEVER deletes anything: the caller owns the
+// handle (deletion while it is open would fail anyway) and decides what to do
+// with the file on a mismatch. The handle's file pointer is rewound to the
+// start before hashing. Returns Ok, PackageHashMismatch, or PackageNotFound
+// (null / invalid handle).
+[[nodiscard]] VerifyResult VerifyPackageHandle(void* file_handle, const std::string& expected_sha256_hex) noexcept;
+
 // Launch the installer for the downloaded (and verified) package.
 // The installer runs as a separate process; this function does NOT wait.
 // Returns true if the process was successfully started.

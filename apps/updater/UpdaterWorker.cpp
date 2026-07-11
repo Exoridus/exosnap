@@ -50,7 +50,7 @@ using exosnap::update::SwapError;
 using exosnap::update::UpdateManifest;
 using exosnap::update::VerifyInstalledVersion;
 using exosnap::update::VerifyManifestSignature;
-using exosnap::update::VerifyPackage;
+using exosnap::update::VerifyPackageHandle;
 using exosnap::update::VerifyResult;
 using exosnap::update::WaitForInstanceMutex;
 using exosnap::update::WaitForProcessExit;
@@ -71,12 +71,6 @@ constexpr std::chrono::seconds kInstanceMutexTimeout{15};
     fs::remove_all(fs::path(dir), ec);
     std::error_code ec2;
     return !fs::exists(fs::path(dir), ec2);
-}
-
-// Narrow (ACP) path for the update engine's std::string seams (VerifyPackage
-// opens files through narrow ifstream paths on MSVC).
-[[nodiscard]] std::string ToLocal8Bit(const std::wstring& w) {
-    return QString::fromStdWString(w).toLocal8Bit().toStdString();
 }
 
 // The two-paths detail line for SwapError::RestoreFailed (worst case: the old
@@ -152,6 +146,23 @@ UpStep RetryEntryStep(FailureCase c) {
 
 std::wstring BuildMsiexecParams(const std::wstring& msi_path) {
     return L"/i \"" + msi_path + L"\" /qn /norestart";
+}
+
+void* OpenPackageWriteLock(const std::wstring& path) {
+    // GENERIC_READ + FILE_SHARE_READ only: readers (msiexec, the ZIP extractor)
+    // may still open the file, but no one — not even the same user, who owns the
+    // file — can open it for writing, rename it, or delete it while this handle
+    // lives. Kernel share-mode enforcement cannot be bypassed by a file owner the
+    // way an ACL can, which is why this beats staging into an ACL'd directory.
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    return h; // INVALID_HANDLE_VALUE on failure
+}
+
+void ClosePackageLock(void* handle) noexcept {
+    if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+        ::CloseHandle(static_cast<HANDLE>(handle));
+    }
 }
 
 bool LaunchExoSnapFrom(const std::wstring& install_dir) {
@@ -336,24 +347,27 @@ bool UpdaterWorker::runDownload() {
             emit downloadProgress(p.bytes_received, p.bytes_total);
         }
     };
+    // Release any lock from a previous attempt so a retry's re-download can
+    // overwrite the file (a held deny-write/deny-delete handle would block it).
+    locked_package_.reset();
     if (const auto err = DownloadToFile(package->url, package_path.wstring(), on_progress, cancel_)) {
         emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
         return false;
     }
 
-    // SHA-256 gate -- a mismatch deletes the file inside VerifyPackage.
-    const VerifyResult verdict = VerifyPackage({ToLocal8Bit(package_path.wstring()), package->sha256_hex});
-    if (verdict != VerifyResult::Ok) {
-        const QString detail =
-            verdict == VerifyResult::PackageNotFound
-                ? QStringLiteral("No package for this install type in the manifest.")
-                : QStringLiteral("SHA-256 mismatch - the file was deleted.");
-        emit failed(FailureCase::VerifyDownloadFailed, detail); // A2 -- hard stop
+    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
+    // THROUGH that handle, then keep the handle open through consumption: the
+    // verified bytes cannot be swapped before the (elevated) installer / extractor
+    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
+    package_path_ = package_path.wstring();
+    package_sha256_ = package->sha256_hex;
+    QString verify_error;
+    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
+        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
         return false;
     }
 
     manifest_ = std::move(manifest);
-    package_path_ = package_path.wstring();
     have_package_ = true;
 
     if (portable) {
@@ -406,6 +420,28 @@ bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package)
         (void)RemoveTree(hoist);
         (void)RemoveTree(plan_.staging_dir);
         *error = QStringLiteral("Can't arrange the staged files next to the install directory.");
+        return false;
+    }
+    return true;
+}
+
+// Lock package_path_ deny-write/deny-delete, verify its bytes through the handle,
+// and retain the handle (locked_package_) so nothing can swap the verified file
+// before it is consumed. Deletes the file on a hash mismatch.
+bool UpdaterWorker::LockAndVerifyPackage(const std::string& expected_sha256, QString* error) {
+    locked_package_.reset(); // drop any stale lock first
+    void* handle = OpenPackageWriteLock(package_path_);
+    if (handle == INVALID_HANDLE_VALUE) {
+        *error = QStringLiteral("Can't open the downloaded package for verification.");
+        return false;
+    }
+    locked_package_.reset(handle);
+
+    if (VerifyPackageHandle(handle, expected_sha256) != VerifyResult::Ok) {
+        locked_package_.reset(); // close before deleting
+        std::error_code ec;
+        fs::remove(fs::path(package_path_), ec);
+        *error = QStringLiteral("SHA-256 mismatch - the file was deleted.");
         return false;
     }
     return true;
@@ -490,6 +526,20 @@ bool UpdaterWorker::runInstallPortable() {
 // ── Step 3b: Install (MSI handoff) ───────────────────────────────────────────
 bool UpdaterWorker::runInstallMsi() {
     emit stepStarted(UpStep::Install);
+
+    // The deny-write lock must be held across the elevated handoff so the exact
+    // verified bytes are what msiexec reads. It is normally taken at Download and
+    // survives Install-step retries (C1/C2) on this same worker; if it is somehow
+    // not held (defensive — e.g. a future re-entry path), re-lock and re-verify
+    // the package before elevating rather than hand an unverified path to an
+    // elevated process.
+    if (!locked_package_) {
+        QString relock_error;
+        if (!LockAndVerifyPackage(package_sha256_, &relock_error)) {
+            emit failed(FailureCase::MsiFailed, relock_error); // C2 -- refuse to elevate an unverified package
+            return false;
+        }
+    }
 
     const std::wstring params = BuildMsiexecParams(package_path_);
     SHELLEXECUTEINFOW sei{};

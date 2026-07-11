@@ -129,6 +129,17 @@ The **security contract is unchanged** and is what makes an unattended portable 
 - **Hash mismatch is a hard stop.** The downloaded package SHA-256 is verified before it is used;
   a mismatch aborts the swap and retains no partial binary. Nothing is swapped until verification
   passes.
+- **Verify under lock (no swap between check and use).** The package is downloaded into a per-user
+  temp directory, which any same-user process can write. To keep that from becoming a
+  time-of-check/time-of-use gap — where a verified package is swapped for an unverified one before
+  the (elevated) `msiexec` or the portable extractor reads it — the updater holds an exclusive
+  deny-write / deny-delete file handle on the package from the moment it is hashed until the package
+  is consumed, and computes the SHA-256 *through that same handle*. While the handle is open the OS
+  refuses every write, rename, and delete of the file from any process (a guarantee the file owner
+  cannot revoke, unlike an ACL), and its open child handle pins the parent directories against
+  rename, so the absolute path handed to the elevated installer cannot be repointed. The bytes that
+  verify are therefore the exact bytes that install. `msiexec` still opens the source read-only,
+  which the lock permits.
 - **No silent restart.** The swap+relaunch happens only after the user clicked **Update**; the app
   never restarts itself unprompted. The recording/finalization block (above) still gates the whole
   flow, and the swap window disables interruption during Install/Verify/Restart.

@@ -8,11 +8,18 @@
 
 #include <gtest/gtest.h>
 
+// clang-format off
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+// clang-format on
+
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include <update/package_verifier.h>
 
 #include "UpdaterWorker.h"
 
@@ -141,6 +148,122 @@ TEST(BuildMsiexecParams, QuotesPathAndAppendsSilentFlags) {
 TEST(BuildMsiexecParams, PathWithSpacesStaysOneArgument) {
     EXPECT_EQ(BuildMsiexecParams(L"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi"),
               L"/i \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi\" /qn /norestart");
+}
+
+// ---------------------------------------------------------------------------
+// OpenPackageWriteLock + VerifyPackageHandle -- the TOCTOU close: the verified
+// package cannot be written, renamed, or deleted while the lock is held, so the
+// bytes that hash here are the bytes later consumed (elevated msiexec).
+// ---------------------------------------------------------------------------
+
+class PackageLockTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        path_ = fs::temp_directory_path() /
+                (L"exosnap_pkg_lock_test_" + std::to_wstring(reinterpret_cast<uintptr_t>(this)) + L".bin");
+        fs::remove(path_);
+    }
+    void TearDown() override {
+        std::error_code ec;
+        fs::remove(path_, ec);
+    }
+
+    void Write(const std::string& bytes) {
+        std::ofstream f(path_, std::ios::binary | std::ios::trunc);
+        f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+
+    // SHA-256("abc"), the canonical NIST test vector.
+    static constexpr const char* kAbcSha256 =
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fs::path path_;
+};
+
+TEST_F(PackageLockTest, LockOpensExistingFileAndVerifiesThroughHandle) {
+    Write("abc");
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+    EXPECT_EQ(exosnap::update::VerifyPackageHandle(lock, kAbcSha256), exosnap::update::VerifyResult::Ok);
+    ClosePackageLock(lock);
+}
+
+TEST_F(PackageLockTest, HeldLockDeniesConcurrentWriteOpen) {
+    // The core of the fix: while the deny-write lock is held, no same-user
+    // process can open the verified file for writing to swap its contents.
+    Write("abc");
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+
+    HANDLE writer = ::CreateFileW(path_.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    EXPECT_EQ(writer, INVALID_HANDLE_VALUE);
+    EXPECT_EQ(::GetLastError(), static_cast<DWORD>(ERROR_SHARING_VIOLATION));
+    if (writer != INVALID_HANDLE_VALUE) {
+        ::CloseHandle(writer);
+    }
+    ClosePackageLock(lock);
+}
+
+TEST_F(PackageLockTest, HeldLockDeniesDeleteAndRename) {
+    // deny-delete (no FILE_SHARE_DELETE) also blocks rename, which pins the path
+    // — and, via the open child handle, its parent directories — so the absolute
+    // path handed to msiexec cannot be repointed at a different file.
+    Write("abc");
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+
+    EXPECT_EQ(::DeleteFileW(path_.wstring().c_str()), 0);
+    const fs::path other = path_.wstring() + L".swapped";
+    EXPECT_EQ(::MoveFileW(path_.wstring().c_str(), other.wstring().c_str()), 0);
+    EXPECT_TRUE(fs::exists(path_));
+
+    ClosePackageLock(lock);
+}
+
+TEST_F(PackageLockTest, ReleasingLockRestoresWriteAccess) {
+    // Sanity: without the lock the file IS writable/replaceable — this is exactly
+    // the pre-fix window the held lock removes.
+    Write("abc");
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+    ClosePackageLock(lock);
+
+    HANDLE writer = ::CreateFileW(path_.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    EXPECT_NE(writer, INVALID_HANDLE_VALUE);
+    if (writer != INVALID_HANDLE_VALUE) {
+        ::CloseHandle(writer);
+    }
+}
+
+TEST_F(PackageLockTest, VerifyThroughHandleRejectsWrongHash) {
+    Write("abc");
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+    EXPECT_EQ(exosnap::update::VerifyPackageHandle(lock, std::string(64, '0')),
+              exosnap::update::VerifyResult::PackageHashMismatch);
+    ClosePackageLock(lock); // handle-based verify never deletes; caller owns the file
+    EXPECT_TRUE(fs::exists(path_));
+}
+
+TEST_F(PackageLockTest, VerifyThroughHandleRewindsBeforeHashing) {
+    // Hashing must cover the whole file regardless of the handle's file pointer.
+    Write("abc");
+    void* lock = OpenPackageWriteLock(path_.wstring());
+    ASSERT_NE(lock, INVALID_HANDLE_VALUE);
+    LARGE_INTEGER end{};
+    end.QuadPart = 3;
+    ::SetFilePointerEx(static_cast<HANDLE>(lock), end, nullptr, FILE_BEGIN); // move to EOF
+    EXPECT_EQ(exosnap::update::VerifyPackageHandle(lock, kAbcSha256), exosnap::update::VerifyResult::Ok);
+    ClosePackageLock(lock);
+}
+
+TEST(VerifyPackageHandle, NullOrInvalidHandleIsPackageNotFound) {
+    EXPECT_EQ(exosnap::update::VerifyPackageHandle(nullptr, std::string(64, '0')),
+              exosnap::update::VerifyResult::PackageNotFound);
+    EXPECT_EQ(exosnap::update::VerifyPackageHandle(INVALID_HANDLE_VALUE, std::string(64, '0')),
+              exosnap::update::VerifyResult::PackageNotFound);
 }
 
 // ---------------------------------------------------------------------------
