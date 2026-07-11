@@ -287,6 +287,13 @@ struct VisualScenario {
     // milliseconds into the recording; positioned proportionally on the timeline.
     double edit_export_duration_seconds = 0.0;
     QVector<uint64_t> edit_export_marker_times_ms;
+
+    // --- EditExport Edit-phase timeline state ---
+    // Trim handles + playhead position for the interactive trim timeline.
+    // Negative trim values mean "untrimmed" (handles at 0% / 100%).
+    qint64 edit_export_trim_start_ms = -1;
+    qint64 edit_export_trim_end_ms = -1;
+    qint64 edit_export_playhead_ms = 0;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

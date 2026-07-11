@@ -2381,11 +2381,7 @@ const std::vector<RecordingMarker>& RecordingCoordinator::Markers() const noexce
 }
 
 std::filesystem::path RecordingCoordinator::MarkerSidecarPath() const {
-    if (current_output_path_.empty())
-        return {};
-    auto sidecar = current_output_path_;
-    sidecar.replace_extension(L".markers.json");
-    return sidecar;
+    return exosnap::DeriveMarkerSidecarPath(current_output_path_);
 }
 
 void RecordingCoordinator::WriteMarkerSidecar() {
@@ -2429,8 +2425,7 @@ void RecordingCoordinator::WriteSegmentMarkerSidecar(const recorder_core::Comple
     if (local.empty())
         return;
 
-    auto sidecar_path = segment.path;
-    sidecar_path.replace_extension(L".markers.json");
+    const auto sidecar_path = exosnap::DeriveMarkerSidecarPath(segment.path);
 
     // Same canonical serializer, with the per-segment index field set.
     const QString media = QString::fromStdWString(segment.path.filename().wstring());
