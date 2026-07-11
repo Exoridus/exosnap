@@ -28,11 +28,15 @@ is non-fatal: it disables phase-correct for the session and falls back to the si
 newest-at-tick path. GPU runtime smoothness has been dev-recording-verified by the user against
 a 144 Hz VRR source → 60 fps MKV output.
 
-**Known limitation — ring always sizes to fallback 8.** Monitor refresh rate is not surfaced
-to the video thread at this time; `ComputePacingRingSize` is always called with
-`monitor_refresh_hz = 0`, so the ring is always 8 textures regardless of source framerate.
-The formula and the `monitor_refresh_hz` parameter are correct and in place; wiring the actual
-refresh value is a follow-up (safe headroom: 8 covers up to 8× source-over-output).
+**Ring sizes to the real monitor refresh rate.** `DxgiOdCaptureSrc::Open()` resolves the
+duplicated output's refresh rate and `video_thread.cpp` passes it to `ComputePacingRingSize`, so
+the ring is now adaptively sized (e.g. 5 textures for 144→60, 6 for 240→60) instead of always
+8. The refresh value is read from `DXGI_OUTDUPL_DESC.ModeDesc.RefreshRate` when present but that
+field is unreliable for desktop duplication (frequently `{0,0}`, exactly as its `Format` sibling
+is unreliable — see the capture-format policy note in `dxgi_od_capture_src.h`), so it falls back
+to the authoritative current display mode via `EnumDisplaySettingsW` (`dmDisplayFrequency`), keyed
+by the stable GDI device name. When the rate genuinely cannot be determined, the conservative
+fallback of 8 still applies (safe headroom for up to 8× source-over-output).
 
 **User control.** Expert Video settings section gains a "Frame pacing" select:
 `Smooth (phase-correct)` / `Newest (lowest latency)`. Default `Smooth`. Persisted in preset
