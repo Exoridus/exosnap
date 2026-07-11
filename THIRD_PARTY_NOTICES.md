@@ -43,14 +43,21 @@ directory alongside the ExoSnap binary.
 - **Linkage:** static
 - **Bundled license:** `licenses/opus.txt`
 
-### FDK-AAC
+### FDK-AAC (fdk-aac-free, LC-only fork)
 
-- **Version:** 2.0.3
-- **Project:** https://github.com/mstorsjo/fdk-aac
+- **Version:** 2.0.2 base, `stripped4` branch @
+  `529b87452cd33d45e1d0a5066d20b64f10b38845`
+- **Project:** https://gitlab.freedesktop.org/wtaymans/fdk-aac-stripped
+  (Third-Party Modified Version of the Fraunhofer FDK AAC Codec Library for
+  Android; the source lineage Fedora distributes as `fdk-aac-free`)
 - **License:** Fraunhofer FDK AAC Codec Library license (see bundled text)
 - **Linkage:** static
 - **Bundled license:** `licenses/fdk-aac.txt`
-- **Note:** Patent licenses for AAC encoding/decoding may be required
+- **Note:** This fork removes the patent-encumbered HE-AAC/HEv2 (SBR/PS) code
+  paths and retains only AAC-LC encode/decode — the only profile ExoSnap uses.
+  Fedora Legal approved distributing this stripped fork alongside GPL code
+  (Red Hat Bugzilla #1501522); see ADR 0043 for the project's licensing
+  position. Patent licenses for AAC encoding/decoding may still be required
   independently from the copyright license. This notice does not provide patent
   rights. Patent licensing is the user's responsibility. Most device
   manufacturers already license the relevant AAC patents.
