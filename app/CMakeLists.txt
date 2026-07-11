@@ -736,6 +736,19 @@ exosnap_add_gtest(
 target_include_directories(engine_log_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(engine_log_bridge_tests PROPERTIES AUTOMOC ON)
 
+# App log file rotation: size-based rotation, handle-reuse across writes, and
+# Logs-page (in-memory history) compatibility across rotation.
+exosnap_add_gtest(
+    NAME app_log_rotation_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_app_log_rotation.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(app_log_rotation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(app_log_rotation_tests PROPERTIES AUTOMOC ON)
+
 exosnap_add_gtest(
     NAME output_settings_tests
     TEST_PREFIX output.

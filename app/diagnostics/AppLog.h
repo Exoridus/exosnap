@@ -31,6 +31,17 @@ class AppLog final : public QObject {
   public:
     static constexpr int kDefaultMaxEntries = 5000;
 
+    // Size-based rotation for the on-disk session log file (exosnap.log).
+    //
+    // 5 MiB holds several hours of a chatty (Debug-level) session as plain text
+    // while staying trivial to attach to a support request; 3 files (current +
+    // 2 backups, exosnap.log[.1][.2], ~15 MiB worst case) keep enough history to
+    // diagnose a problem reported after the fact without the file growing
+    // unbounded across a long-running or multi-day session. Not user-configurable:
+    // this is an implementation bound, not a product setting.
+    static constexpr qint64 kMaxLogFileBytes = 5 * 1024 * 1024;
+    static constexpr int kMaxLogFileCount = 3;
+
     static AppLog& instance();
 
     // One-time init: creates the log directory and writes the startup banner.
@@ -70,6 +81,10 @@ class AppLog final : public QObject {
     // Test support: resets process-local state without writing synthetic entries.
     static void resetForTesting(int max_entries = kDefaultMaxEntries);
     static void setTimestampProviderForTesting(std::function<QDateTime()> provider);
+
+    // Test support: overrides the rotation threshold so rotation tests don't need
+    // to write megabytes of lines. Pass std::nullopt to restore kMaxLogFileBytes.
+    static void setMaxLogFileBytesForTesting(std::optional<qint64> max_bytes);
 
   signals:
     void entriesAppended(QVector<exosnap::diagnostics::LogEntry> entries, int evicted_count);
