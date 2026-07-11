@@ -49,6 +49,7 @@
 #define EXOSNAP_CAPABILITY_HAVE_NVENC 0
 #endif
 
+#include <capability/adapter_enum.h>
 #include <capability/capability_builder.h>
 #include <capability/runtime_snapshot.h>
 
@@ -344,6 +345,50 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
 }
 
 // -------------------------------------------------------------------------
+// B3. Cheap adapter-identity read (LUID + WDDM driver version)
+// -------------------------------------------------------------------------
+//
+// Used only to build the disk-cache warm-start key (capability_cache_key.h);
+// never consulted by the real probe path. Reuses EnumerateAdapters() (the
+// same "skip software/WARP" filtering ProbeAdapterName applies) instead of
+// re-walking DXGI adapters a third way.
+void ProbeAdapterIdentity(AdapterIdentity& identity) {
+    const std::vector<AdapterInfo> adapters = EnumerateAdapters();
+    if (adapters.empty())
+        return; // no real adapter — identity stays default (luid=0, driver_version empty)
+
+    identity.adapter_luid = adapters.front().luid;
+
+    Microsoft::WRL::ComPtr<IDXGIFactory4> factory4;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory4))))
+        return; // driver_version stays empty — cache key still usable (less precise)
+
+    LUID luid{};
+    luid.LowPart = static_cast<DWORD>(static_cast<uint64_t>(identity.adapter_luid) & 0xFFFFFFFFu);
+    luid.HighPart = static_cast<LONG>(static_cast<uint64_t>(identity.adapter_luid) >> 32);
+
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    if (FAILED(factory4->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))))
+        return;
+
+    // IDXGIAdapter::CheckInterfaceSupport is deprecated for feature queries
+    // post-Direct3D 10, but it still reliably reports the WDDM user-mode
+    // driver version as a packed LARGE_INTEGER on real hardware drivers.
+    // DXGI_ERROR_UNSUPPORTED (e.g. some virtualized/basic drivers) leaves
+    // driver_version empty — a graceful degrade, not a hard failure.
+    LARGE_INTEGER umd_version{};
+    if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd_version))) {
+        const uint64_t v = static_cast<uint64_t>(umd_version.QuadPart);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%llu.%llu.%llu.%llu", static_cast<unsigned long long>((v >> 48) & 0xFFFFu),
+                      static_cast<unsigned long long>((v >> 32) & 0xFFFFu),
+                      static_cast<unsigned long long>((v >> 16) & 0xFFFFu),
+                      static_cast<unsigned long long>(v & 0xFFFFu));
+        identity.driver_version = buf;
+    }
+}
+
+// -------------------------------------------------------------------------
 // C0. Media Foundation presence pre-check (shared by C and Cw below)
 // -------------------------------------------------------------------------
 
@@ -535,6 +580,12 @@ std::vector<DisplayHdrFacts> CapabilityBuilder::QueryDisplayFacts() {
     std::vector<DisplayHdrFacts> displays;
     ProbeDisplays(displays);
     return displays;
+}
+
+AdapterIdentity CapabilityBuilder::QueryAdapterIdentity() {
+    AdapterIdentity identity;
+    ProbeAdapterIdentity(identity);
+    return identity;
 }
 
 } // namespace exosnap::capability

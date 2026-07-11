@@ -19,8 +19,22 @@ class CapabilityBuilder {
     // none of the expensive probes (no NVENC session, no Media Foundation).
     static std::vector<DisplayHdrFacts> QueryDisplayFacts();
 
+    // Cheap adapter-identity read (LUID + WDDM driver version) — see
+    // AdapterIdentity's doc comment in runtime_snapshot.h. Used to build the
+    // disk-cache key for the warm-start path; never consulted by the real
+    // probe itself.
+    static AdapterIdentity QueryAdapterIdentity();
+
+    // Pure: derives a CapabilitySet from an already-obtained snapshot, without
+    // touching hardware. Leaves CapabilitySet::probed at its default (false) —
+    // callers that pass a snapshot obtained from a real probe just now
+    // (BuildFromHardwareQuery, below) are responsible for marking it probed;
+    // callers rebuilding from a disk-cache snapshot must NOT.
     static CapabilitySet BuildEffectiveCapabilities(const RuntimeCapabilitySnapshot& snapshot);
 
+    // Runs the real, synchronous hardware probe (QueryRuntimeFacts) and derives
+    // the effective CapabilitySet from it, with probed = true. The only path
+    // that may ever unlock a recording-start decision (see CapabilitySet::probed).
     static CapabilitySet BuildFromHardwareQuery();
 };
 

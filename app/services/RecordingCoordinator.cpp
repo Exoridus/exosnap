@@ -499,6 +499,19 @@ void RecordingCoordinator::OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshol
 
 void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                                                const exosnap::capability::ResolveResult& validation) {
+    if (!caps.probed) {
+        // Defense-in-depth: a recording-start decision must never be authorized
+        // from a cache-hydrated (warm-start) CapabilitySet — only a freshly
+        // probed one. RecordPage only ever calls this with the async hardware
+        // probe's result, so this should be unreachable; fail safe rather than
+        // silently trusting stale/cached facts if that ever changes.
+        diagnostics::AppLog::error(
+            QStringLiteral("record.failure"),
+            QStringLiteral("phase=Init category=CapabilityCheck detail=\"Internal error: capability set was not "
+                           "freshly probed\""));
+        OnCapabilityFailure(L"Capability check failed.");
+        return;
+    }
     caps_ = caps;
     has_caps_ = true;
     validation_result_ = validation;

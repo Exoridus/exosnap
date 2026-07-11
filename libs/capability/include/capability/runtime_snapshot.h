@@ -112,4 +112,18 @@ struct RuntimeCapabilitySnapshot {
     std::vector<DisplayHdrFacts> displays;
 };
 
+// Cheap adapter-identity read: just enough to know whether the GPU/driver
+// underlying a persisted capability cache entry still matches the current
+// system. DXGI-only (adapter LUID + WDDM user-mode driver version); no NVENC
+// session, no Media Foundation — same cost class as QueryDisplayFacts(), safe
+// to call synchronously on the UI thread. See CapabilityBuilder::QueryAdapterIdentity.
+struct AdapterIdentity {
+    int64_t adapter_luid = 0; // 0 when no real (non-software) adapter was found
+    // WDDM user-mode driver version, formatted "A.B.C.D" (from
+    // IDXGIAdapter::CheckInterfaceSupport). Empty when unavailable — a driver
+    // that does not answer this (deprecated-but-still-functional) query
+    // degrades the cache to matching on LUID + app version + schema alone.
+    std::string driver_version;
+};
+
 } // namespace exosnap::capability

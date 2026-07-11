@@ -32,6 +32,15 @@ struct CapabilitySet {
     bool mf_aac_available = false;
     bool mf_webcam_available = false; // S4: true when mfplat.dll is present (webcam subsystem usable)
 
+    // True only when this set was produced by a real, just-completed hardware
+    // probe (CapabilityBuilder::BuildFromHardwareQuery). False for the static
+    // baseline and for a set rebuilt from a disk-cache warm-start snapshot
+    // (CapabilityBuilder::BuildEffectiveCapabilities called directly on a
+    // cached RuntimeCapabilitySnapshot). A recording-start decision must never
+    // be authorized from a set with probed == false — see
+    // RecordingCoordinator::OnCapabilitiesReady, which refuses one.
+    bool probed = false;
+
     RuntimeCapabilitySnapshot runtime;
 
     std::unordered_map<Container, SupportAnnotation> containers;

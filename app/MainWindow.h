@@ -26,10 +26,12 @@
 #include "services/WebcamDeviceNotifier.h"
 #include "services/WhatsNewPayload.h"
 #include "settings/AppSettingsStore.h"
+#include "settings/CapabilityCacheStore.h"
 #include "settings/RecordingPresetStore.h"
 #include "settings/RecoveryManifestStore.h"
 #include "ui/tray/TrayPresence.h"
 #include <capability/audio_ui_state.h>
+#include <capability/capability_cache_key.h>
 #include <capability/capability_set.h>
 #include <crash_capture/crash_capture.h>
 
@@ -456,6 +458,16 @@ class MainWindow : public QMainWindow {
     bool pre_fullscreen_maximized_ = false;
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;
+    // Disk cache for the last known-good CapabilitySet (warm-start only — see
+    // CapabilityCacheStore). A cache hit hydrates runtime_caps_/runtime_caps_ready_
+    // early so Device/Diagnostics are not blank during the async probe's cold
+    // window; it never reaches RecordPage/the recording-start gate (CapabilitySet::
+    // probed stays false on a cache hit; only onRuntimeCapsReady's freshly probed
+    // set is ever delivered to record_page_->setRuntimeCapabilities()).
+    CapabilityCacheStore capability_cache_;
+    // Computed once at warm-start time (adapter LUID + driver version + app version +
+    // schema); reused by onRuntimeCapsReady() to write back the freshly probed snapshot.
+    capability::CapabilityCacheKey capability_cache_key_;
     QString record_status_label_ = QStringLiteral("READY");
     // DROP-NOTIFY: latest encoder-backpressure drop count observed on the live
     // diagnostics stream during the current recording (teed in initNotificationToasts).

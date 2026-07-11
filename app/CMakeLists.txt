@@ -294,6 +294,8 @@ qt_add_executable(exosnap WIN32
     settings/RecordingHistoryStore.cpp
     settings/RecoveryManifestStore.h
     settings/RecoveryManifestStore.cpp
+    settings/CapabilityCacheStore.h
+    settings/CapabilityCacheStore.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
@@ -1532,6 +1534,18 @@ exosnap_add_gtest(
 )
 target_include_directories(recovery_manifest_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recovery_manifest_store_tests PROPERTIES AUTOMOC ON)
+
+# Capability warm-start disk cache: roundtrip, key-mismatch, and corrupt-file tests.
+exosnap_add_gtest(
+    NAME capability_cache_store_tests
+    TEST_PREFIX capability_cache.
+    SOURCES tests/test_capability_cache_store.cpp
+            settings/CapabilityCacheStore.cpp
+            diagnostics/AppLog.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(capability_cache_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(capability_cache_store_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME recovery_service_tests
