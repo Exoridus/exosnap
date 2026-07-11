@@ -1,6 +1,7 @@
 #include "RecordingPreset.h"
 
 #include <capability/container_compat_registry.h>
+#include <capability/resolver.h>
 #include <recorder_core/audio_track_model.h>
 
 #include <algorithm>
@@ -228,40 +229,23 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.countdown_seconds = 0;
     }
 
-    // Output: reconcile codecs and normalize the canonical output-size intent.
-    ReconcileContainerCodecs(config.output);
+    // Output format: the resolver owns every static reconciliation rule
+    // (container × codec per ADR 0010, the 10-bit demotion per ADR 0032, the
+    // 4:4:4 chroma snap, and the MP4 CFR timing constraint). Copy its answer
+    // instead of keeping a second rule set that could drift.
+    {
+        const capability::OutputFormatReconciliation reconciled = capability::ReconcileOutputFormat(
+            {config.output.container, config.output.video_codec, config.output.audio_codec, config.output.bit_depth,
+             config.output.chroma_subsampling, config.video.cfr});
+        config.output.container = reconciled.resolved.container;
+        config.output.video_codec = reconciled.resolved.video_codec;
+        config.output.audio_codec = reconciled.resolved.audio_codec;
+        config.output.bit_depth = reconciled.resolved.bit_depth;
+        config.output.chroma_subsampling = reconciled.resolved.chroma;
+        config.video.cfr = reconciled.resolved.cfr;
+    }
     SanitizeOutputResolution(config.output.resolution);
     SanitizeSplitSettings(config.output.split);
-
-    // Video bit depth (0.7.0): 10-bit is valid only for HEVC and AV1 (HEVC Main10 /
-    // AV1 10-bit P010, SDR BT.709 — ADR 0032), never for H.264. This mirrors the
-    // static rule the capability layer enforces in translation.cpp; the resolver
-    // performs the same Bit8 fallback at record time. Reconcile here so a stored
-    // 10-bit depth that becomes invalid (e.g. after the container forces H.264 via
-    // ReconcileContainerCodecs above) is reset to 8-bit.
-    {
-        const auto codec = config.output.video_codec;
-        const bool supports_10bit =
-            codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::Av1Nvenc;
-        if (config.output.bit_depth == capability::BitDepth::Bit10 && !supports_10bit) {
-            config.output.bit_depth = capability::BitDepth::Bit8;
-        }
-    }
-
-    // Chroma subsampling: 4:4:4 is an 8-bit H.264/HEVC-only expert path (AV1 NVENC
-    // is 4:2:0 only; 4:4:4 + 10-bit is out of scope). Reset to 4:2:0 when the stored
-    // combination is no longer valid — mirrors the resolver's chroma fallback and
-    // translation.cpp. (Runs after the bit-depth reconcile so an 8-bit-adjusted
-    // session can still keep 4:4:4.)
-    {
-        const auto codec = config.output.video_codec;
-        const bool supports_444 =
-            codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
-        if (config.output.chroma_subsampling == capability::ChromaSubsampling::Cs444 &&
-            (!supports_444 || config.output.bit_depth != capability::BitDepth::Bit8)) {
-            config.output.chroma_subsampling = capability::ChromaSubsampling::Cs420;
-        }
-    }
 
     // Video: reset frame rate if degenerate (either numerator or denominator is zero).
     if (config.video.frame_rate_num == 0 || config.video.frame_rate_den == 0) {
@@ -277,9 +261,6 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
             config.video.frame_rate_num = 60;
             config.video.frame_rate_den = 1;
         }
-    }
-    if (config.output.container == capability::Container::Mp4 && !config.video.cfr) {
-        config.video.cfr = true;
     }
     // Video: frame_pacing (ADR 0035) — clamp unknown integer values to Smooth.
     {

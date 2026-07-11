@@ -39,6 +39,7 @@
 #include <QVBoxLayout>
 
 #include <capability/capability_builder.h>
+#include <capability/resolver.h>
 #include <capability/support_level.h>
 
 #include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
@@ -2334,11 +2335,17 @@ void ConfigPage::onCursorChanged() {
 }
 
 void ConfigPage::reconcileContainerCodecRules() {
-    ReconcileContainerCodecs(format_settings_);
+    // The resolver owns the container × codec and timing rules; the page copies
+    // its decision into the fields this reconcile manages (codecs + CFR). Bit
+    // depth and chroma stay owned by their dedicated control updaters below,
+    // which apply the same resolver predicates.
+    const capability::OutputFormatReconciliation reconciled = capability::ReconcileOutputFormat(
+        {format_settings_.container, format_settings_.video_codec, format_settings_.audio_codec,
+         format_settings_.bit_depth, format_settings_.chroma_subsampling, video_settings_.cfr});
+    format_settings_.video_codec = reconciled.resolved.video_codec;
+    format_settings_.audio_codec = reconciled.resolved.audio_codec;
+    video_settings_.cfr = reconciled.resolved.cfr;
     SanitizeOutputResolution(format_settings_.resolution);
-    if (format_settings_.container == capability::Container::Mp4) {
-        video_settings_.cfr = true;
-    }
     updateVideoCodecChoices();
     updateAudioCodecChoices();
 }
@@ -2370,11 +2377,10 @@ void ConfigPage::updateVideoBitDepthControl() {
         return;
 
     // 10-bit (HEVC Main10 / AV1 10-bit P010, SDR BT.709 — ADR 0032) is valid only
-    // for HEVC and AV1, never H.264. This is the same fixed format rule the
-    // capability layer enforces (translation.cpp / resolver Bit8 fallback), so the
-    // UI stays the single source of truth by mirroring it rather than diverging.
+    // for HEVC and AV1, never H.264. The rule lives in the resolver
+    // (capability::CodecSupports10Bit); the UI only reads the answer.
     const auto codec = format_settings_.video_codec;
-    const bool supports_10bit = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::Av1Nvenc;
+    const bool supports_10bit = capability::CodecSupports10Bit(codec);
     const bool locked = controls_locked_;
 
     // If 10-bit was selected but is no longer valid for the codec, snap the model
@@ -2419,10 +2425,10 @@ void ConfigPage::updateVideoChromaControl() {
         return;
 
     // 4:4:4 (AYUV, NVENC High 4:4:4 / HEVC FREXT) is an 8-bit H.264/HEVC-only expert
-    // path — AV1 NVENC is 4:2:0 only and 4:4:4 + 10-bit is out of scope. Mirror the
-    // engine/translation rule so the UI stays the single source of truth.
+    // path — AV1 NVENC is 4:2:0 only and 4:4:4 + 10-bit is out of scope. The rule
+    // lives in the resolver (capability::CodecSupportsChroma444); the UI reads it.
     const auto codec = format_settings_.video_codec;
-    const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+    const bool codec_ok = capability::CodecSupportsChroma444(codec);
     const bool eight_bit = format_settings_.bit_depth == capability::BitDepth::Bit8;
     // Once the async probe has delivered runtime capabilities, consult the ACTIVE
     // GPU's real per-codec YUV444 support; before that, gpu_ok is true so the

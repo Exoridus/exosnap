@@ -713,50 +713,36 @@ TEST(OutputSettingsTest, Mp4Profile_ExtensionIsMp4) {
     EXPECT_EQ(filename.substr(filename.size() - 4), L".mp4");
 }
 
-TEST(OutputSettingsTest, Mp4Profile_ApplyAudioCodec_UsesAac) {
+// The resolver (via ToRecorderCoreConfig) stamps the container/codec decision
+// into the RecorderConfig before ApplyOutputSettingsToRecorderConfig runs.
+// The apply step must never overwrite that answer from the raw settings —
+// doing so would silently undo a resolver fallback (e.g. an audio codec the
+// validation replaced for the container) and record an invalid combination.
+
+TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedAudioCodec) {
     recorder_core::RecorderConfig config{};
-    config.audio_codec = recorder_core::AudioCodec::Opus;
+    config.audio_codec = recorder_core::AudioCodec::Opus; // resolver's answer
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
-    settings.container = capability::Container::Mp4;
-    settings.audio_codec = capability::AudioCodec::AacMf;
+    settings.audio_codec = capability::AudioCodec::AacMf; // raw, unresolved wish
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::AacMf);
+    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus)
+        << "the apply step must keep the resolver-stamped audio codec, not the raw settings value";
 }
 
-TEST(OutputSettingsTest, WebMProfile_ApplyAudioCodec_UsesOpus) {
+TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedContainerOrVideoCodec) {
     recorder_core::RecorderConfig config{};
-    config.audio_codec = recorder_core::AudioCodec::AacMf;
+    config.container = recorder_core::Container::Mp4; // resolver's answer
+    config.video_codec = recorder_core::VideoCodec::H264Nvenc;
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
-    settings.container = capability::Container::WebM;
-    settings.audio_codec = capability::AudioCodec::Opus;
+    settings.container = capability::Container::WebM; // raw, unresolved wish
+    settings.video_codec = capability::VideoCodec::Av1Nvenc;
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus);
-}
-
-TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesOpusWhenSelected) {
-    recorder_core::RecorderConfig config{};
-    config.audio_codec = recorder_core::AudioCodec::AacMf;
-
-    OutputSettingsModel settings = OutputSettingsModel::Defaults();
-    settings.audio_codec = capability::AudioCodec::Opus;
-
-    ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus);
-}
-
-TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesAacWhenSelected) {
-    recorder_core::RecorderConfig config{};
-    config.audio_codec = recorder_core::AudioCodec::Opus;
-
-    OutputSettingsModel settings = OutputSettingsModel::Defaults();
-    settings.audio_codec = capability::AudioCodec::AacMf;
-
-    ApplyOutputSettingsToRecorderConfig(config, settings);
-    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::AacMf);
+    EXPECT_EQ(config.container, recorder_core::Container::Mp4);
+    EXPECT_EQ(config.video_codec, recorder_core::VideoCodec::H264Nvenc);
 }
 
 TEST(OutputSettingsTest, ApplyOutputResolution_PassesFixedSizeToRecorderConfig) {

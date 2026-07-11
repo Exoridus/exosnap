@@ -43,7 +43,6 @@
 #include "../models/FilenameBuilder.h"
 #include "../models/MarkerSidecar.h"
 #include "../models/OutputPathValidator.h"
-#include "../models/RecordingPreset.h"
 #include "../settings/RecoveryManifestStore.h"
 
 namespace exosnap {
@@ -207,6 +206,12 @@ static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
 }
 
 void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings) {
+    // Plain pass-throughs with no capability-layer equivalent only. The
+    // container/codec/depth/chroma decisions are NOT re-applied here: the
+    // resolver made them and ToRecorderCoreConfig already stamped its answer
+    // into `config` — overwriting any of those fields from the raw settings
+    // would let this copy drift from (and silently undo) a resolver fallback.
+    //
     // OutputSettingsModel::nvenc_preset already uses recorder_core::NvencPreset
     // directly (no capability:: mirror type exists for it), so this is a plain copy.
     config.nvenc_preset = settings.nvenc_preset;
@@ -222,22 +227,6 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
             config.output_width = custom_size->width;
             config.output_height = custom_size->height;
         }
-    }
-
-    switch (settings.audio_codec) {
-    case capability::AudioCodec::Opus:
-        config.audio_codec = recorder_core::AudioCodec::Opus;
-        return;
-    case capability::AudioCodec::Pcm:
-        config.audio_codec = recorder_core::AudioCodec::Pcm;
-        return;
-    case capability::AudioCodec::Flac:
-        config.audio_codec = recorder_core::AudioCodec::Flac;
-        return;
-    case capability::AudioCodec::AacMf:
-    default:
-        config.audio_codec = recorder_core::AudioCodec::AacMf;
-        return;
     }
 }
 
@@ -740,7 +729,6 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.nvenc_bitrate_kbps = video_settings_.bitrate_kbps;
     config.frame_rate_num = video_settings_.frame_rate_num;
     config.frame_rate_den = video_settings_.frame_rate_den;
-    config.cfr = video_settings_.cfr;
     config.cfr_pacing_mode = video_settings_.frame_pacing;
     // Map keyframe interval mode to seconds for NVENC GOP configuration.
     switch (video_settings_.keyframe_interval) {
@@ -754,11 +742,18 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         config.keyframe_interval_secs = 0.5f;
         break;
     }
-    if (config.container == recorder_core::Container::Mp4 && !config.cfr) {
-        diagnostics::AppLog::warning(
-            QStringLiteral("record.reconcile"),
-            QStringLiteral("field=timing requested=VFR effective=CFR reason=\"MP4 mux path is fixed-rate\""));
-        config.cfr = true;
+    // Timing: the resolver owns the MP4-is-fixed-rate constraint; the
+    // coordinator copies its decision and only surfaces it.
+    {
+        const capability::OutputFormatReconciliation timing = capability::ReconcileOutputFormat(
+            {output_settings_.container, output_settings_.video_codec, output_settings_.audio_codec,
+             output_settings_.bit_depth, output_settings_.chroma_subsampling, video_settings_.cfr});
+        config.cfr = timing.resolved.cfr;
+        if (timing.cfr_forced) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("record.reconcile"),
+                QStringLiteral("field=timing requested=VFR effective=CFR reason=\"MP4 mux path is fixed-rate\""));
+        }
     }
     config.capture_cursor = video_settings_.capture_cursor;
     ApplyOutputSettingsToRecorderConfig(config, output_settings_);
@@ -776,23 +771,14 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // display as it is now — the user may have toggled HDR since launch.
     if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts())) {
         if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
-            recorder_core::HdrDisplayFacts hdr_facts;
-            hdr_facts.hdr_active = facts->hdr_active;
-            hdr_facts.red_primary_x = facts->red_primary_x;
-            hdr_facts.red_primary_y = facts->red_primary_y;
-            hdr_facts.green_primary_x = facts->green_primary_x;
-            hdr_facts.green_primary_y = facts->green_primary_y;
-            hdr_facts.blue_primary_x = facts->blue_primary_x;
-            hdr_facts.blue_primary_y = facts->blue_primary_y;
-            hdr_facts.white_point_x = facts->white_point_x;
-            hdr_facts.white_point_y = facts->white_point_y;
-            hdr_facts.max_luminance_nits = facts->max_luminance_nits;
-            hdr_facts.min_luminance_nits = facts->min_luminance_nits;
             // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
             // 4:2:0 — 4:4:4 (AYUV) is 8-bit only, so a leftover Cs444 selection would
             // otherwise reach Validate() as Cs444 + Bit10 and fail the recording start
-            // on any HDR-active display.
-            const bool chroma_snapped = recorder_core::ApplyHdr10NativeEncode(config, hdr_facts);
+            // on any HDR-active display. The field mapping and the encode overrides
+            // are engine-owned (ToHdrDisplayFacts / ApplyHdr10NativeEncode); the
+            // coordinator only plumbs the target's facts through.
+            const bool chroma_snapped =
+                recorder_core::ApplyHdr10NativeEncode(config, capability::ToHdrDisplayFacts(*facts));
             diagnostics::AppLog::info(
                 QStringLiteral("record.hdr"),
                 QStringLiteral("mode=hdr10-native primaries=bt2020 transfer=pq bitdepth=10 range=limited"));
@@ -1887,11 +1873,21 @@ std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
-    const OutputSettingsModel requested = output_settings_;
-    ReconcileContainerCodecs(output_settings_);
+    // The resolver owns every format reconciliation rule (container × codec,
+    // bit-depth demotion, chroma snap — see capability::ReconcileOutputFormat).
+    // The coordinator only copies the resolved answer and surfaces the decision;
+    // it holds no rule of its own. The timing (CFR) dimension is resolved again
+    // at StartRecording with the then-current video settings.
+    const capability::OutputFormatReconciliation reconciled = capability::ReconcileOutputFormat(
+        {output_settings_.container, output_settings_.video_codec, output_settings_.audio_codec,
+         output_settings_.bit_depth, output_settings_.chroma_subsampling, video_settings_.cfr});
+    output_settings_.container = reconciled.resolved.container;
+    output_settings_.video_codec = reconciled.resolved.video_codec;
+    output_settings_.audio_codec = reconciled.resolved.audio_codec;
+    output_settings_.bit_depth = reconciled.resolved.bit_depth;
+    output_settings_.chroma_subsampling = reconciled.resolved.chroma;
     SanitizeOutputResolution(output_settings_.resolution);
-    if (requested.video_codec != output_settings_.video_codec ||
-        requested.audio_codec != output_settings_.audio_codec) {
+    if (reconciled.codecs_adjusted) {
         diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
                                      QStringLiteral("field=codec container=%1 video=%2 audio=%3")
                                          .arg(static_cast<int>(output_settings_.container))
@@ -1902,25 +1898,7 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     resolved_user_config_.container = output_settings_.container;
     resolved_user_config_.video_codec = output_settings_.video_codec;
     resolved_user_config_.audio_codec = output_settings_.audio_codec;
-    // Video bit depth (0.7.0): flows to UserRecorderConfig.bit_depth so the engine
-    // tags 10-bit (HEVC Main10 / AV1 10-bit P010) when selected. ReconcileContainerCodecs
-    // above may have forced H.264 for the container; reset to 8-bit when the resolved
-    // codec cannot carry 10-bit (the resolver applies the same Bit8 fallback).
-    if (output_settings_.bit_depth == capability::BitDepth::Bit10 &&
-        output_settings_.video_codec != capability::VideoCodec::HevcNvenc &&
-        output_settings_.video_codec != capability::VideoCodec::Av1Nvenc) {
-        output_settings_.bit_depth = capability::BitDepth::Bit8;
-    }
     resolved_user_config_.bit_depth = output_settings_.bit_depth;
-    // Chroma subsampling (expert): 4:4:4 is 8-bit H.264/HEVC only. Reset to 4:2:0
-    // when the resolved codec/bit-depth can't carry it (the resolver applies the
-    // same fallback); then carry it into UserRecorderConfig.chroma.
-    if (output_settings_.chroma_subsampling == capability::ChromaSubsampling::Cs444 &&
-        (output_settings_.bit_depth != capability::BitDepth::Bit8 ||
-         (output_settings_.video_codec != capability::VideoCodec::HevcNvenc &&
-          output_settings_.video_codec != capability::VideoCodec::H264Nvenc))) {
-        output_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
-    }
     resolved_user_config_.chroma = output_settings_.chroma_subsampling;
     // Colour range (0.7.0): always valid for every codec/container, so it flows
     // straight through (no reconcile) to UserRecorderConfig.color_range and on to

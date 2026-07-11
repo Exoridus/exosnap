@@ -26,16 +26,15 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     // AV1 10-bit P010, SDR BT.709 — ADR 0032) is valid only for HEVC and AV1, never
     // H.264. The per-combo flags below combine this with the codec, so a 10-bit H.264
     // request falls through to the rejection path.
-    const bool is_hevc = final_config.video_codec == VideoCodec::HevcNvenc;
-    const bool is_av1 = final_config.video_codec == VideoCodec::Av1Nvenc;
-    const bool is_h264 = final_config.video_codec == VideoCodec::H264Nvenc;
     const bool bit_depth_ok =
-        final_config.bit_depth == BitDepth::Bit8 || (final_config.bit_depth == BitDepth::Bit10 && (is_hevc || is_av1));
+        final_config.bit_depth == BitDepth::Bit8 ||
+        (final_config.bit_depth == BitDepth::Bit10 && CodecSupports10Bit(final_config.video_codec));
     // 4:4:4 is an 8-bit H.264/HEVC expert path; AV1 and 4:4:4 + 10-bit are rejected
     // (the resolver already downgrades those, but keep translation self-guarding).
-    const bool chroma_ok = final_config.chroma == ChromaSubsampling::Cs420 ||
-                           (final_config.chroma == ChromaSubsampling::Cs444 && (is_h264 || is_hevc) &&
-                            final_config.bit_depth == BitDepth::Bit8);
+    const bool chroma_ok =
+        final_config.chroma == ChromaSubsampling::Cs420 ||
+        (final_config.chroma == ChromaSubsampling::Cs444 && CodecSupportsChroma444(final_config.video_codec) &&
+         final_config.bit_depth == BitDepth::Bit8);
     const bool valid_chroma_depth = chroma_ok && bit_depth_ok;
     const bool is_webm_av1_opus = final_config.container == Container::WebM &&
                                   final_config.video_codec == VideoCodec::Av1Nvenc &&
