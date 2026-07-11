@@ -2098,6 +2098,35 @@ void VideoThread::Run() {
         previewSharedTex.TryPublish(d3dContext.get(), vpInput);
     };
 
+    // Cache the VideoProcessor input view across ticks. The encode input handed to
+    // VideoProcessorBlt is usually the SAME texture object every tick — the
+    // compositor's stable Result() texture, or (still desktop / newest-at-tick) the
+    // persistent capture texture — so recreating the input view per frame was pure
+    // churn. The view is a light wrapper that reads the texture's current contents at
+    // Blt time, so reusing it across re-blts is correct. Keyed by the texture pointer;
+    // a new pointer (a phase-correct ring entry, a fresh WGC frame, or a format/size
+    // change — all of which are distinct texture objects) rebuilds it. Returns nullptr
+    // if the view cannot be created (the caller then skips the tick, as before).
+    winrt::com_ptr<ID3D11VideoProcessorInputView> cachedInputView;
+    ID3D11Texture2D* cachedInputViewTex = nullptr;
+    auto acquireInputView = [&](ID3D11Texture2D* vpInput) -> ID3D11VideoProcessorInputView* {
+        if (cachedInputViewTex == vpInput && cachedInputView != nullptr)
+            return cachedInputView.get();
+        cachedInputView = nullptr;
+        cachedInputViewTex = nullptr;
+        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
+        ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+        ivDesc.Texture2D.MipSlice = 0;
+        ivDesc.Texture2D.ArraySlice = 0;
+        winrt::com_ptr<ID3D11VideoProcessorInputView> view;
+        HRESULT ivHr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, view.put());
+        if (FAILED(ivHr) || view == nullptr)
+            return nullptr;
+        cachedInputView = view;
+        cachedInputViewTex = vpInput;
+        return cachedInputView.get();
+    };
+
     if (m_state.config.cfr) {
         // ====================================================================
         // CFR path: QPC-driven scheduler — duplicate/drop to hit constant rate
@@ -2175,6 +2204,11 @@ void VideoThread::Run() {
         size_t ringHead = 0;                // next physical slot to overwrite (round-robin)
         uint64_t lastEmittedPresentQpc = 0; // present-QPC of the last frame handed to the encoder
         bool phaseRingHasFrame = false;     // true once any live entry exists since last reset
+        // Reused scratch for linearising the round-robin ring into ascending present
+        // order each tick — hoisted out of the hot loop so the two vectors are
+        // allocated once (reserved to the ring size) and only cleared per tick.
+        std::vector<uint64_t> presentQpcsAscending;
+        std::vector<size_t> liveIndexToRingSlot;
         // odCapturedTex is null only if stop was requested before the first OD
         // frame arrived (lazy format negotiation) — no ring needed then.
         bool usePhaseCorrect =
@@ -2189,6 +2223,8 @@ void VideoThread::Run() {
             D3D11_TEXTURE2D_DESC ringDesc{};
             odCapturedTex->GetDesc(&ringDesc); // mirror the OD capture texture exactly
             captureRing.resize(ringN);
+            presentQpcsAscending.reserve(ringN);
+            liveIndexToRingSlot.reserve(ringN);
             for (auto& entry : captureRing) {
                 HRESULT ringHr = d3dDevice->CreateTexture2D(&ringDesc, nullptr, entry.tex.put());
                 if (FAILED(ringHr)) {
@@ -2471,11 +2507,10 @@ void VideoThread::Run() {
                 if (usePhaseCorrect) {
                     // Linearise the round-robin ring to ascending (oldest -> newest)
                     // present order; ringHead points at the oldest physical slot.
-                    std::vector<uint64_t> presentQpcsAscending;
-                    std::vector<size_t> liveIndexToRingSlot;
+                    // Reuses the hoisted scratch (allocated once, cleared per tick).
+                    presentQpcsAscending.clear();
+                    liveIndexToRingSlot.clear();
                     const size_t ringN = captureRing.size();
-                    presentQpcsAscending.reserve(ringN);
-                    liveIndexToRingSlot.reserve(ringN);
                     for (size_t i = 0; i < ringN; ++i) {
                         const size_t phys = (ringHead + i) % ringN;
                         if (captureRing[phys].presentQpc != 0) {
@@ -2609,19 +2644,14 @@ void VideoThread::Run() {
                     // and non-blocking; never stalls the encode below.
                     tapPreviewSource(vpInput, pts_ns);
 
-                    // Convert RGB frame to NV12/P010 via VideoProcessorBlt
-                    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                    ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                    ivDesc.Texture2D.MipSlice = 0;
-                    ivDesc.Texture2D.ArraySlice = 0;
+                    // Convert RGB frame to NV12/P010 via VideoProcessorBlt using the
+                    // per-tick-cached input view (recreated only when vpInput changes).
+                    ID3D11VideoProcessorInputView* inputView = acquireInputView(vpInput);
 
-                    winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                    hr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, inputView.put());
-
-                    if (SUCCEEDED(hr) && inputView != nullptr) {
+                    if (inputView != nullptr) {
                         D3D11_VIDEO_PROCESSOR_STREAM stream{};
                         stream.Enable = TRUE;
-                        stream.pInputSurface = inputView.get();
+                        stream.pInputSurface = inputView;
 
                         const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
@@ -2629,7 +2659,6 @@ void VideoThread::Run() {
                         const auto vp_t1 = std::chrono::steady_clock::now();
                         m_state.diagnostics.OnVpbltSubmit(
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
-                        inputView = nullptr;
 
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
@@ -2975,19 +3004,14 @@ void VideoThread::Run() {
                     // (works for 4:4:4 too; non-blocking, never stalls the encode below).
                     tapPreviewSource(vpInput, framePts_ns);
 
-                    // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's view
-                    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                    ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                    ivDesc.Texture2D.MipSlice = 0;
-                    ivDesc.Texture2D.ArraySlice = 0;
+                    // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's
+                    // view, reusing the per-tick-cached input view (see acquireInputView).
+                    ID3D11VideoProcessorInputView* inputView = acquireInputView(vpInput);
 
-                    winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                    hr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, inputView.put());
-
-                    if (SUCCEEDED(hr) && inputView != nullptr) {
+                    if (inputView != nullptr) {
                         D3D11_VIDEO_PROCESSOR_STREAM stream{};
                         stream.Enable = TRUE;
-                        stream.pInputSurface = inputView.get();
+                        stream.pInputSurface = inputView;
 
                         const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
@@ -2996,7 +3020,6 @@ void VideoThread::Run() {
                         m_state.diagnostics.OnVpbltSubmit(
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
 
-                        inputView = nullptr;
                         latestTex = nullptr;
 
                         std::string ayuvErr;
