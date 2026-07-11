@@ -62,6 +62,7 @@ class UpdateSettingsPanel : public QWidget {
     void remindLaterRequested();
 
   private:
+    void applyTheme();      // re-applies persistent inline styling on a theme switch
     void rebuild();         // re-renders the body for the current state/model
     QWidget* buildHeader(); // icon tile + title + subline + cur→next pill
     QWidget* buildChannelSelector();

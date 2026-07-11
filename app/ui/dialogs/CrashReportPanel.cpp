@@ -16,6 +16,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSize>
 #include <QString>
 #include <QVBoxLayout>
@@ -184,18 +185,37 @@ CrashReportPanel::CrashReportPanel(const CrashReportModel& model, QWidget* paren
     // top-level window Qt fills the background anyway, which is why this went unnoticed;
     // embedded in the overlay the card vanished and its contents sat on the backdrop.
     setAttribute(Qt::WA_StyledBackground, true);
+
+    // Every surface here is coloured from the active theme, so the whole card body is
+    // rebuilt on a theme switch. A zero-margin outer layout hosts the rebuildable content
+    // widget (chrome bar + body); applyTheme() populates it.
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    // applyTheme() runs immediately here and again on every ReapplyTheme().
+    ui::theme::OnThemeChanged(this, [this]() { applyTheme(); });
+}
+
+void CrashReportPanel::applyTheme() {
     // The card is the styled surface; the chrome bar + bug tile read against it.
     setStyleSheet(QStringLiteral("#crashReportCard { background:%1; border:1px solid %2; border-radius:14px; }")
                       .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf),
                            QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2)));
 
-    auto* root = new QVBoxLayout(this);
+    // Preserve user-facing state across the rebuild.
+    const bool auto_send = autoSendChecked();
+
+    delete content_;
+    content_ = new QWidget(this);
+
+    auto* root = new QVBoxLayout(content_);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
     root->addWidget(buildChromeBar());
 
-    auto* body = new QWidget(this);
+    auto* body = new QWidget(content_);
     auto* body_layout = new QVBoxLayout(body);
     body_layout->setContentsMargins(18, 18, 18, 18);
     body_layout->setSpacing(0);
@@ -238,6 +258,29 @@ CrashReportPanel::CrashReportPanel(const CrashReportModel& model, QWidget* paren
     body_layout->addWidget(buildActionsRow());
 
     root->addWidget(body);
+
+    static_cast<QVBoxLayout*>(layout())->addWidget(content_);
+
+    // Restore the preserved opt-in without re-emitting autoSendToggled to the host.
+    {
+        const QSignalBlocker blocker(auto_send_check_);
+        auto_send_check_->setChecked(auto_send);
+    }
+
+    // Restore the details-expanded state (buildDetailsSection/buildScrubbedReport always
+    // build in the collapsed layout; re-apply the current expansion after the rebuild).
+    if (scrubbed_report_ != nullptr)
+        scrubbed_report_->setVisible(details_expanded_);
+    if (details_toggle_ != nullptr) {
+        details_toggle_->setChecked(details_expanded_);
+        details_toggle_->setText(details_expanded_ ? QStringLiteral("Hide report details")
+                                                   : QStringLiteral("Show report details"));
+    }
+    if (details_chevron_ != nullptr) {
+        details_chevron_->setPixmap(
+            theme::lucidePixmap(details_expanded_ ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
+                                QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 15, devicePixelRatioF()));
+    }
 }
 
 bool CrashReportPanel::autoSendChecked() const {

@@ -128,22 +128,16 @@ class RecoveryRow : public QWidget {
         name_label_->setObjectName("recoveryRowName");
         name_label_->setProperty("labelRole", "recoveryName");
         name_label_->setWordWrap(false);
-        name_label_->setStyleSheet(QStringLiteral("font-size:13px; font-weight:600; color:%1; background:transparent;")
-                                       .arg(tok(ActiveTheme().ink)));
 
         const QString meta = QStringLiteral("%1  \xc2\xb7  %2  \xc2\xb7  %3")
                                  .arg(FormatSize(candidate_.artefact_size_bytes), candidate_.entry.started_at.left(10),
                                       candidate_.entry.intended_container.toUpper());
-        auto* meta_label = new QLabel(meta, info_row);
-        meta_label->setObjectName("recoveryRowMeta");
-        meta_label->setProperty("labelRole", "recoveryMeta");
-        meta_label->setStyleSheet(
-            QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; letter-spacing:0.3px; "
-                           "color:%1; background:transparent;")
-                .arg(tok(ActiveTheme().dim)));
+        meta_label_ = new QLabel(meta, info_row);
+        meta_label_->setObjectName("recoveryRowMeta");
+        meta_label_->setProperty("labelRole", "recoveryMeta");
 
         info_layout->addWidget(name_label_, 1);
-        info_layout->addWidget(meta_label);
+        info_layout->addWidget(meta_label_);
 
         // ── Action row ────────────────────────────────────────────────────
         auto* action_row = new QWidget(this);
@@ -163,7 +157,6 @@ class RecoveryRow : public QWidget {
         finish_btn_ = new QPushButton(QStringLiteral("Finish"), action_row);
         finish_btn_->setObjectName("recoveryFinishBtn");
         finish_btn_->setCursor(Qt::PointingHandCursor);
-        finish_btn_->setStyleSheet(primaryButtonQss());
 
         // "Continue" — only for non-finalized candidates (true crashes). Tier-2 outline.
         // Finalized entries are deliberate stops whose remux failed; they get Finish/Delete only.
@@ -171,7 +164,6 @@ class RecoveryRow : public QWidget {
         continue_btn_ = new QPushButton(QStringLiteral("Continue"), action_row);
         continue_btn_->setObjectName("recoveryContinueBtn");
         continue_btn_->setCursor(Qt::PointingHandCursor);
-        continue_btn_->setStyleSheet(outlineButtonQss());
         continue_btn_->setVisible(can_continue);
 
         // "Delete" — destructive (inline two-step confirm). Tier-3 coral text, pushed to
@@ -180,13 +172,10 @@ class RecoveryRow : public QWidget {
         delete_btn_->setObjectName("recoveryDeleteBtn");
         delete_btn_->setProperty("role", "destructive");
         delete_btn_->setCursor(Qt::PointingHandCursor);
-        delete_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().error, ActiveTheme().error));
 
         status_label_ = new QLabel(action_row);
         status_label_->setObjectName("recoveryRowStatus");
         status_label_->setProperty("labelRole", "recoveryStatus");
-        status_label_->setStyleSheet(
-            QStringLiteral("font-size:11.5px; color:%1; background:transparent;").arg(tok(ActiveTheme().mut)));
         status_label_->setVisible(false);
 
         progress_bar_ = new QProgressBar(action_row);
@@ -197,14 +186,10 @@ class RecoveryRow : public QWidget {
         progress_bar_->setMinimumWidth(140);
         progress_bar_->setVisible(false);
         progress_bar_->setTextVisible(false);
-        progress_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border:none; border-radius:2px; }"
-                                                    "QProgressBar::chunk { background:%2; border-radius:2px; }")
-                                         .arg(tok(ActiveTheme().line2), tok(ActiveTheme().ac)));
 
         cancel_btn_ = new QPushButton(QStringLiteral("Cancel"), action_row);
         cancel_btn_->setObjectName("recoveryCancelBtn");
         cancel_btn_->setCursor(Qt::PointingHandCursor);
-        cancel_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
         cancel_btn_->setVisible(false);
 
         // Safe actions on the left; progress/cancel/status fill the middle during a
@@ -225,6 +210,32 @@ class RecoveryRow : public QWidget {
         connect(continue_btn_, &QPushButton::clicked, this, [this]() { onContinue(); });
         connect(delete_btn_, &QPushButton::clicked, this, [this]() { onDelete(); });
         connect(cancel_btn_, &QPushButton::clicked, this, [this]() { cancel_requested_ = true; });
+
+        // The row's inline stylesheets (name/meta text, the three button tiers, the
+        // progress bar) all derive from the active theme, so re-apply them on a theme
+        // switch. applyTheme() runs immediately here and again on every ReapplyTheme().
+        theme::OnThemeChanged(this, [this]() { applyTheme(); });
+    }
+
+    // Re-applies every theme-coloured inline stylesheet from the active theme. Respects
+    // the current status state (the error tint set by setStatus is re-derived here).
+    void applyTheme() {
+        name_label_->setStyleSheet(QStringLiteral("font-size:13px; font-weight:600; color:%1; background:transparent;")
+                                       .arg(tok(ActiveTheme().ink)));
+        meta_label_->setStyleSheet(
+            QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; letter-spacing:0.3px; "
+                           "color:%1; background:transparent;")
+                .arg(tok(ActiveTheme().dim)));
+        finish_btn_->setStyleSheet(primaryButtonQss());
+        continue_btn_->setStyleSheet(outlineButtonQss());
+        delete_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().error, ActiveTheme().error));
+        cancel_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
+        progress_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border:none; border-radius:2px; }"
+                                                    "QProgressBar::chunk { background:%2; border-radius:2px; }")
+                                         .arg(tok(ActiveTheme().line2), tok(ActiveTheme().ac)));
+        const bool is_error = status_label_->property("isError").toBool();
+        status_label_->setStyleSheet(QStringLiteral("font-size:11.5px; color:%1; background:transparent;")
+                                         .arg(tok(is_error ? ActiveTheme().error : ActiveTheme().mut)));
     }
 
     void setButtonsEnabled(bool enabled) {
@@ -319,6 +330,7 @@ class RecoveryRow : public QWidget {
     bool awaiting_confirm_ = false;
 
     QLabel* name_label_ = nullptr;
+    QLabel* meta_label_ = nullptr;
     QPushButton* finish_btn_ = nullptr;
     QPushButton* continue_btn_ = nullptr;
     QPushButton* delete_btn_ = nullptr;
@@ -348,6 +360,46 @@ RecoveryOverlay::RecoveryOverlay(RecoveryService& service, const QVector<Recover
 
     if (parent != nullptr)
         parent->installEventFilter(this);
+
+    // The card surface, chrome bar, text, rules and footer button all draw from the
+    // active theme; re-apply them on a theme switch (per-row buttons restyle themselves).
+    // applyTheme() runs immediately here and again on every ReapplyTheme().
+    theme::OnThemeChanged(this, [this]() { applyTheme(); });
+}
+
+void RecoveryOverlay::applyTheme() {
+    if (card_ != nullptr)
+        card_->setStyleSheet(QStringLiteral("#recoveryCard { background:%1; border:1px solid %2; border-radius:14px; }")
+                                 .arg(tok(ActiveTheme().surf), tok(ActiveTheme().line2)));
+    if (chrome_bar_ != nullptr)
+        chrome_bar_->setStyleSheet(QStringLiteral("#recoveryChromeBar { background:%1; border-bottom:1px solid %2; "
+                                                  "border-top-left-radius:14px; border-top-right-radius:14px; }")
+                                       .arg(tok(ActiveTheme().bg), tok(ActiveTheme().line)));
+    if (brand_label_ != nullptr)
+        brand_label_->setStyleSheet(QStringLiteral("font-size:12px; font-weight:600; color:%1; background:transparent;")
+                                        .arg(tok(ActiveTheme().ink)));
+    if (chrome_sep_ != nullptr)
+        chrome_sep_->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ActiveTheme().line2)));
+    if (chrome_sub_ != nullptr)
+        chrome_sub_->setStyleSheet(
+            QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; letter-spacing:0.3px; "
+                           "color:%1; background:transparent;")
+                .arg(tok(ActiveTheme().dim)));
+    if (title_label_ != nullptr)
+        title_label_->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600; color:%1; background:transparent;")
+                                        .arg(tok(ActiveTheme().ink)));
+    if (hint_label_ != nullptr)
+        hint_label_->setStyleSheet(
+            QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ActiveTheme().mut)));
+    for (QFrame* rule : rules_)
+        if (rule != nullptr)
+            rule->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ActiveTheme().line)));
+    if (decide_later_btn_ != nullptr)
+        decide_later_btn_->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
+
+    // The backdrop is custom-painted from ActiveTheme().bg in paintEvent; force a repaint
+    // so the scrim tracks the new theme.
+    update();
 }
 
 QFrame* RecoveryOverlay::buildCard() {
@@ -356,9 +408,8 @@ QFrame* RecoveryOverlay::buildCard() {
     card->setFixedWidth(560);
     // Same card surface as the crash / recording-error panels (surf fill, line2
     // hairline, 14px radius). Inline so it matches those surfaces exactly and
-    // doesn't depend on the app QSS.
-    card->setStyleSheet(QStringLiteral("#recoveryCard { background:%1; border:1px solid %2; border-radius:14px; }")
-                            .arg(tok(ActiveTheme().surf), tok(ActiveTheme().line2)));
+    // doesn't depend on the app QSS. The theme-coloured stylesheet is applied in
+    // applyTheme() so it re-derives on a theme switch.
 
     auto* main_layout = new QVBoxLayout(card);
     main_layout->setContentsMargins(0, 0, 0, 0);
@@ -377,9 +428,7 @@ QFrame* RecoveryOverlay::buildCard() {
     auto* chrome = new QWidget(card);
     chrome->setObjectName("recoveryChromeBar");
     chrome->setFixedHeight(38);
-    chrome->setStyleSheet(QStringLiteral("#recoveryChromeBar { background:%1; border-bottom:1px solid %2; "
-                                         "border-top-left-radius:14px; border-top-right-radius:14px; }")
-                              .arg(tok(ActiveTheme().bg), tok(ActiveTheme().line)));
+    chrome_bar_ = chrome;
     auto* chrome_layout = new QHBoxLayout(chrome);
     chrome_layout->setContentsMargins(15, 0, 12, 0);
     chrome_layout->setSpacing(9);
@@ -388,22 +437,15 @@ QFrame* RecoveryOverlay::buildCard() {
     brand_mark->setFixedSize(15, 15);
     chrome_layout->addWidget(brand_mark, 0, Qt::AlignVCenter);
 
-    auto* brand = new QLabel(QStringLiteral("ExoSnap"), chrome);
-    brand->setStyleSheet(QStringLiteral("font-size:12px; font-weight:600; color:%1; background:transparent;")
-                             .arg(tok(ActiveTheme().ink)));
-    chrome_layout->addWidget(brand, 0, Qt::AlignVCenter);
+    brand_label_ = new QLabel(QStringLiteral("ExoSnap"), chrome);
+    chrome_layout->addWidget(brand_label_, 0, Qt::AlignVCenter);
 
-    auto* sep = new QFrame(chrome);
-    sep->setFixedSize(1, 13);
-    sep->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ActiveTheme().line2)));
-    chrome_layout->addWidget(sep, 0, Qt::AlignVCenter);
+    chrome_sep_ = new QFrame(chrome);
+    chrome_sep_->setFixedSize(1, 13);
+    chrome_layout->addWidget(chrome_sep_, 0, Qt::AlignVCenter);
 
-    auto* chrome_sub = new QLabel(QStringLiteral("Recovery"), chrome);
-    chrome_sub->setStyleSheet(
-        QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; letter-spacing:0.3px; "
-                       "color:%1; background:transparent;")
-            .arg(tok(ActiveTheme().dim)));
-    chrome_layout->addWidget(chrome_sub, 0, Qt::AlignVCenter);
+    chrome_sub_ = new QLabel(QStringLiteral("Recovery"), chrome);
+    chrome_layout->addWidget(chrome_sub_, 0, Qt::AlignVCenter);
     chrome_layout->addStretch(1);
     main_layout->addWidget(chrome);
 
@@ -414,12 +456,10 @@ QFrame* RecoveryOverlay::buildCard() {
     body_layout->setSpacing(0);
 
     // ── Title ─────────────────────────────────────────────────────────────
-    auto* title = new QLabel(QStringLiteral("Recover interrupted recordings"), body);
-    title->setObjectName("recoveryTitle");
-    title->setProperty("labelRole", "recoveryTitle");
-    title->setStyleSheet(QStringLiteral("font-size:16px; font-weight:600; color:%1; background:transparent;")
-                             .arg(tok(ActiveTheme().ink)));
-    body_layout->addWidget(title);
+    title_label_ = new QLabel(QStringLiteral("Recover interrupted recordings"), body);
+    title_label_->setObjectName("recoveryTitle");
+    title_label_->setProperty("labelRole", "recoveryTitle");
+    body_layout->addWidget(title_label_);
     body_layout->addSpacing(6);
 
     // ── Hint text ─────────────────────────────────────────────────────────
@@ -428,6 +468,7 @@ QFrame* RecoveryOverlay::buildCard() {
                                            "Continue resumes recording from where you left off. "
                                            "Or decide later — entries stay for the next launch."),
                             body);
+    hint_label_ = hint;
     hint->setObjectName("recoveryHint");
     hint->setProperty("labelRole", "recoveryHint");
     hint->setWordWrap(true);
@@ -440,8 +481,6 @@ QFrame* RecoveryOverlay::buildCard() {
     // full height instead of the one-line minimum.
     hint->setFixedWidth(560 - 28 * 2);
     hint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-    hint->setStyleSheet(
-        QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ActiveTheme().mut)));
     body_layout->addWidget(hint);
     body_layout->addSpacing(18);
 
@@ -461,7 +500,7 @@ QFrame* RecoveryOverlay::buildCard() {
         auto* rule = new QFrame(rows_container);
         rule->setProperty("frameRole", "sectionRuleLine");
         rule->setFixedHeight(1);
-        rule->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ActiveTheme().line)));
+        rules_.append(rule);
         rows_layout->addWidget(rule);
 
         auto* row = new RecoveryRow(service_, candidate, rows_container);
@@ -494,12 +533,11 @@ QFrame* RecoveryOverlay::buildCard() {
     footer_row->setContentsMargins(0, 0, 0, 0);
     footer_row->addStretch(1);
 
-    auto* decide_later_btn = new QPushButton(QStringLiteral("Decide later"), body);
-    decide_later_btn->setObjectName("recoveryDecideLaterBtn");
-    decide_later_btn->setCursor(Qt::PointingHandCursor);
-    decide_later_btn->setStyleSheet(tertiaryButtonQss(ActiveTheme().mut, ActiveTheme().ink));
-    connect(decide_later_btn, &QPushButton::clicked, this, &RecoveryOverlay::closeOverlay);
-    footer_row->addWidget(decide_later_btn);
+    decide_later_btn_ = new QPushButton(QStringLiteral("Decide later"), body);
+    decide_later_btn_->setObjectName("recoveryDecideLaterBtn");
+    decide_later_btn_->setCursor(Qt::PointingHandCursor);
+    connect(decide_later_btn_, &QPushButton::clicked, this, &RecoveryOverlay::closeOverlay);
+    footer_row->addWidget(decide_later_btn_);
 
     body_layout->addLayout(footer_row);
     main_layout->addWidget(body);

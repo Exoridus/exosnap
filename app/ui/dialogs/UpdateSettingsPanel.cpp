@@ -100,25 +100,11 @@ QFrame* makeDivider(QWidget* parent) {
 
 UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("updateSettingsPanel"));
-    setStyleSheet(QStringLiteral("#updateSettingsPanel { background:%1; border:1px solid %2; border-radius:14px; }")
-                      .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf2),
-                           QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
 
     // Persistent "Check for updates" button (re-parented into the per-state body).
     check_button_ = new QPushButton(QStringLiteral("Check for updates"), this);
     check_button_->setObjectName(QStringLiteral("updateCheckButton"));
     check_button_->setCursor(Qt::PointingHandCursor);
-    check_button_->setStyleSheet(
-        QStringLiteral(
-            "QPushButton { background:%1; color:%2; border:1px solid %3; border-radius:8px; padding:8px 14px; "
-            "font-size:12.5px; }"
-            "QPushButton:hover { background:%4; }"
-            "QPushButton:disabled { color:%5; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
-                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme()),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
     connect(check_button_, &QPushButton::clicked, this, &UpdateSettingsPanel::checkRequested);
 
     // Persistent Stable/Preview segmented control (built from two exclusive toggles —
@@ -126,29 +112,16 @@ UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
     channel_group_ = new QButtonGroup(this);
     channel_group_->setExclusive(true);
 
-    const QString seg_style =
-        QStringLiteral(
-            "QPushButton { background:transparent; color:%1; border:none; border-radius:6px; padding:5px 14px; "
-            "font-size:12px; }"
-            "QPushButton:checked { background:%2; color:%3; }"
-            "QPushButton:hover:!checked { color:%4; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
-                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme()),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink));
-
     channel_stable_ = new QPushButton(QStringLiteral("Stable"), this);
     channel_stable_->setObjectName(QStringLiteral("updateChannelStable"));
     channel_stable_->setCheckable(true);
     channel_stable_->setCursor(Qt::PointingHandCursor);
-    channel_stable_->setStyleSheet(seg_style);
     channel_group_->addButton(channel_stable_, 0);
 
     channel_preview_ = new QPushButton(QStringLiteral("Preview"), this);
     channel_preview_->setObjectName(QStringLiteral("updateChannelPreview"));
     channel_preview_->setCheckable(true);
     channel_preview_->setCursor(Qt::PointingHandCursor);
-    channel_preview_->setStyleSheet(seg_style);
     channel_group_->addButton(channel_preview_, 1);
 
     channel_stable_->setChecked(true);
@@ -177,6 +150,56 @@ UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
     body_layout_->setContentsMargins(0, 16, 0, 0);
     body_layout_->setSpacing(0);
     root->addWidget(body);
+
+    // Applies the persistent inline styling now and re-applies it (plus a rebuild of
+    // the per-state body) on every theme switch. Replaces the initial rebuild().
+    exosnap::ui::theme::OnThemeChanged(this, [this]() { applyTheme(); });
+}
+
+void UpdateSettingsPanel::applyTheme() {
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+
+    // The card shell.
+    setStyleSheet(QStringLiteral("#updateSettingsPanel { background:%1; border:1px solid %2; border-radius:14px; }")
+                      .arg(QString::fromUtf8(t.surf2), QString::fromUtf8(t.line)));
+
+    // Persistent "Check for updates" button.
+    check_button_->setStyleSheet(
+        QStringLiteral(
+            "QPushButton { background:%1; color:%2; border:1px solid %3; border-radius:8px; padding:8px 14px; "
+            "font-size:12.5px; }"
+            "QPushButton:hover { background:%4; }"
+            "QPushButton:disabled { color:%5; }")
+            .arg(QString::fromUtf8(t.raise), QString::fromUtf8(t.ink), QString::fromUtf8(t.line2),
+                 exosnap::ui::theme::ThemeBg4Color(t), QString::fromUtf8(t.dim)));
+
+    // Persistent Stable/Preview segmented toggles.
+    const QString seg_style =
+        QStringLiteral(
+            "QPushButton { background:transparent; color:%1; border:none; border-radius:6px; padding:5px 14px; "
+            "font-size:12px; }"
+            "QPushButton:checked { background:%2; color:%3; }"
+            "QPushButton:hover:!checked { color:%4; }")
+            .arg(QString::fromUtf8(t.mut), exosnap::ui::theme::ThemeBg4Color(t), QString::fromUtf8(t.ink),
+                 QString::fromUtf8(t.ink));
+    channel_stable_->setStyleSheet(seg_style);
+    channel_preview_->setStyleSheet(seg_style);
+
+    // Header labels (the icon tile + body are re-styled inside rebuild()).
+    if (header_title_ != nullptr)
+        header_title_->setStyleSheet(
+            QStringLiteral("font-size:14.5px; font-weight:600; color:%1; background:transparent;")
+                .arg(QString::fromUtf8(t.ink)));
+    if (header_sub_ != nullptr)
+        header_sub_->setStyleSheet(QStringLiteral("font-family:%1; font-size:11.5px; color:%2; background:transparent;")
+                                       .arg(QString::fromLatin1(kMono), QString::fromUtf8(t.mut)));
+    if (version_pill_ != nullptr)
+        version_pill_->setStyleSheet(
+            QStringLiteral(
+                "font-family:%1; font-size:11px; color:%2; background:%3; border:1px solid %4; border-radius:6px; "
+                "padding:3px 9px;")
+                .arg(QString::fromLatin1(kMono), QString::fromUtf8(t.dim), QString::fromUtf8(t.raise),
+                     QString::fromUtf8(t.line)));
 
     rebuild();
 }
@@ -228,29 +251,17 @@ QWidget* UpdateSettingsPanel::buildHeader() {
 
     header_title_ = new QLabel(text_col);
     header_title_->setObjectName(QStringLiteral("updateHeaderTitle"));
-    header_title_->setStyleSheet(QStringLiteral("font-size:14.5px; font-weight:600; color:%1; background:transparent;")
-                                     .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
     text_layout->addWidget(header_title_);
 
     header_sub_ = new QLabel(text_col);
     header_sub_->setObjectName(QStringLiteral("updateHeaderSub"));
     header_sub_->setWordWrap(true);
-    header_sub_->setStyleSheet(
-        QStringLiteral("font-family:%1; font-size:11.5px; color:%2; background:transparent;")
-            .arg(QString::fromLatin1(kMono), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut)));
     text_layout->addWidget(header_sub_);
 
     layout->addWidget(text_col, 1);
 
     version_pill_ = new QLabel(row);
     version_pill_->setObjectName(QStringLiteral("updateVersionPill"));
-    version_pill_->setStyleSheet(
-        QStringLiteral(
-            "font-family:%1; font-size:11px; color:%2; background:%3; border:1px solid %4; border-radius:6px; "
-            "padding:3px 9px;")
-            .arg(QString::fromLatin1(kMono), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
     version_pill_->setVisible(false);
     layout->addWidget(version_pill_, 0, Qt::AlignVCenter);
 
