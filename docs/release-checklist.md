@@ -73,7 +73,32 @@ the automated gates and the updater RC live-check above:
 
 ## 6. Downstream package managers
 
-- [ ] Update WinGet / Scoop manifests (Chocolatey when applicable) per the published SHAs and URLs.
+WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside
+tracked files; both are easy to forget because nothing fails locally if they go stale. Update them
+by hand, every release:
+
+- [ ] **WinGet.** `packaging/winget/manifests/c/Codexo/ExoSnap/` must contain exactly one version
+      directory (`scripts/validate-winget-manifest.ps1` enforces this) — `git mv` the existing
+      `<old-version>/` directory to `<new-version>/` rather than adding a second one, then update:
+  - `Codexo.ExoSnap.yaml` — `PackageVersion`.
+  - `Codexo.ExoSnap.installer.yaml` — `PackageVersion`, `ReleaseDate`, `InstallerUrl` (the version
+    segment of the path), `InstallerSha256` (uppercase, from the published `.msi.sha256`
+    sidecar), and `ProductCode` in both the top-level installer entry and
+    `AppsAndFeaturesEntries` — WiX auto-generates a **new** `ProductCode` on every MSI build (see
+    `packaging/msi/Package.wxs`), so this must be read out of the freshly built MSI, never copied
+    from the previous release. `UpgradeCode` is permanent (ADR 0034) and must **not** change.
+  - `Codexo.ExoSnap.locale.en-US.yaml` — `PackageVersion`, `ReleaseNotesUrl`, and the version
+    number/release-specific text inside `Description` if it names one.
+  - Run `scripts/validate-winget-manifest.ps1` before submitting per `packaging/winget/README.md`.
+- [ ] **Chocolatey.** `packaging/chocolatey/tools/chocolateyinstall.ps1` — `url64bit` (version in
+      the path) and `checksum64` (lowercase SHA-256, from the same `.msi.sha256`). Also
+      `packaging/chocolatey/exosnap.nuspec` — `<version>`, the `@vX.Y.Z` tag in `<iconUrl>`,
+      `<releaseNotes>`, and any version-specific line in `<description>`.
+- [ ] **Scoop.** `packaging/scoop/exosnap.json` carries an `autoupdate`/`checkver` block, so the
+      *published* bucket entry (`Exoridus/scoop-exosnap`) refreshes its own version/URL/hash once
+      `scoop update` runs against the new GitHub Release — no manual bucket edit needed. Still keep
+      this in-repo template's `version`, `architecture.64bit.url`, and `hash` current so a
+      first-time copy into the bucket (`packaging/scoop/README.md`) starts from the right values.
 
 ---
 
