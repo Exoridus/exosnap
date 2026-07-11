@@ -68,7 +68,6 @@ qt_add_executable(exosnap WIN32
     assets/brand/exosnap_brand.qrc
     assets/fonts/exosnap_fonts.qrc
     ui/theme/ExoSnapPalette.h
-    ui/theme/ExoSnapAccents.h
     ui/theme/ExoSnapMetrics.h
     ui/theme/ExoSnapTheme.h
     ui/theme/ExoSnapTheme.cpp
@@ -784,8 +783,8 @@ exosnap_add_gtest(
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ACCENT-PICKER-R1 (0.5.0-B): accent id resolution and table invariant tests.
-# Headless — no QApplication required; only inspects ExoSnapAccents + ExoSnapPalette.
+# Theme table invariant tests. Headless — no QApplication required; only
+# inspects ExoTheme + ExoSnapPalette.
 exosnap_add_gtest(
     NAME accent_theme_tests
     TEST_PREFIX accent.
