@@ -31,6 +31,21 @@ namespace exosnap::diagnostics {
 //     the effective threshold is therefore higher and the constant itself
 //     remains conservative.
 //
+//     This also covers the poll gap: RecordingCoordinator's disk monitor
+//     samples free space every 5 s (kPollInterval in
+//     RecordingCoordinator::StartDiskMonitor), so up to one interval's worth
+//     of writes can land between the last "still above threshold" sample and
+//     the one that trips the guard. The highest sustained rate a session can
+//     reach is bounded by the video-bitrate sanitizer clamp
+//     (kMaxBitrateKbps = 200'000 kbps in RecordingPreset.cpp; the Settings UI
+//     spin box itself caps lower, at 100'000) plus a trivial audio ceiling
+//     (audio_bitrate_kbps clamped to 510 kbps) — roughly 25.06 MB/s, or about
+//     125 MB over one 5 s poll interval. kHardStopFreeBytes therefore still
+//     leaves ~375 MB of margin even under that worst case, several orders of
+//     magnitude more than the "few KB" MKV finalize needs above. No change
+//     needed unless kPollInterval grows substantially or the bitrate ceiling
+//     is raised well past today's clamp.
+//
 // Remux reserve (ADR-0014):
 //   When MP4 output is selected, the MKV transient file and the MP4 output
 //   file coexist on disk during the remux-on-stop phase.  The low-disk guard
