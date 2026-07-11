@@ -808,6 +808,19 @@ exosnap_add_gtest(
 target_include_directories(test_wasapi_acquire_failure_classify PRIVATE src)
 target_compile_definitions(test_wasapi_acquire_failure_classify PRIVATE NOMINMAX)
 
+# WASAPI loopback acquire classifier: the SYS/system-audio mirror of the above
+# for WasapiLoopback/WasapiLoopbackSrc (screen-capture system audio) — pins
+# that a device-invalidated GetBuffer/GetNextPacketSize is reported as a fatal
+# capture loss instead of the track silently going mute. No audio hardware.
+exosnap_add_gtest(
+    NAME test_wasapi_loopback_acquire_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_wasapi_loopback_acquire_classify.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_wasapi_loopback_acquire_classify PRIVATE src)
+target_compile_definitions(test_wasapi_loopback_acquire_classify PRIVATE NOMINMAX)
+
 # OD reopen policy: pure live re-duplication retry loop (recovered continue vs
 # in-budget retry vs budget-exhausted give-up/clean-stop). No GPU.
 exosnap_add_gtest(
