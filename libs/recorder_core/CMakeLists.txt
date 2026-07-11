@@ -481,6 +481,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_thread_source_agnostic PRIVATE src)
 
+# Discontinuity gap compensation: the device-position arithmetic that turns a
+# WASAPI DATA_DISCONTINUITY into a measured gap, and the AudioThread silence
+# fill that keeps the sample timeline (and A/V sync) continuous across it.
+exosnap_add_gtest(
+    NAME test_audio_discontinuity_gap
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_discontinuity_gap.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_discontinuity_gap PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_fdk_aac_encoder
     TEST_PREFIX recorder_core.

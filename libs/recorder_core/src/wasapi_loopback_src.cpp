@@ -1,5 +1,7 @@
 #include "wasapi_loopback_src.h"
 
+#include "discontinuity_gap.h"
+
 namespace recorder_core {
 
 WasapiLoopbackSrc::~WasapiLoopbackSrc() {
@@ -25,7 +27,8 @@ bool WasapiLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_
     UINT32 numFrames = 0;
     DWORD captureFlags = 0;
     bool silent = false;
-    if (!wasapi_.GetNextPacket(&data, &numFrames, &captureFlags, &silent)) {
+    UINT64 devicePos = 0;
+    if (!wasapi_.GetNextPacket(&data, &numFrames, &captureFlags, &silent, &devicePos)) {
         const HRESULT fatalHr = wasapi_.LastFatalErrorHresult();
         if (fatalHr != S_OK) {
             // The endpoint is gone (invalidated / service down / unexpected
@@ -45,10 +48,17 @@ bool WasapiLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_
     buffer_acquired_ = true;
     last_frames_ = numFrames;
 
+    const bool discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity, device_position_tracked_,
+                                                              expected_device_position_, devicePos, SampleRate());
+    device_position_tracked_ = true;
+    expected_device_position_ = devicePos + numFrames;
+
     out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
     out_buf.num_frames = numFrames;
     out_buf.silent = silent;
-    out_buf.data_discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    out_buf.data_discontinuity = discontinuity;
+    out_buf.gap_frames = gap_frames;
     return true;
 }
 

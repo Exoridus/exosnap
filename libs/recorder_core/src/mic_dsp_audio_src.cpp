@@ -129,6 +129,7 @@ bool MicDspAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_err
     out_buf.num_frames = src_buf.num_frames;
     out_buf.silent = false;
     out_buf.data_discontinuity = src_buf.data_discontinuity;
+    out_buf.gap_frames = src_buf.gap_frames; // frame-preserving DSP: forward as-is
     return true;
 }
 

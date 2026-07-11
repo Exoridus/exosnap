@@ -163,6 +163,27 @@ void AudioThread::Run() {
 
     std::vector<float> floatScratch;
 
+    // A DATA_DISCONTINUITY means the device lost frames BEFORE the flagged
+    // packet. Counting it (diagnostics) is not enough: unless the gap is
+    // refilled, every packet that follows lands earlier on the sample timeline
+    // and the whole remaining track plays ahead of video — a permanent A/V
+    // offset that grows with each underrun. Feed the measured gap into the
+    // encoder as silence so PTS (derived from the accumulated frame counter)
+    // stays continuous. Chunked so a large (clamped) gap never needs a large
+    // scratch buffer.
+    auto feedGapSilence = [&](IAudioEncoder& enc, uint32_t gap_frames, uint64_t& accumulated_frames,
+                              std::vector<EncodedAudioPacket>& out_pkts) {
+        constexpr uint32_t kChunkFrames = 4800; // 100 ms at 48 kHz
+        const uint32_t first_chunk = gap_frames < kChunkFrames ? gap_frames : kChunkFrames;
+        std::vector<float> zeros(static_cast<size_t>(first_chunk) * kChannels, 0.0f);
+        for (uint32_t remaining = gap_frames; remaining > 0;) {
+            const uint32_t n = remaining < kChunkFrames ? remaining : kChunkFrames;
+            enc.FeedFloat32(zeros.data(), static_cast<size_t>(n) * kChannels, 0, accumulated_frames, kSampleRate,
+                            kChannels, out_pkts);
+            remaining -= n;
+        }
+    };
+
     if (m_state.config.audio_codec == AudioCodec::Opus) {
         // --- Opus encoder init ---
         OpusAudioEncoder opusEnc;
@@ -230,6 +251,9 @@ void AudioThread::Run() {
 
                 std::vector<EncodedAudioPacket> pkts;
                 float new_rms = 0.0f;
+                if (raw.gap_frames > 0) {
+                    feedGapSilence(opusEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
+                }
                 if (raw.silent) {
                     std::vector<float> silence(static_cast<size_t>(raw.num_frames) * kChannels, 0.0f);
                     opusEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
@@ -389,6 +413,9 @@ void AudioThread::Run() {
 
                 std::vector<EncodedAudioPacket> pkts;
                 float new_rms = 0.0f;
+                if (raw.gap_frames > 0) {
+                    feedGapSilence(pcmEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
+                }
                 const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
                 if (raw.silent) {
                     std::vector<float> silence(totalSamples, 0.0f);
@@ -550,6 +577,9 @@ void AudioThread::Run() {
 
                 std::vector<EncodedAudioPacket> pkts;
                 float new_rms = 0.0f;
+                if (raw.gap_frames > 0) {
+                    feedGapSilence(flacEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
+                }
                 const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
                 if (raw.silent) {
                     std::vector<float> silence(totalSamples, 0.0f);
@@ -715,6 +745,9 @@ void AudioThread::Run() {
 
             std::vector<EncodedAudioPacket> pkts;
             float new_rms = 0.0f;
+            if (raw.gap_frames > 0) {
+                feedGapSilence(aacEnc, raw.gap_frames, audioAccumulatedFrames, pkts);
+            }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
 
             if (raw.silent) {
