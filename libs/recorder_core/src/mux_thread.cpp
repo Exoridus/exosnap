@@ -257,7 +257,12 @@ void MuxThread::Run() {
         seg.writer.reset();
         m_state.diagnostics.OnSegmentFinalized(finalize_ms, ok);
 
-        const uint64_t local_duration_ns = seg.max_local_pts_ns + (seg.max_local_pts_ns > 0 ? frame_dur_ns : 0);
+        // The trailing frame duration represents the last *video* frame's on-screen
+        // interval. A segment that never received a video frame (epoch never set — an
+        // audio-only flush) has no such frame, so adding a video frame's worth would
+        // overstate its duration; use the audio PTS span as-is.
+        const uint64_t tail_ns = (seg.max_local_pts_ns > 0 && seg.epoch_set) ? frame_dur_ns : 0;
+        const uint64_t local_duration_ns = seg.max_local_pts_ns + tail_ns;
         const uint64_t file_bytes = ok ? QueryFileSizeBytes(seg.path) : 0;
 
         CompletedSegment info;
