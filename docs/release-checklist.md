@@ -52,7 +52,26 @@ hand from the previous shipped version (currently 0.8.1) to the RC build:
       updater surfaces a download failure (amber), the current version is untouched, and Retry resumes
       cleanly once the network is back.
 
-## 5. Downstream package managers
+## 5. 0.9 release gate — manual live verifications
+
+0.9 is **not** tagged or released until these manual checks pass, on real hardware, in addition to
+the automated gates and the updater RC live-check above:
+
+- [ ] **Window-capture recording with the `APP` audio row.** Record a specific application window
+      with the `APP` row enabled; play the result back and confirm per-app audio is present and
+      audibly correct.
+- [ ] **System-audio recording on a real 44.1 kHz output device.** Set a physical playback device to
+      44.1 kHz, record with `SYS` enabled, and confirm audio is present in the output file.
+- [ ] **Updater round-trip on the RC build.** With the signed manifest and its detached `.sig`
+      published alongside the RC release, confirm the in-app update check finds the release,
+      verifies it, and installs it end to end.
+- [ ] **Edit overlay walkthrough.** Open a completed recording in the Edit overlay and click through
+      it once: the trim is applied only on Save (not while dragging the handles), scrubbing pauses
+      playback for the drag and resumes only if it was playing before, the playhead follows
+      playback, and a marker JSON sidecar is written only when at least one marker survives the
+      trim.
+
+## 6. Downstream package managers
 
 - [ ] Update WinGet / Scoop manifests (Chocolatey when applicable) per the published SHAs and URLs.
 
