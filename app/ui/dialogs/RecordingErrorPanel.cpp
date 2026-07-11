@@ -71,10 +71,29 @@ RecordingErrorPanel::RecordingErrorPanel(const RecordingErrorModel& model, QWidg
     // Without this a plain QWidget child paints no stylesheet background, so the card
     // disappears once it is embedded in its overlay (see CrashReportPanel).
     setAttribute(Qt::WA_StyledBackground, true);
+
+    // The card content is built entirely from theme colours, so it is rebuilt on every
+    // theme switch. A zero-margin outer layout hosts the rebuildable content widget; the
+    // real body margins live on that content widget (see applyTheme).
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    // applyTheme() runs immediately here and again on every ReapplyTheme().
+    theme::OnThemeChanged(this, [this]() { applyTheme(); });
+}
+
+void RecordingErrorPanel::applyTheme() {
     setStyleSheet(QStringLiteral("#recordingErrorCard { background:%1; border:1px solid %2; border-radius:14px; }")
                       .arg(tok(ActiveTheme().surf), tok(ActiveTheme().line2)));
 
-    auto* root = new QVBoxLayout(this);
+    // Rebuild the card body so every inline stylesheet and tinted glyph re-derives from
+    // the active theme. There is no in-flight state to preserve here (send_button_ is a
+    // pointer reassigned by buildActionsRow; canSendReport() reads the model).
+    delete content_;
+    content_ = new QWidget(this);
+
+    auto* root = new QVBoxLayout(content_);
     root->setContentsMargins(22, 20, 22, 18);
     root->setSpacing(0);
 
@@ -89,6 +108,8 @@ RecordingErrorPanel::RecordingErrorPanel(const RecordingErrorModel& model, QWidg
 
     root->addSpacing(16);
     root->addWidget(buildActionsRow());
+
+    static_cast<QVBoxLayout*>(layout())->addWidget(content_);
 }
 
 bool RecordingErrorPanel::canSendReport() const noexcept {

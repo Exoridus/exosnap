@@ -9,8 +9,10 @@
 class QEvent;
 class QFrame;
 class QKeyEvent;
+class QLabel;
 class QMouseEvent;
 class QPaintEvent;
+class QPushButton;
 class QShowEvent;
 
 namespace exosnap::ui::dialogs {
@@ -60,10 +62,25 @@ class RecoveryOverlay : public QWidget {
   private:
     void syncGeometryToParent();
     QFrame* buildCard();
+    // Re-applies every theme-coloured inline stylesheet (card surface, chrome bar,
+    // title/hint text, separator rules, the "Decide later" button) and repaints the
+    // custom backdrop from the active theme. Runs once at construction and again on
+    // every ReapplyTheme(). Per-candidate rows restyle themselves independently.
+    void applyTheme();
 
     RecoveryService& service_;
     QVector<RecoveryCandidate> candidates_;
     QFrame* card_ = nullptr;
+
+    // Theme-coloured widgets restyled by applyTheme() (promoted from buildCard locals).
+    QWidget* chrome_bar_ = nullptr;
+    QLabel* brand_label_ = nullptr;
+    QFrame* chrome_sep_ = nullptr;
+    QLabel* chrome_sub_ = nullptr;
+    QLabel* title_label_ = nullptr;
+    QLabel* hint_label_ = nullptr;
+    QPushButton* decide_later_btn_ = nullptr;
+    QVector<QFrame*> rules_;
 };
 
 } // namespace exosnap::ui::dialogs

@@ -2025,6 +2025,28 @@ target_include_directories(theme_token_resolution_tests PRIVATE ${CMAKE_CURRENT_
 target_compile_definitions(theme_token_resolution_tests PRIVATE NOMINMAX)
 set_target_properties(theme_token_resolution_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
+# Pixel proof that ReapplyTheme() restyles widgets whose inline stylesheets /
+# tinted pixmaps derive from ActiveTheme() (the CompareHint popover was the
+# confirmed stuck-dark case), and that a dark → light → dark round trip renders
+# byte-identically. Writes PNGs to .workspace/screenshots/theme-switch/.
+exosnap_add_gtest(
+    NAME theme_switch_visual_proof_tests
+    TEST_PREFIX theme.
+    SOURCES
+        tests/theme_switch_visual_proof.cpp
+        ui/widgets/CompareHint.cpp
+        ui/dialogs/UpdateSettingsPanel.cpp
+        models/SettingsCompareData.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(theme_switch_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(theme_switch_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(theme_switch_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
+
 # ---------------------------------------------------------------------------
 # Install / windeployqt
 # ---------------------------------------------------------------------------

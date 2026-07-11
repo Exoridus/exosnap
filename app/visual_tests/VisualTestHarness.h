@@ -23,6 +23,8 @@ struct VisualTestOptions {
     int window_width = 0;    // 0 = harness default
     int window_height = 0;   // 0 = harness default
     int target_display = -1; // -1 = auto (capture mode prefers a non-primary screen)
+    QString theme_id;        // empty = keep the startup dark-default; otherwise ReapplyTheme() after
+                             // the window is built, exercising the real theme-switch path
 };
 
 bool HasVisualTestRequest(const QStringList& args);

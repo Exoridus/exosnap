@@ -2,6 +2,7 @@
 
 #include "../MainWindow.h"
 #include "../pages/LogsPage.h"
+#include "../ui/theme/ExoSnapTheme.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/PreviewSurface.h"
 
@@ -160,6 +161,9 @@ bool ParseVisualTestOptions(const QStringList& args, VisualTestOptions* out, QSt
             }
         } else if (arg == QStringLiteral("--visual-test-exit")) {
             parsed.exit_after_capture = true;
+        } else if (arg == QStringLiteral("--visual-test-theme")) {
+            if (!require_value(&parsed.theme_id))
+                return false;
         }
     }
 
@@ -510,6 +514,12 @@ int RunVisualTest(QApplication& app, MainWindow& window, const VisualTestOptions
         window.move(origin);
         window.resize(target_w, target_h);
     }
+
+    // Optional theme switch AFTER the window (and its pages) are fully built — this
+    // drives the real ReapplyTheme() path, so a capture with --visual-test-theme
+    // renders exactly what the user sees after switching themes at runtime.
+    if (!options.theme_id.trimmed().isEmpty())
+        ui::theme::ReapplyTheme(app, options.theme_id);
 
     if (!passive) {
         window.raise();

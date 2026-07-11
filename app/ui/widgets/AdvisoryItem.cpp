@@ -29,8 +29,6 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
         f.setPixelSize(13);
         f.setWeight(QFont::DemiBold);
         title_label_->setFont(f);
-        title_label_->setStyleSheet(QString::fromLatin1("color: ") +
-                                    QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink) + QLatin1Char(';'));
     }
 
     // -- Body label --
@@ -40,8 +38,6 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
         QFont f = body_label_->font();
         f.setPixelSize(12);
         body_label_->setFont(f);
-        body_label_->setStyleSheet(QString::fromLatin1("color: ") +
-                                   QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut) + QLatin1Char(';'));
     }
 
     // -- Time label (inline in title row, VG-5) --
@@ -52,16 +48,11 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
         f.setFamily(QStringLiteral("IBM Plex Mono"));
         f.setPixelSize(10);
         time_label_->setFont(f);
-        time_label_->setStyleSheet(QString::fromLatin1("color: ") +
-                                   QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim) + QLatin1Char(';'));
     }
 
     // -- Unread dot (6x6) --
     unread_dot_ = new QWidget(this);
     unread_dot_->setFixedSize(6, 6);
-    unread_dot_->setStyleSheet(QString::fromLatin1("background: ") +
-                               QString::fromUtf8(exosnap::ui::theme::ActiveTheme().success) +
-                               QStringLiteral("; border-radius: 3px;"));
     unread_dot_->setVisible(false);
 
     // -- Title row: [dot] [title] [time] inline (VG-5) --
@@ -101,7 +92,18 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
     main_layout->addLayout(row1);
     main_layout->addWidget(actions_container_);
 
+    // Text colours, the severity status icon, and the unread dot all re-derive on a
+    // theme switch (applyTheme runs once now and on every ReapplyTheme).
+    ui::theme::OnThemeChanged(this, [this]() { applyTheme(); });
+}
+
+void AdvisoryItem::applyTheme() {
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    title_label_->setStyleSheet(QStringLiteral("color: %1;").arg(QString::fromUtf8(t.ink)));
+    body_label_->setStyleSheet(QStringLiteral("color: %1;").arg(QString::fromUtf8(t.mut)));
+    time_label_->setStyleSheet(QStringLiteral("color: %1;").arg(QString::fromUtf8(t.dim)));
     updateStatusIcon();
+    updateUnreadDot();
 }
 
 void AdvisoryItem::setStatus(const QString& status) {

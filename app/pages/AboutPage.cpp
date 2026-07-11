@@ -134,7 +134,9 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     wordmark_ = new QLabel(card);
     wordmark_->setProperty("labelRole", "aboutWordmark");
     wordmark_->setTextFormat(Qt::RichText);
-    refreshBrand();
+    // The two-tone wordmark bakes ink/accent into rich text; rebake on every theme
+    // switch (runs once now, again on each ReapplyTheme).
+    ui::theme::OnThemeChanged(this, [this]() { refreshBrand(); });
 
     auto* version_line = new QLabel(QStringLiteral("Version %1 \xc2\xb7 for Windows").arg(version), card);
     version_line->setProperty("labelRole", "aboutVersionLine");

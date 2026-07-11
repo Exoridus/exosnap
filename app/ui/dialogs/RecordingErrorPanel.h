@@ -54,12 +54,19 @@ class RecordingErrorPanel : public QWidget {
     void dismissRequested();
 
   private:
+    // Rebuilds the theme-coloured content from the active theme. Runs once at
+    // construction and again on every ReapplyTheme() (theme switch), so the inline
+    // stylesheets and tinted glyphs re-derive their colours instead of keeping the
+    // values baked in at construction time.
+    void applyTheme();
+
     QWidget* buildHeader();
     QWidget* buildDetailBox();
     QWidget* buildPrivacyNote();
     QWidget* buildActionsRow();
 
     RecordingErrorModel model_;
+    QWidget* content_ = nullptr;
     QPushButton* send_button_ = nullptr;
 };
 

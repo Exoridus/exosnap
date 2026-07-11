@@ -61,6 +61,13 @@ class CrashReportPanel : public QWidget {
     void autoSendToggled(bool checked);
 
   private:
+    // Rebuilds the theme-coloured card content from the active theme. Runs once at
+    // construction and again on every ReapplyTheme() (theme switch), so the inline
+    // stylesheets and tinted glyphs re-derive their colours instead of keeping the
+    // dark values baked in at construction time. The auto-send opt-in and the
+    // details-expanded state are preserved across the rebuild.
+    void applyTheme();
+
     QWidget* buildChromeBar();
     QWidget* buildStatement();
     QWidget* buildRecordingBanner();
@@ -72,6 +79,7 @@ class CrashReportPanel : public QWidget {
 
     CrashReportModel model_;
 
+    QWidget* content_ = nullptr;
     QPushButton* details_toggle_ = nullptr;
     QLabel* details_chevron_ = nullptr;
     QFrame* scrubbed_report_ = nullptr;

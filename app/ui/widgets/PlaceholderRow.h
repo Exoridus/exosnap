@@ -18,6 +18,8 @@ class PlaceholderRow : public QWidget {
     void setVersionTag(const QString& version); // e.g. "0.7"
 
   private:
+    void applyTheme();
+
     QLabel* label_{nullptr};
     QLabel* version_badge_{nullptr};
 };
