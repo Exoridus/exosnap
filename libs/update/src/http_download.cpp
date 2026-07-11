@@ -2,6 +2,8 @@
 
 #include <update/http_download.h>
 
+#include "url_utils.h"
+
 // WinHTTP is available on all supported Windows versions (Vista+).
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -57,8 +59,11 @@ std::optional<std::string> DownloadToFile(const std::string& url, const std::wst
     if (cancel.load())
         return FailWithCleanup(dest_path, "canceled");
 
-    // Widen the URL for WinHttpCrackUrl (it operates on wide strings).
-    std::wstring wide_url(url.begin(), url.end());
+    // Widen the URL for WinHttpCrackUrl (it operates on wide strings). Must be a
+    // real UTF-8 -> UTF-16 conversion, not byte-wise widening: a non-ASCII path
+    // segment is multiple UTF-8 bytes that byte-wise widening would turn into
+    // multiple garbled wide chars instead of the one correct code unit.
+    std::wstring wide_url = Utf8ToWide(url);
 
     URL_COMPONENTS components{};
     components.dwStructSize = sizeof(components);
