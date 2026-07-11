@@ -106,5 +106,29 @@ TEST(ExoThemeTest, LightThemes_HaveNullptrDerivedOverrides) {
     }
 }
 
+TEST(ExoThemeTest, ErrorHoverOverride_KeepsHistoricalQssValueOnDarkThemesOnly) {
+    // The old exosnap_dark.qss hardcoded #EC8A7E for the stop button's hover
+    // state on every theme. The override preserves that exact rendered pixel
+    // for the dark themes (which share the same error coral) while light
+    // themes derive their own hover shade from their error color.
+    for (const auto& t : exosnap::ui::theme::kExoThemes) {
+        if (t.kind == exosnap::ui::theme::ThemeKind::Dark) {
+            ASSERT_NE(t.error_hover_override, nullptr) << "Dark theme must keep the historical hover: " << t.id;
+            EXPECT_STREQ(t.error_hover_override, "#EC8A7E");
+        } else {
+            EXPECT_EQ(t.error_hover_override, nullptr)
+                << "Light theme should derive its error hover, not override it: " << t.id;
+        }
+    }
+}
+
+TEST(ExoThemeTest, AllThemes_ErrorInk_IsValidColor) {
+    for (const auto& t : exosnap::ui::theme::kExoThemes) {
+        ASSERT_NE(t.error_ink, nullptr) << "error_ink null for theme: " << t.id;
+        const QColor c(QString::fromUtf8(t.error_ink));
+        EXPECT_TRUE(c.isValid()) << "error_ink invalid for theme: " << t.id;
+    }
+}
+
 } // namespace
 } // namespace exosnap
