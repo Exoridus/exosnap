@@ -25,13 +25,16 @@ a GPU-less runner.
 
 - [ ] Create the `vX.Y.Z` tag and GitHub Release; upload the portable ZIP, MSI, and their `.sha256`
       sidecars.
-- [ ] **Publish `update-manifest.json` as a release asset. MANDATORY for every release from 0.9.0 on.**
-      The in-app update checker only surfaces a release that carries this signed manifest (verified
-      against the embedded public key before any field is read); a release published without it is
-      **invisible to in-app updates forever**. `release-candidate.yml` runs `sign-manifest.yml` as a
-      required job on the version-tag push (official builds) and produces the signed manifest; download
-      it from that run and attach it to the release. The signed asset URLs point at the canonical
-      release download paths for the tag, so publish it alongside the ZIP + MSI under the same tag.
+- [ ] **Publish `update-manifest.json` AND `update-manifest.json.sig` as release assets. MANDATORY
+      for every release from 0.9.0 on.** The signature is detached: the `.sig` asset holds the
+      ed25519 signature over the exact bytes of `update-manifest.json`, and the in-app update
+      checker only surfaces a release that carries **both** assets (the signature is verified
+      against the embedded public key before any manifest field is read); a release published
+      without them is **invisible to in-app updates forever**. `release-candidate.yml` runs
+      `sign-manifest.yml` as a required job on the version-tag push (official builds); the job
+      attaches both files to the GitHub Release for the tag automatically once the Release exists.
+      Verify both assets are on the release page; if the job ran before the Release existed,
+      re-run `sign-manifest.yml` via workflow_dispatch with the final URLs + SHAs.
 
 ## 4. Updater RC live-check (manual, on real hardware)
 

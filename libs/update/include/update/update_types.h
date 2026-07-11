@@ -7,7 +7,6 @@
 //
 // ADR 0012: Update Security Model (0.4.0 implementation).
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -92,7 +91,8 @@ struct UpdateManifest {
     SemVer version;
     SemVer minimum_accepted_version;
     std::vector<PackageEntry> packages;
-    std::array<uint8_t, 64> signature{}; // raw ed25519 signature bytes
+    // The ed25519 signature is detached: it lives in a sibling `.sig` asset and
+    // covers the exact manifest bytes, so it is never carried inside this struct.
 };
 
 // ---------------------------------------------------------------------------

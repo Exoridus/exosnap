@@ -3,8 +3,10 @@
 // Uses a test key pair generated from the RFC 8032 §6.1 test vectors so
 // the tests are fully deterministic without requiring the CI secret.
 
+#include <algorithm>
 #include <cstring>
 #include <gtest/gtest.h>
+#include <string>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
 #include <update/update_types.h>
@@ -72,23 +74,84 @@ TEST(Ed25519, RFC8032Vector2OneByte) {
 }
 
 // ---------------------------------------------------------------------------
-// Manifest signature: dev-build placeholder key always rejects
+// Cross-implementation round-trip for the DETACHED manifest signature.
+//
+// The fixture below is produced exactly the way the CI signer (sign-manifest.yml)
+// produces a release: an ed25519 signature over the EXACT bytes of
+// update-manifest.json. The signer and this fixture share the same test key pair
+// (NOT the production key), derived from the fixed 32-byte seed 00 01 02 ... 1f.
+// Public key: 03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8
+//
+// scripts/dev/gen-manifest-fixture.py regenerates the manifest text + signature.
 // ---------------------------------------------------------------------------
-TEST(ManifestVerify, DevBuildKeyRejectsAllSignatures) {
-    // Build a minimal valid JSON manifest
-    const std::string json = R"({
-        "version": "1.0.0",
-        "minimum_accepted_version": "1.0.0",
-        "packages": [],
-        "signature": ")" + std::string(128, '0') +
-                             R"("
-    })";
-    auto result = ParseManifest(json);
+static const uint8_t kFixturePubKey[32] = {0x03, 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd,
+                                           0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5,
+                                           0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8};
+
+// The exact bytes of update-manifest.json the signer signed (LF line endings).
+static const char* kFixtureManifestRaw = R"JSON({
+  "version": "1.2.3",
+  "minimum_accepted_version": "1.2.3",
+  "packages": [
+    {
+      "kind": "installer",
+      "url": "https://github.com/Exoridus/exosnap/releases/download/v1.2.3/ExoSnap-1.2.3-windows-x64.msi",
+      "sha256": "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+    },
+    {
+      "kind": "portable",
+      "url": "https://github.com/Exoridus/exosnap/releases/download/v1.2.3/ExoSnap-1.2.3-windows-x64-portable.zip",
+      "sha256": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    }
+  ]
+})JSON";
+
+// Detached signature over kFixtureManifestRaw (the .sig sidecar content).
+static const char* kFixtureSignatureHex = "728d0161a8f42472b52d2e6e6fb5d54b5e7ceb670b12b95c79451c25f8548344"
+                                          "20a8c1fd45f8a2143d519ddbd0dc16f99d0e3350a91b94e3c9772dab587e7206";
+
+// The manifest bytes travel over the wire with LF endings; a CRLF checkout of
+// this source file would embed CRLF in the literal, so normalise to LF here so
+// the byte string matches what the signer signed regardless of git autocrlf.
+static std::string FixtureManifest() {
+    std::string s = kFixtureManifestRaw;
+    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+    return s;
+}
+
+TEST(ManifestVerify, DetachedSignatureVerifies) {
+    const std::string manifest = FixtureManifest();
+    // The manifest must parse and its detached signature must verify against the key.
+    auto result = ParseManifest(manifest);
     ASSERT_TRUE(std::holds_alternative<UpdateManifest>(result));
-    const auto& m = std::get<UpdateManifest>(result);
-    // Verification must fail for the all-zero dev key
-    auto vr = VerifyManifestSignature(m, json);
-    EXPECT_NE(vr, VerifyResult::Ok);
+    EXPECT_EQ(VerifyManifestSignature(manifest, kFixtureSignatureHex, kFixturePubKey), VerifyResult::Ok);
+}
+
+TEST(ManifestVerify, TamperedManifestByteFailsVerification) {
+    std::string manifest = FixtureManifest();
+    manifest[manifest.find("1.2.3")] = '9'; // flip a version digit
+    EXPECT_EQ(VerifyManifestSignature(manifest, kFixtureSignatureHex, kFixturePubKey),
+              VerifyResult::ManifestSigInvalid);
+}
+
+TEST(ManifestVerify, WrongPublicKeyFailsVerification) {
+    uint8_t other_key[32];
+    memcpy(other_key, kFixturePubKey, 32);
+    other_key[0] ^= 0x01;
+    EXPECT_EQ(VerifyManifestSignature(FixtureManifest(), kFixtureSignatureHex, other_key),
+              VerifyResult::ManifestSigInvalid);
+}
+
+TEST(ManifestVerify, MalformedSignatureHexFailsVerification) {
+    EXPECT_EQ(VerifyManifestSignature(FixtureManifest(), "not-hex", kFixturePubKey), VerifyResult::ManifestSigInvalid);
+    EXPECT_EQ(VerifyManifestSignature(FixtureManifest(), std::string(128, 'z'), kFixturePubKey),
+              VerifyResult::ManifestSigInvalid);
+}
+
+// The default embedded key is the all-zero dev placeholder (an invalid curve
+// point), so even a genuinely valid detached signature must be rejected.
+TEST(ManifestVerify, DevBuildKeyRejectsValidSignature) {
+    EXPECT_NE(VerifyManifestSignature(FixtureManifest(), kFixtureSignatureHex), VerifyResult::Ok);
 }
 
 TEST(ManifestVerify, DowngradeDetected) {

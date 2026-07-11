@@ -3,8 +3,19 @@
 # Triggered after a release build succeeds. Reads the ed25519 private key from
 # the repository secret EXOSNAP_UPDATE_SIGNING_KEY (base64-encoded 32-byte
 # ed25519 seed — PyNaCl's SigningKey requires exactly 32 bytes), constructs a
-# JSON manifest, signs it with ed25519 (RFC 8032, verified client-side by
-# Monocypher), and uploads the signed manifest as a CI artifact.
+# JSON manifest, and produces a DETACHED ed25519 signature (RFC 8032, verified
+# client-side by Monocypher) over the exact manifest bytes.
+#
+# The signature is detached — it is NOT embedded in the JSON. update-manifest.json
+# carries no "signature" field; the 128-hex-char signature travels in a sibling
+# asset update-manifest.json.sig. The client verifies the signature against the
+# manifest bytes exactly as received, so signer and verifier never have to agree
+# on a canonical JSON serialisation (an embedded-signature scheme that
+# re-serialised the body on the client broke on every real release because Python
+# and the C++ client emitted object keys in different orders).
+#
+# Both files are uploaded as a CI artifact and attached to the GitHub Release for
+# this tag so the in-app updater can fetch them.
 #
 # MANDATORY from 0.9.0 on. The in-app update checker only surfaces a release that
 # carries an update-manifest.json asset (verified against the embedded public key
@@ -93,7 +104,7 @@ jobs:
           seed = base64.b64decode(seed_b64)
           signing_key = nacl.signing.SigningKey(seed)
 
-          body = {
+          manifest = {
               "version":                  os.environ["VERSION"],
               "minimum_accepted_version": os.environ["VERSION"],
               "packages": [
@@ -110,18 +121,19 @@ jobs:
               ]
           }
 
-          body_json = json.dumps(body, separators=(",", ":"))
-          sig_bytes = signing_key.sign(body_json.encode()).signature
-          sig_hex   = sig_bytes.hex()
+          # Serialise ONCE and sign the exact bytes we ship. The signature is
+          # detached: it never re-enters the JSON, so the client verifies it over
+          # the manifest bytes verbatim with no canonicalisation on either side.
+          manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
+          sig_hex = signing_key.sign(manifest_bytes).signature.hex()
 
-          manifest = dict(body)
-          manifest["signature"] = sig_hex
+          with open("update-manifest.json", "wb") as f:
+              f.write(manifest_bytes)
+          with open("update-manifest.json.sig", "w", newline="") as f:
+              f.write(sig_hex)
 
-          with open("update-manifest.json", "w") as f:
-              json.dump(manifest, f, indent=2)
-
-          print("Manifest signed successfully.")
-          print(f"Version:   {body['version']}")
+          print("Manifest signed successfully (detached signature).")
+          print(f"Version:   {manifest['version']}")
           print(f"Signature: {sig_hex[:16]}...")
           EOF
 
@@ -129,7 +141,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: update-manifest
-          path: update-manifest.json
+          path: |
+            update-manifest.json
+            update-manifest.json.sig
+          if-no-files-found: error
+
+      # Attach the manifest + its detached signature to the GitHub Release for
+      # this tag so release_locator (which requires both assets) can surface the
+      # update. The Release must already exist — created by the release-publish
+      # step for a tag push, or manually before a workflow_dispatch run.
+      - name: Attach manifest to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            update-manifest.json update-manifest.json.sig \
+            --clobber --repo "$GITHUB_REPOSITORY"
 
   # ---------------------------------------------------------------------------
   # Authenticode signing hook (DORMANT -- awaiting SignPath cert)

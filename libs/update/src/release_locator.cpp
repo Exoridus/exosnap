@@ -48,15 +48,19 @@ std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, Updat
             if (!sv)
                 continue;
 
-            // Only releases carrying an update-manifest.json asset qualify.
+            // A release qualifies only when it carries BOTH the manifest and its
+            // detached signature — without the .sig the manifest cannot be verified.
             std::string manifest_url;
+            std::string signature_url;
             std::string portable_url;
             std::string installer_url;
             if (rel.contains("assets")) {
                 for (const auto& asset : rel["assets"]) {
                     auto name = asset.value("name", std::string{});
                     auto url = asset.value("browser_download_url", std::string{});
-                    if (name == "update-manifest.json")
+                    if (name == "update-manifest.json.sig")
+                        signature_url = url;
+                    else if (name == "update-manifest.json")
                         manifest_url = url;
                     else if (EndsWith(name, "-portable.zip"))
                         portable_url = url;
@@ -64,12 +68,13 @@ std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, Updat
                         installer_url = url;
                 }
             }
-            if (manifest_url.empty())
+            if (manifest_url.empty() || signature_url.empty())
                 continue;
 
             if (!have_best || *sv > best.version) {
                 best.version = *sv;
                 best.manifest_url = std::move(manifest_url);
+                best.signature_url = std::move(signature_url);
                 best.portable_url = std::move(portable_url);
                 best.installer_url = std::move(installer_url);
                 best.releases_page_url = rel.value("html_url", std::string{});

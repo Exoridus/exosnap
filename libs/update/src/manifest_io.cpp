@@ -1,7 +1,9 @@
 // manifest_io.cpp -- ExoSnap update manifest parsing and verification.
 
+#include <array>
 #include <cstring>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
 
@@ -51,18 +53,6 @@ static std::optional<std::array<uint8_t, 64>> ParseHex64(std::string_view hex) n
     return out;
 }
 
-// Extract the body for signature verification: the manifest JSON with the
-// "signature" field removed, then the remaining object re-serialised.
-static std::string ExtractBody(std::string_view raw_json) noexcept {
-    try {
-        auto j = nlohmann::json::parse(raw_json);
-        j.erase("signature");
-        return j.dump(); // compact, keys in insertion order
-    } catch (...) {
-        return {};
-    }
-}
-
 // ---------------------------------------------------------------------------
 // ParseManifest
 // ---------------------------------------------------------------------------
@@ -103,13 +93,6 @@ ParseResult ParseManifest(std::string_view json) noexcept {
             m.packages.push_back(std::move(e));
         }
 
-        // signature
-        auto sig_hex = j.at("signature").get<std::string>();
-        auto sig = ParseHex64(sig_hex);
-        if (!sig)
-            return std::string{"invalid signature field (expected 128 hex chars)"};
-        m.signature = *sig;
-
         return m;
     } catch (const nlohmann::json::exception& ex) {
         return std::string{"json parse error: "} + ex.what();
@@ -119,17 +102,26 @@ ParseResult ParseManifest(std::string_view json) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// VerifyManifestSignature
+// VerifyManifestSignature (detached)
+//
+// The signature covers the manifest bytes exactly as received. No JSON parse,
+// no re-serialisation: the verified byte string is identical to the signed byte
+// string by construction, which is what makes signer/verifier agreement robust.
 // ---------------------------------------------------------------------------
-VerifyResult VerifyManifestSignature(const UpdateManifest& manifest, std::string_view raw_json) noexcept {
-    std::string body = ExtractBody(raw_json);
-    if (body.empty())
-        return VerifyResult::ManifestParseError;
+VerifyResult VerifyManifestSignature(std::string_view raw_manifest_json, std::string_view signature_hex,
+                                     const uint8_t pub_key[32]) noexcept {
+    auto sig = ParseHex64(signature_hex);
+    if (!sig)
+        return VerifyResult::ManifestSigInvalid;
 
-    const auto* msg = reinterpret_cast<const uint8_t*>(body.data());
-    bool ok = ed25519_verify(manifest.signature.data(), msg, body.size(), kUpdatePublicKey);
+    const auto* msg = reinterpret_cast<const uint8_t*>(raw_manifest_json.data());
+    bool ok = ed25519_verify(sig->data(), msg, raw_manifest_json.size(), pub_key);
 
     return ok ? VerifyResult::Ok : VerifyResult::ManifestSigInvalid;
+}
+
+VerifyResult VerifyManifestSignature(std::string_view raw_manifest_json, std::string_view signature_hex) noexcept {
+    return VerifyManifestSignature(raw_manifest_json, signature_hex, kUpdatePublicKey);
 }
 
 // ---------------------------------------------------------------------------

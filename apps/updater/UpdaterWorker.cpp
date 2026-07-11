@@ -246,8 +246,9 @@ bool UpdaterWorker::runDownload() {
         return false;
     }
 
-    // Manifest download.
-    if (release->manifest_url.empty()) {
+    // Manifest download. The detached signature (.sig sibling) is mandatory --
+    // without it the manifest bytes cannot be verified.
+    if (release->manifest_url.empty() || release->signature_url.empty()) {
         emit failed(FailureCase::DownloadFailed, QStringLiteral("The release carries no update manifest.")); // A1
         return false;
     }
@@ -268,7 +269,35 @@ bool UpdaterWorker::runDownload() {
         }
     }
 
-    // Manifest parse + signature -- BEFORE any field is acted upon (ADR 0012).
+    const fs::path signature_path = download_dir / L"update-manifest.json.sig";
+    if (const auto err = DownloadToFile(release->signature_url, signature_path.wstring(), {}, cancel_)) {
+        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+        return false;
+    }
+    std::string signature_hex;
+    {
+        std::ifstream in(signature_path, std::ios::binary);
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        signature_hex = buf.str();
+        if (!in) {
+            emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't read the manifest signature.")); // A1
+            return false;
+        }
+        // Trim surrounding whitespace/newlines so the 128-hex payload parses.
+        const auto first = signature_hex.find_first_not_of(" \t\r\n");
+        const auto last = signature_hex.find_last_not_of(" \t\r\n");
+        signature_hex = (first == std::string::npos) ? std::string{} : signature_hex.substr(first, last - first + 1);
+    }
+
+    // Verify the detached signature over the EXACT manifest bytes -- BEFORE any
+    // field is parsed or acted upon (ADR 0012). No re-serialisation is involved.
+    if (VerifyManifestSignature(manifest_json, signature_hex) != VerifyResult::Ok) {
+        emit failed(FailureCase::VerifyDownloadFailed, QStringLiteral("Manifest signature invalid.")); // A2
+        return false;
+    }
+
+    // Only after the signature passes do we parse the manifest fields.
     const exosnap::update::ParseResult parsed = ParseManifest(manifest_json);
     if (std::holds_alternative<std::string>(parsed)) {
         emit failed(FailureCase::VerifyDownloadFailed, // A2 -- corrupt manifest is a security stop
@@ -276,10 +305,6 @@ bool UpdaterWorker::runDownload() {
         return false;
     }
     UpdateManifest manifest = std::get<UpdateManifest>(parsed);
-    if (VerifyManifestSignature(manifest, manifest_json) != VerifyResult::Ok) {
-        emit failed(FailureCase::VerifyDownloadFailed, QStringLiteral("Manifest signature invalid.")); // A2
-        return false;
-    }
 
     // Downgrade guard (unparseable current version defends as 0.0.0 -- never
     // blocks, the manifest minimum_accepted_version still applies).
