@@ -95,6 +95,12 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     bool buffer_acquired_ = false;
     uint32_t acquired_frames_ = 0;
 
+    // Device-position tracking for discontinuity gap measurement (see
+    // discontinuity_gap.h): expected position of the next packet = previous
+    // packet's device position + its frame count.
+    bool device_position_tracked_ = false;
+    uint64_t expected_device_position_ = 0;
+
     bool pending_capture_error_ = false;
     std::string pending_capture_error_msg_;
     // Raw HRESULT of the last fatal acquire failure (endpoint loss). Surfaced to

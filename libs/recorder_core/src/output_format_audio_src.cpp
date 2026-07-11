@@ -1,5 +1,7 @@
 #include "output_format_audio_src.h"
 
+#include "discontinuity_gap.h"
+
 // FFmpeg libswresample and libavutil headers
 extern "C" {
 #include <libavutil/channel_layout.h>
@@ -151,6 +153,7 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         exposed_buf_.num_frames = src_buf.num_frames;
         exposed_buf_.silent = src_buf.silent;
         exposed_buf_.data_discontinuity = src_buf.data_discontinuity;
+        exposed_buf_.gap_frames = src_buf.gap_frames;
         out_buf = exposed_buf_;
         return true;
     }
@@ -170,6 +173,7 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         // Treat as produce-nothing (edge case).
         out_buf.silent = src_buf.silent;
         out_buf.data_discontinuity = src_buf.data_discontinuity;
+        out_buf.gap_frames = ScaleDiscontinuityGapFrames(src_buf.gap_frames, inner_->SampleRate(), target_sample_rate_);
         out_buf.num_frames = 0;
         return true;
     }
@@ -205,6 +209,10 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
     exposed_buf_.num_frames = static_cast<uint32_t>(produced);
     exposed_buf_.silent = (produced == 0) || src_buf.silent;
     exposed_buf_.data_discontinuity = src_buf.data_discontinuity;
+    // The gap was measured in the inner source's frames; report it in this
+    // decorator's output frames.
+    exposed_buf_.gap_frames =
+        ScaleDiscontinuityGapFrames(src_buf.gap_frames, inner_->SampleRate(), target_sample_rate_);
 
     out_buf = exposed_buf_;
     return true;

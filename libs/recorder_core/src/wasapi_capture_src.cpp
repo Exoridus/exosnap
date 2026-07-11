@@ -1,5 +1,6 @@
 #include "wasapi_capture_src.h"
 
+#include "discontinuity_gap.h"
 #include "wgc_capture.h"
 
 #include <functiondiscoverykeys_devpkey.h>
@@ -520,6 +521,13 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     const bool silent = (captureFlags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
     const bool discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
 
+    // Measure the gap the discontinuity spans from the device-position jump,
+    // then advance the expected position for the next packet.
+    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity, device_position_tracked_,
+                                                              expected_device_position_, devicePos, sample_rate_);
+    device_position_tracked_ = true;
+    expected_device_position_ = devicePos + numFrames;
+
     buffer_acquired_ = true;
     acquired_frames_ = numFrames;
 
@@ -534,6 +542,7 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
         out_buf.num_frames = numFrames;
         out_buf.silent = silent;
         out_buf.data_discontinuity = discontinuity;
+        out_buf.gap_frames = gap_frames;
         return true;
     }
 
@@ -594,6 +603,7 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     out_buf.num_frames = numFrames;
     out_buf.silent = silent;
     out_buf.data_discontinuity = discontinuity;
+    out_buf.gap_frames = gap_frames;
     return true;
 }
 

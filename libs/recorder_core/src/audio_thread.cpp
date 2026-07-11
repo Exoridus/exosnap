@@ -28,17 +28,26 @@ void ConvertInt16ToFloat32(const std::int16_t* src, float* dst, size_t sample_co
 
 } // namespace
 
-AudioThread::AudioThread(SessionState& state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id)
-    : m_state(state), source_(std::move(source)), track_id_(track_id) {
+AudioThread::AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source,
+                         uint32_t track_id)
+    : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)), track_id_(track_id) {
 }
 
 AudioThread::~AudioThread() {
+    // Start() gave the running thread shared ownership of this object, so a
+    // joinable thread here has already returned from Run() (the final release
+    // may even happen on the worker thread itself, where join() would
+    // deadlock). Detaching a finished thread only releases its handle.
     if (m_thread.joinable())
         m_thread.detach();
 }
 
 void AudioThread::Start() {
-    m_thread = std::thread([this] { Run(); });
+    // Self-ownership handoff: the lambda keeps this worker (and through
+    // m_state_ptr the SessionState) alive until Run() returns, so dropping the
+    // session's handle on a stalled worker can never dangle the state the
+    // thread still writes through.
+    m_thread = std::thread([self = shared_from_this()] { self->Run(); });
 }
 
 bool AudioThread::Join(unsigned timeout_ms) {
@@ -152,9 +161,17 @@ void AudioThread::Run() {
                     lk.unlock();
                     MuxItem mi;
                     mi.payload = std::move(pkt);
-                    std::lock_guard mlk(m_state.mux_mutex);
-                    m_state.mux_queue.push_back(std::move(mi));
-                    m_state.mux_cv.notify_one();
+                    std::unique_lock mlk(m_state.mux_mutex);
+                    // Bounded steady-state queue: block briefly for room, then
+                    // fail cleanly — never drop packets or grow without limit.
+                    if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                        mlk.unlock();
+                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                              "Mux queue limit exceeded: the output destination "
+                                              "cannot keep up with the recording");
+                        return false;
+                    }
+                    m_state.PushMuxItemLocked(std::move(mi));
                 }
             }
         }
@@ -162,6 +179,27 @@ void AudioThread::Run() {
     };
 
     std::vector<float> floatScratch;
+
+    // A DATA_DISCONTINUITY means the device lost frames BEFORE the flagged
+    // packet. Counting it (diagnostics) is not enough: unless the gap is
+    // refilled, every packet that follows lands earlier on the sample timeline
+    // and the whole remaining track plays ahead of video — a permanent A/V
+    // offset that grows with each underrun. Feed the measured gap into the
+    // encoder as silence so PTS (derived from the accumulated frame counter)
+    // stays continuous. Chunked so a large (clamped) gap never needs a large
+    // scratch buffer.
+    auto feedGapSilence = [&](IAudioEncoder& enc, uint32_t gap_frames, uint64_t& accumulated_frames,
+                              std::vector<EncodedAudioPacket>& out_pkts) {
+        constexpr uint32_t kChunkFrames = 4800; // 100 ms at 48 kHz
+        const uint32_t first_chunk = gap_frames < kChunkFrames ? gap_frames : kChunkFrames;
+        std::vector<float> zeros(static_cast<size_t>(first_chunk) * kChannels, 0.0f);
+        for (uint32_t remaining = gap_frames; remaining > 0;) {
+            const uint32_t n = remaining < kChunkFrames ? remaining : kChunkFrames;
+            enc.FeedFloat32(zeros.data(), static_cast<size_t>(n) * kChannels, 0, accumulated_frames, kSampleRate,
+                            kChannels, out_pkts);
+            remaining -= n;
+        }
+    };
 
     if (m_state.config.audio_codec == AudioCodec::Opus) {
         // --- Opus encoder init ---
@@ -230,6 +268,9 @@ void AudioThread::Run() {
 
                 std::vector<EncodedAudioPacket> pkts;
                 float new_rms = 0.0f;
+                if (raw.gap_frames > 0) {
+                    feedGapSilence(opusEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
+                }
                 if (raw.silent) {
                     std::vector<float> silence(static_cast<size_t>(raw.num_frames) * kChannels, 0.0f);
                     opusEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
@@ -311,8 +352,7 @@ void AudioThread::Run() {
             MuxItem eos;
             eos.payload = AudioEosSentinel{track_id_};
             std::lock_guard lk(m_state.mux_mutex);
-            m_state.mux_queue.push_back(std::move(eos));
-            m_state.mux_cv.notify_one();
+            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
         }
 
         opusEnc.Shutdown();
@@ -389,6 +429,9 @@ void AudioThread::Run() {
 
                 std::vector<EncodedAudioPacket> pkts;
                 float new_rms = 0.0f;
+                if (raw.gap_frames > 0) {
+                    feedGapSilence(pcmEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
+                }
                 const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
                 if (raw.silent) {
                     std::vector<float> silence(totalSamples, 0.0f);
@@ -460,8 +503,7 @@ void AudioThread::Run() {
             MuxItem eos;
             eos.payload = AudioEosSentinel{track_id_};
             std::lock_guard lk(m_state.mux_mutex);
-            m_state.mux_queue.push_back(std::move(eos));
-            m_state.mux_cv.notify_one();
+            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
         }
 
         pcmEnc.Shutdown();
@@ -550,6 +592,9 @@ void AudioThread::Run() {
 
                 std::vector<EncodedAudioPacket> pkts;
                 float new_rms = 0.0f;
+                if (raw.gap_frames > 0) {
+                    feedGapSilence(flacEnc, raw.gap_frames, encoderAccumulatedFrames, pkts);
+                }
                 const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
                 if (raw.silent) {
                     std::vector<float> silence(totalSamples, 0.0f);
@@ -630,8 +675,7 @@ void AudioThread::Run() {
             MuxItem eos;
             eos.payload = AudioEosSentinel{track_id_};
             std::lock_guard lk(m_state.mux_mutex);
-            m_state.mux_queue.push_back(std::move(eos));
-            m_state.mux_cv.notify_one();
+            m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
         }
 
         flacEnc.Shutdown();
@@ -715,6 +759,9 @@ void AudioThread::Run() {
 
             std::vector<EncodedAudioPacket> pkts;
             float new_rms = 0.0f;
+            if (raw.gap_frames > 0) {
+                feedGapSilence(aacEnc, raw.gap_frames, audioAccumulatedFrames, pkts);
+            }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
 
             if (raw.silent) {
@@ -796,8 +843,7 @@ end_audio_loop:
         MuxItem eos;
         eos.payload = AudioEosSentinel{track_id_};
         std::lock_guard lk(m_state.mux_mutex);
-        m_state.mux_queue.push_back(std::move(eos));
-        m_state.mux_cv.notify_one();
+        m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
     }
 
     aacEnc.Shutdown();

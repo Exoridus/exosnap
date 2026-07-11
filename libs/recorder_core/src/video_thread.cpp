@@ -138,16 +138,24 @@ DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerat
 
 } // namespace
 
-VideoThread::VideoThread(SessionState& state) : m_state(state) {
+VideoThread::VideoThread(std::shared_ptr<SessionState> state) : m_state_ptr(std::move(state)), m_state(*m_state_ptr) {
 }
 
 VideoThread::~VideoThread() {
+    // Start() gave the running thread shared ownership of this object, so a
+    // joinable thread here has already returned from Run() (the final release
+    // may even happen on the worker thread itself, where join() would
+    // deadlock). Detaching a finished thread only releases its handle.
     if (m_thread.joinable())
         m_thread.detach();
 }
 
 void VideoThread::Start() {
-    m_thread = std::thread([this] { Run(); });
+    // Self-ownership handoff: the lambda keeps this worker (and through
+    // m_state_ptr the SessionState) alive until Run() returns, so dropping the
+    // session's handle on a hung producer can never dangle the state the
+    // thread still writes through.
+    m_thread = std::thread([self = shared_from_this()] { self->Run(); });
 }
 
 bool VideoThread::Join(unsigned timeout_ms) {
@@ -1848,7 +1856,18 @@ void VideoThread::Run() {
                 // epoch is this packet's session PTS, so the auto interval resets
                 // off the actual boundary (manual splits therefore push the next
                 // auto split out by a full interval).
-                std::lock_guard mlk(m_state.mux_mutex);
+                std::unique_lock mlk(m_state.mux_mutex);
+                // Bounded steady-state queue: wait for room BEFORE the split
+                // sentinel so the sentinel and its keyframe stay adjacent; block
+                // briefly, then fail cleanly — never drop frames or grow without
+                // limit.
+                if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                    mlk.unlock();
+                    m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                          "Mux queue limit exceeded: the output destination "
+                                          "cannot keep up with the recording");
+                    return false;
+                }
                 if (split_armed && pkt.keyframe) {
                     ++current_segment_index;
                     segment_start_session_pts_ns = pkt.pts_ns;
@@ -1857,13 +1876,12 @@ void VideoThread::Run() {
                     }
                     MuxItem split_item;
                     split_item.payload = SplitSentinel{current_segment_index, split_armed_trigger};
-                    m_state.mux_queue.push_back(std::move(split_item));
+                    m_state.PushMuxItemLocked(std::move(split_item)); // sentinel: bypasses the bound
                     split_armed = false;
                 }
                 MuxItem mux_item;
                 mux_item.payload = std::move(pkt);
-                m_state.mux_queue.push_back(std::move(mux_item));
-                m_state.mux_cv.notify_one();
+                m_state.PushMuxItemLocked(std::move(mux_item));
             }
         }
 
@@ -3065,9 +3083,16 @@ end_encode_loop:
                     lk.unlock();
                     MuxItem mi;
                     mi.payload = std::move(pkt);
-                    std::lock_guard mlk(m_state.mux_mutex);
-                    m_state.mux_queue.push_back(std::move(mi));
-                    m_state.mux_cv.notify_one();
+                    std::unique_lock mlk(m_state.mux_mutex);
+                    // Bounded steady-state queue (same policy as the live loop):
+                    // wait for room, then fail cleanly rather than grow unbounded.
+                    if (!m_state.WaitForMuxQueueSpace(mlk)) {
+                        mlk.unlock();
+                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                              "Mux queue limit exceeded while draining the video encoder");
+                        break;
+                    }
+                    m_state.PushMuxItemLocked(std::move(mi));
                 }
             }
 
@@ -3096,8 +3121,7 @@ end_encode_loop:
         MuxItem eos;
         eos.payload = VideoEosSentinel{};
         std::lock_guard lk(m_state.mux_mutex);
-        m_state.mux_queue.push_back(std::move(eos));
-        m_state.mux_cv.notify_one();
+        m_state.PushMuxItemLocked(std::move(eos)); // sentinel: bypasses the queue bound
     }
 
     // Cleanup slot views and textures

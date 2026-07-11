@@ -49,7 +49,10 @@ class WasapiLoopback {
     // endpoint was invalidated) — see LastFatalErrorHresult()/LastFatalErrorMessage()
     // to tell the two apart.
     // Sets silent=true if AUDCLNT_BUFFERFLAGS_SILENT is set.
-    bool GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags, bool* out_silent);
+    // out_device_position (optional) receives the packet's device position in
+    // frames — used to measure the gap a DATA_DISCONTINUITY spans.
+    bool GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags, bool* out_silent,
+                       UINT64* out_device_position = nullptr);
 
     // Release the current packet (must be called after GetNextPacket succeeds).
     bool ReleasePacket(UINT32 num_frames);

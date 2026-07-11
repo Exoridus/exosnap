@@ -19,18 +19,26 @@
 
 #include "session_internal.h"
 
+#include <memory>
 #include <thread>
 
 namespace recorder_core {
 
-class MuxThread {
+// Ownership contract: see audio_thread.h — the object must be owned by a
+// std::shared_ptr, and Start() hands the running thread shared ownership of
+// the worker and (through it) the SessionState. A finalize that stalls past
+// the shutdown budget therefore keeps its state alive until the writer call
+// returns and the thread observes the stop flag; it is never left writing
+// through freed session memory.
+class MuxThread : public std::enable_shared_from_this<MuxThread> {
   public:
-    explicit MuxThread(SessionState& state);
+    explicit MuxThread(std::shared_ptr<SessionState> state);
     ~MuxThread();
 
     MuxThread(const MuxThread&) = delete;
     MuxThread& operator=(const MuxThread&) = delete;
 
+    // Requires shared_ptr ownership of this object (see class comment).
     void Start();
 
     // Join with up to timeout_ms.  Returns true if joined cleanly.
@@ -45,7 +53,8 @@ class MuxThread {
   private:
     void Run();
 
-    SessionState& m_state;
+    std::shared_ptr<SessionState> m_state_ptr;
+    SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())
     std::thread m_thread;
 };
 

@@ -481,6 +481,40 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_thread_source_agnostic PRIVATE src)
 
+# Discontinuity gap compensation: the device-position arithmetic that turns a
+# WASAPI DATA_DISCONTINUITY into a measured gap, and the AudioThread silence
+# fill that keeps the sample timeline (and A/V sync) continuous across it.
+exosnap_add_gtest(
+    NAME test_audio_discontinuity_gap
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_discontinuity_gap.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_discontinuity_gap PRIVATE src)
+
+# Steady-state mux queue bound: a stalled/slow consumer blocks producers and
+# times out into a deterministic ErrorPhase::Mux failure instead of unbounded
+# RAM growth; drain and failure both wake blocked producers.
+exosnap_add_gtest(
+    NAME test_mux_queue_backpressure
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mux_queue_backpressure.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mux_queue_backpressure PRIVATE src)
+
+# Worker teardown ownership: an abandoned (stalled/hung) worker keeps its
+# SessionState and capture source alive through the thread's shared ownership,
+# wakes on the stop/failure flags, and runs out cleanly — never a detach into
+# freed session memory, never a teardown deadlock on the mux queue bound.
+exosnap_add_gtest(
+    NAME test_worker_teardown_ownership
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_worker_teardown_ownership.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_worker_teardown_ownership PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_fdk_aac_encoder
     TEST_PREFIX recorder_core.

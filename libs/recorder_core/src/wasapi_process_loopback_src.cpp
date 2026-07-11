@@ -1,5 +1,7 @@
 #include "wasapi_process_loopback_src.h"
 
+#include "discontinuity_gap.h"
+
 #include <audioclientactivationparams.h>
 #include <mmdeviceapi.h>
 #include <propidl.h>
@@ -400,7 +402,8 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
     BYTE* data = nullptr;
     UINT32 frames = 0;
     DWORD flags = 0;
-    HRESULT hr = capture_client_->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+    UINT64 devicePos = 0;
+    HRESULT hr = capture_client_->GetBuffer(&data, &frames, &flags, &devicePos, nullptr);
     if (hr == AUDCLNT_S_BUFFER_EMPTY) {
         return false;
     }
@@ -424,10 +427,17 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
     buffer_acquired_ = true;
     acquired_frames_ = frames;
 
+    const bool discontinuity = (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    const uint32_t gap_frames = ComputeDiscontinuityGapFrames(discontinuity, device_position_tracked_,
+                                                              expected_device_position_, devicePos, SampleRate());
+    device_position_tracked_ = true;
+    expected_device_position_ = devicePos + frames;
+
     out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
     out_buf.num_frames = frames;
     out_buf.silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
-    out_buf.data_discontinuity = (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
+    out_buf.data_discontinuity = discontinuity;
+    out_buf.gap_frames = gap_frames;
     return true;
 }
 

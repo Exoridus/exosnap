@@ -84,13 +84,28 @@ std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::
 // ---------------------------------------------------------------------------
 
 struct RecorderSession::Impl {
-    SessionState state;
+    // SessionState is shared with the worker threads (each worker's thread
+    // lambda holds it alive through the worker object, see audio_thread.h).
+    // The pointer itself is guarded by state_mutex: Record() swaps in a fresh
+    // state when a previous session abandoned a stalled worker, so a still-
+    // running leaked worker keeps writing through ITS state while the new
+    // session gets an untouched one.
+    std::mutex state_mutex;
+    std::shared_ptr<SessionState> state = std::make_shared<SessionState>();
+    bool workers_leaked = false; // guarded by state_mutex
+
     StatsCallback stats_callback;
     MeterCallback meter_callback;
     DiagnosticsCallback diagnostics_callback;
     PreviewSharedHandleCallback preview_shared_handle_callback;
+    SegmentCallback segment_callback;
     uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
+
+    std::shared_ptr<SessionState> State() {
+        std::lock_guard lk(state_mutex);
+        return state;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -368,18 +383,20 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 // ---------------------------------------------------------------------------
 
 void RecorderSession::Stop() {
-    m_impl->state.pause_requested.store(false);
-    m_impl->state.stop_requested.store(true);
-    m_impl->state.premux_cv.notify_all();
-    m_impl->state.mux_cv.notify_all();
+    const auto st = m_impl->State();
+    st->pause_requested.store(false);
+    st->stop_requested.store(true);
+    st->premux_cv.notify_all();
+    st->mux_cv.notify_all();
+    st->mux_space_cv.notify_all();
 }
 
 void RecorderSession::Pause() {
-    m_impl->state.pause_requested.store(true);
+    m_impl->State()->pause_requested.store(true);
 }
 
 void RecorderSession::Resume() {
-    m_impl->state.pause_requested.store(false);
+    m_impl->State()->pause_requested.store(false);
 }
 
 void RecorderSession::RequestSplit(SplitTriggerSource source) {
@@ -387,32 +404,37 @@ void RecorderSession::RequestSplit(SplitTriggerSource source) {
         return;
     // Record the trigger (for logging) before bumping the sequence so the
     // observing thread sees a consistent (seq, trigger) pair.
-    m_impl->state.split_last_trigger.store(static_cast<uint32_t>(source));
-    m_impl->state.split_request_seq.fetch_add(1);
+    const auto st = m_impl->State();
+    st->split_last_trigger.store(static_cast<uint32_t>(source));
+    st->split_request_seq.fetch_add(1);
 }
 
 void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
-    m_impl->state.segment_callback = std::move(cb);
+    // Stored on the Impl (not the SessionState) so the callback survives the
+    // fresh-state swap after a leaked worker; Record() copies it in.
+    m_impl->segment_callback = std::move(cb);
 }
 
 void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback) {
     if (!m_impl->recording.load())
         return;
-    std::lock_guard lk(m_impl->state.snapshot_callback_mutex);
-    if (m_impl->state.snapshot_requested.load())
+    const auto st = m_impl->State();
+    std::lock_guard lk(st->snapshot_callback_mutex);
+    if (st->snapshot_requested.load())
         return; // already pending — ignore
-    m_impl->state.snapshot_callback = std::move(callback);
-    m_impl->state.snapshot_requested.store(true);
+    st->snapshot_callback = std::move(callback);
+    st->snapshot_requested.store(true);
 }
 
 void RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay) {
     if (!m_impl->recording.load()) {
         return;
     }
-    if (m_impl->state.config.webcam.frame_provider == nullptr) {
+    const auto st = m_impl->State();
+    if (st->config.webcam.frame_provider == nullptr) {
         return;
     }
-    m_impl->state.UpdateWebcamOverlay(overlay);
+    st->UpdateWebcamOverlay(overlay);
 }
 
 // ---------------------------------------------------------------------------
@@ -435,9 +457,23 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         engine_config.output_path = DeriveTransientMkvPath(config.output_path);
     }
 
+    // A previous session that abandoned a stalled/hung worker leaked that
+    // worker with shared ownership of ITS SessionState. Never reuse that state:
+    // swap in a fresh one so the leaked worker drains against the old state
+    // (kept alive by its own shared_ptr) while this session starts clean.
+    std::shared_ptr<SessionState> state_ptr;
+    {
+        std::lock_guard lk(m_impl->state_mutex);
+        if (m_impl->workers_leaked) {
+            m_impl->state = std::make_shared<SessionState>();
+            m_impl->workers_leaked = false;
+        }
+        state_ptr = m_impl->state;
+    }
+
     // Reset session state
     {
-        auto& st = m_impl->state;
+        auto& st = *state_ptr;
         st.stop_requested.store(false);
         {
             std::lock_guard lk(st.failure_mutex);
@@ -453,6 +489,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         {
             std::lock_guard lk(st.mux_mutex);
             st.mux_queue.clear();
+            st.mux_queue_bytes = 0;
         }
         {
             std::lock_guard lk(st.stats_mutex);
@@ -490,6 +527,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.stats_callback = m_impl->stats_callback;
         st.meter_callback = m_impl->meter_callback;
         st.diagnostics_callback = m_impl->diagnostics_callback;
+        st.segment_callback = m_impl->segment_callback;
         // Bridge the public uintptr_t handle callback to the internal HANDLE-typed one.
         if (m_impl->preview_shared_handle_callback) {
             auto pub_cb = m_impl->preview_shared_handle_callback;
@@ -549,12 +587,12 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         }
     };
 
-    std::vector<std::unique_ptr<AudioThread>> audioWorkers;
+    std::vector<std::shared_ptr<AudioThread>> audioWorkers;
     if (!config.record_audio) {
         // Video-only path: no audio workers.
     } else if (config.audio_track_plan.tracks.empty()) {
         auto source = std::make_unique<WasapiLoopbackSrc>();
-        audioWorkers.push_back(std::make_unique<AudioThread>(m_impl->state, std::move(source), 0));
+        audioWorkers.push_back(std::make_shared<AudioThread>(state_ptr, std::move(source), 0));
     } else {
         audioWorkers.reserve(config.audio_track_plan.tracks.size());
         for (const auto& track : config.audio_track_plan.tracks) {
@@ -620,27 +658,31 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
 
             audioWorkers.push_back(
-                std::make_unique<AudioThread>(m_impl->state, std::move(track_source), track.track_index));
+                std::make_shared<AudioThread>(state_ptr, std::move(track_source), track.track_index));
         }
     }
 
     m_impl->recording.store(true);
 
-    // Start stats collector
+    // Start stats collector (Stop() joins its thread before Record returns, so
+    // a plain reference into the shared state is safe here).
     const auto recording_wall_start = std::chrono::steady_clock::now();
-    SessionStatsCollector statsCollector(m_impl->state);
+    SessionStatsCollector statsCollector(*state_ptr);
     statsCollector.Start();
 
     // Start worker threads — all containers (including MP4) use MuxThread/Matroska.
     // For MP4: the engine records to a transient MKV; the app layer remuxes after stop.
-    VideoThread videoThread(m_impl->state);
-    MuxThread muxThread(m_impl->state);
+    // Workers are shared_ptr-owned: each Start() hands the running thread shared
+    // ownership of its worker (and through it the SessionState), so abandoning a
+    // stalled worker below leaks the thread but never dangles what it touches.
+    auto videoThread = std::make_shared<VideoThread>(state_ptr);
+    auto muxThread = std::make_shared<MuxThread>(state_ptr);
 
     for (auto& worker : audioWorkers) {
         worker->Start();
     }
-    videoThread.Start();
-    muxThread.Start();
+    videoThread->Start();
+    muxThread->Start();
 
     // Two-phase cooperative shutdown (see worker_join.h):
     //   Phase 1 — wait (unbounded) until Stop() or a fatal worker failure sets
@@ -654,11 +696,11 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // handle becomes invalid once the std::thread is joined.
     std::vector<HANDLE> allHandles;
     allHandles.reserve(audioWorkers.size() + 2);
-    allHandles.push_back(videoThread.NativeHandle());
+    allHandles.push_back(videoThread->NativeHandle());
     for (auto& worker : audioWorkers) {
         allHandles.push_back(worker->NativeHandle());
     }
-    allHandles.push_back(muxThread.NativeHandle());
+    allHandles.push_back(muxThread->NativeHandle());
 
     bool hasNullHandle = false;
     for (HANDLE h : allHandles) {
@@ -700,17 +742,17 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         // --- Phase 1: producer workers under the short budget. Phase 1 of the wait
         // is still unbounded until stop_requested, so recording duration is never
         // capped; only the post-stop drain is bounded (kProducerJoinBudgetMs). ---
-        const WorkerJoinResult jr = WaitForWorkersThenJoin(producerHandles, m_impl->state.stop_requested,
+        const WorkerJoinResult jr = WaitForWorkersThenJoin(producerHandles, state_ptr->stop_requested,
                                                            kProducerJoinBudgetMs, kStopPollIntervalMs);
         if (jr.wait_failed) {
-            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(jr.last_error), ErrorPhase::Shutdown,
-                                        "WaitForMultipleObjects failed during producer join");
+            state_ptr->RecordFailure(HRESULT_FROM_WIN32(jr.last_error), ErrorPhase::Shutdown,
+                                     "WaitForMultipleObjects failed during producer join");
         }
         // Join the std::thread wrappers for producers that actually exited so their
         // destructors don't detach a still-running thread (order matches producerHandles:
         // video at 0, audio at 1..n). Timed-out workers stay unsignaled and are detached.
         if (!jr.signaled.empty() && jr.signaled[0]) {
-            videoJoined = videoThread.Join(0);
+            videoJoined = videoThread->Join(0);
         }
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
             if (jr.signaled[1 + i]) {
@@ -726,16 +768,16 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         for (;;) {
             const DWORD w = WaitForSingleObject(muxHandle, kFinalizePollIntervalMs);
             if (w == WAIT_OBJECT_0) {
-                muxJoined = muxThread.Join(0);
+                muxJoined = muxThread->Join(0);
                 break;
             }
             if (w == WAIT_FAILED) {
-                m_impl->state.RecordFailure(HRESULT_FROM_WIN32(GetLastError()), ErrorPhase::Shutdown,
-                                            "WaitForSingleObject failed during finalize wait");
+                state_ptr->RecordFailure(HRESULT_FROM_WIN32(GetLastError()), ErrorPhase::Shutdown,
+                                         "WaitForSingleObject failed during finalize wait");
                 break;
             }
             // WAIT_TIMEOUT: sample finalize byte progress and decide whether to keep waiting.
-            const uint64_t bytes = m_impl->state.mux_bytes_written.load(std::memory_order_relaxed);
+            const uint64_t bytes = state_ptr->mux_bytes_written.load(std::memory_order_relaxed);
             const uint64_t elapsed_ms = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - phase2_start)
                     .count());
@@ -745,7 +787,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
         }
     } else {
-        m_impl->state.RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
+        state_ptr->RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
     }
 
     // Stop stats collector
@@ -753,10 +795,27 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     m_impl->recording.store(false);
 
+    // Any worker that missed its join is now abandoned — but it stays alive
+    // through its own shared ownership (worker thread -> worker -> state).
+    // Mark the leak so the next Record() starts on a fresh SessionState
+    // instead of racing the leaked worker on this one.
+    {
+        bool anyLeaked = !videoJoined || !muxJoined;
+        for (const bool joined : audioJoined) {
+            if (!joined) {
+                anyLeaked = true;
+            }
+        }
+        if (anyLeaked) {
+            std::lock_guard lk(m_impl->state_mutex);
+            m_impl->workers_leaked = true;
+        }
+    }
+
     // Build result
     RecorderResult result;
     {
-        auto& st = m_impl->state;
+        auto& st = *state_ptr;
 
         std::lock_guard flk(st.failure_mutex);
         if (st.failure_recorded) {
@@ -810,11 +869,11 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     {
         FrameSnapshotCallback pending_cb;
         {
-            std::lock_guard slk(m_impl->state.snapshot_callback_mutex);
-            if (m_impl->state.snapshot_requested.load()) {
-                pending_cb = std::move(m_impl->state.snapshot_callback);
-                m_impl->state.snapshot_callback = nullptr;
-                m_impl->state.snapshot_requested.store(false);
+            std::lock_guard slk(state_ptr->snapshot_callback_mutex);
+            if (state_ptr->snapshot_requested.load()) {
+                pending_cb = std::move(state_ptr->snapshot_callback);
+                state_ptr->snapshot_callback = nullptr;
+                state_ptr->snapshot_requested.store(false);
             }
         }
         if (pending_cb)
@@ -823,8 +882,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     // Final stats snapshot
     {
-        std::lock_guard slk(m_impl->state.stats_mutex);
-        result.stats = m_impl->state.stats;
+        std::lock_guard slk(state_ptr->stats_mutex);
+        result.stats = state_ptr->stats;
     }
 
     // Fill in elapsed_seconds from wall-clock time (stats_callback snapshots compute this per-tick
@@ -859,7 +918,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         const DiagnosticsLifecycle lifecycle =
             result.succeeded ? DiagnosticsLifecycle::Completed : DiagnosticsLifecycle::Failed;
         const RecordingDiagnosticsSnapshot snapshot =
-            m_impl->state.diagnostics.BuildSnapshot(diag_now, result.stats, lifecycle, result.stats.elapsed_seconds);
+            state_ptr->diagnostics.BuildSnapshot(diag_now, result.stats, lifecycle, result.stats.elapsed_seconds);
         m_impl->diagnostics_callback(snapshot);
     }
 

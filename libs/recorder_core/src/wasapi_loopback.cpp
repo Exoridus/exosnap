@@ -176,8 +176,8 @@ UINT32 WasapiLoopback::GetNextPacketSize() {
 // GetNextPacket
 // ---------------------------------------------------------------------------
 
-bool WasapiLoopback::GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags,
-                                   bool* out_silent) {
+bool WasapiLoopback::GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags, bool* out_silent,
+                                   UINT64* out_device_position) {
     if (!m_pCaptureClient)
         return false;
     UINT64 devicePos = 0, qpcPos = 0;
@@ -194,6 +194,8 @@ bool WasapiLoopback::GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWOR
         return false;
     if (out_silent)
         *out_silent = (*out_capture_flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+    if (out_device_position)
+        *out_device_position = devicePos;
     return true;
 }
 

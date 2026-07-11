@@ -14,6 +14,12 @@ struct RawAudioBuffer {
     uint32_t num_frames = 0;
     bool silent = false;             // backend signals digitally silent buffer
     bool data_discontinuity = false; // WASAPI reported AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY
+    // Frames known to have been lost immediately BEFORE this buffer's first
+    // frame, at this source's advertised sample rate. Sources derive it from the
+    // device-position jump across a DATA_DISCONTINUITY (0 when the gap length is
+    // unknown or there is none). The consumer must fill the gap with silence so
+    // the sample timeline — and therefore every later PTS — stays continuous.
+    uint32_t gap_frames = 0;
 };
 
 class IAudioCaptureSource {

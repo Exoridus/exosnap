@@ -11,14 +11,21 @@
 
 namespace recorder_core {
 
-class AudioThread {
+// Ownership contract (shared by all session workers): the object must be owned
+// by a std::shared_ptr, and Start() hands the running thread a shared_ptr to
+// the worker — which in turn holds the SessionState alive. If the session gives
+// up on a stalled worker (finalize stall, producer hang) and drops its handle,
+// the thread keeps everything it touches alive until it has observed the stop
+// flag and run out; nothing is ever detached without that ownership handoff.
+class AudioThread : public std::enable_shared_from_this<AudioThread> {
   public:
-    AudioThread(SessionState& state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id);
+    AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id);
     ~AudioThread();
 
     AudioThread(const AudioThread&) = delete;
     AudioThread& operator=(const AudioThread&) = delete;
 
+    // Requires shared_ptr ownership of this object (see class comment).
     void Start();
 
     // Join with up to timeout_ms.  Returns true if joined cleanly.
@@ -33,7 +40,8 @@ class AudioThread {
   private:
     void Run();
 
-    SessionState& m_state;
+    std::shared_ptr<SessionState> m_state_ptr;
+    SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())
     std::unique_ptr<IAudioCaptureSource> source_;
     uint32_t track_id_ = 0;
     float m_smoothed_rms_ = 0.0f;

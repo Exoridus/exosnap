@@ -38,6 +38,11 @@ class WasapiLoopbackSrc : public IAudioCaptureSource {
     // to the drain so it reaches the app log as the recording's error code
     // instead of a generic E_FAIL. 0 (S_OK) when no fatal failure has occurred.
     int32_t last_capture_hr_ = 0;
+
+    // Device-position tracking for discontinuity gap measurement
+    // (discontinuity_gap.h).
+    bool device_position_tracked_ = false;
+    uint64_t expected_device_position_ = 0;
 };
 
 } // namespace recorder_core
