@@ -197,8 +197,10 @@ jobs:
         include:
           - label: windows-x64-debug
             preset: windows-x64-ninja-debug
+            config: Debug
           - label: windows-x64-release
             preset: windows-x64-ninja-release
+            config: Release
       fail-fast: false
 
     steps:
@@ -224,8 +226,19 @@ jobs:
       - name: Build (${{ matrix.preset }})
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
+      # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
+      # -ExcludeLabel mechanism as local dev instead of relying solely on the
+      # "live" binaries' own GTEST_SKIP self-guard. Two capability test binaries
+      # carry LABELS live (real DXGI/GPU queries); this runner has no GPU, so
+      # they are excluded here rather than trusted to skip themselves — a future
+      # runner-image change (or a new live test that forgets the self-skip)
+      # would otherwise fail silently past this gate.
       - name: Test (${{ matrix.preset }})
-        run: ctest --preset ${{ matrix.preset }} --output-on-failure
+        run: >-
+          pwsh -NonInteractive -File scripts/run-tests.ps1
+          -BuildDir build/${{ matrix.preset }} -Config ${{ matrix.config }}
+          -ExcludeLabel live
 
       - name: sccache stats
         if: always()
