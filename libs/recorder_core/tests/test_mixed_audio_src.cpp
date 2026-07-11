@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -114,6 +115,98 @@ static std::vector<float> MakeUnityGains(size_t count) {
     return std::vector<float>(count, 1.0f);
 }
 
+// A source that delivers a finite, ordered sequence of packets, one per
+// Acquire/Release cycle, and reports the real pending-frame count of the packet
+// at the head of the queue (0 once drained). Unlike MockAudioCaptureSource it
+// decrements as packets are consumed, so it can model realistic device periods
+// (e.g. 448- and 512-frame packets) and be drained the way the audio thread
+// drains a real source.
+class QueueMockSource final : public IAudioCaptureSource {
+  public:
+    // Enqueue `frames` of interleaved-stereo Float32 whose left and right sample
+    // at global frame index (start_frame + i) both equal value_at(start_frame + i).
+    // Lets a test lay a single continuous ramp across many differently sized
+    // packets and then verify the emitted stream is that ramp, unbroken.
+    template <typename Fn> void EnqueueRamp(uint32_t frames, uint32_t start_frame, Fn value_at) {
+        std::vector<float> buf(static_cast<size_t>(frames) * 2u);
+        for (uint32_t i = 0; i < frames; ++i) {
+            const float v = value_at(start_frame + i);
+            buf[(i * 2) + 0] = v;
+            buf[(i * 2) + 1] = v;
+        }
+        queue_.push_back(Packet{frames, std::move(buf)});
+    }
+
+    uint32_t PendingFrameCount() override {
+        return queue_.empty() ? 0u : queue_.front().frames;
+    }
+
+    bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override {
+        out_error.clear();
+        if (queue_.empty() || held_)
+            return false;
+        held_ = true;
+        const Packet& p = queue_.front();
+        out_buf = {reinterpret_cast<const uint8_t*>(p.data.data()), p.frames, false, false};
+        return true;
+    }
+
+    void ReleaseBuffer() override {
+        if (!held_)
+            return;
+        held_ = false;
+        queue_.pop_front();
+    }
+
+    bool Init(std::string&) override {
+        return true;
+    }
+    uint32_t SampleRate() const override {
+        return 48000;
+    }
+    uint32_t Channels() const override {
+        return 2;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Float32;
+    }
+    const std::string& EndpointName() const override {
+        return name_;
+    }
+    void Shutdown() override {
+    }
+
+  private:
+    struct Packet {
+        uint32_t frames;
+        std::vector<float> data;
+    };
+    std::deque<Packet> queue_;
+    bool held_ = false;
+    std::string name_{"queue-mock"};
+};
+
+// Drive the mixer the way AudioThread::Run does: while it reports pending
+// frames, acquire, copy out the emitted stereo samples, release. Returns the
+// concatenated emitted stream (interleaved stereo).
+static std::vector<float> DrainMixer(MixedAudioSrc& mixer) {
+    std::vector<float> out;
+    std::string err;
+    while (mixer.PendingFrameCount() > 0) {
+        RawAudioBuffer buf{};
+        if (!mixer.AcquireBuffer(buf, err))
+            break;
+        if (buf.num_frames > 0 && buf.bytes != nullptr) {
+            const float* f = reinterpret_cast<const float*>(buf.bytes);
+            out.insert(out.end(), f, f + static_cast<size_t>(buf.num_frames) * 2u);
+        }
+        mixer.ReleaseBuffer();
+        if (buf.num_frames == 0)
+            break; // no forward progress; avoid spinning
+    }
+    return out;
+}
+
 TEST(MixedAudioSrcTest, MixedAudioSrc_ZeroSources_InitFails) {
     MixedAudioSrc mixer({}, {});
     std::string err;
@@ -132,11 +225,16 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_GainCountMismatch_InitFails) {
 
 TEST(MixedAudioSrcTest, MixedAudioSrc_TwoSilentSources_OutputIsSilent) {
     std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    // Silent sources still deliver frames (WASAPI flags a buffer SILENT rather
+    // than shrinking it); the mixer must carry those frames as zeros.
+    const auto silent_bytes = MakeFloat32Bytes(MixedAudioSrc::kMixFrameCount, 2, 1.0f);
     auto* s0 = new MockAudioCaptureSource();
     auto* s1 = new MockAudioCaptureSource();
     s0->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+    s0->SetData(silent_bytes);
     s0->SetSilent(true);
     s1->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+    s1->SetData(silent_bytes);
     s1->SetSilent(true);
     sources.push_back(std::unique_ptr<IAudioCaptureSource>(s0));
     sources.push_back(std::unique_ptr<IAudioCaptureSource>(s1));
@@ -358,7 +456,10 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_MonoSource_DuplicatesToStereo) {
     mixer.Shutdown();
 }
 
-TEST(MixedAudioSrcTest, MixedAudioSrc_ShortBuffer_ZeroPads) {
+TEST(MixedAudioSrcTest, MixedAudioSrc_ShortBuffer_EmitsExactFrameCountNoPadding) {
+    // A source packet shorter than the nominal device period must be emitted at
+    // its real length — the mixer must not pad it up to kMixFrameCount with
+    // fabricated silence (doing so inflated the sample-count-based PTS).
     constexpr uint32_t kShortFrames = 24;
     const auto src_bytes = MakeFloat32Bytes(kShortFrames, 2, 0.7f);
 
@@ -374,14 +475,11 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_ShortBuffer_ZeroPads) {
 
     RawAudioBuffer buf{};
     ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    EXPECT_EQ(buf.num_frames, kShortFrames);
     const float* samples = reinterpret_cast<const float*>(buf.bytes);
     for (uint32_t frame = 0; frame < kShortFrames; ++frame) {
         EXPECT_NEAR(samples[(frame * 2) + 0], 0.7f, 1e-5f) << "left at frame " << frame;
         EXPECT_NEAR(samples[(frame * 2) + 1], 0.7f, 1e-5f) << "right at frame " << frame;
-    }
-    for (uint32_t frame = kShortFrames; frame < MixedAudioSrc::kMixFrameCount; ++frame) {
-        EXPECT_NEAR(samples[(frame * 2) + 0], 0.0f, 1e-6f) << "left at frame " << frame;
-        EXPECT_NEAR(samples[(frame * 2) + 1], 0.0f, 1e-6f) << "right at frame " << frame;
     }
 
     mixer.ReleaseBuffer();
@@ -510,6 +608,153 @@ TEST(MixedAudioSrcTest, SingleSource_Int16_DirectAndMixedPathsAgree) {
         EXPECT_NEAR(direct_samples[i], mixed_samples[i], 1e-6f) << " path mismatch at " << i;
     }
     EXPECT_NEAR(rms(direct_samples), rms(mixed_samples), 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// Frame-accounting regression tests: the mixer must neither discard a source
+// packet's tail nor fabricate trailing silence, and the emitted sample count
+// must equal what the source delivered (so the sample-count-based PTS is
+// drift-free on realistic device periods that are not exactly 480 frames).
+// ---------------------------------------------------------------------------
+
+// A ramp value keyed to the global frame index — distinct per frame so any
+// dropped or inserted frame shows up as a discontinuity.
+static float RampAt(uint32_t frame) {
+    return static_cast<float>(frame % 4096) * (1.0f / 8192.0f); // stays within +-0.5
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_PacketLargerThanNominal_NoTailDiscarded) {
+    // One 512-frame packet (a 10.67 ms device period). The buggy mixer emitted a
+    // fixed 480 and discarded the trailing 32 frames.
+    constexpr uint32_t kFrames = 512;
+    auto* src = new QueueMockSource();
+    src->EnqueueRamp(kFrames, 0, RampAt);
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(src));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(1));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    const std::vector<float> out = DrainMixer(mixer);
+    ASSERT_EQ(out.size(), static_cast<size_t>(kFrames) * 2u); // all 512 frames survive
+    for (uint32_t f = 0; f < kFrames; ++f) {
+        EXPECT_NEAR(out[(f * 2) + 0], RampAt(f), 1e-6f) << "left at frame " << f;
+        EXPECT_NEAR(out[(f * 2) + 1], RampAt(f), 1e-6f) << "right at frame " << f;
+    }
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_PacketSmallerThanNominal_NoSilenceInserted) {
+    // One 448-frame packet (a ~9.3 ms device period). The buggy mixer emitted a
+    // fixed 480 and appended 32 fabricated silent frames.
+    constexpr uint32_t kFrames = 448;
+    auto* src = new QueueMockSource();
+    src->EnqueueRamp(kFrames, 0, RampAt);
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(src));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(1));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    const std::vector<float> out = DrainMixer(mixer);
+    ASSERT_EQ(out.size(), static_cast<size_t>(kFrames) * 2u); // exactly 448, no padding
+    for (uint32_t f = 0; f < kFrames; ++f) {
+        EXPECT_NEAR(out[(f * 2) + 0], RampAt(f), 1e-6f) << "frame " << f;
+    }
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_ManyPackets_SamplePreservingAndContinuous) {
+    // A single continuous ramp split across packets of realistic, varying device
+    // periods. After draining, the emitted stream must be that exact ramp with
+    // no gaps and no extra samples — i.e. Sigma in == Sigma out and PTS-continuous.
+    const uint32_t sizes[] = {448, 512, 480, 400, 530, 441, 512, 448};
+    auto* src = new QueueMockSource();
+    uint32_t total = 0;
+    for (uint32_t s : sizes) {
+        src->EnqueueRamp(s, total, RampAt);
+        total += s;
+    }
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(src));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(1));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    const std::vector<float> out = DrainMixer(mixer);
+    ASSERT_EQ(out.size(), static_cast<size_t>(total) * 2u);
+    for (uint32_t f = 0; f < total; ++f) {
+        EXPECT_NEAR(out[(f * 2) + 0], RampAt(f), 1e-6f) << "left at frame " << f;
+        EXPECT_NEAR(out[(f * 2) + 1], RampAt(f), 1e-6f) << "right at frame " << f;
+    }
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_TwoSourcesMismatchedPeriods_AlignedNoDiscardNoInsert) {
+    // Two sources deliver the same total number of frames of two independent
+    // ramps, but split on different packet boundaries (512+448 vs 480+480). The
+    // mixer must align them sample-for-sample: surplus from the longer packet is
+    // buffered (not discarded) and the shorter side is not silence-padded, so the
+    // output is exactly 0.5*A + 0.5*B for every one of the 960 frames.
+    auto ramp_a = [](uint32_t f) { return static_cast<float>(f % 1000) * (1.0f / 4000.0f); };
+    auto ramp_b = [](uint32_t f) { return -static_cast<float>(f % 700) * (1.0f / 4000.0f); };
+
+    auto* a = new QueueMockSource();
+    a->EnqueueRamp(512, 0, ramp_a);
+    a->EnqueueRamp(448, 512, ramp_a);
+    auto* b = new QueueMockSource();
+    b->EnqueueRamp(480, 0, ramp_b);
+    b->EnqueueRamp(480, 480, ramp_b);
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(a));
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(b));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    const std::vector<float> out = DrainMixer(mixer);
+    constexpr uint32_t kTotal = 960;
+    ASSERT_EQ(out.size(), static_cast<size_t>(kTotal) * 2u);
+    for (uint32_t f = 0; f < kTotal; ++f) {
+        const float expected = 0.5f * ramp_a(f) + 0.5f * ramp_b(f);
+        EXPECT_NEAR(out[(f * 2) + 0], expected, 1e-6f) << "left at frame " << f;
+        EXPECT_NEAR(out[(f * 2) + 1], expected, 1e-6f) << "right at frame " << f;
+    }
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_IdleSourceDoesNotStallActiveSource) {
+    // One source streams while the other is idle (a WASAPI loopback endpoint
+    // delivers no packets at all while the system is silent). The active source
+    // must keep flowing — the idle one contributes silence, it does not gate the
+    // mix — and every active frame must survive.
+    const uint32_t sizes[] = {480, 512, 448};
+    auto* active = new QueueMockSource();
+    uint32_t total = 0;
+    for (uint32_t s : sizes) {
+        active->EnqueueRamp(s, total, RampAt);
+        total += s;
+    }
+    auto* idle = new QueueMockSource(); // never enqueued: always 0 pending
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(active));
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(idle));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    const std::vector<float> out = DrainMixer(mixer);
+    ASSERT_EQ(out.size(), static_cast<size_t>(total) * 2u);
+    for (uint32_t f = 0; f < total; ++f) {
+        // base_gain = 1/2, idle contributes 0 -> output is 0.5 * active.
+        EXPECT_NEAR(out[(f * 2) + 0], 0.5f * RampAt(f), 1e-6f) << "frame " << f;
+    }
+    mixer.Shutdown();
 }
 
 } // namespace
