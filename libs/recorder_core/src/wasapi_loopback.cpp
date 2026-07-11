@@ -1,5 +1,9 @@
 #include "wasapi_loopback.h"
 
+// ClassifyWasapiAcquireFailure/WasapiAcquireFailAction — the shared WASAPI
+// acquire fail-closed policy this mirrors (see wasapi_capture_src.h).
+#include "wasapi_capture_src.h"
+
 // WideToUtf8 is declared in wgc_capture.h; include it directly
 #include "wgc_capture.h"
 
@@ -9,6 +13,33 @@
 #include <cstdio>
 
 namespace recorder_core {
+
+// ---------------------------------------------------------------------------
+// ClassifyLoopbackAcquire
+// ---------------------------------------------------------------------------
+
+LoopbackAcquireResult ClassifyLoopbackAcquire(const char* api_name, HRESULT hr) {
+    LoopbackAcquireResult result;
+    if (ClassifyWasapiAcquireFailure(hr) != WasapiAcquireFailAction::Fail) {
+        return result; // benign: S_OK / AUDCLNT_S_BUFFER_EMPTY — no data this tick
+    }
+
+    result.fatal = true;
+    char buf[192];
+    if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
+        snprintf(buf, sizeof(buf),
+                 "%s failed: AUDCLNT_E_DEVICE_INVALIDATED (0x%08lX) - system audio device invalidated", api_name,
+                 static_cast<unsigned long>(hr));
+    } else if (hr == AUDCLNT_E_SERVICE_NOT_RUNNING) {
+        snprintf(buf, sizeof(buf),
+                 "%s failed: AUDCLNT_E_SERVICE_NOT_RUNNING (0x%08lX) - Windows Audio service not running", api_name,
+                 static_cast<unsigned long>(hr));
+    } else {
+        snprintf(buf, sizeof(buf), "%s failed 0x%08lX", api_name, static_cast<unsigned long>(hr));
+    }
+    result.error_message = buf;
+    return result;
+}
 
 // ---------------------------------------------------------------------------
 // Destructor
@@ -26,6 +57,9 @@ bool WasapiLoopback::Init(std::string& out_error) {
     constexpr uint32_t kRequiredSampleRate = 48000;
     constexpr uint32_t kRequiredChannels = 2;
     constexpr LONGLONG kHnsBuffer = 2000000LL; // 200 ms
+
+    m_lastFatalErrorHr = S_OK;
+    m_lastFatalErrorMsg.clear();
 
     IMMDeviceEnumerator* pEnum = nullptr;
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pEnum));
@@ -122,8 +156,19 @@ UINT32 WasapiLoopback::GetNextPacketSize() {
     if (!m_pCaptureClient)
         return 0;
     UINT32 n = 0;
-    if (FAILED(m_pCaptureClient->GetNextPacketSize(&n)))
-        return 0;
+    const HRESULT hr = m_pCaptureClient->GetNextPacketSize(&n);
+    const LoopbackAcquireResult result = ClassifyLoopbackAcquire("IAudioCaptureClient::GetNextPacketSize", hr);
+    if (result.fatal) {
+        m_lastFatalErrorHr = hr;
+        m_lastFatalErrorMsg = result.error_message;
+        // Force the caller into GetNextPacket(), which surfaces the failure via
+        // LastFatalError{Hresult,Message}() instead of returning 0 forever
+        // against a dead endpoint (the track would otherwise go silently mute
+        // on a device unplug/invalidation instead of failing visibly).
+        return 1;
+    }
+    m_lastFatalErrorHr = S_OK;
+    m_lastFatalErrorMsg.clear();
     return n;
 }
 
@@ -136,8 +181,16 @@ bool WasapiLoopback::GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWOR
     if (!m_pCaptureClient)
         return false;
     UINT64 devicePos = 0, qpcPos = 0;
-    HRESULT hr = m_pCaptureClient->GetBuffer(out_data, out_num_frames, out_capture_flags, &devicePos, &qpcPos);
-    if (FAILED(hr) || *out_num_frames == 0)
+    const HRESULT hr = m_pCaptureClient->GetBuffer(out_data, out_num_frames, out_capture_flags, &devicePos, &qpcPos);
+    const LoopbackAcquireResult result = ClassifyLoopbackAcquire("IAudioCaptureClient::GetBuffer", hr);
+    if (result.fatal) {
+        m_lastFatalErrorHr = hr;
+        m_lastFatalErrorMsg = result.error_message;
+        return false;
+    }
+    m_lastFatalErrorHr = S_OK;
+    m_lastFatalErrorMsg.clear();
+    if (*out_num_frames == 0)
         return false;
     if (out_silent)
         *out_silent = (*out_capture_flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
@@ -159,6 +212,8 @@ bool WasapiLoopback::ReleasePacket(UINT32 num_frames) {
 // ---------------------------------------------------------------------------
 
 void WasapiLoopback::Shutdown() {
+    m_lastFatalErrorHr = S_OK;
+    m_lastFatalErrorMsg.clear();
     if (m_pCaptureClient) {
         m_pCaptureClient->Release();
         m_pCaptureClient = nullptr;

@@ -26,6 +26,7 @@ class WasapiLoopbackSrc : public IAudioCaptureSource {
     uint32_t Channels() const override;
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
+    int32_t LastCaptureHresult() const override;
 
     void Shutdown() override;
 
@@ -33,6 +34,10 @@ class WasapiLoopbackSrc : public IAudioCaptureSource {
     WasapiLoopback wasapi_;
     uint32_t last_frames_ = 0;
     bool buffer_acquired_ = false;
+    // Raw HRESULT of the last fatal acquire failure (endpoint loss). Surfaced
+    // to the drain so it reaches the app log as the recording's error code
+    // instead of a generic E_FAIL. 0 (S_OK) when no fatal failure has occurred.
+    int32_t last_capture_hr_ = 0;
 };
 
 } // namespace recorder_core
