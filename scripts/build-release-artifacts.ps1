@@ -26,6 +26,14 @@
     This script does NOT create a git tag, GitHub Release, or change repository
     visibility. Publication is a separate, manual, approved step.
 
+.PARAMETER Preset
+    CMake preset to build and package from. Defaults to the canonical
+    'windows-x64-release' (Visual Studio generator, multi-config) used by the
+    release pipeline. The PR packaging smoke passes 'windows-x64-ninja-release'
+    (Ninja, single-config, sccache-cacheable) instead so PR CI can validate
+    packaging drift without paying for a from-scratch VS Release build. Both
+    generator layouts are supported when locating the built exosnap.exe.
+
 .PARAMETER SkipConfigure
     Skip the CMake configure step (assumes the Release build tree is configured).
 
@@ -43,6 +51,7 @@
 #>
 [CmdletBinding()]
 param(
+    [string]$Preset = 'windows-x64-release',
     [switch]$SkipConfigure,
     [switch]$SkipBuild,
     [switch]$SkipSmoke,
@@ -58,9 +67,13 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Platform = 'windows-x64'
-$Preset = 'windows-x64-release'
 $BuildDir = Join-Path $RepoRoot "build/$Preset"
-$ReleaseExe = Join-Path $BuildDir 'app/Release/exosnap.exe'
+# Multi-config generators (Visual Studio) place the built exe under a
+# per-config subdirectory (app/Release/exosnap.exe); single-config generators
+# (Ninja) place it directly under app/exosnap.exe. Resolved after the build
+# step below, once the tree actually exists.
+$ReleaseExeMultiConfig = Join-Path $BuildDir 'app/Release/exosnap.exe'
+$ReleaseExeSingleConfig = Join-Path $BuildDir 'app/exosnap.exe'
 
 # ---------------------------------------------------------------------------
 # Canonical version — single source of truth is the root project(... VERSION ...)
@@ -456,8 +469,10 @@ else {
     Write-Step "Skipping configure/build (-SkipBuild)."
 }
 
-if (-not (Test-Path -LiteralPath $ReleaseExe -PathType Leaf)) {
-    throw "Release executable not found at '$ReleaseExe'. Build first (omit -SkipBuild)."
+$ReleaseExe = @($ReleaseExeMultiConfig, $ReleaseExeSingleConfig) |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $ReleaseExe) {
+    throw "Release executable not found at '$ReleaseExeMultiConfig' or '$ReleaseExeSingleConfig'. Build first (omit -SkipBuild)."
 }
 
 # ---------------------------------------------------------------------------

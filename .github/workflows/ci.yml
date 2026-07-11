@@ -157,6 +157,36 @@ jobs:
             if ($count -gt 40) { Write-Host "  ... ($($count - 40) more)" }
           }
 
+  # ---------------------------------------------------------------------------
+  # Detect whether this PR touches packaging-relevant paths, so the packaging
+  # smoke below (a scoped-down slice of the release-candidate pipeline, ADR
+  # 0037) only runs when it can actually catch something. Runs on pull_request
+  # only; push triggers (main, tags) are covered by the full RC pipeline
+  # instead (release-candidate.yml runs on tags and release/** branches).
+  # ---------------------------------------------------------------------------
+  changes:
+    name: detect packaging changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      packaging: ${{ steps.filter.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            packaging:
+              - 'packaging/**'
+              - 'scripts/build-release-artifacts.ps1'
+              - 'cmake/Vendor*'
+              - 'CMakeLists.txt'
+              - 'app/CMakeLists.txt'
+              - 'apps/updater/CMakeLists.txt'
+              - 'third_party/CMakeLists.txt'
+              - 'THIRD_PARTY_NOTICES.md'
+
   build-test:
     # The job name is kept stable (windows-x64-debug / -release) so the required
     # status checks keep matching; the Ninja preset is selected via matrix.preset.
@@ -207,3 +237,75 @@ jobs:
         with:
           name: ctest-logs-${{ matrix.preset }}
           path: build/${{ matrix.preset }}/Testing/Temporary/
+
+  # ---------------------------------------------------------------------------
+  # Packaging smoke (PR-CI only; gated on packaging-relevant path changes,
+  # see the `changes` job above). ADR 0037 established the full release-gate
+  # pipeline (install -> audit -> MSI -> content assertion -> MSI smoke -> ZIP
+  # smoke) in release-candidate.yml, but that workflow only runs on version
+  # tags and release/** branches — harvest-fragment regressions, new runtime
+  # DLLs windeployqt fails to stage, or leaked dev-tree files are invisible
+  # until the release tag is pushed. This job runs the fastest subset of that
+  # pipeline that still catches those regressions:
+  #
+  #   - cmake --install into a pruned staging tree (identical pruning rules)
+  #   - presence / absence / leak / exe-metadata validation of that tree
+  #   - the dumpbin /dependents static runtime-dependency audit
+  #   - portable ZIP creation + the isolated launch smoke (app exe + updater
+  #     exe, both via SetErrorMode + dialog-sentinel)
+  #
+  # It deliberately skips the WiX/MSI build, the MSI content assertion, and
+  # the MSI smoke (-SkipMsi): those need the WiX Toolset installed and add
+  # several minutes for a package format the portable-ZIP path already
+  # exercises structurally (same staging tree, same harvest source). It also
+  # builds from the Ninja release preset (sccache-cacheable, shared with the
+  # build-test job's release leg above) rather than the canonical VS-generator
+  # release preset the RC pipeline uses — the VS/MSBuild generator ignores
+  # CMAKE_CXX_COMPILER_LAUNCHER, which would mean a from-scratch compile on
+  # every PR. build-release-artifacts.ps1 takes a -Preset parameter (default
+  # 'windows-x64-release', unchanged for the RC pipeline) and resolves the
+  # built exe under either generator's output layout.
+  # ---------------------------------------------------------------------------
+  packaging-smoke:
+    name: packaging-smoke
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          archives: 'qtbase qtsvg'
+          cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Configure (windows-x64-ninja-release)
+        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+
+      # -SkipConfigure: configured above. -SkipMsi: WiX/MSI is out of scope for
+      # this PR-CI subset (release-candidate.yml is the release gate for that).
+      - name: Build, install, and smoke-test packaging (release-gate subset)
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -Preset windows-x64-ninja-release -SkipMsi
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload packaging validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaging-smoke-report
+          path: |
+            .workspace/release/*/validation-report.md
+            .workspace/release/*/artifact-manifest.json
+          if-no-files-found: warn
