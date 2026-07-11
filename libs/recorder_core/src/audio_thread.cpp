@@ -307,6 +307,28 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // those into a smoothed audio-clock-vs-QPC drift (audio_clock_drift.h).
     AudioClockDriftEstimator drift_estimator;
 
+    // Idle wait between drains. Sources initialized with
+    // AUDCLNT_STREAMFLAGS_EVENTCALLBACK expose a buffer-ready event (mic
+    // capture, process loopback); waiting on it plus the session stop event
+    // replaces the 1 ms poll — the stop event preserves today's shutdown
+    // behavior of a producer that wakes the moment stop/failure is raised. The
+    // bounded timeout is the safety net for the wake paths that have no event:
+    // pause_requested toggling, a stop flag set by a worker that bypasses the
+    // session helpers, or an engine that stops signaling. Sources without an
+    // event keep the previous 1 ms poll: the system-loopback stream never
+    // signals capture events (see wasapi_loopback.cpp), and a merged track
+    // drains several sources with no single event to wait on.
+    HANDLE wait_handles[2] = {m_state.stop_event, static_cast<HANDLE>(source_->BufferReadyEvent())};
+    const bool event_driven = (wait_handles[0] != nullptr && wait_handles[1] != nullptr);
+    constexpr DWORD kEventWaitTimeoutMs = 10;
+    auto waitForCaptureWork = [&]() {
+        if (event_driven) {
+            WaitForMultipleObjects(2, wait_handles, FALSE, kEventWaitTimeoutMs);
+        } else {
+            Sleep(1);
+        }
+    };
+
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
@@ -325,7 +347,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         uint32_t pendingFrames = source_->PendingFrameCount();
         m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
         if (pendingFrames == 0) {
-            Sleep(1);
+            waitForCaptureWork();
             continue;
         }
 
@@ -411,7 +433,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             break;
 
         if (!anyWork)
-            Sleep(1);
+            waitForCaptureWork();
     }
 
     source_->Shutdown();

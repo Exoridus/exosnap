@@ -75,6 +75,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     const std::string& EndpointName() const override;
     int32_t LastCaptureHresult() const override;
     bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
+    void* BufferReadyEvent() const override;
 
     void Shutdown() override;
 
@@ -85,6 +86,10 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;
     IAudioCaptureClient* capture_client_ = nullptr;
+    // Auto-reset event the audio engine signals per ready packet
+    // (AUDCLNT_STREAMFLAGS_EVENTCALLBACK); owned here, exposed via
+    // BufferReadyEvent() for the event-driven drain.
+    HANDLE buffer_event_ = nullptr;
     std::string endpoint_name_;
 
     AudioSampleFormat sample_format_ = AudioSampleFormat::Float32;

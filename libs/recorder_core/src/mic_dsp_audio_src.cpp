@@ -163,6 +163,10 @@ bool MicDspAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const
     return inner_ && inner_->LastBufferDeviceTiming(out_timing);
 }
 
+void* MicDspAudioSrc::BufferReadyEvent() const {
+    return inner_ ? inner_->BufferReadyEvent() : nullptr;
+}
+
 void MicDspAudioSrc::Shutdown() {
     inner_->Shutdown();
     initialized_ = false;

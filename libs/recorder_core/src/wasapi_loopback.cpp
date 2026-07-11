@@ -110,6 +110,13 @@ bool WasapiLoopback::Init(std::string& out_error) {
     // AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM so the audio engine's own sample-rate
     // converter and channel matrixer resample/downmix into it, mirroring the
     // process-loopback path (see wasapi_process_loopback_src.cpp).
+    //
+    // Deliberately NOT event-driven: Windows does not signal capture events for
+    // a loopback-initialized stream on a render endpoint — the documented
+    // workaround is a companion event-driven render client that is polled in
+    // lockstep ("Loopback Recording" in the WASAPI docs), which is more moving
+    // parts than the 1 ms poll it would replace. The process-loopback virtual
+    // device does not share this limitation and runs event-driven.
     WAVEFORMATEX fmt{};
     fmt.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
     fmt.nChannels = static_cast<WORD>(kRequiredChannels);

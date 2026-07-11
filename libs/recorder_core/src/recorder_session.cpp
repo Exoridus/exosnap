@@ -386,6 +386,7 @@ void RecorderSession::Stop() {
     const auto st = m_impl->State();
     st->pause_requested.store(false);
     st->stop_requested.store(true);
+    st->SignalStopEvent();
     st->premux_cv.notify_all();
     st->mux_cv.notify_all();
     st->mux_space_cv.notify_all();
@@ -475,6 +476,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     {
         auto& st = *state_ptr;
         st.stop_requested.store(false);
+        if (st.stop_event) {
+            ResetEvent(st.stop_event); // re-arm the Win32 stop mirror
+        }
         {
             std::lock_guard lk(st.failure_mutex);
             st.failure_recorded = false;

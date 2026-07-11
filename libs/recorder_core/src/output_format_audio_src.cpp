@@ -247,6 +247,10 @@ bool OutputFormatAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing)
     return inner_ && inner_->LastBufferDeviceTiming(out_timing);
 }
 
+void* OutputFormatAudioSrc::BufferReadyEvent() const {
+    return inner_ ? inner_->BufferReadyEvent() : nullptr;
+}
+
 void OutputFormatAudioSrc::Shutdown() {
     if (swr_ != nullptr) {
         swr_free(&swr_);

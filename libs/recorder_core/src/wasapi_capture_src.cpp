@@ -397,9 +397,22 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         hnsDefaultDevicePeriod = kFallbackDevicePeriodHns;
     }
 
-    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, hnsDefaultDevicePeriod, 0, initFormat, nullptr);
+    // Event-driven capture: the engine signals buffer_event_ whenever a packet
+    // is ready, so the drain waits on the event instead of polling every 1 ms.
+    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, hnsDefaultDevicePeriod,
+                                   0, initFormat, nullptr);
     if (FAILED(hr)) {
         return failHr("IAudioClient::Initialize(capture)", hr);
+    }
+
+    buffer_event_ = CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr);
+    if (buffer_event_ == nullptr) {
+        return failHr("CreateEvent(capture buffer ready)", HRESULT_FROM_WIN32(GetLastError()));
+    }
+
+    hr = audio_client_->SetEventHandle(buffer_event_);
+    if (FAILED(hr)) {
+        return failHr("IAudioClient::SetEventHandle(capture)", hr);
     }
 
     hr = audio_client_->GetService(IID_PPV_ARGS(&capture_client_));
@@ -655,6 +668,10 @@ bool WasapiCaptureSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) con
     return true;
 }
 
+void* WasapiCaptureSrc::BufferReadyEvent() const {
+    return buffer_event_;
+}
+
 void WasapiCaptureSrc::UpdateAutoModeFromBuffer(const uint8_t* data, uint32_t num_frames, bool silent) {
     if (requested_channel_mode_ != MicChannelMode::Auto || auto_mode_locked_ || input_channels_ != 2 ||
         num_frames == 0) {
@@ -714,6 +731,11 @@ void WasapiCaptureSrc::Shutdown() {
     if (device_) {
         device_->Release();
         device_ = nullptr;
+    }
+
+    if (buffer_event_) {
+        CloseHandle(buffer_event_);
+        buffer_event_ = nullptr;
     }
 
     input_channels_ = 0;

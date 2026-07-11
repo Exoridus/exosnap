@@ -324,11 +324,28 @@ bool WasapiProcessLoopbackSrc::Init(std::string& out_error) {
     fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
     fmt.cbSize = 0;
 
+    // Event-driven capture: unlike endpoint loopback, the process-loopback
+    // virtual device DOES signal capture events (the pattern Microsoft's
+    // ApplicationLoopback sample uses), so the drain can wait on the event
+    // instead of polling. Events only fire while the target process renders
+    // audio; silent stretches produce neither packets nor events, which the
+    // consumer's bounded wait already handles.
     hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED,
-                                   AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+                                   AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                                       AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                                    kProcessLoopbackBufferDurationHns, 0, &fmt, nullptr);
     if (FAILED(hr)) {
         return fail("Process loopback IAudioClient::Initialize", hr);
+    }
+
+    buffer_event_ = CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr);
+    if (buffer_event_ == nullptr) {
+        return fail("Process loopback CreateEvent(buffer ready)", HRESULT_FROM_WIN32(GetLastError()));
+    }
+
+    hr = audio_client_->SetEventHandle(buffer_event_);
+    if (FAILED(hr)) {
+        return fail("Process loopback IAudioClient::SetEventHandle", hr);
     }
 
     hr = audio_client_->GetService(IID_PPV_ARGS(&capture_client_));
@@ -486,6 +503,10 @@ bool WasapiProcessLoopbackSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_tim
     return true;
 }
 
+void* WasapiProcessLoopbackSrc::BufferReadyEvent() const {
+    return buffer_event_;
+}
+
 void WasapiProcessLoopbackSrc::Shutdown() {
     ReleaseBuffer();
     pending_capture_error_ = false;
@@ -503,6 +524,11 @@ void WasapiProcessLoopbackSrc::Shutdown() {
         audio_client_->Stop();
         audio_client_->Release();
         audio_client_ = nullptr;
+    }
+
+    if (buffer_event_ != nullptr) {
+        CloseHandle(buffer_event_);
+        buffer_event_ = nullptr;
     }
 }
 

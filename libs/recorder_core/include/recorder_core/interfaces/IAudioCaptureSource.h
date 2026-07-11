@@ -84,6 +84,17 @@ class IAudioCaptureSource {
         return false;
     }
 
+    // Optional event-driven mode: a Win32 auto-reset event (HANDLE as void* to
+    // keep this header platform-agnostic) the audio engine signals when a
+    // capture buffer becomes ready (AUDCLNT_STREAMFLAGS_EVENTCALLBACK +
+    // SetEventHandle). nullptr when the source only supports polling — the
+    // consumer then falls back to its polling cadence. The handle is owned by
+    // the source and valid between a successful Init() and Shutdown().
+    // Decorators forward their inner source's handle.
+    virtual void* BufferReadyEvent() const {
+        return nullptr;
+    }
+
     virtual void Shutdown() = 0;
 };
 

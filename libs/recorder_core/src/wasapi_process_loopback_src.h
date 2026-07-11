@@ -33,6 +33,7 @@ class WasapiProcessLoopbackSrc : public IAudioCaptureSource {
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
     bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
+    void* BufferReadyEvent() const override;
     void Shutdown() override;
 
   private:
@@ -41,6 +42,10 @@ class WasapiProcessLoopbackSrc : public IAudioCaptureSource {
 
     IAudioClient* audio_client_ = nullptr;
     IAudioCaptureClient* capture_client_ = nullptr;
+    // Auto-reset event the audio engine signals per ready packet
+    // (AUDCLNT_STREAMFLAGS_EVENTCALLBACK); owned here, exposed via
+    // BufferReadyEvent() for the event-driven drain.
+    HANDLE buffer_event_ = nullptr;
 
     std::string endpoint_name_;
     bool buffer_acquired_ = false;

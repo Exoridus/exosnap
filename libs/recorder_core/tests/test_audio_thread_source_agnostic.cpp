@@ -481,4 +481,90 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsNotInflatedByIdleGaps) {
     EXPECT_GE(avgStep, kAacFrameDurNs * 0.85) << "AAC PTS step collapsed: " << avgStep << " ns";
 }
 
+// ---------------------------------------------------------------------------
+// Event-driven drain (AUDCLNT_STREAMFLAGS_EVENTCALLBACK sources)
+// ---------------------------------------------------------------------------
+
+// Mock that exposes a buffer-ready event like an event-driven WASAPI source:
+// the event is signaled whenever a packet is pending. Exercises the
+// WaitForMultipleObjects drain path instead of the Sleep(1) poll.
+class EventDrivenMockSource : public MockAudioCaptureSource {
+  public:
+    EventDrivenMockSource(std::atomic<bool>* stop_requested, size_t packet_count)
+        : MockAudioCaptureSource(stop_requested, packet_count),
+          event_(CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr)) {
+    }
+
+    ~EventDrivenMockSource() override {
+        if (event_ != nullptr) {
+            CloseHandle(event_);
+        }
+    }
+
+    uint32_t PendingFrameCount() override {
+        const uint32_t pending = MockAudioCaptureSource::PendingFrameCount();
+        if (pending > 0 && event_ != nullptr) {
+            SetEvent(event_);
+        }
+        return pending;
+    }
+
+    void* BufferReadyEvent() const override {
+        return event_;
+    }
+
+  private:
+    HANDLE event_ = nullptr;
+};
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_EventDrivenSource_EncodesAllPacketsAndSendsEos) {
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.config.audio_codec = AudioCodec::Opus;
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<EventDrivenMockSource>(&state.stop_requested, 5);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
+
+    EXPECT_FALSE(state.HasFailure());
+    EXPECT_FALSE(GatherQueuedAudioPackets(state).empty());
+
+    bool foundEos = false;
+    {
+        std::lock_guard lk(state.mux_mutex);
+        for (const auto& item : state.mux_queue) {
+            if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr) {
+                foundEos = true;
+            }
+        }
+    }
+    EXPECT_TRUE(foundEos);
+}
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_EventDrivenIdleDrain_WakesOnStop) {
+    // An event-driven source with no packets and an event that never fires:
+    // the drain sits in its wait. Raising stop through the session helpers
+    // (flag + stop event) must terminate the worker promptly — this is the
+    // shutdown contract the event wait has to preserve.
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.config.audio_codec = AudioCodec::Opus;
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<EventDrivenMockSource>(nullptr, 0);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+
+    thread->Start();
+    Sleep(50); // let the drain reach its idle wait
+
+    state.stop_requested.store(true);
+    state.SignalStopEvent();
+
+    EXPECT_TRUE(thread->Join(2000));
+    EXPECT_FALSE(state.HasFailure());
+}
+
 } // namespace
