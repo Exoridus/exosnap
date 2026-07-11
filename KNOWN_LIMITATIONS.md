@@ -217,15 +217,21 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   different adapters the shared frame cannot be opened, so the preview never
   switches sources and simply keeps running its own live WGC capture (recording
   is unaffected).
-- Update checking is **notify-only**: the official build checks GitHub Releases and points you to
-  the releases page. There is no in-place download, no auto-install, and no silent restart (see the
-  Crash reporting and updates section below).
+- **In-app updates are implemented** (official build only): a manual "Check now" and a toggleable
+  automatic check both look at GitHub Releases; a found update can be downloaded, signature- and
+  hash-verified, and installed in place via a dedicated updater process, with rollback on failure.
+  See the Crash reporting and updates section below for the full flow and its current boundaries.
+  There is still no silent restart — every install step is visible and the last step (relaunch) is
+  user-facing.
 - No code signing (portable ZIP and MSI are both unsigned); Windows SmartScreen may warn on first
   launch. An MSI installer is provided in addition to the portable ZIP.
 - No Replay Buffer.
 - The built-in editor (Review → Edit → Output overlay, opened from a completed recording) supports
   keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). There is no
-  video preview playback in the overlay yet, and there is no chapter/container-metadata export.
+  video preview playback in the overlay yet — the bundled FFmpeg build ships only the mux-only DLL
+  set (avformat/avcodec/avutil/swresample); `avfilter` and `swscale` are not deployed, so decoding
+  frames to a displayable format is not wired up (planned for a later release) — and there is no
+  chapter/container-metadata export (a JSON marker sidecar is written instead; see ADR 0042).
 - **HDR handling covers both monitor and window/game capture** (expert opt-in
   for native HDR10; tone-mapped SDR is the default for HDR desktops). A window on
   an HDR display captures via a scRGB FP16 frame pool and follows the same HDR
@@ -251,10 +257,14 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   all use `WDA_EXCLUDEFROMCAPTURE` to stay outside the captured frame. If the capture exclusion
   API fails on a given system, the overlay hides itself and logs the failure.
 - The quick-control pill is **opt-in** (off by default). Enable it in Advanced settings.
-- The notification "center" is implemented as a tray unread badge only — there is no persistent
-  notification history panel in this release.
-- Toast notifications appear in the bottom-right corner and auto-dismiss. They are not queued
-  visually when multiple arrive simultaneously; only the most recent is displayed.
+- **The notification hub is the persistent record.** A bell icon in the app header opens a
+  notification hub panel where every notification lands and persists until dismissed, keeping its
+  action (recover, undo, show in folder, …); the tray icon additionally shows an unread badge for
+  the same items. Toasts are a transient glance at the hub, anchored bottom-right of the screen
+  hosting the ExoSnap window: at most one *timed* toast (something that already finished) is
+  visible at a time — a newer one replaces it — while *standing* toasts (a condition that still
+  holds, e.g. low storage, unexpected stop, recovery available) stack above it and never
+  auto-dismiss.
 - Countdown overlay is anchored to the recorded monitor's bottom-center. On multi-monitor setups,
   it follows the selected monitor. It is not configurable in 0.3.0.
 - The fullscreen/borderless/exclusive capture matrix (capturing games that use exclusive fullscreen)
@@ -291,27 +301,37 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   Nothing leaves the machine without an explicit choice on the next-launch crash dialog.
 - **Crash detection is next-launch only.** Crashes are surfaced and offered for reporting on the
   *following* launch (clean-exit marker + session sidecar). An immediate in-session crash reporter
-  (Crash A2) is deferred.
+  is deferred.
 - **Stage 1 (automated Sentry upload) is present only in official builds.** The Sentry DSN is compiled
   in only under the official-build gate, so self-built binaries never upload. Stage 0 (assisted GitHub
   issue) is always available.
 - **Server-side symbolication.** No client-side minidump parsing; stacks are symbolicated server-side
   from PDBs. Automated `sentry-cli` symbol upload is not yet wired (pending an auth token); symbols are
   archived per release in the meantime.
-- **Update checking is notify + manual download.** Stable and Preview channels are supported. The
-  client verifies a signed manifest (ed25519 via Monocypher + SHA-256) and refuses downgrades, but it
-  does **not** download or install the update itself, and never restarts silently. In-place
-  auto-update (Update C) is deferred.
+- **In-app updates are implemented, with a dedicated updater process.** Stable and Preview channels
+  are supported, with both a manual "Check now" and a toggleable automatic check. The client
+  verifies the manifest against a detached ed25519 signature (Monocypher; shipped as a sibling
+  `update-manifest.json.sig` release asset) plus each package's SHA-256 hash, and refuses
+  downgrades. Finding an update hands off to a separate `exosnap-updater.exe` process that
+  downloads, verifies, closes the running app, swaps the files in place (staged rename for
+  portable installs; an elevated `msiexec /qn` for MSI installs, one UAC prompt), verifies the
+  result, and relaunches — restoring the previous version automatically if verification fails at
+  any step. The app never restarts silently: every step is shown, and the final relaunch is the
+  one moment the user sees the new version start.
 - **Updates are off by default for self-built binaries** and require the embedded official public key;
   no GitHub token is used by the client.
+- **Two moments are not fully in-app:** the UAC prompt for MSI installs, and the brief window while
+  the app is closed during the file swap. No update runs during an active recording or
+  finalization.
 
 ## Planned beyond 0.7.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
 current boundary is unambiguous. They are **not** part of 0.7.0:
-in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
-AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut management
-beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and window/game
-capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level metadata),
-4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
+in-place auto-update with restart (has since shipped as a dual-swap in-app updater — see the
+Crash reporting and updates section above), immediate in-session crash reporter, automated symbol
+upload, AMD and Intel hardware encoding, software encoding fallback, HLG and wide-color-gamut
+management beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and
+window/game capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level
+metadata), 4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
 audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).
