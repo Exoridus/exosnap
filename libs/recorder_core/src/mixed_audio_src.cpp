@@ -1,6 +1,7 @@
 #include "mixed_audio_src.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <string>
 
@@ -77,7 +78,7 @@ bool MixedAudioSrc::Init(std::string& out_error) {
     }
 
     const size_t num = sources_.size();
-    source_acquired_.assign(num, false);
+    source_fifo_.assign(num, std::vector<float>{});
 
     for (size_t i = 0; i < num; ++i) {
         std::string src_err;
@@ -90,7 +91,7 @@ bool MixedAudioSrc::Init(std::string& out_error) {
         }
     }
 
-    mix_buffer_.assign(static_cast<size_t>(kMixFrameCount) * kOutputChannels, 0.0f);
+    mix_buffer_.clear();
     scratch_buffer_.assign(static_cast<size_t>(kMixFrameCount) * kOutputChannels, 0.0f);
 
     if (limiter_enabled_) {
@@ -106,30 +107,27 @@ bool MixedAudioSrc::Init(std::string& out_error) {
     return true;
 }
 
-uint32_t MixedAudioSrc::PendingFrameCount() {
-    for (auto& src : sources_) {
-        if (src->PendingFrameCount() > 0) {
-            return kMixFrameCount;
+uint32_t MixedAudioSrc::EmittableFrames() const {
+    size_t emittable = 0;
+    bool any_ready = false;
+    for (const auto& fifo : source_fifo_) {
+        const size_t frames = fifo.size() / kOutputChannels;
+        if (frames == 0) {
+            continue;
+        }
+        if (!any_ready || frames < emittable) {
+            emittable = frames;
+            any_ready = true;
         }
     }
-    return 0;
+    return any_ready ? static_cast<uint32_t>(emittable) : 0;
 }
 
-bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) {
-    out_buf = {};
-    out_error.clear();
-
+void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
     const size_t num = sources_.size();
     const float base_gain = 1.0f / static_cast<float>(num);
 
-    std::fill(mix_buffer_.begin(), mix_buffer_.end(), 0.0f);
-    std::fill(source_acquired_.begin(), source_acquired_.end(), false);
-
-    bool any_discontinuity = false;
-
     for (size_t i = 0; i < num; ++i) {
-        const float gain = base_gain * source_gain_multipliers_[i];
-
         if (sources_[i]->PendingFrameCount() == 0) {
             continue;
         }
@@ -140,31 +138,107 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
             continue;
         }
 
-        source_acquired_[i] = true;
-
         if (src_buf.data_discontinuity) {
             any_discontinuity = true;
         }
 
-        if (src_buf.silent || src_buf.bytes == nullptr || src_buf.num_frames == 0) {
-            continue;
+        const uint32_t frames = src_buf.num_frames;
+        auto& fifo = source_fifo_[i];
+
+        if (frames > 0) {
+            const size_t base = fifo.size();
+            fifo.resize(base + static_cast<size_t>(frames) * kOutputChannels, 0.0f);
+
+            // Silent / null packets occupy the source timeline as literal
+            // silence — they are appended as zeros (preserving frame count) so
+            // this source's stream stays sample-aligned with the others.
+            if (!src_buf.silent && src_buf.bytes != nullptr) {
+                if (scratch_buffer_.size() < static_cast<size_t>(frames) * kOutputChannels) {
+                    scratch_buffer_.assign(static_cast<size_t>(frames) * kOutputChannels, 0.0f);
+                }
+                std::fill_n(scratch_buffer_.begin(), static_cast<size_t>(frames) * kOutputChannels, 0.0f);
+                ConvertToFloat32Stereo(src_buf.bytes, frames, sources_[i]->Channels(), sources_[i]->SampleFormat(),
+                                       scratch_buffer_.data(), frames);
+                const float gain = base_gain * source_gain_multipliers_[i];
+                for (size_t s = 0; s < static_cast<size_t>(frames) * kOutputChannels; ++s) {
+                    fifo[base + s] = gain * scratch_buffer_[s];
+                }
+            }
+
+            // Drift relief: bound the surplus a persistently faster source can
+            // accumulate. Drops the oldest frames only past the cap; normal
+            // packet jitter never reaches it.
+            const size_t cap = static_cast<size_t>(kMaxFifoFrames) * kOutputChannels;
+            if (fifo.size() > cap) {
+                fifo.erase(fifo.begin(), fifo.begin() + static_cast<std::ptrdiff_t>(fifo.size() - cap));
+            }
         }
 
-        std::fill(scratch_buffer_.begin(), scratch_buffer_.end(), 0.0f);
-        ConvertToFloat32Stereo(src_buf.bytes, src_buf.num_frames, sources_[i]->Channels(), sources_[i]->SampleFormat(),
-                               scratch_buffer_.data(), kMixFrameCount);
+        sources_[i]->ReleaseBuffer();
+    }
+}
 
-        const uint32_t mix_frames = std::min(src_buf.num_frames, kMixFrameCount);
-        for (uint32_t f = 0; f < mix_frames; ++f) {
-            mix_buffer_[(f * 2) + 0] += gain * scratch_buffer_[(f * 2) + 0];
-            mix_buffer_[(f * 2) + 1] += gain * scratch_buffer_[(f * 2) + 1];
+uint32_t MixedAudioSrc::PendingFrameCount() {
+    // Side-effect free: report what can be mixed from already-buffered samples,
+    // or — when nothing is buffered yet — a positive figure while any source
+    // still has an unread packet, so the caller proceeds to AcquireBuffer (which
+    // performs the actual pump).
+    const uint32_t emittable = EmittableFrames();
+    if (emittable > 0) {
+        return emittable;
+    }
+    uint32_t inner_pending = 0;
+    for (auto& src : sources_) {
+        inner_pending = std::max(inner_pending, src->PendingFrameCount());
+    }
+    return inner_pending;
+}
+
+bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) {
+    out_buf = {};
+    out_error.clear();
+
+    bool any_discontinuity = false;
+    PumpOnePacketPerSource(any_discontinuity);
+
+    const uint32_t n = EmittableFrames();
+    if (n == 0) {
+        // No source currently holds samples — emit nothing this call rather than
+        // fabricating a silent block. data_discontinuity is still forwarded.
+        out_buf.num_frames = 0;
+        out_buf.silent = true;
+        out_buf.data_discontinuity = any_discontinuity;
+        return true;
+    }
+
+    const size_t samples = static_cast<size_t>(n) * kOutputChannels;
+    mix_buffer_.assign(samples, 0.0f);
+
+    // Sum the first n frames of every source that holds samples; sources with an
+    // empty FIFO contribute silence for this block. Then consume n frames from
+    // each contributing FIFO, leaving any surplus buffered for the next call.
+    for (auto& fifo : source_fifo_) {
+        if (fifo.empty()) {
+            continue;
+        }
+        for (size_t s = 0; s < samples; ++s) {
+            mix_buffer_[s] += fifo[s];
+        }
+        fifo.erase(fifo.begin(), fifo.begin() + static_cast<std::ptrdiff_t>(samples));
+    }
+
+    bool all_zero = true;
+    for (float s : mix_buffer_) {
+        if (s != 0.0f) {
+            all_zero = false;
+            break;
         }
     }
 
     if (limiter_enabled_) {
         // Brickwall limiter: smooth peak reduction to the ceiling (with a final
         // clamp guarantee inside Process) instead of hard-clipping the mix.
-        limiter_.Process(mix_buffer_.data(), kMixFrameCount);
+        limiter_.Process(mix_buffer_.data(), n);
     } else {
         // Legacy behavior: hard-clip the mix to full scale.
         for (float& s : mix_buffer_) {
@@ -176,19 +250,16 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     }
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(mix_buffer_.data());
-    out_buf.num_frames = kMixFrameCount;
-    out_buf.silent = false;
+    out_buf.num_frames = n;
+    out_buf.silent = all_zero;
     out_buf.data_discontinuity = any_discontinuity;
     return true;
 }
 
 void MixedAudioSrc::ReleaseBuffer() {
-    for (size_t i = 0; i < sources_.size(); ++i) {
-        if (source_acquired_[i]) {
-            sources_[i]->ReleaseBuffer();
-            source_acquired_[i] = false;
-        }
-    }
+    // Source packets are acquired and released inside PumpOnePacketPerSource;
+    // the mixed buffer this exposes is owned by mix_buffer_, so there is nothing
+    // further to release here.
 }
 
 uint32_t MixedAudioSrc::SampleRate() const {
@@ -212,7 +283,7 @@ void MixedAudioSrc::Shutdown() {
         src->Shutdown();
     }
     initialized_ = false;
-    source_acquired_.clear();
+    source_fifo_.clear();
 }
 
 } // namespace recorder_core
