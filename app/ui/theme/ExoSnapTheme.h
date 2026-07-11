@@ -2,9 +2,12 @@
 
 #include "ExoSnapThemes.h"
 
+#include <functional>
+
 #include <QColor>
 
 class QApplication;
+class QObject;
 class QString;
 
 namespace exosnap::ui::theme {
@@ -20,6 +23,15 @@ void ReapplyTheme(QApplication& app, const QString& theme_id);
 
 // Returns the currently active theme. Valid after ApplyExoSnapTheme().
 const ExoTheme& ActiveTheme();
+
+// Register a callback that restyles a widget from the active theme. `apply` runs
+// once immediately (so callers stop duplicating the initial styling) and again on
+// every subsequent ReapplyTheme() call, so widgets that build inline stylesheets or
+// render theme-tinted pixmaps re-derive their colours on a theme switch instead of
+// keeping the values baked at construction. `context` scopes the subscription: once
+// it is destroyed the callback is dropped (pass the widget itself). A null context
+// runs `apply` once and does not subscribe.
+void OnThemeChanged(QObject* context, std::function<void()> apply);
 
 // Parse a CSS colour string (supports #rrggbb, #rgb, rgba(r,g,b,a) where a is 0..1).
 // Returns an invalid QColor if parsing fails.

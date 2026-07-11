@@ -1,13 +1,18 @@
 #include "ExoSnapTheme.h"
 
 #include <algorithm>
+#include <functional>
+#include <utility>
+#include <vector>
 
 #include <QApplication>
 #include <QColor>
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include <QObject>
 #include <QPalette>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QString>
 #include <QStringList>
@@ -529,6 +534,39 @@ ThemeFontFamilies& CachedFontFamilies() {
     return font_families;
 }
 
+// ---------------------------------------------------------------------------
+// Theme-change broadcast
+// ---------------------------------------------------------------------------
+// The QApplication stylesheet re-applies master-QSS rules for free on a theme
+// switch, but widgets that build inline stylesheets or render theme-tinted
+// pixmaps bake their colours at construction and would otherwise keep them.
+// Those widgets subscribe here so ReapplyTheme() re-runs their styling.
+
+struct ThemeSubscriber {
+    QPointer<QObject> context;
+    std::function<void()> apply;
+};
+
+std::vector<ThemeSubscriber>& ThemeSubscribers() {
+    static std::vector<ThemeSubscriber> subscribers;
+    return subscribers;
+}
+
+void NotifyThemeChanged() {
+    auto& subscribers = ThemeSubscribers();
+    // Drop subscribers whose context widget has been destroyed.
+    subscribers.erase(std::remove_if(subscribers.begin(), subscribers.end(),
+                                     [](const ThemeSubscriber& s) { return s.context.isNull(); }),
+                      subscribers.end());
+    // Snapshot before dispatch: a callback that builds or tears down widgets can
+    // register/unregister subscribers, which would otherwise invalidate iterators.
+    const std::vector<ThemeSubscriber> snapshot = subscribers;
+    for (const auto& subscriber : snapshot) {
+        if (!subscriber.context.isNull() && subscriber.apply)
+            subscriber.apply();
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -537,6 +575,14 @@ ThemeFontFamilies& CachedFontFamilies() {
 
 const ExoTheme& ActiveTheme() {
     return ActiveThemeStorage();
+}
+
+void OnThemeChanged(QObject* context, std::function<void()> apply) {
+    if (!apply)
+        return;
+    apply(); // apply the current theme immediately so callers do not duplicate it
+    if (context != nullptr)
+        ThemeSubscribers().push_back({context, std::move(apply)});
 }
 
 QColor ParseThemeColor(const char* css_color) {
@@ -584,6 +630,10 @@ void ReapplyTheme(QApplication& app, const QString& theme_id) {
 
     ApplyPalette(app, theme);
     app.setStyleSheet(BuildThemeStylesheet(CachedFontFamilies(), theme));
+
+    // Restyle widgets that hold inline stylesheets / theme-tinted pixmaps, which
+    // the app stylesheet swap above does not reach.
+    NotifyThemeChanged();
 }
 
 QString ThemeBg4Color(const ExoTheme& theme) {
