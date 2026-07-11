@@ -1,9 +1,12 @@
 // src/zip_extract.cpp -- vendored-miniz zip extraction with a zip-slip guard.
 //
 // No Qt. All paths cross the API boundary as UTF-8 (miniz entry names) or
-// std::wstring (Windows filesystem paths); conversion happens locally here.
+// std::wstring (Windows filesystem paths); conversion goes through
+// url_utils.h's Utf8ToWide (proper CP_UTF8 widening, not byte-wise).
 
 #include <update/zip_extract.h>
+
+#include "url_utils.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -17,21 +20,6 @@
 namespace fs = std::filesystem;
 
 namespace exosnap::update {
-
-namespace {
-
-std::wstring Utf8ToWide(std::string_view utf8) {
-    if (utf8.empty())
-        return {};
-    int needed = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
-    if (needed <= 0)
-        return {};
-    std::wstring out(static_cast<size_t>(needed), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), needed);
-    return out;
-}
-
-} // namespace
 
 bool IsSafeZipEntryName(std::string_view entry_name) {
     if (entry_name.empty())

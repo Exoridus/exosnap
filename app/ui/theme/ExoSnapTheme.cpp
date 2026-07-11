@@ -289,6 +289,9 @@ QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families, const Ex
         {"${ok}", QString::fromUtf8(theme.success)},
         {"${warn}", QString::fromUtf8(theme.caution)},
         {"${err}", QString::fromUtf8(theme.error)},
+        {"${err-ink}", QString::fromUtf8(theme.error_ink)},
+        {"${err-hover}",
+         theme.error_hover_override ? QString::fromUtf8(theme.error_hover_override) : Lighten(err_c, 0.14).name()},
         {"${info}", QString::fromUtf8(theme.ac)}, // info = accent
         {"${ok-dim}", RgbaToken(ok_c, sDim)},
         {"${ok-b}", RgbaToken(ok_c, sB)},
@@ -356,6 +359,15 @@ QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families, const Ex
         {"${ac-a12}", RgbaToken(ac_c, 0.12)},
         {"${ac-a16}", RgbaToken(ac_c, 0.16)},
         {"${ac-a18}", RgbaToken(ac_c, 0.18)},
+        // Fixed dark fills that predate the token engine: every dark theme shipped
+        // these exact hex values through hardcoded QSS, so dark keeps them
+        // byte-identical while light themes derive a sensible equivalent instead
+        // of inheriting a near-black fill.
+        // preview-well: recessed panel behind the live preview swap-chain window.
+        {"${preview-well}",
+         dark ? QStringLiteral("#0A0A0B") : Darken(QColor(QString::fromUtf8(theme.bg)), 0.06).name()},
+        // indicator-disabled: fill of a disabled checkbox indicator.
+        {"${indicator-disabled}", dark ? QStringLiteral("#1A1A1D") : QString::fromUtf8(theme.bg)},
         // surface alpha tokens (chip/overlay backgrounds derived from surface colors)
         {"${surf-a92}", RgbaToken(QColor(QString::fromUtf8(theme.surf)), 0.92)},
         {"${surf2-a78}", RgbaToken(QColor(QString::fromUtf8(theme.surf2)), 0.78)},

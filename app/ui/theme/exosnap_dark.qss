@@ -369,7 +369,7 @@ QWidget#recordSourceRow[sourceLocked="true"] {
 }
 
 QWidget#recordPreviewSurfaceHost {
-    background: #0A0A0B;
+    background: ${preview-well};
     border: 1px solid ${line2};
     /* Square corners: the live preview is a rectangular native swap-chain child
        window that would cover any rounded corner unevenly. */
@@ -2096,7 +2096,7 @@ QCheckBox::indicator:checked {
 
 QCheckBox::indicator:disabled {
     border-color: ${line2};
-    background: #1A1A1D;
+    background: ${indicator-disabled};
 }
 
 QRadioButton::indicator {
@@ -2398,14 +2398,14 @@ QPushButton[dockAction="resume"]:disabled {
 }
 
 QPushButton[dockAction="stop"] {
-    color: #1A0D0B;
+    color: ${err-ink};
     background: ${err};
     border: 1px solid ${err};
 }
 
 QPushButton[dockAction="stop"]:hover {
-    background: #EC8A7E;
-    border-color: #EC8A7E;
+    background: ${err-hover};
+    border-color: ${err-hover};
 }
 
 QPushButton[dockAction="stop"]:disabled {
