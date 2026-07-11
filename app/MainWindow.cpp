@@ -4394,11 +4394,10 @@ void MainWindow::buildConfigPage() {
     connect(config_page_, &ConfigPage::themeIdChanged, this, [this](const QString& id) {
         persisted_settings_.theme_id = id;
         settings_store_.Save(persisted_settings_);
+        // ReapplyTheme() swaps the app stylesheet/palette AND notifies every
+        // OnThemeChanged() subscriber (inline stylesheets, tinted pixmaps, the
+        // two-tone brand wordmarks) — no per-widget patch-up calls here.
         ui::theme::ReapplyTheme(*qApp, id);
-        if (title_bar_)
-            title_bar_->refreshBrand();
-        if (about_page_)
-            about_page_->refreshBrand();
         for (QWidget* w : findChildren<QWidget*>())
             w->update();
     });

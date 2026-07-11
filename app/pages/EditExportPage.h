@@ -1,5 +1,6 @@
 #pragma once
 #include <QString>
+#include <QVector>
 #include <QWidget>
 #include <atomic>
 #include <cstdint>
@@ -129,6 +130,7 @@ class EditExportPage : public QWidget {
 
   private:
     void buildUi();
+    void applyThemeStyles();
     void refreshPhase();
     void loadMarkers();
     void runExport();
@@ -152,6 +154,7 @@ class EditExportPage : public QWidget {
 
     // Review Panel (post-flight report)
     QWidget* review_panel_ = nullptr;
+    QLabel* review_title_ = nullptr;
     QLabel* review_drop_label_ = nullptr;
     QLabel* review_drift_label_ = nullptr;
     QLabel* review_health_label_ = nullptr;
@@ -181,6 +184,7 @@ class EditExportPage : public QWidget {
     QString last_export_error_; // real error message from the last failed export
 
     // Mode-Bar
+    QFrame* mode_bar_ = nullptr;
     QPushButton* back_btn_ = nullptr;
     QLabel* title_label_ = nullptr;
     QLabel* filename_label_ = nullptr;
@@ -199,6 +203,7 @@ class EditExportPage : public QWidget {
     // Player-Area
     QFrame* player_frame_ = nullptr;
     QPushButton* play_pause_btn_ = nullptr;
+    QLabel* player_sub_ = nullptr;
     QLabel* player_meta_label_ = nullptr;
 
     // Timeline (interactive: trim handles, markers, playhead)
@@ -206,6 +211,10 @@ class EditExportPage : public QWidget {
 
     // Output-Panel
     QWidget* output_panel_ = nullptr;
+    QLabel* output_title_ = nullptr;
+    QLabel* container_lbl_ = nullptr;
+    QLabel* savemode_lbl_ = nullptr;
+    QLabel* dest_lbl_title_ = nullptr;
     QLabel* dest_folder_label_ = nullptr;
 
     // Exporting-Panel
@@ -224,6 +233,9 @@ class EditExportPage : public QWidget {
 
     // Details card (right rail)
     QFrame* detail_rail_ = nullptr;
+    QLabel* rail_title_ = nullptr;
+    QVector<QFrame*> fact_separators_;
+    QVector<QLabel*> fact_keys_;
     QLabel* fact_duration_val_ = nullptr;
     QLabel* fact_size_val_ = nullptr;
     QLabel* fact_res_val_ = nullptr;

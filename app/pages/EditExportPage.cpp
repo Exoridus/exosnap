@@ -136,44 +136,26 @@ void EditExportPage::buildUi() {
     root_layout->setSpacing(0);
 
     // ---- Mode-Bar ----
-    auto* mode_bar = new QFrame(this);
-    mode_bar->setObjectName(QStringLiteral("editExportModeBar"));
-    mode_bar->setFixedHeight(52);
-    mode_bar->setStyleSheet(QStringLiteral("QFrame#editExportModeBar {"
-                                           "background:%1;"
-                                           "border-bottom: 1px solid %2;"
-                                           "}")
-                                .arg(ActiveTheme().surf, ActiveTheme().line));
+    mode_bar_ = new QFrame(this);
+    mode_bar_->setObjectName(QStringLiteral("editExportModeBar"));
+    mode_bar_->setFixedHeight(52);
 
-    auto* mode_bar_layout = new QHBoxLayout(mode_bar);
+    auto* mode_bar_layout = new QHBoxLayout(mode_bar_);
     mode_bar_layout->setContentsMargins(M::kSpaceMd, 0, M::kSpaceMd, 0);
     mode_bar_layout->setSpacing(M::kSpaceSm);
 
-    back_btn_ = new QPushButton(mode_bar);
+    back_btn_ = new QPushButton(mode_bar_);
     back_btn_->setObjectName(QStringLiteral("editExportBackBtn"));
     back_btn_->setFixedSize(32, 32);
     back_btn_->setToolTip(QStringLiteral("Back to Record"));
     back_btn_->setCursor(Qt::PointingHandCursor);
-    back_btn_->setIcon(QIcon(renderEditIcon(QStringLiteral("chevLeft"), 16, themeColor(ActiveTheme().mut))));
     back_btn_->setIconSize(QSize(16, 16));
-    back_btn_->setStyleSheet(QStringLiteral("QPushButton#editExportBackBtn {"
-                                            "background:%1;"
-                                            "border: 1px solid %2;"
-                                            "border-radius: 9px;"
-                                            "}"
-                                            "QPushButton#editExportBackBtn:hover { background:%3; }")
-                                 .arg(ActiveTheme().surf2, ActiveTheme().line2, ActiveTheme().raise));
 
-    title_label_ = new QLabel(QStringLiteral("Edit & export"), mode_bar);
+    title_label_ = new QLabel(QStringLiteral("Edit & export"), mode_bar_);
     title_label_->setObjectName(QStringLiteral("editExportTitle"));
-    title_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:700; font-size:16px; }").arg(ActiveTheme().ink));
 
     filename_label_ = new QLabel(this);
     filename_label_->setObjectName(QStringLiteral("editExportFilename"));
-    filename_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12.5px; }")
-            .arg(ActiveTheme().ac));
     filename_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
     mode_bar_layout->addWidget(back_btn_);
@@ -181,17 +163,12 @@ void EditExportPage::buildUi() {
     mode_bar_layout->addWidget(filename_label_, 1);
     mode_bar_layout->addStretch();
 
-    root_layout->addWidget(mode_bar);
+    root_layout->addWidget(mode_bar_);
 
     // ---- Phase Stepper ----
     stepper_widget_ = new QWidget(this);
     stepper_widget_->setObjectName(QStringLiteral("editExportStepper"));
     stepper_widget_->setFixedHeight(40);
-    stepper_widget_->setStyleSheet(QStringLiteral("QWidget#editExportStepper {"
-                                                  "background:%1;"
-                                                  "border-bottom: 1px solid %2;"
-                                                  "}")
-                                       .arg(ActiveTheme().surf, ActiveTheme().line));
 
     auto* stepper_layout = new QHBoxLayout(stepper_widget_);
     stepper_layout->setContentsMargins(M::kSpaceLg, 0, M::kSpaceLg, 0);
@@ -239,14 +216,6 @@ void EditExportPage::buildUi() {
     // Enforce a 16:9 aspect ratio via eventFilter (Qt widgets have no native
     // height-for-width without a subclass).
     player_frame_->installEventFilter(this);
-    player_frame_->setStyleSheet(QStringLiteral("QFrame#editExportPlayer {"
-                                                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-                                                "stop:0 #1a1a1e, stop:1 #0e0e10);"
-                                                "border: 1px solid %1;"
-                                                "border-radius: %2px;"
-                                                "}")
-                                     .arg(ActiveTheme().line)
-                                     .arg(M::kRadiusLg));
 
     auto* player_layout = new QVBoxLayout(player_frame_);
     player_layout->setAlignment(Qt::AlignCenter);
@@ -258,31 +227,19 @@ void EditExportPage::buildUi() {
     play_pause_btn_->setObjectName(QStringLiteral("editExportPlayPauseBtn"));
     play_pause_btn_->setFixedSize(60, 60);
     play_pause_btn_->setCursor(Qt::PointingHandCursor);
-    play_pause_btn_->setIcon(QIcon(renderEditIcon(QStringLiteral("play"), 24, themeColor(ActiveTheme().ink))));
     play_pause_btn_->setIconSize(QSize(24, 24));
     play_pause_btn_->setToolTip(QStringLiteral("Play / pause preview"));
-    play_pause_btn_->setStyleSheet(QStringLiteral("QPushButton#editExportPlayPauseBtn {"
-                                                  "background: rgba(14, 14, 16, 0.7);"
-                                                  "border: 1px solid %1;"
-                                                  "border-radius: 30px;"
-                                                  "}"
-                                                  "QPushButton#editExportPlayPauseBtn:hover {"
-                                                  "background: rgba(24, 24, 28, 0.8);"
-                                                  "}")
-                                       .arg(ActiveTheme().line2));
 
-    auto* player_sub = new QLabel(QStringLiteral("Video preview — coming in 0.11"), player_frame_);
-    player_sub->setAlignment(Qt::AlignCenter);
-    player_sub->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().dim));
+    player_sub_ = new QLabel(QStringLiteral("Video preview — coming in 0.11"), player_frame_);
+    player_sub_->setAlignment(Qt::AlignCenter);
 
     player_meta_label_ = new QLabel(this);
     player_meta_label_->setObjectName(QStringLiteral("editExportPlayerMeta"));
     player_meta_label_->setAlignment(Qt::AlignRight | Qt::AlignBottom);
-    player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(ActiveTheme().dim));
 
     player_layout->addStretch();
     player_layout->addWidget(play_pause_btn_, 0, Qt::AlignHCenter);
-    player_layout->addWidget(player_sub);
+    player_layout->addWidget(player_sub_);
     player_layout->addStretch();
     player_layout->addWidget(player_meta_label_);
 
@@ -295,20 +252,15 @@ void EditExportPage::buildUi() {
     review_layout->setContentsMargins(0, 0, 0, 0);
     review_layout->setSpacing(M::kSpaceSm);
 
-    auto* review_title = new QLabel(QStringLiteral("Post-recording report"), review_panel_);
-    review_title->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(ActiveTheme().ink));
+    review_title_ = new QLabel(QStringLiteral("Post-recording report"), review_panel_);
 
     review_drop_label_ = new QLabel(QStringLiteral("Frame drops: \xe2\x80\x93"), review_panel_);
-    review_drop_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
 
     review_drift_label_ = new QLabel(QStringLiteral("Peak A/V drift: \xe2\x80\x93"), review_panel_);
-    review_drift_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
 
     review_health_label_ = new QLabel(QStringLiteral("Pipeline health: \xe2\x80\x93"), review_panel_);
-    review_health_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
 
-    review_layout->addWidget(review_title);
+    review_layout->addWidget(review_title_);
     review_layout->addWidget(review_drop_label_);
     review_layout->addWidget(review_drift_label_);
     review_layout->addWidget(review_health_label_);
@@ -332,15 +284,12 @@ void EditExportPage::buildUi() {
     output_panel_layout->setContentsMargins(0, 0, 0, 0);
     output_panel_layout->setSpacing(M::kSpaceSm);
 
-    auto* output_title = new QLabel(QStringLiteral("Output format"), output_panel_);
-    output_title->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(ActiveTheme().ink));
-    output_panel_layout->addWidget(output_title);
+    output_title_ = new QLabel(QStringLiteral("Output format"), output_panel_);
+    output_panel_layout->addWidget(output_title_);
 
     // Container selection (stream-copy only — no re-encode per ADR-0014)
-    auto* container_lbl = new QLabel(QStringLiteral("Container:"), output_panel_);
-    container_lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
-    output_panel_layout->addWidget(container_lbl);
+    container_lbl_ = new QLabel(QStringLiteral("Container:"), output_panel_);
+    output_panel_layout->addWidget(container_lbl_);
 
     output_container_combo_ = new QComboBox(output_panel_);
     output_container_combo_->setObjectName(QStringLiteral("outputContainerCombo"));
@@ -351,9 +300,8 @@ void EditExportPage::buildUi() {
     output_panel_layout->addWidget(output_container_combo_);
 
     // Save mode: new file or overwrite original
-    auto* savemode_lbl = new QLabel(QStringLiteral("Save:"), output_panel_);
-    savemode_lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
-    output_panel_layout->addWidget(savemode_lbl);
+    savemode_lbl_ = new QLabel(QStringLiteral("Save:"), output_panel_);
+    output_panel_layout->addWidget(savemode_lbl_);
 
     output_save_mode_combo_ = new QComboBox(output_panel_);
     output_save_mode_combo_->setObjectName(QStringLiteral("outputSaveModeCombo"));
@@ -372,15 +320,12 @@ void EditExportPage::buildUi() {
     dest_layout->setContentsMargins(0, 0, 0, 0);
     dest_layout->setSpacing(M::kSpaceSm);
 
-    auto* dest_lbl_title = new QLabel(QStringLiteral("Destination:"), dest_row);
-    dest_lbl_title->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
+    dest_lbl_title_ = new QLabel(QStringLiteral("Destination:"), dest_row);
 
     dest_folder_label_ = new QLabel(QStringLiteral("Same folder as source"), dest_row);
     dest_folder_label_->setObjectName(QStringLiteral("editExportDestFolder"));
-    dest_folder_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ThemeText1Color(ActiveTheme())));
 
-    dest_layout->addWidget(dest_lbl_title);
+    dest_layout->addWidget(dest_lbl_title_);
     dest_layout->addWidget(dest_folder_label_, 1);
 
     output_panel_layout->addWidget(dest_row);
@@ -396,8 +341,6 @@ void EditExportPage::buildUi() {
 
     exporting_status_label_ = new QLabel(QStringLiteral("Exporting…"), exporting_panel_);
     exporting_status_label_->setObjectName(QStringLiteral("editExportExportingStatus"));
-    exporting_status_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:14px; }").arg(ActiveTheme().ink));
 
     exporting_bar_ = new QProgressBar(exporting_panel_);
     exporting_bar_->setObjectName(QStringLiteral("editExportProgressBar"));
@@ -405,13 +348,8 @@ void EditExportPage::buildUi() {
     exporting_bar_->setValue(62);
     exporting_bar_->setFixedHeight(6);
     exporting_bar_->setTextVisible(false);
-    exporting_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border-radius:3px; border:none; }"
-                                                 "QProgressBar::chunk { background:%2; border-radius:3px; }")
-                                      .arg(ActiveTheme().raise, ActiveTheme().ac));
 
     exporting_detail_label_ = new QLabel(QStringLiteral("Stream-copy \xc2\xb7 no quality loss"), exporting_panel_);
-    exporting_detail_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
 
     exporting_layout->addWidget(exporting_status_label_);
     exporting_layout->addWidget(exporting_bar_);
@@ -440,7 +378,6 @@ void EditExportPage::buildUi() {
 
     result_detail_label_ = new QLabel(result_panel_);
     result_detail_label_->setObjectName(QStringLiteral("editExportResultDetail"));
-    result_detail_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
     result_detail_label_->setWordWrap(true);
 
     auto* result_actions_row = new QWidget(result_panel_);
@@ -476,29 +413,20 @@ void EditExportPage::buildUi() {
 
     detail_rail_ = new QFrame(rail_column);
     detail_rail_->setObjectName(QStringLiteral("editExportDetailRail"));
-    detail_rail_->setStyleSheet(QStringLiteral("QFrame#editExportDetailRail {"
-                                               "background:%1;"
-                                               "border: 1px solid %2;"
-                                               "border-radius: %3px;"
-                                               "}")
-                                    .arg(ActiveTheme().surf, ActiveTheme().line)
-                                    .arg(M::kRadiusLg));
 
     auto* rail_layout = new QVBoxLayout(detail_rail_);
     rail_layout->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
     rail_layout->setSpacing(0);
 
-    auto* rail_title = new QLabel(QStringLiteral("Details"), detail_rail_);
-    rail_title->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:700; font-size:13.5px; }").arg(ActiveTheme().ink));
-    rail_layout->addWidget(rail_title);
+    rail_title_ = new QLabel(QStringLiteral("Details"), detail_rail_);
+    rail_layout->addWidget(rail_title_);
     rail_layout->addSpacing(M::kSpaceSm);
 
     const auto makeFactRow = [&](const QString& key_text, QLabel*& val_label_ref, bool first) {
         if (!first) {
             auto* sep = new QFrame(detail_rail_);
             sep->setFixedHeight(1);
-            sep->setStyleSheet(QStringLiteral("QFrame { background:%1; border:none; }").arg(ActiveTheme().line));
+            fact_separators_.push_back(sep);
             rail_layout->addWidget(sep);
         }
         auto* row = new QWidget(detail_rail_);
@@ -507,15 +435,10 @@ void EditExportPage::buildUi() {
         row_layout->setSpacing(M::kSpaceSm);
 
         auto* key = new QLabel(key_text, row);
-        key->setStyleSheet(
-            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:11px; }")
-                .arg(ActiveTheme().dim));
+        fact_keys_.push_back(key);
 
         val_label_ref = new QLabel(QStringLiteral("–"), row);
         val_label_ref->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        val_label_ref->setStyleSheet(
-            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12px; }")
-                .arg(ActiveTheme().ink));
 
         row_layout->addWidget(key);
         row_layout->addWidget(val_label_ref, 1);
@@ -556,11 +479,6 @@ void EditExportPage::buildUi() {
     action_bar_ = new QFrame(this);
     action_bar_->setObjectName(QStringLiteral("editExportActionBar"));
     action_bar_->setFixedHeight(64);
-    action_bar_->setStyleSheet(QStringLiteral("QFrame#editExportActionBar {"
-                                              "background:%1;"
-                                              "border-top: 1px solid %2;"
-                                              "}")
-                                   .arg(ActiveTheme().surf, ActiveTheme().line));
 
     auto* action_layout = new QHBoxLayout(action_bar_);
     action_layout->setContentsMargins(M::kSpaceMd, 0, M::kSpaceMd, 0);
@@ -612,7 +530,124 @@ void EditExportPage::buildUi() {
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &EditExportPage::onOpenFolderClicked);
     connect(result_reveal_btn_, &QPushButton::clicked, this, &EditExportPage::onRevealFileClicked);
 
-    // Initial phase
+    // Applies the theme-derived inline styling (and the initial phase via
+    // refreshPhase()) now, and re-applies it on every theme switch so nothing
+    // keeps the old palette's colours or icon tints.
+    ui::theme::OnThemeChanged(this, [this]() { applyThemeStyles(); });
+}
+
+void EditExportPage::applyThemeStyles() {
+    const auto& t = ActiveTheme();
+
+    // ---- Mode-Bar ----
+    mode_bar_->setStyleSheet(QStringLiteral("QFrame#editExportModeBar {"
+                                            "background:%1;"
+                                            "border-bottom: 1px solid %2;"
+                                            "}")
+                                 .arg(t.surf, t.line));
+
+    back_btn_->setIcon(QIcon(renderEditIcon(QStringLiteral("chevLeft"), 16, themeColor(t.mut))));
+    back_btn_->setStyleSheet(QStringLiteral("QPushButton#editExportBackBtn {"
+                                            "background:%1;"
+                                            "border: 1px solid %2;"
+                                            "border-radius: 9px;"
+                                            "}"
+                                            "QPushButton#editExportBackBtn:hover { background:%3; }")
+                                 .arg(t.surf2, t.line2, t.raise));
+
+    title_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:700; font-size:16px; }").arg(t.ink));
+
+    filename_label_->setStyleSheet(
+        QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12.5px; }")
+            .arg(t.ac));
+
+    // ---- Phase Stepper ----
+    stepper_widget_->setStyleSheet(QStringLiteral("QWidget#editExportStepper {"
+                                                  "background:%1;"
+                                                  "border-bottom: 1px solid %2;"
+                                                  "}")
+                                       .arg(t.surf, t.line));
+
+    // ---- Player-Area ----
+    player_frame_->setStyleSheet(QStringLiteral("QFrame#editExportPlayer {"
+                                                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+                                                "stop:0 #1a1a1e, stop:1 #0e0e10);"
+                                                "border: 1px solid %1;"
+                                                "border-radius: %2px;"
+                                                "}")
+                                     .arg(t.line)
+                                     .arg(M::kRadiusLg));
+
+    play_pause_btn_->setStyleSheet(QStringLiteral("QPushButton#editExportPlayPauseBtn {"
+                                                  "background: rgba(14, 14, 16, 0.7);"
+                                                  "border: 1px solid %1;"
+                                                  "border-radius: 30px;"
+                                                  "}"
+                                                  "QPushButton#editExportPlayPauseBtn:hover {"
+                                                  "background: rgba(24, 24, 28, 0.8);"
+                                                  "}")
+                                       .arg(t.line2));
+    // Re-render the play/pause glyph (its tint follows ActiveTheme().ink).
+    refreshPlayButton();
+
+    player_sub_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.dim));
+    player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(t.dim));
+
+    // ---- Review Panel ----
+    review_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(t.ink));
+    review_drop_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.mut));
+    review_drift_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.mut));
+    review_health_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.mut));
+
+    // ---- Output Panel ----
+    output_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(t.ink));
+    container_lbl_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
+    savemode_lbl_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
+    dest_lbl_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
+    dest_folder_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ThemeText1Color(t)));
+
+    // ---- Exporting Panel ----
+    exporting_status_label_->setStyleSheet(
+        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:14px; }").arg(t.ink));
+    exporting_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border-radius:3px; border:none; }"
+                                                 "QProgressBar::chunk { background:%2; border-radius:3px; }")
+                                      .arg(t.raise, t.ac));
+    exporting_detail_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
+
+    // ---- Result Panel (title/icon/badge are phase-dependent → refreshPhase) ----
+    result_detail_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
+
+    // ---- Details card (right rail) ----
+    detail_rail_->setStyleSheet(QStringLiteral("QFrame#editExportDetailRail {"
+                                               "background:%1;"
+                                               "border: 1px solid %2;"
+                                               "border-radius: %3px;"
+                                               "}")
+                                    .arg(t.surf, t.line)
+                                    .arg(M::kRadiusLg));
+    rail_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:700; font-size:13.5px; }").arg(t.ink));
+
+    for (QFrame* sep : fact_separators_)
+        sep->setStyleSheet(QStringLiteral("QFrame { background:%1; border:none; }").arg(t.line));
+    for (QLabel* key : fact_keys_)
+        key->setStyleSheet(
+            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:11px; }")
+                .arg(t.dim));
+    for (QLabel* val : {fact_duration_val_, fact_size_val_, fact_res_val_, fact_fps_val_, fact_video_val_,
+                        fact_audio_val_, fact_container_val_})
+        val->setStyleSheet(
+            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12px; }")
+                .arg(t.ink));
+
+    // ---- Bottom action bar ----
+    action_bar_->setStyleSheet(QStringLiteral("QFrame#editExportActionBar {"
+                                              "background:%1;"
+                                              "border-top: 1px solid %2;"
+                                              "}")
+                                   .arg(t.surf, t.line));
+
+    // Re-derive the phase-dependent stepper/result/title/button styling and icons
+    // for the current phase from ActiveTheme().
     refreshPhase();
 }
 

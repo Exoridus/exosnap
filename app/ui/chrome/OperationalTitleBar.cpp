@@ -46,7 +46,9 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     wordmark_ = new QLabel(brand_slot);
     wordmark_->setProperty("labelRole", "titlebarWordmark");
     wordmark_->setTextFormat(Qt::RichText);
-    refreshBrand();
+    // The two-tone wordmark bakes ink/accent into rich text; rebake on every theme
+    // switch (runs once now, again on each ReapplyTheme).
+    theme::OnThemeChanged(this, [this]() { refreshBrand(); });
 
     brand_layout->addWidget(brand_mark_, 0, Qt::AlignVCenter);
     brand_layout->addWidget(wordmark_, 0, Qt::AlignVCenter);
