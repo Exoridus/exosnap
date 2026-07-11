@@ -665,8 +665,8 @@ RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrat
 }
 
 // ---------------------------------------------------------------------------
-// ComputeGopLength / ApplyGopToNvenc / NextGopKeyframePhase
-// Pure GOP / keyframe helpers (see nvenc_encoder.h). No GPU/NVENC session.
+// ComputeGopLength / ApplyGopToNvenc / ApplySpatialAqToNvenc / NextGopKeyframePhase
+// Pure GOP + AQ helpers (see nvenc_encoder.h). No GPU/NVENC session required.
 // ---------------------------------------------------------------------------
 uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept {
     if (frame_rate_num == 0u || frame_rate_den == 0u) {
@@ -691,6 +691,12 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
         cfg.encodeCodecConfig.av1Config.idrPeriod = gop_length;
         break;
     }
+}
+
+void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept {
+    cfg.rcParams.enableAQ = 1;         // spatial AQ — no capability gate; safe without lookahead
+    cfg.rcParams.enableTemporalAQ = 0; // deliberately off (undocumented without lookahead)
+    cfg.rcParams.aqStrength = 0;       // 0 = driver auto-selects AQ strength
 }
 
 GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) noexcept {
@@ -797,6 +803,11 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_encodeConfig.rcParams.enableLookahead = 0;
     m_encodeConfig.rcParams.lookaheadDepth = 0;
     m_encodeConfig.frameIntervalP = 1;
+
+    // Explicitly pin spatial adaptive quantization on, so the AQ state no longer
+    // depends on the driver's per-preset default. Temporal AQ stays off (no
+    // lookahead) — see ApplySpatialAqToNvenc.
+    ApplySpatialAqToNvenc(m_encodeConfig);
 
     return true;
 }

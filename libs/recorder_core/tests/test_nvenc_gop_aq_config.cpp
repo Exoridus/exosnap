@@ -4,15 +4,17 @@
 
 #include <gtest/gtest.h>
 
-// Tests for the pure, GPU-free GOP helpers backing the keyframe-interval
-// selector:
-//   ComputeGopLength     — round(interval_secs * fps) with a degenerate-fps fallback
-//   ApplyGopToNvenc      — gopLength + codec-specific idrPeriod, kept consistent
-//   NextGopKeyframePhase — deterministic IDR predictor with non-default GOP
+// Tests for the pure, GPU-free GOP + AQ helpers backing the keyframe-interval
+// selector and the explicit adaptive-quantization setting:
+//   ComputeGopLength      — round(interval_secs * fps) with a degenerate-fps fallback
+//   ApplyGopToNvenc       — gopLength + codec-specific idrPeriod, kept consistent
+//   ApplySpatialAqToNvenc — enableAQ=1, enableTemporalAQ=0, aqStrength=0
+//   NextGopKeyframePhase  — deterministic IDR predictor with non-default GOP
 //
 // NVENC SDK fields under test (NV_ENC_CONFIG):
 //   gopLength
 //   encodeCodecConfig.{h264Config,hevcConfig,av1Config}.idrPeriod
+//   rcParams.{enableAQ, enableTemporalAQ, aqStrength}
 
 namespace recorder_core {
 
@@ -93,6 +95,31 @@ TEST(ApplyGopToNvenc, IdrPeriodEqualsGopLengthForEveryCodec) {
                                                                 : cfg.encodeCodecConfig.av1Config.idrPeriod;
         EXPECT_EQ(idr, cfg.gopLength);
     }
+}
+
+// ---------------------------------------------------------------------------
+// ApplySpatialAqToNvenc — spatial AQ on, temporal off, auto strength
+// ---------------------------------------------------------------------------
+
+TEST(ApplySpatialAqToNvenc, EnablesSpatialAqOnly) {
+    NV_ENC_CONFIG cfg{};
+    ApplySpatialAqToNvenc(cfg);
+    EXPECT_EQ(cfg.rcParams.enableAQ, 1u) << "spatial AQ must be explicitly enabled";
+    EXPECT_EQ(cfg.rcParams.enableTemporalAQ, 0u) << "temporal AQ must stay off (no lookahead)";
+    EXPECT_EQ(cfg.rcParams.aqStrength, 0u) << "aqStrength 0 keeps driver auto-selection";
+}
+
+TEST(ApplySpatialAqToNvenc, OverridesInheritedTemporalAqAndStrength) {
+    // Simulate a preset config that arrived with temporal AQ / a strength set;
+    // the explicit apply must pin it back to the deterministic spatial-only state.
+    NV_ENC_CONFIG cfg{};
+    cfg.rcParams.enableAQ = 0;
+    cfg.rcParams.enableTemporalAQ = 1;
+    cfg.rcParams.aqStrength = 8;
+    ApplySpatialAqToNvenc(cfg);
+    EXPECT_EQ(cfg.rcParams.enableAQ, 1u);
+    EXPECT_EQ(cfg.rcParams.enableTemporalAQ, 0u);
+    EXPECT_EQ(cfg.rcParams.aqStrength, 0u);
 }
 
 // ---------------------------------------------------------------------------

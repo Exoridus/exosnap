@@ -530,8 +530,9 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_chroma_config PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
-# test_nvenc_gop_aq_config: pure unit tests for the GOP helpers backing the
-# keyframe-interval selector — ComputeGopLength / ApplyGopToNvenc /
+# test_nvenc_gop_aq_config: pure unit tests for the GOP + adaptive-quantization
+# helpers backing the keyframe-interval selector and the explicit spatial-AQ
+# setting — ComputeGopLength / ApplyGopToNvenc / ApplySpatialAqToNvenc /
 # NextGopKeyframePhase (no GPU needed).
 exosnap_add_gtest(
     NAME test_nvenc_gop_aq_config

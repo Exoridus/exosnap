@@ -123,6 +123,19 @@ uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num,
 void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) noexcept;
 
 // ---------------------------------------------------------------------------
+// ApplySpatialAqToNvenc — pure, testable. Explicitly pins spatial adaptive
+// quantization on so the AQ state is set by us, not inherited from the driver's
+// per-preset default. Spatial AQ (rcParams.enableAQ) has no capability gate in
+// the NVENC API, unlike temporal AQ (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ), and is
+// valid with the P-only / no-lookahead pipeline used here. Temporal AQ is left
+// off deliberately: nvEncodeAPI.h does not document it as valid without
+// lookahead, so enabling it would be speculative. aqStrength stays 0 to keep the
+// driver's automatic strength selection (header: "If not set, strength is auto
+// selected by driver."). No GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept;
+
+// ---------------------------------------------------------------------------
 // NextGopKeyframePhase — pure, testable IDR predictor. Mirrors the deterministic
 // cadence EncodeFrame relies on: with no B-frames and no lookahead
 // (frameIntervalP=1) output order == submission order, so IDRs land on
