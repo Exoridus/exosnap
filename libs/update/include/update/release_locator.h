@@ -17,6 +17,7 @@ namespace exosnap::update {
 struct ReleaseAssets {
     SemVer version;                // parsed from tag_name "vX.Y.Z"
     std::string manifest_url;      // browser_download_url of "update-manifest.json"
+    std::string signature_url;     // browser_download_url of "update-manifest.json.sig"
     std::string portable_url;      // asset ending "-portable.zip" ("" if absent)
     std::string installer_url;     // asset ending ".msi" ("" if absent)
     std::string releases_page_url; // html_url
@@ -24,7 +25,9 @@ struct ReleaseAssets {
 
 // Parse the GitHub /releases JSON array (exact payload UpdateChecker fetches) and pick
 // the newest release for `channel` (Stable = non-prerelease, Preview = prerelease) that
-// carries an update-manifest.json asset. nullopt when none qualifies.
+// carries BOTH an update-manifest.json asset AND its update-manifest.json.sig detached
+// signature. A release missing either cannot be verified and does not qualify. nullopt
+// when none qualifies.
 //
 // If `parse_error` is non-null, it is set to a non-empty message when the JSON body
 // could not be parsed or had an unexpected shape (i.e. LocateRelease could not read

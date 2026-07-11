@@ -5,23 +5,35 @@
 using namespace exosnap::update;
 
 namespace {
+// v0.9.1 carries only a portable ZIP (no manifest, no signature) -> never
+// qualifies. v0.9.2 carries a manifest but NO detached signature -> cannot be
+// verified, so the newest-qualifying pick must skip it in favour of v0.9.0,
+// which carries both the manifest and its .sig.
 constexpr const char* kReleases = R"JSON([
+ {"tag_name":"v0.9.2","prerelease":false,"html_url":"https://gh/r/v0.9.2","assets":[
+   {"name":"update-manifest.json","browser_download_url":"https://dl/m092.json"},
+   {"name":"ExoSnap-0.9.2-windows-x64-portable.zip","browser_download_url":"https://dl/p092.zip"}]},
  {"tag_name":"v0.9.1","prerelease":false,"html_url":"https://gh/r/v0.9.1","assets":[
    {"name":"ExoSnap-0.9.1-windows-x64-portable.zip","browser_download_url":"https://dl/p091.zip"}]},
  {"tag_name":"v0.9.0","prerelease":false,"html_url":"https://gh/r/v0.9.0","assets":[
    {"name":"update-manifest.json","browser_download_url":"https://dl/m090.json"},
+   {"name":"update-manifest.json.sig","browser_download_url":"https://dl/m090.json.sig"},
    {"name":"ExoSnap-0.9.0-windows-x64-portable.zip","browser_download_url":"https://dl/p090.zip"},
    {"name":"ExoSnap-0.9.0-windows-x64.msi","browser_download_url":"https://dl/i090.msi"}]},
  {"tag_name":"v0.10.0-rc.1","prerelease":true,"html_url":"https://gh/r/rc1","assets":[
-   {"name":"update-manifest.json","browser_download_url":"https://dl/mrc.json"}]}
+   {"name":"update-manifest.json","browser_download_url":"https://dl/mrc.json"},
+   {"name":"update-manifest.json.sig","browser_download_url":"https://dl/mrc.json.sig"}]}
 ])JSON";
-}
+} // namespace
 
-TEST(ReleaseLocator, StableSkipsReleasesWithoutManifestAsset) {
+TEST(ReleaseLocator, StableSkipsReleasesMissingManifestOrSignature) {
+    // Newest stable (v0.9.2) has a manifest but no .sig -> skipped; v0.9.1 has
+    // neither -> skipped; v0.9.0 has both -> selected.
     auto r = LocateRelease(kReleases, UpdateChannel::Stable);
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->version, (SemVer{0, 9, 0}));
     EXPECT_EQ(r->manifest_url, "https://dl/m090.json");
+    EXPECT_EQ(r->signature_url, "https://dl/m090.json.sig");
     EXPECT_EQ(r->portable_url, "https://dl/p090.zip");
     EXPECT_EQ(r->installer_url, "https://dl/i090.msi");
 }
@@ -30,6 +42,17 @@ TEST(ReleaseLocator, PreviewPicksPrerelease) {
     auto r = LocateRelease(kReleases, UpdateChannel::Preview);
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->manifest_url, "https://dl/mrc.json");
+    EXPECT_EQ(r->signature_url, "https://dl/mrc.json.sig");
+}
+
+TEST(ReleaseLocator, ManifestWithoutSignatureDoesNotQualify) {
+    // A single release carrying a manifest but no detached signature must not
+    // be selected -- it cannot be verified.
+    constexpr const char* kNoSig = R"JSON([
+     {"tag_name":"v1.0.0","prerelease":false,"html_url":"https://gh/r/v1.0.0","assets":[
+       {"name":"update-manifest.json","browser_download_url":"https://dl/m100.json"}]}
+    ])JSON";
+    EXPECT_FALSE(LocateRelease(kNoSig, UpdateChannel::Stable).has_value());
 }
 
 TEST(ReleaseLocator, MalformedJsonSetsParseError) {
