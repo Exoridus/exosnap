@@ -49,10 +49,11 @@
 // ============================================================================
 // D3D11 threading contract
 // ============================================================================
-// ID3D11DeviceContext (m_d3dContext) and ID3D11VideoContext (m_videoContext) are
-// used EXCLUSIVELY on this VideoThread.  No other thread in RecorderSession may
-// call any method on these interfaces.  The shared ID3D11Device (m_d3dDevice)
-// lifetime is owned by RecorderSession::Impl; VideoThread borrows the pointer.
+// The D3D11 device (d3dDevice), its immediate context (d3dContext) and the
+// video context (videoContext) are created locally in Run() and owned for the
+// lifetime of that call.  They are used EXCLUSIVELY on this VideoThread — no
+// other thread in RecorderSession may call any method on these interfaces.
+// Nothing here is borrowed from the session; the device is not shared.
 // ============================================================================
 
 namespace recorder_core {
