@@ -1170,6 +1170,7 @@ TEST(DisplayFactsRefreshTest, RefreshReplacesTheStartupSnapshot) {
     RecordingCoordinator coordinator;
 
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
     caps.runtime.displays = {MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/false)};
     coordinator.OnCapabilitiesReady(caps, capability::ResolveResult{});
     ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
@@ -1190,6 +1191,7 @@ TEST(DisplayFactsRefreshTest, AnEmptyQueryKeepsThePreviousFacts) {
     RecordingCoordinator coordinator;
 
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
     caps.runtime.displays = {MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/true)};
     coordinator.OnCapabilitiesReady(caps, capability::ResolveResult{});
 
@@ -1214,6 +1216,7 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
 
     RecordingCoordinator coordinator;
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
     capability::ResolveResult validation;
     validation.succeeded = true;
     // MP4 + H.264 + AAC: validated as-is by the static baseline, and distinct

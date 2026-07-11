@@ -247,7 +247,11 @@ void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& fact
 
 CapabilitySet CapabilityBuilder::BuildFromHardwareQuery() {
     const RuntimeCapabilitySnapshot snapshot = QueryRuntimeFacts();
-    return BuildEffectiveCapabilities(snapshot);
+    CapabilitySet caps = BuildEffectiveCapabilities(snapshot);
+    // Only a set that just came from a real, completed hardware probe is
+    // authoritative enough to gate a recording-start decision.
+    caps.probed = true;
+    return caps;
 }
 
 } // namespace exosnap::capability

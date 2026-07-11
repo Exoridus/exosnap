@@ -51,6 +51,7 @@
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion / kGitCommit
 
 #include <capability/capability_builder.h>
+#include <capability/capability_cache_key.h>
 #include <capability/codec_selection.h>
 #include <capability/config_types.h>
 #include <capability/resolver.h>
@@ -1057,6 +1058,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     qApp->installEventFilter(this);
 
     QTimer::singleShot(0, this, [this]() {
+        // Warm-start: hydrate Diagnostics/Device from the last known-good capability
+        // snapshot before the real, off-thread probe below even starts, so those pages
+        // are not blank during its cold window. The adapter-identity read is cheap
+        // (DXGI only — no NVENC session, no Media Foundation), so this stays synchronous.
+        // A cache hit is NEVER delivered to record_page_ / the coordinator: it is rebuilt
+        // via BuildEffectiveCapabilities() directly, which leaves CapabilitySet::probed
+        // false, and only onRuntimeCapsReady()'s freshly probed set (below) is ever handed
+        // to RecordPage::setRuntimeCapabilities() — the sole path that can unlock a
+        // recording-start decision. See CapabilityCacheStore's doc comment.
+        capability_cache_key_ = capability::BuildCapabilityCacheKey(
+            capability::CapabilityBuilder::QueryAdapterIdentity(), exosnap::build::kVersion);
+        if (auto warm_snapshot = capability_cache_.LoadMatching(capability_cache_key_)) {
+            runtime_caps_ = capability::CapabilityBuilder::BuildEffectiveCapabilities(*warm_snapshot);
+            runtime_caps_ready_ = true;
+            diagnostics::AppLog::info(
+                QStringLiteral("perf"),
+                QStringLiteral("caps-warm-start %1 ms").arg(diagnostics::StartupClock().elapsed()));
+            if (device_page_)
+                device_page_->setCapabilitySet(runtime_caps_);
+            refreshDiagnosticsData();
+        }
+
         // Run the hardware capability probe on a worker thread so tick-0 does not
         // stall the UI. onRuntimeCapsReady() is invoked on the main thread via
         // QueuedConnection when the probe completes; it also starts the device
@@ -1108,6 +1131,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
     runtime_caps_ = std::move(caps);
     runtime_caps_ready_ = true;
+    // Warm-start: overwrite the disk cache with THIS run's freshly probed answer so the
+    // next launch can hydrate from it (see CapabilityCacheStore's doc comment). Cheap
+    // JSON write; done here on the UI thread rather than the probe's worker thread so it
+    // never races MainWindow teardown.
+    capability_cache_.Save(runtime_caps_.runtime, capability_cache_key_);
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed (async)"));
     diagnostics::AppLog::info(QStringLiteral("perf"),
                               QStringLiteral("caps-probe-end %1 ms").arg(diagnostics::StartupClock().elapsed()));

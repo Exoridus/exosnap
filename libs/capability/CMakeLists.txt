@@ -4,6 +4,7 @@ add_library(exosnap_capability STATIC
   src/capability_set.cpp
   src/codec_selection.cpp
   src/capability_builder.cpp
+  src/capability_cache_key.cpp
   src/runtime_query.cpp
   src/resolver.cpp
   src/option_query.cpp
@@ -107,5 +108,15 @@ exosnap_add_gtest(
   NAME capability_adapter_capability_tests
   TEST_PREFIX capability.
   SOURCES tests/test_adapter_capability.cpp
+  LIBRARIES exosnap_capability
+)
+
+# Pure — no hardware/DXGI calls (unlike capability_adapter_enum_tests / the live
+# parts of capability_runtime_merge_tests). Covers CapabilityCacheKey and the
+# CapabilitySet::probed flag semantics used by the disk-cache warm-start path.
+exosnap_add_gtest(
+  NAME capability_cache_key_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_capability_cache_key.cpp
   LIBRARIES exosnap_capability
 )
