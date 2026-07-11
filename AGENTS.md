@@ -6,37 +6,18 @@ Build a Windows-native, diagnostics-first recording application MVP with a high-
 
 ## Canonical product decisions
 
-- Dark mode is the default app theme.
-- MVP navigation is exactly:
-  - Record
-  - Video
-  - Audio
-  - Output
-  - Hotkeys
-  - Diagnostics
-  - Logs
-  - Advanced
-- MVP excludes overlay/HUD work.
-- Primary recording profile:
-  - WebM (libwebm writes DocType=webm for all V_AV1+A_OPUS output)
-  - AV1
-  - Opus
-  - CFR 60 fps
-- Default audio source order:
-  1. APP
-  2. MIC
-  3. SYS
-- Default audio state:
-  - all sources enabled
-  - all sources separate tracks
-- The exact UI label is **`Merge with above`**. Do not rename it.
-- Recording start must be blocked when diagnostic blockers exist.
-- UI must not duplicate track resolution logic. It submits editable source rows; the engine returns resolved tracks.
-- MP4 must expose only compatible audio codecs. Opus must not be offered for MP4.
-- When switching containers, the selected audio codec must be reconciled to a valid codec for the new container.
-- MP4 shows a calm informational note about lower crash resilience than MKV.
-- The Record view contains a live preview before recording and a technical recording view while recording.
-- If a hotkey starts recording while the app window is visible, activate the Record view. If minimized, do not restore the window.
+Product decisions (defaults, navigation, audio/video model, container/codec rules) are **not
+duplicated here** to avoid the two drifting apart. `CLAUDE.md` and `docs/product-spec.md` are the
+single authoritative source for user-visible product behavior — read them before any change that
+could be visible to a user. This file only adds constraints on *how* agents implement that
+behavior, not *what* the behavior is:
+
+- UI must not duplicate track resolution logic. It submits editable source rows; the engine
+  returns resolved tracks.
+- When switching containers, the selected audio codec must be reconciled to a valid codec for the
+  new container; reconciliation is engine logic, never duplicated in the UI.
+- If a hotkey starts recording while the app window is visible, activate the Record view. If
+  minimized, do not restore the window.
 
 ## Architectural rules
 
