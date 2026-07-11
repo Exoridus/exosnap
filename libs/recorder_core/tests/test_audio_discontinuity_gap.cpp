@@ -181,7 +181,8 @@ std::vector<EncodedAudioPacket> GatherQueuedAudioPackets(SessionState& state) {
 // counter. The plan delivers 960 clean frames, then a packet flagged with a
 // 480-frame gap, then 960 more clean frames.
 TEST(AudioThreadGapFill, ReportedGapBecomesExactSilenceAndPtsStaysContinuous) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Pcm;
     state.config.audio_bit_depth = 16;
     state.audio_track_count = 1;
@@ -192,9 +193,9 @@ TEST(AudioThreadGapFill, ReportedGapBecomesExactSilenceAndPtsStaysContinuous) {
         {960, 0.25f, 0, false},
     };
     auto source = std::make_unique<GapMockSource>(&state.stop_requested, std::move(plan));
-    AudioThread thread(state, std::move(source), 0);
-    thread.Start();
-    ASSERT_TRUE(thread.Join(5000));
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
 
     EXPECT_FALSE(state.HasFailure());
 
@@ -249,7 +250,8 @@ TEST(AudioThreadGapFill, ReportedGapBecomesExactSilenceAndPtsStaysContinuous) {
 // A discontinuity with an unknown gap length (gap_frames == 0, e.g. a source
 // that cannot measure it) must not synthesize anything.
 TEST(AudioThreadGapFill, UnknownGapLengthInsertsNothing) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Pcm;
     state.config.audio_bit_depth = 16;
     state.audio_track_count = 1;
@@ -258,9 +260,9 @@ TEST(AudioThreadGapFill, UnknownGapLengthInsertsNothing) {
         {960, 0.25f, 0, false}, {960, 0.25f, 0, true}, // flagged, but no measurable gap
     };
     auto source = std::make_unique<GapMockSource>(&state.stop_requested, std::move(plan));
-    AudioThread thread(state, std::move(source), 0);
-    thread.Start();
-    ASSERT_TRUE(thread.Join(5000));
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
 
     EXPECT_FALSE(state.HasFailure());
 

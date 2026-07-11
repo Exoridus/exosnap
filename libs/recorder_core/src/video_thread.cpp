@@ -138,16 +138,24 @@ DXGI_FORMAT DemoteToneMapFormatIfUnsupportedVpInput(ID3D11VideoProcessorEnumerat
 
 } // namespace
 
-VideoThread::VideoThread(SessionState& state) : m_state(state) {
+VideoThread::VideoThread(std::shared_ptr<SessionState> state) : m_state_ptr(std::move(state)), m_state(*m_state_ptr) {
 }
 
 VideoThread::~VideoThread() {
+    // Start() gave the running thread shared ownership of this object, so a
+    // joinable thread here has already returned from Run() (the final release
+    // may even happen on the worker thread itself, where join() would
+    // deadlock). Detaching a finished thread only releases its handle.
     if (m_thread.joinable())
         m_thread.detach();
 }
 
 void VideoThread::Start() {
-    m_thread = std::thread([this] { Run(); });
+    // Self-ownership handoff: the lambda keeps this worker (and through
+    // m_state_ptr the SessionState) alive until Run() returns, so dropping the
+    // session's handle on a hung producer can never dangle the state the
+    // thread still writes through.
+    m_thread = std::thread([self = shared_from_this()] { self->Run(); });
 }
 
 bool VideoThread::Join(unsigned timeout_ms) {

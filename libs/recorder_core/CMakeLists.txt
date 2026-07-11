@@ -503,6 +503,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_mux_queue_backpressure PRIVATE src)
 
+# Worker teardown ownership: an abandoned (stalled/hung) worker keeps its
+# SessionState and capture source alive through the thread's shared ownership,
+# wakes on the stop/failure flags, and runs out cleanly — never a detach into
+# freed session memory, never a teardown deadlock on the mux queue bound.
+exosnap_add_gtest(
+    NAME test_worker_teardown_ownership
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_worker_teardown_ownership.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_worker_teardown_ownership PRIVATE src)
+
 exosnap_add_gtest(
     NAME test_fdk_aac_encoder
     TEST_PREFIX recorder_core.

@@ -48,7 +48,8 @@ MuxItem MakeAudioItem(size_t payload_bytes) {
 // ---------------------------------------------------------------------------
 
 TEST(MuxQueueBackpressure, FullQueueTimesOutDeterministically) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.mux_queue_packet_limit = 4;
     state.mux_queue_full_timeout_ms = 50;
 
@@ -67,7 +68,8 @@ TEST(MuxQueueBackpressure, FullQueueTimesOutDeterministically) {
 }
 
 TEST(MuxQueueBackpressure, ByteLimitBlocksBeforePacketLimit) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.mux_queue_packet_limit = 1000;
     state.mux_queue_byte_limit = 64;
     state.mux_queue_full_timeout_ms = 50;
@@ -79,7 +81,8 @@ TEST(MuxQueueBackpressure, ByteLimitBlocksBeforePacketLimit) {
 }
 
 TEST(MuxQueueBackpressure, DrainingConsumerWakesBlockedProducer) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.mux_queue_packet_limit = 2;
     state.mux_queue_full_timeout_ms = 5000;
 
@@ -114,7 +117,8 @@ TEST(MuxQueueBackpressure, DrainingConsumerWakesBlockedProducer) {
 }
 
 TEST(MuxQueueBackpressure, RecordedFailureWakesBlockedProducer) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.mux_queue_packet_limit = 1;
     state.mux_queue_full_timeout_ms = 60000; // must NOT be what unblocks us
 
@@ -220,7 +224,8 @@ class FloodMockSource : public IAudioCaptureSource {
 // scenario. The queue must stop at the bound and the session must fail with an
 // ErrorPhase::Mux error instead of growing without limit.
 TEST(MuxQueueBackpressure, AudioProducerFailsInsteadOfUnboundedGrowth) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Pcm;
     state.config.audio_bit_depth = 16;
     state.audio_track_count = 1;
@@ -231,9 +236,9 @@ TEST(MuxQueueBackpressure, AudioProducerFailsInsteadOfUnboundedGrowth) {
     state.codec_private.av1_ready = true;
 
     auto source = std::make_unique<FloodMockSource>(&state.stop_requested, 100);
-    AudioThread thread(state, std::move(source), 0);
-    thread.Start();
-    ASSERT_TRUE(thread.Join(15000));
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+    thread->Start();
+    ASSERT_TRUE(thread->Join(15000));
 
     EXPECT_TRUE(state.HasFailure());
     {

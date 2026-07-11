@@ -28,17 +28,26 @@ void ConvertInt16ToFloat32(const std::int16_t* src, float* dst, size_t sample_co
 
 } // namespace
 
-AudioThread::AudioThread(SessionState& state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id)
-    : m_state(state), source_(std::move(source)), track_id_(track_id) {
+AudioThread::AudioThread(std::shared_ptr<SessionState> state, std::unique_ptr<IAudioCaptureSource> source,
+                         uint32_t track_id)
+    : m_state_ptr(std::move(state)), m_state(*m_state_ptr), source_(std::move(source)), track_id_(track_id) {
 }
 
 AudioThread::~AudioThread() {
+    // Start() gave the running thread shared ownership of this object, so a
+    // joinable thread here has already returned from Run() (the final release
+    // may even happen on the worker thread itself, where join() would
+    // deadlock). Detaching a finished thread only releases its handle.
     if (m_thread.joinable())
         m_thread.detach();
 }
 
 void AudioThread::Start() {
-    m_thread = std::thread([this] { Run(); });
+    // Self-ownership handoff: the lambda keeps this worker (and through
+    // m_state_ptr the SessionState) alive until Run() returns, so dropping the
+    // session's handle on a stalled worker can never dangle the state the
+    // thread still writes through.
+    m_thread = std::thread([self = shared_from_this()] { self->Run(); });
 }
 
 bool AudioThread::Join(unsigned timeout_ms) {

@@ -11,18 +11,24 @@
 
 #include "session_internal.h"
 
+#include <memory>
 #include <thread>
 
 namespace recorder_core {
 
-class VideoThread {
+// Ownership contract: see audio_thread.h — the object must be owned by a
+// std::shared_ptr, and Start() hands the running thread shared ownership of
+// the worker and (through it) the SessionState, so a producer that misses the
+// shutdown budget can never be left writing through freed session memory.
+class VideoThread : public std::enable_shared_from_this<VideoThread> {
   public:
-    explicit VideoThread(SessionState& state);
+    explicit VideoThread(std::shared_ptr<SessionState> state);
     ~VideoThread();
 
     VideoThread(const VideoThread&) = delete;
     VideoThread& operator=(const VideoThread&) = delete;
 
+    // Requires shared_ptr ownership of this object (see class comment).
     void Start();
 
     // Join with up to timeout_ms.  Returns true if joined cleanly.
@@ -37,7 +43,8 @@ class VideoThread {
   private:
     void Run();
 
-    SessionState& m_state;
+    std::shared_ptr<SessionState> m_state_ptr;
+    SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())
     std::thread m_thread;
 };
 

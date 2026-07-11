@@ -143,15 +143,16 @@ std::vector<EncodedAudioPacket> GatherQueuedAudioPackets(SessionState& state) {
 }
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_StampsPacketsWithTrackId) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Opus;
     state.audio_track_count = 2;
 
     auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 3);
-    AudioThread thread(state, std::move(source), 1);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 1);
 
-    thread.Start();
-    ASSERT_TRUE(thread.Join(5000));
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
 
     EXPECT_FALSE(state.HasFailure());
 
@@ -163,15 +164,16 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_StampsPacketsWithTrackId) {
 }
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_SendsEosWithTrackId) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Opus;
     state.audio_track_count = 2;
 
     auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 3);
-    AudioThread thread(state, std::move(source), 1);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 1);
 
-    thread.Start();
-    ASSERT_TRUE(thread.Join(5000));
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
 
     bool foundEos = false;
     {
@@ -188,15 +190,16 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_SendsEosWithTrackId) {
 }
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_SourceInitFailureRecordsFailure) {
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Opus;
     state.audio_track_count = 1;
 
     auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 0, false, "Mock source init failure");
-    AudioThread thread(state, std::move(source), 1);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 1);
 
-    thread.Start();
-    ASSERT_TRUE(thread.Join(5000));
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
 
     EXPECT_TRUE(state.stop_requested.load());
     EXPECT_TRUE(state.HasFailure());
@@ -299,14 +302,15 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_OpusPtsStepIs20ms_SmallChunks) {
     // Deliver audio in 480-sample chunks (10 ms WASAPI pattern).
     // 10 chunks × 480 samples = 4800 samples → 5 Opus packets.
     // Each Opus packet must have a PTS exactly 20 ms after the previous one.
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::Opus;
     state.audio_track_count = 1;
 
     auto source = std::make_unique<SmallChunkMockSource>(&state.stop_requested, 480, 10);
-    AudioThread thread(state, std::move(source), 0);
-    thread.Start();
-    ASSERT_TRUE(thread.Join(5000));
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
 
     EXPECT_FALSE(state.HasFailure());
 
@@ -411,14 +415,15 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsStepMatchesFrameDuration_S
     // Deliver back-to-back 480-sample chunks through the real MF AAC encoder.
     // 100 chunks x 480 = 48000 frames (~1 s) -> ~46 AAC packets, each spaced by
     // one AAC frame duration (21.333 ms).
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::AacMf;
     state.audio_track_count = 1;
 
     auto source = std::make_unique<SmallChunkMockSource>(&state.stop_requested, 480, 100);
-    AudioThread thread(state, std::move(source), 0);
-    thread.Start();
-    ASSERT_TRUE(thread.Join(10000));
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+    thread->Start();
+    ASSERT_TRUE(thread->Join(10000));
 
     if (state.HasFailure()) {
         GTEST_SKIP() << "MF AAC encoder unavailable on this host";
@@ -444,14 +449,15 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsNotInflatedByIdleGaps) {
     // the audio timeline. 16 chunks of exactly one AAC frame, separated by ~25
     // idle polls (~25 ms of real Sleep). Pre-fix the QPC idle clock would push
     // the average step toward ~46 ms; after the fix it must stay ~21.333 ms.
-    SessionState state{};
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
     state.config.audio_codec = AudioCodec::AacMf;
     state.audio_track_count = 1;
 
     auto source = std::make_unique<IdleGapMockSource>(&state.stop_requested, 1024, 16, 25);
-    AudioThread thread(state, std::move(source), 0);
-    thread.Start();
-    ASSERT_TRUE(thread.Join(15000));
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+    thread->Start();
+    ASSERT_TRUE(thread->Join(15000));
 
     if (state.HasFailure()) {
         GTEST_SKIP() << "MF AAC encoder unavailable on this host";

@@ -28,16 +28,24 @@ namespace recorder_core {
 // MuxThread
 // ---------------------------------------------------------------------------
 
-MuxThread::MuxThread(SessionState& state) : m_state(state) {
+MuxThread::MuxThread(std::shared_ptr<SessionState> state) : m_state_ptr(std::move(state)), m_state(*m_state_ptr) {
 }
 
 MuxThread::~MuxThread() {
+    // Start() gave the running thread shared ownership of this object, so a
+    // joinable thread here has already returned from Run() (the final release
+    // may even happen on the worker thread itself, where join() would
+    // deadlock). Detaching a finished thread only releases its handle.
     if (m_thread.joinable())
         m_thread.detach();
 }
 
 void MuxThread::Start() {
-    m_thread = std::thread([this] { Run(); });
+    // Self-ownership handoff: the lambda keeps this worker (and through
+    // m_state_ptr the SessionState) alive until Run() returns — the fix for
+    // the stalled-finalize teardown, where the session abandons the worker
+    // while Finalize() is still blocked inside the writer.
+    m_thread = std::thread([self = shared_from_this()] { self->Run(); });
 }
 
 bool MuxThread::Join(unsigned timeout_ms) {
