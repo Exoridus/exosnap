@@ -646,9 +646,11 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
 - **Off by default for self-built binaries**; the official build's update check is opt-in and
   consent-gated. Both a manual "Check now" and a toggleable automatic update check exist.
 - **Stable** and **Preview** channels.
-- The client verifies a **signed manifest** (ed25519 via Monocypher + SHA-256) and **refuses
-  downgrades**. No GitHub token is used by the client. No update is performed during recording or
-  finalization, and the app never restarts silently.
+- The client verifies the manifest against a **detached ed25519 signature** (Monocypher; shipped as
+  a sibling `update-manifest.json.sig` asset, verified over the exact received manifest bytes
+  before any field is parsed) plus each package's **SHA-256** hash, and **refuses downgrades**. No
+  GitHub token is used by the client. No update is performed during recording or finalization, and
+  the app never restarts silently.
 - **UI home:** the update UI lives on the **Settings update card**, plus a **dedicated updater
   window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
@@ -743,9 +745,9 @@ release binaries will be signed once the certificate is issued.
   out of scope for the MVP); video preview playback inside the Edit/Output/Save overlay; HDR beyond
   BT.2020 (HDR handling now covers both monitor and WGC window/game capture via an FP16 frame pool;
   no HLG/wide-gamut is the confirmed 1.0 scope); 4:2:2 chroma and 10-bit 4:4:4
-  (8-bit 4:4:4 for H.264/HEVC is implemented as an Expert option); multi-vendor hardware encoding; the
-  in-place dual-swap updater (designed, not shipped); immediate
-  in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix.
+  (8-bit 4:4:4 for H.264/HEVC is implemented as an Expert option); multi-vendor hardware encoding;
+  immediate in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix. The
+  in-place dual-swap updater has since shipped (see Section 13) and is no longer on this list.
 
 **Licensing.** ExoSnap is GPL-3.0-or-later and bundles FFmpeg as LGPL-2.1-or-later shared libraries
 (dynamic linking).
@@ -754,6 +756,9 @@ release binaries will be signed once the certificate is issued.
 
 ## Resolved-decision notes
 
-- **Default audio state.** The canonical default is all three sources (APP/SYS/MIC) enabled as
-  separate tracks (per `CLAUDE.md` and README). An older internal preset note described a
-  System-only default; the enabled-all default is authoritative.
+- **Default audio state.** The canonical default is **context-aware**, per Section 3: the `APP` row
+  exists only while a specific application window is the capture target, and defaults enabled
+  there; for screen capture (no `APP` row) the shipped default is `SYS` enabled and `MIC` present
+  but off. Each enabled source is a separate resulting track (per `CLAUDE.md`). An older internal
+  preset note described a System-only default with no `MIC` row at all; Section 3's context-aware
+  default is authoritative.
