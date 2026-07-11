@@ -109,6 +109,48 @@ struct RcParams {
 RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrate_kbps);
 
 // ---------------------------------------------------------------------------
+// GOP / keyframe helpers — pure, testable, no GPU/NVENC session.
+//
+// ComputeGopLength: gopLength = round(keyframe_interval_secs * fps), fps =
+//   num/den. Falls back to 120 (the historical 2 s @ 60 fps default) for a
+//   degenerate frame rate, and never returns 0 (an all-1-GOP infinite stream).
+//
+// ApplyGopToNvenc: writes gopLength and the codec-specific idrPeriod into an
+//   NV_ENC_CONFIG, keeping idrPeriod == gopLength for H.264/HEVC/AV1 (each codec
+//   config struct carries its own idrPeriod field).
+// ---------------------------------------------------------------------------
+uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept;
+void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) noexcept;
+
+// ---------------------------------------------------------------------------
+// ApplySpatialAqToNvenc — pure, testable. Explicitly pins spatial adaptive
+// quantization on so the AQ state is set by us, not inherited from the driver's
+// per-preset default. Spatial AQ (rcParams.enableAQ) has no capability gate in
+// the NVENC API, unlike temporal AQ (NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ), and is
+// valid with the P-only / no-lookahead pipeline used here. Temporal AQ is left
+// off deliberately: nvEncodeAPI.h does not document it as valid without
+// lookahead, so enabling it would be speculative. aqStrength stays 0 to keep the
+// driver's automatic strength selection (header: "If not set, strength is auto
+// selected by driver."). No GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept;
+
+// ---------------------------------------------------------------------------
+// NextGopKeyframePhase — pure, testable IDR predictor. Mirrors the deterministic
+// cadence EncodeFrame relies on: with no B-frames and no lookahead
+// (frameIntervalP=1) output order == submission order, so IDRs land on
+// submission indices 0, gopLength, 2*gopLength, ...; a forced IDR resets the
+// phase. Given the current frame-in-GOP counter, the configured GOP length, and
+// whether an IDR was forced for this frame, returns whether the frame is a
+// keyframe and the counter to carry to the next frame. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+struct GopKeyframePhase {
+    bool is_keyframe = false;
+    uint32_t frame_in_gop = 0;
+};
+GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) noexcept;
+
+// ---------------------------------------------------------------------------
 // InputSlot — one NVENC GPU input resource in the slot ring
 // ---------------------------------------------------------------------------
 

@@ -53,8 +53,8 @@ class NvencVideoEncoder : public IVideoEncoder {
     // Set keyframe interval in seconds before Configure().
     // Controls gopLength and idrPeriod: gopLength = round(secs * fps).
     // Default 2.0 s — matches the pre-0.9.0 hardcoded value.
-    // NOTE: video_thread.cpp must call this BEFORE Configure() for the value to take effect.
-    // The setter is wired here; the actual call is in video_thread.cpp (one line).
+    // Called from video_thread.cpp with the user's Settings → Advanced selection
+    // before Configure(); the value flows into InitEncoder's GOP computation.
     void SetKeyframeIntervalSecs(float secs) noexcept {
         m_nvenc.SetKeyframeIntervalSecs(secs);
     }
