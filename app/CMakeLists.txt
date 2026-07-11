@@ -1979,6 +1979,25 @@ target_include_directories(recovery_overlay_visual_proof_tests PRIVATE ${CMAKE_C
 target_compile_definitions(recovery_overlay_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(recovery_overlay_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
+# Guard: every curated theme (ExoSnapThemes.h) must resolve every `${token}` in
+# the real compiled QSS resource. An invalid/orphaned token crashes at startup
+# in Debug (Q_ASSERT_X in ExoSnapTheme.cpp) and ships a literal "${token}"
+# string in Release; this drives the real ApplyExoSnapTheme()/ReapplyTheme()
+# path for every shipped theme so a QSS edit can't silently leave one broken.
+exosnap_add_gtest(
+    NAME theme_token_resolution_tests
+    TEST_PREFIX theme.
+    SOURCES
+        tests/test_theme_token_resolution.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(theme_token_resolution_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(theme_token_resolution_tests PRIVATE NOMINMAX)
+set_target_properties(theme_token_resolution_tests PROPERTIES AUTOMOC ON AUTORCC ON)
+
 # ---------------------------------------------------------------------------
 # Install / windeployqt
 # ---------------------------------------------------------------------------
