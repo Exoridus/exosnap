@@ -677,12 +677,25 @@ behind an expert toggle, and always shows hard blockers.
 **Underlying severity:** each check resolves to **Pass / Notice / Blocker**. A **Notice** is advisory
 and never blocks recording; a **Blocker** prevents recording from starting.
 
-**Calm presentation tiers:**
+**The four-tier honesty model.** Every diagnostic **declares its own tier** as part of the diagnosis
+— the tier is not re-derived downstream from an id list. The tier sets both the colour and the
+default visibility, and the honesty rail is a hard rule: **hiding is only ever for noise (Tier 3 +
+4); a real problem (Tier 1 + 2) is always visible in both Simple and Expert.** No check may show a
+Tier-3 optimisation in a warn colour.
 
-- **Tier 1 — Blocker.** Always shown; gates recording start.
-- **Tier 2 — measured environment/config problem.** Earns its own card.
-- **Tier 3 — optimisation tip** ("better, but it runs"). Bundled into a quiet tip chip; never turns
-  the verdict amber.
+- **Tier 1 — Blocker** (coral). Always shown; gates recording start.
+- **Tier 2 — measured problem** (amber). A live or environment problem that was actually *measured*
+  (judder, disk write-stall, low disk, audio device loss, unresolved saved display). Always shown as
+  its own card. Only ever fires when the condition is real — never predicted.
+- **Tier 3 — optimisation tip** (mint, "better, but it runs" — codec, container, colour range, FAT32,
+  Opus-in-MP4). Bundled into one quiet tip chip; never turns the verdict amber.
+- **Tier 4 — fact** (neutral). Capability/environment facts (elevation baseline, live audio format).
+  Run through the same model, shown only in the Expert Environment panel, never counted in the
+  verdict.
+
+**Entry cards.** Each Tier-1/Tier-2 card carries a mono **ID chip**, an optional **Elev** lock badge
+(for checks measured from the elevated present-path baseline), its typed FixAction, and a collapsed
+**Evidence** disclosure (measured value → "why" recommendation → a log excerpt).
 
 The Diagnostics page has a **Simple (default) view** and an **Expert toggle** (a single global state
 shared with Settings that reveals depth, not a second mode). Simple shows a verdict plus exactly four

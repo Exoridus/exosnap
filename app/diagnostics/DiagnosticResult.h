@@ -13,6 +13,36 @@ enum class DiagnosticSeverity {
     Blocker,
 };
 
+// The four-tier honesty model (diag-model.jsx DTIER). Each diagnostic declares
+// its own tier — the tier is part of the diagnosis, never inferred downstream by
+// an id allowlist. Colour AND default visibility follow the tier:
+//
+//   Blocker (1)          coral   — always visible; gates the record start
+//   MeasuredProblem (2)  amber   — always visible; only fires when actually measured
+//   Optimisation (3)     mint    — bundled into ONE quiet tip chip; never a warn colour
+//   Fact (4)             neutral — capability / environment fact; Expert-only
+//
+// The honesty rail: hiding is ONLY ever for noise (Tier 3 + 4). Tier 1 + 2 are
+// always shown, in both Simple and Expert. See IsAlwaysVisible / BundlesIntoTipChip.
+enum class DiagnosticTier {
+    Blocker = 1,
+    MeasuredProblem = 2,
+    Optimisation = 3,
+    Fact = 4,
+};
+
+// Honesty rule (the rail): a real problem is never hidden. Blockers and measured
+// problems are always visible; optimisations and facts may be collapsed away.
+[[nodiscard]] constexpr bool IsAlwaysVisible(DiagnosticTier tier) noexcept {
+    return tier == DiagnosticTier::Blocker || tier == DiagnosticTier::MeasuredProblem;
+}
+
+// Tier-3 optimisations are the ONLY diagnostics that bundle into the quiet tip
+// chip ("better, but it runs"). Everything else earns its own surface.
+[[nodiscard]] constexpr bool BundlesIntoTipChip(DiagnosticTier tier) noexcept {
+    return tier == DiagnosticTier::Optimisation;
+}
+
 enum class DiagnosticGroup {
     Overview,
     OperatingSystem,
@@ -52,6 +82,10 @@ struct DiagnosticResult {
     std::string id;
     DiagnosticGroup group = DiagnosticGroup::Overview;
     DiagnosticSeverity severity = DiagnosticSeverity::Pass;
+    // The honesty tier (diag-model.jsx DTIER). Declared by each check at the
+    // diagnosis site. Defaults to Fact — a bare result carries no alarm until a
+    // check states otherwise.
+    DiagnosticTier tier = DiagnosticTier::Fact;
     std::string title;
     std::string summary;
     std::string detail;

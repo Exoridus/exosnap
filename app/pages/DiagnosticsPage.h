@@ -140,9 +140,15 @@ class DiagnosticsPage : public QWidget {
     void updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
     void renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
 
-    // Splits engine results into Tier-1 blockers / Tier-2 measured problems (issue
-    // cards) and Tier-3 optimisations (bundled into the tip chip).
+    // Splits engine results by their declared tier: Tier-1 blockers + Tier-2 measured
+    // problems become issue cards; Tier-3 optimisations bundle into the tip chip.
+    // Tier-4 facts are excluded here (they render in the Environment panel).
     void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations);
+
+    // Renders Tier-4 environment facts (elevation, audio format, …) into the
+    // Expert Environment panel. Facts flow through the diagnostics model as real
+    // Fact-tier results rather than hard-coded UI rows.
+    void refreshEnvironmentFacts(const std::vector<diagnostics::DiagnosticResult>& facts);
 
     void refreshReadinessTiles(int blockers, int notices, int cap_passes);
     void setReadinessState(const QString& state);
@@ -196,6 +202,9 @@ class DiagnosticsPage : public QWidget {
 
     // ── Expert-only container (phases + elevation) ─────────────────────────────
     QWidget* expert_container_ = nullptr;
+
+    // Environment panel (Tier-4 facts, repopulated from the model each refresh).
+    QVBoxLayout* env_facts_layout_ = nullptr;
 
     // Capture pipeline (Phase ③ health cards) — always constructed so live wiring +
     // tests work regardless of view; hidden in Simple.

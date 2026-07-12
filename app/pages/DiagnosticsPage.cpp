@@ -129,17 +129,11 @@ QLabel* makeTableHeader(const QString& text, QWidget* parent) {
     return l;
 }
 
-// Tier-3 optimisation catalog (diag-model.jsx): capability/config-based "better,
-// but it runs" recommendations that bundle into the quiet tip chip instead of
-// alarming as a measured problem. Everything else Notice = a measured/environment
-// issue that earns its own card. Curated by id — all engine results share the
-// Recommendation group, so the group can't distinguish tiers.
-bool isOptimisationTip(const std::string& id) {
-    return id == "rec.002"              // MKV survives a crash better than MP4
-           || id == "rec.profile.codec" // GPU can record a better codec
-           || id == "rec.009"           // Opus in MP4 won't play everywhere
-           || id == "rec.008"           // FAT32 4 GB single-file limit
-           || id == "rec.color.range";  // Full range looks dark in players that ignore the flag
+// True for checks whose measurement requires elevated present-path telemetry
+// (PresentMon / DPC-ISR ETW). Drives the "Elev" lock badge on the entry card so
+// the user knows the diagnosis came from the elevated baseline (diag-model.jsx).
+bool needsElevation(const std::string& id) {
+    return id.rfind("rec.present.", 0) == 0 || id.rfind("rec.dpc.", 0) == 0;
 }
 
 int fixKind(const diagnostics::FixAction& fa) {
@@ -327,10 +321,18 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     auto* env_l = new QVBoxLayout(env_panel);
     env_l->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
     env_l->setSpacing(M::kSpaceXs);
-    env_l->addWidget(makeInfoRow(
+    // Tier-4 facts are repopulated from the diagnostics model each refresh; the
+    // host layout is seeded with a baseline elevation row so Expert is never blank.
+    auto* env_facts_host = new QWidget(env_panel);
+    env_facts_host->setObjectName(QStringLiteral("diagEnvFactsHost"));
+    env_facts_layout_ = new QVBoxLayout(env_facts_host);
+    env_facts_layout_->setContentsMargins(0, 0, 0, 0);
+    env_facts_layout_->setSpacing(M::kSpaceXs);
+    env_facts_layout_->addWidget(makeInfoRow(
         QStringLiteral("Elevation"),
         QStringLiteral("Standard \xe2\x80\x94 DXGI / NVAPI baseline \xc2\xb7 monitor judder still measured"), QString(),
-        env_panel, true));
+        env_facts_host, true));
+    env_l->addWidget(env_facts_host);
     auto* device_row = new QWidget(env_panel);
     auto* dr = new QHBoxLayout(device_row);
     dr->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
@@ -662,6 +664,13 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
     last_cards_applied_ = now;
 
     renderPipelineCards(s);
+
+    // Live measured problems (judder, disk write-stall, audio device loss) are Tier-2:
+    // "measured, not predicted". Re-run the honesty rail on the same throttled cadence
+    // so they surface WHILE recording, not only on the next manual check.
+    if (data_ready_) {
+        refreshOverview();
+    }
 }
 
 void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& s) {
@@ -1139,9 +1148,12 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     int issue_count = 0;
     constexpr int kMaxIssues = 6;
 
-    const auto add_issue_card = [&](diagnostics::DiagnosticSeverity severity, const QString& title,
-                                    const QString& summary, const QString& action, const QString& detail,
-                                    const diagnostics::FixAction* fix = nullptr) {
+    // One entry card (diag-model.jsx EntryCard): title + mono ID chip + optional
+    // Elev lock badge, a FixAction, and an L1→L2→L3 Evidence disclosure (Measured
+    // value + Why recommendation + collapsed log excerpt).
+    const auto add_issue_card = [&](diagnostics::DiagnosticSeverity severity, const QString& id, const QString& title,
+                                    const QString& summary, const QString& why, const QString& measured,
+                                    const QString& log, bool elev, const diagnostics::FixAction* fix) {
         if (issue_count >= kMaxIssues)
             return;
 
@@ -1161,26 +1173,26 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         title_label->setWordWrap(true);
         title_row->addWidget(icon_label, 0, Qt::AlignTop);
         title_row->addWidget(title_label, 1);
+        if (!id.isEmpty()) {
+            auto* id_chip = new QLabel(id, card);
+            id_chip->setObjectName(QStringLiteral("issueIdChip"));
+            id_chip->setProperty("labelRole", "issueIdChip");
+            title_row->addWidget(id_chip, 0, Qt::AlignTop);
+        }
+        if (elev) {
+            auto* elev_badge = new QLabel(QStringLiteral("Elev"), card);
+            elev_badge->setObjectName(QStringLiteral("issueElevBadge"));
+            elev_badge->setProperty("labelRole", "elevBadge");
+            elev_badge->setToolTip(
+                QStringLiteral("Measured from the elevated present-path baseline (PresentMon / DPC-ISR)."));
+            title_row->addWidget(elev_badge, 0, Qt::AlignTop);
+        }
         card_layout->addLayout(title_row);
 
         auto* summary_label = new QLabel(summary, card);
         summary_label->setProperty("labelRole", "issueDesc");
         summary_label->setWordWrap(true);
         card_layout->addWidget(summary_label);
-
-        if (!detail.trimmed().isEmpty()) {
-            auto* detail_label = new QLabel(detail, card);
-            detail_label->setProperty("labelRole", "issueMeta");
-            detail_label->setWordWrap(true);
-            card_layout->addWidget(detail_label);
-        }
-
-        if (!action.trimmed().isEmpty()) {
-            auto* action_label = new QLabel(QStringLiteral("Action: ") + action, card);
-            action_label->setProperty("labelRole", "issueMeta");
-            action_label->setWordWrap(true);
-            card_layout->addWidget(action_label);
-        }
 
         if (fix != nullptr) {
             if (fix->safety == diagnostics::FixAction::Safety::Auto) {
@@ -1209,6 +1221,53 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
             }
         }
 
+        // Evidence disclosure (L1 summary above → L2 measured + why → L3 log excerpt).
+        const bool has_evidence = !measured.trimmed().isEmpty() || !why.trimmed().isEmpty() || !log.trimmed().isEmpty();
+        if (has_evidence) {
+            auto* ev_toggle = new QToolButton(card);
+            ev_toggle->setObjectName(QStringLiteral("issueEvidenceToggle"));
+            ev_toggle->setProperty("role", "collapseHead");
+            ev_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            ev_toggle->setCheckable(true);
+            ev_toggle->setChecked(false);
+            ev_toggle->setCursor(Qt::PointingHandCursor);
+            ev_toggle->setText(QStringLiteral("Evidence"));
+            const qreal dpr = ev_toggle->devicePixelRatioF();
+            ev_toggle->setIcon(QIcon(
+                ui::theme::lucidePixmap(QStringLiteral("chevron-right"), QString::fromUtf8(Pal::kText2), 12, dpr)));
+
+            auto* ev_body = new QWidget(card);
+            ev_body->setObjectName(QStringLiteral("issueEvidenceBody"));
+            ev_body->setVisible(false);
+            auto* ev_l = new QVBoxLayout(ev_body);
+            ev_l->setContentsMargins(0, M::kSpaceXs, 0, 0);
+            ev_l->setSpacing(M::kSpaceXs);
+            const auto add_ev_row = [&](const QString& label, const QString& value, const char* role) {
+                if (value.trimmed().isEmpty())
+                    return;
+                auto* lbl = new QLabel(label, ev_body);
+                lbl->setProperty("labelRole", "evidenceLabel");
+                ev_l->addWidget(lbl);
+                auto* val = new QLabel(value, ev_body);
+                val->setProperty("labelRole", role);
+                val->setWordWrap(true);
+                ev_l->addWidget(val);
+            };
+            add_ev_row(QStringLiteral("Measured"), measured, "evidenceMeasured");
+            add_ev_row(QStringLiteral("Why"), why, "evidenceWhy");
+            add_ev_row(QStringLiteral("Log excerpt"), log, "evidenceLog");
+
+            connect(ev_toggle, &QToolButton::toggled, this, [ev_toggle, ev_body](bool on) {
+                ev_body->setVisible(on);
+                const qreal d = ev_toggle->devicePixelRatioF();
+                ev_toggle->setIcon(
+                    QIcon(ui::theme::lucidePixmap(on ? QStringLiteral("chevron-down") : QStringLiteral("chevron-right"),
+                                                  QString::fromUtf8(Pal::kText2), 12, d)));
+            });
+            card_layout->addWidget(ev_toggle);
+            card_layout->addWidget(ev_body);
+        }
+
         overview_issues_layout_->addWidget(card);
         ++issue_count;
     };
@@ -1218,9 +1277,9 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         for (const auto& invalid : profile_validation_.invalidity) {
             const QString field_display = QString::fromStdString(diagnostics::InvalidFieldDisplayName(invalid.field));
             const QString action_hint = QString::fromStdString(diagnostics::InvalidFieldActionHint(invalid.field));
-            add_issue_card(diagnostics::DiagnosticSeverity::Blocker,
+            add_issue_card(diagnostics::DiagnosticSeverity::Blocker, QString(),
                            field_display + QStringLiteral(" is not supported"), QString::fromStdString(invalid.message),
-                           action_hint, QString{});
+                           action_hint, QString(), QString(), false, nullptr);
         }
     }
 
@@ -1228,35 +1287,41 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     const std::vector<diagnostics::DiagnosticResult> ordered_recommendations =
         diagnostics::BuildTopIssueRecommendations(recommendations, has_profile_invalidity);
 
+    const auto add_result_card = [&](const diagnostics::DiagnosticResult& result) {
+        add_issue_card(result.severity, QString::fromStdString(result.id), QString::fromStdString(result.title),
+                       QString::fromStdString(result.summary), QString::fromStdString(result.recommendation),
+                       QString::fromStdString(result.current_value), QString::fromStdString(result.detail),
+                       needsElevation(result.id), result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
+    };
+
+    // Tier-1 blockers (worst-first).
     for (const auto& result : ordered_recommendations) {
-        if (result.severity != diagnostics::DiagnosticSeverity::Blocker)
-            continue;
-        add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
-                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
-                       result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
+        if (result.tier == diagnostics::DiagnosticTier::Blocker)
+            add_result_card(result);
     }
 
     for (const auto& warning : profile_validation_.warnings) {
-        add_issue_card(diagnostics::DiagnosticSeverity::Notice, QStringLiteral("Configuration needs validation"),
-                       QString::fromStdString(warning.message),
-                       QStringLiteral("Run a short recording to validate quality on this machine."),
-                       QStringLiteral("Code: %1").arg(QString::fromStdString(warning.code)));
+        add_issue_card(diagnostics::DiagnosticSeverity::Notice, QString(),
+                       QStringLiteral("Configuration needs validation"), QString::fromStdString(warning.message),
+                       QStringLiteral("Run a short recording to validate quality on this machine."), QString(),
+                       QStringLiteral("Code: %1").arg(QString::fromStdString(warning.code)), false, nullptr);
     }
 
     if (!hotkeys_ok_ && hotkeys_summary_ != "None configured") {
-        add_issue_card(diagnostics::DiagnosticSeverity::Notice, QStringLiteral("Global hotkeys are not active"),
-                       QStringLiteral("Hotkeys are configured but not currently registered."),
-                       QStringLiteral("Open the Hotkeys page and reapply the binding if shortcuts do not trigger."),
-                       QStringLiteral("If the app just launched, this can clear once startup completes."));
+        add_issue_card(
+            diagnostics::DiagnosticSeverity::Notice, QString(), QStringLiteral("Global hotkeys are not active"),
+            QStringLiteral("Hotkeys are configured but not currently registered."),
+            QStringLiteral("Open the Hotkeys page and reapply the binding if shortcuts do not trigger."), QString(),
+            QStringLiteral("If the app just launched, this can clear once startup completes."), false, nullptr);
     }
 
-    // Tier-2 measured/environment notices become cards; Tier-3 optimisations bundle
-    // into the quiet tip chip.
+    // Tier-2 measured problems become cards; Tier-3 optimisations bundle into the
+    // quiet tip chip. The tier is read straight from each result — never re-derived.
     QVector<ui::widgets::TipChip::Tip> tips;
     for (const auto& result : ordered_recommendations) {
-        if (result.severity != diagnostics::DiagnosticSeverity::Notice)
-            continue;
-        if (isOptimisationTip(result.id)) {
+        if (result.tier == diagnostics::DiagnosticTier::MeasuredProblem) {
+            add_result_card(result);
+        } else if (diagnostics::BundlesIntoTipChip(result.tier)) {
             ui::widgets::TipChip::Tip tip;
             tip.id = QString::fromStdString(result.id);
             tip.summary = QString::fromStdString(result.title);
@@ -1268,11 +1333,7 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
                 tip.changes = QString::fromStdString(fa.changes_summary);
             }
             tips.push_back(tip);
-            continue;
         }
-        add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
-                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
-                       result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
     }
 
     if (tip_chip_)
@@ -1420,23 +1481,25 @@ void DiagnosticsPage::refreshOverview() {
     auto recs = engine.Generate();
 
     // Honesty rail: the verdict counts ONLY Tier-1 blockers and Tier-2 measured /
-    // environment problems. Tier-3 optimisation tips ("better, but it runs" — bundled
-    // into the quiet tip chip by refreshTopIssues) must never turn the verdict amber
-    // or promise cards that don't exist (suite-diag2.jsx 'ready': tips + READY).
+    // environment problems, read straight from each result's declared tier. Tier-3
+    // optimisation tips ("better, but it runs" — bundled into the quiet tip chip by
+    // refreshTopIssues) must never turn the verdict amber or promise cards that don't
+    // exist; Tier-4 facts are neutral environment data (suite-diag2.jsx 'ready').
     int blockers = 0, tier2_notices = 0;
     for (const auto& r : recs.results) {
-        switch (r.severity) {
-        case diagnostics::DiagnosticSeverity::Blocker:
+        switch (r.tier) {
+        case diagnostics::DiagnosticTier::Blocker:
             ++blockers;
             break;
-        case diagnostics::DiagnosticSeverity::Notice:
-            if (!isOptimisationTip(r.id))
-                ++tier2_notices;
+        case diagnostics::DiagnosticTier::MeasuredProblem:
+            ++tier2_notices;
             break;
-        case diagnostics::DiagnosticSeverity::Pass:
+        case diagnostics::DiagnosticTier::Optimisation:
+        case diagnostics::DiagnosticTier::Fact:
             break;
         }
     }
+    const std::vector<diagnostics::DiagnosticResult> facts = engine.GenerateEnvironmentFacts();
 
     int cap_passes = 0;
     for (const auto& r : cap_summary_.entries) {
@@ -1483,6 +1546,37 @@ void DiagnosticsPage::refreshOverview() {
 
     refreshReadinessTiles(blockers, tier2_notices, cap_passes);
     refreshTopIssues(recs);
+    refreshEnvironmentFacts(facts);
+}
+
+// ── Environment facts (Tier-4, Expert panel) ────────────────────────────────────
+
+void DiagnosticsPage::refreshEnvironmentFacts(const std::vector<diagnostics::DiagnosticResult>& facts) {
+    if (!env_facts_layout_)
+        return;
+
+    QLayoutItem* child = nullptr;
+    while ((child = env_facts_layout_->takeAt(0)) != nullptr) {
+        delete child->widget();
+        delete child;
+    }
+
+    auto* host = env_facts_layout_->parentWidget();
+    bool first = true;
+    for (const auto& fact : facts) {
+        env_facts_layout_->addWidget(makeInfoRow(QString::fromStdString(fact.title),
+                                                 QString::fromStdString(fact.summary), QString(), host, first));
+        first = false;
+    }
+
+    // Never leave Expert blank: if the model produced no facts (idle), keep the
+    // honest elevation baseline row so the panel still reads as environment.
+    if (facts.empty()) {
+        env_facts_layout_->addWidget(makeInfoRow(
+            QStringLiteral("Elevation"),
+            QStringLiteral("Standard \xe2\x80\x94 DXGI / NVAPI baseline \xc2\xb7 monitor judder still measured"),
+            QString(), host, true));
+    }
 }
 
 // ── Pipeline refresh (static readiness) ─────────────────────────────────────────
