@@ -18,13 +18,17 @@ uint64_t NowTimestamp() {
         std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, DiagnosticSeverity sev,
+// Every diagnostic declares its own tier here, at the diagnosis site — the tier
+// is part of the diagnosis, never inferred downstream by an id allowlist. The
+// bucketing + honesty rules (IsAlwaysVisible / BundlesIntoTipChip) read this field.
+DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, DiagnosticSeverity sev, DiagnosticTier tier,
                             const std::string& title, const std::string& summary, const std::string& detail = "",
                             const std::string& current_value = "", const std::string& recommendation = "") {
     DiagnosticResult r;
     r.id = id;
     r.group = group;
     r.severity = sev;
+    r.tier = tier;
     r.title = title;
     r.summary = summary;
     r.detail = detail;
@@ -64,6 +68,18 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_disk_write_available_ = true;
         live_disk_peak_write_ms_ = live_snapshot->disk.peak_write_ms;
     }
+    // Consume live audio health + format (ADR 0046). Available only while an audio
+    // track is actually capturing; idle/no-audio recordings leave it neutral.
+    if (live_snapshot != nullptr && live_snapshot->valid && live_snapshot->audio.active) {
+        live_audio_available_ = true;
+        live_audio_degraded_sources_ = live_snapshot->audio.degraded_sources;
+        live_audio_track_count_ = live_snapshot->audio.track_count;
+        if (live_snapshot->audio.sample_rate > 0 && live_snapshot->audio.channels > 0) {
+            live_audio_format_available_ = true;
+            live_audio_sample_rate_ = live_snapshot->audio.sample_rate;
+            live_audio_channels_ = live_snapshot->audio.channels;
+        }
+    }
 }
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
@@ -86,6 +102,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkDpcLatency(checklist);
     checkDiskWriteStall(checklist);
     checkUnresolvedSavedDisplay(checklist);
+    checkAudioSourceDegraded(checklist);
     return checklist;
 }
 
@@ -114,12 +131,13 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
         " ms during constant-frame-rate recording. The source presents with variable / refresh-driven "
         "timing (e.g. VRR) irregular enough that even phase-correct frame selection cannot fully smooth "
         "it at a fixed output rate, producing residual judder.";
-    DiagnosticResult r = MakeResult(
-        "rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, "VRR / refresh-induced judder detected",
-        "Live present-pacing measurements indicate uneven frame delivery from the source.", detail,
-        "Measured present jitter " + jitter_str + " ms during CFR capture",
-        "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
-        "smoother pacing.");
+    DiagnosticResult r =
+        MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                   DiagnosticTier::MeasuredProblem, "VRR / refresh-induced judder detected",
+                   "Live present-pacing measurements indicate uneven frame delivery from the source.", detail,
+                   "Measured present jitter " + jitter_str + " ms during CFR capture",
+                   "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
+                   "smoother pacing.");
 
     // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
     // presents so the diagnosis reads as a root cause, not just a number.
@@ -156,7 +174,7 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
         DiagnosticResult pr = MakeResult(
             "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-            "Phase-correct frame pacing recommended",
+            DiagnosticTier::MeasuredProblem, "Phase-correct frame pacing recommended",
             "Phase-correct pacing removes judder from high-refresh / VRR sources.",
             "Your recording uses Lowest latency frame pacing; the measured judder is exactly what "
             "Phase-correct pacing fixes.",
@@ -177,7 +195,7 @@ void RecommendationEngine::checkMp4CrashResilience(DiagnosticChecklist& checklis
     if (config_.container == capability::Container::Mp4) {
         DiagnosticResult r =
             MakeResult("rec.002", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       "MP4 is less crash-resilient than MKV",
+                       DiagnosticTier::Optimisation, "MP4 is less crash-resilient than MKV",
                        "MP4 recordings may become unreadable if the app or system crashes during recording.",
                        "MP4 containers require finalization to write the moov atom. If recording is interrupted, "
                        "the file may be unrecoverable.",
@@ -200,7 +218,7 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
     if (!capability::IsSelectable(v_ann.level)) {
         std::string fallback = "H.264 (NVENC)";
         DiagnosticResult r = MakeResult(
-            "rec.003", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+            "rec.003", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
             "Selected video codec is unavailable", "The selected video codec is not available on this system.",
             "Codec: " + std::string(capability::ToString(config_.video_codec)) + ". Reason: " + v_ann.reason,
             "Unavailable", "Switch to " + fallback + " which is available.");
@@ -219,7 +237,7 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
     if (!capability::IsSelectable(a_ann.level)) {
         std::string fallback = "AAC";
         DiagnosticResult r = MakeResult(
-            "rec.004", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+            "rec.004", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
             "Selected audio codec is unavailable", "The selected audio codec is not available on this system.",
             "Codec: " + std::string(capability::ToString(config_.audio_codec)) + ". Reason: " + a_ann.reason,
             "Unavailable", "Switch to " + fallback + " which is available.");
@@ -265,7 +283,7 @@ void RecommendationEngine::checkRecommendedCodec(DiagnosticChecklist& checklist)
     const std::string current_label(capability::VisibleVideoCodecLabel(config_.video_codec));
 
     DiagnosticResult r = MakeResult(
-        "rec.profile.codec", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "rec.profile.codec", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
         "A better GPU-supported codec is available",
         "Your GPU supports " + best_label + ", which encodes with better quality and efficiency than " + current_label +
             " at the same bitrate.",
@@ -292,15 +310,16 @@ void RecommendationEngine::checkColorRange(DiagnosticChecklist& checklist) const
     if (config_.color_range != capability::ColorRange::Full) {
         return;
     }
-    DiagnosticResult r = MakeResult(
-        "rec.color.range", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, "Full color range is set",
-        "Common players such as VLC display full-range video too dark. Limited is the compatible choice.",
-        "The recording is configured with Full (0-255) colour range. Several widely-used players, "
-        "including VLC, ignore the range flag and always expand playback as Limited (16-235), so "
-        "Full-range recordings can look crushed or too dark in those players. Limited range decodes "
-        "correctly everywhere, including players that do read the range flag.",
-        "Colour range: Full",
-        "Switch to Limited colour range for compatibility with players that ignore the range flag.");
+    DiagnosticResult r =
+        MakeResult("rec.color.range", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                   DiagnosticTier::Optimisation, "Full color range is set",
+                   "Common players such as VLC display full-range video too dark. Limited is the compatible choice.",
+                   "The recording is configured with Full (0-255) colour range. Several widely-used players, "
+                   "including VLC, ignore the range flag and always expand playback as Limited (16-235), so "
+                   "Full-range recordings can look crushed or too dark in those players. Limited range decodes "
+                   "correctly everywhere, including players that do read the range flag.",
+                   "Colour range: Full",
+                   "Switch to Limited colour range for compatibility with players that ignore the range flag.");
     FixAction fa;
     fa.id = "fix.color.range";
     fa.label = "Switch to Limited";
@@ -360,7 +379,7 @@ void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) c
     const std::string fix_id =
         proposed_codec == capability::VideoCodec::Av1Nvenc ? "fix.hdr.codec.av1" : "fix.hdr.codec.hevc";
     DiagnosticResult r = MakeResult(
-        "rec.hdr.h264", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+        "rec.hdr.h264", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
         current_label + " cannot record HDR10",
         current_label + " has no 10-bit/HDR10 path. Switch to " + proposed_label + " to record the HDR signal.",
         "HDR10 recording is enabled and the capture target's display is in HDR, but " + current_label +
@@ -386,7 +405,7 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
         // Disk card and never propagated up to the verdict.
         DiagnosticResult r =
             MakeResult("rec.output.writable", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
-                       "Output folder is not writable",
+                       DiagnosticTier::Blocker, "Output folder is not writable",
                        "Recording cannot start — the selected output folder cannot be written to.",
                        "The writability probe failed to create a file in the output folder. Choose a different "
                        "folder or fix the folder's permissions.",
@@ -415,7 +434,7 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
     if (free_bytes <= kHardStopFreeBytes) {
         // rec.007: hard-stop blocker — recording is blocked until free space is recovered.
         DiagnosticResult r = MakeResult("rec.007", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
-                                        "Insufficient disk space — recording blocked",
+                                        DiagnosticTier::Blocker, "Insufficient disk space — recording blocked",
                                         "Less than 500 MB free on the output drive. Recording cannot start.",
                                         "Free space: " + free_gb_str +
                                             " GB. "
@@ -437,13 +456,13 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
 
     if (free_bytes < kWarnFreeBytes) {
         // rec.005: soft warning — recording is still allowed but space is getting low.
-        DiagnosticResult r =
-            MakeResult("rec.005", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       "Output drive is low on space", "Less than 2 GB free on the output drive.",
-                       "Free space: " + free_gb_str +
-                           " GB. "
-                           "Recording may stop automatically if space runs out during a session.",
-                       free_gb_str + " GB free", "Free up disk space or switch to a different output drive.");
+        DiagnosticResult r = MakeResult(
+            "rec.005", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
+            "Output drive is low on space", "Less than 2 GB free on the output drive.",
+            "Free space: " + free_gb_str +
+                " GB. "
+                "Recording may stop automatically if space runs out during a session.",
+            free_gb_str + " GB free", "Free up disk space or switch to a different output drive.");
         FixAction fa;
         fa.id = "fix.output.change_folder";
         fa.label = "Change output folder";
@@ -477,7 +496,7 @@ void RecommendationEngine::checkOutputFilesystem(DiagnosticChecklist& checklist)
     // prevent legitimate use of FAT32 volumes for short clips.  The user is
     // informed and can act before starting a long recording.
     DiagnosticResult r = MakeResult(
-        "rec.008", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "rec.008", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::Optimisation,
         "Output volume uses FAT32 — 4 GiB file size limit",
         "FAT32 volumes cannot store files larger than 4 GiB. Long recordings will fail when this limit is reached.",
         "The configured output folder is on a FAT32 volume. A single recording file cannot exceed 4,294,967,295 bytes "
@@ -499,7 +518,7 @@ void RecommendationEngine::checkOutputFilesystem(DiagnosticChecklist& checklist)
 void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) const {
     if (!is_profile_supported_) {
         DiagnosticResult r = MakeResult(
-            "rec.006", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+            "rec.006", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
             "Recording profile is not supported",
             "The current recording profile cannot be used with available hardware.",
             "Your selected profile requires codecs or features not available on this system.", "Profile: unsupported",
@@ -518,13 +537,14 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
 
 void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checklist) const {
     if (config_.audio_codec == capability::AudioCodec::Flac && config_.container == capability::Container::Mp4) {
-        DiagnosticResult r = MakeResult(
-            "rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, "FLAC is not supported in MP4",
-            "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
-            "codec to AAC.",
-            "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
-            "codec to AAC.",
-            "Audio: FLAC, Container: MP4", "Switch the container to MKV or select a different audio codec.");
+        DiagnosticResult r =
+            MakeResult("rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+                       "FLAC is not supported in MP4",
+                       "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
+                       "codec to AAC.",
+                       "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
+                       "codec to AAC.",
+                       "Audio: FLAC, Container: MP4", "Switch the container to MKV or select a different audio codec.");
         FixAction fa;
         fa.id = "fix.audio.flac_to_mkv";
         fa.label = "Switch container to MKV";
@@ -541,7 +561,7 @@ void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checkl
     if (config_.audio_codec == capability::AudioCodec::Opus && config_.container == capability::Container::Mp4) {
         DiagnosticResult r =
             MakeResult("rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       "Opus in MP4 has limited player compatibility",
+                       DiagnosticTier::Optimisation, "Opus in MP4 has limited player compatibility",
                        "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.",
                        "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.",
                        "Audio: Opus, Container: MP4",
@@ -560,13 +580,14 @@ void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checkl
 
 void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const {
     if (config_.video_codec == capability::VideoCodec::HevcNvenc && config_.container == capability::Container::WebM) {
-        DiagnosticResult r = MakeResult(
-            "rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, "HEVC is not supported in WebM",
-            "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
-            "WebM container.",
-            "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
-            "WebM container.",
-            "Video: HEVC, Container: WebM", "Switch the container to MKV, which supports HEVC video.");
+        DiagnosticResult r =
+            MakeResult("rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+                       "HEVC is not supported in WebM",
+                       "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
+                       "WebM container.",
+                       "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
+                       "WebM container.",
+                       "Video: HEVC, Container: WebM", "Switch the container to MKV, which supports HEVC video.");
         FixAction fa;
         fa.id = "fix.video.hevc_webm";
         fa.label = "Switch container to MKV";
@@ -581,13 +602,14 @@ void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist
     }
 
     if (config_.video_codec == capability::VideoCodec::H264Nvenc && config_.container == capability::Container::WebM) {
-        DiagnosticResult r = MakeResult(
-            "rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, "H.264 is not supported in WebM",
-            "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
-            "container.",
-            "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
-            "container.",
-            "Video: H.264, Container: WebM", "Switch the container to MKV, which supports H.264 video.");
+        DiagnosticResult r =
+            MakeResult("rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
+                       "H.264 is not supported in WebM",
+                       "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
+                       "container.",
+                       "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
+                       "container.",
+                       "Video: H.264, Container: WebM", "Switch the container to MKV, which supports H.264 video.");
         FixAction fa;
         fa.id = "fix.video.h264_webm";
         fa.label = "Switch container to MKV";
@@ -621,6 +643,9 @@ void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& check
     DiagnosticResult r = MakeResult(
         "rec.capture.exclusive_window", DiagnosticGroup::Recommendation,
         proven ? DiagnosticSeverity::Blocker : DiagnosticSeverity::Notice,
+        // Honest capture problem: proven-black gates the start (Tier-1), a suspected
+        // exclusive window is a measured Tier-2 problem — never an optimisation/fact.
+        proven ? DiagnosticTier::Blocker : DiagnosticTier::MeasuredProblem,
         proven ? "Selected window is in exclusive fullscreen and produces no frames"
                : "Selected window may be in exclusive fullscreen",
         proven ? "The selected window is in exclusive fullscreen; window capture records a black/frozen frame."
@@ -669,6 +694,7 @@ void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checkli
     r.id = "rec.present.exclusive";
     r.group = DiagnosticGroup::Recommendation;
     r.severity = DiagnosticSeverity::Notice;
+    r.tier = DiagnosticTier::MeasuredProblem;
     r.title = "Captured source is in exclusive fullscreen";
     r.summary = "Captured source is in exclusive fullscreen";
     r.detail = "The source presents in legacy exclusive fullscreen. Desktop/window capture often records "
@@ -698,7 +724,7 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
     const std::string driver = dpc_->worst_driver.empty() ? "an unidentified kernel driver" : dpc_->worst_driver;
     const std::string max_str = std::to_string(static_cast<long>(dpc_->max_latency_us));
     DiagnosticResult r = MakeResult(
-        "rec.dpc.latency", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "rec.dpc.latency", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
         "High kernel DPC/ISR latency detected",
         "Kernel driver latency can cause recording stutter even when the game feels smooth.",
         "Peak DPC latency reached " + max_str + " us, attributed to " + driver +
@@ -731,7 +757,7 @@ void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist
     const std::string pct = std::to_string(static_cast<long>(ratio * 100.0 + 0.5));
     DiagnosticResult r = MakeResult(
         "rec.present.discarded", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        "Compositor is discarding presents",
+        DiagnosticTier::MeasuredProblem, "Compositor is discarding presents",
         "The desktop compositor dropped a notable share of the source's frames before capture.",
         "About " + pct +
             "% of the captured source's presents were discarded by the compositor (DWM). "
@@ -761,7 +787,7 @@ void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist)
     const std::string n = std::to_string(present_->mode_flip_count);
     DiagnosticResult r = MakeResult(
         "rec.present.modeflip", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        "Captured source keeps changing present mode",
+        DiagnosticTier::MeasuredProblem, "Captured source keeps changing present mode",
         "The source repeatedly switched presentation mode, which can cause capture hitches.",
         "The captured source changed presentation mode " + n +
             " times this session (e.g. flipping between "
@@ -790,7 +816,8 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
     const std::string ms = std::to_string(static_cast<long>(live_disk_peak_write_ms_));
     DiagnosticResult r = MakeResult(
         "rec.disk.writestall", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-        "Disk write stalls detected", "Writing the recording to disk stalled, which can drop frames at high bitrates.",
+        DiagnosticTier::MeasuredProblem, "Disk write stalls detected",
+        "Writing the recording to disk stalled, which can drop frames at high bitrates.",
         "A single write of the recording to disk took up to " + ms +
             " ms. When disk writes stall longer than "
             "the encoder can buffer, the mux queue backs up and frames can be dropped. A slow or busy drive, "
@@ -824,7 +851,8 @@ void RecommendationEngine::checkUnresolvedSavedDisplay(DiagnosticChecklist& chec
         saved_display_label_.empty() ? std::string("The saved display") : ("\"" + saved_display_label_ + "\"");
 
     DiagnosticResult r = MakeResult(
-        "display.saved.unresolved", DiagnosticGroup::Display, DiagnosticSeverity::Notice, "Saved display not found",
+        "display.saved.unresolved", DiagnosticGroup::Display, DiagnosticSeverity::Notice,
+        DiagnosticTier::MeasuredProblem, "Saved display not found",
         "The display this preset recorded from is not currently connected, so no capture source is selected.",
         which + " could not be matched to any connected display. This happens after that monitor is unplugged, or "
                 "after swapping cables between two identical monitors that report no serial number. Recording still "
@@ -843,6 +871,64 @@ void RecommendationEngine::checkUnresolvedSavedDisplay(DiagnosticChecklist& chec
     checklist.results.push_back(std::move(r));
 }
 
+// ---------------------------------------------------------------------------
+// Audio device loss — calm Tier-2 measured problem (ADR 0046). Fires ONLY while
+// recording and at least one audio capture source is currently degraded (endpoint
+// lost, contributing honest silence). NEVER a blocker: the recording keeps running
+// and the source auto-reactivates when the device returns. The verdict must stay
+// "recording" — this is measured, not predicted.
+// ---------------------------------------------------------------------------
+void RecommendationEngine::checkAudioSourceDegraded(DiagnosticChecklist& checklist) const {
+    if (!live_audio_available_ || live_audio_degraded_sources_ == 0) {
+        return;
+    }
+    const std::string n = std::to_string(live_audio_degraded_sources_);
+    const bool plural = live_audio_degraded_sources_ != 1;
+    const std::string source_word = plural ? "audio sources are" : "An audio source is";
+    DiagnosticResult r = MakeResult(
+        "rec.audio.degraded", DiagnosticGroup::Audio, DiagnosticSeverity::Notice, DiagnosticTier::MeasuredProblem,
+        "Audio device lost — recording continues",
+        source_word + " silent because the capture device dropped out. The recording keeps running.",
+        n + " of " +
+            std::to_string(live_audio_track_count_ == 0 ? live_audio_degraded_sources_ : live_audio_track_count_) +
+            " audio track(s) lost their capture device mid-recording and are contributing honest silence. Video and "
+            "every other audio source are untouched; the source reactivates automatically the moment the device "
+            "returns.",
+        n + " audio source" + (plural ? "s" : "") + " degraded to silence",
+        "Reconnect the audio device (or check Windows Sound settings). No action is required to keep recording — the "
+        "gap is filled with silence and the source recovers on its own.");
+    FixAction fa;
+    fa.id = "fix.audio.check_devices";
+    fa.label = "Check audio devices";
+    fa.safety = FixAction::Safety::Assisted; // app cannot re-plug a device for the user
+    fa.reversible = true;
+    fa.changes_summary = "Opens Audio settings so you can reselect or reconnect the capture device.";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+// ---------------------------------------------------------------------------
+// Tier-4 environment facts. Capability/environment facts run through the model as
+// real Fact-tier results (never inline hard-coded UI), but on a separate producer
+// so they never pollute the recommendation checklist or the verdict. Neutral and
+// Expert-only. Elevation baseline is always a fact; the audio format is a fact
+// once a live audio track reports its rate/channels.
+// ---------------------------------------------------------------------------
+std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() const {
+    std::vector<DiagnosticResult> facts;
+    facts.push_back(MakeResult("fact.elevation", DiagnosticGroup::ConfigSnapshot, DiagnosticSeverity::Pass,
+                               DiagnosticTier::Fact, "Elevation",
+                               "Standard — DXGI / NVAPI baseline · monitor judder still measured"));
+    if (live_audio_format_available_) {
+        const std::string value =
+            std::to_string(live_audio_sample_rate_) + " Hz · " + std::to_string(live_audio_channels_) + " ch";
+        facts.push_back(MakeResult("fact.audio.format", DiagnosticGroup::Audio, DiagnosticSeverity::Pass,
+                                   DiagnosticTier::Fact, "Audio format", value));
+    }
+    return facts;
+}
+
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
     return {"rec.001",
             "rec.002",
@@ -856,6 +942,8 @@ std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
             "rec.010",
             "rec.color.range",
             "rec.hdr.h264",
+            "rec.audio.degraded",
+            "rec.capture.exclusive_window",
             "display.saved.unresolved"};
 }
 

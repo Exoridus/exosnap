@@ -3372,6 +3372,32 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
         s.mux.segment_count = 2;
         s.mux.split_transitions = 1;
         s.video_encoder.forced_keyframes = 1;
+    } else if (kind == QStringLiteral("judder")) {
+        // Measured present-time jitter over the 8 ms judder threshold → Tier-2
+        // "VRR / refresh-induced judder" (rec.001), verdict amber, recording continues.
+        s.capture.source_present_jitter_ms = 11.4;
+        s.capture.source_present_interval_ms = 16.6;
+        s.capture.present_cadence_availability = MetricAvailability::Available;
+        s.video_encoder.cfr = true;
+        s.bottleneck = PipelineBottleneck::None;
+        s.health = PipelineHealth::Warning;
+    } else if (kind == QStringLiteral("degraded")) {
+        // Audio endpoint lost mid-recording → Tier-2 "Audio device lost" (rec.audio.degraded).
+        // Calm, measured, never a blocker: the recording keeps running on honest silence.
+        s.audio.degraded_sources = 1;
+        s.audio.source_degraded = true;
+        s.audio.track_count = 2;
+        s.health = PipelineHealth::Warning;
+    } else if (kind == QStringLiteral("post")) {
+        // Post-flight: a finished, saved recording. The Diagnostics post-flight phase
+        // links to the Edit overlay's report card; the verdict returns to a calm state.
+        s.lifecycle = DiagnosticsLifecycle::Completed;
+        s.capture.actual_fps = 0.0;
+        s.video_encoder.output_fps = 0.0;
+        s.mux.throughput_mib_s = 0.0;
+        s.disk.throughput_mib_s = 0.0;
+        s.audio.degraded_sources = 0;
+        s.audio.source_degraded = false;
     }
 
     return s;
@@ -3383,15 +3409,22 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
     if (!diagnostics_page_)
         return;
 
-    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
-    OutputSettingsModel output;
-    output.container = capability::Container::WebM;
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
-    output.audio_codec = capability::AudioCodec::Opus;
+    // Prefer the real probed caps when ready so this render matches the async
+    // caps-ready refreshDiagnosticsData() and does not flicker the card set.
+    capability::CapabilitySet caps =
+        runtime_caps_ready_ ? runtime_caps_ : capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    // Read the scenario's container / codecs so lifecycle scenarios can drive a
+    // Tier-1 blocker (e.g. MP4 + FLAC → rec.009). Defaults are the canon WebM/AV1/Opus.
+    // These are written into the app's real settings so the async caps-ready
+    // refreshDiagnosticsData() reproduces the same verdict rather than resetting it.
+    output_settings_.container = scenario.container;
+    output_settings_.video_codec = scenario.video_codec;
+    output_settings_.audio_codec = scenario.audio_codec;
+    OutputSettingsModel output = output_settings_;
     VideoSettingsModel video;
     diagnostics_page_->setDiagnosticData(
         caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
-        "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
+        "Visual Test Diagnostics", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
 
     // The live pipeline + full taxonomy are Expert-gated; recording scenarios need
     // Expert on to render Phase ③. The plain "diagnostics" scenario stays Simple, unless
@@ -3399,6 +3432,9 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
     diagnostics_page_->setExpertModeEnabled(!scenario.diag_live.isEmpty() || scenario.settings_expert_mode);
 
     if (!scenario.diag_live.isEmpty()) {
+        // The post-flight scenario shows a finished recording — enable the Phase-④
+        // "Open last report" bridge to the Edit overlay.
+        diagnostics_page_->setHasLastRecording(scenario.diag_live == QStringLiteral("post"));
         diagnostics_page_->applyLiveDiagnostics(makeLiveDiagnosticsSnapshot(scenario.diag_live));
     }
 }

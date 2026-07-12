@@ -35,6 +35,12 @@ class RecommendationEngine {
 
     DiagnosticChecklist Generate() const;
 
+    // Tier-4 environment facts (elevation baseline, live audio format). Kept on a
+    // separate producer so facts never mix into the recommendation checklist or the
+    // verdict count — they flow through the DiagnosticResult model but render only
+    // in the Expert Environment panel.
+    std::vector<DiagnosticResult> GenerateEnvironmentFacts() const;
+
     void SetDpcLatency(DpcLatencyReading reading) {
         dpc_ = std::move(reading);
     }
@@ -103,6 +109,7 @@ class RecommendationEngine {
     void checkDpcLatency(DiagnosticChecklist& checklist) const;
     void checkDiskWriteStall(DiagnosticChecklist& checklist) const;
     void checkUnresolvedSavedDisplay(DiagnosticChecklist& checklist) const;
+    void checkAudioSourceDegraded(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
@@ -131,6 +138,19 @@ class RecommendationEngine {
     // DiskDiagnostics; available only for the streaming Matroska writer (MP4 remux is post-stop).
     bool live_disk_write_available_ = false;
     double live_disk_peak_write_ms_ = 0.0;
+
+    // Live audio device-loss health (ADR 0046). Extracted from the live snapshot's
+    // AudioDiagnostics: how many capture sources are currently degraded (endpoint
+    // lost, contributing honest silence) out of the total. A calm Tier-2 measured
+    // problem while recording — NEVER a blocker; the recording keeps running and the
+    // source auto-reactivates when the device returns.
+    bool live_audio_available_ = false;
+    uint32_t live_audio_degraded_sources_ = 0;
+    uint32_t live_audio_track_count_ = 0;
+    // Live audio format (Tier-4 environment fact): sample rate / channels / codec.
+    uint32_t live_audio_sample_rate_ = 0;
+    uint32_t live_audio_channels_ = 0;
+    bool live_audio_format_available_ = false;
 
     // Present-mode observation (v0.8.0 / ADR 0033). Available only when the present provider
     // is active (elevation + ETW session open). Empty when not available.

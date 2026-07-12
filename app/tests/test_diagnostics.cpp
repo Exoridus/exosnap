@@ -577,6 +577,162 @@ TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
     EXPECT_TRUE(found);
 }
 
+// --- 4-tier honesty model (diag-model.jsx DTIER) ---
+
+TEST(DiagnosticTierTest, HonestyHelpers_VisibilityAndBundling) {
+    // Tier 1 + 2 are always visible; Tier 3 + 4 may be hidden. Only Tier 3 bundles.
+    EXPECT_TRUE(IsAlwaysVisible(DiagnosticTier::Blocker));
+    EXPECT_TRUE(IsAlwaysVisible(DiagnosticTier::MeasuredProblem));
+    EXPECT_FALSE(IsAlwaysVisible(DiagnosticTier::Optimisation));
+    EXPECT_FALSE(IsAlwaysVisible(DiagnosticTier::Fact));
+
+    EXPECT_TRUE(BundlesIntoTipChip(DiagnosticTier::Optimisation));
+    EXPECT_FALSE(BundlesIntoTipChip(DiagnosticTier::Blocker));
+    EXPECT_FALSE(BundlesIntoTipChip(DiagnosticTier::MeasuredProblem));
+    EXPECT_FALSE(BundlesIntoTipChip(DiagnosticTier::Fact));
+}
+
+TEST(DiagnosticTierTest, EachCheckDeclaresItsTier) {
+    // A single config that fires a blocker (FLAC+MP4 → rec.009) and an optimisation
+    // (MP4 crash resilience → rec.002). Each result must carry its own declared tier.
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Flac;
+
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    auto checklist = engine.Generate();
+
+    bool saw_blocker = false, saw_optimisation = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.009") {
+            saw_blocker = true;
+            EXPECT_EQ(r.tier, DiagnosticTier::Blocker);
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+        }
+        if (r.id == "rec.002") {
+            saw_optimisation = true;
+            EXPECT_EQ(r.tier, DiagnosticTier::Optimisation);
+        }
+        // Honesty rule: no Tier-3 optimisation ever carries a Blocker severity/verdict.
+        if (r.tier == DiagnosticTier::Optimisation)
+            EXPECT_NE(r.severity, DiagnosticSeverity::Blocker);
+    }
+    EXPECT_TRUE(saw_blocker) << "FLAC+MP4 must declare a Tier-1 blocker";
+    EXPECT_TRUE(saw_optimisation) << "MP4 crash-resilience must declare a Tier-3 optimisation";
+}
+
+TEST(DiagnosticTierTest, MeasuredJudderIsTier2) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Limited;
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/11.4, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001") {
+            found = true;
+            EXPECT_EQ(r.tier, DiagnosticTier::MeasuredProblem);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+namespace {
+recorder_core::RecordingDiagnosticsSnapshot MakeDegradedAudioSnapshot(uint32_t degraded, uint32_t tracks) {
+    recorder_core::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.lifecycle = recorder_core::DiagnosticsLifecycle::Recording;
+    live.audio.active = true;
+    live.audio.sample_rate = 48000;
+    live.audio.channels = 2;
+    live.audio.track_count = tracks;
+    live.audio.degraded_sources = degraded;
+    live.audio.source_degraded = degraded > 0;
+    return live;
+}
+} // namespace
+
+TEST(DiagnosticTierTest, AudioDeviceLoss_FiresCalmTier2NeverBlocker) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Limited;
+    const auto live = MakeDegradedAudioSnapshot(/*degraded=*/1, /*tracks=*/2);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.audio.degraded") {
+            found = true;
+            EXPECT_EQ(r.tier, DiagnosticTier::MeasuredProblem);
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice) << "device loss is calm, never a blocker";
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+        }
+    }
+    EXPECT_TRUE(found) << "a degraded audio source must surface a Tier-2 measured problem";
+    EXPECT_FALSE(checklist.has_blocker) << "audio device loss must never block the recording";
+}
+
+TEST(DiagnosticTierTest, AudioDeviceLoss_SilentWhenNoLoss) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Limited;
+    const auto live = MakeDegradedAudioSnapshot(/*degraded=*/0, /*tracks=*/2);
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", &live);
+    auto checklist = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.audio.degraded"; }));
+}
+
+TEST(DiagnosticTierTest, EnvironmentFacts_ElevationAlways_AudioFormatWhenLive) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    // No live snapshot: only the elevation baseline fact, and it must NOT leak into
+    // the recommendation checklist (keeps "clean == empty" for the verdict).
+    RecommendationEngine idle(caps, config, 0, std::nullopt, true);
+    auto idle_checklist = idle.Generate();
+    EXPECT_TRUE(std::none_of(idle_checklist.results.begin(), idle_checklist.results.end(),
+                             [](const DiagnosticResult& r) { return r.tier == DiagnosticTier::Fact; }))
+        << "facts must not pollute the recommendation checklist";
+    auto idle_facts = idle.GenerateEnvironmentFacts();
+    ASSERT_FALSE(idle_facts.empty());
+    EXPECT_EQ(idle_facts.front().id, "fact.elevation");
+    EXPECT_EQ(idle_facts.front().tier, DiagnosticTier::Fact);
+    EXPECT_TRUE(std::none_of(idle_facts.begin(), idle_facts.end(),
+                             [](const DiagnosticResult& r) { return r.id == "fact.audio.format"; }));
+
+    // With a live audio track, the audio-format fact appears.
+    const auto live = MakeDegradedAudioSnapshot(/*degraded=*/0, /*tracks=*/1);
+    RecommendationEngine rec(caps, config, 0, std::nullopt, true, "", &live);
+    auto facts = rec.GenerateEnvironmentFacts();
+    bool saw_audio = false;
+    for (const auto& f : facts) {
+        EXPECT_EQ(f.tier, DiagnosticTier::Fact);
+        if (f.id == "fact.audio.format")
+            saw_audio = true;
+    }
+    EXPECT_TRUE(saw_audio) << "a live audio track must produce a Tier-4 audio-format fact";
+}
+
 TEST(RecommendationEngineTest, Generate_LiveCoalesceAlone_NoLongerFires) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
@@ -916,9 +1072,10 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
     // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat); the
     // color-range compatibility guard added rec.color.range; the H.264 + HDR10-native
-    // blocker added rec.hdr.h264; stable display identity added display.saved.unresolved —
-    // expect 13 codes now.
-    EXPECT_EQ(codes.size(), 13u);
+    // blocker added rec.hdr.h264; stable display identity added display.saved.unresolved;
+    // ADR 0046 audio device loss added rec.audio.degraded; the exclusive-window pre-flight
+    // check added rec.capture.exclusive_window — expect 15 codes now.
+    EXPECT_EQ(codes.size(), 15u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
@@ -928,6 +1085,8 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.010"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.color.range"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.hdr.h264"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.audio.degraded"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.capture.exclusive_window"), codes.end());
 }
 
 // --- rec.color.range: Full color range warns about players that render it too dark ---
