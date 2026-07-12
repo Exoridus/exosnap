@@ -101,6 +101,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     audio_queue_depth_ = 0;
     audio_queue_peak_ = 0;
     audio_discontinuities_ = 0;
+    audio_degraded_sources_.fill(0);
+    audio_total_sources_.fill(0);
 
     video_queue_depth_ = 0;
     video_queue_peak_ = 0;
@@ -279,6 +281,15 @@ void PipelineDiagnosticsAggregator::OnAudioQueueDepth(uint32_t depth) noexcept {
 void PipelineDiagnosticsAggregator::OnAudioDiscontinuity() noexcept {
     std::lock_guard lk(mutex_);
     ++audio_discontinuities_;
+}
+
+void PipelineDiagnosticsAggregator::OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources,
+                                                        uint32_t total_sources) noexcept {
+    std::lock_guard lk(mutex_);
+    if (track_id < audio_degraded_sources_.size()) {
+        audio_degraded_sources_[track_id] = degraded_sources;
+        audio_total_sources_[track_id] = total_sources;
+    }
 }
 
 void PipelineDiagnosticsAggregator::OnVideoQueueDepth(uint32_t depth) noexcept {
@@ -510,6 +521,12 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     au.channels = audio_channels_;
     au.codec = stats.audio_codec;
     au.track_count = cfg_.audio_track_count;
+    uint32_t degraded_total = 0;
+    for (const uint32_t d : audio_degraded_sources_) {
+        degraded_total += d;
+    }
+    au.degraded_sources = degraded_total;
+    au.source_degraded = degraded_total > 0;
 
     // ---- Queues ----
     s.video_queue.current_depth = video_queue_depth_;

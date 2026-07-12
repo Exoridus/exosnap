@@ -58,6 +58,12 @@ class MixedAudioSrc final : public IAudioCaptureSource {
                            float limiter_ceiling_linear = 1.0f);
 
     bool Init(std::string& out_error) override;
+    // Reactivate every currently-degraded inner source (ADR 0046). Each inner is
+    // reacquired with its own identity rules (a PID-keyed loopback may refuse and
+    // stay silent; a default endpoint follows the current default). Sources that
+    // recover clear their degraded flag; the survivors are never touched. Returns
+    // true when no degraded source remains after the attempt.
+    bool Reinit(std::string& out_error) override;
     uint32_t PendingFrameCount() override;
     bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override;
     void ReleaseBuffer() override;
@@ -66,6 +72,11 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     uint32_t Channels() const override;
     AudioSampleFormat SampleFormat() const override;
     const std::string& EndpointName() const override;
+    // Source-granular health (ADR 0046): total inner sources and how many are
+    // currently degraded (endpoint lost, contributing honest silence). Lets the
+    // audio thread surface a partly-degraded merged track without ending it.
+    uint32_t CaptureSourceCount() const override;
+    uint32_t DegradedSourceCount() const override;
 
     void Shutdown() override;
 
@@ -84,6 +95,13 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     // Per-source FIFO of gain-applied interleaved Float32 stereo samples. Holds
     // the surplus a source delivered beyond what has been mixed so far.
     std::vector<std::vector<float>> source_fifo_;
+
+    // Per-source degraded flag (ADR 0046). Set when an inner source's acquire
+    // fails mid-recording (endpoint lost): the mixer stops polling it (it would
+    // only fail again) so the survivors keep mixing, and Reinit reacquires it.
+    // This replaces the old silent-swallow that made a dead inner vanish without
+    // trace. Sized to sources_ in Init.
+    std::vector<bool> source_degraded_;
 
     std::vector<float> mix_buffer_;     // emitted block: N * kOutputChannels floats
     std::vector<float> scratch_buffer_; // per-source conversion scratch

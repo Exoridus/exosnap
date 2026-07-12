@@ -58,6 +58,7 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
     MicDspAudioSrc(std::unique_ptr<IAudioCaptureSource> inner, const MicDspConfig& cfg);
 
     bool Init(std::string& out_error) override;
+    bool Reinit(std::string& out_error) override;
     uint32_t PendingFrameCount() override;
     bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override;
     void ReleaseBuffer() override;
@@ -69,6 +70,8 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
     int32_t LastCaptureHresult() const override;
     bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
     void* BufferReadyEvent() const override;
+    uint32_t CaptureSourceCount() const override;
+    uint32_t DegradedSourceCount() const override;
 
     void Shutdown() override;
 

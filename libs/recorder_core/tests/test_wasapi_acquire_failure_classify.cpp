@@ -5,15 +5,22 @@
 // endpoint until the fixed join budget detaches it (the a0=TIMEOUT symptom of
 // the original recording hang).
 //
-// Unlike the OD path there is no in-place "recover": a WASAPI capture endpoint
-// that is invalidated mid-recording (device unplugged, format changed, audio
-// service restarted) cannot be reacquired on the same stream, so endpoint loss
-// ends the recording cleanly (EOS -> finalise). The decision is HW-free and
-// pinned here:
+// This is the SOURCE-LAYER decision — "did this acquire carry data, or did the
+// endpoint fail?". The `Fail` return means the old stream is dead (a WASAPI
+// capture endpoint invalidated mid-recording cannot be reacquired on the same
+// stream). It is pinned here:
 //   S_OK / AUDCLNT_S_BUFFER_EMPTY  -> Idle (no data-carrying failure this tick; keep draining)
-//   AUDCLNT_E_DEVICE_INVALIDATED   -> Fail (endpoint gone: stop cleanly)
-//   AUDCLNT_E_SERVICE_NOT_RUNNING  -> Fail (audio service down: stop cleanly)
+//   AUDCLNT_E_DEVICE_INVALIDATED   -> Fail (endpoint gone)
+//   AUDCLNT_E_SERVICE_NOT_RUNNING  -> Fail (audio service down)
 //   any other unexpected HRESULT   -> Fail (fail closed, never loop silently)
+//
+// What `Fail` MEANS at the session level changed in ADR 0046: it no longer ends
+// the recording. The audio thread now maps a reported acquire failure through
+// ClassifyAudioSourceLoss (audio_device_loss_policy.h, pinned in
+// test_audio_device_loss_policy.cpp) to DegradeSource — the affected source goes
+// to honest silence and reactivates, while video and every other source keep
+// running. This classifier still answers only the narrower "is the stream dead"
+// question, so its Idle/Fail contract is unchanged.
 
 #include "wasapi_capture_src.h"
 

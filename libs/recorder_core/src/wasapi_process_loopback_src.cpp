@@ -1,6 +1,7 @@
 #include "wasapi_process_loopback_src.h"
 
 #include "discontinuity_gap.h"
+#include "process_identity.h"
 
 #include <audioclientactivationparams.h>
 #include <mmdeviceapi.h>
@@ -200,6 +201,30 @@ PROCESS_LOOPBACK_MODE ToProcessLoopbackMode(ProcessLoopbackMode mode) {
     }
 }
 
+// The target process's creation time (FILETIME packed into a uint64), used with
+// the PID as a recycle-proof identity (process_identity.h). out_alive is set
+// true only when the PID currently resolves to a live, queryable process.
+// Returns 0 when the process is gone or its times cannot be read.
+uint64_t QueryProcessCreationTime(DWORD pid, bool& out_alive) noexcept {
+    out_alive = false;
+    if (pid == 0) {
+        return 0;
+    }
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (proc == nullptr) {
+        return 0; // process gone / not queryable
+    }
+    FILETIME creation{}, exit_time{}, kernel_time{}, user_time{};
+    uint64_t creation_packed = 0;
+    if (GetProcessTimes(proc, &creation, &exit_time, &kernel_time, &user_time)) {
+        out_alive = true;
+        creation_packed =
+            (static_cast<uint64_t>(creation.dwHighDateTime) << 32) | static_cast<uint64_t>(creation.dwLowDateTime);
+    }
+    CloseHandle(proc);
+    return creation_packed;
+}
+
 } // namespace
 
 WasapiProcessLoopbackSrc::WasapiProcessLoopbackSrc(DWORD target_pid, ProcessLoopbackMode mode)
@@ -365,7 +390,37 @@ bool WasapiProcessLoopbackSrc::Init(std::string& out_error) {
 
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
+    last_capture_hr_ = 0;
+
+    // Capture the target's recycle-proof identity once, on the first successful
+    // init (ADR 0046). Reinit re-checks this before reacquiring so a dead/reused
+    // PID is never grabbed. Captured even if the query returns 0 (unqueryable):
+    // ProcessIdentityMatches then fails closed on any later Reinit.
+    if (!identity_captured_) {
+        bool alive = false;
+        process_creation_time_ = QueryProcessCreationTime(pid_, alive);
+        identity_captured_ = true;
+    }
     return true;
+}
+
+bool WasapiProcessLoopbackSrc::Reinit(std::string& out_error) {
+    out_error.clear();
+    bool alive = false;
+    const uint64_t current_creation_time = QueryProcessCreationTime(pid_, alive);
+    if (!ProcessIdentityMatches(process_creation_time_, current_creation_time, alive)) {
+        Shutdown();
+        char buf[220];
+        snprintf(buf, sizeof(buf),
+                 "Process loopback target (%s, pid=%lu) has exited or was replaced; this source stays silent",
+                 ModeLabel(mode_), static_cast<unsigned long>(pid_));
+        out_error = buf;
+        return false;
+    }
+    // Same instance still alive — reacquire a fresh loopback session (Init
+    // tears the previous one down first). identity_captured_ stays set so the
+    // originally captured creation time is preserved.
+    return Init(out_error);
 }
 
 uint32_t WasapiProcessLoopbackSrc::PendingFrameCount() {
@@ -387,6 +442,7 @@ uint32_t WasapiProcessLoopbackSrc::PendingFrameCount() {
         }
         pending_capture_error_ = true;
         pending_capture_error_msg_ = buf;
+        last_capture_hr_ = static_cast<int32_t>(hr);
         return 1;
     }
 
@@ -436,6 +492,7 @@ bool WasapiProcessLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::strin
                      static_cast<unsigned long>(hr));
         }
         out_error = buf;
+        last_capture_hr_ = static_cast<int32_t>(hr);
         return false;
     }
     if (frames == 0) {
@@ -492,6 +549,10 @@ AudioSampleFormat WasapiProcessLoopbackSrc::SampleFormat() const {
 
 const std::string& WasapiProcessLoopbackSrc::EndpointName() const {
     return endpoint_name_;
+}
+
+int32_t WasapiProcessLoopbackSrc::LastCaptureHresult() const {
+    return last_capture_hr_;
 }
 
 bool WasapiProcessLoopbackSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {

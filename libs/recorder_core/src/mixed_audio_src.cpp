@@ -79,6 +79,7 @@ bool MixedAudioSrc::Init(std::string& out_error) {
 
     const size_t num = sources_.size();
     source_fifo_.assign(num, std::vector<float>{});
+    source_degraded_.assign(num, false);
 
     for (size_t i = 0; i < num; ++i) {
         std::string src_err;
@@ -128,6 +129,11 @@ void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
     const float base_gain = 1.0f / static_cast<float>(num);
 
     for (size_t i = 0; i < num; ++i) {
+        // A degraded inner (endpoint lost) is not polled — it would only fail
+        // again. The survivors keep mixing; Reinit reacquires it (ADR 0046).
+        if (source_degraded_[i]) {
+            continue;
+        }
         if (sources_[i]->PendingFrameCount() == 0) {
             continue;
         }
@@ -135,6 +141,14 @@ void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
         RawAudioBuffer src_buf{};
         std::string src_err;
         if (!sources_[i]->AcquireBuffer(src_buf, src_err)) {
+            // Non-empty error == the endpoint was lost (benign "no data this
+            // tick" returns false with an empty message). Degrade this inner
+            // source visibly instead of silently swallowing it — its
+            // contribution becomes honest silence and DegradedSourceCount()
+            // surfaces it, until Reinit brings it back.
+            if (!src_err.empty()) {
+                source_degraded_[i] = true;
+            }
             continue;
         }
 
@@ -188,8 +202,14 @@ uint32_t MixedAudioSrc::PendingFrameCount() {
         return emittable;
     }
     uint32_t inner_pending = 0;
-    for (auto& src : sources_) {
-        inner_pending = std::max(inner_pending, src->PendingFrameCount());
+    for (size_t i = 0; i < sources_.size(); ++i) {
+        // A degraded inner keeps reporting a pending error; skip it so a
+        // fully-degraded merged track reports 0 pending (the audio thread then
+        // holds its timeline with silence) instead of spinning on failed pumps.
+        if (i < source_degraded_.size() && source_degraded_[i]) {
+            continue;
+        }
+        inner_pending = std::max(inner_pending, sources_[i]->PendingFrameCount());
     }
     return inner_pending;
 }
@@ -256,6 +276,40 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     return true;
 }
 
+bool MixedAudioSrc::Reinit(std::string& out_error) {
+    out_error.clear();
+    std::string first_err;
+    for (size_t i = 0; i < sources_.size(); ++i) {
+        if (i >= source_degraded_.size() || !source_degraded_[i]) {
+            continue;
+        }
+        std::string err;
+        if (sources_[i]->Reinit(err)) {
+            source_degraded_[i] = false;
+        } else if (first_err.empty()) {
+            first_err = err;
+        }
+    }
+    if (!first_err.empty()) {
+        out_error = first_err;
+    }
+    return DegradedSourceCount() == 0;
+}
+
+uint32_t MixedAudioSrc::CaptureSourceCount() const {
+    return static_cast<uint32_t>(sources_.size());
+}
+
+uint32_t MixedAudioSrc::DegradedSourceCount() const {
+    uint32_t degraded = 0;
+    for (const bool d : source_degraded_) {
+        if (d) {
+            ++degraded;
+        }
+    }
+    return degraded;
+}
+
 void MixedAudioSrc::ReleaseBuffer() {
     // Source packets are acquired and released inside PumpOnePacketPerSource;
     // the mixed buffer this exposes is owned by mix_buffer_, so there is nothing
@@ -284,6 +338,7 @@ void MixedAudioSrc::Shutdown() {
     }
     initialized_ = false;
     source_fifo_.clear();
+    source_degraded_.clear();
 }
 
 } // namespace recorder_core

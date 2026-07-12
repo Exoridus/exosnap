@@ -420,8 +420,33 @@ degrades gracefully when not elevated.
 
 **Known target-identity boundaries.** Display identity uses the GDI device name (e.g.
 `\\.\DISPLAY1`), which can be reassigned on a topology change, so a saved Region/Display target may
-point to a different physical monitor after a reboot or reconnect — re-select in that case. Hot-swap
-of the capture device mid-recording is not supported: stop and restart after reconnecting.
+point to a different physical monitor after a reboot or reconnect — re-select in that case.
+
+**Device loss mid-recording (ADR 0046).** Losing a capture device during a recording is handled per
+device type — a coherent, honest policy rather than a blanket "stop and restart". The recording is
+never retargeted onto a *different* device; the engine only holds or reacquires the **same** source.
+
+- **Display (monitor).** A brief loss (mode change, sleep/wake, reconnect) holds the last frame and
+  reopens the same display (by GDI name), indefinitely, so the recording continues seamlessly. A GPU
+  removal ends the recording cleanly (the segment stays valid).
+- **Window.** Closing the captured window ends the recording cleanly — a closed window is gone for
+  good and is not retargeted. (Merely minimizing or covering it keeps recording the last frame.)
+- **Audio source.** An audio endpoint lost mid-recording (a mic unplugged, a headset switched, the
+  system output changed, the audio service restarted) **no longer ends the recording**. The affected
+  source goes to honest silence and the recording keeps running — video and every other audio source
+  are untouched — while the engine reactivates the source with the same identity every 500 ms. In a
+  merged track only the dead source's contribution falls silent; the others keep mixing. A fixed-device
+  microphone reacquires that exact device; the default microphone and the system-output capture follow
+  the *current* Windows default (they represent "the system default", not one pinned device); an
+  app/window audio capture keyed on a process reacquires only while that same process is still running
+  (it never grabs a different process that reused the PID) and otherwise stays silent. The silence gap
+  is real and shown: a calm live notice in Diagnostics while a source is degraded, and the post-flight
+  report notes that the recording contains a silence gap.
+- **Webcam.** Losing the camera freezes the last picture-in-picture frame and reopens the same device,
+  indefinitely; the recording continues.
+
+If every audio source is lost at once, the recording continues **video-only** (the picture is the
+primary source). The engine never auto-switches an audio source to a freely-chosen *other* device.
 
 **Displays are numbered sequentially everywhere.** The internal GDI names skip numbers after
 plug/unplug cycles (`\\.\DISPLAY6`, `\\.\DISPLAY7` on a two-display desktop); the user-facing

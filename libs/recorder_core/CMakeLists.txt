@@ -888,6 +888,43 @@ exosnap_add_gtest(
 target_include_directories(test_od_reopen_policy PRIVATE src)
 target_compile_definitions(test_od_reopen_policy PRIVATE NOMINMAX)
 
+# Audio device-loss policy (ADR 0046): pure classifier (endpoint loss ->
+# degrade the source, not kill the session), unbounded reactivation cadence, and
+# the PID-reuse identity guard for process-loopback flavors. No audio hardware.
+exosnap_add_gtest(
+    NAME test_audio_device_loss_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_device_loss_policy.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_device_loss_policy PRIVATE src)
+target_compile_definitions(test_audio_device_loss_policy PRIVATE NOMINMAX)
+
+# MixedAudioSrc per-source degradation (ADR 0046): a lost inner source degrades
+# to honest silence (visible via DegradedSourceCount) while the survivors keep
+# mixing, and Reinit reacquires it. No audio hardware.
+exosnap_add_gtest(
+    NAME test_mixed_audio_device_loss
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mixed_audio_device_loss.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mixed_audio_device_loss PRIVATE src)
+target_compile_definitions(test_mixed_audio_device_loss PRIVATE NOMINMAX)
+
+# AudioThread device-loss integration (ADR 0046): a fake source that loses its
+# endpoint mid-recording keeps the session alive (no RecordFailure), holds the
+# timeline with silence, reactivates via Reinit, and still emits EOS; a merged
+# track survives one dead inner. No audio hardware.
+exosnap_add_gtest(
+    NAME test_audio_thread_device_loss
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_thread_device_loss.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_thread_device_loss PRIVATE src)
+target_compile_definitions(test_audio_thread_device_loss PRIVATE NOMINMAX)
+
 # Capture drain selection: the frame loop must never drain the backend it does not
 # own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.
 exosnap_add_gtest(

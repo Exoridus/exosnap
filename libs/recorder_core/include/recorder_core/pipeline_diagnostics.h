@@ -219,6 +219,13 @@ struct AudioDiagnostics {
     uint32_t channels = 0;
     AudioCodec codec = AudioCodec::Opus;
     uint32_t track_count = 0;
+    // Device hot-swap health (ADR 0046). degraded_sources = capture sources
+    // across all audio tracks whose endpoint is currently lost and contributing
+    // honest silence (the recording keeps running; the source reactivates when
+    // the device returns). source_degraded == degraded_sources > 0. A calm,
+    // measured live notice — never a blocker.
+    uint32_t degraded_sources = 0;
+    bool source_degraded = false;
 };
 
 struct QueueDiagnostics {

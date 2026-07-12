@@ -121,6 +121,45 @@ TEST(RollingTimeWindow, PercentileHonoursHorizon) {
 // Snapshot defaults / lifecycle / generation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Audio device-loss health (ADR 0046)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, AudioSourceHealthDefaultsHealthy) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.audio.degraded_sources, 0u);
+    EXPECT_FALSE(s.audio.source_degraded);
+}
+
+TEST(PipelineDiagnostics, AudioSourceHealthSurfacesAndClearsDegradation) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+
+    // One of a merged track's two sources lost its endpoint.
+    agg.OnAudioSourceHealth(/*track*/ 0, /*degraded*/ 1, /*total*/ 2);
+    auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.audio.degraded_sources, 1u);
+    EXPECT_TRUE(s.audio.source_degraded);
+
+    // It reactivated: the notice clears.
+    agg.OnAudioSourceHealth(0, 0, 2);
+    s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 0.2);
+    EXPECT_EQ(s.audio.degraded_sources, 0u);
+    EXPECT_FALSE(s.audio.source_degraded);
+}
+
+TEST(PipelineDiagnostics, AudioSourceHealthSumsAcrossTracks) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAudioSourceHealth(0, 1, 1);
+    agg.OnAudioSourceHealth(1, 1, 2);
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.audio.degraded_sources, 2u);
+    EXPECT_TRUE(s.audio.source_degraded);
+}
+
 TEST(PipelineDiagnostics, DefaultGenerationZeroAndIdleInvalid) {
     PipelineDiagnosticsAggregator agg;
     EXPECT_EQ(agg.generation(), 0u);
