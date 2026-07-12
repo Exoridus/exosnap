@@ -1717,5 +1717,129 @@ TEST(RecommendationEngineTest, Hdr10PlusAv1OrHevcOnActiveHdrDisplayRaisesNoBlock
     }
 }
 
+// --- rec.capture.exclusive_window (S2b): pre-flight exclusive-fullscreen card ---
+
+namespace {
+
+capability::CapabilitySet ExclusiveCaps() {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    return caps;
+}
+
+capability::UserRecorderConfig ExclusiveConfig() {
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Limited;
+    return config;
+}
+
+WindowTargetFacts FullscreenShapedFacts() {
+    WindowTargetFacts f;
+    f.valid = true;
+    f.visible = true;
+    f.window_rect = RECT{0, 0, 1920, 1080};
+    f.monitor_rect = RECT{0, 0, 1920, 1080};
+    f.style = WS_POPUP | WS_VISIBLE;
+    return f;
+}
+
+const DiagnosticResult* FindResult(const DiagnosticChecklist& list, const std::string& id) {
+    for (const auto& r : list.results) {
+        if (r.id == id)
+            return &r;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST(ExclusiveWindowCard, NoWindowFactsIsSilent) {
+    // The engine holds caps/config by reference — keep them alive as named locals.
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    // No SetCaptureWindowEvidence: monitor target / no selection.
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
+}
+
+TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    // FullscreenShaped + hub produced nothing for >= 2 s == ProvenBlack.
+    engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
+                                    WindowHubEvidence{recorder_core::HubFrameKind::None, 3.0, 0.0, false});
+    const DiagnosticChecklist list = engine.Generate();
+    const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
+    ASSERT_NE(r, nullptr);
+    EXPECT_EQ(r->severity, DiagnosticSeverity::Blocker);
+    EXPECT_TRUE(list.has_blocker);
+    ASSERT_TRUE(r->fix_action.has_value());
+    EXPECT_EQ(r->fix_action->id, "fix.capture.monitor_instead");
+    EXPECT_EQ(r->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(r->fix_action->reversible);
+    // The changes_summary must name the scope + APP-audio consequences.
+    EXPECT_NE(r->fix_action->changes_summary.find("APP"), std::string::npos);
+    EXPECT_FALSE(r->fix_action->changes_summary.empty());
+}
+
+TEST(ExclusiveWindowCard, SuspectedWithQunsRaisesNotice) {
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    WindowTargetFacts facts = FullscreenShapedFacts();
+    facts.quns_d3d_fullscreen = true; // fullscreen signal, but no measured black proof
+    engine.SetCaptureWindowEvidence(facts, WindowHubEvidence{recorder_core::HubFrameKind::Live, 5.0, 0.0, true});
+    const DiagnosticChecklist list = engine.Generate();
+    const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
+    ASSERT_NE(r, nullptr);
+    EXPECT_EQ(r->severity, DiagnosticSeverity::Notice);
+    EXPECT_TRUE(list.has_notice);
+}
+
+TEST(ExclusiveWindowCard, BorderlessThatWorksIsSilent) {
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    // FullscreenShaped, producing frames, no signal: the normal borderless case.
+    engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
+                                    WindowHubEvidence{recorder_core::HubFrameKind::Live, 5.0, 0.1, true});
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
+}
+
+TEST(ExclusiveWindowCard, DedupesGenericPresentExclusiveCard) {
+    // A PresentMon ExclusiveFullscreen sample would normally raise rec.present.exclusive.
+    // While the selected-window card fires, the generic card is suppressed.
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", nullptr, &present);
+    engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
+                                    WindowHubEvidence{recorder_core::HubFrameKind::None, 3.0, 0.0, false});
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_NE(FindResult(list, "rec.capture.exclusive_window"), nullptr);
+    EXPECT_EQ(FindResult(list, "rec.present.exclusive"), nullptr) << "one problem must raise exactly one card";
+}
+
+TEST(ExclusiveWindowCard, PresentExclusiveStillFiresWithoutWindowEvidence) {
+    // Without window facts (monitor target), the generic present card is unaffected.
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true, "", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_NE(FindResult(list, "rec.present.exclusive"), nullptr);
+}
+
 } // namespace
 } // namespace exosnap::diagnostics

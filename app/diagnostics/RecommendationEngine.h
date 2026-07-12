@@ -2,6 +2,7 @@
 
 #include "DiagnosticResult.h"
 #include "PresentProvider.h"
+#include "WindowTargetFacts.h"
 
 #include <capability/capability_set.h>
 #include <capability/user_config.h>
@@ -65,6 +66,18 @@ class RecommendationEngine {
         saved_display_label_ = std::move(label);
     }
 
+    // Honest, elevation-free exclusive-fullscreen facts for the SELECTED window
+    // capture target, supplied by the caller from WindowEvidenceProbe (S2a). facts
+    // == nullopt when no window target is selected (a monitor target, or nothing),
+    // in which case the exclusive-window check stays silent. The engine combines
+    // the window shape, the measured hub evidence and its own present sample into
+    // the severity ladder (Suspected -> Notice, ProvenBlack -> Blocker). Default
+    // silent, mirroring the other caller-supplied facts.
+    void SetCaptureWindowEvidence(std::optional<WindowTargetFacts> facts, const WindowHubEvidence& hub) {
+        capture_window_facts_ = std::move(facts);
+        capture_window_hub_ = hub;
+    }
+
     static std::vector<std::string> GetAllRecommendationCodes();
 
   private:
@@ -80,6 +93,11 @@ class RecommendationEngine {
     void checkAudioContainerCompat(DiagnosticChecklist& checklist) const;
     void checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const;
     void checkExclusiveFullscreen(DiagnosticChecklist& checklist) const;
+    void checkExclusiveWindowTarget(DiagnosticChecklist& checklist) const;
+    // The combined exclusive-fullscreen verdict for the selected window (None when
+    // no window target / no evidence). Shared by checkExclusiveWindowTarget and the
+    // dedupe in checkExclusiveFullscreen so one problem raises exactly one card.
+    ExclusiveEvidence exclusiveWindowEvidence() const;
     void checkDiscardedPresents(DiagnosticChecklist& checklist) const;
     void checkPresentModeFlips(DiagnosticChecklist& checklist) const;
     void checkDpcLatency(DiagnosticChecklist& checklist) const;
@@ -96,6 +114,11 @@ class RecommendationEngine {
     bool capture_target_hdr_active_ = false; // true => capture target's display has Windows HDR ON (set by caller)
     bool saved_display_unresolved_ = false;  // true => saved capture target could not be matched (set by caller)
     std::string saved_display_label_;        // friendly name / label of the saved (missing) display
+
+    // Selected-window exclusive-fullscreen facts (S2a probe). nullopt => no window
+    // target selected: the exclusive-window check stays silent.
+    std::optional<WindowTargetFacts> capture_window_facts_;
+    WindowHubEvidence capture_window_hub_;
 
     // Live present-cadence correlation (v0.8.0 / ADR 0033). Extracted from an optional live
     // RecordingDiagnosticsSnapshot; all false/neutral when no live measurement is available

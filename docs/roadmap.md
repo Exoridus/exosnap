@@ -74,7 +74,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 |----------|------------------------------------|-----------|
 | `0.1.0`  | Initial MVP                        | NVIDIA/NVENC baseline, portable ZIP artifact. No further large features. |
 | `0.2.0`  | Reliability foundation             | MKV as sole recording container; libavformat remux engine (progressive MP4 on stop, faststart); MF/SinkWriter removal; recovery manifest + startup recovery UI; low-disk guard (including remux reserve); filesystem/FAT32 checks; MP4 split via per-segment remux; container compatibility registry. |
-| `0.3.0`  | Presence and notifications         | Recording + diagnostics overlays (excluded from capture), tray icon + recording/paused + unread badge, notification toasts (low storage / saved / unexpected stop / recovery available), class-1 countdown overlay, on-screen capture-frame control + opt-in interactive quick-control pill, refined region selection, close-to-tray. *(Shipped. The fullscreen/borderless/exclusive capture matrix was deferred to `0.12.x` — capture-engine reliability work, not presence.)* |
+| `0.3.0`  | Presence and notifications         | Recording + diagnostics overlays (excluded from capture), tray icon + recording/paused + unread badge, notification toasts (low storage / saved / unexpected stop / recovery available), class-1 countdown overlay, on-screen capture-frame control + opt-in interactive quick-control pill, refined region selection, close-to-tray. *(Shipped. The fullscreen/borderless/exclusive capture matrix was deferred to `0.10.0` — capture-engine reliability work, not presence.)* |
 | `0.4.0`  | Crash reporting and updates        | Local-first Crashpad capture + privacy-scrubbed, consent-gated delivery — Stage 0 (assisted GitHub issue) and Stage 1 (automated opt-in upload to Sentry, EU data residency), symbol pipeline; update check with Stable/Preview channels, auto-updater, ed25519 (Monocypher verify) + SHA-256 verification, rollback. |
 | `0.5.0`  | Settings & media-capability        | TOML config, profile export/import, encoder factory, capability model, compatibility registry, Basic/Advanced/Expert settings, video rate-control/bitrate, audio bitrate, buffers, encoder presets, split time + size, themes/accent, color-pipeline ADR, audio-format ADR. |
 | `0.6.0`  | Audio v2                           | Per-track gain, mute, brickwall limiter, mic AGC, optional noise gate / high-pass / RNNoise, PCM, FLAC, channel/sample-format model. |
@@ -262,7 +262,7 @@ advanced 7 → 16 across the wave (pre-1.0: reset, no migration).
 Earlier waves for reference: the `0.3.0` presence layer shipped capture-excluded overlays
 (ADR 0016), tray icon + unread badge, notification toasts, countdown overlay, capture-frame control,
 refined region selection, and close-to-tray; the fullscreen/borderless/exclusive capture matrix was
-deferred to `0.12.x` (RC stabilization).
+deferred to `0.10.0` (vendor-independent capture-engine hardening).
 
 ---
 

@@ -246,6 +246,8 @@ qt_add_executable(exosnap WIN32
     services/DxgiCaptureHubService.cpp
     services/ThumbnailCapture.h
     services/ThumbnailCapture.cpp
+    services/WindowEvidenceProbe.h
+    services/WindowEvidenceProbe.cpp
     services/DxgiPreviewRenderer.h
     services/DxgiPreviewRenderer.cpp
     services/WebcamService.h
@@ -339,6 +341,12 @@ qt_add_executable(exosnap WIN32
     diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.h
     diagnostics/RecommendationEngine.cpp
+    diagnostics/WindowTargetFacts.h
+    diagnostics/WindowTargetFacts.cpp
+    diagnostics/WindowEvidenceAccumulator.h
+    diagnostics/WindowEvidenceAccumulator.cpp
+    diagnostics/WindowCaptureStall.h
+    diagnostics/WindowCaptureStall.cpp
     diagnostics/SelfTestRunner.h
     diagnostics/SelfTestRunner.cpp
     viewmodels/RecordViewModel.h
@@ -506,6 +514,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/DiskSpaceProvider.cpp
     diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.cpp
+    diagnostics/WindowTargetFacts.cpp
     diagnostics/SelfTestRunner.cpp
     # Session report writer is called by RecordingCoordinator, which is compiled
     # into the coordinator test targets that all link this support lib.
@@ -514,7 +523,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
     exosnap_output_model_test_support exosnap_capability recorder_core
     exosnap::crash_capture
-    dxgi.lib mmdevapi.lib
+    dxgi.lib mmdevapi.lib dwmapi.lib shell32.lib
 )
 
 exosnap_add_app_test_support(exosnap_device_service_test_support
@@ -639,6 +648,42 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core
 )
 target_include_directories(display_identity_resolver_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Exclusive-fullscreen pre-flight: pure window-shape + evidence-ladder resolvers (S1).
+exosnap_add_gtest(
+    NAME window_target_facts_tests
+    TEST_PREFIX exclusive_fs.
+    SOURCES
+        tests/test_window_target_facts.cpp
+        diagnostics/WindowTargetFacts.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(window_target_facts_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(window_target_facts_tests PRIVATE dwmapi.lib shell32.lib)
+
+# Exclusive-fullscreen pre-flight: pure hub-evidence accumulator (S2a).
+exosnap_add_gtest(
+    NAME window_evidence_accumulator_tests
+    TEST_PREFIX exclusive_fs.
+    SOURCES
+        tests/test_window_evidence_accumulator.cpp
+        diagnostics/WindowEvidenceAccumulator.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(window_evidence_accumulator_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Exclusive-fullscreen mid-session stall predicate (S4, pure).
+exosnap_add_gtest(
+    NAME window_capture_stall_tests
+    TEST_PREFIX exclusive_fs.
+    SOURCES
+        tests/test_window_capture_stall.cpp
+        diagnostics/WindowCaptureStall.cpp
+        diagnostics/WindowTargetFacts.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(window_capture_stall_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(window_capture_stall_tests PRIVATE dwmapi.lib shell32.lib)
 
 # 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
 # preset round-trip, dirty-tracking, sanitize, and capability queries.

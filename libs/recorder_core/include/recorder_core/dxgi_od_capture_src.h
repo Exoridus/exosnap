@@ -287,4 +287,40 @@ enum class CaptureDrainStep : uint8_t {
     return od_holding ? CaptureDrainStep::Hold : CaptureDrainStep::DrainOd;
 }
 
+// ---------------------------------------------------------------------------
+// Wait-for-first-frame guard policy (start-time OD access loss)
+// ---------------------------------------------------------------------------
+// A game entering exclusive fullscreen exactly as recording starts throws
+// DXGI_ERROR_ACCESS_LOST before the first frame is ever acquired. Failing
+// immediately loses the start; instead the loop enters a bounded start-hold and
+// polls Reopen() under DecideOdReopen(budget) — the same recovery the drain uses
+// mid-session, but bounded (the user is waiting on "Preparing", not on a live
+// recording). While that hold is active the 5 s first-frame timeout must be
+// suspended, or it would end the session before the reopen budget could run.
+// After a successful reopen the first-frame deadline restarts from that moment.
+enum class FirstFrameWaitAction : uint8_t {
+    KeepWaiting, // no frame yet, deadline not reached: keep polling
+    TimeoutFail, // deadline exceeded without a frame: honest first-frame timeout
+    HoldStep,    // OD start-hold active: 5 s guard suspended; drive the reopen budget
+};
+
+// Pure decision for one iteration of the wait-for-first-frame loop. While the OD
+// start-hold is active the 5 s guard is suspended (HoldStep); otherwise the guard
+// applies against the elapsed time since the current first-frame deadline began
+// (session start, or the moment the last start-hold ended after a successful
+// reopen). No wall clock is read here — elapsed is passed in.
+[[nodiscard]] constexpr FirstFrameWaitAction
+FirstFrameWaitStep(bool od_start_holding, double elapsed_since_deadline_sec, double timeout_sec) noexcept {
+    if (od_start_holding)
+        return FirstFrameWaitAction::HoldStep;
+    if (elapsed_since_deadline_sec > timeout_sec)
+        return FirstFrameWaitAction::TimeoutFail;
+    return FirstFrameWaitAction::KeepWaiting;
+}
+
+// Bounded recovery budget for a start-time OD access loss (see FirstFrameWaitStep).
+// Short by design: the user is blocked on "Preparing", not watching a live
+// recording, so the wait cannot be the drain's unbounded hold.
+inline constexpr std::chrono::milliseconds kOdStartHoldBudget{15000};
+
 } // namespace recorder_core

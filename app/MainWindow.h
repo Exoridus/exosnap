@@ -25,6 +25,7 @@
 #include "services/RecoveryService.h"
 #include "services/WebcamDeviceNotifier.h"
 #include "services/WhatsNewPayload.h"
+#include "services/WindowEvidenceProbe.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/CapabilityCacheStore.h"
 #include "settings/RecordingPresetStore.h"
@@ -165,6 +166,10 @@ class MainWindow : public QMainWindow {
     void refreshPresetUi();
     void initHotkeyService();
     void refreshDiagnosticsData();
+    // Re-pull the selected-window exclusive-fullscreen probe snapshot and feed it
+    // to the Diagnostics page. Cheap; called on config changes and on a light timer
+    // while the page is visible (the evidence accumulates over ~2 s).
+    void refreshWindowEvidence();
     // Called on the UI thread when the async capability probe completes.
     // Sets runtime_caps_, delivers them to the Record page, and starts device notifiers.
     void onRuntimeCapsReady(capability::CapabilitySet caps);
@@ -420,6 +425,7 @@ class MainWindow : public QMainWindow {
     // 750 ms single-shot debounce for schedulePersistLiveState(); created on
     // first use.
     QTimer* live_persist_timer_ = nullptr;
+    QTimer* window_evidence_timer_ = nullptr;
     // Set when RecordingPresetStore::Load() had to repair the file; consumed
     // (and cleared) once the notification toast system exists to report it.
     bool preset_store_repaired_ = false;
@@ -498,6 +504,10 @@ class MainWindow : public QMainWindow {
     // gate (elevation + opt-in). Started/stopped alongside present_provider_; its reading
     // is fed to the DiagnosticsPage which forwards it into RecommendationEngine.
     diagnostics::DpcLatencyProvider dpc_provider_;
+    // Selected-window exclusive-fullscreen evidence probe (S2a). Subscribes to the
+    // selected window pre-flight and paused during recording; its snapshot feeds the
+    // DiagnosticsPage rec.capture.exclusive_window card. Elevation-free.
+    WindowEvidenceProbe window_evidence_probe_;
 };
 
 } // namespace exosnap

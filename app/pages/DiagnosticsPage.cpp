@@ -553,6 +553,15 @@ void DiagnosticsPage::setSelectedCaptureTarget(const std::optional<recorder_core
     }
 }
 
+void DiagnosticsPage::setCaptureWindowEvidence(const std::optional<diagnostics::WindowTargetFacts>& facts,
+                                               const diagnostics::WindowHubEvidence& hub) {
+    capture_window_facts_ = facts;
+    capture_window_hub_ = hub;
+    if (data_ready_ && isVisible()) {
+        refreshOverview();
+    }
+}
+
 void DiagnosticsPage::setSavedDisplayUnresolved(bool unresolved, const std::string& label) {
     if (saved_display_unresolved_ == unresolved && saved_display_label_ == label) {
         return;
@@ -1406,6 +1415,7 @@ void DiagnosticsPage::refreshOverview() {
     // pre-flight blocker (rec.hdr.h264) fires only on an HDR-active desktop.
     engine.SetCaptureTargetHdrActive(SelectedTargetHdrActive(selected_capture_target_, caps_));
     engine.SetSavedDisplayUnresolved(saved_display_unresolved_, saved_display_label_);
+    engine.SetCaptureWindowEvidence(capture_window_facts_, capture_window_hub_);
 
     auto recs = engine.Generate();
 

@@ -124,6 +124,13 @@ class RecordPage : public QWidget {
     // the HDR10 pre-flight readiness check.
     [[nodiscard]] std::optional<recorder_core::CaptureTarget> selectedCaptureTarget() const;
 
+    // Retarget the current window selection to the monitor that hosts it. Drives
+    // the "Record the monitor instead" FixAction for an exclusive-fullscreen
+    // window (a foreign FSE window cannot be captured by WGC; the monitor's DXGI
+    // OD path can). No-op (logged) when the current target is not a window, or
+    // the hosting monitor has no enumerated capture target.
+    void selectMonitorTargetForWindow();
+
     // Apply a saved capture policy:
     //   - Empty key     → no stored preference: auto-pick primary/first target (OK).
     //   - Non-empty key, match found  → select it.

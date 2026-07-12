@@ -315,8 +315,17 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   auto-dismiss.
 - Countdown overlay is anchored to the recorded monitor's bottom-center. On multi-monitor setups,
   it follows the selected monitor. It is not configurable in 0.3.0.
-- The fullscreen/borderless/exclusive capture matrix (capturing games that use exclusive fullscreen)
-  is deferred to 0.12.x (RC stabilization wave).
+- **Exclusive-fullscreen (legacy FSE) window capture is a named limitation, not a
+  supported path.** A game in legacy exclusive fullscreen bypasses the desktop
+  compositor, so **window** capture (WGC) records a black or frozen picture — ExoSnap
+  cannot capture an FSE *window* in isolation (that would need hook/injection capture,
+  which is deliberately rejected — see the privacy/anti-cheat posture). Record the
+  **monitor** instead: monitor capture (DXGI Output Duplication) can capture exclusive
+  fullscreen. ExoSnap now *detects* this pre-flight (the `rec.capture.exclusive_window`
+  check) and offers a one-confirm "Record the monitor instead" fix; a window that goes
+  FSE mid-recording is reported rather than silently frozen. Most modern "fullscreen"
+  settings run as borderless/flip-model (FSO) and record fine on either path; the
+  remaining hardening of this matrix is tracked for `0.10.0`.
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
 ## Capture previews
@@ -415,5 +424,6 @@ upload, AMD and Intel hardware encoding, software encoding fallback, HLG and wid
 management beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and
 window/game capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level
 metadata), 4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
-audio (32-bit float PCM has since shipped), PCM/FLAC in MP4, and the fullscreen/exclusive capture
-matrix (0.12.x).
+audio (32-bit float PCM has since shipped), PCM/FLAC in MP4, and the remaining hardening of the
+fullscreen/exclusive capture matrix (0.10.0; exclusive-fullscreen detection + the "record the
+monitor instead" path have since shipped — see the capture-matrix limitation above).
