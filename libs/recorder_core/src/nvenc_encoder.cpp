@@ -732,7 +732,7 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     // uniformly across all three codecs (no per-codec gating). NOTE: P5-P7 on
     // AV1/HEVC previously triggered NV_ENC_ERR_NEED_MORE_INPUT on every frame
     // even with lookahead disabled (internal pipeline depth); EncodeFrame
-    // already buffers/drains this case (m_pendingPts/m_pendingSlots), so it is
+    // already buffers/drains this case (m_pending FIFO), so it is
     // not fatal, but it increases encode latency and 8-slot input-ring pressure.
     m_presetGuid = NvencPresetToGuid(m_preset);
 
@@ -1082,18 +1082,21 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
     }
 
     uint64_t ts_ns = 0;
-    if (!m_pendingPts.empty()) {
-        ts_ns = m_pendingPts.front();
-        m_pendingPts.pop();
-    }
+    double latency_ms = -1.0;
+    if (!m_pending.empty()) {
+        const PendingFrame pf = m_pending.front();
+        m_pending.pop();
+        ts_ns = pf.pts_ns;
+        // True submit -> bitstream-available latency for this frame. In the P5-P7
+        // buffered case the consumed output belongs to an earlier submission, so
+        // this is the only place the correct latency can be measured (the video
+        // thread's call-site bracket would attribute it to the wrong frame).
+        latency_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf.submit_time).count();
 
-    // Release the associated input slot
-    if (!m_pendingSlots.empty()) {
-        int32_t slot_idx = m_pendingSlots.front();
-        m_pendingSlots.pop();
-
-        if (slot_idx >= 0 && slot_idx < 8) {
-            InputSlot& slot = m_slots[slot_idx];
+        // Release the associated input slot.
+        if (pf.slot_idx >= 0 && pf.slot_idx < 8) {
+            InputSlot& slot = m_slots[pf.slot_idx];
             if (slot.mapped && slot.mappedResource != nullptr) {
                 m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
                 slot.mappedResource = nullptr;
@@ -1107,6 +1110,7 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
 
     out_packet.pts_ns = ts_ns;
     out_packet.keyframe = isKey;
+    out_packet.encode_latency_ms = latency_ms;
     out_packet.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
                             static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
 
@@ -1143,9 +1147,10 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     slot.mappedResource = mapRes.mappedResource;
     slot.mapped = true;
 
-    // Push PTS and slot index before submission (FIFO: one entry per submitted frame)
-    m_pendingPts.push(pts_ns);
-    m_pendingSlots.push(slot_idx);
+    // Record this submission before the encode call (FIFO: one entry per submitted
+    // frame). submit_time stamps the start of the encode so the consuming lock can
+    // report the true per-frame latency, independent of preset buffering.
+    m_pending.push(PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now()});
 
     NV_ENC_PIC_PARAMS pic{};
     pic.version = NV_ENC_PIC_PARAMS_VER;
@@ -1206,12 +1211,11 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
                 slot.mapped = false;
                 slot.in_flight = false;
 
-                // Pop our own PTS+slot entries; LockAndConsumeBitstream
-                // may have already popped them if it got partway through.
-                // Best-effort: drain matching pair if present.
-                if (!m_pendingPts.empty() && !m_pendingSlots.empty()) {
-                    m_pendingPts.pop();
-                    m_pendingSlots.pop();
+                // Pop our own pending entry; LockAndConsumeBitstream may have
+                // already popped it if it got partway through. Best-effort: drain
+                // one entry if present.
+                if (!m_pending.empty()) {
+                    m_pending.pop();
                 }
                 out_error = lockErr;
                 return false;
@@ -1233,11 +1237,9 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
         slot.mapped = false;
         slot.in_flight = false;
 
-        // Remove the PTS+slot we just pushed (best-effort, front of queue)
-        if (!m_pendingPts.empty())
-            m_pendingPts.pop();
-        if (!m_pendingSlots.empty())
-            m_pendingSlots.pop();
+        // Remove the entry we just pushed (best-effort, front of queue)
+        if (!m_pending.empty())
+            m_pending.pop();
 
         out_error = std::string("nvEncEncodePicture: ") + NvencStatusName(st);
         return false;
@@ -1271,7 +1273,7 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
     constexpr double kFlushDrainBudgetMs = 2000.0;
     auto lastProgress = std::chrono::steady_clock::now();
     for (int i = 0; i < m_needMoreInputCount;) {
-        if (m_pendingPts.empty())
+        if (m_pending.empty())
             break;
 
         EncodedVideoPacket pkt;

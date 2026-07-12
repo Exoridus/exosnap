@@ -5,6 +5,7 @@
 // See D3D11 threading contract in video_thread.cpp.
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <queue>
 #include <string>
@@ -352,7 +353,7 @@ class NvencEncoder {
     // used P6 (visible default change, expert-overridable — see ADR 0039). P6 on
     // AV1/HEVC has internal pipeline depth that causes NV_ENC_ERR_NEED_MORE_INPUT
     // on every frame even with lookahead disabled; EncodeFrame already buffers/
-    // drains this case via m_pendingPts/m_pendingSlots, so higher presets are not
+    // drains this case via the m_pending FIFO, so higher presets are not
     // fatal, but they increase encode latency and 8-slot input-ring pressure.
     NvencPreset m_preset = NvencPreset::P4;
     // Resolved via NvencPresetToGuid(m_preset) in FetchPresetConfig(); the member
@@ -360,11 +361,19 @@ class NvencEncoder {
     GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
     const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
 
-    // Pending PTS FIFO — one entry per submitted frame not yet returned as output
-    std::queue<uint64_t> m_pendingPts;
-
-    // Pending slot FIFO — mirrors m_pendingPts; associates slot indices with pending output
-    std::queue<int32_t> m_pendingSlots;
+    // One entry per submitted frame not yet returned as output. Consolidates the
+    // former parallel PTS/slot FIFOs into a single record so the submit timestamp
+    // travels with each in-flight frame; the consuming lock computes the true
+    // submit->ready latency from it (carried out on EncodedVideoPacket::
+    // encode_latency_ms). Output order == submission order today (frameIntervalP=1,
+    // no lookahead), so front() is always the next output — behaviour-identical to
+    // the previous two-FIFO scheme.
+    struct PendingFrame {
+        uint64_t pts_ns = 0;
+        int32_t slot_idx = -1;
+        std::chrono::steady_clock::time_point submit_time{};
+    };
+    std::queue<PendingFrame> m_pending;
 
     int m_needMoreInputCount = 0;
 

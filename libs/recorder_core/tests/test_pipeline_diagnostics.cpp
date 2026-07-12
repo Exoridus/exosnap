@@ -84,6 +84,39 @@ TEST(RollingTimeWindow, BoundedCapacityNoUnboundedGrowth) {
     EXPECT_EQ(w.size(), 64u); // never exceeds capacity
 }
 
+TEST(RollingTimeWindow, PercentileEmptyIsZero) {
+    RollingTimeWindow w(64, milliseconds(2000));
+    EXPECT_DOUBLE_EQ(w.Percentile(At(0), 0.5), 0.0);
+}
+
+TEST(RollingTimeWindow, PercentileExactNearestRank) {
+    RollingTimeWindow w(256, milliseconds(100000));
+    // Values 1..100 ms at 1 ms cadence, all inside the horizon.
+    for (int i = 1; i <= 100; ++i) {
+        w.Add(At(i), static_cast<double>(i));
+    }
+    // Nearest-rank on a 0-based sorted index of 100 elements.
+    EXPECT_DOUBLE_EQ(w.Percentile(At(100), 0.0), 1.0);
+    EXPECT_DOUBLE_EQ(w.Percentile(At(100), 1.0), 100.0);
+    // p50 -> rank round(0.5*99)=round(49.5)=50 -> value 51.
+    EXPECT_DOUBLE_EQ(w.Percentile(At(100), 0.5), 51.0);
+    // p99 -> rank round(0.99*99)=round(98.01)=98 -> value 99.
+    EXPECT_DOUBLE_EQ(w.Percentile(At(100), 0.99), 99.0);
+}
+
+TEST(RollingTimeWindow, PercentileHonoursHorizon) {
+    RollingTimeWindow w(256, milliseconds(2000));
+    // Old, large samples outside the 2 s horizon must not count.
+    for (int i = 0; i < 10; ++i) {
+        w.Add(At(i), 900.0);
+    }
+    // Fresh, small samples inside the horizon.
+    for (int i = 0; i < 10; ++i) {
+        w.Add(At(5000 + i), 3.0);
+    }
+    EXPECT_DOUBLE_EQ(w.Percentile(At(5009), 0.99), 3.0);
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot defaults / lifecycle / generation
 // ---------------------------------------------------------------------------
@@ -305,6 +338,89 @@ TEST(PipelineDiagnostics, EncodeLatencyAggregated) {
     EXPECT_DOUBLE_EQ(s.video_encoder.average_ms, 3.0);
     EXPECT_DOUBLE_EQ(s.video_encoder.peak_ms, 4.0);
     EXPECT_DOUBLE_EQ(s.video_encoder.latest_ms, 4.0);
+}
+
+TEST(PipelineDiagnostics, EncodePercentilesInSnapshot) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // 100 latency samples 1..100 ms, all inside the 2 s window.
+    for (int i = 1; i <= 100; ++i) {
+        agg.OnEncodeLatency(At(i), static_cast<double>(i));
+    }
+    const auto s = agg.BuildSnapshot(At(100), MakeStats(), DiagnosticsLifecycle::Recording, 0.1);
+    // Nearest-rank window percentiles: p50 -> 51, p99 -> 99.
+    EXPECT_DOUBLE_EQ(s.video_encoder.p50_ms, 51.0);
+    EXPECT_DOUBLE_EQ(s.video_encoder.p99_ms, 99.0);
+}
+
+TEST(PipelineDiagnostics, VideoTickTimingSnapshotAndBudget) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats(); // 60 fps
+    // Unavailable until a tick sample exists.
+    const auto s0 = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s0.video_timing.availability, MetricAvailability::Unavailable);
+    EXPECT_NEAR(s0.video_timing.budget_ms, 1000.0 / 60.0, 1e-6);
+
+    for (int i = 1; i <= 50; ++i) {
+        agg.OnVideoTickTime(At(1000 + i), static_cast<double>(i) / 10.0); // 0.1..5.0 ms
+    }
+    const auto s1 = agg.BuildSnapshot(At(1050), stats, DiagnosticsLifecycle::Recording, 1.05);
+    EXPECT_EQ(s1.video_timing.availability, MetricAvailability::Available);
+    EXPECT_GT(s1.video_timing.tick_p99_ms, s1.video_timing.tick_p50_ms);
+    EXPECT_NEAR(s1.video_timing.tick_peak_ms, 5.0, 1e-9);
+}
+
+TEST(PipelineDiagnostics, SlotStallCounterIndependentOfBackpressure) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDroppedBackpressure();
+    agg.OnFrameDroppedBackpressure();
+    agg.OnSlotStall(); // a subset — only one of the two drops was a slot stall
+    const auto p = agg.SamplePerfWindow(At(0));
+    EXPECT_EQ(p.dropped_backpressure, 2u);
+    EXPECT_EQ(p.slot_stalls, 1u);
+}
+
+TEST(PipelineDiagnostics, PerfWindowSampleSeparatesLatencyFromSubmitCost) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 20; ++i) {
+        agg.OnEncodeLatency(At(i), 8.0);    // true latency
+        agg.OnEncodeSubmitCost(At(i), 0.5); // cheap submit
+        agg.OnVideoTickTime(At(i), 12.0);
+    }
+    const auto p = agg.SamplePerfWindow(At(20));
+    EXPECT_NEAR(p.encode_p50_ms, 8.0, 1e-9);
+    EXPECT_NEAR(p.submit_p50_ms, 0.5, 1e-9);
+    EXPECT_NEAR(p.tick_p50_ms, 12.0, 1e-9);
+    EXPECT_EQ(p.encode_samples, 20u);
+    EXPECT_EQ(p.tick_samples, 20u);
+}
+
+TEST(PipelineDiagnostics, PerfSessionSummaryHistogramsAndReset) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 30; ++i) {
+        agg.OnEncodeLatency(At(i), 5.0);
+        agg.OnVideoTickTime(At(i), 10.0);
+        agg.OnEncodeSubmitCost(At(i), 1.0);
+    }
+    const auto sum = agg.BuildPerfSummary();
+    EXPECT_EQ(sum.encode_count, 30u);
+    EXPECT_EQ(sum.tick_count, 30u);
+    EXPECT_EQ(sum.submit_count, 30u);
+    // The whole-session encode p50 must land in the 5 ms bucket range.
+    const std::size_t b5 = recorder_core::LatencyHistogram::BucketIndex(5.0);
+    EXPECT_EQ(sum.encode_buckets[b5], 30u);
+    EXPECT_GE(sum.encode_p50_ms, recorder_core::LatencyHistogram::BucketLowEdge(b5));
+    EXPECT_LE(sum.encode_p50_ms, recorder_core::LatencyHistogram::BucketHighEdge(b5));
+
+    // Reset clears the whole-session histograms too.
+    agg.Reset(2, MakeConfig());
+    const auto empty = agg.BuildPerfSummary();
+    EXPECT_EQ(empty.encode_count, 0u);
+    EXPECT_EQ(empty.tick_count, 0u);
 }
 
 TEST(PipelineDiagnostics, ForcedKeyframeCounterIncrementsOnSplitArm) {

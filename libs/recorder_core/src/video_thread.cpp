@@ -2537,11 +2537,16 @@ void VideoThread::Run() {
             // burst workload after process suspension.
             uint64_t catchUpFrames = 0;
             while (currentElapsed100ns >= next_tick_100ns && catchUpFrames < kMaxCatchUpFrames) {
+                // Whole-tick frame-time bracket (composite + tonemap + VP-Blt +
+                // encode + route). Emitted only on the emit path below, so dropped
+                // ticks are not counted as frame-time samples.
+                const auto tick_t0 = std::chrono::steady_clock::now();
                 const uint64_t pts_ns = cfr_frame_idx * frame_interval_ns;
 
                 int32_t slot = nvenc.AcquireFreeSlot();
                 if (slot < 0) {
                     ++slotStallCount;
+                    m_state.diagnostics.OnSlotStall();
                     m_state.diagnostics.OnFrameDroppedBackpressure();
                     break; // retry this tick next outer iteration once a slot is free
                 }
@@ -2751,8 +2756,12 @@ void VideoThread::Run() {
                 const auto enc_t0 = std::chrono::steady_clock::now();
                 bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkt, encErr);
                 const auto enc_t1 = std::chrono::steady_clock::now();
-                m_state.diagnostics.OnEncodeLatency(enc_t1,
-                                                    std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                // Call-site CPU cost of the submit; the true submit->ready latency
+                // (P5-P7-correct) travels on the packet and is reported only when set.
+                m_state.diagnostics.OnEncodeSubmitCost(
+                    enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                if (pkt.encode_latency_ms >= 0.0)
+                    m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
 
                 if (!encOk) {
                     m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
@@ -2764,6 +2773,10 @@ void VideoThread::Run() {
 
                 if (!routePacket(std::move(pkt)))
                     goto end_encode_loop;
+
+                const auto tick_t1 = std::chrono::steady_clock::now();
+                m_state.diagnostics.OnVideoTickTime(
+                    tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
 
                 cfr_frame_idx++;
                 next_tick_100ns += frame_interval_100ns;
@@ -2972,6 +2985,10 @@ void VideoThread::Run() {
                 }
                 lastVideoPts = framePts_ns;
 
+                // Whole-tick frame-time bracket (VFR): from slot acquire to after
+                // the packet is routed. Emitted only on the emit paths below.
+                const auto tick_t0 = std::chrono::steady_clock::now();
+
                 // Acquire a free input slot
                 int32_t slot = nvenc.AcquireFreeSlot();
 
@@ -3016,8 +3033,10 @@ void VideoThread::Run() {
                     const auto enc_t0 = std::chrono::steady_clock::now();
                     bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
                     const auto enc_t1 = std::chrono::steady_clock::now();
-                    m_state.diagnostics.OnEncodeLatency(
+                    m_state.diagnostics.OnEncodeSubmitCost(
                         enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                    if (pkt.encode_latency_ms >= 0.0)
+                        m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
                     if (!encOk) {
                         m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
                         break;
@@ -3025,6 +3044,9 @@ void VideoThread::Run() {
                     ++videoFramesCaptured;
                     if (!routePacket(std::move(pkt)))
                         goto end_encode_loop;
+                    const auto tick_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnVideoTickTime(
+                        tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
                 } else if (slot >= 0) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
@@ -3087,8 +3109,10 @@ void VideoThread::Run() {
                             const auto enc_t0 = std::chrono::steady_clock::now();
                             bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
                             const auto enc_t1 = std::chrono::steady_clock::now();
-                            m_state.diagnostics.OnEncodeLatency(
+                            m_state.diagnostics.OnEncodeSubmitCost(
                                 enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                            if (pkt.encode_latency_ms >= 0.0)
+                                m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
 
                             if (!encOk) {
                                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
@@ -3099,6 +3123,10 @@ void VideoThread::Run() {
 
                             if (!routePacket(std::move(pkt)))
                                 goto end_encode_loop;
+
+                            const auto tick_t1 = std::chrono::steady_clock::now();
+                            m_state.diagnostics.OnVideoTickTime(
+                                tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
                         } else {
                             latestTex = nullptr;
                         }
@@ -3109,6 +3137,7 @@ void VideoThread::Run() {
                     // No free slot — drop the frame and skip
                     latestTex = nullptr;
                     ++slotStallCount;
+                    m_state.diagnostics.OnSlotStall();
                     m_state.diagnostics.OnFrameDroppedBackpressure();
                 }
 

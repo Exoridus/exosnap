@@ -150,9 +150,15 @@ struct CompositorDiagnostics {
 };
 
 struct EncoderDiagnostics {
-    double latest_ms = 0.0; // submit -> bitstream-ready (synchronous lock) latency
+    double latest_ms = 0.0; // submit -> bitstream-ready (true per-frame) latency
     double average_ms = 0.0;
     double peak_ms = 0.0;
+    // Rolling-window (≈2 s) percentiles of the same submit->ready encode latency.
+    // Engine-internal in this stage: consumed by tests and the periodic perf log
+    // record, not yet surfaced on any diagnostics card (the visibility decision is
+    // deferred until the measurement campaign shows whether it is product-relevant).
+    double p50_ms = 0.0;
+    double p99_ms = 0.0;
     double output_fps = 0.0; // encoded packets Δ / elapsed Δ
     uint64_t frames_submitted = 0;
     uint64_t frames_encoded = 0;
@@ -185,6 +191,20 @@ struct EncoderInitInfo {
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     bool color_full_range = false;
     HdrMode hdr_mode = HdrMode::Off;
+};
+
+// Whole-tick video-thread frame time: composite + tonemap + VP-Blt + encode +
+// mux-queue wait, measured per emitted frame from the start of the tick body to
+// after the packet is routed. This is the metric checked against the frame budget
+// (16.67 ms @ 60 fps). Engine-internal in this stage (tests + periodic perf log
+// record); not surfaced on any diagnostics card yet. Percentiles are rolling-window
+// (≈2 s); Unavailable until the first emitted frame this session.
+struct VideoTimingDiagnostics {
+    double tick_p50_ms = 0.0;
+    double tick_p99_ms = 0.0;
+    double tick_peak_ms = 0.0;
+    double budget_ms = 0.0; // 1000 / target_fps
+    MetricAvailability availability = MetricAvailability::Unavailable;
 };
 
 struct AudioDiagnostics {
@@ -271,6 +291,7 @@ struct RecordingDiagnosticsSnapshot {
     CaptureDiagnostics capture;
     CompositorDiagnostics compositor;
     EncoderDiagnostics video_encoder;
+    VideoTimingDiagnostics video_timing;
     AudioDiagnostics audio;
     QueueDiagnostics video_queue; // post-encode mux queue (unbounded by design)
     QueueDiagnostics audio_queue; // audio premux (bounded)

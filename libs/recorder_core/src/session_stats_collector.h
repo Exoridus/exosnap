@@ -28,6 +28,10 @@ class SessionStatsCollector {
   private:
     void Run();
 
+    // Emit the whole-session perf distribution to the engine log when the
+    // collector loop exits (log-only; no-op if no frames were measured).
+    void EmitSessionPerfSummary();
+
     SessionState& m_state;
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
