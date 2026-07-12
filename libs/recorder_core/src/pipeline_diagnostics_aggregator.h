@@ -6,6 +6,8 @@
 // (steady_clock::time_point) so aggregation/cadence/expiry are deterministically testable
 // without sleeps. Not part of the public API.
 
+#include "perf_histogram.h"
+
 #include <recorder_core/pipeline_diagnostics.h>
 #include <recorder_core/recorder_session.h>
 #include <recorder_core/session_stats.h>
@@ -78,6 +80,41 @@ class RollingTimeWindow {
         return agg;
     }
 
+    // Exact quantile (q in [0,1]) over the samples still inside the horizon.
+    // Copies the live window (<= capacity) into a scratch buffer and partitions
+    // it — cheap at 256 samples / 5 Hz. Returns 0 when the window is empty. Used
+    // for the live encode/tick p50/p99 snapshot fields; the whole-session gate
+    // data lives in the mergeable LatencyHistogram instead.
+    [[nodiscard]] double Percentile(time_point now, double q) const noexcept {
+        const time_point cutoff = now - horizon_;
+        std::array<double, 512> scratch;
+        std::size_t n = 0;
+        for (std::size_t i = 0; i < size_ && n < scratch.size(); ++i) {
+            const std::size_t idx = (head_ + buf_.size() - 1 - i) % buf_.size();
+            const Sample& s = buf_[idx];
+            if (s.t < cutoff) {
+                break; // ring is time-ordered; older entries are even older
+            }
+            scratch[n++] = s.v;
+        }
+        if (n == 0) {
+            return 0.0;
+        }
+        if (q < 0.0) {
+            q = 0.0;
+        }
+        if (q > 1.0) {
+            q = 1.0;
+        }
+        // Nearest-rank on a 0-based sorted index, clamped to the last element.
+        auto rank = static_cast<std::size_t>(q * static_cast<double>(n - 1) + 0.5);
+        if (rank >= n) {
+            rank = n - 1;
+        }
+        std::nth_element(scratch.begin(), scratch.begin() + rank, scratch.begin() + n);
+        return scratch[rank];
+    }
+
     void Clear() noexcept {
         head_ = 0;
         size_ = 0;
@@ -129,6 +166,45 @@ struct DiagnosticsStaticConfig {
     uint32_t audio_queue_capacity = 0; // premux bound (bounded)
 };
 
+// ---- Perf measurement records (log-only; engine-internal) -----------------
+// Rolling-window (≈2 s) sample emitted periodically to the engine log so a
+// recording produces a time series of encode/frame-time percentiles.
+struct PerfWindowSample {
+    double encode_p50_ms = 0.0;
+    double encode_p95_ms = 0.0;
+    double encode_p99_ms = 0.0;
+    double encode_peak_ms = 0.0;
+    double tick_p50_ms = 0.0;
+    double tick_p95_ms = 0.0;
+    double tick_p99_ms = 0.0;
+    double tick_peak_ms = 0.0;
+    double submit_p50_ms = 0.0;
+    double submit_p99_ms = 0.0;
+    std::size_t encode_samples = 0;
+    std::size_t tick_samples = 0;
+    uint64_t dropped_backpressure = 0; // cumulative this session
+    uint64_t slot_stalls = 0;          // cumulative this session (subset of backpressure)
+};
+
+// Whole-session distribution captured once at session end. The bucket arrays are
+// the authoritative gate data (the live windows are noisy over ~2 s); the script
+// recomputes percentiles from them. Percentiles here are provided for convenience.
+struct PerfSessionSummary {
+    std::array<uint64_t, LatencyHistogram::kBucketCount> encode_buckets{};
+    std::array<uint64_t, LatencyHistogram::kBucketCount> tick_buckets{};
+    std::array<uint64_t, LatencyHistogram::kBucketCount> submit_buckets{};
+    uint64_t encode_count = 0;
+    uint64_t tick_count = 0;
+    uint64_t submit_count = 0;
+    double encode_p50_ms = 0.0;
+    double encode_p99_ms = 0.0;
+    double tick_p50_ms = 0.0;
+    double tick_p99_ms = 0.0;
+    uint64_t dropped_backpressure = 0;
+    uint64_t slot_stalls = 0;
+    EncoderInitInfo encoder_init;
+};
+
 // Build the static config from a RecorderConfig (UI-free).
 [[nodiscard]] DiagnosticsStaticConfig MakeDiagnosticsStaticConfig(const RecorderConfig& config);
 
@@ -169,7 +245,21 @@ class PipelineDiagnosticsAggregator {
     void OnMuxLatency(time_point now, double ms) noexcept;     // mux drain loop (Muxer)
     // Encoder (VideoThread)
     void OnEncodeSubmitted() noexcept;
+    // True submit -> bitstream-available latency for one frame (from
+    // EncodedVideoPacket::encode_latency_ms; reported only when available). Feeds
+    // the live window and the whole-session histogram.
     void OnEncodeLatency(time_point now, double ms) noexcept;
+    // CPU cost of the EncodeFrame call itself (the former call-site bracket). In
+    // the synchronous path this ≈ encode latency at P1-P4; the difference at
+    // P5-P7 (and, later, in async mode) is the pipelining head-room. Separate
+    // window/histogram so the two are never conflated.
+    void OnEncodeSubmitCost(time_point now, double ms) noexcept;
+    // Whole-tick video-thread frame time for one emitted frame.
+    void OnVideoTickTime(time_point now, double ms) noexcept;
+    // An encoder input slot was unavailable this tick (a subset of the
+    // backpressure drops; tracked separately so the analysis can split slot
+    // stalls from sustained-lag resync skips).
+    void OnSlotStall() noexcept;
     void OnForcedKeyframe() noexcept;
     // Encoder init parameters, captured once by the encoder at configure time and
     // carried unchanged on every subsequent snapshot.
@@ -201,6 +291,10 @@ class PipelineDiagnosticsAggregator {
     // ---- collector-thread publish -----------------------------------------
     [[nodiscard]] RecordingDiagnosticsSnapshot BuildSnapshot(time_point now, const SessionStats& stats,
                                                              DiagnosticsLifecycle lifecycle, double elapsed_seconds);
+
+    // Perf log support (collector thread). Both take/return copies under mutex_.
+    [[nodiscard]] PerfWindowSample SamplePerfWindow(time_point now) const;
+    [[nodiscard]] PerfSessionSummary BuildPerfSummary() const;
 
     [[nodiscard]] uint64_t generation() const noexcept;
 
@@ -240,7 +334,14 @@ class PipelineDiagnosticsAggregator {
     // Encoder
     uint64_t frames_submitted_ = 0;
     uint64_t forced_keyframes_ = 0;
+    uint64_t slot_stalls_ = 0;
     RollingTimeWindow encode_window_{256, std::chrono::milliseconds(2000)};
+    RollingTimeWindow submit_window_{256, std::chrono::milliseconds(2000)};
+    RollingTimeWindow tick_window_{256, std::chrono::milliseconds(2000)};
+    // Whole-session distributions (mergeable, constant memory) — the gate data.
+    LatencyHistogram encode_hist_;
+    LatencyHistogram submit_hist_;
+    LatencyHistogram tick_hist_;
 
     // Audio
     uint32_t audio_sample_rate_ = 0;

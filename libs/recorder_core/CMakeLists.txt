@@ -1131,3 +1131,25 @@ exosnap_add_gtest(
             src/pipeline_health.cpp
 )
 target_include_directories(pipeline_health_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Perf measurement infrastructure: the pure fixed-bucket latency histogram behind
+# the whole-session encode-latency / frame-time distributions (no GPU/NVENC/Qt).
+exosnap_add_gtest(
+    NAME test_perf_histogram
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_perf_histogram.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_perf_histogram PRIVATE src)
+
+# analyze-encode-perf.py round-trip: write a synthetic engine.jsonl via the real
+# logging layer and assert the script recomputes the same percentiles from the
+# summary histogram. Skips itself when no Python interpreter is present.
+exosnap_add_gtest(
+    NAME test_analyze_encode_perf
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_analyze_encode_perf.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_analyze_encode_perf PRIVATE src)
+target_compile_definitions(test_analyze_encode_perf PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

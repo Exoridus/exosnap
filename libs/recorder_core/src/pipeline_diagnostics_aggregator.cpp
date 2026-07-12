@@ -88,7 +88,13 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
 
     frames_submitted_ = 0;
     forced_keyframes_ = 0;
+    slot_stalls_ = 0;
     encode_window_.Clear();
+    submit_window_.Clear();
+    tick_window_.Clear();
+    encode_hist_.Clear();
+    submit_hist_.Clear();
+    tick_hist_.Clear();
 
     audio_sample_rate_ = 0;
     audio_channels_ = 0;
@@ -231,6 +237,24 @@ void PipelineDiagnosticsAggregator::OnEncodeSubmitted() noexcept {
 void PipelineDiagnosticsAggregator::OnEncodeLatency(time_point now, double ms) noexcept {
     std::lock_guard lk(mutex_);
     encode_window_.Add(now, ms);
+    encode_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnEncodeSubmitCost(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    submit_window_.Add(now, ms);
+    submit_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnVideoTickTime(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    tick_window_.Add(now, ms);
+    tick_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnSlotStall() noexcept {
+    std::lock_guard lk(mutex_);
+    ++slot_stalls_;
 }
 
 void PipelineDiagnosticsAggregator::OnForcedKeyframe() noexcept {
@@ -447,6 +471,8 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     enc.latest_ms = el.latest;
     enc.average_ms = el.average;
     enc.peak_ms = el.peak;
+    enc.p50_ms = encode_window_.Percentile(now, 0.50);
+    enc.p99_ms = encode_window_.Percentile(now, 0.99);
     enc.frames_submitted = frames_submitted_;
     enc.frames_encoded = stats.encoded_video_packets;
     enc.backlog =
@@ -458,6 +484,17 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     enc.cfr = stats.cfr;
     if (can_rate && stats.encoded_video_packets >= last_frames_encoded_) {
         enc.output_fps = static_cast<double>(stats.encoded_video_packets - last_frames_encoded_) / dt;
+    }
+
+    // ---- Video-thread frame time (whole-tick) ----
+    VideoTimingDiagnostics& vt = s.video_timing;
+    const RollingTimeWindow::Aggregate tk = tick_window_.Compute(now);
+    vt.budget_ms = (cap.target_fps > 0.0) ? 1000.0 / cap.target_fps : 0.0;
+    if (tk.count > 0) {
+        vt.tick_p50_ms = tick_window_.Percentile(now, 0.50);
+        vt.tick_p99_ms = tick_window_.Percentile(now, 0.99);
+        vt.tick_peak_ms = tk.peak;
+        vt.availability = MetricAvailability::Available;
     }
 
     // ---- Audio ----
@@ -626,6 +663,48 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     last_frames_encoded_ = stats.encoded_video_packets;
     last_disk_bytes_ = disk_bytes_written_;
 
+    return s;
+}
+
+PerfWindowSample PipelineDiagnosticsAggregator::SamplePerfWindow(time_point now) const {
+    std::lock_guard lk(mutex_);
+    PerfWindowSample p;
+    const RollingTimeWindow::Aggregate enc = encode_window_.Compute(now);
+    const RollingTimeWindow::Aggregate tk = tick_window_.Compute(now);
+    const RollingTimeWindow::Aggregate sub = submit_window_.Compute(now);
+    p.encode_p50_ms = encode_window_.Percentile(now, 0.50);
+    p.encode_p95_ms = encode_window_.Percentile(now, 0.95);
+    p.encode_p99_ms = encode_window_.Percentile(now, 0.99);
+    p.encode_peak_ms = enc.peak;
+    p.tick_p50_ms = tick_window_.Percentile(now, 0.50);
+    p.tick_p95_ms = tick_window_.Percentile(now, 0.95);
+    p.tick_p99_ms = tick_window_.Percentile(now, 0.99);
+    p.tick_peak_ms = tk.peak;
+    p.submit_p50_ms = submit_window_.Percentile(now, 0.50);
+    p.submit_p99_ms = submit_window_.Percentile(now, 0.99);
+    p.encode_samples = enc.count;
+    p.tick_samples = tk.count;
+    p.dropped_backpressure = dropped_backpressure_;
+    p.slot_stalls = slot_stalls_;
+    return p;
+}
+
+PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
+    std::lock_guard lk(mutex_);
+    PerfSessionSummary s;
+    s.encode_buckets = encode_hist_.BucketCounts();
+    s.tick_buckets = tick_hist_.BucketCounts();
+    s.submit_buckets = submit_hist_.BucketCounts();
+    s.encode_count = encode_hist_.count();
+    s.tick_count = tick_hist_.count();
+    s.submit_count = submit_hist_.count();
+    s.encode_p50_ms = encode_hist_.Quantile(0.50);
+    s.encode_p99_ms = encode_hist_.Quantile(0.99);
+    s.tick_p50_ms = tick_hist_.Quantile(0.50);
+    s.tick_p99_ms = tick_hist_.Quantile(0.99);
+    s.dropped_backpressure = dropped_backpressure_;
+    s.slot_stalls = slot_stalls_;
+    s.encoder_init = encoder_init_;
     return s;
 }
 

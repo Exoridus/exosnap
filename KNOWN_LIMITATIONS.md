@@ -342,6 +342,15 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   of resetting on each launch.
 - **The Startup latency table** on the Logs page reflects the milestones recorded up to the moment
   it is shown; it is not a continuously updating profiler.
+- **Video encode is synchronous, with measurement instrumentation in place but no user-facing
+  perf surface yet.** NVENC submits and waits for each frame's bitstream before the next; capture,
+  convert, and encode do not overlap across frames. To decide whether that is worth changing, every
+  recording now writes structured `perf` records to the engine JSON-lines log: a rolling window of
+  encode-latency and frame-time percentiles (about every 10 seconds) and a whole-session distribution
+  summary at the end. These are **log-only** — there is no new diagnostics card or reading in the UI,
+  and they carry no personal data. `scripts/dev/analyze-encode-perf.py` turns one or two logs into a
+  per-session table or a before/after comparison. Whether encode latency ever earns a visible
+  diagnostics value is deferred until this measurement shows it matters.
 
 ## Planned beyond 0.7.0 (not in this build)
 
