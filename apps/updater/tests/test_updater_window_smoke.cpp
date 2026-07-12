@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QCloseEvent>
 #include <QCoreApplication>
 #include <QLabel>
 #include <QString>
@@ -114,6 +115,43 @@ TEST_F(UpdaterWindowTest, CloseIsAllowedOnTerminalStates) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::VerifyInstallFailed));
     EXPECT_TRUE(window.closeEnabled());
+}
+
+// The in-window close button is only half the guard -- Alt+F4, the taskbar
+// close, and a Windows logoff all raise WM_CLOSE / QCloseEvent directly,
+// bypassing the disabled button entirely. closeEvent() must refuse those too
+// while a swap is mid-flight, or a force-kill between StageRename's two
+// renames can strand the install directory.
+TEST_F(UpdaterWindowTest, CloseEventIsIgnoredWhileInstallIsWorking) {
+    UpdaterWindow window;
+    window.render(InstallInFlight());
+    QCloseEvent event;
+    QCoreApplication::sendEvent(&window, &event);
+    EXPECT_FALSE(event.isAccepted());
+}
+
+TEST_F(UpdaterWindowTest, CloseEventIsIgnoredWhileVerifyIsWorking) {
+    UpdaterWindow window;
+    window.render(VerifyInFlight());
+    QCloseEvent event;
+    QCoreApplication::sendEvent(&window, &event);
+    EXPECT_FALSE(event.isAccepted());
+}
+
+TEST_F(UpdaterWindowTest, CloseEventIsIgnoredWhileLaunchIsWorking) {
+    UpdaterWindow window;
+    window.render(LaunchInFlight());
+    QCloseEvent event;
+    QCoreApplication::sendEvent(&window, &event);
+    EXPECT_FALSE(event.isAccepted());
+}
+
+TEST_F(UpdaterWindowTest, CloseEventIsAcceptedOnTerminalStates) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::VerifyInstallFailed));
+    QCloseEvent event;
+    QCoreApplication::sendEvent(&window, &event);
+    EXPECT_TRUE(event.isAccepted());
 }
 
 TEST_F(UpdaterWindowTest, RedVariantFooterButtons) {

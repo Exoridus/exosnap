@@ -810,6 +810,13 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
      is discarded.
 
   The swap is **staged and reversible** (dual-swap) and nothing is swapped until verification passes.
+  While the swap-critical steps (Installing, Verifying, Launching) are in flight the updater window
+  **refuses to close** — the close control is disabled and Alt+F4, the taskbar close, and a Windows
+  logoff are all ignored — so the in-place rename cannot be torn apart mid-swap. If a forced kill
+  (or a power loss) does interrupt a portable swap between its two renames, the **next** update run
+  detects the orphaned backup and restores the last-known-good install before proceeding. After a
+  successful update the downloaded manifest, signature, and package are removed from the temp
+  directory; a failed run keeps them so a retry can reuse them.
   Failure is shown as one of three variants, each of which **always names the version that is safe to
   run right now**:
   - **Amber (retryable):** a pre-swap step failed (download, app would not close, install could not

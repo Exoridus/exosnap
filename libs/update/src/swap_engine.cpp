@@ -136,6 +136,17 @@ bool CleanupBackup(const SwapPlan& plan) {
     return RemoveTree(plan.backup_dir);
 }
 
+bool RepairOrphanedSwap(const SwapPlan& plan) {
+    const std::wstring install_exe = (fs::path(plan.install_dir) / kExeName).wstring();
+    if (FileExists(install_exe)) {
+        return true; // install_dir looks intact -- nothing to repair
+    }
+    if (!FileExists(plan.backup_dir)) {
+        return true; // no backup to restore from -- not an orphan this can fix
+    }
+    return RestoreBackup(plan) == SwapError::None;
+}
+
 // ---------------------------------------------------------------------------
 // Version verification
 // ---------------------------------------------------------------------------

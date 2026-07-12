@@ -93,4 +93,16 @@ enum class SwapError : uint8_t {
 // if it was already gone).
 [[nodiscard]] bool CleanupBackup(const SwapPlan& plan);
 
+// Heals an interrupted StageRename. install->backup (rename 1) and
+// staging->install (rename 2) are two separate MoveFileExW calls; a process
+// kill landing in the narrow window between them -- or between rename 2
+// failing and its own compensating restore -- can leave install_dir gone
+// while backup_dir still holds the last-known-good tree (SwapError::
+// RestoreFailed is exactly this state reported at the time). This restores
+// backup_dir -> install_dir so a runnable install exists again. A no-op
+// (returns true, nothing touched) when install_dir already carries
+// exosnap.exe, or when there is no backup_dir to restore from -- there is
+// nothing for this function to repair in either case.
+[[nodiscard]] bool RepairOrphanedSwap(const SwapPlan& plan);
+
 } // namespace exosnap::update
