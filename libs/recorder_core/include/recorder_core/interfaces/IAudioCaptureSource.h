@@ -52,6 +52,32 @@ class IAudioCaptureSource {
     // Initialize and start the capture stream.
     virtual bool Init(std::string& out_error) = 0;
 
+    // Re-open the stream in place after a mid-recording device loss (ADR 0046).
+    // The default tears the stream down and Init()s a fresh one with the SAME
+    // identity the source was constructed with — a fixed device_id re-opens that
+    // id; a default (nullopt) mic / the system-output endpoint re-resolves the
+    // *current* Windows default (concept identity, honest "follows the system
+    // default"). Sources whose identity is not re-resolvable that way (a process
+    // loopback keyed on a PID that Windows may recycle) override this to guard
+    // the reacquire and fail closed rather than grab a stranger. Returns true and
+    // clears the last fatal error on success. Decorators forward to their inner.
+    virtual bool Reinit(std::string& out_error) {
+        Shutdown();
+        return Init(out_error);
+    }
+
+    // Composite health for the device-loss diagnostics (ADR 0046). A single
+    // source reports {1, degraded?1:0}; a mixed/merged source reports the real
+    // per-inner-source counts so a partly-degraded merged track (one dead inner,
+    // the rest still mixing) is distinguishable from a fully-silent one.
+    // Decorators forward their inner source's counts.
+    virtual uint32_t CaptureSourceCount() const {
+        return 1;
+    }
+    virtual uint32_t DegradedSourceCount() const {
+        return 0;
+    }
+
     // Number of frames ready in the pending buffer (0 = none).
     virtual uint32_t PendingFrameCount() = 0;
 

@@ -55,6 +55,7 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
 
     // IAudioCaptureSource
     bool Init(std::string& out_error) override;
+    bool Reinit(std::string& out_error) override;
     uint32_t PendingFrameCount() override;
     bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override;
     void ReleaseBuffer() override;
@@ -65,9 +66,17 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     int32_t LastCaptureHresult() const override;
     bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
     void* BufferReadyEvent() const override;
+    uint32_t CaptureSourceCount() const override;
+    uint32_t DegradedSourceCount() const override;
     void Shutdown() override;
 
   private:
+    // Derive inner rate/channels/format and (re)build the SwrContext for the
+    // current inner stream. Shared by Init and Reinit so a reacquired inner whose
+    // native format changed (the default endpoint moved to another device) gets a
+    // matching resampler instead of a stale one.
+    bool ConfigureConversion(std::string& out_error);
+
     std::unique_ptr<IAudioCaptureSource> inner_;
     uint32_t target_sample_rate_;
     uint32_t target_channels_;

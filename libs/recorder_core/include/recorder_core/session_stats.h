@@ -35,6 +35,10 @@ struct SessionStats {
     // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.
     std::array<float, 3> per_track_rms{};
     bool source_loss = false;
+    // True once any audio capture source was lost mid-recording and degraded to
+    // honest silence (ADR 0046). A post-flight fact so the "Saved" report can
+    // note the recording contains a silence gap, rather than surprising the user.
+    bool audio_degraded_occurred = false;
     // Set once when a requested webcam PiP / cursor overlay cannot be recorded in
     // the active mode (native HDR10 from an already-PQ 10-bit desktop composites
     // nothing — the surface is non-linear). Surfaced as a calm diagnostics notice,

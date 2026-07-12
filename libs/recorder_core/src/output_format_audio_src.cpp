@@ -47,7 +47,29 @@ bool OutputFormatAudioSrc::Init(std::string& out_error) {
     if (!inner_->Init(out_error)) {
         return false;
     }
+    return ConfigureConversion(out_error);
+}
 
+bool OutputFormatAudioSrc::Reinit(std::string& out_error) {
+    out_error.clear();
+    if (!inner_) {
+        out_error = "OutputFormatAudioSrc::Reinit: inner source is null";
+        return false;
+    }
+    // Reacquire the inner with its own identity rules (a PID-keyed loopback may
+    // refuse; a default endpoint follows the current default). Rebuild the
+    // resampler for the reacquired stream — its native format may have changed.
+    if (!inner_->Reinit(out_error)) {
+        return false;
+    }
+    if (swr_ != nullptr) {
+        swr_free(&swr_);
+        swr_ = nullptr;
+    }
+    return ConfigureConversion(out_error);
+}
+
+bool OutputFormatAudioSrc::ConfigureConversion(std::string& out_error) {
     const uint32_t inner_rate = inner_->SampleRate();
     const uint32_t inner_channels = inner_->Channels();
     inner_format_ = inner_->SampleFormat();
@@ -249,6 +271,14 @@ bool OutputFormatAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing)
 
 void* OutputFormatAudioSrc::BufferReadyEvent() const {
     return inner_ ? inner_->BufferReadyEvent() : nullptr;
+}
+
+uint32_t OutputFormatAudioSrc::CaptureSourceCount() const {
+    return inner_ ? inner_->CaptureSourceCount() : 1;
+}
+
+uint32_t OutputFormatAudioSrc::DegradedSourceCount() const {
+    return inner_ ? inner_->DegradedSourceCount() : 0;
 }
 
 void OutputFormatAudioSrc::Shutdown() {

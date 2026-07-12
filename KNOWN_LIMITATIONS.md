@@ -249,9 +249,27 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   which can be reassigned on a monitor topology change. A saved Region or Display
   target may point to a different physical monitor after a reboot or
   reconnect/mode-set; re-select the source manually in that case.
-- Hot-swap during recording is not supported. Disconnecting the configured
-  capture device mid-session does not retarget the pipeline; stop and restart the
-  recording after reconnecting or selecting a new device.
+- Device loss mid-recording is handled per device type (ADR 0046), not by a
+  blanket stop-and-restart. A brief display loss holds the last frame and reopens
+  the same monitor; a GPU removal ends the recording cleanly. Closing the captured
+  window ends the recording cleanly. An audio endpoint lost mid-recording (mic
+  unplugged, headset switched, system output changed, audio service restarted) no
+  longer ends the recording: the affected source goes to honest silence and the
+  recording keeps running while the engine reactivates the same source every
+  500 ms; in a merged track only the dead source's contribution falls silent. The
+  webcam freezes its last frame and reopens. The pipeline is never *retargeted*
+  onto a different device — the same source is held or reacquired, or (for a
+  process-keyed app/window audio capture whose target exited) stays silent rather
+  than grab a stranger.
+  - Remaining boundary: when *every* inner source of a single merged audio track
+    is lost at once, that track's timeline holds (no packets) until an inner
+    returns, rather than being filled with exact-length silence; a bare
+    single-source track and the video track always get exact-length silence /
+    continuity. Video-only recording continues if all audio is lost.
+  - The degraded state is surfaced in Diagnostics and the post-flight report; a
+    standing user-facing notification for it is a follow-up.
+  - Verified by unit/integration tests with fake sources; real endpoint-unplug
+    behavior is a manual live check.
 
 ## Overlay and notification limitations (0.3.0)
 

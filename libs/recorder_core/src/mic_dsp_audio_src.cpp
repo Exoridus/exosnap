@@ -79,6 +79,25 @@ bool MicDspAudioSrc::Init(std::string& out_error) {
     return true;
 }
 
+bool MicDspAudioSrc::Reinit(std::string& out_error) {
+    out_error.clear();
+    if (inner_ == nullptr) {
+        out_error = "MicDspAudioSrc::Reinit: inner source is null";
+        return false;
+    }
+    // Reacquire the inner mic with its own identity rules, then clear the DSP
+    // stages' internal state so the reacquired stream starts from a clean filter
+    // history (no rumble/gate/AGC memory carried across the silence gap).
+    if (!inner_->Reinit(out_error)) {
+        return false;
+    }
+    hpf_.Reset();
+    gate_.Reset();
+    agc_.Reset();
+    rnnoise_.Reset();
+    return true;
+}
+
 uint32_t MicDspAudioSrc::PendingFrameCount() {
     return inner_->PendingFrameCount();
 }
@@ -165,6 +184,14 @@ bool MicDspAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const
 
 void* MicDspAudioSrc::BufferReadyEvent() const {
     return inner_ ? inner_->BufferReadyEvent() : nullptr;
+}
+
+uint32_t MicDspAudioSrc::CaptureSourceCount() const {
+    return inner_ ? inner_->CaptureSourceCount() : 1;
+}
+
+uint32_t MicDspAudioSrc::DegradedSourceCount() const {
+    return inner_ ? inner_->DegradedSourceCount() : 0;
 }
 
 void MicDspAudioSrc::Shutdown() {
