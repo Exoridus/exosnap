@@ -634,6 +634,10 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
         return false;
     }
+    // A/V clock slaving (H-3): enabled (exact).
+    if (a.audio.clock_slaving_enabled != b.audio.clock_slaving_enabled) {
+        return false;
+    }
     // Mic high-pass filter (Audio v2): enabled (exact) + cutoff (1e-2 Hz tolerance).
     if (a.audio.mic_hpf_enabled != b.audio.mic_hpf_enabled) {
         return false;
@@ -903,6 +907,10 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
+        return false;
+    }
+    // A/V clock slaving (H-3): enabled (exact).
+    if (a.audio.clock_slaving_enabled != b.audio.clock_slaving_enabled) {
         return false;
     }
     // Mic high-pass filter (Audio v2): enabled (exact) + cutoff (1e-2 Hz tolerance).

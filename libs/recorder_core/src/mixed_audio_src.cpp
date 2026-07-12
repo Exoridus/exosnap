@@ -1,5 +1,7 @@
 #include "mixed_audio_src.h"
 
+#include "discontinuity_gap.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -156,6 +158,15 @@ void MixedAudioSrc::PumpOnePacketPerSource(bool& any_discontinuity) {
             any_discontinuity = true;
         }
 
+        // Single-source pass-through of the measured discontinuity gap (H-3): a
+        // gain-wrapped single track must not silently drop the inner packet's
+        // gap. Hold it for the next emitted buffer. Multi-source merges leave it
+        // 0 (they mix several clocks; the per-source FIFO drift relief bounds
+        // inter-source skew instead).
+        if (num == 1) {
+            single_source_pending_gap_frames_ += src_buf.gap_frames;
+        }
+
         const uint32_t frames = src_buf.num_frames;
         auto& fifo = source_fifo_[i];
 
@@ -273,7 +284,25 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     out_buf.num_frames = n;
     out_buf.silent = all_zero;
     out_buf.data_discontinuity = any_discontinuity;
+    // Single-source: attach the held inner gap (scaled to the 48 kHz output rate)
+    // to this emitted buffer, then clear it. The gap precedes these samples, so
+    // the audio thread fills it with silence before feeding them.
+    if (sources_.size() == 1 && single_source_pending_gap_frames_ > 0) {
+        out_buf.gap_frames = ScaleDiscontinuityGapFrames(single_source_pending_gap_frames_, sources_[0]->SampleRate(),
+                                                         kOutputSampleRate);
+        single_source_pending_gap_frames_ = 0;
+    }
     return true;
+}
+
+bool MixedAudioSrc::LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const {
+    // Only a single-source mixer can attribute one device clock. The constant
+    // FIFO offset (<= one device period) cancels in the estimator's baseline
+    // normalization, so forwarding the inner's timing is honest.
+    if (sources_.size() != 1) {
+        return false;
+    }
+    return sources_[0]->LastBufferDeviceTiming(out_timing);
 }
 
 bool MixedAudioSrc::Reinit(std::string& out_error) {
@@ -339,6 +368,7 @@ void MixedAudioSrc::Shutdown() {
     initialized_ = false;
     source_fifo_.clear();
     source_degraded_.clear();
+    single_source_pending_gap_frames_ = 0;
 }
 
 } // namespace recorder_core

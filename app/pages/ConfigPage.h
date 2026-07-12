@@ -598,6 +598,7 @@ class ConfigPage : public QWidget {
     QSpinBox* opus_complexity_spin_ = nullptr;
     // Brickwall limiter (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* limiter_check_ = nullptr;
+    ui::widgets::ExoCheckBox* clock_slaving_check_ = nullptr;
     QDoubleSpinBox* limiter_ceiling_spin_ = nullptr;
     // Microphone high-pass filter (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_hpf_check_ = nullptr;

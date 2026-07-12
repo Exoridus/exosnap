@@ -70,6 +70,23 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     uint32_t DegradedSourceCount() const override;
     void Shutdown() override;
 
+    // --- A/V clock slaving (H-3) --------------------------------------------
+    // Set the resampler's rate compensation in ppm. p > 0 stretches the output
+    // timeline (more output frames per input), pushing audio events later —
+    // which corrects a positive measured drift (audio leading video). The first
+    // call with p != 0 permanently leaves the byte-identical passthrough by
+    // lazily building a rate-preserving (inner -> target, 48 k -> 48 k in the
+    // default) SwrContext; p == 0 alone keeps the passthrough untouched. Must be
+    // called on the audio worker thread.
+    void SetCompensationPpm(double ppm);
+
+    // Cumulative applied compensation in ms of the output timeline, from the real
+    // frame accounting (out_total/target_rate - in_total/inner_rate). 0.0 until a
+    // compensating context has processed frames. This is A in the controller's
+    // residual R = D - A — measured, not integrated from p, because gap silence,
+    // pauses and swr filter latency all decouple applied from commanded.
+    [[nodiscard]] double AppliedCompensationMs() const;
+
   private:
     // Derive inner rate/channels/format and (re)build the SwrContext for the
     // current inner stream. Shared by Init and Reinit so a reacquired inner whose
@@ -77,9 +94,21 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     // matching resampler instead of a stale one.
     bool ConfigureConversion(std::string& out_error);
 
+    // Allocate + init swr_ for inner_rate_/inner_channels_/inner_format_ -> target
+    // Float32. Used by the resample branch of ConfigureConversion and by the lazy
+    // passthrough -> compensating transition in SetCompensationPpm (where inner
+    // and target rates are equal — an identity resampler swr_set_compensation can
+    // still nudge).
+    bool BuildSwrContext(std::string& out_error);
+
     std::unique_ptr<IAudioCaptureSource> inner_;
     uint32_t target_sample_rate_;
     uint32_t target_channels_;
+
+    // Inner source's rate/channels captured during ConfigureConversion (needed by
+    // the lazy SwrContext build and the applied-compensation accounting).
+    uint32_t inner_rate_ = 0;
+    uint32_t inner_channels_ = 0;
 
     // Sample format the inner source delivers, captured at Init. The decorator
     // always emits Float32 (its SampleFormat() contract), so an Int16 inner is
@@ -88,6 +117,18 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
 
     bool passthrough_ = false;  // true when target rate/channels == inner
     SwrContext* swr_ = nullptr; // null in passthrough mode
+
+    // Clock-slaving state. compensation_engaged_ latches true on the first
+    // non-zero SetCompensationPpm; from then on every AcquireBuffer re-arms the
+    // compensation window (a ppm of 0 re-arms a zero delta, cancelling cleanly
+    // while keeping the context). in_total_/out_total_ are the consumed input and
+    // produced output frame counts on the resample path (int64: > 60 years at
+    // 48 kHz without overflow). All three reset on Reinit alongside the drift
+    // estimator so the reacquired stream re-engages from a clean baseline.
+    double compensation_ppm_ = 0.0;
+    bool compensation_engaged_ = false;
+    int64_t in_total_ = 0;
+    int64_t out_total_ = 0;
 
     // The last buffer acquired from the inner source (valid until ReleaseBuffer).
     // In passthrough mode we hand out the inner bytes directly.

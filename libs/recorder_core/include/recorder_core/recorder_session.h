@@ -416,6 +416,19 @@ struct RecorderConfig {
     float audio_limiter_ceiling_db = 0.0f;
 
     // ---------------------------------------------------------------------------
+    // A/V clock slaving (H-3)
+    // ---------------------------------------------------------------------------
+
+    // When true (default), audio gently tracks the video (QPC) clock: once the
+    // measured device-clock drift crosses ~15 ms the audio output timeline is
+    // resampled by a sub-audible ppm amount (<= 0.05 %) so long recordings do not
+    // drift out of sync. Default on, codec-independent (sync before bit-exactness);
+    // the expert opt-out restores byte-identical capture for archival PCM/FLAC.
+    // Below the engage threshold — the majority of sessions — it is a no-op and
+    // the default 48 kHz/stereo path stays a byte-identical passthrough.
+    bool audio_clock_slaving_enabled = true;
+
+    // ---------------------------------------------------------------------------
     // Microphone high-pass filter (Audio v2 — 0.6.0)
     // ---------------------------------------------------------------------------
 

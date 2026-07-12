@@ -137,14 +137,33 @@ Invalid combinations are not offered.
   (`A_PCM/FLOAT_IEEE`) is a raw passthrough of the mix bus's native format and is
   PCM-only (FLAC has no float mode). **Deferred:** more than 2 channels (5.1/7.1)
   and non-vetted sample rates.
-  - A small (~10 ms) tail of audio may be dropped at stop when recording at a
-    **non-default sample rate** (the resampler's internal buffer is not drained
-    at end-of-stream); negligible for normal recordings.
+  - A small tail of audio may be dropped at stop **whenever a resample context is
+    active** — a non-default sample rate (~10 ms tail) or engaged audio clock
+    slaving on the default 48 kHz path (sub-ms to a few ms, in filter-length order)
+    — because the resampler's internal buffer is not drained at end-of-stream;
+    negligible for normal recordings.
 - **Per-track gain & mute** and a **brickwall limiter** (on by default, 0 dBFS
   ceiling) on the mixed bus.
 - **Microphone DSP chain**, each stage **off by default** (capture is byte-identical
-  when all are off): high-pass filter → noise gate → AGC → RNNoise neural noise
-  suppression. Stages are toggled individually; there is no single master switch.
+  when all are off, **unless audio clock slaving has engaged** — see below):
+  high-pass filter → noise gate → AGC → RNNoise neural noise suppression. Stages are
+  toggled individually; there is no single master switch.
+- **A/V clock slaving** (on by default, codec-independent): once measured
+  device-clock drift crosses ~15 ms the audio output timeline is resampled by a
+  sub-audible ppm amount to track the video (QPC) clock. Consequences:
+  - It leaves a **bounded residual that grows with the drift rate**: a proportional
+    controller with a fixed 500 ppm cap holds ~3–6 ms at typical 50–100 ppm
+    crystals, but from ~250 ppm upward the residual no longer drops below the 15 ms
+    engage threshold (it converts unbounded drift into a bounded, still-inaudible
+    residual, not zero drift).
+  - Once it engages, the default 48 kHz/stereo path is **no longer byte-identical**
+    (it is resampled), including for PCM/FLAC. Disable *Audio clock slaving*
+    (expert) for bit-exact archival capture.
+  - **Multi-source merged tracks are not slaved** (they mix several independent
+    device clocks); the per-source FIFO drift relief bounds their inter-source
+    skew instead. A single gain-adjusted source is slaved normally.
+  - **Not yet live-validated** over a multi-hour soak (net drift ≤ threshold,
+    audibly artifact-free); pending the 0.10 soak-gate check.
 - **FLAC compression level** (0–8, default 5) is configurable; lossless at every
   level (level only trades encode CPU vs. file size).
 - The RNNoise model weights are fetched at **configure (build) time** from a

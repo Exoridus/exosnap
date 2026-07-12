@@ -410,4 +410,184 @@ TEST(OutputFormatAudioSrc, NullInner_InitFails) {
     EXPECT_FALSE(err.empty());
 }
 
+// ---------------------------------------------------------------------------
+// A/V clock slaving (H-3): swr compensation sign contract + frame accounting.
+// ---------------------------------------------------------------------------
+
+namespace {
+struct SlaveResult {
+    int64_t total_out_frames = 0;
+    double applied_ms = 0.0;
+};
+
+// Drive a 48 k/stereo decorator (default passthrough) at a fixed compensation
+// ppm across `packets` buffers of `frames` Float32 stereo frames, returning the
+// total output frame count and the final AppliedCompensationMs.
+SlaveResult DriveCompensated(double ppm, int packets, uint32_t frames = 480) {
+    auto stub = std::make_unique<StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = frames;
+    stub->data.assign(static_cast<size_t>(frames) * 2u, 0.1f);
+
+    OutputFormatAudioSrc src(std::move(stub), 48000, 2);
+    std::string err;
+    EXPECT_TRUE(src.Init(err)) << err;
+    if (ppm != 0.0) {
+        src.SetCompensationPpm(ppm);
+    }
+    SlaveResult r;
+    for (int i = 0; i < packets; ++i) {
+        RawAudioBuffer buf{};
+        if (!src.AcquireBuffer(buf, err)) {
+            break;
+        }
+        r.total_out_frames += buf.num_frames;
+        src.ReleaseBuffer();
+    }
+    r.applied_ms = src.AppliedCompensationMs();
+    return r;
+}
+} // namespace
+
+TEST(OutputFormatAudioSrc, ClockSlaving_SignContract_PositivePpmProducesMoreOutput) {
+    // The load-bearing cross-layer check: a positive ppm must yield MORE output
+    // frames than input, a negative ppm fewer. A sign inversion here would double
+    // the drift instead of correcting it.
+    constexpr int kPackets = 2000;
+    constexpr int64_t kInputFrames = static_cast<int64_t>(kPackets) * 480; // 960000
+
+    const SlaveResult pos = DriveCompensated(+500.0, kPackets);
+    const SlaveResult neg = DriveCompensated(-500.0, kPackets);
+
+    // 500 ppm over 960k frames = ~480 frames of compensation, far above the swr
+    // filter hold (tens of frames), so the direction is unambiguous.
+    EXPECT_GT(pos.total_out_frames, kInputFrames) << "+500 ppm must stretch (more output)";
+    EXPECT_LT(neg.total_out_frames, kInputFrames) << "-500 ppm must compress (less output)";
+    EXPECT_GT(pos.total_out_frames - neg.total_out_frames, 700)
+        << "the +/-500 ppm spread must be ~2x the per-side compensation";
+}
+
+TEST(OutputFormatAudioSrc, ClockSlaving_AppliedCompensationMs_SignAndMagnitude) {
+    const SlaveResult pos = DriveCompensated(+500.0, 2000);
+    const SlaveResult neg = DriveCompensated(-500.0, 2000);
+    // +500 ppm over 20 s (~960k frames / 48 kHz) stretches ~10 ms; -500 compresses.
+    EXPECT_GT(pos.applied_ms, 0.0);
+    EXPECT_LT(neg.applied_ms, 0.0);
+    EXPECT_NEAR(pos.applied_ms, 10.0, 3.0);
+    EXPECT_NEAR(neg.applied_ms, -10.0, 3.0);
+}
+
+TEST(OutputFormatAudioSrc, ClockSlaving_ZeroPpm_StaysByteIdenticalPassthrough) {
+    // A session that never engages compensation must remain the byte-identical
+    // passthrough (no swr, A == 0) — the bit-exact guarantee for PCM/FLAC.
+    auto stub = std::make_unique<StubSource>();
+    stub->data.resize(480 * 2);
+    for (size_t i = 0; i < stub->data.size(); ++i) {
+        stub->data[i] = static_cast<float>(i) / 1000.0f;
+    }
+    const std::vector<float> expected = stub->data;
+
+    OutputFormatAudioSrc src(std::move(stub), 48000, 2);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+    EXPECT_DOUBLE_EQ(src.AppliedCompensationMs(), 0.0);
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+    ASSERT_NE(buf.bytes, nullptr);
+    const float* got = reinterpret_cast<const float*>(buf.bytes);
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_FLOAT_EQ(got[i], expected[i]) << " at index " << i;
+    }
+    src.ReleaseBuffer();
+    EXPECT_DOUBLE_EQ(src.AppliedCompensationMs(), 0.0);
+}
+
+TEST(OutputFormatAudioSrc, ClockSlaving_EngageTransition_PreservesFlags) {
+    // Engaging compensation lazily must not lose silent / data_discontinuity /
+    // gap_frames on the buffers that follow.
+    auto stub = std::make_unique<StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = 480;
+    stub->data.assign(480 * 2, 0.2f);
+    stub->data_discontinuity = true;
+
+    OutputFormatAudioSrc src(std::move(stub), 48000, 2);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+    src.SetCompensationPpm(200.0); // leave passthrough
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+    EXPECT_TRUE(buf.data_discontinuity);
+    EXPECT_GT(buf.num_frames, 0u);
+    src.ReleaseBuffer();
+}
+
+TEST(OutputFormatAudioSrc, ClockSlaving_ZeroAfterEngage_KeepsContextCancelsDelta) {
+    // SetCompensationPpm(0) after engage must keep the (now resampling) context
+    // and simply stop stretching — not crash or revert to passthrough.
+    auto stub = std::make_unique<StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = 480;
+    stub->data.assign(480 * 2, 0.1f);
+
+    OutputFormatAudioSrc src(std::move(stub), 48000, 2);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+    src.SetCompensationPpm(500.0);
+    for (int i = 0; i < 100; ++i) {
+        RawAudioBuffer buf{};
+        ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+        src.ReleaseBuffer();
+    }
+    const double applied_at_cut = src.AppliedCompensationMs();
+    EXPECT_GT(applied_at_cut, 0.0);
+
+    src.SetCompensationPpm(0.0);                                        // stop stretching, keep context
+    const int64_t before = static_cast<int64_t>(applied_at_cut * 48.0); // ~frames
+    (void)before;
+    for (int i = 0; i < 100; ++i) {
+        RawAudioBuffer buf{};
+        ASSERT_TRUE(src.AcquireBuffer(buf, err)) << err;
+        src.ReleaseBuffer();
+    }
+    // A stopped stretching: the applied compensation no longer grows meaningfully
+    // (a zero delta is re-armed each acquire).
+    EXPECT_NEAR(src.AppliedCompensationMs(), applied_at_cut, 0.5);
+}
+
+TEST(OutputFormatAudioSrc, ClockSlaving_OnResamplePath_44kCompensates) {
+    // On a genuine resample target (44.1 k) compensation rides the existing
+    // context; positive ppm still stretches (more output than the uncompensated
+    // baseline).
+    const auto count_out = [](double ppm) {
+        auto stub = std::make_unique<StubSource>();
+        stub->sample_rate = 48000;
+        stub->channels = 2;
+        stub->frames = 480;
+        stub->data.assign(480 * 2, 0.1f);
+        OutputFormatAudioSrc src(std::move(stub), 44100, 2);
+        std::string err;
+        EXPECT_TRUE(src.Init(err)) << err;
+        if (ppm != 0.0) {
+            src.SetCompensationPpm(ppm);
+        }
+        int64_t total = 0;
+        for (int i = 0; i < 2000; ++i) {
+            RawAudioBuffer buf{};
+            if (!src.AcquireBuffer(buf, err)) {
+                break;
+            }
+            total += buf.num_frames;
+            src.ReleaseBuffer();
+        }
+        return total;
+    };
+    EXPECT_GT(count_out(+500.0), count_out(-500.0));
+}
+
 } // namespace

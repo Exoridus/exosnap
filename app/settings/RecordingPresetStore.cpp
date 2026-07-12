@@ -661,6 +661,8 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     // Brickwall limiter (Audio v2 — 0.6.0).
     aud_tbl.emplace("limiter_enabled", aud.limiter_enabled);
     aud_tbl.emplace("limiter_ceiling_db", static_cast<double>(aud.limiter_ceiling_db));
+    // A/V clock slaving (H-3).
+    aud_tbl.emplace("clock_slaving_enabled", aud.clock_slaving_enabled);
     // Microphone high-pass filter (Audio v2 — 0.6.0).
     aud_tbl.emplace("mic_hpf_enabled", aud.mic_hpf_enabled);
     aud_tbl.emplace("mic_hpf_cutoff_hz", static_cast<double>(aud.mic_hpf_cutoff_hz));
@@ -947,6 +949,11 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     {
         aud.limiter_enabled = TomlBool(tbl["audio"]["limiter_enabled"], true);
         aud.limiter_ceiling_db = static_cast<float>(TomlFloat(tbl["audio"]["limiter_ceiling_db"], 0.0));
+    }
+    // A/V clock slaving (H-3). Missing key => default on (sync before bit-exactness);
+    // pre-1.0, no migration.
+    {
+        aud.clock_slaving_enabled = TomlBool(tbl["audio"]["clock_slaving_enabled"], true);
     }
     // Microphone high-pass filter (Audio v2 — 0.6.0). Older presets default to
     // disabled / 80 Hz (no behavior change vs unfiltered mic capture).

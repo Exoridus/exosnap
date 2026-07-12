@@ -549,6 +549,7 @@ class RecordPage : public QWidget {
     // v0.8.0-D: Post-flight report card — pipeline stats accumulated during recording
     double peak_av_drift_ms_ = 0.0;
     bool av_drift_ever_available_ = false;
+    bool clock_slaving_ever_active_ = false; // H-3: slaving engaged at any point this session
     recorder_core::PipelineHealth last_pipeline_health_ = recorder_core::PipelineHealth::Idle;
     recorder_core::RecordingDiagnosticsSnapshot last_completed_snapshot_;
     // Report card dismiss button (inside resultDetailsPanel)

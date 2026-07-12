@@ -12,6 +12,7 @@
 namespace recorder_core {
 
 class IAudioEncoder;
+class OutputFormatAudioSrc;
 
 // Ownership contract (shared by all session workers): the object must be owned
 // by a std::shared_ptr, and Start() hands the running thread a shared_ptr to
@@ -52,6 +53,11 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     std::shared_ptr<SessionState> m_state_ptr;
     SessionState& m_state; // = *m_state_ptr (kept as a reference for Run())
     std::unique_ptr<IAudioCaptureSource> source_;
+    // Typed, non-owning view of the OutputFormatAudioSrc wrapper that source_
+    // points at after Run() wraps the raw capture source (ADR 0030). Lets the
+    // clock-slaving controller drive its compensation without an interface
+    // downcast. Valid for the lifetime of source_.
+    OutputFormatAudioSrc* output_format_src_ = nullptr;
     uint32_t track_id_ = 0;
     float m_smoothed_rms_ = 0.0f;
     std::thread m_thread;

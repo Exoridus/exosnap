@@ -957,6 +957,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // Brickwall limiter (Audio v2).
     config.audio_limiter_enabled = plan.limiter_enabled;
     config.audio_limiter_ceiling_db = plan.limiter_ceiling_db;
+    // A/V clock slaving (H-3).
+    config.audio_clock_slaving_enabled = plan.clock_slaving_enabled;
     // Microphone high-pass filter (Audio v2).
     config.mic_hpf_enabled = plan.mic_hpf_enabled;
     config.mic_hpf_cutoff_hz = plan.mic_hpf_cutoff_hz;

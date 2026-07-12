@@ -757,5 +757,155 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_IdleSourceDoesNotStallActiveSource) {
     mixer.Shutdown();
 }
 
+// ---------------------------------------------------------------------------
+// H-3: single-source pass-through of device timing and the discontinuity gap.
+// A gain-wrapped single MIC track is wrapped in MixedAudioSrc; it must still
+// surface the honest A/V drift metric and feed its measured gaps.
+// ---------------------------------------------------------------------------
+
+class TimingGapMockSource final : public IAudioCaptureSource {
+  public:
+    void Enqueue(uint32_t frames, uint32_t gap) {
+        queue_.push_back(Packet{frames, gap, std::vector<float>(static_cast<size_t>(frames) * 2u, 0.2f)});
+    }
+    void SetTiming(uint64_t dev, uint64_t qpc) {
+        has_timing_ = true;
+        dev_ = dev;
+        qpc_ = qpc;
+    }
+
+    uint32_t PendingFrameCount() override {
+        return queue_.empty() ? 0u : queue_.front().frames;
+    }
+    bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override {
+        out_error.clear();
+        if (queue_.empty() || held_)
+            return false;
+        held_ = true;
+        const Packet& p = queue_.front();
+        out_buf = {};
+        out_buf.bytes = reinterpret_cast<const uint8_t*>(p.data.data());
+        out_buf.num_frames = p.frames;
+        out_buf.gap_frames = p.gap;
+        return true;
+    }
+    void ReleaseBuffer() override {
+        if (held_) {
+            held_ = false;
+            queue_.pop_front();
+        }
+    }
+    bool Init(std::string&) override {
+        return true;
+    }
+    uint32_t SampleRate() const override {
+        return 48000;
+    }
+    uint32_t Channels() const override {
+        return 2;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Float32;
+    }
+    const std::string& EndpointName() const override {
+        return name_;
+    }
+    bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override {
+        if (!has_timing_)
+            return false;
+        out_timing.device_position_ns = dev_;
+        out_timing.qpc_position_ns = qpc_;
+        return true;
+    }
+    void Shutdown() override {
+    }
+
+  private:
+    struct Packet {
+        uint32_t frames;
+        uint32_t gap;
+        std::vector<float> data;
+    };
+    std::deque<Packet> queue_;
+    bool held_ = false;
+    bool has_timing_ = false;
+    uint64_t dev_ = 0;
+    uint64_t qpc_ = 0;
+    std::string name_{"timing-gap-mock"};
+};
+
+TEST(MixedAudioSrcTest, SingleSource_ForwardsDeviceTiming) {
+    auto* s = new TimingGapMockSource();
+    s->SetTiming(1000, 2000);
+    s->Enqueue(480, 0);
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(1));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    AudioDeviceTiming t{};
+    EXPECT_TRUE(mixer.LastBufferDeviceTiming(t));
+    EXPECT_EQ(t.device_position_ns, 1000u);
+    EXPECT_EQ(t.qpc_position_ns, 2000u);
+    mixer.ReleaseBuffer();
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, TwoSources_NoDeviceTiming) {
+    auto* s0 = new TimingGapMockSource();
+    auto* s1 = new TimingGapMockSource();
+    s0->SetTiming(1000, 2000);
+    s1->SetTiming(3000, 4000);
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s0));
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s1));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    AudioDeviceTiming t{};
+    EXPECT_FALSE(mixer.LastBufferDeviceTiming(t)); // several device clocks -> unavailable
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, SingleSource_ForwardsGapFrames) {
+    auto* s = new TimingGapMockSource();
+    s->Enqueue(480, 100); // 100 frames lost before this packet
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(1));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    EXPECT_EQ(buf.num_frames, 480u);
+    EXPECT_EQ(buf.gap_frames, 100u); // 48 kHz -> 48 kHz identity scale
+    mixer.ReleaseBuffer();
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, TwoSources_GapNotForwarded) {
+    auto* s0 = new TimingGapMockSource();
+    auto* s1 = new TimingGapMockSource();
+    s0->Enqueue(480, 100);
+    s1->Enqueue(480, 50);
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s0));
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s1));
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2));
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    EXPECT_EQ(buf.gap_frames, 0u); // merges mix several clocks; no single gap axis
+    mixer.ReleaseBuffer();
+    mixer.Shutdown();
+}
+
 } // namespace
 } // namespace recorder_core

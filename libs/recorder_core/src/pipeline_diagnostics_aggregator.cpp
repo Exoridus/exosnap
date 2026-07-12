@@ -145,8 +145,10 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
 
-    audio_clock_drift_ms_.fill(0.0);
-    audio_clock_drift_valid_.fill(false);
+    audio_clock_raw_ms_.fill(0.0);
+    audio_clock_residual_ms_.fill(0.0);
+    audio_clock_ppm_.fill(0.0);
+    audio_clock_valid_.fill(false);
     peak_av_drift_ms_ = 0.0;
     peak_av_drift_valid_ = false;
     encoder_init_ = EncoderInitInfo{};
@@ -368,13 +370,16 @@ void PipelineDiagnosticsAggregator::SetSplitPending(bool pending) noexcept {
     split_pending_ = pending;
 }
 
-void PipelineDiagnosticsAggregator::OnAudioClockDrift(uint32_t track_id, double drift_ms) noexcept {
+void PipelineDiagnosticsAggregator::OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms,
+                                                        double applied_ppm) noexcept {
     std::lock_guard lk(mutex_);
-    if (track_id >= audio_clock_drift_ms_.size()) {
+    if (track_id >= audio_clock_valid_.size()) {
         return;
     }
-    audio_clock_drift_ms_[track_id] = drift_ms;
-    audio_clock_drift_valid_[track_id] = true;
+    audio_clock_raw_ms_[track_id] = raw_drift_ms;
+    audio_clock_residual_ms_[track_id] = residual_ms;
+    audio_clock_ppm_[track_id] = applied_ppm;
+    audio_clock_valid_[track_id] = true;
 }
 
 void PipelineDiagnosticsAggregator::SetEncoderInitInfo(const EncoderInitInfo& info) noexcept {
@@ -604,29 +609,40 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         sp.seconds_until_auto_split = -1.0;
     }
 
-    // ---- A/V drift ----
-    // Measured clock drift: each audio worker compares its device clock
-    // (WASAPI device-position/QPC pairs) against the QPC timeline video frames
-    // are paced on, normalized at capture start and smoothed over a rolling
-    // window (audio_clock_drift.h). Positive = audio leads video. With several
-    // device-backed tracks the largest-magnitude estimate is surfaced; merged
-    // tracks mix multiple device clocks and never report, so the metric stays
-    // Unavailable rather than guessing.
+    // ---- A/V drift + clock slaving ----
+    // av_drift_ms surfaces the RESIDUAL — the misalignment that actually lands in
+    // the file after clock slaving pulled the audio timeline toward the QPC axis.
+    // Each audio worker reports raw drift (device-vs-QPC), residual, and its
+    // current compensation ppm. With several device-backed tracks the
+    // largest-|residual| track is surfaced (and its raw drift + ppm alongside);
+    // multi-source merges never report, so the metric stays Unavailable rather
+    // than guessing. clock_slaving_active latches from any engaged track.
     s.av_drift_ms = 0.0;
+    s.av_drift_raw_ms = 0.0;
+    s.clock_slaving_ppm = 0.0;
+    s.clock_slaving_active = false;
     s.av_drift_availability = MetricAvailability::Unavailable;
-    for (std::size_t i = 0; i < audio_clock_drift_ms_.size(); ++i) {
-        if (!audio_clock_drift_valid_[i]) {
+    for (std::size_t i = 0; i < audio_clock_valid_.size(); ++i) {
+        if (!audio_clock_valid_[i]) {
             continue;
         }
         if (s.av_drift_availability == MetricAvailability::Unavailable ||
-            std::abs(audio_clock_drift_ms_[i]) > std::abs(s.av_drift_ms)) {
-            s.av_drift_ms = audio_clock_drift_ms_[i];
+            std::abs(audio_clock_residual_ms_[i]) > std::abs(s.av_drift_ms)) {
+            s.av_drift_ms = audio_clock_residual_ms_[i];
+            s.av_drift_raw_ms = audio_clock_raw_ms_[i];
+            s.clock_slaving_ppm = audio_clock_ppm_[i];
         }
         s.av_drift_availability = MetricAvailability::Available;
+        // A track is actively slaved if it commands a rate or has already shifted
+        // the timeline (raw != residual, i.e. some compensation was applied).
+        if (audio_clock_ppm_[i] != 0.0 || std::abs(audio_clock_raw_ms_[i] - audio_clock_residual_ms_[i]) > 1e-9) {
+            s.clock_slaving_active = true;
+        }
     }
 
-    // Running peak of the drift magnitude, so the live UI and the session report
-    // share one authoritative value instead of each accumulating independently.
+    // Running peak of the residual magnitude, so the live UI and the session
+    // report share one authoritative value instead of each accumulating
+    // independently.
     if (s.av_drift_availability == MetricAvailability::Available) {
         const double magnitude = std::abs(s.av_drift_ms);
         if (!peak_av_drift_valid_ || magnitude > peak_av_drift_ms_) {
