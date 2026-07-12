@@ -4,6 +4,7 @@
 #include "test_unique_temp.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -988,6 +989,42 @@ TEST_F(StreamWriterTest, EmptySession_StillPerformsFinalDurabilityFlush) {
     ASSERT_FALSE(w.failed()) << w.error();
     EXPECT_EQ(w.durability_flush_count(), 1u)
         << "Finalize() must still durably flush the container even with no clusters";
+}
+
+// 13. The progress sink (SetProgressSink) must keep advancing through
+//     Finalize()'s back-patch phase (Cues render, SeekHead/Duration/Segment-
+//     size patches, final durability flush), not freeze at whatever it was
+//     after the last streaming-phase FlushCluster() call. The out-of-thread
+//     shutdown watcher (FinalizeProgressTracker, see finalize_join_policy.h)
+//     polls this sink while the mux thread is blocked inside Finalize(); if it
+//     stops advancing, a slow-but-working finalize (e.g. on a network drive)
+//     is misclassified as a stall and the recording is falsely reported as
+//     failed even though the file finishes writing correctly.
+TEST_F(StreamWriterTest, ProgressSinkAdvancesThroughFinalizeBackPatch) {
+    MatroskaStreamWriter w;
+    std::atomic<uint64_t> sink{0};
+    w.SetProgressSink(&sink);
+
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, true, false)));
+    // Cross at least one 2 s cluster boundary so the sink already carries a
+    // nonzero value published from the streaming phase before Finalize().
+    FeedSeconds(w, /*seconds=*/5.0, /*gop=*/30, /*payload_bytes=*/512);
+
+    const uint64_t pre_finalize_sink = sink.load(std::memory_order_relaxed);
+
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const uint64_t post_finalize_sink = sink.load(std::memory_order_relaxed);
+    const auto file_size = static_cast<uint64_t>(std::filesystem::file_size(tmp_));
+
+    // Cues/SeekHead/Duration/Segment-size are written/patched strictly after
+    // the last streaming-phase cluster flush, so the published value must grow.
+    EXPECT_GT(post_finalize_sink, pre_finalize_sink)
+        << "Progress sink did not advance during Finalize()'s back-patch phase";
+    // And it must reflect the true finalized file size, not an earlier
+    // checkpoint frozen mid-Finalize().
+    EXPECT_EQ(post_finalize_sink, file_size) << "Progress sink does not reflect the finalized file's true size";
 }
 
 } // namespace

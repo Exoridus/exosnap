@@ -716,6 +716,14 @@ void WasapiCaptureSrc::Shutdown() {
     last_timing_valid_ = false;
     last_device_position_ns_ = 0;
     last_qpc_position_ns_ = 0;
+    // Reset discontinuity-gap tracking so a reconnect (Init() calls Shutdown()
+    // first) never carries the previous device session's expected position
+    // into the new one. ComputeDiscontinuityGapFrames() already guards this
+    // (a lower new-device position vs. the stale expected one yields gap 0),
+    // so this is behavior-neutral — reset purely so the state does not read
+    // as belonging to a session that no longer exists.
+    device_position_tracked_ = false;
+    expected_device_position_ = 0;
 
     if (capture_client_) {
         capture_client_->Release();

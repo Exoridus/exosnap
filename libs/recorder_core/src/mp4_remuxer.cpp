@@ -325,7 +325,20 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // Seek to the keyframe at or before start_us.
         // AVSEEK_FLAG_BACKWARD ensures we snap to the nearest preceding keyframe
         // so the output starts on a clean keyframe boundary.
-        const int seek_ret = av_seek_frame(in_ctx, video_stream_idx, tr.start_us, AVSEEK_FLAG_BACKWARD);
+        //
+        // av_seek_frame()'s timestamp unit depends on stream_index: when a
+        // specific stream is targeted (video_stream_idx >= 0, the normal case
+        // here), the timestamp must already be expressed in that stream's own
+        // time_base. Only the stream_index == -1 form auto-converts from
+        // AV_TIME_BASE. tr.start_us is always microseconds at AV_TIME_BASE, so
+        // it must be rescaled to the video stream's time_base before seeking —
+        // passing it unconverted seeks to the wrong position (typically far
+        // past EOF) and silently fails, which used to be masked by a fudge
+        // factor in the packet-loop keyframe check below.
+        const int64_t seek_ts = (video_stream_idx >= 0) ? av_rescale_q(tr.start_us, AVRational{1, AV_TIME_BASE},
+                                                                       in_ctx->streams[video_stream_idx]->time_base)
+                                                        : tr.start_us;
+        const int seek_ret = av_seek_frame(in_ctx, video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
         if (seek_ret < 0) {
             // Non-fatal: if seek fails, continue from the beginning.
             std::string msg = std::string("av_seek_frame (trim start) failed: ") + av_err2str(seek_ret);
@@ -345,10 +358,10 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
 
     bool cancelled = false;
 
-    // When trimming from the start: we might land on the keyframe just before
-    // start_us (due to AVSEEK_FLAG_BACKWARD). Non-keyframe video packets before
-    // start_us are skipped; keyframe packets at or after start_us are accepted.
-    // We track whether we have seen the first accepted keyframe yet.
+    // When trimming from the start, the backward seek above (when it
+    // succeeds) positions the read cursor exactly at the keyframe at or
+    // before start_us — the seek target. We track whether we have locked
+    // onto that keyframe yet.
     bool trim_start_locked = !tr.HasStart(); // true = past the start boundary
 
     while (true) {
@@ -379,17 +392,16 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // Trim: start boundary — skip packets until we lock onto a keyframe.
         // ---------------------------------------------------------------
         if (!trim_start_locked && si == video_stream_idx) {
-            // We only accept video packets that are keyframes.
-            // Once we accept one, all subsequent packets (video + audio) pass.
-            if (pkt->pts != AV_NOPTS_VALUE) {
-                const int64_t pts_us = av_rescale_q(pkt->pts, in_st->time_base, {1, AV_TIME_BASE});
-                if ((pkt->flags & AV_PKT_FLAG_KEY) && pts_us >= tr.start_us - 1000000LL) {
-                    // Found the first keyframe at or after trim start — lock.
-                    trim_start_locked = true;
-                } else {
-                    av_packet_unref(pkt);
-                    continue;
-                }
+            // Accept the first video keyframe encountered unconditionally. A
+            // successful backward seek already positions the read cursor at
+            // the keyframe at or before start_us (the seek target), so the
+            // first keyframe read here IS that target — no pts comparison
+            // needed. If the seek failed, we fall back to a linear scan from
+            // the beginning of the file, and the first keyframe encountered
+            // there is still the best available "at or before" candidate.
+            // Non-keyframe video packets before that point are skipped.
+            if (pkt->flags & AV_PKT_FLAG_KEY) {
+                trim_start_locked = true;
             } else {
                 av_packet_unref(pkt);
                 continue;

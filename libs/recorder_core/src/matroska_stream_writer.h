@@ -180,9 +180,12 @@ class MatroskaStreamWriter {
 
     // Optional cumulative-byte progress sink. When set, the writer publishes
     // bytes_written() into it on every cluster flush — including the flushes that
-    // happen inside the blocking Finalize() drain — so an out-of-thread observer
-    // (the shutdown sequence) can tell a slow-but-progressing finalize from a
-    // stalled one. The sink must outlive the writer; the writer never reads it.
+    // happen inside the blocking Finalize() drain — AND at each checkpoint of
+    // Finalize()'s back-patch phase (Cues render, SeekHead/Duration/Segment-size
+    // patches, final durability flush), so an out-of-thread observer (the
+    // shutdown sequence) can tell a slow-but-progressing finalize from a stalled
+    // one across the whole finalize call, not just its cluster-draining prefix.
+    // The sink must outlive the writer; the writer never reads it.
     void SetProgressSink(std::atomic<uint64_t>* sink) noexcept {
         m_progress_sink = sink;
     }
@@ -256,6 +259,11 @@ class MatroskaStreamWriter {
     // Write a single resolved packet into the current/next cluster.
     bool EmitPacket(const WindowEntry& e);
     bool FlushCluster();
+    // Publish the current file position (clamped to a running max, so a
+    // transient backward seek/restore inside a back-patch never regresses the
+    // published value) into the progress sink, if one is set. Used both by
+    // FlushCluster() and by the Finalize() back-patch checkpoints.
+    void PublishProgress() noexcept;
     void Fail(const std::string& reason);
     void CloseIo();
 
