@@ -135,6 +135,11 @@ if(EXOSNAP_BUILD_PROBES)
     add_subdirectory(tools/probes)
 endif()
 
+# Reliability soak tooling. The subdirectory always builds the pure analysis
+# library + its CI test; the GPU-driving `exosnap-soak` executable is gated
+# inside on EXOSNAP_BUILD_SOAK (developer machine only).
+add_subdirectory(tools/soak)
+
 if(EXOSNAP_WITH_PRESENTMON)
     target_link_libraries(exosnap PRIVATE PresentMon::consumer)
     target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON=1)

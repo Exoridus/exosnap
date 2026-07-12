@@ -1065,19 +1065,33 @@ exosnap_add_gtest(
 )
 target_include_directories(test_remux_trim PRIVATE src)
 
-# Whole-pipeline end-to-end: drive the real AudioThread (real Opus/AAC encoder)
-# + real MuxThread + MatroskaStreamWriter + Finalize to a real file on disk, then
+# Deterministic, GPU-free session driver shared by the e2e test, the soak twin,
+# and the recovery drills. It drives the REAL AudioThread + MuxThread +
+# MatroskaStreamWriter + Finalize with an in-process video feeder (VideoThread's
+# SessionState role). PUBLIC-linking recorder_core + FFmpeg/EBML/Matroska so
+# consumers inherit them; PRIVATE `src` for the internal worker/state headers.
+add_library(recorder_core_testutil STATIC
+    testutil/synthetic_session.cpp
+)
+target_include_directories(recorder_core_testutil PUBLIC testutil)
+target_include_directories(recorder_core_testutil PRIVATE src)
+target_link_libraries(recorder_core_testutil PUBLIC
+    recorder_core EBML::ebml Matroska::matroska FFmpeg::mux)
+target_link_libraries(recorder_core_testutil PRIVATE exosnap::warnings)
+target_compile_definitions(recorder_core_testutil PRIVATE NOMINMAX)
+target_compile_features(recorder_core_testutil PUBLIC cxx_std_20)
+
+# Whole-pipeline end-to-end: drive the shared synthetic session to a real MKV, then
 # validate it with the vendored libavformat (open, read stream info, demux to a
 # clean EOF, check tracks/keyframes/monotone PTS) and remux MKV->MP4 through the
-# real remuxer. No GPU: an in-test seam plays VideoThread's SessionState role.
+# real remuxer. No GPU: the in-lib seam plays VideoThread's SessionState role.
 # Not `live` — fully deterministic and device-free.
 exosnap_add_gtest(
     NAME test_session_e2e_real_file
     TEST_PREFIX recorder_core.
     SOURCES tests/test_session_e2e_real_file.cpp
-    LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+    LIBRARIES recorder_core_testutil
 )
-target_include_directories(test_session_e2e_real_file PRIVATE src)
 target_compile_definitions(test_session_e2e_real_file PRIVATE NOMINMAX)
 
 # ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
