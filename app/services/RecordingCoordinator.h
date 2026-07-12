@@ -155,6 +155,17 @@ class RecordingCoordinator {
     // device-lock fight, and it works while recording. Idempotent.
     void SetWebcamSettingsPreviewActive(bool active);
     void StopRecording();
+    // Cooperatively cancel an in-progress Preparing phase (device setup running on
+    // the preparation worker thread). Safe to call from the Qt main thread.
+    //   - While Preparing (prepare_in_flight_ && !is_recording_): requests a
+    //     cooperative cancel; the worker unwinds to Ready at its next checkpoint.
+    //   - Once the session has committed to recording (is_recording_): falls through
+    //     to StopRecording() so a cancel press in the narrow commit window is never
+    //     dropped.
+    //   - No-op when nothing is preparing or recording.
+    // A running blocking step (MF camera open, ≤750 ms lease wait) is not interrupted;
+    // the cancel takes effect after it returns.
+    void CancelPreparing();
     void PauseRecording();
     void ResumeRecording();
 
@@ -227,14 +238,15 @@ class RecordingCoordinator {
         std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
     void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
 
-    // Invoked synchronously on the UI thread immediately before the recording
-    // thread starts — after every validation and guard, so it never fires for a
-    // start that is rejected. The idle preview's DXGI capture hub releases its
+    // Invoked on the recording preparation worker thread (NOT the UI thread),
+    // immediately before the engine opens its capture — after every validation,
+    // guard, and cancellation checkpoint, so it never fires for a start that is
+    // rejected or cancelled. The idle preview's DXGI capture hub releases its
     // duplication here (an output can only be duplicated once per process, and
-    // the engine is about to open its own). The hook must block until the
-    // release has actually happened. The lease is returned page-side when the
-    // recording reaches Ready/Completed/Failed, alongside the pushed-source
-    // revert.
+    // the engine is about to open its own). The hook must be thread-safe and must
+    // block until the release has actually happened. The lease is returned
+    // page-side when the recording reaches Ready/Completed/Failed, alongside the
+    // pushed-source revert.
     using PreviewCaptureReleaseHook = std::function<void()>;
     void SetPreviewCaptureReleaseHook(PreviewCaptureReleaseHook hook);
 
@@ -255,6 +267,31 @@ class RecordingCoordinator {
     void CaptureFrame();
 
   private:
+    // Immutable snapshot of every input and config model StartRecording's device
+    // work reads, copied by value on the UI thread before the preparation worker
+    // starts. "Thin gate, fat worker": the worker reads exclusively from this
+    // snapshot — never a live coordinator member — so the Settings setters remain
+    // free to mutate output_settings_/video_settings_/etc. during Preparing without
+    // tearing a std::wstring/std::filesystem::path across the thread boundary.
+    struct PrepareContext {
+        recorder_core::CaptureTarget target;
+        capability::AudioUiState audio_ui_state;
+        std::optional<recorder_core::CaptureRegion> crop_region;
+        OutputSettingsModel output_settings;
+        recorder_core::RecordingSplitSettings split_settings;
+        VideoSettingsModel video_settings;
+        WebcamSettings webcam_settings;
+        capability::UserRecorderConfig resolved_user_config;
+        FilenameTargetContext output_target_context;
+        bool has_output_target_context = false;
+        capability::CapabilitySet caps;
+    };
+
+    // Runs the device-setup ("Preparing") phase and, on success, the recording
+    // itself — all on the recording thread, so the UI thread never blocks on the
+    // free-space query, filesystem work, DXGI display-facts refresh, webcam open,
+    // or the capture-lease handshake. Reads only from `ctx`.
+    void PrepareAndRecordThreadProc(const PrepareContext& ctx);
     void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
     // (Re)start or stop the shared webcam capture based on enabled/recording/preview state.
     void SyncWebcamService(bool force_restart);
@@ -263,7 +300,7 @@ class RecordingCoordinator {
     // The error dialog shows this format context; a result that omits it falls
     // back to the struct defaults (WebM · AV1 · Opus) and contradicts the
     // Record footer and the output filename.
-    void FillResultFormat(UiRecordingResult& result) const;
+    void FillResultFormat(UiRecordingResult& result, const PrepareContext& ctx) const;
     void PostResult(UiRecordingResult result);
     // Write the on-disk session-<id>.json report for a finished (or failed)
     // recording, from the result plus the stashed final snapshot. Best-effort:
@@ -279,7 +316,13 @@ class RecordingCoordinator {
     void PostAppMeter(float rms_linear);
     void PostRecordingMeter(std::array<float, 3> per_track_rms);
 
-    std::filesystem::path GenerateOutputPath() const;
+    // Builds the output path from the prepare snapshot (reads only from ctx). Runs
+    // on the preparation worker thread.
+    std::filesystem::path GenerateOutputPath(const PrepareContext& ctx) const;
+    // Apply the EXOSNAP_OUTPUT_DIR override to a configured output folder. The
+    // no-arg EffectiveOutputFolder() delegates here with output_settings_; the
+    // worker calls it with the snapshot's folder.
+    static std::filesystem::path EffectiveOutputFolderFor(const OutputSettingsModel& settings);
     void WriteMarkerSidecar();
     // Write a per-segment marker sidecar adjacent to `segment_media_path`,
     // containing only markers whose session time falls in this segment, rebased to
@@ -360,9 +403,25 @@ class RecordingCoordinator {
     std::jthread recording_thread_;
     std::atomic<bool> is_recording_{false};
     std::atomic<bool> is_paused_{false};
+    // Guards the Preparing phase (device setup on the recording thread, before the
+    // engine opens). Set by the UI-thread gate in StartRecording via a
+    // compare-exchange so two starts can never both win; cleared by the worker when
+    // it fails, cancels, or commits to recording (is_recording_ then takes over).
+    // Also owns the shared webcam device across the prepare boundary (see
+    // SyncWebcamService) so a queued Preparing state-callback cannot Stop() the
+    // camera the worker is opening.
+    std::atomic<bool> prepare_in_flight_{false};
+    // Cooperative cancel request for the Preparing phase; honored at the worker's
+    // checkpoints (after disk/FS, after display facts, after webcam start, and
+    // immediately before the recording commits).
+    std::atomic<bool> prepare_cancel_requested_{false};
 
     std::atomic<UiRecordingState> state_{UiRecordingState::LoadingCapabilities};
     std::wstring capability_status_text_;
+    // Written by the preparation worker, read by CurrentOutputPath() on the UI
+    // thread; the mutex prevents a torn read of the std::filesystem::path across
+    // the thread boundary.
+    mutable std::mutex output_path_mutex_;
     std::filesystem::path current_output_path_;
 
     // Recording markers

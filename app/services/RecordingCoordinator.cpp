@@ -312,7 +312,13 @@ RecordingCoordinator::~RecordingCoordinator() {
     StopMicMeter();
     StopSysMeter();
     StopAppMeter();
-    if (is_recording_) {
+    // Unblock any in-flight prepare/record so the recording_thread_ jthread can join
+    // in its destructor instead of hanging. Requesting the cancel makes a worker still
+    // in its preparation checkpoints unwind before it commits to Record(); pre-arming
+    // the stop (safe before Record() has fully spun up) makes a worker that already
+    // committed return from Record() at once.
+    prepare_cancel_requested_.store(true);
+    if (is_recording_.load() || prepare_in_flight_.load()) {
         session_.Stop();
     }
 }
@@ -572,9 +578,11 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     }
 
     // A device/resolution/fps change requires re-opening the capture, so do not
-    // restart the webcam device mid-recording. Live overlay fields are pushed
-    // above and enable/disable is handled by SyncWebcamService.
-    SyncWebcamService((device_changed || res_changed || fps_changed) && !recording);
+    // restart the webcam device mid-recording — nor mid-prepare, where the worker
+    // owns the device and SyncWebcamService early-returns anyway. Live overlay
+    // fields are pushed above and enable/disable is handled by SyncWebcamService.
+    const bool session_owns_device = recording || prepare_in_flight_.load();
+    SyncWebcamService((device_changed || res_changed || fps_changed) && !session_owns_device);
 }
 
 void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
@@ -588,10 +596,20 @@ void RecordingCoordinator::SetWebcamSettingsPreviewActive(bool active) {
 }
 
 void RecordingCoordinator::SyncWebcamService(bool force_restart) {
-    // Recording always owns the device; while idle the capture runs only when the
-    // Record preview asked for it (live Ready PiP) and webcam is enabled.
+    // Device ownership across the prepare boundary: while a prepare is in flight the
+    // worker is opening/holding the shared webcam device (RecordingCoordinator's
+    // preparation worker). The UI thread must not touch webcam_service_ in that
+    // window — a queued Preparing state-callback would otherwise Stop() the device
+    // the worker just opened (is_recording_ is still false at that instant). The
+    // worker itself calls webcam_service_ directly, never through this method.
+    if (prepare_in_flight_.load())
+        return;
+    // Recording (or an in-flight prepare) always owns the device; while idle the
+    // capture runs only when the Record preview asked for it (live Ready PiP) and
+    // webcam is enabled.
     const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
-                              (is_recording_.load() || webcam_preview_active_ || webcam_settings_preview_active_);
+                              (is_recording_.load() || prepare_in_flight_.load() || webcam_preview_active_ ||
+                               webcam_settings_preview_active_);
     if (!want_running) {
         webcam_service_.Stop();
         return;
@@ -612,9 +630,90 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
                                           std::optional<recorder_core::CaptureRegion> crop_region) {
     StopMicMeter();
 
-    if (is_recording_)
+    // ── Thin gate (UI thread) ────────────────────────────────────────────────
+    // A cheap, race-free admission check, then hand every blocking step (disk
+    // query, filesystem work, DXGI display-facts refresh, webcam open, capture-
+    // lease handshake) to the preparation worker. StartRecording is only ever
+    // called from the UI thread, so check-then-set is inherently safe against a
+    // second StartRecording; the compare-exchange publishes prepare_in_flight_ to
+    // the worker and rejects a start while one is already in flight.
+    bool expected = false;
+    if (is_recording_.load() || !prepare_in_flight_.compare_exchange_strong(expected, true)) {
         return false;
-    const std::filesystem::path effective_folder = EffectiveOutputFolder();
+    }
+
+    // Startable-state and capability gates (both cheap, UI-thread-local). On a
+    // miss, release the in-flight flag we just claimed and reject.
+    const UiRecordingState st = state_.load();
+    if (st != UiRecordingState::Ready && st != UiRecordingState::Completed && st != UiRecordingState::Failed &&
+        st != UiRecordingState::ArmedFromRecovery) {
+        prepare_in_flight_.store(false);
+        return false;
+    }
+    if (!has_caps_) {
+        prepare_in_flight_.store(false);
+        return false;
+    }
+
+    prepare_cancel_requested_.store(false);
+
+    // Snapshot every input and config model the worker reads (see PrepareContext).
+    // The worker reads only from this snapshot, so the Settings setters stay free
+    // to mutate the live members during Preparing without a torn cross-thread read.
+    PrepareContext ctx;
+    ctx.target = target;
+    ctx.audio_ui_state = audio_ui_state;
+    ctx.crop_region = crop_region;
+    ctx.output_settings = output_settings_;
+    ctx.split_settings = split_settings_;
+    ctx.video_settings = video_settings_;
+    ctx.webcam_settings = webcam_settings_;
+    ctx.resolved_user_config = resolved_user_config_;
+    ctx.caps = caps_;
+    ctx.output_target_context =
+        has_output_target_context_ ? output_target_context_ : BuildFilenameContextFromTarget(target);
+    ctx.has_output_target_context = true;
+
+    // Preparing is now a real, drawn state: the UI thread posts it and returns to
+    // the event loop immediately (repaint shows "Preparing…"), then the worker does
+    // the device work off-thread. Default countdown is 0 s, so for most starts this
+    // is the only pre-record feedback the user gets.
+    PostStateChange(UiRecordingState::Preparing);
+
+    recording_thread_ = std::jthread([this, c = std::move(ctx)](std::stop_token) { PrepareAndRecordThreadProc(c); });
+
+    return true;
+}
+
+void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx) {
+    const recorder_core::CaptureTarget& target = ctx.target;
+    const std::filesystem::path effective_folder = EffectiveOutputFolderFor(ctx.output_settings);
+
+    // Whether this prepare opened the shared webcam device (vs. an idle PiP preview
+    // that was already running). Only a device we opened is torn down on cancel.
+    bool webcam_started_by_us = false;
+
+    // Cooperative-cancel unwind, run at each checkpoint below: consume the request,
+    // stop only the webcam we opened, drop any recovery-manifest entry we wrote,
+    // release the in-flight flag, and post Ready (still + log; no toast — "calm, not
+    // alarmist"). The capture lease is acquired as the very last step before
+    // Record(), so a cancelled prepare never holds it, and the page-side revert
+    // (ShouldRevertPreviewFromPushedMode → ReturnEngineLease) is a no-op when nothing
+    // was leased. The queued Ready state-callback restores the idle preview capture
+    // on the UI thread once prepare_in_flight_ is clear.
+    auto cancel_unwind = [&]() {
+        prepare_cancel_requested_.store(false);
+        if (webcam_started_by_us) {
+            webcam_service_.Stop();
+        }
+        if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
+            recovery_manifest_store_->Remove(current_manifest_id_);
+            current_manifest_id_.clear();
+        }
+        prepare_in_flight_.store(false);
+        diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("start cancelled during preparation"));
+        PostStateChange(UiRecordingState::Ready);
+    };
 
     // Pre-start disk-space guard (LOW-DISK-GUARD-R1).
     // Block recording when free space is at or below the hard-stop threshold.
@@ -651,9 +750,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
             result.succeeded = false;
             result.error_phase = L"DiskSpace";
             result.error_detail = kDiskSpaceStopReason;
-            FillResultFormat(result);
+            FillResultFormat(result, ctx);
             PostResult(std::move(result));
-            return false;
+            prepare_in_flight_.store(false);
+            return;
         }
     }
 
@@ -670,23 +770,14 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.succeeded = false;
         result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
         result.error_detail = FolderValidationMessage(folder_check);
-        FillResultFormat(result);
+        FillResultFormat(result, ctx);
         PostResult(std::move(result));
 
-        return false;
-    }
-    if (state_ != UiRecordingState::Ready && state_ != UiRecordingState::Completed &&
-        state_ != UiRecordingState::Failed && state_ != UiRecordingState::ArmedFromRecovery) {
-        return false;
-    }
-    if (!has_caps_)
-        return false;
-
-    if (!has_output_target_context_) {
-        output_target_context_ = BuildFilenameContextFromTarget(target);
+        prepare_in_flight_.store(false);
+        return;
     }
 
-    auto output_path = GenerateOutputPath();
+    auto output_path = GenerateOutputPath(ctx);
     const auto resolved_path = ResolveAvailableOutputPath(output_path);
     if (!resolved_path.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
@@ -700,12 +791,16 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.output_path = output_path.wstring();
         result.error_detail =
             L"Could not create a unique output filename. Change the filename pattern or output folder.";
-        FillResultFormat(result);
+        FillResultFormat(result, ctx);
         PostResult(std::move(result));
-        return false;
+        prepare_in_flight_.store(false);
+        return;
     }
     output_path = *resolved_path;
-    current_output_path_ = output_path;
+    {
+        std::lock_guard<std::mutex> lock(output_path_mutex_);
+        current_output_path_ = output_path;
+    }
 
     std::error_code ec;
     std::filesystem::create_directories(output_path.parent_path(), ec);
@@ -719,12 +814,17 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         UiRecordingResult result;
         result.succeeded = false;
         result.error_detail = L"Failed to create output directory: " + ToWide(ec.message());
-        FillResultFormat(result);
+        FillResultFormat(result, ctx);
         PostResult(std::move(result));
-        return false;
+        prepare_in_flight_.store(false);
+        return;
     }
 
-    PostStateChange(UiRecordingState::Preparing);
+    // Cancellation checkpoint 1 — after the disk/filesystem work.
+    if (prepare_cancel_requested_.load()) {
+        cancel_unwind();
+        return;
+    }
 
     // Mint the per-recording session id now: independent of the (nullable) recovery
     // store, stable across split segments, and not cleared before PostResult. Reset
@@ -737,15 +837,15 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         last_snapshot_ = recorder_core::RecordingDiagnosticsSnapshot{};
     }
 
-    auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
-    config.nvenc_cq = video_settings_.cq;
-    config.nvenc_rate_control = video_settings_.rate_control;
-    config.nvenc_bitrate_kbps = video_settings_.bitrate_kbps;
-    config.frame_rate_num = video_settings_.frame_rate_num;
-    config.frame_rate_den = video_settings_.frame_rate_den;
-    config.cfr_pacing_mode = video_settings_.frame_pacing;
+    auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
+    config.nvenc_cq = ctx.video_settings.cq;
+    config.nvenc_rate_control = ctx.video_settings.rate_control;
+    config.nvenc_bitrate_kbps = ctx.video_settings.bitrate_kbps;
+    config.frame_rate_num = ctx.video_settings.frame_rate_num;
+    config.frame_rate_den = ctx.video_settings.frame_rate_den;
+    config.cfr_pacing_mode = ctx.video_settings.frame_pacing;
     // Map keyframe interval mode to seconds for NVENC GOP configuration.
-    switch (video_settings_.keyframe_interval) {
+    switch (ctx.video_settings.keyframe_interval) {
     case KeyframeIntervalMode::Seconds2:
         config.keyframe_interval_secs = 2.0f;
         break;
@@ -760,8 +860,8 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // coordinator copies its decision and only surfaces it.
     {
         const capability::OutputFormatReconciliation timing = capability::ReconcileOutputFormat(
-            {output_settings_.container, output_settings_.video_codec, output_settings_.audio_codec,
-             output_settings_.bit_depth, output_settings_.chroma_subsampling, video_settings_.cfr});
+            {ctx.output_settings.container, ctx.output_settings.video_codec, ctx.output_settings.audio_codec,
+             ctx.output_settings.bit_depth, ctx.output_settings.chroma_subsampling, ctx.video_settings.cfr});
         config.cfr = timing.resolved.cfr;
         if (timing.cfr_forced) {
             diagnostics::AppLog::warning(
@@ -769,10 +869,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
                 QStringLiteral("field=timing requested=VFR effective=CFR reason=\"MP4 mux path is fixed-rate\""));
         }
     }
-    config.capture_cursor = video_settings_.capture_cursor;
-    ApplyOutputSettingsToRecorderConfig(config, output_settings_);
+    config.capture_cursor = ctx.video_settings.capture_cursor;
+    ApplyOutputSettingsToRecorderConfig(config, ctx.output_settings);
     config.target = target;
-    config.crop_region = crop_region;
+    config.crop_region = ctx.crop_region;
 
     // Native HDR10 output: when HDR10 handling is selected, the captured display
     // is HDR-active, and the codec can encode HDR10, derive the BT.2020/PQ colour
@@ -782,7 +882,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // excluded (it cannot encode HDR10; the pre-flight blocker catches it).
     // Read through the refreshing accessor, never the startup snapshot: the metadata
     // committed below goes into the encoder and the container, and it must describe the
-    // display as it is now — the user may have toggled HDR since launch.
+    // display as it is now — the user may have toggled HDR since launch. The refresh
+    // mutates the member caps_.runtime.displays; during Preparing RevalidateCapabilities
+    // early-returns, so no UI-thread reader competes for it.
     if (const capability::DisplayHdrFacts* facts = FindTargetDisplayFacts(target, RefreshedDisplayFacts())) {
         if (recorder_core::IsHdr10NativeEffective(config.hdr_mode, facts->hdr_active, config.video_codec)) {
             // Derive BT.2020/PQ colour metadata, pin 10-bit, and snap chroma back to
@@ -804,28 +906,34 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         }
     }
     config.output_path = output_path;
-    config.split = split_settings_;
+    config.split = ctx.split_settings;
 
-    config.webcam.enabled = webcam_settings_.enabled && !webcam_settings_.device_id.empty();
+    config.webcam.enabled = ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty();
     config.webcam.frame_provider = &webcam_service_;
-    config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
-    config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
-    config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
-    config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
-    config.webcam.mirror = webcam_settings_.mirror;
-    config.webcam.opacity = webcam_settings_.opacity;
-    config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
+    config.webcam.overlay_x_norm = ctx.webcam_settings.overlay.x_norm;
+    config.webcam.overlay_y_norm = ctx.webcam_settings.overlay.y_norm;
+    config.webcam.overlay_w_norm = ctx.webcam_settings.overlay.w_norm;
+    config.webcam.overlay_h_norm = ctx.webcam_settings.overlay.h_norm;
+    config.webcam.mirror = ctx.webcam_settings.mirror;
+    config.webcam.opacity = ctx.webcam_settings.opacity;
+    config.webcam.chroma_key_enabled = ctx.webcam_settings.chroma_key.enabled;
     {
-        const auto ac = webcam_settings_.chroma_key.active_color();
+        const auto ac = ctx.webcam_settings.chroma_key.active_color();
         config.webcam.chroma_r = ac.r;
         config.webcam.chroma_g = ac.g;
         config.webcam.chroma_b = ac.b;
     }
-    config.webcam.chroma_tolerance = webcam_settings_.chroma_key.tolerance;
-    config.webcam.chroma_softness = webcam_settings_.chroma_key.softness;
-    config.webcam.chroma_spill_reduction = webcam_settings_.chroma_key.spill_reduction;
+    config.webcam.chroma_tolerance = ctx.webcam_settings.chroma_key.tolerance;
+    config.webcam.chroma_softness = ctx.webcam_settings.chroma_key.softness;
+    config.webcam.chroma_spill_reduction = ctx.webcam_settings.chroma_key.spill_reduction;
 
-    capability::AudioUiState audio_state = audio_ui_state;
+    // Cancellation checkpoint 2 — after the DXGI display-facts refresh / config build.
+    if (prepare_cancel_requested_.load()) {
+        cancel_unwind();
+        return;
+    }
+
+    capability::AudioUiState audio_state = ctx.audio_ui_state;
     if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {
         HWND hwnd = reinterpret_cast<HWND>(target.native_id);
         DWORD pid = 0;
@@ -879,9 +987,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.output_path = output_path.wstring();
         result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
         result.error_detail = L"Window target PID unavailable; the selected window may have been closed.";
-        FillResultFormat(result);
+        FillResultFormat(result, ctx);
         PostResult(std::move(result));
-        return false;
+        prepare_in_flight_.store(false);
+        return;
     }
 
     recorder_core::RecorderResult validate_result;
@@ -899,9 +1008,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         result.error_phase = FormatErrorPhase(validate_result.error_phase);
         result.hresult_text = FormatHResult(validate_result.error_code);
         result.error_detail = ToWide(validate_result.error_detail);
-        FillResultFormat(result);
+        FillResultFormat(result, ctx);
         PostResult(std::move(result));
-        return false;
+        prepare_in_flight_.store(false);
+        return;
     }
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
@@ -928,22 +1038,31 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     split_pending_.store(false);
     session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
-    if (webcam_settings_.enabled && !webcam_settings_.device_id.empty()) {
+    // Webcam device open (documented up to several hundred ms). While
+    // prepare_in_flight_ is set the worker is the sole accessor of webcam_service_:
+    // SyncWebcamService early-returns on the UI thread and its want_running includes
+    // prepare_in_flight_, so a queued Preparing state-callback cannot Stop() the
+    // device we are opening here.
+    if (config.webcam.enabled) {
         // Keep the already-running shared capture (the live PiP preview) instead of
         // stopping and restarting it, which blanks the webcam for a moment right as
         // recording begins. Settings changes before this point already restarted the
         // capture via SyncWebcamService, so a running reader is current; only start one
         // if none is running.
-        if (!webcam_service_.IsRunning())
-            webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
-                                  webcam_settings_.fps);
+        if (!webcam_service_.IsRunning()) {
+            webcam_service_.Start(ctx.webcam_settings.device_id, ctx.webcam_settings.width, ctx.webcam_settings.height,
+                                  ctx.webcam_settings.fps);
+            webcam_started_by_us = true;
+        }
     } else {
         webcam_service_.Stop();
     }
 
-    is_recording_ = true;
-    disk_stop_reason_bytes_free_ = 0;
-    disk_stop_reason_threshold_ = 0;
+    // Cancellation checkpoint 3 — after the webcam open.
+    if (prepare_cancel_requested_.load()) {
+        cancel_unwind();
+        return;
+    }
 
     {
         std::lock_guard<std::mutex> lock(markers_mutex_);
@@ -979,6 +1098,30 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         current_manifest_id_ = entry.id;
     }
 
+    // Cancellation checkpoint 4 — immediately before the recording commits.
+    if (prepare_cancel_requested_.load()) {
+        cancel_unwind(); // removes the manifest entry just written
+        return;
+    }
+
+    // ── Commit ────────────────────────────────────────────────────────────────
+    // From here the recording owns the device. is_recording_ is set before the
+    // last cancel look so any later CancelPreparing routes through StopRecording.
+    is_recording_ = true;
+    // Narrow-window recheck: a cancel press could have set the flag between
+    // checkpoint 4 and the store above (CancelPreparing read is_recording_==false).
+    // is_recording_ is now true, so no future CancelPreparing will target the flag —
+    // honor the press here rather than dropping it, unwinding to Ready before any
+    // Recording state is posted.
+    if (prepare_cancel_requested_.load()) {
+        is_recording_ = false;
+        cancel_unwind();
+        return;
+    }
+    prepare_in_flight_.store(false);
+    disk_stop_reason_bytes_free_ = 0;
+    disk_stop_reason_threshold_ = 0;
+
     PostStateChange(UiRecordingState::Recording);
 
     {
@@ -999,21 +1142,20 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
         const std::filesystem::path transient_mkv =
             is_mp4 ? recorder_core::DeriveTransientMkvPath(output_path) : std::filesystem::path{};
-        StartDiskMonitor(EffectiveOutputFolder(), is_mp4, transient_mkv);
+        StartDiskMonitor(effective_folder, is_mp4, transient_mkv);
     }
 
-    // The idle preview's capture hub may hold the one allowed duplication of
-    // the target display; the engine opens its own in the thread below. The
-    // hook blocks until the hub's is closed, so the two never overlap. Fires
-    // only here — after every guard — so a rejected start never releases.
+    // The idle preview's capture hub may hold the one allowed duplication of the
+    // target display; the engine opens its own below. The hook blocks until the
+    // hub's is closed, so the two never overlap. Runs on this worker thread (not the
+    // UI thread), the last step before the engine opens — so a rejected or cancelled
+    // start never releases.
     if (preview_capture_release_hook_)
         preview_capture_release_hook_();
 
-    recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
-        RecordingThreadProc(cfg, op);
-    });
-
-    return true;
+    // Prepare succeeded — flow straight into the recording (same thread, no second
+    // hop). RecordingThreadProc blocks in session_.Record() for the whole recording.
+    RecordingThreadProc(config, output_path);
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,6 +1232,24 @@ void RecordingCoordinator::StopRecording() {
     is_paused_.store(false);
     PostStateChange(UiRecordingState::Stopping);
     session_.Stop();
+}
+
+void RecordingCoordinator::CancelPreparing() {
+    // Once the session has committed to recording, a cancel press is a stop — route
+    // it there so a press in the narrow commit window is never dropped.
+    if (is_recording_.load()) {
+        StopRecording();
+        return;
+    }
+    if (!prepare_in_flight_.load())
+        return; // nothing preparing
+    prepare_cancel_requested_.store(true);
+    // If the worker committed to recording just as we set the flag, the worker's
+    // post-commit recheck will honor it; but should is_recording_ have flipped true
+    // in this instant, route to the stop machinery as well (belt and suspenders for
+    // the same narrow window).
+    if (is_recording_.load())
+        StopRecording();
 }
 
 void RecordingCoordinator::PauseRecording() {
@@ -1889,6 +2049,7 @@ std::wstring RecordingCoordinator::ResolvedVideoCodecLabel() const {
     }
 }
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
+    std::lock_guard<std::mutex> lock(output_path_mutex_);
     return current_output_path_;
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
@@ -2185,14 +2346,22 @@ void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
     if (!on_state_changed_)
         return;
     auto cb = on_state_changed_;
+    // No running Qt app (headless tests): call through directly. In production the
+    // marshalled queued call keeps the callback on the UI thread — required now that
+    // state posts also originate on the preparation worker thread.
+    if (QCoreApplication::instance() == nullptr) {
+        cb(new_state);
+        return;
+    }
     QMetaObject::invokeMethod(QCoreApplication::instance(), [cb, new_state]() { cb(new_state); }, Qt::QueuedConnection);
 }
 
-void RecordingCoordinator::FillResultFormat(UiRecordingResult& result) const {
-    // The same translation the recording itself runs (StartRecording, line
-    // where `config` is built) — one home for the capability -> engine format
-    // mapping, so the dialog can never disagree with the file.
-    const auto core = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
+void RecordingCoordinator::FillResultFormat(UiRecordingResult& result, const PrepareContext& ctx) const {
+    // The same translation the recording itself runs (where `config` is built) —
+    // one home for the capability -> engine format mapping, so the dialog can never
+    // disagree with the file. Reads from the prepare snapshot, not the live members,
+    // since a Settings change during Preparing must not retro-alter this result.
+    const auto core = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
     result.container = core.container;
     result.video_codec = core.video_codec;
     result.audio_codec = core.audio_codec;
@@ -2293,6 +2462,10 @@ void RecordingCoordinator::PostResult(UiRecordingResult result) {
     if (!on_result_ready_)
         return;
     auto cb = on_result_ready_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(result);
+        return;
+    }
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, r = std::move(result)]() { cb(r); }, Qt::QueuedConnection);
 }
@@ -2306,6 +2479,10 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
     if (!on_stats_updated_)
         return;
     auto cb = on_stats_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(stats);
+        return;
+    }
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
 }
@@ -2402,24 +2579,28 @@ void RecordingCoordinator::PostRecordingMeter(std::array<float, 3> per_track_rms
         QCoreApplication::instance(), [cb, per_track_rms]() { cb(per_track_rms); }, Qt::QueuedConnection);
 }
 
-std::filesystem::path RecordingCoordinator::EffectiveOutputFolder() const {
+std::filesystem::path RecordingCoordinator::EffectiveOutputFolderFor(const OutputSettingsModel& settings) {
     // EXOSNAP_OUTPUT_DIR runtime override: when set to a non-empty value it takes
-    // precedence over the user-configured output_settings_.output_folder.  This
-    // mirrors the EXOSNAP_CONFIG_DIR pattern (ConfigPaths.h) and lets the capture
-    // harness and CI redirect recordings into a temp directory without modifying any
-    // persisted settings.  The override is never written back to disk.
+    // precedence over the configured output_folder.  This mirrors the
+    // EXOSNAP_CONFIG_DIR pattern (ConfigPaths.h) and lets the capture harness and CI
+    // redirect recordings into a temp directory without modifying any persisted
+    // settings.  The override is never written back to disk.
     const QString override_dir = qEnvironmentVariable("EXOSNAP_OUTPUT_DIR");
     if (!override_dir.isEmpty())
         return std::filesystem::path(override_dir.toStdWString());
-    return output_settings_.output_folder;
+    return settings.output_folder;
 }
 
-std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {
-    FilenameTargetContext context = output_target_context_;
-    context.video_codec = output_settings_.video_codec;
-    context.audio_codec = output_settings_.audio_codec;
-    return BuildOutputPath(EffectiveOutputFolder(), output_settings_.naming_pattern, output_settings_.container,
-                           std::time(nullptr), context);
+std::filesystem::path RecordingCoordinator::EffectiveOutputFolder() const {
+    return EffectiveOutputFolderFor(output_settings_);
+}
+
+std::filesystem::path RecordingCoordinator::GenerateOutputPath(const PrepareContext& ctx) const {
+    FilenameTargetContext context = ctx.output_target_context;
+    context.video_codec = ctx.output_settings.video_codec;
+    context.audio_codec = ctx.output_settings.audio_codec;
+    return BuildOutputPath(EffectiveOutputFolderFor(ctx.output_settings), ctx.output_settings.naming_pattern,
+                           ctx.output_settings.container, std::time(nullptr), context);
 }
 
 std::wstring RecordingCoordinator::FormatHResult(int32_t hr) {

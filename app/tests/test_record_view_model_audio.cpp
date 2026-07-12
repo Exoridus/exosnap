@@ -15,6 +15,37 @@ const recorder_core::AudioSourceRow* FindRow(const capability::AudioUiState& s, 
     return nullptr;
 }
 
+// --- Preparing-state predicates and text (M-9) ---
+
+TEST(RecordViewModelPreparingTest, Preparing_ExcludesStartAndStop_AllowsCancel) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Preparing);
+    EXPECT_FALSE(vm.CanStart());
+    EXPECT_FALSE(vm.CanStop());
+    EXPECT_TRUE(vm.CanCancelPreparing());
+}
+
+TEST(RecordViewModelPreparingTest, CanCancelPreparing_OnlyInPreparing) {
+    RecordViewModel vm;
+    const UiRecordingState non_preparing[] = {
+        UiRecordingState::Ready,  UiRecordingState::Countdown, UiRecordingState::Recording,
+        UiRecordingState::Paused, UiRecordingState::Stopping,  UiRecordingState::Completed,
+        UiRecordingState::Failed, UiRecordingState::Blocked,   UiRecordingState::Saving,
+    };
+    for (UiRecordingState s : non_preparing) {
+        vm.SetState(s);
+        EXPECT_FALSE(vm.CanCancelPreparing());
+    }
+    vm.SetState(UiRecordingState::Preparing);
+    EXPECT_TRUE(vm.CanCancelPreparing());
+}
+
+TEST(RecordViewModelPreparingTest, Preparing_StateTextIsPreparing) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Preparing);
+    EXPECT_EQ(vm.state_text, std::wstring(L"Preparing..."));
+}
+
 TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForWindowTarget) {
     RecordViewModel vm;
 

@@ -83,6 +83,17 @@ const QVector<VisualScenario> kScenarios = {
       {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
      3,
      0},
+    {QStringLiteral("record-preparing"),
+     QStringLiteral("Record / Preparing"),
+     VisualPage::Record,
+     VisualRecordState::Preparing,
+     VisualSettingsTarget::None,
+     VisualSourcePickerTab::None,
+     VisualWebcamState::None,
+     {{QStringLiteral("previewSurface"), QStringLiteral("live preview remains dynamic")},
+      {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
+     0,
+     0},
     {QStringLiteral("record-recording-after-countdown"),
      QStringLiteral("Record / Recording After Countdown"),
      VisualPage::Record,
@@ -1985,6 +1996,8 @@ QString ToString(VisualRecordState state) {
         return QStringLiteral("ready");
     case VisualRecordState::Countdown:
         return QStringLiteral("countdown");
+    case VisualRecordState::Preparing:
+        return QStringLiteral("preparing");
     case VisualRecordState::Recording:
         return QStringLiteral("recording");
     case VisualRecordState::Paused:

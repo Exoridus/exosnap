@@ -439,6 +439,14 @@ exists** (for example: no supported NVENC encoder detected, hard-stop disk thres
 unresolved HDR10-vs-H.264 conflict). If no supported NVIDIA NVENC encoder is detected, recording is
 blocked with a diagnostic message rather than silently falling back.
 
+**Preparing.** Between the trigger (or the end of the countdown) and the running recording, the app
+briefly shows a **Preparing** state while device setup — display facts, webcam open, and the capture
+lease hand-off — runs off the UI thread, so the window stays responsive rather than freezing at the
+moment of the click. The default countdown is 0 s, so for most starts Preparing is the first feedback
+the user sees. Pressing the record hotkey during Preparing cancels the pending start and returns to
+Ready (quietly, with a log entry — no dialog); a device step already in flight finishes before the
+cancel takes effect.
+
 **Live monitoring.** While recording, low-cost instrumentation (aggregated off-thread, ~1–4 Hz, no
 per-frame image analysis) tracks dropped/duplicated frames, A/V drift, and disk-fill ETA, and
 classifies the pipeline as encoder-, capture-, or disk-bound. Root-cause correlation is surfaced (the

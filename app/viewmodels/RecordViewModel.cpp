@@ -308,6 +308,10 @@ bool RecordViewModel::CanStop() const noexcept {
     return state == UiRecordingState::Recording || state == UiRecordingState::Paused;
 }
 
+bool RecordViewModel::CanCancelPreparing() const noexcept {
+    return state == UiRecordingState::Preparing;
+}
+
 bool RecordViewModel::CanPause() const noexcept {
     return state == UiRecordingState::Recording;
 }
@@ -374,6 +378,10 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
         break;
     case UiRecordingState::Failed:
         state_text = L"Failed";
+        break;
+    default:
+        // Paused/ArmedFromRecovery/Saving keep the text set by their own UI paths;
+        // this defensive default keeps the switch total as the enum grows.
         break;
     }
 }

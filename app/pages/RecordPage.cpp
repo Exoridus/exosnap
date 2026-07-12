@@ -1909,6 +1909,13 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
             preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Warn);
         }
         break;
+    case visual::VisualRecordState::Preparing:
+        view_model_.ResetStats();
+        view_model_.SetState(UiRecordingState::Preparing);
+        if (preview_surface_) {
+            preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Warn);
+        }
+        break;
     case visual::VisualRecordState::Recording:
         if (scenario.id == QStringLiteral("record-recording-after-countdown"))
             view_model_.ResetStats();
@@ -2543,12 +2550,20 @@ void RecordPage::initCoordinator() {
         });
 
     // The engine may only duplicate an output this process is not already
-    // duplicating: hand the hub's lease over right before the recording thread
-    // starts (blocking; fires after every validation, so a rejected start never
-    // touches the idle feed). Returned at Ready/Completed/Failed alongside the
-    // pushed-source revert (resumeHubPreviewIfHeld).
+    // duplicating: hand the hub's lease over right before the engine opens its
+    // capture (blocking; fires after every validation and cancel checkpoint, so a
+    // rejected or cancelled start never touches the idle feed). Returned at
+    // Ready/Completed/Failed alongside the pushed-source revert (resumeHubPreviewIfHeld).
+    //
+    // Thread-safety: this hook is now invoked on the coordinator's preparation
+    // worker thread, not the UI thread. dxgi_capture_hub_ is created once during
+    // init and only read here, so the pointer read is safe. RequestEngineLease() is
+    // internally thread-safe (posts a command to the hub's own worker and waits on a
+    // condition variable) and is a cheap idempotent no-op when nothing is being
+    // duplicated — so it needs no UI-thread-only hub_preview_active_ gate, which
+    // would be a torn read from this thread anyway.
     coordinator_->SetPreviewCaptureReleaseHook([this]() {
-        if (hub_preview_active_ && dxgi_capture_hub_)
+        if (dxgi_capture_hub_)
             dxgi_capture_hub_->RequestEngineLease();
     });
 
@@ -3111,6 +3126,11 @@ void RecordPage::onHotkeyToggle() {
     ensureCoordinatorInit();
     if (isCountdownActive()) {
         cancelCountdown();
+    } else if (view_model_.CanCancelPreparing()) {
+        // Abort the device-setup phase before recording commits. Quiet: no toast,
+        // just a log entry (the coordinator posts Ready). Hotkey is the only cancel
+        // affordance during Preparing — the primary button stays busy/disabled.
+        coordinator_->CancelPreparing();
     } else if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
         onStart();
     } else if (view_model_.CanStop()) {
@@ -4244,6 +4264,7 @@ void RecordPage::updateTransportDock() {
 
     const UiRecordingState s = view_model_.state;
     const bool countdown = (s == UiRecordingState::Countdown);
+    const bool preparing = (s == UiRecordingState::Preparing);
     const bool recording = (s == UiRecordingState::Recording);
     const bool paused = (s == UiRecordingState::Paused);
     const bool stopping = (s == UiRecordingState::Stopping);
@@ -4268,6 +4289,12 @@ void RecordPage::updateTransportDock() {
         // Keep the Recording layout while the session winds down, actions disabled.
         dock_state = TransportDock::State::Recording;
         primary_enabled = false;
+    } else if (preparing) {
+        // Device setup off-thread (display facts, webcam, capture lease). Keep the
+        // Ready layout with the primary busy/disabled — the only cancel affordance is
+        // the record hotkey (no dedicated button); the timer shows "Preparing…".
+        dock_state = TransportDock::State::Ready;
+        primary_enabled = false;
     } else if (saving) {
         // ADR-0014: remux in progress — keep Ready layout, all actions disabled.
         // v10: no separate Saving dock state; timer shows "Saving…" while blocked.
@@ -4289,11 +4316,13 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setCountdownSeconds(selected_countdown_seconds_);
 
     const bool recording_for_timer = recording || paused || stopping;
-    transport_dock_->setTimerText(saving ? QStringLiteral("Saving…")
-                                         : buildTimerText(recording_for_timer || countdown));
+    transport_dock_->setTimerText(saving      ? QStringLiteral("Saving…")
+                                  : preparing ? QStringLiteral("Preparing…")
+                                              : buildTimerText(recording_for_timer || countdown));
     transport_dock_->setTimerRole(recording             ? QStringLiteral("recording")
                                   : paused              ? QStringLiteral("paused")
                                   : countdown           ? QStringLiteral("countdown")
+                                  : preparing           ? QStringLiteral("preparing")
                                   : saving              ? QStringLiteral("saving")
                                   : completed_success   ? QStringLiteral("done")
                                   : (blocked || failed) ? QStringLiteral("blocked")
