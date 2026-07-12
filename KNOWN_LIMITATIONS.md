@@ -184,7 +184,11 @@ Invalid combinations are not offered.
   before each recording starts. If a session is interrupted, the next launch
   shows a recovery overlay with three actions per candidate (ADR-0015):
   - **Finish** — saves the recording as originally configured (MKV rename/repair
-    or MP4 remux, honouring the manifest snapshot; no user format choice).
+    or MP4 remux, honouring the manifest snapshot; no user format choice). The
+    remux is written to a temporary file and atomically renamed onto the target
+    path only on success, so an interrupted earlier remux never leaves a corrupt
+    half-file where the finished recording belongs — recovery overwrites that
+    stale partial in place rather than saving the good file under a different name.
   - **Continue** — shown only for non-finalized (true-crash) artefacts. Arms the
     coordinator in a paused state; Resume starts the next recording slice aligned
     with the per-segment machinery. The 1–2 s data loss at the crash boundary is
