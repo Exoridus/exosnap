@@ -2603,6 +2603,7 @@ void RecordPage::initCoordinator() {
                 // Reset post-flight report card stats for the new recording.
                 peak_av_drift_ms_ = 0.0;
                 av_drift_ever_available_ = false;
+                clock_slaving_ever_active_ = false;
                 last_pipeline_health_ = recorder_core::PipelineHealth::Idle;
                 last_completed_snapshot_ = {};
             }
@@ -2675,6 +2676,11 @@ void RecordPage::initCoordinator() {
         if (snapshot.peak_av_drift_availability == recorder_core::MetricAvailability::Available) {
             av_drift_ever_available_ = true;
             peak_av_drift_ms_ = snapshot.peak_av_drift_ms;
+        }
+        // Latch whether clock slaving was ever active this session, so the report
+        // card can note the correction even if it has disengaged by the final frame.
+        if (snapshot.clock_slaving_active) {
+            clock_slaving_ever_active_ = true;
         }
         if (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording) {
             last_pipeline_health_ = snapshot.health;
@@ -4807,10 +4813,18 @@ void RecordPage::updateReportCard() {
         drop_label->setVisible(true);
     }
 
-    // Peak A/V drift
+    // Peak A/V drift (the residual that landed in the file). When clock slaving
+    // engaged this session, note how much it corrected (|raw - residual| from the
+    // final snapshot): one problem, one line, no second warning.
     if (drift_label) {
         if (av_drift_ever_available_) {
-            drift_label->setText(QStringLiteral("Peak A/V drift: \xc2\xb1%1 ms").arg(peak_av_drift_ms_, 0, 'f', 0));
+            QString text = QStringLiteral("Peak A/V drift: \xc2\xb1%1 ms").arg(peak_av_drift_ms_, 0, 'f', 0);
+            if (clock_slaving_ever_active_) {
+                const double a = snap.av_drift_raw_ms - snap.av_drift_ms;
+                const double corrected = a < 0.0 ? -a : a;
+                text += QStringLiteral(" \xc2\xb7 clock slaving corrected %1 ms").arg(corrected, 0, 'f', 0);
+            }
+            drift_label->setText(text);
         } else {
             drift_label->setText(QStringLiteral("A/V drift: unavailable"));
         }

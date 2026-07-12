@@ -1898,6 +1898,15 @@ TEST_F(ConfigPageTest, S5_LimiterControls_StillFindableByObjectName) {
         << "limiterCeilingSpin must still exist after S5 reparenting";
 }
 
+TEST_F(ConfigPageTest, ClockSlavingCheck_ExistsInExpertAudio) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
+
+    auto* check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("clockSlavingCheck"));
+    ASSERT_NE(check, nullptr) << "clockSlavingCheck must exist in the audio-expert section";
+    EXPECT_TRUE(check->isChecked()) << "clock slaving defaults on";
+}
+
 TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable

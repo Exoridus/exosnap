@@ -78,6 +78,13 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     uint32_t CaptureSourceCount() const override;
     uint32_t DegradedSourceCount() const override;
 
+    // Single-source pass-through of the inner device timing (H-3). A one-source
+    // mixer is the gain-wrapped single track (a MIC row with gain != 1); it has
+    // exactly one device clock, so it forwards the inner's timing and the honest
+    // A/V drift metric (and clock slaving) cover it. A multi-source merge mixes
+    // several device clocks and stays Unavailable (returns false).
+    bool LastBufferDeviceTiming(AudioDeviceTiming& out_timing) const override;
+
     void Shutdown() override;
 
   private:
@@ -102,6 +109,14 @@ class MixedAudioSrc final : public IAudioCaptureSource {
     // This replaces the old silent-swallow that made a dead inner vanish without
     // trace. Sized to sources_ in Init.
     std::vector<bool> source_degraded_;
+
+    // Single-source only (H-3): gap frames pulled from the one inner packet but
+    // not yet attached to an emitted buffer. The pump records the inner packet's
+    // gap; the next AcquireBuffer that emits frames carries it (scaled to 48 kHz)
+    // so the audio thread's gap-fill keeps the sample timeline continuous — a
+    // gain-wrapped single track no longer silently drops measured gaps. Always 0
+    // for multi-source merges.
+    uint32_t single_source_pending_gap_frames_ = 0;
 
     std::vector<float> mix_buffer_;     // emitted block: N * kOutputChannels floats
     std::vector<float> scratch_buffer_; // per-source conversion scratch

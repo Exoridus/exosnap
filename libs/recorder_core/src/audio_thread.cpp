@@ -2,6 +2,7 @@
 
 #include "audio_clock_drift.h"
 #include "audio_device_loss_policy.h"
+#include "clock_slaving.h"
 #include "codec_private.h"
 #include "fdk_aac_encoder.h"
 #include "flac_audio_encoder.h"
@@ -11,11 +12,15 @@
 #include "recorder_core/audio_meter.h"
 #include "session_internal.h"
 
+#include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
+#include <span>
 #include <string>
 
 namespace recorder_core {
@@ -182,8 +187,11 @@ void AudioThread::Run() {
 
         // Wrap source_ so OutputFormatAudioSrc::Init calls the real source's Init
         // and configures swresample if needed. After this, source_ reports the
-        // target sample_rate/channels.
-        source_ = std::make_unique<OutputFormatAudioSrc>(std::move(source_), effective_rate, effective_channels);
+        // target sample_rate/channels. Keep a typed view so the clock-slaving
+        // controller can drive compensation on it.
+        auto wrapper = std::make_unique<OutputFormatAudioSrc>(std::move(source_), effective_rate, effective_channels);
+        output_format_src_ = wrapper.get();
+        source_ = std::move(wrapper);
     }
 
     {
@@ -328,6 +336,16 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // those into a smoothed audio-clock-vs-QPC drift (audio_clock_drift.h).
     AudioClockDriftEstimator drift_estimator;
 
+    // A/V clock slaving (H-3): a P-controller that, once drift crosses the engage
+    // threshold, drives the decorator's swr rate compensation to pull the audio
+    // output timeline back onto the QPC axis. Gated by config; when off the
+    // controller is never fed, so the default 48 kHz/stereo path stays a
+    // byte-identical passthrough.
+    ClockSlavingController clock_controller;
+    const bool clock_slaving_enabled = m_state.config.audio_clock_slaving_enabled;
+    bool clock_slaving_logged_engage = false;
+    bool clock_slaving_logged_saturation = false;
+
     // --- Device hot-swap / source-degradation state (ADR 0046) ---
     // bare_degraded: the sole (non-merged) source lost its endpoint; the thread
     // owns its silence + reactivation. Merged tracks self-report per-inner health
@@ -446,6 +464,12 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     // zero; drop the stale drift baseline so the reacquired
                     // timeline is not read as a huge drift.
                     drift_estimator.Reset();
+                    // Clock slaving restarts with the reacquired stream (the
+                    // decorator reset its compensation in Reinit); re-engage from a
+                    // clean baseline rather than resume against stale accounting.
+                    clock_controller = ClockSlavingController{};
+                    clock_slaving_logged_engage = false;
+                    clock_slaving_logged_saturation = false;
                     lastAccountedQpcNs = QpcNowNs();
                     m_state.diagnostics.OnAudioSourceHealth(track_id_, 0, 1);
                 }
@@ -520,7 +544,46 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 AudioDeviceTiming timing{};
                 if (source_->LastBufferDeviceTiming(timing)) {
                     drift_estimator.AddObservation(timing.device_position_ns, timing.qpc_position_ns);
-                    m_state.diagnostics.OnAudioClockDrift(track_id_, drift_estimator.DriftMs());
+                    const double raw_drift = drift_estimator.DriftMs();
+                    double residual = raw_drift; // no slaving => residual is the raw drift
+                    double applied_ppm = 0.0;
+                    if (clock_slaving_enabled && output_format_src_ != nullptr) {
+                        const double applied = output_format_src_->AppliedCompensationMs();
+                        if (clock_controller.Update(raw_drift, applied, timing.qpc_position_ns)) {
+                            output_format_src_->SetCompensationPpm(clock_controller.Ppm());
+                            if (!clock_slaving_logged_engage) {
+                                clock_slaving_logged_engage = true;
+                                logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                                         {"drift_ms", std::to_string(raw_drift)}};
+                                logging::log(logging::LogLevel::Info, "audio.clock_slaving", "clock slaving engaged",
+                                             std::span<const logging::LogField>(f, std::size(f)));
+                            } else {
+                                logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                                         {"ppm", std::to_string(clock_controller.Ppm())}};
+                                logging::log(logging::LogLevel::Debug, "audio.clock_slaving", "compensation updated",
+                                             std::span<const logging::LogField>(f, std::size(f)));
+                            }
+                        }
+                        residual = clock_controller.ResidualMs();
+                        applied_ppm = clock_controller.Ppm();
+                        // Saturation warn (once): the rate is pinned at the cap and
+                        // the residual still exceeds the cap-case bound — drift beyond
+                        // the correction envelope (defective hardware/driver). Calm,
+                        // not alarmist: a log line, no toast, no blocker.
+                        if (!clock_slaving_logged_saturation &&
+                            std::abs(applied_ppm) >= ClockSlavingController::kMaxPpm &&
+                            std::abs(residual) >
+                                ClockSlavingController::kMaxPpm * ClockSlavingController::kControlHorizonS / 1000.0) {
+                            clock_slaving_logged_saturation = true;
+                            logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                                     {"residual_ms", std::to_string(residual)},
+                                                     {"ppm", std::to_string(applied_ppm)}};
+                            logging::log(logging::LogLevel::Warn, "audio.clock_slaving",
+                                         "clock slaving saturated; drift exceeds correction envelope",
+                                         std::span<const logging::LogField>(f, std::size(f)));
+                        }
+                    }
+                    m_state.diagnostics.OnAudioClockSlaving(track_id_, raw_drift, residual, applied_ppm);
                 }
             }
 

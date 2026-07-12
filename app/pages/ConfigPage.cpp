@@ -3413,6 +3413,10 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
             const QSignalBlocker b(limiter_check_);
             limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
         }
+        if (clock_slaving_check_) {
+            const QSignalBlocker b(clock_slaving_check_);
+            clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
+        }
         if (limiter_ceiling_spin_) {
             const QSignalBlocker b(limiter_ceiling_spin_);
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
@@ -4104,6 +4108,22 @@ void ConfigPage::buildAudioExpertSection() {
             limiter_popover_row->popoverContentLayout()->addWidget(ceiling_row);
         }
 
+        // A/V clock slaving (H-3) — expert toggle, default on. A single
+        // enable/disable control (no sub-parameters: the controller constants are
+        // fixed, there is no meaningful user choice between thresholds).
+        {
+            clock_slaving_check_ = new ui::widgets::ExoCheckBox(QString(), audio_expert_section_);
+            clock_slaving_check_->setObjectName(QStringLiteral("clockSlavingCheck"));
+            clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
+
+            auto* clock_slaving_row =
+                new ui::widgets::SettingsPopoverRow(QStringLiteral("Audio clock slaving"), audio_expert_section_);
+            clock_slaving_row->setInfoHint(ui::hints::kClockSlaving);
+            clock_slaving_row->setPrimaryControl(clock_slaving_check_);
+            clock_slaving_row->setProperty("settingsRow", true);
+            aes_layout->addWidget(clock_slaving_row);
+        }
+
         // Microphone post-processing (Audio v2 — 0.6.0) — S5: 4 stage rows collapsed
         // into a single SettingsPopoverRow. HPF → Gate → AGC → RNNoise order preserved.
         // Constructed here but inserted at mic_post_insert_index so it appears visually
@@ -4308,6 +4328,10 @@ void ConfigPage::buildAudioExpertSection() {
     });
     connect(limiter_ceiling_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
         audio_ui_state_.limiter_ceiling_db = static_cast<float>(db);
+        emitCurrentAudioSettings();
+    });
+    connect(clock_slaving_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.clock_slaving_enabled = on;
         emitCurrentAudioSettings();
     });
     connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
@@ -5236,6 +5260,10 @@ void ConfigPage::updateExpertModeVisibility() {
         if (limiter_check_) {
             const QSignalBlocker b(limiter_check_);
             limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+        }
+        if (clock_slaving_check_) {
+            const QSignalBlocker b(clock_slaving_check_);
+            clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
         }
         if (limiter_ceiling_spin_) {
             const QSignalBlocker b(limiter_ceiling_spin_);

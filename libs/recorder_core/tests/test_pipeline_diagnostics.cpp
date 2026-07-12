@@ -788,7 +788,7 @@ TEST(PipelineDiagnostics, AvDriftReportsMeasuredClockDrift) {
     agg.Reset(1, MakeConfig());
     // The audio worker reports its smoothed device-clock-vs-QPC estimate.
     // Positive = audio leads video.
-    agg.OnAudioClockDrift(0, 2.5);
+    agg.OnAudioClockSlaving(0, 2.5, 2.5, 0.0);
     const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
     EXPECT_DOUBLE_EQ(s.av_drift_ms, 2.5);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
@@ -797,8 +797,8 @@ TEST(PipelineDiagnostics, AvDriftReportsMeasuredClockDrift) {
 TEST(PipelineDiagnostics, AvDriftLatestEstimatePerTrackWins) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnAudioClockDrift(0, 2.5);
-    agg.OnAudioClockDrift(0, 3.0);
+    agg.OnAudioClockSlaving(0, 2.5, 2.5, 0.0);
+    agg.OnAudioClockSlaving(0, 3.0, 3.0, 0.0);
     const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
     EXPECT_DOUBLE_EQ(s.av_drift_ms, 3.0);
 }
@@ -808,8 +808,8 @@ TEST(PipelineDiagnostics, AvDriftLargestMagnitudeAcrossTracks_Signed) {
     agg.Reset(1, MakeConfig());
     // Two device-backed tracks (e.g. SYS render endpoint + MIC capture
     // endpoint) can drift independently; surface the worst one, signed.
-    agg.OnAudioClockDrift(0, 2.0);
-    agg.OnAudioClockDrift(1, -5.0);
+    agg.OnAudioClockSlaving(0, 2.0, 2.0, 0.0);
+    agg.OnAudioClockSlaving(1, -5.0, -5.0, 0.0);
     const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
     EXPECT_DOUBLE_EQ(s.av_drift_ms, -5.0);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
@@ -818,7 +818,7 @@ TEST(PipelineDiagnostics, AvDriftLargestMagnitudeAcrossTracks_Signed) {
 TEST(PipelineDiagnostics, AvDriftOutOfRangeTrackIgnored) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnAudioClockDrift(99, 42.0);
+    agg.OnAudioClockSlaving(99, 42.0, 42.0, 0.0);
     const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
     EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
@@ -827,12 +827,54 @@ TEST(PipelineDiagnostics, AvDriftOutOfRangeTrackIgnored) {
 TEST(PipelineDiagnostics, AvDriftResetClearsState) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnAudioClockDrift(0, 4.0);
+    agg.OnAudioClockSlaving(0, 4.0, 4.0, 0.0);
     // After Reset the per-track estimates must clear.
     agg.Reset(2, MakeConfig());
     const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
     EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
     EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Clock slaving: residual is surfaced as av_drift_ms; raw drift, ppm and the
+// active flag ride alongside.
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, ClockSlaving_SurfacesResidualWithRawAndPpm) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // Raw drift 20 ms, compensated down to a 6 ms residual at 100 ppm.
+    agg.OnAudioClockSlaving(0, 20.0, 6.0, 100.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 6.0);      // the file's real misalignment
+    EXPECT_DOUBLE_EQ(s.av_drift_raw_ms, 20.0); // the uncorrected measured drift
+    EXPECT_DOUBLE_EQ(s.clock_slaving_ppm, 100.0);
+    EXPECT_TRUE(s.clock_slaving_active);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
+}
+
+TEST(PipelineDiagnostics, ClockSlaving_InactiveWhenNotEngaged) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAudioClockSlaving(0, 3.0, 3.0, 0.0); // raw == residual, no ppm
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_FALSE(s.clock_slaving_active);
+    EXPECT_DOUBLE_EQ(s.clock_slaving_ppm, 0.0);
+}
+
+TEST(PipelineDiagnostics, ClockSlaving_SelectsLargestResidualTrack) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // Track 0 has a big raw drift but is well-corrected (small residual); track 1
+    // has a smaller raw drift but a larger residual. The larger residual wins,
+    // and its raw + ppm come with it.
+    agg.OnAudioClockSlaving(0, 40.0, 4.0, 480.0);
+    agg.OnAudioClockSlaving(1, 12.0, 9.0, 120.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 9.0);
+    EXPECT_DOUBLE_EQ(s.av_drift_raw_ms, 12.0);
+    EXPECT_DOUBLE_EQ(s.clock_slaving_ppm, 120.0);
+    EXPECT_TRUE(s.clock_slaving_active);
 }
 
 // ---------------------------------------------------------------------------
@@ -956,18 +998,18 @@ TEST(PeakAvDrift, RunningMaximumOfMagnitudeIsMonotonic) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
 
-    agg.OnAudioClockDrift(0, 3.0);
+    agg.OnAudioClockSlaving(0, 3.0, 3.0, 0.0);
     auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
     EXPECT_EQ(s.peak_av_drift_availability, MetricAvailability::Available);
     EXPECT_DOUBLE_EQ(s.peak_av_drift_ms, 3.0);
 
     // A larger-magnitude (negative) drift raises the peak.
-    agg.OnAudioClockDrift(0, -7.0);
+    agg.OnAudioClockSlaving(0, -7.0, -7.0, 0.0);
     s = agg.BuildSnapshot(At(100), MakeStats(), DiagnosticsLifecycle::Recording, 0.6);
     EXPECT_DOUBLE_EQ(s.peak_av_drift_ms, 7.0);
 
     // A smaller drift does not lower the peak.
-    agg.OnAudioClockDrift(0, 1.0);
+    agg.OnAudioClockSlaving(0, 1.0, 1.0, 0.0);
     s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 0.7);
     EXPECT_DOUBLE_EQ(s.peak_av_drift_ms, 7.0);
 

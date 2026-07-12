@@ -286,11 +286,13 @@ class PipelineDiagnosticsAggregator {
     void OnMuxFailure() noexcept;
     void OnReorderWindow(uint32_t packets, uint32_t peak_packets, uint64_t bytes, uint64_t peak_bytes) noexcept;
     void SetSplitPending(bool pending) noexcept;
-    // Measured A/V clock drift for one audio track (AudioThread, smoothed by
-    // AudioClockDriftEstimator from WASAPI device-position/QPC pairs). Positive
-    // = audio leads video. Tracks without an attributable device clock (merged
-    // sources) never report.
-    void OnAudioClockDrift(uint32_t track_id, double drift_ms) noexcept;
+    // A/V clock slaving state for one audio track (AudioThread). raw_drift_ms is
+    // the measured device-vs-QPC drift (AudioClockDriftEstimator; positive =
+    // audio leads video); residual_ms is what remains after the applied
+    // compensation (equals raw before slaving engages); applied_ppm is the
+    // current compensation rate (0 = not compensating). Tracks without an
+    // attributable device clock (multi-source merges) never report.
+    void OnAudioClockSlaving(uint32_t track_id, double raw_drift_ms, double residual_ms, double applied_ppm) noexcept;
     // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
     void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
@@ -406,14 +408,16 @@ class PipelineDiagnosticsAggregator {
     uint64_t last_dropped_total_ = 0;
     uint64_t last_audio_disc_ = 0;
 
-    // A/V clock drift: latest smoothed estimate per audio track (audio device
-    // clock vs the QPC timeline video is paced on; see audio_clock_drift.h).
-    // Array size mirrors CodecPrivateData::kMaxAudioTracks. Protected by mutex_.
-    std::array<double, 3> audio_clock_drift_ms_{};
-    std::array<bool, 3> audio_clock_drift_valid_{};
+    // A/V clock slaving: latest per-track raw drift, residual (raw minus applied
+    // compensation) and compensation rate (ppm). Array size mirrors
+    // CodecPrivateData::kMaxAudioTracks. Protected by mutex_.
+    std::array<double, 3> audio_clock_raw_ms_{};
+    std::array<double, 3> audio_clock_residual_ms_{};
+    std::array<double, 3> audio_clock_ppm_{};
+    std::array<bool, 3> audio_clock_valid_{};
 
-    // Peak |av_drift_ms| this session (running maximum). Single source of truth for
-    // both the live UI and the session report.
+    // Peak |av_drift_ms| (residual) this session (running maximum). Single source
+    // of truth for both the live UI and the session report.
     double peak_av_drift_ms_ = 0.0;
     bool peak_av_drift_valid_ = false;
 

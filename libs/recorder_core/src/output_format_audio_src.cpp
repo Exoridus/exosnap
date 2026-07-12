@@ -11,6 +11,7 @@ extern "C" {
 #include <libswresample/swresample.h>
 }
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -66,30 +67,46 @@ bool OutputFormatAudioSrc::Reinit(std::string& out_error) {
         swr_free(&swr_);
         swr_ = nullptr;
     }
+    // Clock slaving resets with the reacquired stream: the fresh device restarts
+    // its position near zero and the drift estimator resets in lockstep
+    // (audio_thread), so the controller must re-engage from a clean baseline
+    // rather than resume against stale frame accounting.
+    compensation_engaged_ = false;
+    compensation_ppm_ = 0.0;
+    in_total_ = 0;
+    out_total_ = 0;
     return ConfigureConversion(out_error);
 }
 
 bool OutputFormatAudioSrc::ConfigureConversion(std::string& out_error) {
-    const uint32_t inner_rate = inner_->SampleRate();
-    const uint32_t inner_channels = inner_->Channels();
+    inner_rate_ = inner_->SampleRate();
+    inner_channels_ = inner_->Channels();
     inner_format_ = inner_->SampleFormat();
 
-    if (inner_rate == 0 || inner_channels == 0) {
+    if (inner_rate_ == 0 || inner_channels_ == 0) {
         out_error = "OutputFormatAudioSrc: inner source reported invalid rate/channels after Init";
         return false;
     }
 
     // Fast path: if target rate/channels == inner, skip the SwrContext entirely.
     // Even here the inner may be Int16 (e.g. process-loopback capture); the byte
-    // conversion to Float32 happens in AcquireBuffer.
-    if (target_sample_rate_ == inner_rate && target_channels_ == inner_channels) {
+    // conversion to Float32 happens in AcquireBuffer. Clock slaving can later
+    // leave this passthrough lazily (SetCompensationPpm) once real drift engages.
+    if (target_sample_rate_ == inner_rate_ && target_channels_ == inner_channels_) {
         passthrough_ = true;
         initialized_ = true;
         return true;
     }
 
     passthrough_ = false;
+    if (!BuildSwrContext(out_error)) {
+        return false;
+    }
+    initialized_ = true;
+    return true;
+}
 
+bool OutputFormatAudioSrc::BuildSwrContext(std::string& out_error) {
     // Input sample format for the resampler follows the inner source. The
     // sources feeding this decorator deliver either Float32 (mix bus, WASAPI
     // loopback, mic DSP) or Int16 (process loopback, some mic endpoints).
@@ -99,15 +116,17 @@ bool OutputFormatAudioSrc::ConfigureConversion(std::string& out_error) {
     // Build channel layouts using the modern AVChannelLayout API (avutil-60).
     AVChannelLayout in_layout = {};
     AVChannelLayout out_layout = {};
-    av_channel_layout_default(&in_layout, static_cast<int>(inner_channels));
+    av_channel_layout_default(&in_layout, static_cast<int>(inner_channels_));
     av_channel_layout_default(&out_layout, static_cast<int>(target_channels_));
 
     // swr_alloc_set_opts2: allocates and configures the context in one call.
     // In  = inner format (Int16 or Float32 interleaved, per in_sample_fmt).
     // Out = Float32 interleaved (AV_SAMPLE_FMT_FLT). The resampler up-converts
     // Int16 inputs to Float32; deeper bit-depth conversion is the encoder's job.
+    // When inner and target rates are equal (the lazy clock-slaving engage) this
+    // is an identity resampler; swr_set_compensation still nudges its rate.
     int ret = swr_alloc_set_opts2(&swr_, &out_layout, AV_SAMPLE_FMT_FLT, static_cast<int>(target_sample_rate_),
-                                  &in_layout, in_sample_fmt, static_cast<int>(inner_rate), 0, nullptr);
+                                  &in_layout, in_sample_fmt, static_cast<int>(inner_rate_), 0, nullptr);
 
     av_channel_layout_uninit(&in_layout);
     av_channel_layout_uninit(&out_layout);
@@ -122,11 +141,11 @@ bool OutputFormatAudioSrc::ConfigureConversion(std::string& out_error) {
     // bus that feeds us is already peak-limited, so an averaging downmix (L+R)/2
     // cannot clip on correlated full-scale content, and mono->stereo duplication
     // is unity. Must be set after configure, before swr_init.
-    if (inner_channels != target_channels_) {
-        if (inner_channels == 2 && target_channels_ == 1) {
+    if (inner_channels_ != target_channels_) {
+        if (inner_channels_ == 2 && target_channels_ == 1) {
             const double matrix[2] = {0.5, 0.5}; // out0 = 0.5*in0 + 0.5*in1
             swr_set_matrix(swr_, matrix, 2);
-        } else if (inner_channels == 1 && target_channels_ == 2) {
+        } else if (inner_channels_ == 1 && target_channels_ == 2) {
             const double matrix[2] = {1.0, 1.0}; // out0 = in0, out1 = in0
             swr_set_matrix(swr_, matrix, 1);
         }
@@ -138,9 +157,44 @@ bool OutputFormatAudioSrc::ConfigureConversion(std::string& out_error) {
         out_error = "OutputFormatAudioSrc: swr_init failed";
         return false;
     }
-
-    initialized_ = true;
     return true;
+}
+
+void OutputFormatAudioSrc::SetCompensationPpm(double ppm) {
+    compensation_ppm_ = ppm;
+    if (ppm != 0.0 && !compensation_engaged_) {
+        // First non-zero command: leave the passthrough permanently. Build a
+        // lazy inner->target context if we do not have one yet (the default
+        // 48 k/stereo passthrough). If the build fails, stay in passthrough —
+        // degrade to "no compensation" rather than break the recording.
+        if (passthrough_ || swr_ == nullptr) {
+            std::string err;
+            if (BuildSwrContext(err)) {
+                passthrough_ = false;
+                in_total_ = 0;
+                out_total_ = 0;
+                compensation_engaged_ = true;
+            } else {
+                compensation_ppm_ = 0.0; // build failed: remain a no-op
+            }
+        } else {
+            // Already on the resample path (44.1 k / 96 k / mono target).
+            compensation_engaged_ = true;
+        }
+    }
+}
+
+double OutputFormatAudioSrc::AppliedCompensationMs() const {
+    if ((in_total_ == 0 && out_total_ == 0) || inner_rate_ == 0 || target_sample_rate_ == 0) {
+        return 0.0;
+    }
+    // A = out_seconds - in_seconds, in ms. int64 numerator (> 60 years at 48 kHz
+    // without overflow), converted to a double millisecond value. Positive =
+    // output timeline stretched (events later) — corrects a positive drift.
+    const int64_t num =
+        out_total_ * static_cast<int64_t>(inner_rate_) - in_total_ * static_cast<int64_t>(target_sample_rate_);
+    return static_cast<double>(num) * 1000.0 /
+           (static_cast<double>(inner_rate_) * static_cast<double>(target_sample_rate_));
 }
 
 uint32_t OutputFormatAudioSrc::PendingFrameCount() {
@@ -215,6 +269,18 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         in_ptr = reinterpret_cast<const uint8_t*>(silence_buf.data());
     }
 
+    // Re-arm the clock-slaving compensation window before every convert while a
+    // compensation has ever engaged. distance = 10 * target_rate gives 0.1 ppm
+    // resolution; the window never expires because we re-arm each acquire. A ppm
+    // of 0 arms a zero delta, cancelling cleanly while keeping the context.
+    // Sign contract: p > 0 -> positive sample_delta -> more output frames per
+    // input (the swr characterization test pins this; invert here if it fails).
+    if (compensation_engaged_ && swr_ != nullptr) {
+        const int distance = 10 * static_cast<int>(target_sample_rate_);
+        const int sample_delta = static_cast<int>(std::lround(compensation_ppm_ * 1e-6 * distance));
+        swr_set_compensation(swr_, sample_delta, distance);
+    }
+
     uint8_t* out_ptr = reinterpret_cast<uint8_t*>(resample_buf_.data());
 
     const int produced = swr_convert(swr_, &out_ptr, max_out_frames, &in_ptr, in_frames);
@@ -226,6 +292,11 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
         out_buf = src_buf;
         return true;
     }
+
+    // Real frame accounting for the applied-compensation metric (A). Counts on
+    // the resample path only; passthrough leaves both axes identical (A == 0).
+    in_total_ += in_frames;
+    out_total_ += produced;
 
     exposed_buf_.bytes = reinterpret_cast<const uint8_t*>(resample_buf_.data());
     exposed_buf_.num_frames = static_cast<uint32_t>(produced);
@@ -291,6 +362,10 @@ void OutputFormatAudioSrc::Shutdown() {
     }
     initialized_ = false;
     passthrough_ = false;
+    compensation_engaged_ = false;
+    compensation_ppm_ = 0.0;
+    in_total_ = 0;
+    out_total_ = 0;
 }
 
 } // namespace recorder_core

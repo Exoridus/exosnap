@@ -1081,6 +1081,16 @@ exosnap_add_gtest(
 )
 target_include_directories(test_audio_clock_drift PRIVATE src)
 
+# A/V clock slaving: the pure P-controller that pulls the audio output timeline
+# onto the QPC video axis once measured drift crosses the engage threshold.
+exosnap_add_gtest(
+    NAME test_clock_slaving
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_clock_slaving.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_clock_slaving PRIVATE src)
+
 # test_mp4_remux_pipeline_flow: pure-logic tests for DeriveTransientMkvPath
 # and codec-container gating rules (ADR-0014).  No FFmpeg runtime needed.
 exosnap_add_gtest(

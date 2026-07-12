@@ -373,6 +373,8 @@ TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
     // Limiter keys also omitted → enabled / 0.0 dBFS defaults.
     EXPECT_TRUE(state.user_presets.front().config.audio.limiter_enabled);
     EXPECT_FLOAT_EQ(state.user_presets.front().config.audio.limiter_ceiling_db, 0.0f);
+    // Clock-slaving key also omitted → default on.
+    EXPECT_TRUE(state.user_presets.front().config.audio.clock_slaving_enabled);
     // Mic HPF keys also omitted → disabled / 80 Hz defaults.
     EXPECT_FALSE(state.user_presets.front().config.audio.mic_hpf_enabled);
     EXPECT_FLOAT_EQ(state.user_presets.front().config.audio.mic_hpf_cutoff_hz, 80.0f);
@@ -449,6 +451,37 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Limiter) {
     const auto& loaded = state.user_presets.front().config.audio;
     EXPECT_FALSE(loaded.limiter_enabled);
     EXPECT_NEAR(loaded.limiter_ceiling_db, -3.0f, 0.01f);
+    QFile::remove(path);
+}
+
+// ===========================================================================
+// A/V clock slaving (H-3)
+// ===========================================================================
+
+TEST(AudioEncodingPreset, DefaultPreset_ClockSlaving_EnabledByDefault) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_TRUE(p.config.audio.clock_slaving_enabled);
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentClockSlaving_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.clock_slaving_enabled = !a.audio.clock_slaving_enabled;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_ClockSlaving) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId();
+    p.config.audio.clock_slaving_enabled = false; // expert opt-out for bit-exact capture
+    store.Save({p}, p.id, p.config);
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.user_presets.empty());
+    EXPECT_FALSE(state.user_presets.front().config.audio.clock_slaving_enabled);
     QFile::remove(path);
 }
 

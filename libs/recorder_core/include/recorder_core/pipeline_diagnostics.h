@@ -306,22 +306,38 @@ struct RecordingDiagnosticsSnapshot {
     DiskDiagnostics disk;
     SplitDiagnostics split;
 
-    // A/V synchronization drift, measured as clock drift: the audio device
-    // clock (WASAPI device-position/QPC pairs reported with every capture
-    // packet) against the QPC timeline video frames are paced on, normalized
-    // at capture start and smoothed over a rolling window (~1 s of packets).
-    // Positive = audio leads video; negative = video leads audio. Unavailable
-    // until a device-backed audio track has reported timing; merged tracks mix
-    // several device clocks and do not report. Note this is deliberately NOT
-    // the difference of the two pipelines' most recent output PTS — that value
-    // only measures encoder/queue latency and can never see device-clock drift.
+    // A/V synchronization drift as it actually lands in the file — the RESIDUAL
+    // after clock slaving. The audio device clock (WASAPI device-position/QPC
+    // pairs) is measured against the QPC timeline video frames are paced on
+    // (raw drift, av_drift_raw_ms); clock slaving then pulls the audio output
+    // timeline back onto that axis, and this field is what remains (raw drift
+    // minus the applied compensation). Positive = audio leads video. Unavailable
+    // until a device-backed audio track has reported timing; a multi-source
+    // merge mixes several device clocks and does not report. Deliberately NOT the
+    // difference of the two pipelines' most recent output PTS — that only sees
+    // encoder/queue latency. Division of labour: av_drift_ms / av_drift_raw_ms
+    // are the clocks; duration_skew_ms below is encoder starvation.
     double av_drift_ms = 0.0;
     MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
 
-    // Peak |av_drift_ms| observed this session (running maximum of the magnitude).
-    // Accumulated in the engine aggregator so the live UI and the on-disk session
-    // report read one authoritative value rather than each maintaining its own.
-    // Unavailable until av_drift has been measured at least once.
+    // Raw measured device-clock-vs-QPC drift of the same track av_drift_ms is
+    // taken from (before clock-slaving compensation). Equals av_drift_ms when
+    // slaving has not engaged; diverges from it as the controller corrects.
+    double av_drift_raw_ms = 0.0;
+
+    // Current clock-slaving compensation rate of that same track, in ppm. 0.0 =
+    // not compensating (below the engage threshold, or between quantized steps).
+    double clock_slaving_ppm = 0.0;
+
+    // True while any audio track's clock slaving has engaged (is actively pulling
+    // its output timeline onto the QPC axis). Informational, not an alarm.
+    bool clock_slaving_active = false;
+
+    // Peak |av_drift_ms| observed this session (running maximum of the residual
+    // magnitude). Accumulated in the engine aggregator so the live UI and the
+    // on-disk session report read one authoritative value rather than each
+    // maintaining its own. Unavailable until av_drift has been measured at least
+    // once.
     double peak_av_drift_ms = 0.0;
     MetricAvailability peak_av_drift_availability = MetricAvailability::Unavailable;
 

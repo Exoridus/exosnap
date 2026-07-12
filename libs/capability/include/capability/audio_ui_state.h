@@ -58,6 +58,12 @@ struct AudioUiState {
     // Limiter ceiling in dBFS (<= 0). Default 0.0 keeps the previous clamp ceiling.
     float limiter_ceiling_db = 0.0f;
 
+    // A/V clock slaving (H-3). When true (default), audio gently tracks the video
+    // (QPC) clock so long recordings do not drift out of sync; the correction is
+    // sub-audible (<= 0.05 %) and only engages past ~15 ms measured drift. Expert
+    // opt-out for byte-identical archival capture (PCM/FLAC).
+    bool clock_slaving_enabled = true;
+
     // ---------------------------------------------------------------------------
     // Microphone high-pass filter (Audio v2 — 0.6.0)
     // ---------------------------------------------------------------------------
@@ -148,6 +154,9 @@ struct AudioPlanResult {
     // Brickwall limiter (Audio v2 — 0.6.0) — passed through from AudioUiState.
     bool limiter_enabled = true;
     float limiter_ceiling_db = 0.0f;
+
+    // A/V clock slaving (H-3) — passed through from AudioUiState.
+    bool clock_slaving_enabled = true;
 
     // Microphone high-pass filter (Audio v2 — 0.6.0) — passed through from AudioUiState.
     bool mic_hpf_enabled = false;
