@@ -306,6 +306,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/StructuredLog.cpp
     diagnostics/SessionReport.h
     diagnostics/SessionReport.cpp
+    diagnostics/ZipWriter.h
+    diagnostics/ZipWriter.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -773,6 +775,18 @@ exosnap_add_gtest(
 )
 target_include_directories(session_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(session_report_tests PRIVATE ole32.lib shell32.lib)
+
+# ZIP writer over the vendored miniz: round-trips through libs/update's ExtractZip
+# (the reader side) and enforces the reused entry-name safety guard.
+exosnap_add_gtest(
+    NAME zip_writer_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_zip_writer.cpp
+        diagnostics/ZipWriter.cpp
+    LIBRARIES exosnap_miniz exosnap::update Qt6::Core
+)
+target_include_directories(zip_writer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # App log file rotation: size-based rotation, handle-reuse across writes, and
 # Logs-page (in-memory history) compatibility across rotation.
