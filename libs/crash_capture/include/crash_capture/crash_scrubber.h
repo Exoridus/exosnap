@@ -23,10 +23,37 @@
 // This header exposes the scrubbing logic as pure functions so it can be
 // unit-tested without linking sentry-native.
 
+#include <array>
+#include <span>
 #include <string>
 #include <string_view>
 
 namespace exosnap::crash_capture {
+
+// ---------------------------------------------------------------------------
+// Allow-listed tag keys (structured context allowed through before_send).
+// Any tag whose key does NOT appear here is stripped before upload.
+//
+// This is the SINGLE source of truth (ADR 0045): it used to also live as a
+// literal, hand-repeated brace-list inside BeforeSendHook (crash_capture.cpp),
+// which could drift from this array. BeforeSendHook now iterates
+// AllowedTagKeys() instead. The markers below are also parsed by
+// scripts/validate-privacy-allowlist.ps1, which checks that every key here is
+// documented in PRIVACY.md and docs/product-spec.md §14 (and vice versa) — do
+// not reformat the array declaration in a way the script's regex would miss
+// (see that script's header comment for the exact pattern it expects).
+// PRIVACY-ALLOWLIST-BEGIN
+inline constexpr std::array<std::string_view, 10> kAllowedTagKeys = {
+    "os.name",     "os.version",      "gpu.model", "gpu.vendor",  "gpu.driver",
+    "app.version", "encoder_backend", "container", "video_codec", "audio_codec",
+};
+// PRIVACY-ALLOWLIST-END
+
+// Accessor for consumers that want a span rather than the raw array (e.g. the
+// before_send hook, which no longer keeps its own copy of the key list).
+inline constexpr std::span<const std::string_view> AllowedTagKeys() {
+    return kAllowedTagKeys;
+}
 
 // ---------------------------------------------------------------------------
 // Scrub a single string value.

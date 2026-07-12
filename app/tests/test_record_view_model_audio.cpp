@@ -478,6 +478,31 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_Uses
     EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(window_target), "Brave - Claude Design");
 }
 
+// Privacy (ADR 0045): LogSafeTargetLabel is the label used at AppLog callsites
+// (RecordingCoordinator::StartRecording, RecordPage's target-selection/start
+// logs). A window's title must never reach the log, even scrubbed by name --
+// the whole title text is replaced with a stable placeholder. A monitor's
+// description is a technical display identifier, never personal, so it is
+// unaffected and matches the normal (UI-facing) label.
+TEST(RecordViewModelAudioTest, RecordViewModel_LogSafeTargetLabel_WindowTitleReplacedWithPlaceholder) {
+    const recorder_core::CaptureTarget window_target{recorder_core::CaptureTarget::Kind::Window, 13,
+                                                     "Claude Design - Brave"};
+
+    const std::string label = RecordViewModel::LogSafeTargetLabel(window_target);
+    EXPECT_EQ(label, "[window]");
+    EXPECT_EQ(label.find("Claude Design"), std::string::npos);
+    EXPECT_EQ(label.find("Brave"), std::string::npos);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_LogSafeTargetLabel_MonitorDescriptionUnchanged) {
+    const recorder_core::CaptureTarget monitor_target{recorder_core::CaptureTarget::Kind::Monitor, 12,
+                                                      R"(\\.\DISPLAY2)"};
+
+    EXPECT_EQ(RecordViewModel::LogSafeTargetLabel(monitor_target),
+              RecordViewModel::TargetLabelFromCaptureTarget(monitor_target));
+    EXPECT_EQ(RecordViewModel::LogSafeTargetLabel(monitor_target), "Desktop - Display 2");
+}
+
 // ---------------------------------------------------------------------------
 // APP-AUDIO-ROW-FIX-R1 — ApplyTargetKindPreservingAudio: Display → Window
 // ---------------------------------------------------------------------------

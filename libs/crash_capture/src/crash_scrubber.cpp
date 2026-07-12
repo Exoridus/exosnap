@@ -31,14 +31,9 @@
 namespace exosnap::crash_capture {
 
 // ---------------------------------------------------------------------------
-// Allow-listed tag keys (structured context allowed through before_send).
-// Any tag whose key does NOT appear here is stripped before upload.
+// IsAllowedTagKey — kAllowedTagKeys is now the header's single definition
+// (ADR 0045); see crash_scrubber.h for the array itself.
 // ---------------------------------------------------------------------------
-static constexpr std::array<std::string_view, 10> kAllowedTagKeys = {
-    "os.name",     "os.version",      "gpu.model", "gpu.vendor",  "gpu.driver",
-    "app.version", "encoder_backend", "container", "video_codec", "audio_codec",
-};
-
 bool IsAllowedTagKey(std::string_view key) {
     for (auto& allowed : kAllowedTagKeys) {
         if (key == allowed)

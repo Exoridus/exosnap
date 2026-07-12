@@ -261,6 +261,14 @@ QString normalizedTargetLabel(const recorder_core::CaptureTarget& target) {
     return QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target));
 }
 
+// Privacy (ADR 0045): use this instead of normalizedTargetLabel() whenever the
+// label is going into AppLog — a window title must not reach the on-disk log
+// at the source. UI-facing labels (chrome status, target list, notifications)
+// keep using normalizedTargetLabel(), which is unaffected.
+QString logSafeTargetLabel(const recorder_core::CaptureTarget& target) {
+    return QString::fromStdString(RecordViewModel::LogSafeTargetLabel(target));
+}
+
 capability::UserRecorderConfig primaryRecorderConfig() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
@@ -2899,7 +2907,7 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
 
     diagnostics::AppLog::info(QStringLiteral("target"),
                               QStringLiteral("selected: %1 (kind_changed=%2)")
-                                  .arg(normalizedTargetLabel(target))
+                                  .arg(logSafeTargetLabel(target))
                                   .arg(kind_changed ? QStringLiteral("yes") : QStringLiteral("no")));
 
     startPreviewIfIdle();
@@ -3078,7 +3086,7 @@ void RecordPage::startRecordingFlow() {
             return;
         diagnostics::AppLog::info(QStringLiteral("record"),
                                   QStringLiteral("start requested (region crop) target=%1")
-                                      .arg(normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)])));
+                                      .arg(logSafeTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)])));
         doStartRecording(view_model_.region);
         return;
     }
@@ -3088,7 +3096,7 @@ void RecordPage::startRecordingFlow() {
     if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
         return;
 
-    const QString target_label = normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)]);
+    const QString target_label = logSafeTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)]);
     diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("start requested target=%1").arg(target_label));
 
     doStartRecording();

@@ -62,8 +62,11 @@ struct PersistedAppSettings {
     QString update_channel = QStringLiteral("Stable");
 
     // UPDATE-WIRE-R1 (ADR 0012): whether to run a guarded update check on startup.
-    // Default ON.
-    bool check_updates_on_start = true;
+    // Default OFF (ADR 0045): the update check contacts api.github.com, so it must
+    // not run before the user has explicitly opted in — matching the "no network
+    // connections by default" promise in PRIVACY.md / product-spec §13-14. The
+    // user can turn this on from the Settings update card.
+    bool check_updates_on_start = false;
 
     // WHATS-NEW: suppress the one-time post-update "What's new" overlay on future
     // updates. Default false (notices ARE shown). This only affects the post-update

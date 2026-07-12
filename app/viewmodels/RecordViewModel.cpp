@@ -712,6 +712,22 @@ std::string RecordViewModel::TargetLabelFromCaptureTarget(const recorder_core::C
     return WindowLabelFromTarget(target.description);
 }
 
+std::string RecordViewModel::LogSafeTargetLabel(const recorder_core::CaptureTarget& target) {
+    // Privacy (ADR 0045): a window's title (and the app-name/title label built
+    // from it) is potentially sensitive -- document titles, chat partner names,
+    // private tab titles -- and must be neutralized at the LOG SOURCE, not only
+    // when a support bundle is later assembled (the bundle's RedactCaptureTargets
+    // pass stays as a defense-in-depth backstop). Monitor descriptions are
+    // technical display identifiers ("Desktop - Display 1"), never personal, so
+    // they are logged verbatim; only "which window" is replaced with a stable
+    // placeholder, matching the [path]/[user]/[machine] convention already used
+    // by the crash scrubber.
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        return TargetLabelFromCaptureTarget(target);
+    }
+    return "[window]";
+}
+
 FilenameTargetContext RecordViewModel::FilenameContextFromCaptureTarget(const recorder_core::CaptureTarget& target) {
     FilenameTargetContext context;
 

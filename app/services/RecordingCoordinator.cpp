@@ -984,7 +984,12 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     {
         const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
         const QString backend = is_monitor ? QStringLiteral("dxgi_od") : QStringLiteral("wgc");
-        const QString target_desc = QString::fromStdString(target.description);
+        // Privacy (ADR 0045): a window's title must not reach the on-disk log at
+        // the source. Monitor descriptions are technical device identifiers
+        // (never personal) and are logged verbatim; window targets log a stable
+        // placeholder instead of the title.
+        const QString target_desc =
+            is_monitor ? QString::fromStdString(target.description) : QStringLiteral("[window]");
         diagnostics::AppLog::info(QStringLiteral("record"),
                                   QStringLiteral("start backend=%1 target=\"%2\"").arg(backend, target_desc));
     }

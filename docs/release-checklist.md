@@ -52,7 +52,37 @@ hand from the previous shipped version (currently 0.8.1) to the RC build:
       updater surfaces a download failure (amber), the current version is untouched, and Retry resumes
       cleanly once the network is back.
 
-## 5. 0.9 release gate — manual live verifications
+## 5. Privacy review (every release)
+
+ExoSnap promises a telemetry-free product; this is the repeatable step that keeps that promise
+provable rather than assumed. Full detail and rationale: `docs/privacy-review.md` (inventory +
+checklist) and ADR 0045. The **[CI]** items below are already enforced on every PR (`lint` job) —
+this step is a reminder they must be green for the commit being released, not a re-run. The
+**[Live]** items are not automatable (no GPU/Official-build/Sentry DSN on CI runners) and must be
+walked by hand.
+
+- [ ] **[CI]** `scripts/validate-privacy-allowlist.ps1` green — the crash-report tag allowlist
+      matches `PRIVACY.md` and `docs/product-spec.md` §14.
+- [ ] **[CI]** `scripts/validate-network-egress.ps1` green — no network call site outside the
+      known GitHub/Sentry allowlist.
+- [ ] **[CI]** Crash-scrubber tests green (Golden-Set + `IsAllowedTagKey`/`ScrubString`) and, if
+      this release touches the crash-capture strand, the sentry-linked suite in
+      `crash-capture-build.yml` (push-to-main / `crash-capture` label / dispatch).
+- [ ] **[Live]** **Sentry reality check.** On a real Official build, give consent and trigger a
+      test event; in the Sentry EU UI confirm no hostname/path/username and exactly the
+      allowlisted tags + stack arrived. Couple this to any release that touches the crash-capture
+      or Official-build path.
+- [ ] **[Live]** **Minidump module-path check.** Provoke a real hard crash with consent active;
+      inspect the uploaded minidump's module list for a username segment in the `exosnap.exe`
+      path (relevant for portable/non-standard installs). This is the only real check of the
+      minidump binary channel (a test event does not produce one).
+- [ ] **[Live]** **Update-check network trace.** A proxy capture of a real update check shows only
+      the expected `GET api.github.com/.../releases` — no user data in the query.
+- [ ] **[Manual/Doc]** `PRIVACY.md`'s `Effective date` and `docs/product-spec.md` §14 have been
+      walked against `docs/privacy-review.md`'s inventory for this release; bump `Effective date`
+      if any field or recipient changed.
+
+## 6. 0.9 release gate — manual live verifications
 
 0.9 is **not** tagged or released until these manual checks pass, on real hardware, in addition to
 the automated gates and the updater RC live-check above:
@@ -71,7 +101,7 @@ the automated gates and the updater RC live-check above:
       playback, and a marker JSON sidecar is written only when at least one marker survives the
       trim.
 
-## 6. Downstream package managers
+## 7. Downstream package managers
 
 WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside
 tracked files; both are easy to forget because nothing fails locally if they go stale. Update them

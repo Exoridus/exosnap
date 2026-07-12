@@ -477,9 +477,11 @@ TEST(AppSettingsStoreTest, AppSettingsStore_DefaultUpdateChannelIsStable) {
     EXPECT_EQ(settings.update_channel, QStringLiteral("Stable"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultCheckUpdatesOnStartIsTrue) {
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultCheckUpdatesOnStartIsFalse) {
+    // ADR 0045: the update check must be opt-in — a first launch must not
+    // contact api.github.com before the user has explicitly turned this on.
     PersistedAppSettings settings;
-    EXPECT_TRUE(settings.check_updates_on_start);
+    EXPECT_FALSE(settings.check_updates_on_start);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_UpdateChannel_Preview) {
@@ -508,7 +510,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_CheckUpdatesOnStart_Fals
     EXPECT_FALSE(loaded.check_updates_on_start);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAndTrue) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAndFalse) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -524,9 +526,9 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAnd
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    // Update keys absent: must default to Stable / true.
+    // Update keys absent: must default to Stable / false (ADR 0045 — opt-in).
     EXPECT_EQ(loaded.update_channel, QStringLiteral("Stable"));
-    EXPECT_TRUE(loaded.check_updates_on_start);
+    EXPECT_FALSE(loaded.check_updates_on_start);
 }
 
 // ---------------------------------------------------------------------------

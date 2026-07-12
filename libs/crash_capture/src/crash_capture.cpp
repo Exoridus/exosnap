@@ -105,25 +105,39 @@ static sentry_value_t BeforeSendHook(sentry_value_t event, void* /*hint*/, void*
     // (we do not populate breadcrumbs in this slice, but guard anyway)
     sentry_value_remove_by_key(event, "breadcrumbs");
 
-    // Scrub tags: only allow-listed keys survive
+    // Scrub tags: only allow-listed keys survive. Iterates the SAME array the
+    // set-time path (SetTag/IsAllowedTagKey) uses (ADR 0045) — previously this
+    // was a literal, hand-repeated brace-list that could drift from
+    // kAllowedTagKeys in crash_scrubber.h.
     sentry_value_t tags = sentry_value_get_by_key(event, "tags");
     if (!sentry_value_is_null(tags)) {
         // Build a replacement tags object with only allowed keys
         sentry_value_t clean_tags = sentry_value_new_object();
         // sentry tags are stored as a dict; iterate by known allowed keys
-        for (const auto& key : {"os.name", "os.version", "gpu.model", "gpu.vendor", "gpu.driver", "app.version",
-                                "encoder_backend", "container", "video_codec", "audio_codec"}) {
-            sentry_value_t v = sentry_value_get_by_key(tags, key);
+        for (const auto& key : AllowedTagKeys()) {
+            const std::string key_str(key);
+            sentry_value_t v = sentry_value_get_by_key(tags, key_str.c_str());
             if (!sentry_value_is_null(v)) {
                 // Scrub the value even for allowed keys
                 const char* raw = sentry_value_as_string(v);
                 if (raw) {
                     std::string scrubbed = ScrubString(raw);
-                    sentry_value_set_by_key(clean_tags, key, sentry_value_new_string(scrubbed.c_str()));
+                    sentry_value_set_by_key(clean_tags, key_str.c_str(), sentry_value_new_string(scrubbed.c_str()));
                 }
             }
         }
         sentry_value_set_by_key(event, "tags", clean_tags);
+    }
+
+    // Defensive backstop (ADR 0045 / D3): sentry-native 0.15.0 (the pinned
+    // version, see cmake/VendorSentry.cmake) does not set server_name or a
+    // device context on init, so this is not closing an active leak — it
+    // guards against a future sentry-native version (or our own code) adding
+    // either without before_send being updated to catch it.
+    sentry_value_remove_by_key(event, "server_name");
+    sentry_value_t contexts = sentry_value_get_by_key(event, "contexts");
+    if (!sentry_value_is_null(contexts)) {
+        sentry_value_remove_by_key(contexts, "device");
     }
 
     return event;

@@ -680,8 +680,12 @@ honest, disabled "planned" rows to communicate direction without enabling unimpl
 
 **Updates.**
 
-- **Off by default for self-built binaries**; the official build's update check is opt-in and
-  consent-gated. Both a manual "Check now" and a toggleable automatic update check exist.
+- **Off by default for every build, including official builds** (`check_updates_on_start` defaults
+  to `false`, ADR 0045) — a first launch never contacts a server before the user turns the
+  automatic check on from the Settings update card. Self-built binaries additionally never run the
+  check at all, via a separate compile-time gate (`IsUpdateCheckEnabled()`), regardless of this
+  setting. Both a manual "Check now" and a toggleable automatic update check exist; a manual check
+  is itself the user's explicit action and needs no separate consent step.
 - **Stable** and **Preview** channels.
 - The client verifies the manifest against a **detached ed25519 signature** (Monocypher; shipped as
   a sibling `update-manifest.json.sig` asset, verified over the exact received manifest bytes
@@ -754,15 +758,45 @@ release binaries will be signed once the certificate is issued.
 
 ## 14. Privacy
 
-- **No analytics, no telemetry, no account.** By default ExoSnap makes **no network connections**.
+- **No analytics, no telemetry, no account.** By default ExoSnap makes **no network connections** —
+  including on first launch, for every build.
 - Only two features can contact external services, each strictly opt-in and only when the user acts:
-  the **update check** (public GitHub Releases API, no auth token, sends only the version string and
-  the request's IP) and **crash reporting** (Sentry, EU data residency).
-- **Crash-report allowlist (what is sent):** OS build, GPU model and driver version, ExoSnap version,
-  active encoder backend, container and codec, and the crash stack/minidump — nothing else.
-- **Never sent:** usernames, file paths (including output folder and recording filenames), machine
-  name, breadcrumb logs. Recording content is never captured. No persistent device identifier is
-  created.
+  the **update check** (public GitHub Releases API, no auth token; sends only the request's IP and a
+  fixed User-Agent identifying the checker — **no ExoSnap version number is sent**, the
+  newest-release comparison is entirely client-side) and **crash reporting** (Sentry, EU data
+  residency).
+- **Crash-report allowlist (what is sent):**
+
+  <!-- PRIVACY-ALLOWLIST-TABLE-BEGIN -->
+  | Tag key | What it carries |
+  |---|---|
+  | `os.name` | Windows edition name (e.g. "Windows 11") |
+  | `os.version` | Windows build/version string |
+  | `gpu.model` | GPU adapter name |
+  | `gpu.vendor` | GPU vendor (e.g. "NVIDIA") |
+  | `gpu.driver` | GPU driver version |
+  | `app.version` | ExoSnap version |
+  | `encoder_backend` | Active encoder backend (e.g. "nvenc") |
+  | `container` | Output container (e.g. "mkv") |
+  | `video_codec` | Selected video codec |
+  | `audio_codec` | Selected audio codec |
+  <!-- PRIVACY-ALLOWLIST-TABLE-END -->
+
+  plus the crash stack/minidump — nothing else. Only `encoder_backend`/`container`/`video_codec`/
+  `audio_codec` are populated on the Sentry path today; `os.*`/`gpu.*`/`app.version` are allowlisted
+  (so a future change could set them) but currently reach the user only via the local crash dialog
+  and the opt-in Stage-0 GitHub issue (§13), not the Sentry upload. Kept honest by
+  `scripts/validate-privacy-allowlist.ps1` (see `docs/privacy-review.md`).
+- **Never sent (structured event):** usernames, file paths (including output folder and recording
+  filenames), machine name, breadcrumb logs. Recording content is never captured. No persistent
+  device identifier is created. **Exception:** the Crashpad minidump binary (uploaded on a hard
+  crash, separately from the structured event above) carries the full install path of
+  `exosnap.exe` in its module list — for a portable install run from under `%USERPROFILE%` this can
+  include the username segment of that path. See `PRIVACY.md` and `docs/privacy-review.md` for the
+  full explanation and the recommended mitigation (install to a path with no username component).
+- A capture-target **window title** is never written to the on-disk log in the first place (a
+  `[window]` placeholder is logged instead) and is additionally redacted if it ever reaches the
+  one-click support bundle.
 - Settings, presets, recording history, recovery manifest, logs, and recordings are stored locally
   (under `%LOCALAPPDATA%\ExoSnap\`) and never transmitted; the user can delete any of them at any
   time.
