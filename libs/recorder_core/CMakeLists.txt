@@ -888,6 +888,18 @@ exosnap_add_gtest(
 target_include_directories(test_od_reopen_policy PRIVATE src)
 target_compile_definitions(test_od_reopen_policy PRIVATE NOMINMAX)
 
+# First-frame wait guard (S3): the 5 s first-frame timeout is suspended while an
+# OD start-hold recovers a fullscreen/mode transition, and the 15 s reopen budget
+# owns the deadline. Pure; no GPU.
+exosnap_add_gtest(
+    NAME test_first_frame_wait_step
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_first_frame_wait_step.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib
+)
+target_include_directories(test_first_frame_wait_step PRIVATE src)
+target_compile_definitions(test_first_frame_wait_step PRIVATE NOMINMAX)
+
 # Audio device-loss policy (ADR 0046): pure classifier (endpoint loss ->
 # degrade the source, not kill the session), unbounded reactivation cadence, and
 # the PID-reuse identity guard for process-loopback flavors. No audio hardware.

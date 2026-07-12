@@ -69,6 +69,7 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
 DiagnosticChecklist RecommendationEngine::Generate() const {
     DiagnosticChecklist checklist;
     checkRefreshRateMismatch(checklist);
+    checkExclusiveWindowTarget(checklist);
     checkExclusiveFullscreen(checklist);
     checkDiscardedPresents(checklist);
     checkPresentModeFlips(checklist);
@@ -600,8 +601,68 @@ void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist
     }
 }
 
+ExclusiveEvidence RecommendationEngine::exclusiveWindowEvidence() const {
+    if (!capture_window_facts_.has_value()) {
+        return ExclusiveEvidence::None;
+    }
+    const WindowShape shape = ClassifyWindowShape(*capture_window_facts_);
+    const bool present_fse = present_.has_value() && present_->mode == PresentMode::ExclusiveFullscreen;
+    const bool signal = capture_window_facts_->quns_d3d_fullscreen || present_fse;
+    return CombineFullscreenEvidence(shape, capture_window_hub_, signal);
+}
+
+void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& checklist) const {
+    const ExclusiveEvidence ev = exclusiveWindowEvidence();
+    if (ev == ExclusiveEvidence::None) {
+        return;
+    }
+    const bool proven = ev == ExclusiveEvidence::ProvenBlack;
+
+    DiagnosticResult r = MakeResult(
+        "rec.capture.exclusive_window", DiagnosticGroup::Recommendation,
+        proven ? DiagnosticSeverity::Blocker : DiagnosticSeverity::Notice,
+        proven ? "Selected window is in exclusive fullscreen and produces no frames"
+               : "Selected window may be in exclusive fullscreen",
+        proven ? "The selected window is in exclusive fullscreen; window capture records a black/frozen frame."
+               : "The selected window looks like exclusive fullscreen, which window capture cannot reliably record.",
+        proven ? "The window capture API (WGC) produced no usable frame for the selected window — a legacy "
+                 "exclusive-fullscreen application bypasses the desktop compositor, so window capture records "
+                 "a black or frozen picture. Record the monitor instead (which can capture exclusive "
+                 "fullscreen), or switch the game to borderless / windowed fullscreen."
+               : "The selected window covers its monitor with no border and a fullscreen signal is present, "
+                 "which usually means legacy exclusive fullscreen. Window capture often records a black frame "
+                 "in that mode. Record the monitor instead, or switch the game to borderless.",
+        proven ? "Window capture: no frames (exclusive fullscreen)" : "Window looks like exclusive fullscreen",
+        "Set the game to Borderless / Windowed Fullscreen to capture the window directly.");
+
+    FixAction fa;
+    fa.id = "fix.capture.monitor_instead";
+    fa.label = "Record the monitor instead";
+    // Auto (executable) but NEVER one-click: retargeting changes the recording
+    // scope and track structure, so the confirm's changes_summary is mandatory.
+    fa.safety = FixAction::Safety::Auto;
+    fa.reversible = true;
+    fa.changes_summary = "Records the whole monitor that hosts this window instead of the window itself. "
+                         "The recording will include everything on that monitor (other windows, notifications), "
+                         "and the per-application (APP) audio row is removed — only System and Microphone audio "
+                         "remain. You can switch back to window capture at any time.";
+    r.fix_action = fa;
+
+    if (proven) {
+        checklist.has_blocker = true;
+    } else {
+        checklist.has_notice = true;
+    }
+    checklist.results.push_back(std::move(r));
+}
+
 void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checklist) const {
     if (!present_.has_value() || present_->mode != PresentMode::ExclusiveFullscreen) {
+        return;
+    }
+    // Dedupe: while the selected-window card is speaking, suppress this generic
+    // present-mode card so one problem raises exactly one card.
+    if (exclusiveWindowEvidence() != ExclusiveEvidence::None) {
         return;
     }
     DiagnosticResult r;

@@ -66,6 +66,13 @@ class DiagnosticsPage : public QWidget {
     // not found" notice. label describes the saved (missing) display.
     void setSavedDisplayUnresolved(bool unresolved, const std::string& label);
 
+    // Honest exclusive-fullscreen facts for the selected window capture target,
+    // supplied by the owner from WindowEvidenceProbe (S2a). facts == nullopt for a
+    // monitor target / no selection: the exclusive-window card stays silent. The
+    // engine combines these with its present sample into the severity ladder.
+    void setCaptureWindowEvidence(const std::optional<diagnostics::WindowTargetFacts>& facts,
+                                  const diagnostics::WindowHubEvidence& hub);
+
     // Live recording-pipeline telemetry, delivered on the UI thread (~5 Hz while
     // recording, plus one final frozen snapshot). Safe to call when idle.
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
@@ -223,6 +230,8 @@ class DiagnosticsPage : public QWidget {
     bool data_ready_ = false;
     bool expert_mode_enabled_ = false;
     std::optional<recorder_core::CaptureTarget> selected_capture_target_;
+    std::optional<diagnostics::WindowTargetFacts> capture_window_facts_;
+    diagnostics::WindowHubEvidence capture_window_hub_;
     bool saved_display_unresolved_ = false;
     std::string saved_display_label_;
     capability::UserRecorderConfig active_user_config_{};

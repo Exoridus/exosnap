@@ -2702,6 +2702,36 @@ void MainWindow::refreshDiagnosticsData() {
         diagnostics_page_->setSavedDisplayUnresolved(res.unresolved, label);
     }
     diagnostics_page_->setSelectedCaptureTarget(selected_target);
+
+    // Selected-window exclusive-fullscreen probe (S2a/S2b) + pre-flight present
+    // attribution (S6). Subscribe the probe to the selected window (0 for a
+    // monitor target), pause it while recording (the engine owns the capture),
+    // and feed its current snapshot to the page. The evidence accumulates on the
+    // probe's own thread; refreshWindowEvidence() re-pulls it on a light cadence.
+    uintptr_t selected_window = 0;
+    if (selected_target.has_value() && selected_target->kind == recorder_core::CaptureTarget::Kind::Window) {
+        selected_window = selected_target->native_id;
+    }
+    window_evidence_probe_.setWindowTarget(selected_window);
+    window_evidence_probe_.setPaused(recording_active_);
+    // Pre-flight PID attribution: while idle, scope present diagnostics to the
+    // selected window's process so rec.present.exclusive is target-accurate rather
+    // than "whatever last presented". The record-start edge owns it during recording.
+    if (!recording_active_) {
+        present_provider_.SetTargetProcessId(record_page_ ? record_page_->selectedTargetWindowPid() : 0);
+    }
+    refreshWindowEvidence();
+}
+
+void MainWindow::refreshWindowEvidence() {
+    if (!diagnostics_page_ || !diagnostics_page_->isVisible())
+        return;
+    const WindowEvidenceProbe::Snapshot snap = window_evidence_probe_.snapshot();
+    if (snap.active) {
+        diagnostics_page_->setCaptureWindowEvidence(snap.facts, snap.evidence);
+    } else {
+        diagnostics_page_->setCaptureWindowEvidence(std::nullopt, {});
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4683,6 +4713,15 @@ void MainWindow::buildDiagnosticsPage() {
     diagnostics_page_ = new DiagnosticsPage(stack_);
     diagnostics_page_->setPresentProvider(&present_provider_);
     diagnostics_page_->setDpcProvider(&dpc_provider_);
+    // Light cadence to surface the selected-window exclusive-fullscreen evidence,
+    // which needs ~2 s to accumulate. refreshWindowEvidence() no-ops while the page
+    // is hidden, so this costs nothing off the Diagnostics view.
+    if (!window_evidence_timer_) {
+        window_evidence_timer_ = new QTimer(this);
+        window_evidence_timer_->setInterval(1000);
+        connect(window_evidence_timer_, &QTimer::timeout, this, &MainWindow::refreshWindowEvidence);
+        window_evidence_timer_->start();
+    }
     // Single global Expert state, shared with Settings (AppSettingsStore::expert_mode_enabled).
     diagnostics_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
     connect(diagnostics_page_, &DiagnosticsPage::expertModeChanged, this, [this](bool enabled) {
@@ -4712,6 +4751,17 @@ void MainWindow::buildDiagnosticsPage() {
                                      : changes_summary;
             if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
                 return;
+            if (fix_id == QStringLiteral("fix.capture.monitor_instead")) {
+                // rec.capture.exclusive_window: the selected window is in exclusive
+                // fullscreen and cannot be captured. Retarget to the hosting monitor
+                // (DXGI OD can capture FSE). The confirm above already stated the
+                // scope + APP-audio consequences via changes_summary.
+                if (record_page_)
+                    record_page_->selectMonitorTargetForWindow();
+                refreshDiagnosticsData();
+                diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
+                return;
+            }
             if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
                 // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
                 video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;

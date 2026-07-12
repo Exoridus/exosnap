@@ -463,6 +463,26 @@ plug/unplug cycles (`\\.\DISPLAY6`, `\\.\DISPLAY7` on a two-display desktop); th
 header and the output filename all use the same numbering. A display that just left the topology
 falls back to its raw number rather than borrowing another display's.
 
+**Fullscreen capture matrix.** How a target behaves depends on the app's presentation mode:
+
+- **Windowed** and **Borderless / windowed-fullscreen (FSO, flip-model)** record correctly on
+  **every** target — Monitor, Window, and Region. This is the common case on Windows 10/11; most
+  in-game "fullscreen" settings run as borderless/flip today.
+- **Legacy exclusive fullscreen (FSE)** bypasses the desktop compositor. **Window** capture records a
+  **black or frozen** frame — ExoSnap cannot capture an FSE window in isolation (hook/injection
+  capture is deliberately rejected; see §14). **Monitor** (and Region, which is monitor + crop)
+  capture *can* record exclusive fullscreen.
+- **The honest rule:** to record an exclusive-fullscreen game, capture the **monitor**; to capture a
+  **window** directly, run the game in borderless / windowed fullscreen. ExoSnap detects an
+  FSE window target pre-flight (`rec.capture.exclusive_window`, §11) and offers a one-confirm "Record
+  the monitor instead" fix; a window that switches to FSE mid-recording is reported (a standing
+  notice) rather than silently frozen. A game that changes the desktop resolution while recording a
+  monitor ends the recording cleanly with an explicit size-change error (the footage up to that point
+  stays valid).
+
+*(Cells requiring a real legacy-FSE title are verified live before being promised as behaviour; the
+matrix above reflects the shipped detection + monitor path.)*
+
 ---
 
 ## 8. Recording lifecycle
@@ -672,11 +692,19 @@ one bundled Tier-3 tip chip. The static capability matrix lives on the **Device*
 **FixAction model.** Each detected issue can carry a typed, executable fix action with a safety
 class, never applied silently:
 
-- **Auto** — a safe, reversible, config-only change the app can apply after showing a change summary
-  to preview/confirm (for example, reconcile to the nearest valid codec combination, or
-  Full→Limited color range).
+- **Auto** — a safe, reversible change the app can apply after showing a change summary to
+  preview/confirm (for example, reconcile to the nearest valid codec combination, or Full→Limited
+  color range). Auto is normally config-only, but it also covers a **confirmed capture-target
+  change** (e.g. "Record the monitor instead" for an exclusive-fullscreen window). **Rule:** when an
+  Auto fix changes the recording *scope* or *track structure* (not just encoder settings), the
+  confirm dialog with a `changes_summary` is **mandatory** (never one-click), and the summary must
+  name the consequences. For "Record the monitor instead" the summary states that the whole monitor
+  is recorded (other windows, notifications) and that the per-application (APP) audio row is removed
+  (only System/Microphone remain).
 - **Assisted** — opens the right pre-focused Settings panel or folder, or copies a command (for
-  example, "switch the game to borderless" for exclusive-fullscreen black capture).
+  example, "switch the game to borderless" for exclusive-fullscreen black capture). Assisted cannot
+  execute anything; when the app *can* execute the fix (the monitor retarget above), it is Auto, not
+  Assisted.
 - **External** — the app cannot perform it (for example, a driver install); it shows the exact
   required version and a deep link only.
 
@@ -685,7 +713,11 @@ conflict, "Switch to AV1" / "Switch to HEVC".
 
 **Check catalog.** Checks cover recurring environment/config conditions: old driver, low disk, FAT32,
 unsupported codec on this GPU, audio-format mismatch, color-range (VLC) compatibility, refresh-rate
-vs CFR judder, and the HDR10-vs-H.264 conflict. Diagnostics does not add runtime checks for
+vs CFR judder, the HDR10-vs-H.264 conflict, and an **exclusive-fullscreen window target**
+(`rec.capture.exclusive_window`): elevation-free detection that the selected window is in legacy
+exclusive fullscreen, which window capture records black. It is a **Notice** when only a fullscreen
+signal is present and a **Blocker** when capture has demonstrably produced no frames; its primary fix
+is the "Record the monitor instead" Auto retarget above. Diagnostics does not add runtime checks for
 already-fixed internal bugs.
 
 **Support channel (no telemetry).** Because ExoSnap sends no telemetry, the diagnostic artifact a

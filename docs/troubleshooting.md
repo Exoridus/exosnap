@@ -17,13 +17,17 @@ The tone here mirrors the app's: calm, factual, one primary fix per problem.
   source rows (APP / SYS / MIC) you expected are enabled; each enabled source becomes its own track
   unless merged with the row above.
 
-## Black screen / black recording
+## Black screen / black recording (or a frozen game)
 
-- **What ExoSnap shows.** The **Display / Capture** diagnostics surface exclusive-fullscreen and
-  format-negotiation conditions for window/game capture.
-- **What to do.** Switch the game to borderless/windowed (the assisted fix opens the right place);
-  exclusive fullscreen bypasses the compositor that window capture reads from. For a specific
-  display, confirm you selected the intended monitor.
+- **What ExoSnap shows.** When a **window** capture target is a legacy exclusive-fullscreen game, the
+  `rec.capture.exclusive_window` check fires pre-flight (a **Blocker** once capture has demonstrably
+  produced no frames, otherwise a **Notice**). If a window switches to exclusive fullscreen *during*
+  a recording, a standing notice reports that the video is frozen until frames return — the recording
+  is not silently black.
+- **What to do.** Use the **"Record the monitor instead"** fix (monitor capture can record exclusive
+  fullscreen; you confirm a short summary — the whole monitor is recorded and the per-application
+  audio row drops to System/Microphone). Or switch the game to **borderless / windowed fullscreen**
+  to capture the window directly. For a specific display, confirm you selected the intended monitor.
 
 ## "Encoder unavailable" or the recording will not start
 

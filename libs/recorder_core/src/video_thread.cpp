@@ -1470,6 +1470,17 @@ void VideoThread::Run() {
         constexpr double kTimeoutSec = 5.0;
         bool gotFirst = false;
 
+        // OD start-hold recovery: a game entering exclusive fullscreen exactly as
+        // recording starts throws ACCESS_LOST before the first frame. Rather than
+        // failing the start, enter a bounded hold and poll Reopen() under
+        // kOdStartHoldBudget (the same recovery the drain uses mid-session, but
+        // bounded — the user is waiting on "Preparing"). While holding, the 5 s
+        // first-frame guard is suspended (FirstFrameWaitStep); after a successful
+        // reopen the deadline anchor (tStart) restarts, giving a fresh 5 s window.
+        bool odStartHolding = false;
+        auto odStartLossBegan = std::chrono::steady_clock::now();
+        auto odStartLastReopen = odStartLossBegan;
+
         while (!gotFirst && !m_state.stop_requested.load()) {
             if (!useOdCapture) {
                 MSG msg{};
@@ -1481,20 +1492,63 @@ void VideoThread::Run() {
 
             QueryPerformanceCounter(&tNow);
             double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart) / static_cast<double>(freq.QuadPart);
-            if (elapsed > kTimeoutSec) {
-                const char* which = useOdCapture ? "DXGI OD" : "WGC";
-                char buf[80];
-                snprintf(buf, sizeof(buf), "%s: timeout waiting for first frame (5 s)", which);
-                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture, buf);
+            const FirstFrameWaitAction waitAction = FirstFrameWaitStep(odStartHolding, elapsed, kTimeoutSec);
+            if (waitAction == FirstFrameWaitAction::TimeoutFail) {
                 if (!useOdCapture) {
+                    // Honest cause: name the window state and the exclusive-fullscreen
+                    // possibility instead of a bare "timeout" (a window in FSE cannot
+                    // be captured by WGC at all — record the monitor instead).
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                             "WGC: no frame within 5 s (window minimized=%d cloaked=%d). A window in exclusive "
+                             "fullscreen cannot be captured — switch the game to borderless, or record the "
+                             "monitor instead.",
+                             windowMinimized ? 1 : 0, windowCloaked ? 1 : 0);
+                    logging::LogField fields[] = {{"backend", "wgc"},
+                                                  {"reason", "first_frame_timeout"},
+                                                  {"window_minimized", windowMinimized ? "true" : "false"},
+                                                  {"window_cloaked", windowCloaked ? "true" : "false"}};
+                    logging::log(logging::LogLevel::Warn, "video_thread", "WGC first-frame timeout",
+                                 std::span<const logging::LogField>(fields, std::size(fields)));
+                    m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture, buf);
                     if (captureSession != nullptr)
                         captureSession.Close();
                     if (framePool != nullptr)
                         framePool.Close();
+                } else {
+                    m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture,
+                                          "DXGI OD: timeout waiting for first frame (5 s)");
                 }
                 if (com_inited)
                     CoUninitialize();
                 return;
+            }
+            if (waitAction == FirstFrameWaitAction::HoldStep) {
+                // Start-hold active: drive Reopen() under the bounded budget. The
+                // 5 s guard is suspended so the deadline belongs to the reopen budget.
+                const auto now = std::chrono::steady_clock::now();
+                bool reopened = false;
+                if (now - odStartLastReopen >= kOdReopenPollDelay) {
+                    odStartLastReopen = now;
+                    std::string reopenErr;
+                    reopened = odSrc.Reopen(d3dDevice.get(), reopenErr);
+                }
+                const auto sinceLoss = std::chrono::duration_cast<std::chrono::milliseconds>(now - odStartLossBegan);
+                const OdReopenDecision dec =
+                    DecideOdReopen(reopened, sinceLoss, kOdStartHoldBudget, kOdReopenPollDelay);
+                if (dec.action == OdReopenAction::Continue) {
+                    odStartHolding = false;
+                    QueryPerformanceCounter(&tStart); // fresh first-frame deadline
+                } else if (dec.action == OdReopenAction::GiveUp) {
+                    m_state.RecordFailure(DXGI_ERROR_ACCESS_LOST, ErrorPhase::VideoCapture,
+                                          "DXGI OD: display did not return within 15 s of an access loss at start "
+                                          "(a fullscreen or display-mode change was likely in progress).");
+                    if (com_inited)
+                        CoUninitialize();
+                    return;
+                }
+                Sleep(10); // keep stop-request latency low while holding
+                continue;
             }
 
             if (!useOdCapture && sourceLost) {
@@ -1545,10 +1599,17 @@ void VideoThread::Run() {
                     odCapturedTexValid = true;
                     gotFirst = true;
                 } else if (odHr == DXGI_ERROR_ACCESS_LOST) {
-                    m_state.RecordFailure(odHr, ErrorPhase::VideoCapture, "DXGI OD: access lost before first frame");
-                    if (com_inited)
-                        CoUninitialize();
-                    return;
+                    // A fullscreen/mode transition is in progress. Do not fail the
+                    // start: enter the bounded start-hold and poll Reopen() (handled
+                    // by the HoldStep branch above) until the display returns or the
+                    // 15 s budget is exhausted.
+                    if (!odStartHolding) {
+                        odStartHolding = true;
+                        odStartLossBegan = std::chrono::steady_clock::now();
+                        odStartLastReopen = odStartLossBegan;
+                        logging::log(logging::LogLevel::Info, "video_thread",
+                                     "DXGI OD access lost before first frame — entering bounded start-hold", {});
+                    }
                 }
                 // DXGI_ERROR_WAIT_TIMEOUT: no frame yet, loop again
             } else {

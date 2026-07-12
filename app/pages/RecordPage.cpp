@@ -1516,6 +1516,43 @@ std::optional<recorder_core::CaptureTarget> RecordPage::selectedCaptureTarget() 
     return view_model_.targets[static_cast<std::size_t>(idx)];
 }
 
+void RecordPage::selectMonitorTargetForWindow() {
+    const std::optional<recorder_core::CaptureTarget> current = selectedCaptureTarget();
+    if (!current.has_value() || current->kind != recorder_core::CaptureTarget::Kind::Window ||
+        current->native_id == 0) {
+        diagnostics::AppLog::info(QStringLiteral("target"),
+                                  QStringLiteral("record-the-monitor-instead: no window target selected — no-op"));
+        return;
+    }
+
+    const HMONITOR hmon = ::MonitorFromWindow(reinterpret_cast<HWND>(current->native_id), MONITOR_DEFAULTTONEAREST);
+    const auto hmon_id = reinterpret_cast<uintptr_t>(hmon);
+    int resolved_index = -1;
+    for (int idx : monitor_target_indices_) {
+        if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+            continue;
+        if (view_model_.targets[static_cast<std::size_t>(idx)].native_id == hmon_id) {
+            resolved_index = idx;
+            break;
+        }
+    }
+    if (resolved_index < 0) {
+        diagnostics::AppLog::info(QStringLiteral("target"),
+                                  QStringLiteral("record-the-monitor-instead: hosting monitor has no capture "
+                                                 "target — no-op"));
+        return;
+    }
+
+    // A user-confirmed retarget: switch to Monitor capture (this drops the APP
+    // audio row — the confirm's changes_summary states that) and select the
+    // hosting monitor exactly like a manual pick.
+    view_model_.capture_mode = CaptureMode::Monitor;
+    syncTargetSelectionToCombo(resolved_index);
+    refresh();
+    diagnostics::AppLog::info(QStringLiteral("target"),
+                              QStringLiteral("record-the-monitor-instead: retargeted window capture to its monitor"));
+}
+
 void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
     applying_external_config_ = true;
     // ---- RAII clear of the flag on all exit paths ----
