@@ -54,7 +54,8 @@ Top-level navigation is **six items**, in order:
   Hotkeys is an embedded full-width card, not a separate nav item.
 - **Diagnostics** — the live, changeable environment as readiness cards (disk, display, audio,
   elevation, blockers), plus a capability-matrix reference section.
-- **Logs** — runtime events and per-session recording diagnostics.
+- **Logs** — runtime events and per-session recording diagnostics, a **Startup** latency table,
+  and a **Create support bundle** action.
 - **About** — application identity, build metadata, and links.
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
@@ -630,6 +631,26 @@ conflict, "Switch to AV1" / "Switch to HEVC".
 unsupported codec on this GPU, audio-format mismatch, color-range (VLC) compatibility, refresh-rate
 vs CFR judder, and the HDR10-vs-H.264 conflict. Diagnostics does not add runtime checks for
 already-fixed internal bugs.
+
+**Support channel (no telemetry).** Because ExoSnap sends no telemetry, the diagnostic artifact a
+user shares *is* the support channel. Three connected pieces make that shareable (see ADR 0044):
+
+- **Structured logs with a session key.** The engine writes a canonical JSON-lines stream that
+  appends and rotates across launches, and every record carries a launch session id that also
+  appears in the human-readable log's startup banner — one key ties the two streams together.
+- **Per-recording session report.** After each recording a `session-<id>.json` is written beside
+  the logs (10 most recent kept), capturing the resolved format, config, encoder init parameters,
+  drop/dup/discontinuity counters, duration skew, A/V drift and peak drift, the segment list, and
+  the failure phase. Metrics with no measurement read `"unavailable"`, never a fabricated zero.
+- **One-click support bundle.** A **Create support bundle** action (on Logs; also from the
+  Diagnostics page) packages the rotated logs, the recent session reports, and GPU/adapter/display
+  facts into a single scrubbed `.zip`. It is a neutral tool, not an error trigger — wording is
+  "Create a diagnostic package to share with support", with no alarming styling. Nothing is
+  uploaded: the file is saved via a dialog and revealed in the file manager. Paths, username and
+  machine name are scrubbed, and capture-target window titles are redacted to `[capture-target]`.
+
+A **Startup** table on the Logs page shows start-to-milestone latencies so startup regressions are
+visible; it also rides along in the bundle.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
 engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. The

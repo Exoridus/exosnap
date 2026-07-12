@@ -324,6 +324,23 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   the app is closed during the file swap. No update runs during an active recording or
   finalization.
 
+## Diagnostics logs and support bundle
+
+- **The support bundle is created and shared manually.** ExoSnap sends no telemetry; a
+  **Create support bundle** action (Logs page, and the Diagnostics page) packages the rotated logs,
+  the recent per-recording session reports, and GPU/adapter/display facts into a scrubbed `.zip`.
+  Nothing is uploaded — you save it and share it yourself.
+- **Scrubbing covers paths, username, machine name, and capture-target window titles**, and
+  structured files include only an allowlist of known-safe fields. It cannot anticipate an
+  arbitrary personal string a user typed into a field that ends up in a log; the scrubber targets
+  the known shapes (drive/UNC paths, user/machine names, `target="…"` window titles).
+- **Per-recording session reports** are written to `%LOCALAPPDATA%\ExoSnap\logs\reports\`; the ten
+  most recent are kept (pruned on write). There is no in-app viewer or clear button for them.
+- **The engine JSON-lines log now appends and rotates** across launches (5 MiB × 3 files) instead
+  of resetting on each launch.
+- **The Startup latency table** on the Logs page reflects the milestones recorded up to the moment
+  it is shown; it is not a continuously updating profiler.
+
 ## Planned beyond 0.7.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
