@@ -11,6 +11,7 @@
 #include <QStringConverter>
 #include <QTextStream>
 #include <QThread>
+#include <QUuid>
 
 #include "settings/ConfigPaths.h"
 
@@ -36,6 +37,7 @@ struct LogState {
     int pending_evicted_count = 0;
     int max_entries = AppLog::kDefaultMaxEntries;
     quint64 next_sequence = 1;
+    QString session_id;
     bool initialized = false;
     bool delivery_scheduled = false;
     bool delivery_enabled = true;
@@ -246,6 +248,7 @@ void AppLog::init() {
         const QString log_dir = data_dir + QStringLiteral("/logs");
         QDir().mkpath(log_dir);
         s.log_path = log_dir + QStringLiteral("/exosnap.log");
+        s.session_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         s.initialized = true;
         s.delivery_enabled = true;
         path = s.log_path;
@@ -274,6 +277,7 @@ void AppLog::init() {
     if (write_startup) {
         info(QStringLiteral("startup"), QStringLiteral("--- ExoSnap session start ---"));
         info(QStringLiteral("startup"), QStringLiteral("log path: %1").arg(path));
+        info(QStringLiteral("startup"), QStringLiteral("session: %1").arg(sessionId()));
     }
 }
 
@@ -360,6 +364,11 @@ void AppLog::clear() {
 QString AppLog::logFilePath() {
     QMutexLocker lock(&state().mutex);
     return state().log_path;
+}
+
+QString AppLog::sessionId() {
+    QMutexLocker lock(&state().mutex);
+    return state().session_id;
 }
 
 QString AppLog::severityLabel(LogSeverity severity) {

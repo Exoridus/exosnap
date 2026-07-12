@@ -384,6 +384,15 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 
+# Structured-log schema: base fields (launch session id) stamped onto every JSONL
+# record, per-call fields winning on collision, and size-based file rotation.
+exosnap_add_gtest(
+    NAME test_logging_schema
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_logging_schema.cpp
+    LIBRARIES recorder_core
+)
+
 # Capture-hub arbitration: consumer refcount, the held frame across loss and
 # unbounded reopen, and the release-before-the-engine-opens handover order that
 # the one-duplication-per-process constraint forces. Pure, GPU-free.

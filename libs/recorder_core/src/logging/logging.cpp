@@ -1,7 +1,7 @@
 #include <recorder_core/logging/logging.h>
 
 #include <nlohmann/json.hpp>
-#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/spdlog.h>
 
 #include <deque>
@@ -18,6 +18,7 @@ struct InternalState {
     std::deque<LogRecord> ringBuffer;
     std::size_t ringCapacity = 512;
     LogLevel minimumLevel = LogLevel::Info;
+    std::vector<LogField> baseFields;
     LogSink sink;
     bool initialized = false;
 };
@@ -85,7 +86,12 @@ void initialize(const LoggerConfig& config) {
 
     reset_state_locked(s);
 
-    auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(config.filePath.string(), true);
+    // Rotating (not truncating): the JSONL survives across launches and stays
+    // bounded. spdlog's max_files counts the rotated backups, so maxFileCount
+    // files total means maxFileCount-1 backups (engine.jsonl + .1 + .2 == 3).
+    const std::size_t maxBytes = config.maxFileBytes > 0 ? config.maxFileBytes : 1;
+    const std::size_t backups = config.maxFileCount > 1 ? config.maxFileCount - 1 : 1;
+    auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(config.filePath.string(), maxBytes, backups);
     s.logger = std::make_shared<spdlog::logger>("exosnap", sink);
     s.logger->set_pattern("%v");
     s.logger->set_level(spdlog::level::trace);
@@ -93,6 +99,7 @@ void initialize(const LoggerConfig& config) {
 
     s.ringCapacity = config.ringCapacity;
     s.minimumLevel = config.minimumLevel;
+    s.baseFields = config.baseFields;
     s.sink = config.sink;
     s.initialized = true;
 }
@@ -137,7 +144,13 @@ void log(LogLevel level, std::string_view component, std::string_view message, s
         j["component"] = record.component;
         j["message"] = record.message;
 
+        // Base fields (session correlation) first, so a per-call field of the same
+        // key wins. Stamped into the JSONL only; the text-log line stays clean (the
+        // session id is written once to the startup banner instead of every line).
         nlohmann::json fieldsJson = nlohmann::json::object();
+        for (const auto& f : s.baseFields) {
+            fieldsJson[f.key] = f.value;
+        }
         for (const auto& f : record.fields) {
             fieldsJson[f.key] = f.value;
         }

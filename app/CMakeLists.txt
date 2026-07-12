@@ -302,6 +302,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/AppLog.cpp
     diagnostics/EngineLogBridge.h
     diagnostics/EngineLogBridge.cpp
+    diagnostics/StructuredLog.h
+    diagnostics/StructuredLog.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -736,6 +738,22 @@ exosnap_add_gtest(
 )
 target_include_directories(engine_log_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(engine_log_bridge_tests PROPERTIES AUTOMOC ON)
+
+# Structured-event entry point: logEvent forwards only to the engine JSONL, so the
+# bridge is the single source of the text line (no double-write), and a Debug event
+# is dropped at the engine's Info minimumLevel.
+exosnap_add_gtest(
+    NAME structured_log_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_structured_log.cpp
+        diagnostics/StructuredLog.cpp
+        diagnostics/EngineLogBridge.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES recorder_core Qt6::Core
+)
+target_include_directories(structured_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(structured_log_tests PROPERTIES AUTOMOC ON)
 
 # App log file rotation: size-based rotation, handle-reuse across writes, and
 # Logs-page (in-memory history) compatibility across rotation.
