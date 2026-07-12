@@ -51,6 +51,15 @@ class RecommendationEngine {
         output_path_writable_ = writable;
     }
 
+    // Real process-elevation status, queried by the caller from IElevationProvider (the
+    // same source PresentMonProvider::GateOpen() gates on). Feeds the Tier-4 "Elevation"
+    // environment fact so it reports the measured "Elevated" vs "Standard" state instead
+    // of a hard-coded string. Default false (Standard) mirrors SetOutputPathWritable — the
+    // engine stays pure and reports the truthful baseline until the caller supplies the fact.
+    void SetElevated(bool elevated) {
+        elevated_ = elevated;
+    }
+
     // Whether the selected capture target's display currently has Windows HDR ON
     // (resolved by the caller from the selected target's HMONITOR ->
     // DisplayHdrFacts via capability::FindDisplayByName). Feeds the H.264 + HDR10
@@ -118,6 +127,7 @@ class RecommendationEngine {
     bool is_profile_supported_;
     std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
     bool output_path_writable_ = true;       // false => emit the not-writable blocker (set by caller)
+    bool elevated_ = false;                  // true => process runs elevated (set by caller); Tier-4 fact
     bool capture_target_hdr_active_ = false; // true => capture target's display has Windows HDR ON (set by caller)
     bool saved_display_unresolved_ = false;  // true => saved capture target could not be matched (set by caller)
     std::string saved_display_label_;        // friendly name / label of the saved (missing) display

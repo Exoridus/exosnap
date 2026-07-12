@@ -733,6 +733,27 @@ TEST(DiagnosticTierTest, EnvironmentFacts_ElevationAlways_AudioFormatWhenLive) {
     EXPECT_TRUE(saw_audio) << "a live audio track must produce a Tier-4 audio-format fact";
 }
 
+TEST(DiagnosticTierTest, ElevationFactReflectsMeasuredState) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::UserRecorderConfig config;
+
+    // Default (no SetElevated): the honest Standard baseline.
+    RecommendationEngine standard(caps, config, 0, std::nullopt, true);
+    auto standard_facts = standard.GenerateEnvironmentFacts();
+    ASSERT_FALSE(standard_facts.empty());
+    EXPECT_EQ(standard_facts.front().id, "fact.elevation");
+    EXPECT_NE(standard_facts.front().summary.find("Standard"), std::string::npos);
+    EXPECT_EQ(standard_facts.front().summary.find("Elevated"), std::string::npos);
+
+    // Measured elevated: the fact must report "Elevated", not a hard-coded baseline.
+    RecommendationEngine elevated(caps, config, 0, std::nullopt, true);
+    elevated.SetElevated(true);
+    auto elevated_facts = elevated.GenerateEnvironmentFacts();
+    ASSERT_FALSE(elevated_facts.empty());
+    EXPECT_EQ(elevated_facts.front().id, "fact.elevation");
+    EXPECT_NE(elevated_facts.front().summary.find("Elevated"), std::string::npos);
+}
+
 TEST(RecommendationEngineTest, Generate_LiveCoalesceAlone_NoLongerFires) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};

@@ -10,6 +10,7 @@
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
 #include "../diagnostics/DpcLatencyProvider.h"
+#include "../diagnostics/ElevationProvider.h"
 #include "../diagnostics/PresentProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 
@@ -82,6 +83,10 @@ class DiagnosticsPage : public QWidget {
 
     // ADR 0033: inject the kernel DPC/ISR latency provider (borrowed, nullable).
     void setDpcProvider(diagnostics::DpcLatencyProvider* provider) noexcept;
+
+    // ADR 0033: inject the process-elevation provider (borrowed, nullable) so the Tier-4
+    // Elevation environment fact reports the measured state instead of a fixed baseline.
+    void setElevationProvider(diagnostics::IElevationProvider* provider) noexcept;
 
     // Consumes the single global Expert mode (AppSettingsStore::expert_mode_enabled).
     // Mirrors ConfigPage::setExpertModeEnabled — the toolbar toggle and this setter
@@ -258,6 +263,7 @@ class DiagnosticsPage : public QWidget {
 
     diagnostics::IPresentProvider* present_provider_ = nullptr;
     diagnostics::DpcLatencyProvider* dpc_provider_ = nullptr;
+    diagnostics::IElevationProvider* elevation_provider_ = nullptr;
 };
 
 } // namespace exosnap
