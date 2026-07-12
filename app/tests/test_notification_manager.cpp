@@ -86,6 +86,7 @@ TEST_F(NotificationManagerTest, Standing_Types_AreExactlyTheConditionReports) {
     EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::LowStorage));
     EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::UnexpectedStop));
     EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::RecoveryAvailable));
+    EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::AudioSourceDegraded));
 
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::Saved));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::UpdateAvailable));
@@ -336,6 +337,106 @@ TEST(NotificationManagerOverlayOmitted, AutoDismisses) {
 TEST(NotificationManagerOverlayOmitted, IsNotStandingLikeAFailure) {
     EXPECT_NE(NotificationManager::DismissIntervalMs(NotificationType::OverlayOmitted),
               NotificationManager::DismissIntervalMs(NotificationType::UnexpectedStop));
+}
+
+// ── Enqueue() returns the assigned sequence ───────────────────────────────────
+// A caller (MainWindow) that raises a standing toast programmatically needs the
+// sequence back immediately so it can Dismiss() the SAME toast later when the
+// condition it reports clears on its own — not via a user click on the ✕.
+
+TEST_F(NotificationManagerTest, Enqueue_ReturnsTheAssignedSequence) {
+    const uint64_t seq = mgr.Enqueue(MakeEvent(NotificationType::Saved));
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    EXPECT_EQ(seq, mgr.VisibleEvents()[0].sequence);
+}
+
+TEST_F(NotificationManagerTest, Enqueue_ReturnedSequence_DismissesTheRightEvent) {
+    const uint64_t first = mgr.Enqueue(MakeEvent(NotificationType::LowStorage));
+    const uint64_t second = mgr.Enqueue(MakeEvent(NotificationType::RecoveryAvailable));
+    ASSERT_EQ(mgr.VisibleEvents().size(), 2);
+
+    mgr.Dismiss(first);
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    EXPECT_EQ(mgr.VisibleEvents()[0].sequence, second);
+}
+
+TEST_F(NotificationManagerTest, Enqueue_ReturnsSequenceEvenWhenToastsDisabled) {
+    // The hub still records every event (and needs its identity) even though no
+    // toast becomes visible — mirrors the "recorded but not shown" contract.
+    mgr.SetToastsEnabled(false);
+    const uint64_t seq = mgr.Enqueue(MakeEvent(NotificationType::AudioSourceDegraded));
+    EXPECT_GT(seq, 0u);
+    EXPECT_TRUE(mgr.VisibleEvents().isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// AudioSourceDegraded (ADR 0046 follow-up): a live device-loss condition, exactly
+// like LowStorage/UnexpectedStop/RecoveryAvailable — standing, never auto-dismisses.
+// ---------------------------------------------------------------------------
+
+TEST(NotificationManagerAudioSourceDegraded, IsStanding) {
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::AudioSourceDegraded), 0);
+    EXPECT_TRUE(NotificationManager::IsStanding(NotificationType::AudioSourceDegraded));
+}
+
+// ── MakeAudioSourceDegradedEvent (pure resolver) ──────────────────────────────
+
+TEST(MakeAudioSourceDegradedEventTest, SingleSource_UsesSingularCalmWording) {
+    const NotificationEvent e = MakeAudioSourceDegradedEvent(1);
+    EXPECT_EQ(e.type, NotificationType::AudioSourceDegraded);
+    EXPECT_EQ(e.title, QStringLiteral("Audio source went silent"));
+    EXPECT_TRUE(e.body.contains(QStringLiteral("An audio source")));
+    EXPECT_TRUE(e.body.contains(QStringLiteral("Recording continues")));
+    EXPECT_EQ(e.action, NotificationAction::OpenDiagnostics);
+}
+
+TEST(MakeAudioSourceDegradedEventTest, MultipleSources_UsesPluralWordingWithCount) {
+    const NotificationEvent e = MakeAudioSourceDegradedEvent(3);
+    EXPECT_EQ(e.title, QStringLiteral("Audio sources went silent"));
+    EXPECT_TRUE(e.body.contains(QStringLiteral("3 audio sources")));
+    EXPECT_EQ(e.action, NotificationAction::OpenDiagnostics);
+}
+
+TEST(MakeAudioSourceDegradedEventTest, NeverAlarmist_NoExclamationOrErrorWording) {
+    // CLAUDE.md: Diagnostics/notifications stay calm, not alarmist. The recording
+    // is unaffected by a degraded source — the wording must not read as a failure.
+    for (uint32_t count : {1u, 2u, 5u}) {
+        const NotificationEvent e = MakeAudioSourceDegradedEvent(count);
+        EXPECT_FALSE(e.title.contains(QLatin1Char('!')));
+        EXPECT_FALSE(e.body.contains(QLatin1Char('!')));
+        EXPECT_FALSE(e.body.contains(QStringLiteral("fail"), Qt::CaseInsensitive));
+        EXPECT_FALSE(e.body.contains(QStringLiteral("error"), Qt::CaseInsensitive));
+    }
+}
+
+// ── Replace-in-place lifecycle (MainWindow's Dismiss-then-Enqueue pattern) ────
+// MainWindow does not call a manager "update" API — it owns the tracked sequence
+// and replaces the standing toast by dismissing the old one and enqueueing the
+// new body. This exercises that exact sequence at the manager level.
+
+TEST_F(NotificationManagerTest, AudioSourceDegraded_ReplaceInPlace_StaysAtOneVisibleEntry) {
+    const uint64_t first = mgr.Enqueue(MakeAudioSourceDegradedEvent(1));
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+
+    // The degraded count changed 1 -> 2: dismiss the old one, enqueue the new body.
+    mgr.Dismiss(first);
+    const uint64_t second = mgr.Enqueue(MakeAudioSourceDegradedEvent(2));
+
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    EXPECT_NE(first, second);
+    EXPECT_EQ(mgr.VisibleEvents()[0].sequence, second);
+    EXPECT_EQ(mgr.VisibleEvents()[0].title, QStringLiteral("Audio sources went silent"));
+}
+
+TEST_F(NotificationManagerTest, AudioSourceDegraded_StacksAboveATimedToast) {
+    // Standing toasts insert before a trailing timed toast (never displace it).
+    mgr.Enqueue(MakeEvent(NotificationType::Saved)); // timed
+    mgr.Enqueue(MakeAudioSourceDegradedEvent(1));    // standing
+
+    const auto& vis = mgr.VisibleEvents();
+    ASSERT_EQ(vis.size(), 2);
+    EXPECT_EQ(vis.last().type, NotificationType::Saved) << "the timed toast stays anchor-nearest";
+    EXPECT_EQ(vis.first().type, NotificationType::AudioSourceDegraded);
 }
 
 } // namespace

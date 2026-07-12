@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted — implemented (engine). The audio path degrades a lost source to honest
-silence and reactivates it; the display, window and webcam paths already behaved
-this way and are documented here as one coherent policy. A standing user-facing
-notification for the degraded state, and manual live-hardware verification, are
-follow-ups (see Consequences).
+Accepted — implemented (engine + UI). The audio path degrades a lost source to
+honest silence and reactivates it; the display, window and webcam paths already
+behaved this way and are documented here as one coherent policy. A standing
+user-facing notification for the degraded state is implemented; manual
+live-hardware verification remains a follow-up (see Consequences).
 
 Related: ADR 0013 (Output Duplication for monitor capture), ADR 0041 (held frame),
 ADR 0018 (each enabled source is its own track), ADR 0016 (notifications),
@@ -108,7 +108,10 @@ degraded, and a post-flight fact (`SessionStats.audio_degraded_occurred`) so the
 - Remaining boundary: when *all* inners of a single merged track are lost at once,
   that track's timeline holds rather than being filled with exact-length silence;
   a bare single-source track and the video track always keep exact continuity.
-- Follow-ups: a standing user-facing notification for the degraded state (the
-  engine already exposes the signal); and manual live-hardware verification
-  (real endpoint unplug/replug, default-device follow, PID-reuse, audio-service
-  restart) — the automated coverage uses fake sources.
+- The standing notification (a calm, informative toast — never alarmist) stays
+  visible for as long as any source is degraded, is replaced in place if the
+  degraded count changes, and clears the moment every source reactivates or the
+  recording ends; it links to Diagnostics for the full detail.
+- Follow-up: manual live-hardware verification (real endpoint unplug/replug,
+  default-device follow, PID-reuse, audio-service restart) — the automated
+  coverage uses fake sources.

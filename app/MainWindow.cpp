@@ -1926,6 +1926,10 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         present_provider_.SetTargetProcessId(record_page_ ? record_page_->selectedTargetWindowPid() : 0);
     } else if (!recording && was_recording) {
         present_provider_.SetTargetProcessId(0); // back to global attribution when idle
+        // AUDIO-DEGRADED-NOTIFY-R1: the notice describes a live recording condition —
+        // clear it at the latest here so it never outlives the session it was raised for,
+        // even if the last diagnostics tick before stop still reported it degraded.
+        clearAudioSourceDegradedNotification();
     }
     // ADR-0014: track remux-on-stop phase separately so closeEvent can guard it.
     remuxing_active_ = (record_status_label_ == QStringLiteral("SAVING"));
@@ -2910,6 +2914,14 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     switch (scenario.page) {
     case visual::VisualPage::Record:
         setCurrentPage(kRecordPageIndex);
+        // AUDIO-DEGRADED-NOTIFY-R1: drive the real production Enqueue() path so the
+        // visual-test manifest reports the standing toast's actual state. Independent
+        // of the diagnostics-snapshot plumbing (diag_live) — this scenario does not
+        // touch RecordingDiagnosticsSnapshot at all.
+        if (scenario.audio_degraded_notification_count > 0 && notification_manager_) {
+            notification_manager_->Enqueue(notifications::MakeAudioSourceDegradedEvent(
+                static_cast<uint32_t>(scenario.audio_degraded_notification_count)));
+        }
         break;
     case visual::VisualPage::Settings:
         applyVisualSettingsScenario(scenario);
@@ -3742,6 +3754,15 @@ void MainWindow::initNotificationToasts() {
                 last_backpressure_drops_ = snapshot.capture.frames_dropped_backpressure;
             });
 
+    // AUDIO-DEGRADED-NOTIFY-R1 (ADR 0046 follow-up): a second, independent tee of the
+    // same live diagnostics stream — raises/refreshes/clears the standing "audio source
+    // went silent" toast from AudioDiagnostics.source_degraded/degraded_sources. Calm,
+    // informative, never alarmist (CLAUDE.md); the recording itself is unaffected.
+    connect(record_page_, &RecordPage::diagnosticsUpdated, this,
+            [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+                updateAudioSourceDegradedNotification(snapshot);
+            });
+
     // ── RECORDING-ERROR-MODAL-R1: modal failure dialog ──
     // A non-disk-space recording failure opens a prominent modal with the failure
     // detail and an opt-in error report. Independent of show_notifications.
@@ -3830,6 +3851,11 @@ void MainWindow::recordEventInHub(const notifications::NotificationEvent& event)
         // Only the latest switch is undoable (a single undo slot exists).
         id = QStringLiteral("preset-switched");
         break;
+    case NotificationType::AudioSourceDegraded:
+        // One entry for the current degraded set; replaced in place as the count
+        // changes and removed outright once every source reactivates (ADR 0046).
+        id = QStringLiteral("audio-source-degraded");
+        break;
     default:
         id = QStringLiteral("evt-%1").arg(event.sequence);
         break;
@@ -3843,6 +3869,7 @@ void MainWindow::recordEventInHub(const notifications::NotificationEvent& event)
     case NotificationType::LowStorage:
     case NotificationType::FramesDropped:
     case NotificationType::OverlayOmitted:
+    case NotificationType::AudioSourceDegraded:
         status = QStringLiteral("caution");
         break;
     case NotificationType::UnexpectedStop:
@@ -3900,6 +3927,50 @@ void MainWindow::recordEventInHub(const notifications::NotificationEvent& event)
     notification_hub_->addAdvisory(id, status, event.title, event.body, QStringLiteral("now"),
                                    /*unread=*/true, action_id, action_label, is_deep_link);
     refreshHubUnreadBell();
+}
+
+void MainWindow::updateAudioSourceDegradedNotification(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    if (!notification_manager_)
+        return;
+
+    // Only a live recording/paused snapshot can report a degraded source; anything
+    // else (idle, completed, failed, a stale/earlier-generation snapshot) reads as
+    // "not degraded" so the toast clears on its own at the end of the session.
+    const bool recording_or_paused =
+        snapshot.valid && (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
+                           snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
+    const uint32_t count =
+        (recording_or_paused && snapshot.audio.source_degraded) ? snapshot.audio.degraded_sources : 0;
+
+    if (count == audio_degraded_source_count_)
+        return; // unchanged since the last tick — never re-announce the same condition
+
+    if (count == 0) {
+        clearAudioSourceDegradedNotification();
+        return;
+    }
+
+    // The degraded set changed (newly degraded, or the count moved) — replace any
+    // previous standing toast for this recording rather than stacking a second one.
+    if (audio_degraded_notification_sequence_ != 0)
+        notification_manager_->Dismiss(audio_degraded_notification_sequence_);
+
+    audio_degraded_notification_sequence_ =
+        notification_manager_->Enqueue(notifications::MakeAudioSourceDegradedEvent(count));
+    audio_degraded_source_count_ = count;
+}
+
+void MainWindow::clearAudioSourceDegradedNotification() {
+    if (audio_degraded_notification_sequence_ != 0) {
+        if (notification_manager_)
+            notification_manager_->Dismiss(audio_degraded_notification_sequence_);
+        audio_degraded_notification_sequence_ = 0;
+    }
+    audio_degraded_source_count_ = 0;
+    if (notification_hub_) {
+        notification_hub_->removeAdvisoryById(QStringLiteral("audio-source-degraded"));
+        refreshHubUnreadBell();
+    }
 }
 
 void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {

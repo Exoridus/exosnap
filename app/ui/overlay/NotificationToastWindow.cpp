@@ -145,6 +145,7 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
     case notifications::NotificationType::OverlayOmitted:
     case notifications::NotificationType::HotkeyConflict: // caution tone, shared with FramesDropped
     case notifications::NotificationType::LowStorage:
+    case notifications::NotificationType::AudioSourceDegraded: // caution tone, shared with LowStorage
         return {kCautionC, kCautionDim, kCautionB};
     case notifications::NotificationType::UnexpectedStop:
     case notifications::NotificationType::SettingsSaveFailed: // error tone, shared with UnexpectedStop
@@ -192,7 +193,8 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
     case notifications::NotificationType::FramesDropped: // caution glyph, shared with LowStorage
     case notifications::NotificationType::OverlayOmitted:
     case notifications::NotificationType::HotkeyConflict: // caution glyph, shared with FramesDropped
-    case notifications::NotificationType::LowStorage: {
+    case notifications::NotificationType::LowStorage:
+    case notifications::NotificationType::AudioSourceDegraded: { // caution glyph, shared with LowStorage
         // alertTriangle: equilateral triangle + ! inside
         const float h = sz * 0.86f;
         const float base = sz * 0.88f;

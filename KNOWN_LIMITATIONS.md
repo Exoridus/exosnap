@@ -300,8 +300,10 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
     returns, rather than being filled with exact-length silence; a bare
     single-source track and the video track always get exact-length silence /
     continuity. Video-only recording continues if all audio is lost.
-  - The degraded state is surfaced in Diagnostics and the post-flight report; a
-    standing user-facing notification for it is a follow-up.
+  - The degraded state is surfaced in Diagnostics, the post-flight report, and a
+    standing notification that stays up for as long as a source is silenced,
+    updates in place if the degraded set changes, and clears the moment every
+    source reactivates (or the recording ends).
   - Verified by unit/integration tests with fake sources; real endpoint-unplug
     behavior is a manual live check.
 
