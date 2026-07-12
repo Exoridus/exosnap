@@ -194,6 +194,9 @@ class RecordViewModel {
     // Computed predicates
     bool CanStart() const noexcept;
     bool CanStop() const noexcept;
+    // True only while the device-setup Preparing phase is running, so the UI can
+    // route a cancel (hotkey only — no dedicated button) back to Ready.
+    bool CanCancelPreparing() const noexcept;
     bool CanPause() const noexcept;
     bool CanResume() const noexcept;
     bool HasTargets() const noexcept;

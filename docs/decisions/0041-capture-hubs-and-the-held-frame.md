@@ -64,9 +64,10 @@ engine before the engine takes it. `StepCaptureHub` emits `close_capture` and
 wrong order.
 
 The lease API (`RequestLease` / `ReturnLease`) is wired: the coordinator fires a
-blocking release hook immediately before the recording thread starts — after
-every validation and guard, so a rejected start never touches the idle feed —
-and the Record page returns the lease at Ready/Completed/Failed, where the
+blocking release hook from its recording preparation worker thread, immediately
+before the engine opens its capture — after every validation, guard, and
+cancellation checkpoint, so a rejected or cancelled start never touches the idle
+feed — and the Record page returns the lease at Ready/Completed/Failed, where the
 pushed-source revert already lives. The subscription and the held frame survive
 the lease, so both hand-overs read as a hold, never a flash. `ForwardFrame`
 remains callerless: during a recording the preview consumes the engine's

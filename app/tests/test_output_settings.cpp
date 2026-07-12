@@ -1,17 +1,24 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <ctime>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <QCoreApplication>
 
 #include <recorder_core/recorder_session.h>
 
+#include "diagnostics/DiskSpaceProvider.h"
+#include "diagnostics/DiskSpaceThresholds.h"
 #include "models/FilenameBuilder.h"
 #include "models/OutputPathPolicy.h"
 #include "models/OutputPathValidator.h"
@@ -1237,9 +1244,15 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     target.kind = recorder_core::CaptureTarget::Kind::Monitor;
     target.native_id = 1; // never touched: the folder guard fires first
     target.description = "\\\\.\\DISPLAY1";
-    EXPECT_FALSE(coordinator.StartRecording(target, capability::AudioUiState{}, std::nullopt));
+    // The device work (and the folder guard) now runs on the preparation worker
+    // thread, so StartRecording returns true immediately (accepted) and the Failed
+    // result arrives asynchronously via the event loop — proof it is off-thread.
+    EXPECT_TRUE(coordinator.StartRecording(target, capability::AudioUiState{}, std::nullopt));
 
-    QCoreApplication::processEvents();
+    for (int i = 0; i < 500 && !failure.has_value(); ++i) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
     ASSERT_TRUE(failure.has_value());
     EXPECT_FALSE(failure->succeeded);
     // The contract: the dialog's format context equals what the recording
@@ -1252,6 +1265,214 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
 
     std::error_code cleanup_ec;
     std::filesystem::remove(file_as_folder, cleanup_ec);
+}
+
+// ---------------------------------------------------------------------------
+// Preparing-state (off-thread StartRecording) behaviour.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A ready coordinator: freshly-probed baseline caps, a valid temp output folder,
+// and a validated MKV/AV1/Opus format. `out_folder` receives the temp folder so
+// the caller can clean it up.
+void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesystem::path& out_folder) {
+    std::filesystem::create_directories(out_folder);
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.probed = true;
+    capability::ResolveResult validation;
+    validation.succeeded = true;
+    validation.resolved_config.container = capability::Container::Matroska;
+    validation.resolved_config.video_codec = capability::VideoCodec::Av1Nvenc;
+    validation.resolved_config.audio_codec = capability::AudioCodec::Opus;
+    coordinator.OnCapabilitiesReady(caps, validation);
+
+    OutputSettingsModel settings;
+    settings.output_folder = out_folder;
+    settings.container = capability::Container::Matroska;
+    settings.video_codec = capability::VideoCodec::Av1Nvenc;
+    settings.audio_codec = capability::AudioCodec::Opus;
+    coordinator.SetOutputSettings(settings);
+}
+
+recorder_core::CaptureTarget MonitorTarget() {
+    recorder_core::CaptureTarget target;
+    target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    target.native_id = 1;
+    target.description = "\\\\.\\DISPLAY1";
+    return target;
+}
+
+// A disk provider that parks the caller (the preparation worker) inside
+// FreeBytesForPath until the test releases it — making the "worker is mid-prepare"
+// window deterministic without touching a real device.
+class GatedDiskSpaceProvider final : public diagnostics::IDiskSpaceProvider {
+  public:
+    explicit GatedDiskSpaceProvider(uint64_t free_bytes) : free_bytes_(free_bytes) {
+    }
+
+    std::optional<uint64_t> FreeBytesForPath(const std::filesystem::path&) const override {
+        {
+            std::unique_lock<std::mutex> lock(m_);
+            entered_ = true;
+            entered_cv_.notify_all();
+            release_cv_.wait(lock, [this] { return released_; });
+        }
+        return free_bytes_;
+    }
+
+    void WaitEntered() {
+        std::unique_lock<std::mutex> lock(m_);
+        entered_cv_.wait(lock, [this] { return entered_; });
+    }
+    void Release() {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            released_ = true;
+        }
+        release_cv_.notify_all();
+    }
+
+  private:
+    uint64_t free_bytes_;
+    mutable std::mutex m_;
+    mutable std::condition_variable entered_cv_;
+    mutable std::condition_variable release_cv_;
+    mutable bool entered_ = false;
+    bool released_ = false;
+};
+
+class StubFreeSpace final : public diagnostics::IDiskSpaceProvider {
+  public:
+    explicit StubFreeSpace(uint64_t free_bytes) : free_bytes_(free_bytes) {
+    }
+    std::optional<uint64_t> FreeBytesForPath(const std::filesystem::path&) const override {
+        return free_bytes_;
+    }
+
+  private:
+    uint64_t free_bytes_;
+};
+
+// Pump the event loop until `predicate` holds or the timeout elapses.
+template <typename Pred> bool PumpUntil(Pred predicate, int max_iterations = 1000) {
+    for (int i = 0; i < max_iterations && !predicate(); ++i) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return predicate();
+}
+
+} // namespace
+
+// The start is accepted immediately (returns true, off-thread) and the low-disk
+// block is delivered asynchronously as Preparing → Failed(DiskSpace).
+TEST(PreparingStateTest, DiskBlockPostsFailedOffThread) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempPath(L"prep_disk");
+    MakeReadyCoordinator(coordinator, folder);
+
+    StubFreeSpace stub(diagnostics::kHardStopFreeBytes / 2); // at/under hard stop
+    coordinator.SetDiskSpaceProvider(&stub);
+
+    std::vector<UiRecordingState> states;
+    coordinator.SetStateChangedCallback([&](UiRecordingState s) { states.push_back(s); });
+    std::optional<UiRecordingResult> failure;
+    coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
+
+    EXPECT_TRUE(coordinator.StartRecording(MonitorTarget(), capability::AudioUiState{}, std::nullopt));
+
+    ASSERT_TRUE(PumpUntil([&] { return failure.has_value(); }));
+    EXPECT_FALSE(failure->succeeded);
+    EXPECT_EQ(failure->error_phase, std::wstring(L"DiskSpace"));
+    // The state machine passed through Preparing before Failed — the whole point.
+    ASSERT_GE(states.size(), 2u);
+    EXPECT_EQ(states.front(), UiRecordingState::Preparing);
+    EXPECT_EQ(states.back(), UiRecordingState::Failed);
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+}
+
+// A second StartRecording while a prepare is in flight is rejected (no double
+// start), and no second Preparing is posted.
+TEST(PreparingStateTest, SecondStartRejectedWhilePreparing) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempPath(L"prep_reentrancy");
+    MakeReadyCoordinator(coordinator, folder);
+
+    GatedDiskSpaceProvider gate(50ULL * 1024 * 1024 * 1024); // 50 GB free
+    coordinator.SetDiskSpaceProvider(&gate);
+
+    int preparing_posts = 0;
+    coordinator.SetStateChangedCallback([&](UiRecordingState s) {
+        if (s == UiRecordingState::Preparing)
+            ++preparing_posts;
+    });
+
+    EXPECT_TRUE(coordinator.StartRecording(MonitorTarget(), capability::AudioUiState{}, std::nullopt));
+    gate.WaitEntered(); // worker is parked mid-prepare, prepare_in_flight_ is set
+
+    // Second start must be rejected outright.
+    EXPECT_FALSE(coordinator.StartRecording(MonitorTarget(), capability::AudioUiState{}, std::nullopt));
+
+    // Cancel and let the worker unwind so the thread joins cleanly.
+    coordinator.CancelPreparing();
+    gate.Release();
+    ASSERT_TRUE(PumpUntil([&] { return coordinator.State() == UiRecordingState::Ready; }));
+
+    QCoreApplication::processEvents();
+    EXPECT_EQ(preparing_posts, 1);
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+}
+
+// Cancelling during Preparing (before the recording commits) returns to Ready
+// without ever posting Recording, and without leaking a recovery-manifest entry.
+TEST(PreparingStateTest, CancelBeforeRecordReturnsToReady) {
+    int argc = 0;
+    QCoreApplication app(argc, nullptr);
+
+    RecordingCoordinator coordinator;
+    const std::filesystem::path folder = UniqueTempPath(L"prep_cancel");
+    MakeReadyCoordinator(coordinator, folder);
+
+    RecoveryManifestStore manifest_store(QString::fromStdWString((folder / L"recovery.json").wstring()));
+    coordinator.SetRecoveryManifestStore(&manifest_store);
+
+    GatedDiskSpaceProvider gate(50ULL * 1024 * 1024 * 1024);
+    coordinator.SetDiskSpaceProvider(&gate);
+
+    std::vector<UiRecordingState> states;
+    coordinator.SetStateChangedCallback([&](UiRecordingState s) { states.push_back(s); });
+
+    EXPECT_TRUE(coordinator.StartRecording(MonitorTarget(), capability::AudioUiState{}, std::nullopt));
+    gate.WaitEntered();
+    // Request the cancel while the worker is parked in the disk query, so the flag
+    // is set before the worker reaches its first checkpoint.
+    coordinator.CancelPreparing();
+    gate.Release();
+
+    ASSERT_TRUE(PumpUntil([&] { return coordinator.State() == UiRecordingState::Ready; }));
+    QCoreApplication::processEvents();
+
+    // Never reached Recording.
+    for (UiRecordingState s : states)
+        EXPECT_NE(s, UiRecordingState::Recording);
+    EXPECT_EQ(states.back(), UiRecordingState::Ready);
+    EXPECT_FALSE(coordinator.IsArmedFromRecovery());
+    // No orphaned manifest entry from the cancelled prepare.
+    EXPECT_TRUE(manifest_store.Entries().isEmpty());
+
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
 }
 
 } // namespace

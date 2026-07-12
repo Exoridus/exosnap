@@ -26,6 +26,7 @@ enum class VisualRecordState {
     None,
     Ready,
     Countdown,
+    Preparing,
     Recording,
     Paused,
     Completed,
