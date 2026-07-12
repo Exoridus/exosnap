@@ -177,20 +177,27 @@ Per phase (Recording / Finalize / Remux), against the **real app**:
    the ≤ 2 s (`kDurabilityFlushInterval`) + reorder-window + one non-rendered
    cluster loss model actually holds and the file recovers.
 
-### Known issue: stale partial MP4 at the target path
+### Resolved: stale partial MP4 at the target path
 
-The MP4 Remux×Kill drill (`RemuxMp4ProcessKill_StalePartialMp4_KNOWN_ISSUE`) is a
-deliberate **xfail** — it `GTEST_SKIP`s (never falsely passes) until fixed:
+The MP4 Remux×Kill drill (`RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath`)
+was a deliberate **xfail** and is now a hard assertion.
 
-> `RemuxToProgressiveMp4` writes **directly** to the final, user-visible MP4 path.
-> A kill/powerloss mid-remux leaves a corrupt half-MP4 exactly where the user
-> expects their result. Next launch, `RecoveryService.Finish` produces a correct
-> MP4 under a *different* name (`ResolveUniqueOutputPath`) and **leaves the corrupt
-> file behind** — nothing overwrites or clears it. The MKV remains the source of
-> truth, so no data is lost, but the user sees a broken file at the target path.
+> Previously `RecoveryService.Finish` remuxed **directly** to the final,
+> user-visible MP4 path. A kill/powerloss mid-remux left a corrupt half-MP4 exactly
+> where the user expected their result, and next launch recovery produced the good
+> MP4 under a *different* name (`ResolveUniqueOutputPath`) and **left the corrupt
+> file behind**. No data was lost (the MKV was still the source of truth), but the
+> user saw a broken file at the target path.
 
-The drill asserts the **desired** end state (no corrupt artefact at the target
-path) and skips until the fix lands. The fix is a separate Coordinator/Recovery
-slice: remux to a temp path + atomic rename on success, **and/or** `Finish` clears
-`final_output_path` before placing the recovered MP4. The manifest already carries
-`final_output_path`, so the information needed is present.
+`Finish` now remuxes to a sibling `.part` temp on the target's own volume and
+atomically renames it onto the target with `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`.
+A corrupt partial already at `final_output_path` (this recording's own interrupted
+remux) is overwritten in place; a crash *during* the recovery remux leaves only the
+`.part` temp, never a half-written file at the target. The same temp+atomic-rename
+guard is applied to the MKV repair-remux path.
+
+Boundary: the **live** `RecordingCoordinator` remux (`RunRemuxJob` /
+`StartSegmentRemuxThread`) still writes directly to the final MP4, so a kill during
+the *first* remux can still momentarily leave a corrupt file at the target — but the
+next-launch recovery now cleans it up rather than stranding it. Making the live
+remux itself atomic is a natural follow-up.

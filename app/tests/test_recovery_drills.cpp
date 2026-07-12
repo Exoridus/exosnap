@@ -10,11 +10,11 @@
 // a LIVE drill (docs/dev/soak-and-recovery-drills.md); this suite validates the
 // RECOVERY side (Scan/Finish/repair) against realistic partials.
 //
-// KNOWN ISSUE surfaced here: the Remux×Kill cell leaves a corrupt half-MP4 at the
-// user-visible final path (RemuxToProgressiveMp4 writes it directly; recovery then
-// side-steps to a fresh name and never cleans the corrupt file). That fix is a
-// separate Coordinator/Recovery slice; the drill asserts the DESIRED end state and
-// skips (does not falsely pass) until the fix lands.
+// The Remux×Kill cell asserts the durability guarantee: after a kill that left a
+// corrupt half-MP4 at the user-visible final path, recovery must place a playable
+// MP4 there and leave no corrupt stub behind. RecoveryService::Finish now remuxes
+// to a sibling ".part" temp and atomically renames it onto the target (replacing
+// any stale partial in place), so this is a hard assertion rather than an xfail.
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -170,15 +170,12 @@ TEST(RecoveryDrill, RemuxMp4Ordered_ValidMkvProducesPlayableMp4) {
 }
 
 // =============================================================================
-// Remux(MP4) × Process-Kill: KNOWN ISSUE — stale partial MP4 at the target path.
-//
-// Models a kill mid-remux: a corrupt half-MP4 already sits at final_output_path.
-// The DESIRED end state is that recovery does not leave a corrupt artefact where
-// the user expects their result. Current behaviour side-steps to a fresh name and
-// leaves the corrupt file — so this drill SKIPS (never falsely passes) while the
-// bug stands, and will start enforcing the desired state once the fix lands.
+// Remux(MP4) × Process-Kill: a corrupt half-MP4 already sits at final_output_path
+// (the killed remux). Recovery must overwrite it in place with a playable MP4 and
+// leave no stale file behind — not side-step to a fresh name and strand the corrupt
+// stub where the user looks for their result.
 // =============================================================================
-TEST(RecoveryDrill, RemuxMp4ProcessKill_StalePartialMp4_KNOWN_ISSUE) {
+TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     RecoveryManifestStore store(QDir(tmp.path()).filePath(QStringLiteral("manifest.json")));
@@ -201,20 +198,22 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_StalePartialMp4_KNOWN_ISSUE) {
     store.Add(e);
 
     const auto r = service.Finish(e);
-    ASSERT_TRUE(r.success) << r.message; // recovery still produces a good MP4 somewhere
+    ASSERT_TRUE(r.success) << r.message;
 
-    if (QFileInfo::exists(final_out) && !CanDemux(final_out)) {
-        GTEST_SKIP() << "KNOWN ISSUE: a corrupt half-MP4 remains at the user-visible target path "
-                     << "(" << final_out.toStdString() << "). Recovery wrote the good MP4 under a "
-                     << "different name and left the stale file. Tracked as a Coordinator/Recovery "
-                     << "fix (remux-to-temp + atomic rename, or Finish clears final_output_path). "
-                     << "See docs/dev/soak-and-recovery-drills.md.";
-    }
-
-    // DESIRED end state (enforced once the fix lands): the user's target path holds
-    // a playable MP4, not a corrupt stub.
+    // The user's target path holds a playable MP4, not the corrupt stub.
     EXPECT_TRUE(QFileInfo::exists(final_out));
     EXPECT_TRUE(CanDemux(final_out)) << "target path should hold a playable MP4";
+
+    // The good file is AT the target — recovery did not side-step to "(2)".
+    const QString sidestepped = QDir(tmp.path()).filePath(QStringLiteral("session (2).mp4"));
+    EXPECT_FALSE(QFileInfo::exists(sidestepped)) << "recovery must not strand a duplicate at a fresh name";
+
+    // No transient left behind.
+    const QString leftover_temp = QDir(tmp.path()).filePath(QStringLiteral("session.mp4.part"));
+    EXPECT_FALSE(QFileInfo::exists(leftover_temp)) << "the .part temp must be gone after the atomic rename";
+
+    // The manifest entry is cleared on success.
+    EXPECT_TRUE(store.Entries().isEmpty());
 }
 
 } // namespace

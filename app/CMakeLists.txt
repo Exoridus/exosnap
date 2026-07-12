@@ -1635,8 +1635,8 @@ target_include_directories(recovery_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE
 set_target_properties(recovery_service_tests PROPERTIES AUTOMOC ON)
 
 # Recovery drill matrix: drive RecoveryService against REAL synthetic-pipeline
-# artefacts (real MKV, truncated to model a kill). Includes the stale-partial-MP4
-# known-issue drill (skips until the Coordinator/Recovery fix lands).
+# artefacts (real MKV, truncated to model a kill). Includes the Remux×Kill drill
+# that asserts recovery replaces a corrupt half-MP4 at the target path in place.
 exosnap_add_gtest(
     NAME recovery_drill_tests
     TEST_PREFIX recovery.
