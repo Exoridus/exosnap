@@ -553,6 +553,17 @@ void DiagnosticsPage::setSelectedCaptureTarget(const std::optional<recorder_core
     }
 }
 
+void DiagnosticsPage::setSavedDisplayUnresolved(bool unresolved, const std::string& label) {
+    if (saved_display_unresolved_ == unresolved && saved_display_label_ == label) {
+        return;
+    }
+    saved_display_unresolved_ = unresolved;
+    saved_display_label_ = label;
+    if (data_ready_ && isVisible()) {
+        refreshOverview();
+    }
+}
+
 void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, const OutputSettingsModel& output,
                                         const VideoSettingsModel& video, const capability::AudioUiState& audio,
                                         const std::string& profile_name, const std::string& hotkeys_summary,
@@ -1394,6 +1405,7 @@ void DiagnosticsPage::refreshOverview() {
     // Feed the selected capture target's live HDR status so the HDR10 + H.264
     // pre-flight blocker (rec.hdr.h264) fires only on an HDR-active desktop.
     engine.SetCaptureTargetHdrActive(SelectedTargetHdrActive(selected_capture_target_, caps_));
+    engine.SetSavedDisplayUnresolved(saved_display_unresolved_, saved_display_label_);
 
     auto recs = engine.Generate();
 

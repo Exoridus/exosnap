@@ -796,6 +796,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (applying_preset_)
             return;
         onLiveConfigChanged();
+        // Capture-target resolution (saved-display-not-found notice) can change on
+        // a manual re-selection or a topology-driven re-resolve.
+        refreshDiagnosticsData();
     });
 
     // NOTE: webcam_page_ settingsChanged is wired in buildWebcamPage() after deferred construction.
@@ -2691,6 +2694,12 @@ void MainWindow::refreshDiagnosticsData() {
     std::optional<recorder_core::CaptureTarget> selected_target;
     if (record_page_) {
         selected_target = record_page_->selectedCaptureTarget();
+        const RecordPage::SavedDisplayResolution res = record_page_->savedDisplayResolution();
+        std::string label = res.friendly_name;
+        if (label.empty() && res.seq_hint > 0) {
+            label = "Display " + std::to_string(res.seq_hint);
+        }
+        diagnostics_page_->setSavedDisplayUnresolved(res.unresolved, label);
     }
     diagnostics_page_->setSelectedCaptureTarget(selected_target);
 }

@@ -61,6 +61,11 @@ class DiagnosticsPage : public QWidget {
     // the owner whenever the selection changes; nullopt = no selection / SDR.
     void setSelectedCaptureTarget(const std::optional<recorder_core::CaptureTarget>& target);
 
+    // Whether a concretely-saved capture target could not be resolved to any
+    // connected display (stable-display-identity). Feeds the calm "saved display
+    // not found" notice. label describes the saved (missing) display.
+    void setSavedDisplayUnresolved(bool unresolved, const std::string& label);
+
     // Live recording-pipeline telemetry, delivered on the UI thread (~5 Hz while
     // recording, plus one final frozen snapshot). Safe to call when idle.
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
@@ -218,6 +223,8 @@ class DiagnosticsPage : public QWidget {
     bool data_ready_ = false;
     bool expert_mode_enabled_ = false;
     std::optional<recorder_core::CaptureTarget> selected_capture_target_;
+    bool saved_display_unresolved_ = false;
+    std::string saved_display_label_;
     capability::UserRecorderConfig active_user_config_{};
     capability::ResolveResult profile_validation_;
 

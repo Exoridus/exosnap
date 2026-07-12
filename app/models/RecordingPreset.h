@@ -1,6 +1,7 @@
 #pragma once
 
 #include "OutputSettingsModel.h"
+#include "StableDisplayId.h"
 #include "VideoSettingsModel.h"
 #include "WebcamSettings.h"
 
@@ -16,6 +17,16 @@ namespace exosnap {
 
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
+//
+// v25: the capture target's monitor identity moves from the unstable GDI device
+// name to a hardware-stable StableDisplayId sub-table (device path + EDID). The
+// [capture] string keys display_key/region_display_key are replaced by
+// [capture.display_id]/[capture.region_display_id] sub-tables, and the region is
+// stored anchor-relative (region_{x,y,w,h}_norm) instead of absolute virtual-
+// screen pixels. Pre-1.0, older files simply lack the sub-tables: the field-wise
+// repair leaves the identity empty ("no preference"), the saved display target is
+// dropped once, and the next save writes the new stable form. Not reported as an
+// error (only a real parse failure is). See ADR 0047.
 //
 // v24: adds audio.pcm_float (bool) -- 32-bit float PCM (A_PCM/FLOAT_IEEE),
 // opt-in only when audio_codec == Pcm and audio_bit_depth == 32. Older
@@ -46,7 +57,7 @@ namespace exosnap {
 // with explicit "full" is a deliberate post-flip opt-in and is respected.
 // See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 24;
+inline constexpr int kPresetSchemaVersion = 25;
 
 // Files at or below this schema get the targeted color_range full->limited
 // rewrite (ADR 0032) on top of the ordinary field-wise repair.
@@ -75,19 +86,27 @@ enum class PresetCaptureKind {
 // PresetCaptureTarget
 // ---------------------------------------------------------------------------
 
-// Stores best-effort stable identities for the capture source selected at the
-// time the preset was saved.  Raw platform handles (HWND, HMONITOR) are never
-// stored here — the keys are description-based and matched at restore time.
-// An empty key means "no stored preference".
+// Stores the capture source selected at the time the preset was saved. Raw
+// platform handles (HWND, HMONITOR) are never stored — monitors are identified
+// by a hardware-stable StableDisplayId (device path + EDID) resolved at restore
+// time by the ranked DisplayIdentityResolver; windows stay description-based
+// (there is no hardware-stable window identity — out of scope). An empty()
+// display_id means "no stored preference" (primary/any monitor).
+//
+// The region is stored ANCHOR-RELATIVE: normalized [0,1] fractions of the anchor
+// display's physical rect, so a resolution change carries it proportionally.
 struct PresetCaptureTarget {
     PresetCaptureKind kind = PresetCaptureKind::Display;
 
-    std::string display_key; // Monitor identity (description-based)
-    std::string window_key;  // Window/app identity (description-based)
+    StableDisplayId display_id; // Monitor identity (hardware-stable)
+    std::string window_key;     // Window/app identity (description-based)
 
     bool has_region = false;
-    recorder_core::CaptureRegion region{}; // Virtual-screen coords
-    std::string region_display_key;        // Monitor the region belongs to
+    StableDisplayId region_display_id; // Anchor display the region belongs to
+    float region_x_norm = 0.0f;        // Region rect as [0,1] fractions of the
+    float region_y_norm = 0.0f;        // anchor display's physical rcMonitor.
+    float region_w_norm = 0.0f;
+    float region_h_norm = 0.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -181,11 +200,11 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 
 // Returns true when `a` and `b` are dirty-equivalent — i.e. the user has NOT
 // made meaningful changes.  Identical to NormalizedConfigEquals EXCEPT that the
-// capture sub-struct (kind, display_key, window_key, has_region, region,
-// region_display_key) is NOT compared.  Capture identity is transient: it
+// capture sub-struct (kind, display_id, window_key, has_region, region norms,
+// region_display_id) is NOT compared.  Capture identity is transient: it
 // depends on device availability and on auto-resolution (the default preset
-// stores an empty display_key meaning "primary/any", but once applied the live
-// policy holds a concrete resolved key).  Comparing capture would cause the
+// stores an empty display_id meaning "primary/any", but once applied the live
+// policy holds a concrete resolved identity).  Comparing capture would cause the
 // preset to appear spuriously dirty on startup, on monitor replug, etc.
 // Per spec: temporary availability changes must not make the preset dirty.
 // NOTE: NormalizedConfigEquals is kept for persistence round-trip verification

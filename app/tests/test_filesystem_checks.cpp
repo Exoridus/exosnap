@@ -256,10 +256,51 @@ TEST(FilesystemChecksRecommendationTest, Fat32_Plus_HardDiskStop_Fat32RemainsNot
 TEST(FilesystemChecksRecommendationTest, GetAllRecommendationCodes_IncludesRec008) {
     const auto codes = RecommendationEngine::GetAllRecommendationCodes();
     // rec.001–rec.008 + the 0.8.0 incident catalog rec.009/rec.010 + rec.color.range +
-    // rec.hdr.h264 → 12 codes.
-    EXPECT_EQ(codes.size(), 12u);
+    // rec.hdr.h264 + display.saved.unresolved → 13 codes.
+    EXPECT_EQ(codes.size(), 13u);
     const bool has_rec008 = std::find(codes.begin(), codes.end(), "rec.008") != codes.end();
     EXPECT_TRUE(has_rec008);
+}
+
+// ─── Saved-display-not-found — calm Display notice ───────────────────────────
+
+TEST(FilesystemChecksRecommendationTest, SavedDisplayUnresolved_ProducesOneNoticeWithFixAction) {
+    const capability::CapabilitySet caps = MakeBasicCaps();
+    const capability::UserRecorderConfig config = MakeBasicConfig();
+
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    engine.SetSavedDisplayUnresolved(true, "LG HDR 4K");
+    const DiagnosticChecklist cl = engine.Generate();
+
+    int notices = 0;
+    const DiagnosticResult* found = nullptr;
+    for (const auto& r : cl.results) {
+        if (r.id == "display.saved.unresolved") {
+            ++notices;
+            found = &r;
+        }
+    }
+    ASSERT_EQ(notices, 1);
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found->group, DiagnosticGroup::Display);
+    EXPECT_EQ(found->severity, DiagnosticSeverity::Notice);
+    ASSERT_TRUE(found->fix_action.has_value());
+    EXPECT_EQ(found->fix_action->safety, FixAction::Safety::Assisted);
+    EXPECT_FALSE(cl.has_blocker);
+    EXPECT_TRUE(cl.has_notice);
+}
+
+TEST(FilesystemChecksRecommendationTest, SavedDisplayResolved_NoNotice) {
+    const capability::CapabilitySet caps = MakeBasicCaps();
+    const capability::UserRecorderConfig config = MakeBasicConfig();
+
+    RecommendationEngine engine(caps, config, 0, std::nullopt, true);
+    // Default: resolved / empty target -> no notice.
+    const DiagnosticChecklist cl = engine.Generate();
+
+    for (const auto& r : cl.results) {
+        EXPECT_NE(r.id, "display.saved.unresolved");
+    }
 }
 
 // ─── FAT32 case-sensitivity guard ────────────────────────────────────────────

@@ -562,6 +562,32 @@ double TomlFloat(const toml::node_view<const toml::node>& node, double default_v
 // Per-item TOML serialization helpers
 // ---------------------------------------------------------------------------
 
+// A StableDisplayId round-trips as its own sub-table. A missing sub-table (older
+// pre-v25 file) simply yields an empty() identity — "no stored preference".
+toml::table StableDisplayIdToToml(const StableDisplayId& id) {
+    toml::table t;
+    t.emplace("device_path", id.device_path);
+    t.emplace("edid_vendor", id.edid_vendor);
+    t.emplace("edid_product", static_cast<int64_t>(id.edid_product));
+    t.emplace("serial", id.serial);
+    t.emplace("friendly_name", id.friendly_name);
+    t.emplace("gdi_name", id.gdi_name);
+    t.emplace("seq_hint", static_cast<int64_t>(id.seq_hint));
+    return t;
+}
+
+StableDisplayId StableDisplayIdFromToml(const toml::node_view<const toml::node>& node) {
+    StableDisplayId id;
+    id.device_path = TomlStr(node["device_path"]);
+    id.edid_vendor = TomlStr(node["edid_vendor"]);
+    id.edid_product = static_cast<uint32_t>(TomlInt(node["edid_product"], 0));
+    id.serial = TomlStr(node["serial"]);
+    id.friendly_name = TomlStr(node["friendly_name"]);
+    id.gdi_name = TomlStr(node["gdi_name"]);
+    id.seq_hint = static_cast<int>(TomlInt(node["seq_hint"], 0));
+    return id;
+}
+
 // Serializes the config body shared by every stored preset AND the [live]
 // table — capture/output/video/audio/webcam/countdown. No id/name here: those
 // are preset-only identity, not part of the config.
@@ -572,14 +598,14 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     const auto& cap = config.capture;
     toml::table cap_tbl;
     cap_tbl.emplace("kind", PresetCaptureKindToString(cap.kind).toStdString());
-    cap_tbl.emplace("display_key", cap.display_key);
+    cap_tbl.emplace("display_id", StableDisplayIdToToml(cap.display_id));
     cap_tbl.emplace("window_key", cap.window_key);
     cap_tbl.emplace("has_region", cap.has_region);
-    cap_tbl.emplace("region_x", static_cast<int64_t>(cap.region.x));
-    cap_tbl.emplace("region_y", static_cast<int64_t>(cap.region.y));
-    cap_tbl.emplace("region_w", static_cast<int64_t>(cap.region.width));
-    cap_tbl.emplace("region_h", static_cast<int64_t>(cap.region.height));
-    cap_tbl.emplace("region_display_key", cap.region_display_key);
+    cap_tbl.emplace("region_display_id", StableDisplayIdToToml(cap.region_display_id));
+    cap_tbl.emplace("region_x_norm", static_cast<double>(cap.region_x_norm));
+    cap_tbl.emplace("region_y_norm", static_cast<double>(cap.region_y_norm));
+    cap_tbl.emplace("region_w_norm", static_cast<double>(cap.region_w_norm));
+    cap_tbl.emplace("region_h_norm", static_cast<double>(cap.region_h_norm));
     tbl.emplace("capture", std::move(cap_tbl));
 
     // --- Output ---
@@ -724,14 +750,14 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
         const auto kind = PresetCaptureKindFromString(QString::fromStdString(TomlStr(tbl["capture"]["kind"])));
         cap.kind = kind.value_or(PresetCaptureKind::Display);
     }
-    cap.display_key = TomlStr(tbl["capture"]["display_key"]);
+    cap.display_id = StableDisplayIdFromToml(tbl["capture"]["display_id"]);
     cap.window_key = TomlStr(tbl["capture"]["window_key"]);
     cap.has_region = TomlBool(tbl["capture"]["has_region"], false);
-    cap.region.x = static_cast<int>(TomlInt(tbl["capture"]["region_x"], 0));
-    cap.region.y = static_cast<int>(TomlInt(tbl["capture"]["region_y"], 0));
-    cap.region.width = static_cast<int>(TomlInt(tbl["capture"]["region_w"], 0));
-    cap.region.height = static_cast<int>(TomlInt(tbl["capture"]["region_h"], 0));
-    cap.region_display_key = TomlStr(tbl["capture"]["region_display_key"]);
+    cap.region_display_id = StableDisplayIdFromToml(tbl["capture"]["region_display_id"]);
+    cap.region_x_norm = static_cast<float>(TomlFloat(tbl["capture"]["region_x_norm"], 0.0));
+    cap.region_y_norm = static_cast<float>(TomlFloat(tbl["capture"]["region_y_norm"], 0.0));
+    cap.region_w_norm = static_cast<float>(TomlFloat(tbl["capture"]["region_w_norm"], 0.0));
+    cap.region_h_norm = static_cast<float>(TomlFloat(tbl["capture"]["region_h_norm"], 0.0));
 
     // --- Output ---
     auto& out = config.output;

@@ -95,11 +95,14 @@ RecordingPreset MakeDefaultPreset() {
 
     // Capture
     preset.config.capture.kind = PresetCaptureKind::Display;
-    preset.config.capture.display_key = "";
+    preset.config.capture.display_id = StableDisplayId{};
     preset.config.capture.window_key = "";
     preset.config.capture.has_region = false;
-    preset.config.capture.region = recorder_core::CaptureRegion{};
-    preset.config.capture.region_display_key = "";
+    preset.config.capture.region_display_id = StableDisplayId{};
+    preset.config.capture.region_x_norm = 0.0f;
+    preset.config.capture.region_y_norm = 0.0f;
+    preset.config.capture.region_w_norm = 0.0f;
+    preset.config.capture.region_h_norm = 0.0f;
 
     // Output — start from Defaults() then override codecs.
     // MKV + AV1 + Opus is a valid combination; do NOT call ReconcileContainerCodecs.
@@ -440,8 +443,9 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
 
-    // Capture: if kind is Region but region is not valid, clear has_region.
-    if (config.capture.kind == PresetCaptureKind::Region && !config.capture.region.IsValid()) {
+    // Capture: if kind is Region but the normalized region has no area, clear it.
+    if (config.capture.kind == PresetCaptureKind::Region &&
+        (config.capture.region_w_norm <= 0.0f || config.capture.region_h_norm <= 0.0f)) {
         config.capture.has_region = false;
     }
 
@@ -501,21 +505,24 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.capture.kind != b.capture.kind) {
         return false;
     }
-    if (a.capture.display_key != b.capture.display_key) {
+    if (!(a.capture.display_id == b.capture.display_id)) {
         return false;
     }
     if (a.capture.window_key != b.capture.window_key) {
         return false;
     }
-    if (a.capture.region_display_key != b.capture.region_display_key) {
+    if (!(a.capture.region_display_id == b.capture.region_display_id)) {
         return false;
     }
     if (a.capture.has_region != b.capture.has_region) {
         return false;
     }
     if (a.capture.has_region) {
-        if (a.capture.region.x != b.capture.region.x || a.capture.region.y != b.capture.region.y ||
-            a.capture.region.width != b.capture.region.width || a.capture.region.height != b.capture.region.height) {
+        constexpr float kNormTol = 1e-4f;
+        if (std::abs(a.capture.region_x_norm - b.capture.region_x_norm) > kNormTol ||
+            std::abs(a.capture.region_y_norm - b.capture.region_y_norm) > kNormTol ||
+            std::abs(a.capture.region_w_norm - b.capture.region_w_norm) > kNormTol ||
+            std::abs(a.capture.region_h_norm - b.capture.region_h_norm) > kNormTol) {
             return false;
         }
     }
@@ -777,8 +784,8 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 // ---------------------------------------------------------------------------
 
 bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
-    // Capture identity (kind, display_key, window_key, has_region, region,
-    // region_display_key), output.bit_depth, and output.hdr_mode are
+    // Capture identity (kind, display_id, window_key, has_region, region norms,
+    // region_display_id), output.bit_depth, and output.hdr_mode are
     // intentionally NOT compared here: all three are environment fields
     // (see WithEnvironmentFields/StripEnvironmentFields) describing the
     // machine/display rather than the user's recording intent. Capture
@@ -786,7 +793,7 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     // and HDR mode depend on the connected display and source. Comparing any
     // of them would cause spurious/unstable dirty state (e.g. default preset
     // appears dirty at startup because the live policy resolves an empty
-    // display_key to a concrete monitor key, or because a monitor is
+    // display_id to a concrete monitor identity, or because a monitor is
     // replugged, or because the desktop's HDR toggle changes).
     // Per spec: temporary availability changes must not make the preset dirty.
     // NormalizedConfigEquals (full structural equality) is kept for persistence
