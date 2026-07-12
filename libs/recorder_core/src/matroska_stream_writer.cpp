@@ -547,9 +547,7 @@ bool MatroskaStreamWriter::FlushCluster() {
         // Publish progress for the out-of-thread shutdown observer. This runs on
         // the mux thread's streaming loop AND inside the blocking Finalize() drain,
         // so a long finalize keeps advancing this value while it writes.
-        if (m_progress_sink != nullptr) {
-            m_progress_sink->store(m_bytes_written, std::memory_order_relaxed);
-        }
+        PublishProgress();
         // CueClusterPosition must be relative to the Segment data start (Matroska spec
         // §8.1.6.1): relative = absolute - Segment_element_start - Segment_head_bytes.
         const uint64_t cluster_abs = m_cluster->GetPosition();
@@ -599,6 +597,33 @@ bool MatroskaStreamWriter::FlushCluster() {
     return true;
 }
 
+void MatroskaStreamWriter::PublishProgress() noexcept {
+    if (m_io == nullptr)
+        return;
+    // Progress publication is strictly best-effort: getFilePointer() can throw
+    // (ftell failure), and this runs from noexcept contexts (including after the
+    // final flush, outside Finalize()'s try/catch), so swallow any failure — a
+    // stale/unchanged sink value is harmless, it just means one fewer progress
+    // sample for the out-of-thread finalize watcher.
+    try {
+        // Clamp to a running max: some back-patch steps (SeekHead/Segment-size
+        // OverwriteHead) seek backward to rewrite an earlier region of the file
+        // and may or may not restore the position afterward. Never let a
+        // transient backward position regress the published value — the
+        // out-of-thread finalize watcher (FinalizeProgressTracker) must see
+        // monotonic-or-flat progress, never a spurious drop.
+        const uint64_t pos = static_cast<uint64_t>(m_io->getFilePointer());
+        if (pos > m_bytes_written) {
+            m_bytes_written = pos;
+        }
+    } catch (...) {
+        // keep the last known value
+    }
+    if (m_progress_sink != nullptr) {
+        m_progress_sink->store(m_bytes_written, std::memory_order_relaxed);
+    }
+}
+
 bool MatroskaStreamWriter::Finalize() {
     if (!m_opened || m_finalized)
         return !m_failed;
@@ -621,7 +646,12 @@ bool MatroskaStreamWriter::Finalize() {
     if (ok) {
         try {
             // --- Cues ---
+            // O(number of keyframes across the whole recording) and disk-bound
+            // on a slow/networked target — exactly the phase the finalize
+            // shutdown wait (FinalizeProgressTracker) must see advancing, so
+            // publish a checkpoint immediately after.
             m_cues->Render(*m_io);
+            PublishProgress();
 
             // --- SeekHead into the reserved placeholder ---
             {
@@ -631,6 +661,7 @@ bool MatroskaStreamWriter::Finalize() {
                 seekhead.IndexThis(*m_cues, *m_segment);
                 m_seekhead_void->ReplaceWith(seekhead, *m_io, /*ComeBackAfterward=*/true);
             }
+            PublishProgress();
 
             // --- Back-patch Duration in the already-written Info element ---
             {
@@ -650,6 +681,7 @@ bool MatroskaStreamWriter::Finalize() {
                 // if any child's encoded size changed.)
                 dur.OverwriteData(*m_io);
             }
+            PublishProgress();
 
             // --- Back-patch the Segment size ---
             {
@@ -659,6 +691,7 @@ bool MatroskaStreamWriter::Finalize() {
                     m_segment->OverwriteHead(*m_io);
                 }
             }
+            PublishProgress();
         } catch (const std::exception& ex) {
             Fail(std::string("MatroskaStreamWriter::Finalize failed: ") + ex.what());
             ok = false;
@@ -679,6 +712,11 @@ bool MatroskaStreamWriter::Finalize() {
         }
         ++m_durability_flush_count;
     }
+    // Checkpoint around the final flush too: even though FlushFileBuffers
+    // itself does not move the file position, publishing here ensures the
+    // watcher's last-progress mark reflects the moment Finalize() actually
+    // finished writing, not the last cluster flushed minutes earlier.
+    PublishProgress();
 
     CloseIo();
     return ok && !m_failed;

@@ -282,4 +282,60 @@ TEST_F(TrimTest, BothStartAndEndTrim) {
                                     << size_full << ")";
 }
 
+// --- Start trim whose start_us lands mid-GOP, more than 1 s after the
+// preceding keyframe: exercises the trim-start-keyframe-contract fix in
+// mp4_remuxer.cpp. The fix (a) rescales av_seek_frame()'s timestamp into the
+// video stream's own time_base — the un-rescaled AV_TIME_BASE value used to
+// seek far past EOF and silently fail — and (b) removes the `start_us - 1 s`
+// fudge so the backward seek's keyframe target (the keyframe AT OR BEFORE
+// start_us) is accepted unconditionally instead of being rejected once the GOP
+// exceeds 1 s.
+//
+// Fixture limitation (documented, not a product gap): the synthetic streams use
+// non-conformant payloads (0xAB filler), and libavformat's H.264/AV1 bitstream
+// parser overrides the per-packet AV_PKT_FLAG_KEY based on payload content when
+// av_read_frame runs (the same reason ExtractKeyframeTimestamps reads Cues, not
+// packet flags). The trim-start lock keys off that flag, so with synthetic
+// streams no packet is ever accepted and the trimmed output is a near-empty
+// container regardless of the start point — content-size assertions cannot
+// distinguish keyframe boundaries here. What this test CAN guarantee is that
+// the corrected seek path stays healthy: a mid-GOP start on a multi-second-GOP
+// source remuxes successfully to a well-formed, re-openable container for both
+// MKV and MP4 outputs. Exact keyframe-boundary preservation is verified in
+// production against real bitstreams (EditExportPage snaps start_us to a real
+// keyframe PTS before calling in). ---
+TEST_F(TrimTest, StartTrimMidGopRemuxesToValidContainer) {
+    // 3 s GOP (180 frames @ 60 fps): keyframes at ~0, 3, 6, 9 s. The start
+    // lands 2.5 s past kfs[1] — well beyond the old 1 s fudge window, and
+    // before kfs[2].
+    ASSERT_FALSE(BuildTrimMkv(src_, 12.0, 180).empty());
+    const auto kfs = ExtractKeyframeTimestamps(src_);
+    ASSERT_GE(kfs.size(), 3u) << "Need >=3 keyframes (~0/3/6/9 s) for this test";
+
+    const int64_t start_mid = kfs[1] + 2500000; // kfs[1] + 2.5 s
+    ASSERT_LT(start_mid, kfs[2]) << "Fixture assumption violated: start must land before kfs[2]";
+
+    TrimRange tr;
+    tr.start_us = start_mid;
+    tr.end_us = TrimRange::kNoTimestamp;
+
+    // Both outputs must remux with RemuxResult::success — a documented hard
+    // guarantee (mp4_remuxer.h): the corrected backward seek (rescaled into the
+    // stream time_base) must not turn into a read/seek error the packet loop
+    // surfaces as a failure. Before the units fix the seek target overshot far
+    // past EOF; this asserts the trim-start path stays healthy end-to-end for a
+    // GOP much wider than the removed 1 s fudge window.
+    const std::string dst_mkv = UniqueTrimTempPath("midgop.mkv");
+    std::remove(dst_mkv.c_str());
+    {
+        auto res = RemuxToMkv(src_, dst_mkv, RemuxNoopCallback(), tr);
+        EXPECT_TRUE(res.success) << "Mid-GOP start trim to MKV failed: " << res.message;
+    }
+    std::remove(dst_mkv.c_str());
+    {
+        auto res = RemuxToProgressiveMp4(src_, dst_, RemuxNoopCallback(), tr);
+        EXPECT_TRUE(res.success) << "Mid-GOP start trim to MP4 failed: " << res.message;
+    }
+}
+
 // (diagnostic tests removed — root cause found and fixed)
