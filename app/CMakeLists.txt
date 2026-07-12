@@ -216,8 +216,6 @@ qt_add_executable(exosnap WIN32
     pages/DiagnosticsPage.cpp
     pages/LogsPage.h
     pages/LogsPage.cpp
-    pages/OutputPage.h
-    pages/OutputPage.cpp
     pages/EditExportPage.h
     pages/EditExportPage.cpp
     services/DeviceDiscoveryCommon.h
@@ -1022,18 +1020,6 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
-
-exosnap_add_gtest(
-    NAME output_page_tests
-    TEST_PREFIX output.
-    SOURCES
-        tests/test_output_page.cpp
-        pages/OutputPage.cpp
-        ui/widgets/ComboBoxWheelFilter.cpp
-    LIBRARIES exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(output_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(output_page_tests PROPERTIES AUTOMOC ON)
 
 # SETTINGS-TIERS-R2 Phase 2: InfoHintIcon widget unit tests.
 exosnap_add_gtest(

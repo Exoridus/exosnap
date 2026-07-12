@@ -89,7 +89,6 @@ class DiagnosticsPage;
 class EditExportPage;
 class HotkeysPage;
 class LogsPage;
-class OutputPage;
 class RecordPage;
 class UpdateService;
 class WebcamPage;
@@ -218,9 +217,6 @@ class MainWindow : public QMainWindow {
     // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
     // Ends with applySettings(live_webcam_) to replay preset-applied state.
     void buildWebcamPage();
-    // Builds OutputPage, replacing the cheap placeholder reserved at kOutputPageIndex.
-    // Ends with refreshPresetUi() so the freshly-built page gets its profile options.
-    void buildOutputPage();
     // Builds ConfigPage (Settings), replacing the cheap placeholder reserved at kSettingsPageIndex.
     // Ends with applyPresetConfig() + refreshPresetUi() + chrome-state replay so the freshly-built
     // page has correct settings, preset list, and readiness/lock status on first open.
@@ -255,7 +251,7 @@ class MainWindow : public QMainWindow {
     // single write instead of one per intermediate value.
     void schedulePersistLiveState();
 
-    // Export / import handlers (wired to OutputPage signals).
+    // Export / import handlers (wired to ConfigPage preset signals).
     void onExportSelectedProfile(const QString& path);
     void onImportProfiles(const QString& path);
 
@@ -392,7 +388,6 @@ class MainWindow : public QMainWindow {
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
     QWidget* config_placeholder_ = nullptr; // cheap slot-reservation until buildConfigPage()
-    OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     QWidget* diagnostics_placeholder_ = nullptr; // cheap slot-reservation until buildDiagnosticsPage()
     LogsPage* logs_page_ = nullptr;
@@ -402,8 +397,7 @@ class MainWindow : public QMainWindow {
     HotkeysPage* hotkeys_page_ = nullptr;
     QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
     pages::AboutPage* about_page_ = nullptr;
-    QWidget* about_placeholder_ = nullptr;  // cheap slot-reservation until buildAboutPage()
-    QWidget* output_placeholder_ = nullptr; // cheap slot-reservation until buildOutputPage()
+    QWidget* about_placeholder_ = nullptr; // cheap slot-reservation until buildAboutPage()
     DevicePage* device_page_ = nullptr;
     QWidget* device_placeholder_ = nullptr; // cheap slot-reservation until buildDevicePage()
 
