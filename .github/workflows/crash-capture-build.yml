@@ -105,6 +105,29 @@ jobs:
           }
           Write-Host "crashpad_handler.exe present: $((Get-Item $exe).Length) bytes"
 
+      # Privacy review (ADR 0045, docs/privacy-review.md): build the test
+      # targets and run the crash_capture suite against the REAL sentry-native
+      # link (EXOSNAP_CRASH_CAPTURE_AVAILABLE=1). Previously this job only
+      # built --target exosnap and never ran ctest at all, so the crash_capture
+      # tests never exercised the real sentry-native API path. This does not
+      # add a new sentry-specific test — it makes the EXISTING scrubber/engine
+      # tests run under the ON configuration (docs/privacy-review.md documents
+      # this as its own honest CI-reach boundary: the sentry-free golden-set
+      # test in ci.yml's build-test job is what every PR gets; this ON-build
+      # test run only happens here, gated to push-to-main / the crash-capture
+      # label / manual dispatch, same as this whole job).
+      - name: Build tests (crash capture ON)
+        run: cmake --build build/win-on
+
+      - name: Test crash_capture (crash capture ON)
+        # "crash." matches every libs/crash_capture test binary's CTest entry
+        # name (TEST_PREFIX "crash." in libs/crash_capture/CMakeLists.txt):
+        # test_crash_scrubber, test_crash_capture_engine, test_local_minidump.
+        run: >-
+          pwsh -NonInteractive -File scripts/run-tests.ps1
+          -BuildDir build/win-on -Config Release
+          -Filter crash. -ExcludeLabel live
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats

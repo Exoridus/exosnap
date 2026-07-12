@@ -6,6 +6,7 @@
 
 #include <crash_capture/crash_scrubber.h>
 
+#include <array>
 #include <gtest/gtest.h>
 #include <string>
 #include <string_view>
@@ -139,6 +140,49 @@ TEST(GenerateCorrelationIdTest, UniquePerCall) {
     auto id1 = GenerateCorrelationId();
     auto id2 = GenerateCorrelationId();
     EXPECT_NE(id1, id2) << "Correlation IDs must be unique per call";
+}
+
+// ---------------------------------------------------------------------------
+// Allowlist Golden-Set test (ADR 0045 / D2).
+//
+// kAllowedTagKeys now lives ONCE, in crash_scrubber.h (previously it was also
+// hand-repeated as a literal brace-list inside crash_capture.cpp's
+// BeforeSendHook — that copy is gone; the hook now iterates AllowedTagKeys()).
+// This test hardcodes an independent "golden" copy of the expected key set so
+// that ANY change to the allowlist — adding, removing, renaming a key — fails
+// this test and forces the author to consciously update the golden array
+// here, which is the trigger to also update the PRIVACY.md / product-spec
+// §14 mapping table (scripts/validate-privacy-allowlist.ps1 enforces that
+// those documents list exactly this set).
+// ---------------------------------------------------------------------------
+
+TEST(AllowedTagKeysGoldenTest, MatchesGoldenSet) {
+    // Golden set: the fields the app promises are the ONLY structured tags
+    // that survive BeforeSendHook. Keep this list and PRIVACY.md's mapping
+    // table in lockstep by hand; the CI script cross-checks them.
+    static constexpr std::array<std::string_view, 10> kGolden = {
+        "os.name",     "os.version",      "gpu.model", "gpu.vendor",  "gpu.driver",
+        "app.version", "encoder_backend", "container", "video_codec", "audio_codec",
+    };
+
+    const auto actual = AllowedTagKeys();
+    ASSERT_EQ(actual.size(), kGolden.size()) << "kAllowedTagKeys size drifted from the golden set — update both "
+                                                "this test and the PRIVACY.md / product-spec §14 mapping table";
+    for (size_t i = 0; i < kGolden.size(); ++i) {
+        EXPECT_EQ(actual[i], kGolden[i]) << "kAllowedTagKeys[" << i << "] drifted from the golden set";
+    }
+}
+
+TEST(AllowedTagKeysGoldenTest, EveryGoldenKeyIsAllowed) {
+    // Cross-check against IsAllowedTagKey so the two never silently diverge
+    // (this would only be possible with a hand-edit bug in IsAllowedTagKey).
+    static constexpr std::array<std::string_view, 10> kGolden = {
+        "os.name",     "os.version",      "gpu.model", "gpu.vendor",  "gpu.driver",
+        "app.version", "encoder_backend", "container", "video_codec", "audio_codec",
+    };
+    for (const auto& key : kGolden) {
+        EXPECT_TRUE(IsAllowedTagKey(key)) << "golden key not accepted by IsAllowedTagKey: " << key;
+    }
 }
 
 TEST(GenerateCorrelationIdTest, NotPersistentAcrossCalls) {

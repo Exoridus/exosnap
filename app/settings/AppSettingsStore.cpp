@@ -85,10 +85,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("update"));
-    // UPDATE-WIRE-R1: update channel (default "Stable") + auto-check-on-start (default true).
-    // Pre-1.0: no migration; missing keys default to Stable / true.
+    // UPDATE-WIRE-R1: update channel (default "Stable") + auto-check-on-start.
+    // ADR 0045: auto-check-on-start defaults to false (opt-in) so a first launch
+    // never contacts api.github.com without explicit consent.
+    // Pre-1.0: no migration; missing keys default to Stable / false.
     persisted.update_channel = settings.value(QStringLiteral("channel"), QStringLiteral("Stable")).toString();
-    persisted.check_updates_on_start = settings.value(QStringLiteral("check_updates_on_start"), true).toBool();
+    persisted.check_updates_on_start = settings.value(QStringLiteral("check_updates_on_start"), false).toBool();
     // Loop guard for the staged swap updater; empty when no swap is pending.
     persisted.applied_version = settings.value(QStringLiteral("applied_version"), QString()).toString();
     // WHATS-NEW: suppress the post-update overlay (default false = notices shown).

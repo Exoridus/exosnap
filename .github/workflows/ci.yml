@@ -47,6 +47,18 @@ jobs:
         # reverting to a hand-maintained file list that silently omits DLLs.
         run: pwsh -NonInteractive -File scripts/validate-msi-harvest.ps1
 
+      - name: Validate privacy allowlist doc sync
+        # Build-free (docs/privacy-review.md, ADR 0045): the crash-report tag
+        # allowlist (crash_scrubber.h) must stay identical to what PRIVACY.md
+        # and docs/product-spec.md §14 document as "what is sent".
+        run: pwsh -NonInteractive -File scripts/validate-privacy-allowlist.ps1
+
+      - name: Validate network egress inventory
+        # Build-free (docs/privacy-review.md, ADR 0045): fails if a network
+        # primitive or a disallowed host literal appears outside the known
+        # GitHub/Sentry call sites, so a new egress point cannot land unnoticed.
+        run: pwsh -NonInteractive -File scripts/validate-network-egress.ps1
+
   # ---------------------------------------------------------------------------
   # Dev scripts: regression-guard the A/V-sync analyzer against a committed
   # golden clapper clip. This is a Python + SYSTEM-ffmpeg check (the app ships a

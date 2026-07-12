@@ -1126,8 +1126,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
         // UPDATE-WIRE-R1 (ADR 0012): auto-check for updates on startup, guarded so we
         // never contact the update server while a recording/finalize is in flight.
-        // TODO(Update-A): gate auto-check behind EXOSNAP_OFFICIAL_BUILD (self-builds
-        // should not phone home); not compiled out in this slice.
+        // ADR 0045: check_updates_on_start defaults to false, so this line performs
+        // no network contact on a first launch — the user must opt in from the
+        // Settings update card first. IsUpdateCheckEnabled() (a separate, compile-time
+        // gate in libs/update) additionally keeps self-built binaries from ever
+        // phoning home even if this setting were somehow turned on.
         if (persisted_settings_.check_updates_on_start && !recording_active_ && !remuxing_active_)
             triggerUpdateCheck();
     });

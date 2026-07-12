@@ -308,6 +308,11 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - **Server-side symbolication.** No client-side minidump parsing; stacks are symbolicated server-side
   from PDBs. Automated `sentry-cli` symbol upload is not yet wired (pending an auth token); symbols are
   archived per release in the meantime.
+- **The uploaded minidump binary (not the structured event) can carry a path with a username
+  segment.** The scrubber only touches the structured Sentry event; a hard-crash minidump's module
+  list includes the full install path of `exosnap.exe`, which can include the username portion of
+  the path for a portable install run from under `%USERPROFILE%`. See `docs/privacy-review.md` and
+  `PRIVACY.md` for the precise boundary; no code mitigation ships yet.
 - **In-app updates are implemented, with a dedicated updater process.** Stable and Preview channels
   are supported, with both a manual "Check now" and a toggleable automatic check. The client
   verifies the manifest against a detached ed25519 signature (Monocypher; shipped as a sibling
@@ -318,8 +323,10 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   result, and relaunches — restoring the previous version automatically if verification fails at
   any step. The app never restarts silently: every step is shown, and the final relaunch is the
   one moment the user sees the new version start.
-- **Updates are off by default for self-built binaries** and require the embedded official public key;
-  no GitHub token is used by the client.
+- **The automatic update check is off by default for every build** (opt-in from the Settings update
+  card); self-built binaries additionally never run it at all, regardless of the setting, and
+  require the embedded official public key to verify a release even if they did. No GitHub token
+  is used by the client.
 - **Two moments are not fully in-app:** the UAC prompt for MSI installs, and the brief window while
   the app is closed during the file swap. No update runs during an active recording or
   finalization.
