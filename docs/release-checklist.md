@@ -51,6 +51,13 @@ hand from the previous shipped version (currently 0.8.1) to the RC build:
 - [ ] **Unplugged-network download failure (case A1).** Disconnect the network mid-download: the
       updater surfaces a download failure (amber), the current version is untouched, and Retry resumes
       cleanly once the network is back.
+- [ ] **Mid-swap close refusal (0.9.0+).** While the updater is in its Install/Verify/Launch phase,
+      try to close the updater window (Alt+F4, taskbar "Close window"): the window refuses to close so
+      the in-place staged rename cannot be torn apart mid-swap. The disabled close button alone was
+      insufficient before 0.9.0 (a raw `WM_CLOSE` still quit the app).
+- [ ] **Temp-download cleanup after a successful update.** After a healthy update completes, confirm
+      `%TEMP%\ExoSnapUpdate\<version>\` is gone — the downloaded manifest, `.sig`, and ZIP/MSI are
+      removed on the success path (they used to accumulate one full copy per version).
 
 ## 5. Privacy review (every release)
 
@@ -100,6 +107,17 @@ the automated gates and the updater RC live-check above:
       playback for the drag and resumes only if it was playing before, the playhead follows
       playback, and a marker JSON sidecar is written only when at least one marker survives the
       trim.
+- [ ] **Audio-endpoint loss mid-recording ends cleanly.** During a `SYS`-row recording, remove or
+      switch the playback endpoint device: the recording ends with a visible AudioCapture error
+      rather than silently continuing muted. Not automatable (no device seam in the test harness).
+- [ ] **Present-mode diagnostics are per-recording, not per-session.** After some normal desktop use
+      (window switches, notifications), record one demonstrably stable window, stop, then record a
+      second stable window. Neither recording may surface a false "captured source keeps changing
+      present mode" notice — the warning must reflect only the current recording, not accumulated
+      session history.
+- [ ] **Trim keeps the keyframe at or before the cut.** In the Edit overlay, drag the start handle
+      into the middle of a multi-GOP clip and Save; the exported file starts cleanly (no black or
+      frozen lead-in, no overshoot past the end), with duration matching the trimmed range.
 
 ## 7. Downstream package managers
 
