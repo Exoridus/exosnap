@@ -280,6 +280,8 @@ TEST_F(NotificationToastTest, PaintEvent_AllTypes_WithActions_NoFatalFailure) {
         {NotificationType::FramesDropped, NotificationAction::OpenDiagnostics, "Frames dropped",
          "42 frames were dropped because the encoder couldn't keep up."},
         {NotificationType::PresetSwitched, NotificationAction::UndoPresetSwitch, "Switched to 'Quality'", ""},
+        {NotificationType::AudioSourceDegraded, NotificationAction::OpenDiagnostics, "Audio source went silent",
+         "An audio source lost its device. Recording continues — ExoSnap keeps retrying the connection."},
     };
 
     for (const auto& c : cases) {
@@ -686,6 +688,44 @@ TEST_F(NotificationToastTest, OneActionCard_WholeCardIsTheActionTarget) {
     EXPECT_EQ(hits[1].rect.width(), static_cast<qreal>(NotificationToastWindow::kCardWidth));
     // The ✕ sits inside the card-wide target but is pushed first, so it wins.
     EXPECT_TRUE(hits[1].rect.contains(hits[0].rect.center()));
+}
+
+// ── AudioSourceDegraded (ADR 0046 follow-up): standing, single-action card ────
+
+TEST_F(NotificationToastTest, AudioSourceDegraded_IsStanding_NoAutoDismissBar) {
+    NotificationManager mgr;
+    mgr.Enqueue(notifications::MakeAudioSourceDegradedEvent(1));
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const int standing_h = window.sizeHint().height();
+
+    NotificationManager mgr_timed;
+    NotificationEvent timed;
+    timed.type = NotificationType::Saved;
+    timed.title = QStringLiteral("Audio source went silent");
+    timed.body = QStringLiteral("An audio source lost its device. Recording continues — "
+                                "ExoSnap keeps retrying the connection.");
+    timed.action = NotificationAction::OpenDiagnostics;
+    mgr_timed.Enqueue(timed);
+    NotificationToastWindow timed_window(&mgr_timed, nullptr);
+
+    // Same chip/title/body/one-action layout, but the timed card reserves the
+    // bottom countdown bar and the standing one does not.
+    EXPECT_LT(standing_h, timed_window.sizeHint().height());
+}
+
+TEST_F(NotificationToastTest, AudioSourceDegraded_WholeCardOpensDiagnostics) {
+    NotificationManager mgr;
+    mgr.Enqueue(notifications::MakeAudioSourceDegradedEvent(2));
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    ASSERT_EQ(hits.size(), 2); // the ✕ and the card
+    EXPECT_TRUE(hits[0].is_dismiss);
+    EXPECT_FALSE(hits[1].is_dismiss);
+    EXPECT_EQ(hits[1].action, NotificationAction::OpenDiagnostics);
+    EXPECT_EQ(hits[1].rect.width(), static_cast<qreal>(NotificationToastWindow::kCardWidth));
 }
 
 TEST_F(NotificationToastTest, TwoActionCard_CardItselfIsNotClickable) {

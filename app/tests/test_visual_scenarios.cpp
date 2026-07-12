@@ -547,5 +547,24 @@ TEST(VisualScenarioTest, PolishR1ScenariosCarryFrozenContracts) {
     EXPECT_TRUE(ready->focused_object.isEmpty());
 }
 
+// 57. Standing audio-degraded notification scenario (AUDIO-DEGRADED-NOTIFY-R1 /
+// ADR 0046 follow-up) carries deterministic state and is the only registered
+// scenario that drives the notification.
+TEST(VisualScenarioTest, AudioDegradedNotificationScenarioCarriesDeterministicState) {
+    const VisualScenario* s = FindVisualScenario(QStringLiteral("record-recording-audio-degraded"));
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->page, VisualPage::Record);
+    EXPECT_EQ(s->record_state, VisualRecordState::Recording);
+    EXPECT_EQ(s->audio_degraded_notification_count, 1);
+}
+
+TEST(VisualScenarioTest, OtherScenarios_DoNotDriveAudioDegradedNotification) {
+    for (const VisualScenario& s : VisualScenarioRegistry()) {
+        if (s.id == QStringLiteral("record-recording-audio-degraded"))
+            continue;
+        EXPECT_EQ(s.audio_degraded_notification_count, 0) << s.id.toStdString();
+    }
+}
+
 } // namespace
 } // namespace exosnap::visual

@@ -295,6 +295,16 @@ struct VisualScenario {
     qint64 edit_export_trim_start_ms = -1;
     qint64 edit_export_trim_end_ms = -1;
     qint64 edit_export_playhead_ms = 0;
+
+    // --- Standing audio-degraded notification (AUDIO-DEGRADED-NOTIFY-R1) ---
+    // 0 = scenario does not drive the notification; >=1 = the degraded-source
+    // count to raise it with, via the SAME production path a live recording
+    // uses (MainWindow::applyVisualScenario enqueues MakeAudioSourceDegradedEvent).
+    // The toast is a separate top-level window outside the pixel-screenshot
+    // harness (like the countdown/recording overlays); its resulting state is
+    // reported in the JSON manifest and its rendering is covered by
+    // NotificationToastWindow's own widget tests.
+    int audio_degraded_notification_count = 0;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

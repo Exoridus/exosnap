@@ -197,6 +197,10 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
     root.insert(QStringLiteral("region_geometry"),
                 RectToJson(QRect(scenario.region_x, scenario.region_y, scenario.region_width, scenario.region_height)));
     root.insert(QStringLiteral("ready_marker"), QStringLiteral("VISUAL_TEST_READY:%1").arg(scenario.id));
+    // AUDIO-DEGRADED-NOTIFY-R1: 0 = not applicable. The standing toast itself is a
+    // separate top-level window outside window.grab() (like the countdown/recording
+    // overlays); NotificationToastWindow's own widget tests cover its rendering.
+    root.insert(QStringLiteral("audio_degraded_notification_count"), scenario.audio_degraded_notification_count);
     root.insert(QStringLiteral("window_geometry"), RectToJson(window.geometry()));
     root.insert(QStringLiteral("focused_object"), scenario.focused_object);
     {

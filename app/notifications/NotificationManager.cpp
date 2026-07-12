@@ -10,8 +10,9 @@ NotificationManager::NotificationManager(QObject* parent) : QObject(parent) {
     connect(timer_, &QTimer::timeout, this, &NotificationManager::onTimerFired);
 }
 
-void NotificationManager::Enqueue(NotificationEvent event) {
+uint64_t NotificationManager::Enqueue(NotificationEvent event) {
     event.sequence = next_sequence_++;
+    const uint64_t sequence = event.sequence;
 
     // The hub is the record: every event is announced, always.
     emit eventRecorded(event);
@@ -19,10 +20,10 @@ void NotificationManager::Enqueue(NotificationEvent event) {
     // PresetSwitched is record-only: the combo box that performed the switch
     // already offers the way back, so a toast would be noise.
     if (event.type == NotificationType::PresetSwitched)
-        return;
+        return sequence;
 
     if (!toasts_enabled_)
-        return;
+        return sequence;
 
     const bool has_action = event.hasAction();
 
@@ -50,6 +51,7 @@ void NotificationManager::Enqueue(NotificationEvent event) {
 
     rescheduleTimer();
     emit visibleSetChanged();
+    return sequence;
 }
 
 void NotificationManager::Dismiss(uint64_t sequence) {
@@ -111,6 +113,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_HotkeyConflict;
     case NotificationType::SettingsSaveFailed:
         return kDismissMs_SettingsSaveFailed;
+    case NotificationType::AudioSourceDegraded:
+        return kDismissMs_AudioSourceDegraded;
     }
     return kDismissMs_Saved;
 }

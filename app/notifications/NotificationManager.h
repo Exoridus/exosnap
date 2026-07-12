@@ -59,13 +59,18 @@ class NotificationManager : public QObject {
     static constexpr int kDismissMs_HotkeyConflict = 8000;
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_SettingsSaveFailed = 8000;
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_AudioSourceDegraded = 0; // standing
 
     explicit NotificationManager(QObject* parent = nullptr);
 
     // Enqueue a new notification event (Qt main thread only). Always emits
     // eventRecorded(); shows a toast unless the type is record-only
-    // (PresetSwitched) or toasts are disabled.
-    void Enqueue(NotificationEvent event);
+    // (PresetSwitched) or toasts are disabled. Returns the sequence number
+    // assigned to this event — the stable identity a caller needs to later
+    // Dismiss() a standing toast it raised programmatically (e.g. when the
+    // condition it reports clears on its own, not via a user click).
+    uint64_t Enqueue(NotificationEvent event);
 
     // Manually dismiss a visible event by its sequence number.
     // No-op when the sequence is not currently visible.

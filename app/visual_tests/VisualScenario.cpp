@@ -1880,6 +1880,21 @@ const QVector<VisualScenario> kDevicePageScenarios = {
      .device_empty_adapters = true},
 };
 
+// Standing audio-degraded notification (AUDIO-DEGRADED-NOTIFY-R1 / ADR 0046
+// follow-up). Drives the SAME production Enqueue() path a live recording uses
+// (MainWindow::applyVisualScenario), so the visual-test JSON manifest reports the
+// real toast state. The toast itself is a separate top-level window outside the
+// pixel-screenshot harness — like the countdown/recording overlays, it is not
+// composited into MainWindow::grab(); its rendering is covered by
+// NotificationToastWindow's own widget tests (test_notification_toast.cpp).
+const QVector<VisualScenario> kAudioDegradedNotificationScenarios = {
+    {.id = QStringLiteral("record-recording-audio-degraded"),
+     .title = QStringLiteral("Record / Recording / Audio source degraded"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .audio_degraded_notification_count = 1},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1894,6 +1909,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kAboutScenarios);
         merged.append(kUpdatesScenarios);
         merged.append(kDevicePageScenarios);
+        merged.append(kAudioDegradedNotificationScenarios);
     }
     return merged;
 }

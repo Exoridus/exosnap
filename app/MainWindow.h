@@ -43,6 +43,10 @@ class QShowEvent;
 class QPaintEvent;
 class QTimer;
 
+namespace recorder_core {
+struct RecordingDiagnosticsSnapshot;
+} // namespace recorder_core
+
 namespace exosnap {
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -310,6 +314,16 @@ class MainWindow : public QMainWindow {
     void dispatchNotificationAction(const notifications::NotificationEvent& event,
                                     notifications::NotificationAction action);
 
+    // AUDIO-DEGRADED-NOTIFY-R1 (ADR 0046 follow-up): raise/refresh/clear the standing
+    // "audio source went silent" toast from the live diagnostics stream. Called on
+    // every RecordPage::diagnosticsUpdated tick; no-ops when the degraded set hasn't
+    // changed since the last tick so it never re-announces the same condition.
+    void updateAudioSourceDegradedNotification(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    // Dismiss the standing toast (if any) and the matching hub advisory, and reset
+    // the tracked state. Called when every source reactivates and on the
+    // recording-stop edge, so the notice never outlives the recording it describes.
+    void clearAudioSourceDegradedNotification();
+
     // ADR 0033: react to the present-diagnostics opt-in toggle — persist the choice
     // and raise/remove the "needs administrator" hub advisory based on the runtime
     // elevation state.
@@ -484,6 +498,17 @@ class MainWindow : public QMainWindow {
     // Read on the result-ready edge to decide whether to raise a "frames dropped"
     // toast; reset to 0 on the recording-start edge.
     uint64_t last_backpressure_drops_ = 0;
+
+    // AUDIO-DEGRADED-NOTIFY-R1: sequence of the currently-visible standing "audio
+    // source went silent" toast, or 0 when none is active. Lets the diagnostics-tee
+    // Dismiss() the toast itself once the condition clears, rather than waiting for
+    // the user to close it (updateAudioSourceDegradedNotification /
+    // clearAudioSourceDegradedNotification). Reset to 0 on the recording-stop edge.
+    uint64_t audio_degraded_notification_sequence_ = 0;
+    // Degraded-source count as of the last diagnostics tick, so repeat ticks with an
+    // unchanged count never re-announce (and a changed count replaces the toast body
+    // in place instead of stacking a second one).
+    uint32_t audio_degraded_source_count_ = 0;
 
     // CRASH-WIRE-R1 (ADR 0017): crash-capture session lifecycle.
     std::string crash_dir_;

@@ -449,8 +449,10 @@ never retargeted onto a *different* device; the engine only holds or reacquires 
   the *current* Windows default (they represent "the system default", not one pinned device); an
   app/window audio capture keyed on a process reacquires only while that same process is still running
   (it never grabs a different process that reused the PID) and otherwise stays silent. The silence gap
-  is real and shown: a calm live notice in Diagnostics while a source is degraded, and the post-flight
-  report notes that the recording contains a silence gap.
+  is real and shown: a calm live notice in Diagnostics while a source is degraded, a standing
+  notification for the duration of the outage (updates in place if the degraded set changes, clears the
+  moment every source reactivates or the recording ends), and the post-flight report notes that the
+  recording contains a silence gap.
 - **Webcam.** Losing the camera freezes the last picture-in-picture frame and reopens the same device,
   indefinitely; the recording continues.
 
