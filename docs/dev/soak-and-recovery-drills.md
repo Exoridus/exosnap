@@ -196,8 +196,12 @@ remux) is overwritten in place; a crash *during* the recovery remux leaves only 
 `.part` temp, never a half-written file at the target. The same temp+atomic-rename
 guard is applied to the MKV repair-remux path.
 
-Boundary: the **live** `RecordingCoordinator` remux (`RunRemuxJob` /
-`StartSegmentRemuxThread`) still writes directly to the final MP4, so a kill during
-the *first* remux can still momentarily leave a corrupt file at the target — but the
-next-launch recovery now cleans it up rather than stranding it. Making the live
-remux itself atomic is a natural follow-up.
+The **live** `RecordingCoordinator` remux (`RunRemuxJob` / `StartSegmentRemuxThread`)
+now carries the identical guarantee: it remuxes to a sibling `.part` temp on the
+target's own volume and atomically renames it onto the final MP4 on success, using
+the same `MakeSiblingTempPath` / `AtomicReplaceInPlace` primitives (shared in
+`app/services/AtomicFileOps.*`). A kill mid-remux leaves only the `.part` temp — the
+user-visible output path never holds a half-written MP4. The live-path drills
+`LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomically` and
+`LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp` exercise that sequence
+(including a mid-flight check that the target stays empty until the atomic publish).

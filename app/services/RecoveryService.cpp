@@ -1,15 +1,12 @@
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include "RecoveryService.h"
+
+#include "services/AtomicFileOps.h"
 
 #include <recorder_core/mp4_remuxer.h>
 
 #include <QDir>
 #include <QFileInfo>
 
-#include <algorithm>
-#include <cwctype>
 #include <string>
 
 #include "diagnostics/AppLog.h"
@@ -22,45 +19,6 @@ recorder_core::RemuxProgressCallback WrapProgress(std::function<bool(float)> cb)
     if (!cb)
         return recorder_core::RemuxNoopCallback();
     return [cb = std::move(cb)](float f) -> bool { return cb(f); };
-}
-
-// Case- and separator-insensitive path equality (Windows filesystem semantics).
-// Used to decide whether a file already sitting at a derived output path is this
-// recording's own intended destination or an unrelated stranger's file.
-bool PathsEqual(const std::filesystem::path& a, const std::filesystem::path& b) {
-    auto norm = [](std::filesystem::path p) {
-        std::wstring s = p.lexically_normal().generic_wstring();
-        std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) { return std::towlower(c); });
-        return s;
-    };
-    return norm(a) == norm(b);
-}
-
-// Pick a unique transient path on the SAME directory (hence same volume) as the
-// final target, so the post-remux move is a within-volume atomic rename. A crash
-// mid-remux then leaves only this ".part" temp, never a half-written file at the
-// user-visible target path.
-std::filesystem::path MakeSiblingTempPath(const std::filesystem::path& target) {
-    const std::filesystem::path dir = target.parent_path();
-    const std::wstring base = target.filename().wstring();
-    for (int n = 0; n < 100000; ++n) {
-        std::filesystem::path candidate = dir / (base + L".part" + (n == 0 ? std::wstring() : std::to_wstring(n)));
-        std::error_code ec;
-        if (!std::filesystem::exists(candidate, ec))
-            return candidate;
-    }
-    return dir / (base + L".part");
-}
-
-// Atomically move `from` onto `to`, replacing any existing file at `to`. On a
-// single NTFS volume MoveFileExW(MOVEFILE_REPLACE_EXISTING) performs the rename
-// so the target name resolves to either the old or the new file at every instant
-// — a reader never sees a torn file. MOVEFILE_WRITE_THROUGH does not return until
-// the change is flushed. Returns 0 on success, else the Win32 error code.
-DWORD AtomicReplaceInPlace(const std::filesystem::path& from, const std::filesystem::path& to) {
-    if (::MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0)
-        return 0;
-    return ::GetLastError();
 }
 
 // Derive a stem name for the output file from the manifest entry.
@@ -206,7 +164,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
             return {false, result.message};
         }
 
-        if (const DWORD move_err = AtomicReplaceInPlace(temp, repair_target); move_err != 0) {
+        if (const unsigned long move_err = AtomicReplaceInPlace(temp, repair_target); move_err != 0) {
             std::error_code cleanup_ec;
             std::filesystem::remove(temp, cleanup_ec);
             const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";
@@ -249,7 +207,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         return {false, result.message};
     }
 
-    if (const DWORD move_err = AtomicReplaceInPlace(temp, target); move_err != 0) {
+    if (const unsigned long move_err = AtomicReplaceInPlace(temp, target); move_err != 0) {
         std::error_code cleanup_ec;
         std::filesystem::remove(temp, cleanup_ec);
         const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";

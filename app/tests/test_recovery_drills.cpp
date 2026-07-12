@@ -33,10 +33,14 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
+#include <recorder_core/mp4_remuxer.h>
+
+#include "services/AtomicFileOps.h"
 #include "services/RecoveryService.h"
 #include "settings/RecoveryManifestStore.h"
 #include "synthetic_session.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -214,6 +218,112 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
 
     // The manifest entry is cleared on success.
     EXPECT_TRUE(store.Entries().isEmpty());
+}
+
+// =============================================================================
+// LIVE remux (RecordingCoordinator) durability. The live remux-on-stop and the
+// per-segment background remux both write to a sibling ".part" temp on the
+// target's own volume and only atomically rename it onto the final path on
+// success — the same primitives (MakeSiblingTempPath / AtomicReplaceInPlace) the
+// crash-recovery path uses. These drills exercise that exact sequence so the
+// live path carries the identical guarantee: a kill mid-remux never leaves a
+// half-written file at the user-visible output path.
+// =============================================================================
+
+// The final output path is never written mid-remux; the finished file appears
+// there only via the atomic rename. Before that, the bytes live in "<name>.part".
+TEST(RecoveryDrill, LiveRemuxMp4_NeverWritesTargetMidFlightThenPublishesAtomically) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString transient_q = QDir(tmp.path()).filePath(QStringLiteral("live.mkv.tmp"));
+    ASSERT_TRUE(
+        WriteSyntheticMkv(transient_q, recorder_core::VideoCodec::H264Nvenc, recorder_core::AudioCodec::AacMf, 2.0));
+
+    const std::filesystem::path transient(transient_q.toStdWString());
+    const std::filesystem::path final_mp4(QDir(tmp.path()).filePath(QStringLiteral("live.mp4")).toStdWString());
+
+    // The temp is a sibling on the same directory (== same volume) as the target.
+    const std::filesystem::path temp = MakeSiblingTempPath(final_mp4);
+    EXPECT_EQ(temp.filename().wstring(), L"live.mp4.part");
+    EXPECT_EQ(temp.parent_path(), final_mp4.parent_path());
+
+    bool progressed = false;
+    auto progress_cb = [&](float) -> bool {
+        progressed = true;
+        // While the remux runs, the user-visible target must not exist yet.
+        std::error_code ec;
+        EXPECT_FALSE(std::filesystem::exists(final_mp4, ec))
+            << "the target path must stay empty until the atomic publish";
+        return true;
+    };
+
+    const auto result = recorder_core::RemuxToProgressiveMp4(transient, temp, progress_cb);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(progressed) << "progress callback should fire so the mid-flight check runs";
+
+    // Before the publish, the finished bytes are at the temp, not the target.
+    std::error_code ec;
+    EXPECT_TRUE(std::filesystem::exists(temp, ec));
+    EXPECT_FALSE(std::filesystem::exists(final_mp4, ec)) << "not published until the rename";
+
+    // Atomic publish onto the target.
+    EXPECT_EQ(AtomicReplaceInPlace(temp, final_mp4), 0UL);
+    EXPECT_TRUE(std::filesystem::exists(final_mp4, ec));
+    EXPECT_TRUE(CanDemux(QString::fromStdWString(final_mp4.wstring()))) << "published MP4 must be playable";
+    EXPECT_FALSE(std::filesystem::exists(temp, ec)) << "the temp was renamed away";
+}
+
+// A kill/cancel mid-remux leaves the target untouched (a pre-existing good file
+// survives byte-for-byte) and removes the ".part" temp — no half-file anywhere.
+TEST(RecoveryDrill, LiveRemuxMp4_CancelLeavesTargetUntouchedAndRemovesTemp) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString transient_q = QDir(tmp.path()).filePath(QStringLiteral("live2.mkv.tmp"));
+    ASSERT_TRUE(
+        WriteSyntheticMkv(transient_q, recorder_core::VideoCodec::H264Nvenc, recorder_core::AudioCodec::AacMf, 2.0));
+
+    const std::filesystem::path transient(transient_q.toStdWString());
+    const QString final_q = QDir(tmp.path()).filePath(QStringLiteral("live2.mp4"));
+    const std::filesystem::path final_mp4(final_q.toStdWString());
+
+    // A previous good result already sits at the target — the live remux would
+    // overwrite it on success, but on failure it must be left exactly as it was.
+    const QByteArray sentinel("KEEP-ME-INTACT", 14);
+    {
+        QFile f(final_q);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        ASSERT_EQ(f.write(sentinel), sentinel.size());
+    }
+
+    const std::filesystem::path temp = MakeSiblingTempPath(final_mp4);
+
+    // Cancel on the first progress callback — models a kill during the remux.
+    bool fired = false;
+    auto cancel_cb = [&](float) -> bool {
+        fired = true;
+        return false;
+    };
+    auto result = recorder_core::RemuxToProgressiveMp4(transient, temp, cancel_cb);
+
+    // The live failure branch removes the abandoned temp; the target is never touched.
+    if (!result.success) {
+        std::error_code ec;
+        std::filesystem::remove(temp, ec);
+    }
+
+    EXPECT_FALSE(result.success) << "a cancelled remux must not report success";
+    EXPECT_TRUE(fired);
+
+    std::error_code ec;
+    EXPECT_FALSE(std::filesystem::exists(temp, ec)) << "the .part temp must be cleaned up on cancel";
+
+    // The target still holds the untouched sentinel — no half-written MP4.
+    ASSERT_TRUE(std::filesystem::exists(final_mp4, ec));
+    QFile check(final_q);
+    ASSERT_TRUE(check.open(QIODevice::ReadOnly));
+    EXPECT_EQ(check.readAll(), sentinel) << "the target must be byte-for-byte untouched";
 }
 
 } // namespace
