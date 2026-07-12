@@ -48,6 +48,40 @@ jobs:
         run: pwsh -NonInteractive -File scripts/validate-msi-harvest.ps1
 
   # ---------------------------------------------------------------------------
+  # Dev scripts: regression-guard the A/V-sync analyzer against a committed
+  # golden clapper clip. This is a Python + SYSTEM-ffmpeg check (the app ships a
+  # mux-only FFmpeg without the signalstats/astats filters the analyzer needs),
+  # so ffmpeg is provisioned + version-verified explicitly — the runner image
+  # does not guarantee it. Not part of build-test; no GPU, no engine build.
+  # ---------------------------------------------------------------------------
+  dev-scripts:
+    name: dev-scripts
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Provision + verify system ffmpeg
+        # Explicit install so the job is not silently green/red on runner-image
+        # drift. The analyzer's drift math is version-robust (PTS come from a
+        # filter graph, not the codec), so a version print is a sufficient pin.
+        run: |
+          choco install ffmpeg -y --no-progress
+          ffmpeg -version
+          ffprobe -version
+
+      - name: A/V-sync analyzer vs golden fixture
+        # Regression-guards the analyzer's event detection + drift math. The
+        # budget is intentionally loose: a 4 s clip's residual drift is bounded by
+        # frame quantization (~one 60 fps frame), not a real A/V budget, and must
+        # stay green across ffmpeg-version differences in reported PTS. The real
+        # 20 ms budget applies to live 2 h captures, not this fixture.
+        run: python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4 --max-drift-ms 45 --json
+
+  # ---------------------------------------------------------------------------
   # Advisory unused-code / import checks (PHASE B — NEVER blocks the PR)
   #
   # Surfaces stale functions, unused includes, and redundant declarations for

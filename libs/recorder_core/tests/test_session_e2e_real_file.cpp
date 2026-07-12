@@ -16,13 +16,11 @@
 //           whole SessionState handshake, Finalize, and (for the MP4 case) the
 //           real libavformat remuxer.
 //   * SEAM: the GPU video path (WGC capture + NVENC) cannot run on a GPU-less CI
-//           runner, so a small in-test "video feeder" plays VideoThread's role
-//           on the SessionState contract: it publishes the video codec-private +
-//           ready flag, the encode dimensions, the video epoch, then feeds
-//           deterministic encoded video packets (Annex-B for H.264) and the
-//           VideoEos sentinel. The muxer, writer, and validator never decode a
-//           frame, so synthetic-but-well-formed packets exercise the exact
-//           container path a real recording takes.
+//           runner, so recorder_core_testutil's SyntheticSession plays
+//           VideoThread's SessionState role — the same feeder, now extracted so
+//           the soak twin and the recovery drills reuse it. The muxer, writer,
+//           and validator never decode a frame, so synthetic-but-well-formed
+//           packets exercise the exact container path a real recording takes.
 //
 // No `live` label: everything here is deterministic and GPU-/device-free, so it
 // runs on the headless CI runner alongside the rest of the suite.
@@ -35,147 +33,24 @@ extern "C" {
 
 #include <gtest/gtest.h>
 
-#include "audio_thread.h"
-#include "mux_thread.h"
-#include "session_internal.h"
-
 #include "recorder_core/mp4_remuxer.h"
+#include "synthetic_session.h"
 #include "test_unique_temp.h"
 
-#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace {
 
 using recorder_core::AudioCodec;
-using recorder_core::AudioSampleFormat;
-using recorder_core::AudioThread;
-using recorder_core::Container;
-using recorder_core::EncodedVideoPacket;
-using recorder_core::IAudioCaptureSource;
-using recorder_core::MuxItem;
-using recorder_core::MuxThread;
-using recorder_core::RawAudioBuffer;
-using recorder_core::SessionState;
 using recorder_core::VideoCodec;
-using recorder_core::VideoEosSentinel;
 
 static inline const char* AvErr(int errnum) noexcept {
     static thread_local char buf[AV_ERROR_MAX_STRING_SIZE];
     av_strerror(errnum, buf, sizeof(buf));
     return buf;
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic mock capture source: a fixed number of non-silent 48 kHz stereo
-// float packets. Sets stop_requested once drained (mirrors how a real source's
-// end-of-stream ultimately stops the session). This is the ONLY audio input;
-// everything downstream (encode, mux, finalize) is production code.
-// ---------------------------------------------------------------------------
-class MockAudioCaptureSource : public IAudioCaptureSource {
-  public:
-    MockAudioCaptureSource(std::atomic<bool>* stop_requested, size_t packet_count) : stop_requested_(stop_requested) {
-        packets_.resize(packet_count);
-        for (auto& p : packets_) {
-            p.assign(static_cast<size_t>(kFramesPerPacket) * kChannels, 0.1f);
-        }
-    }
-
-    bool Init(std::string& out_error) override {
-        initialized_ = true;
-        out_error.clear();
-        return true;
-    }
-
-    uint32_t PendingFrameCount() override {
-        if (!initialized_ || acquired_)
-            return 0;
-        if (next_ < packets_.size())
-            return kFramesPerPacket;
-        if (stop_requested_)
-            stop_requested_->store(true);
-        return 0;
-    }
-
-    bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override {
-        out_buf = {};
-        if (!initialized_ || acquired_ || next_ >= packets_.size()) {
-            out_error.clear();
-            return false;
-        }
-        acquired_ = true;
-        out_buf.bytes = reinterpret_cast<const uint8_t*>(packets_[next_].data());
-        out_buf.num_frames = kFramesPerPacket;
-        out_buf.silent = false;
-        out_error.clear();
-        return true;
-    }
-
-    void ReleaseBuffer() override {
-        if (!acquired_)
-            return;
-        acquired_ = false;
-        ++next_;
-        if (next_ >= packets_.size() && stop_requested_)
-            stop_requested_->store(true);
-    }
-
-    uint32_t SampleRate() const override {
-        return kSampleRate;
-    }
-    uint32_t Channels() const override {
-        return kChannels;
-    }
-    AudioSampleFormat SampleFormat() const override {
-        return AudioSampleFormat::Float32;
-    }
-    const std::string& EndpointName() const override {
-        return endpoint_;
-    }
-    void Shutdown() override {
-    }
-
-  private:
-    static constexpr uint32_t kSampleRate = 48000;
-    static constexpr uint32_t kChannels = 2;
-    static constexpr uint32_t kFramesPerPacket = 960; // 20 ms
-
-    std::atomic<bool>* stop_requested_ = nullptr;
-    bool initialized_ = false;
-    bool acquired_ = false;
-    size_t next_ = 0;
-    std::vector<std::vector<float>> packets_;
-    std::string endpoint_ = "MockCapture";
-};
-
-// A minimal, structurally valid Annex-B SPS+PPS pair (Baseline profile 66 so the
-// avcC carries no chroma extension). BuildAvccFromAnnexBSpsAndPps (the real mux
-// path) turns this into the avcC written to the MKV video track.
-std::vector<uint8_t> FakeH264AnnexbSpsPps() {
-    return {
-        0x00, 0x00, 0x00, 0x01,             // start code
-        0x67, 0x42, 0x00, 0x1F, 0xAC, 0xD9, // SPS NAL (type 7, profile 66, level 31)
-        0x00, 0x00, 0x00, 0x01,             // start code
-        0x68, 0xCE, 0x3C, 0x80,             // PPS NAL (type 8)
-    };
-}
-
-// One synthetic Annex-B access unit. keyframe -> IDR slice (0x65); otherwise a
-// non-IDR slice (0x41). MuxThread's ConvertAnnexBToAvcc length-prefixes it.
-std::vector<uint8_t> MakeH264AnnexbAu(bool keyframe, size_t payload_bytes) {
-    std::vector<uint8_t> au = {0x00, 0x00, 0x00, 0x01, static_cast<uint8_t>(keyframe ? 0x65 : 0x41)};
-    au.insert(au.end(), payload_bytes, 0xAB);
-    return au;
-}
-
-// A 4-byte AV1CodecConfigurationRecord stub (marker+version, seq_profile/level,
-// flags). MuxThread copies it verbatim into the V_AV1 track's CodecPrivate.
-std::vector<uint8_t> FakeAv1CodecPrivate() {
-    return {0x81, 0x0C, 0x00, 0x00};
 }
 
 // ---------------------------------------------------------------------------
@@ -272,146 +147,22 @@ DemuxFacts DemuxAndInspect(const std::string& path) {
 }
 
 // ---------------------------------------------------------------------------
-// Run the real audio+mux pipeline to a real MKV on disk.
-//
-// video_codec selects the video track codec; audio_codec selects the audio
-// encoder actually instantiated inside AudioThread. Returns true on a clean
-// finalize with no recorded session failure.
+// Run the real audio+mux pipeline to a real MKV on disk via the shared synthetic
+// session seam. video_codec selects the video track codec; audio_codec selects
+// the audio encoder actually instantiated inside AudioThread. Returns true on a
+// clean finalize with no recorded session failure.
 // ---------------------------------------------------------------------------
 bool RunRealPipelineToMkv(VideoCodec video_codec, AudioCodec audio_codec, const std::string& mkv_path,
                           double target_seconds, std::string& out_error) {
-    auto state_ptr = std::make_shared<SessionState>();
-    SessionState& state = *state_ptr;
-
-    // --- Session config the workers read (as RecorderSession::Record would set) ---
-    state.config.output_path = mkv_path;
-    state.config.container = Container::Matroska;
-    state.config.video_codec = video_codec;
-    state.config.audio_codec = audio_codec;
-    state.config.audio_channels = 2;
-    state.config.audio_sample_rate = 48000;
-    state.config.audio_bit_depth = 16;
-    state.config.frame_rate_num = 60;
-    state.config.frame_rate_den = 1;
-    state.audio_track_count = 1;
-
-    // Epoch: make the video epoch equal to the session start so head_start_ns==0
-    // (audio is rebased to itself, nothing dropped) — the exact alignment a real
-    // session resolves once the first captured frame arrives.
-    state.session_start_qpc_100ns = 1000;
-    state.video_epoch_qpc_100ns.store(1000);
-
-    const uint32_t kWidth = 1280;
-    const uint32_t kHeight = 720;
-    {
-        std::lock_guard lk(state.stats_mutex);
-        state.encode_width = kWidth;
-        state.encode_height = kHeight;
-    }
-
-    // --- Audio: real AudioThread with a deterministic mock capture source ---
-    const size_t audio_packets = static_cast<size_t>(target_seconds * 50.0); // 20 ms packets
-    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, audio_packets);
-    auto audio_thread = std::make_shared<AudioThread>(state_ptr, std::move(source), /*track_id=*/0);
-
-    // --- Mux: the real MuxThread + MatroskaStreamWriter + Finalize ---
-    auto mux_thread = std::make_shared<MuxThread>(state_ptr);
-
-    // --- Video feeder: plays VideoThread's role on the SessionState contract ---
-    const uint32_t kFps = 60;
-    const uint32_t kGop = 30;
-    const uint64_t frame_dur_ns = 1000000000ULL / kFps;
-    const uint32_t frame_count = static_cast<uint32_t>(target_seconds * kFps);
-    const bool is_h264 = (video_codec == VideoCodec::H264Nvenc);
-
-    std::thread video_feeder([&, state_ptr] {
-        SessionState& st = *state_ptr;
-
-        // Publish video codec-private + ready flag (mirrors VideoThread's prepare).
-        {
-            std::lock_guard lk(st.premux_mutex);
-            if (is_h264) {
-                st.codec_private.h264_sps_pps = FakeH264AnnexbSpsPps();
-                st.codec_private.h264_ready = true;
-            } else {
-                const auto cp = FakeAv1CodecPrivate();
-                std::copy(cp.begin(), cp.end(), st.codec_private.av1_codec_private);
-                st.codec_private.av1_ready = true;
-            }
-            st.premux_cv.notify_all();
-        }
-
-        auto route_video = [&](EncodedVideoPacket&& pkt) -> bool {
-            std::unique_lock lk(st.premux_mutex);
-            const bool both_ready = st.codec_private.VideoReady(st.config.video_codec) &&
-                                    st.codec_private.AudioAllReady(st.audio_track_count);
-            if (!both_ready) {
-                if (st.video_premux.size() >= SessionState::kVideoPremuxLimit) {
-                    lk.unlock();
-                    st.RecordFailure(E_OUTOFMEMORY, recorder_core::ErrorPhase::Mux, "video pre-mux overflow (test)");
-                    return false;
-                }
-                st.video_premux.push_back(std::move(pkt));
-                return true;
-            }
-            lk.unlock();
-            MuxItem mi;
-            mi.payload = std::move(pkt);
-            std::unique_lock mlk(st.mux_mutex);
-            if (!st.WaitForMuxQueueSpace(mlk)) {
-                mlk.unlock();
-                st.RecordFailure(E_OUTOFMEMORY, recorder_core::ErrorPhase::Mux, "mux queue overflow (test)");
-                return false;
-            }
-            st.PushMuxItemLocked(std::move(mi));
-            return true;
-        };
-
-        for (uint32_t i = 0; i < frame_count; ++i) {
-            if (st.HasFailure())
-                break;
-            EncodedVideoPacket vp;
-            vp.pts_ns = static_cast<uint64_t>(i) * frame_dur_ns;
-            vp.keyframe = (i % kGop == 0);
-            vp.bytes = is_h264 ? MakeH264AnnexbAu(vp.keyframe, /*payload_bytes=*/256)
-                               : std::vector<uint8_t>(256, static_cast<uint8_t>(0xAB));
-            if (!route_video(std::move(vp)))
-                break;
-        }
-
-        // Video EOS sentinel (bypasses the queue bound).
-        MuxItem eos;
-        eos.payload = VideoEosSentinel{};
-        std::lock_guard lk(st.mux_mutex);
-        st.PushMuxItemLocked(std::move(eos));
-    });
-
-    // Start the real workers.
-    mux_thread->Start();
-    audio_thread->Start();
-
-    video_feeder.join();
-    const bool audio_joined = audio_thread->Join(30000);
-    const bool mux_joined = mux_thread->Join(60000);
-
-    if (!audio_joined) {
-        out_error = "audio thread did not join";
-        return false;
-    }
-    if (!mux_joined) {
-        out_error = "mux thread did not join (finalize hang)";
-        return false;
-    }
-    if (state.HasFailure()) {
-        std::lock_guard lk(state.failure_mutex);
-        out_error = "session failure: " + state.failure.error_detail;
-        return false;
-    }
-    if (!std::filesystem::exists(mkv_path) || std::filesystem::file_size(mkv_path) == 0) {
-        out_error = "output file missing or empty";
-        return false;
-    }
-    return true;
+    recorder_core::testutil::SyntheticSessionConfig cfg;
+    cfg.video_codec = video_codec;
+    cfg.audio_codec = audio_codec;
+    cfg.output_path = mkv_path;
+    cfg.target_seconds = target_seconds;
+    const auto r = recorder_core::testutil::SyntheticSession(cfg).Run();
+    if (!r.success)
+        out_error = r.error;
+    return r.success;
 }
 
 // ---------------------------------------------------------------------------
