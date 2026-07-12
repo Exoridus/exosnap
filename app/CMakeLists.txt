@@ -1559,6 +1559,21 @@ exosnap_add_gtest(
 target_include_directories(recovery_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recovery_service_tests PROPERTIES AUTOMOC ON)
 
+# Recovery drill matrix: drive RecoveryService against REAL synthetic-pipeline
+# artefacts (real MKV, truncated to model a kill). Includes the stale-partial-MP4
+# known-issue drill (skips until the Coordinator/Recovery fix lands).
+exosnap_add_gtest(
+    NAME recovery_drill_tests
+    TEST_PREFIX recovery.
+    SOURCES tests/test_recovery_drills.cpp
+            settings/RecoveryManifestStore.cpp
+            services/RecoveryService.cpp
+            diagnostics/AppLog.cpp
+    LIBRARIES exosnap_capability recorder_core recorder_core_testutil Qt6::Core FFmpeg::mux
+)
+target_include_directories(recovery_drill_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(recovery_drill_tests PROPERTIES AUTOMOC ON)
+
 exosnap_add_gtest(
     NAME recovery_overlay_tests
     TEST_PREFIX recovery.

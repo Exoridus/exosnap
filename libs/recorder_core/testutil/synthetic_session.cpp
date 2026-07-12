@@ -187,6 +187,20 @@ SyntheticSessionResult SyntheticSession::Run() {
             st.premux_cv.notify_all();
         }
 
+        // A real 60 fps capture delivers frames slowly enough (~16 ms apart) that
+        // the audio codec-private is ready long before the video pre-mux buffer
+        // (120 packets) fills. The as-fast-as-possible feeder has no such pacing,
+        // so for anything past ~2 s it would overrun the buffer before AudioThread
+        // publishes its codec-private. Wait for audio readiness first (it is
+        // independent of video and arrives within ms) so the pre-mux never overflows.
+        {
+            std::unique_lock lk(st.premux_mutex);
+            st.premux_cv.wait_for(lk, std::chrono::seconds(15), [&] {
+                return st.codec_private.AudioAllReady(st.audio_track_count) || st.HasFailure() ||
+                       st.stop_requested.load();
+            });
+        }
+
         auto route_video = [&](EncodedVideoPacket&& pkt) -> bool {
             std::unique_lock lk(st.premux_mutex);
             const bool both_ready = st.codec_private.VideoReady(st.config.video_codec) &&

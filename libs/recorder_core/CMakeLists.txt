@@ -1094,6 +1094,17 @@ exosnap_add_gtest(
 )
 target_compile_definitions(test_session_e2e_real_file PRIVATE NOMINMAX)
 
+# Powerloss CI proxy: truncate a genuinely-flushed synthetic MKV at assorted
+# offsets and assert the RemuxToMkv repair path never crashes and salvages up to
+# the last complete cluster. Not `live` — deterministic and device-free.
+exosnap_add_gtest(
+    NAME recovery_truncation_tests
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_recovery_truncation.cpp
+    LIBRARIES recorder_core_testutil
+)
+target_compile_definitions(recovery_truncation_tests PRIVATE NOMINMAX)
+
 # ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
 exosnap_add_gtest(
     NAME frame_pacing_tests
