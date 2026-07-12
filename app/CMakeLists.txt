@@ -308,6 +308,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/SessionReport.cpp
     diagnostics/ZipWriter.h
     diagnostics/ZipWriter.cpp
+    diagnostics/SupportBundle.h
+    diagnostics/SupportBundle.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -787,6 +789,19 @@ exosnap_add_gtest(
     LIBRARIES exosnap_miniz exosnap::update Qt6::Core
 )
 target_include_directories(zip_writer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Support bundle: the entry set, and the privacy regression guard (no path,
+# username, machine, output path OR capture-target window title in any entry).
+exosnap_add_gtest(
+    NAME support_bundle_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_support_bundle.cpp
+        diagnostics/SupportBundle.cpp
+        diagnostics/ZipWriter.cpp
+    LIBRARIES exosnap_miniz exosnap::update exosnap::crash_capture Qt6::Core
+)
+target_include_directories(support_bundle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # App log file rotation: size-based rotation, handle-reuse across writes, and
 # Logs-page (in-memory history) compatibility across rotation.
