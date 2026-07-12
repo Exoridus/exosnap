@@ -59,6 +59,12 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetKeyframeIntervalSecs(secs);
     }
 
+    // Resolved encoder init parameters, valid after Configure(). hdr_mode is left
+    // at its default; the caller fills it from the session config.
+    [[nodiscard]] EncoderInitInfo GetInitInfo() const noexcept {
+        return m_nvenc.GetInitInfo();
+    }
+
     bool Open(void* gpu_context, std::string& out_error) override;
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override;

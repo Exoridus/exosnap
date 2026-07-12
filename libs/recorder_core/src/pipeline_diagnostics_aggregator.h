@@ -171,6 +171,9 @@ class PipelineDiagnosticsAggregator {
     void OnEncodeSubmitted() noexcept;
     void OnEncodeLatency(time_point now, double ms) noexcept;
     void OnForcedKeyframe() noexcept;
+    // Encoder init parameters, captured once by the encoder at configure time and
+    // carried unchanged on every subsequent snapshot.
+    void SetEncoderInitInfo(const EncoderInitInfo& info) noexcept;
     // Audio (AudioThread)
     void SetAudioFormat(uint32_t sample_rate, uint32_t channels) noexcept;
     void OnAudioQueueDepth(uint32_t depth) noexcept;
@@ -297,6 +300,14 @@ class PipelineDiagnosticsAggregator {
     // Array size mirrors CodecPrivateData::kMaxAudioTracks. Protected by mutex_.
     std::array<double, 3> audio_clock_drift_ms_{};
     std::array<bool, 3> audio_clock_drift_valid_{};
+
+    // Peak |av_drift_ms| this session (running maximum). Single source of truth for
+    // both the live UI and the session report.
+    double peak_av_drift_ms_ = 0.0;
+    bool peak_av_drift_valid_ = false;
+
+    // Encoder init parameters (set once by the encoder at configure time).
+    EncoderInitInfo encoder_init_;
 
     // Disk-fill ETA: free bytes on the output drive, polled externally at ~5 Hz.
     uint64_t free_bytes_ = 0;

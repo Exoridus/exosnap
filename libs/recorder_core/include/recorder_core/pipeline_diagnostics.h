@@ -164,6 +164,29 @@ struct EncoderDiagnostics {
     bool cfr = true;
 };
 
+// Immutable encoder initialization parameters, captured once when the encoder is
+// configured and carried unchanged on every snapshot thereafter. Plain data only —
+// no NVENC types leak to the app layer (ADR: engine stays UI-agnostic). `valid` is
+// false until the encoder has been configured (e.g. a failure before configure).
+struct EncoderInitInfo {
+    bool valid = false;
+    VideoCodec codec = VideoCodec::Av1Nvenc;
+    NvencPreset preset = NvencPreset::P4;
+    RateControlMode rc_mode = RateControlMode::ConstantQuality;
+    uint32_t target_bitrate_kbps = 0; // averageBitRate (0 for pure CQ)
+    uint32_t max_bitrate_kbps = 0;    // maxBitRate
+    uint32_t cq = 0;                  // constant-quality target (CQ mode)
+    uint32_t gop_length = 0;          // frames between IDRs
+    uint32_t bframes = 0;             // B-frames per GOP (this pipeline: 0)
+    uint32_t lookahead_frames = 0;    // rate-control lookahead depth (this pipeline: 0)
+    bool temporal_aq = false;
+    bool spatial_aq = false;
+    BitDepth bit_depth = BitDepth::Bit8;
+    ChromaSubsampling chroma = ChromaSubsampling::Cs420;
+    bool color_full_range = false;
+    HdrMode hdr_mode = HdrMode::Off;
+};
+
 struct AudioDiagnostics {
     bool active = false;
     uint64_t packets_encoded = 0;
@@ -266,6 +289,16 @@ struct RecordingDiagnosticsSnapshot {
     // only measures encoder/queue latency and can never see device-clock drift.
     double av_drift_ms = 0.0;
     MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
+
+    // Peak |av_drift_ms| observed this session (running maximum of the magnitude).
+    // Accumulated in the engine aggregator so the live UI and the on-disk session
+    // report read one authoritative value rather than each maintaining its own.
+    // Unavailable until av_drift has been measured at least once.
+    double peak_av_drift_ms = 0.0;
+    MetricAvailability peak_av_drift_availability = MetricAvailability::Unavailable;
+
+    // Encoder initialization parameters, captured once at configure time.
+    EncoderInitInfo encoder_init;
 
     // Total media-duration skew: |video media time - audio media time| (ms). Unlike
     // av_drift_ms (an instantaneous PTS lead/lag), this is the accumulated difference
