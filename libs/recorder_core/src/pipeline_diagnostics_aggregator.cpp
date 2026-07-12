@@ -139,6 +139,9 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
 
     audio_clock_drift_ms_.fill(0.0);
     audio_clock_drift_valid_.fill(false);
+    peak_av_drift_ms_ = 0.0;
+    peak_av_drift_valid_ = false;
+    encoder_init_ = EncoderInitInfo{};
 
     free_bytes_ = 0;
     free_bytes_known_ = false;
@@ -337,6 +340,11 @@ void PipelineDiagnosticsAggregator::OnAudioClockDrift(uint32_t track_id, double 
     }
     audio_clock_drift_ms_[track_id] = drift_ms;
     audio_clock_drift_valid_[track_id] = true;
+}
+
+void PipelineDiagnosticsAggregator::SetEncoderInitInfo(const EncoderInitInfo& info) noexcept {
+    std::lock_guard lk(mutex_);
+    encoder_init_ = info;
 }
 
 void PipelineDiagnosticsAggregator::UpdateFreeDiskBytes(uint64_t free_bytes) noexcept {
@@ -562,6 +570,22 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         }
         s.av_drift_availability = MetricAvailability::Available;
     }
+
+    // Running peak of the drift magnitude, so the live UI and the session report
+    // share one authoritative value instead of each accumulating independently.
+    if (s.av_drift_availability == MetricAvailability::Available) {
+        const double magnitude = std::abs(s.av_drift_ms);
+        if (!peak_av_drift_valid_ || magnitude > peak_av_drift_ms_) {
+            peak_av_drift_ms_ = magnitude;
+        }
+        peak_av_drift_valid_ = true;
+    }
+    s.peak_av_drift_ms = peak_av_drift_ms_;
+    s.peak_av_drift_availability =
+        peak_av_drift_valid_ ? MetricAvailability::Available : MetricAvailability::Unavailable;
+
+    // Encoder init parameters, captured once at configure time.
+    s.encoder_init = encoder_init_;
 
     // ---- Duration skew ----
     // Total media-duration mismatch between the video and audio timelines, from the

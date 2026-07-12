@@ -265,6 +265,10 @@ class RecordingCoordinator {
     // Record footer and the output filename.
     void FillResultFormat(UiRecordingResult& result) const;
     void PostResult(UiRecordingResult result);
+    // Write the on-disk session-<id>.json report for a finished (or failed)
+    // recording, from the result plus the stashed final snapshot. Best-effort:
+    // a write failure is logged and never blocks posting the result.
+    void WriteSessionReportForResult(const UiRecordingResult& result);
     void PostStats(recorder_core::SessionStats stats);
     void PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot);
     // Emit a single Initializing diagnostics snapshot so the Diagnostics page shows an
@@ -289,6 +293,13 @@ class RecordingCoordinator {
     // UUID of the manifest entry for the currently active or most recent recording.
     // Empty when no session is in flight.
     QString current_manifest_id_;
+
+    // Stable per-recording session id, minted at StartRecording independent of the
+    // (nullable) recovery store and NOT cleared before PostResult. This — not
+    // current_manifest_id_, which is store-gated, cleared before PostResult, and
+    // re-minted per split segment — names the on-disk session report and stays
+    // constant across a split recording. Overwritten only at the next StartRecording.
+    QString recording_session_id_;
 
     // ADR-0015: armed-from-recovery state.
     bool is_armed_from_recovery_ = false;
@@ -455,6 +466,13 @@ class RecordingCoordinator {
     // Rejects stale-session diagnostics snapshots before they reach the UI.
     recorder_core::DiagnosticsSessionGuard diagnostics_guard_;
     std::mutex diagnostics_guard_mutex_;
+    // Most recent accepted diagnostics snapshot, stashed so PostResult can write the
+    // session report from the end-of-session counters. The stop path emits the final
+    // Completed snapshot before PostResult; an error path leaves the last snapshot
+    // seen, whose unavailable metrics stay unavailable (never fake zeros). Guarded by
+    // diagnostics_guard_mutex_.
+    recorder_core::RecordingDiagnosticsSnapshot last_snapshot_;
+    bool has_last_snapshot_ = false;
     ResultReadyCallback on_result_ready_;
     MicMeterUpdatedCallback on_mic_meter_updated_;
     SysMeterUpdatedCallback on_sys_meter_updated_;

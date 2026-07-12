@@ -17,6 +17,7 @@
 
 #include <recorder_core/codec_types.h>
 #include <recorder_core/color_metadata.h>
+#include <recorder_core/pipeline_diagnostics.h>
 
 namespace recorder_core {
 
@@ -229,6 +230,30 @@ class NvencEncoder {
     // Default 2.0 s matches the pre-0.9.0 hardcoded value.
     void SetKeyframeIntervalSecs(float secs) noexcept {
         m_keyframeIntervalSecs = (secs > 0.0f) ? secs : 2.0f;
+    }
+
+    // Resolved encoder initialization parameters, valid after a successful
+    // InitEncoder() (i.e. after Configure()). Plain data for diagnostics / the
+    // session report — carries no NVENC types. hdr_mode is not known here (it is a
+    // pipeline-level concept); the caller fills it from the session config.
+    [[nodiscard]] EncoderInitInfo GetInitInfo() const noexcept {
+        EncoderInitInfo info;
+        info.valid = m_gopLength > 0; // set by InitEncoder
+        info.codec = m_codec;
+        info.preset = m_preset;
+        info.rc_mode = m_rateControlMode;
+        info.target_bitrate_kbps = m_encodeConfig.rcParams.averageBitRate / 1000;
+        info.max_bitrate_kbps = m_encodeConfig.rcParams.maxBitRate / 1000;
+        info.cq = m_cq;
+        info.gop_length = m_gopLength;
+        info.bframes = m_encodeConfig.frameIntervalP > 0 ? m_encodeConfig.frameIntervalP - 1 : 0;
+        info.lookahead_frames = m_encodeConfig.rcParams.enableLookahead ? m_encodeConfig.rcParams.lookaheadDepth : 0;
+        info.temporal_aq = m_encodeConfig.rcParams.enableTemporalAQ != 0;
+        info.spatial_aq = m_encodeConfig.rcParams.enableAQ != 0;
+        info.bit_depth = m_bitDepth;
+        info.chroma = m_chroma;
+        info.color_full_range = (m_color.range == ColorRange::Full);
+        return info;
     }
 
     // Load nvEncodeAPI64.dll and open a D3D11 encode session.

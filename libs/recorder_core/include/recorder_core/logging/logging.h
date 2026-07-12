@@ -33,6 +33,20 @@ struct LoggerConfig {
     std::filesystem::path filePath;
     std::size_t ringCapacity = 512;
     LogLevel minimumLevel = LogLevel::Info;
+
+    // Size-based rotation of the on-disk JSONL file. The engine appends across
+    // launches (no truncate) and rotates when the live file would exceed
+    // maxFileBytes, keeping maxFileCount files total (engine.jsonl[.1][.2]).
+    // Mirrors the app text log's 5 MiB / 3-file bound. Kept configurable so a
+    // rotation test can drive a small threshold instead of writing megabytes.
+    std::size_t maxFileBytes = 5 * 1024 * 1024;
+    std::size_t maxFileCount = 3;
+
+    // Fields stamped onto every record's fields{} (e.g. the launch session id),
+    // so a single key correlates the JSONL stream, the text log and the session
+    // report. Appended after the per-call fields; per-call keys win on collision.
+    std::vector<LogField> baseFields;
+
     // Optional. The engine writes its own JSONL file regardless; a host sets this to
     // also surface engine records in its own log. Without it the engine's decisions
     // are invisible to the application.

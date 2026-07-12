@@ -584,6 +584,33 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
+
+        // Capture the resolved encoder init parameters for the live diagnostics
+        // snapshot and the on-disk session report, and emit them once as a
+        // structured event so they reach the JSONL even if a later failure means no
+        // final snapshot is produced. hdr_mode is a session-level concept the
+        // encoder does not know, so it is filled from the config here.
+        EncoderInitInfo enc_init = nvenc.GetInitInfo();
+        enc_init.hdr_mode = m_state.config.hdr_mode;
+        m_state.diagnostics.SetEncoderInitInfo(enc_init);
+
+        const char* rc_name = enc_init.rc_mode == RateControlMode::ConstantQuality   ? "cq"
+                              : enc_init.rc_mode == RateControlMode::VariableBitrate ? "vbr"
+                              : enc_init.rc_mode == RateControlMode::ConstantBitrate ? "cbr"
+                                                                                     : "lossless";
+        const std::vector<recorder_core::logging::LogField> init_fields = {
+            {"codec", std::to_string(static_cast<int>(enc_init.codec))},
+            {"preset", std::to_string(static_cast<int>(enc_init.preset))},
+            {"rc", rc_name},
+            {"target_kbps", std::to_string(enc_init.target_bitrate_kbps)},
+            {"max_kbps", std::to_string(enc_init.max_bitrate_kbps)},
+            {"gop", std::to_string(enc_init.gop_length)},
+            {"bit_depth", enc_init.bit_depth == BitDepth::Bit10 ? "10" : "8"},
+            {"spatial_aq", enc_init.spatial_aq ? "1" : "0"},
+        };
+        recorder_core::logging::log(
+            recorder_core::logging::LogLevel::Info, "encoder", "encoder.init",
+            std::span<const recorder_core::logging::LogField>(init_fields.data(), init_fields.size()));
     }
 
     // --- NV12 / P010 texture ring + video processor ---

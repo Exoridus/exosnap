@@ -1,0 +1,167 @@
+// The session report is the on-disk support artifact for one recording. These
+// tests pin the pure builder (deterministic JSON, honest "unavailable" instead of
+// fabricated zeros, segment list, error phase, peak drift) and the writer's prune.
+
+#include <gtest/gtest.h>
+
+#include "diagnostics/SessionReport.h"
+
+#include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
+
+namespace exosnap::diagnostics {
+namespace {
+
+SessionReportInputs MakeInputs() {
+    SessionReportInputs in;
+    in.recording_session_id = QStringLiteral("rec-1234");
+    in.launch_session_id = QStringLiteral("launch-abcd");
+    in.capture_backend = QStringLiteral("dxgi-od");
+    in.bit_depth = 10;
+    in.chroma = QStringLiteral("4:2:0");
+    in.color_range = QStringLiteral("limited");
+    in.hdr_mode = QStringLiteral("tonemap-sdr");
+
+    in.result.succeeded = true;
+    in.result.output_path = L"C:/Users/somebody/Videos/ExoSnap_2026.mkv";
+    in.result.output_file_bytes = 123456;
+    in.result.elapsed_seconds = 42.5;
+    in.result.output_width = 1920;
+    in.result.output_height = 1080;
+    in.result.frame_rate_num = 60;
+    in.result.frame_rate_den = 1;
+    in.result.cfr = true;
+    in.result.container = recorder_core::Container::Matroska;
+    in.result.video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    in.result.audio_codec = recorder_core::AudioCodec::Opus;
+    in.output_filename = QStringLiteral("ExoSnap_2026.mkv");
+
+    in.has_snapshot = true;
+    auto& s = in.snapshot;
+    s.capture.frames_dropped_cfr = 3;
+    s.capture.frames_duplicated = 5;
+    s.video_encoder.frames_submitted = 2540;
+    s.video_encoder.frames_encoded = 2540;
+    s.duration_skew_ms = 12.0;
+    s.duration_skew_availability = recorder_core::MetricAvailability::Available;
+    s.av_drift_ms = -4.0;
+    s.av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.peak_av_drift_ms = 9.0;
+    s.peak_av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.encoder_init.valid = true;
+    s.encoder_init.codec = recorder_core::VideoCodec::Av1Nvenc;
+    s.encoder_init.preset = recorder_core::NvencPreset::P5;
+    s.encoder_init.rc_mode = recorder_core::RateControlMode::VariableBitrate;
+    s.encoder_init.target_bitrate_kbps = 20000;
+    s.encoder_init.gop_length = 120;
+    return in;
+}
+
+QJsonObject Parse(const QByteArray& bytes) {
+    return QJsonDocument::fromJson(bytes).object();
+}
+
+TEST(SessionReport, CarriesIdsFormatAndConfig) {
+    const QJsonObject o = Parse(BuildSessionReportJson(MakeInputs()));
+    EXPECT_EQ(o[QStringLiteral("recording_session_id")].toString(), QStringLiteral("rec-1234"));
+    EXPECT_EQ(o[QStringLiteral("launch_session_id")].toString(), QStringLiteral("launch-abcd"));
+    EXPECT_TRUE(o[QStringLiteral("succeeded")].toBool());
+    EXPECT_EQ(o[QStringLiteral("output_filename")].toString(), QStringLiteral("ExoSnap_2026.mkv"));
+
+    const QJsonObject fmt = o[QStringLiteral("output_format")].toObject();
+    EXPECT_EQ(fmt[QStringLiteral("container")].toString(), QStringLiteral("MKV"));
+    EXPECT_EQ(fmt[QStringLiteral("video_codec")].toString(), QStringLiteral("AV1"));
+    EXPECT_EQ(fmt[QStringLiteral("audio_codec")].toString(), QStringLiteral("Opus"));
+
+    const QJsonObject cfg = o[QStringLiteral("config")].toObject();
+    EXPECT_EQ(cfg[QStringLiteral("capture_backend")].toString(), QStringLiteral("dxgi-od"));
+    EXPECT_EQ(cfg[QStringLiteral("bit_depth")].toInt(), 10);
+}
+
+TEST(SessionReport, CarriesEncoderInitAndPeakDrift) {
+    const QJsonObject o = Parse(BuildSessionReportJson(MakeInputs()));
+    const QJsonObject enc = o[QStringLiteral("encoder_init")].toObject();
+    EXPECT_EQ(enc[QStringLiteral("preset")].toString(), QStringLiteral("P5"));
+    EXPECT_EQ(enc[QStringLiteral("rate_control")].toString(), QStringLiteral("VBR"));
+    EXPECT_EQ(enc[QStringLiteral("gop_length")].toInt(), 120);
+
+    const QJsonObject counters = o[QStringLiteral("counters")].toObject();
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("peak_av_drift_ms")].toDouble(), 9.0);
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("duration_skew_ms")].toDouble(), 12.0);
+}
+
+TEST(SessionReport, UnavailableInsteadOfFakeZero) {
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.duration_skew_availability = recorder_core::MetricAvailability::Unavailable;
+    in.snapshot.peak_av_drift_availability = recorder_core::MetricAvailability::Unavailable;
+    const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("duration_skew_ms")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(counters[QStringLiteral("peak_av_drift_ms")].toString(), QStringLiteral("unavailable"));
+}
+
+TEST(SessionReport, NoSnapshotYieldsUnavailableSections) {
+    SessionReportInputs in = MakeInputs();
+    in.has_snapshot = false;
+    const QJsonObject o = Parse(BuildSessionReportJson(in));
+    EXPECT_EQ(o[QStringLiteral("counters")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(o[QStringLiteral("encoder_init")].toString(), QStringLiteral("unavailable"));
+}
+
+TEST(SessionReport, SegmentsAndErrorPhase) {
+    SessionReportInputs in = MakeInputs();
+    in.result.succeeded = false;
+    in.result.error_phase = L"VideoEncode";
+    in.result.hresult_text = L"0x80004005";
+    in.result.error_detail = L"NVENC configure failed";
+    CompletedRecordingSegment seg;
+    seg.index = 0;
+    seg.duration_seconds = 30.0;
+    seg.file_size_bytes = 5000;
+    seg.succeeded = true;
+    in.result.segments.push_back(seg);
+
+    const QJsonObject o = Parse(BuildSessionReportJson(in));
+    const QJsonArray segments = o[QStringLiteral("segments")].toArray();
+    ASSERT_EQ(segments.size(), 1);
+    EXPECT_DOUBLE_EQ(segments[0].toObject()[QStringLiteral("duration_seconds")].toDouble(), 30.0);
+    EXPECT_TRUE(segments[0].toObject()[QStringLiteral("finalized")].toBool());
+
+    const QJsonObject err = o[QStringLiteral("error")].toObject();
+    EXPECT_EQ(err[QStringLiteral("phase")].toString(), QStringLiteral("VideoEncode"));
+    EXPECT_EQ(err[QStringLiteral("detail")].toString(), QStringLiteral("NVENC configure failed"));
+}
+
+TEST(SessionReport, DeterministicForFixedInputs) {
+    const auto a = BuildSessionReportJson(MakeInputs());
+    const auto b = BuildSessionReportJson(MakeInputs());
+    EXPECT_EQ(a, b);
+}
+
+TEST(SessionReport, WriterUsesTheSessionIdAndPrunesToKeepN) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QString reports_dir = tmp.path() + QStringLiteral("/reports");
+
+    // The writer names the file after the provided id (no store involved), so the
+    // id set unconditionally by the coordinator is what identifies the report.
+    SessionReportInputs in = MakeInputs();
+    in.recording_session_id = QStringLiteral("only-id");
+    QString written;
+    ASSERT_TRUE(WriteSessionReport(reports_dir, in, /*keep_n=*/10, &written));
+    EXPECT_TRUE(written.endsWith(QStringLiteral("session-only-id.json")));
+
+    // Write 12 distinct reports; prune must leave exactly keep_n = 10.
+    for (int i = 0; i < 12; ++i) {
+        SessionReportInputs each = MakeInputs();
+        each.recording_session_id = QStringLiteral("rec-%1").arg(i);
+        ASSERT_TRUE(WriteSessionReport(reports_dir, each, /*keep_n=*/10));
+    }
+    const int remaining = QDir(reports_dir).entryList({QStringLiteral("session-*.json")}, QDir::Files).size();
+    EXPECT_EQ(remaining, 10);
+}
+
+} // namespace
+} // namespace exosnap::diagnostics

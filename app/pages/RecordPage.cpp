@@ -2646,14 +2646,14 @@ void RecordPage::initCoordinator() {
         view_model_.av_drift_available =
             (snapshot.av_drift_availability == recorder_core::MetricAvailability::Available);
         view_model_.av_drift_ms = view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
-        // Accumulate A/V drift peak during Recording lifecycle
+        // Peak A/V drift is accumulated in the engine aggregator now (one source of
+        // truth shared with the session report); mirror the snapshot's value here
+        // instead of re-deriving it.
+        if (snapshot.peak_av_drift_availability == recorder_core::MetricAvailability::Available) {
+            av_drift_ever_available_ = true;
+            peak_av_drift_ms_ = snapshot.peak_av_drift_ms;
+        }
         if (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording) {
-            if (snapshot.av_drift_availability == recorder_core::MetricAvailability::Available) {
-                av_drift_ever_available_ = true;
-                const double abs_drift = std::abs(snapshot.av_drift_ms);
-                if (abs_drift > peak_av_drift_ms_)
-                    peak_av_drift_ms_ = abs_drift;
-            }
             last_pipeline_health_ = snapshot.health;
         }
         // Capture final snapshot when pipeline completes

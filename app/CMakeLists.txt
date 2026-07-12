@@ -302,6 +302,14 @@ qt_add_executable(exosnap WIN32
     diagnostics/AppLog.cpp
     diagnostics/EngineLogBridge.h
     diagnostics/EngineLogBridge.cpp
+    diagnostics/StructuredLog.h
+    diagnostics/StructuredLog.cpp
+    diagnostics/SessionReport.h
+    diagnostics/SessionReport.cpp
+    diagnostics/ZipWriter.h
+    diagnostics/ZipWriter.cpp
+    diagnostics/SupportBundle.h
+    diagnostics/SupportBundle.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -367,7 +375,7 @@ add_dependencies(exosnap exosnap_build_info)
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
-    exosnap::update
+    exosnap::update exosnap_miniz
     tomlplusplus::tomlplusplus
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib Version.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
@@ -494,9 +502,13 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.cpp
     diagnostics/SelfTestRunner.cpp
+    # Session report writer is called by RecordingCoordinator, which is compiled
+    # into the coordinator test targets that all link this support lib.
+    diagnostics/SessionReport.cpp
 )
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
     exosnap_output_model_test_support exosnap_capability recorder_core
+    exosnap::crash_capture
     dxgi.lib mmdevapi.lib
 )
 
@@ -736,6 +748,69 @@ exosnap_add_gtest(
 )
 target_include_directories(engine_log_bridge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(engine_log_bridge_tests PROPERTIES AUTOMOC ON)
+
+# Structured-event entry point: logEvent forwards only to the engine JSONL, so the
+# bridge is the single source of the text line (no double-write), and a Debug event
+# is dropped at the engine's Info minimumLevel.
+exosnap_add_gtest(
+    NAME structured_log_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_structured_log.cpp
+        diagnostics/StructuredLog.cpp
+        diagnostics/EngineLogBridge.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES recorder_core Qt6::Core
+)
+target_include_directories(structured_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(structured_log_tests PROPERTIES AUTOMOC ON)
+
+# Session report: the pure JSON builder (deterministic, honest unavailable metrics,
+# segments, error phase, peak drift) and the writer's prune-to-keep-N.
+exosnap_add_gtest(
+    NAME session_report_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_session_report.cpp
+        diagnostics/SessionReport.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core Qt6::Gui
+)
+target_include_directories(session_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(session_report_tests PRIVATE ole32.lib shell32.lib)
+
+# ZIP writer over the vendored miniz: round-trips through libs/update's ExtractZip
+# (the reader side) and enforces the reused entry-name safety guard.
+exosnap_add_gtest(
+    NAME zip_writer_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_zip_writer.cpp
+        diagnostics/ZipWriter.cpp
+    LIBRARIES exosnap_miniz exosnap::update Qt6::Core
+)
+target_include_directories(zip_writer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Support bundle: the entry set, and the privacy regression guard (no path,
+# username, machine, output path OR capture-target window title in any entry).
+exosnap_add_gtest(
+    NAME support_bundle_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_support_bundle.cpp
+        diagnostics/SupportBundle.cpp
+        diagnostics/ZipWriter.cpp
+    LIBRARIES exosnap_miniz exosnap::update exosnap::crash_capture Qt6::Core
+)
+target_include_directories(support_bundle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Startup trace collector (header-only): ordering, de-duplication, formatter.
+exosnap_add_gtest(
+    NAME startup_trace_tests
+    TEST_PREFIX diagnostics.
+    SOURCES tests/test_startup_trace.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(startup_trace_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # App log file rotation: size-based rotation, handle-reuse across writes, and
 # Logs-page (in-memory history) compatibility across rotation.

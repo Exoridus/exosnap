@@ -209,12 +209,17 @@ TEST_F(DiagnosticsPageTest, RunCheckUpdatesStatusToReady) {
     EXPECT_TRUE(found_ready);
 }
 
-TEST_F(DiagnosticsPageTest, ExportReportStaysDisabledHonestly) {
+TEST_F(DiagnosticsPageTest, SupportBundleButtonIsEnabledAndEmits) {
     DiagnosticsPage page;
     LoadData(page);
-    QPushButton* export_btn = FindButton(page, QStringLiteral("Export Report"));
-    ASSERT_NE(export_btn, nullptr);
-    EXPECT_FALSE(export_btn->isEnabled());
+    QPushButton* bundle_btn = FindButton(page, QStringLiteral("Create support bundle"));
+    ASSERT_NE(bundle_btn, nullptr);
+    EXPECT_TRUE(bundle_btn->isEnabled());
+
+    int emitted = 0;
+    QObject::connect(&page, &DiagnosticsPage::createSupportBundleRequested, &page, [&emitted]() { ++emitted; });
+    bundle_btn->click();
+    EXPECT_EQ(emitted, 1);
 }
 
 // ---- SETTINGS-HONESTY-R1: Phase ④ "Open last report" link ------------------

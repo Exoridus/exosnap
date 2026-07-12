@@ -49,6 +49,14 @@ void InitializeEngineLogging() {
     config.filePath = std::filesystem::path(app_log.absolutePath().toStdWString()) / L"engine.jsonl";
 
     config.minimumLevel = recorder_core::logging::LogLevel::Info;
+
+    // Stamp the launch session id onto every JSONL record, so the structured
+    // stream, the text log (banner) and a support bundle share one launch key.
+    const QString session = diagnostics::AppLog::sessionId();
+    if (!session.isEmpty()) {
+        config.baseFields.push_back({"session", session.toStdString()});
+    }
+
     config.sink = [](const recorder_core::logging::LogRecord& record) {
         // Runs on whichever thread logged — usually the video thread. AppLog::write
         // takes its own lock and marshals delivery to the main thread.

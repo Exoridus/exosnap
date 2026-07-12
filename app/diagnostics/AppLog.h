@@ -62,6 +62,12 @@ class AppLog final : public QObject {
     // Returns an empty string if init() has not been called.
     [[nodiscard]] static QString logFilePath();
 
+    // Process-wide launch session id (a UUID minted once by init()), written to the
+    // startup banner and stamped onto every engine JSONL record. This is the *launch*
+    // key that correlates the text log, the engine JSONL and a support bundle; it is
+    // distinct from a per-recording session id. Empty until init() has run.
+    [[nodiscard]] static QString sessionId();
+
     [[nodiscard]] static QString severityLabel(LogSeverity severity);
     [[nodiscard]] static QString severityKey(LogSeverity severity);
     [[nodiscard]] static QString formatEntry(const LogEntry& entry);

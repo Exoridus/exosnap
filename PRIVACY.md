@@ -57,6 +57,29 @@ is subject to the following guarantees:
 Local crash captures (minidumps in `%LOCALAPPDATA%\ExoSnap\crashes\`) are stored on your device
 only, whether or not you consent to upload.
 
+## Support bundle (local, user-initiated, never transmitted)
+
+ExoSnap can package its diagnostics into a single `.zip` **support bundle** that you create
+manually and share with support however you choose. It is a local file operation only:
+
+- **No transmission.** The bundle is written to a location you pick (save dialog) and then
+  revealed in the file manager. ExoSnap never uploads it anywhere — consistent with having no
+  telemetry.
+- **What it contains.** The rotated application and engine logs, the most recent per-recording
+  session reports, and structured facts about your GPU, adapters, displays and current settings.
+- **Scrubbing.** Every text entry is scrubbed before it is written: user paths, username and
+  machine name are stripped, and — because a capture-target **window title** carries no drive
+  prefix and would otherwise slip past path-scrubbing — window titles in the logs are redacted to
+  `[capture-target]` (only "window vs monitor capture" is retained, not *which* window).
+  Structured files include only a fixed allowlist of known-safe fields, never a raw dump of your
+  settings file.
+- **What it never contains.** Your recordings, raw settings/preset/history files, absolute paths,
+  username, machine name, or crash dumps (crash reporting is a separate, consent-gated channel).
+
+The per-recording **session report** written after each recording
+(`%LOCALAPPDATA%\ExoSnap\logs\reports\`) follows the same principle: it holds byte counts,
+codecs, and diagnostic counters plus a scrubbed output *file name*, and never an absolute path.
+
 ## Update channel
 
 When the update check is enabled (opt-in), ExoSnap contacts the **public GitHub Releases API**

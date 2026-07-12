@@ -14,6 +14,7 @@
 #include "diagnostics/AppLog.h"
 #include "diagnostics/EngineLogBridge.h"
 #include "diagnostics/StartupClock.h"
+#include "diagnostics/StartupTrace.h"
 #include "exosnap_resource.h"
 #include "services/ElevatedRelaunch.h"
 #include "ui/theme/ExoSnapTheme.h"
@@ -143,6 +144,9 @@ int main(int argc, char* argv[]) {
     exosnap::diagnostics::AppLog::info(QStringLiteral("perf"), QStringLiteral("main-start %1 ms").arg(main_start_ms));
     exosnap::diagnostics::AppLog::info(QStringLiteral("perf"),
                                        QStringLiteral("qapplication-created %1 ms").arg(qapplication_created_ms));
+    exosnap::diagnostics::StartupTrace::instance().record(QStringLiteral("main-start"), main_start_ms);
+    exosnap::diagnostics::StartupTrace::instance().record(QStringLiteral("qapplication-created"),
+                                                          qapplication_created_ms);
 
     static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
     if (!QFile::exists(kAppIconPath))
@@ -158,9 +162,12 @@ int main(int argc, char* argv[]) {
     if (!app_icon.isNull())
         QApplication::setWindowIcon(app_icon);
     exosnap::ui::theme::ApplyExoSnapTheme(app);
-    exosnap::diagnostics::AppLog::info(
-        QStringLiteral("perf"),
-        QStringLiteral("theme-applied %1 ms").arg(exosnap::diagnostics::StartupClock().elapsed()));
+    {
+        const qint64 theme_applied_ms = exosnap::diagnostics::StartupClock().elapsed();
+        exosnap::diagnostics::AppLog::info(QStringLiteral("perf"),
+                                           QStringLiteral("theme-applied %1 ms").arg(theme_applied_ms));
+        exosnap::diagnostics::StartupTrace::instance().record(QStringLiteral("theme-applied"), theme_applied_ms);
+    }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     exosnap::visual::VisualTestOptions visual_options;

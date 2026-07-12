@@ -184,6 +184,10 @@ class MainWindow : public QMainWindow {
     void hydrateSecondaryPages();
     // Builds LogsPage, replacing the cheap placeholder reserved at kLogsPageIndex.
     void buildLogsPage();
+    // Gather the runtime facts, write a scrubbed support bundle via a save dialog,
+    // then reveal it in the file manager. Shared by the Logs and Diagnostics entry
+    // points (one code path).
+    void createSupportBundle();
     // Builds HotkeysPage, replacing the cheap placeholder reserved at kHotkeysPageIndex.
     void buildHotkeysPage();
     // Builds DiagnosticsPage, replacing the cheap placeholder reserved at kDiagnosticsPageIndex.

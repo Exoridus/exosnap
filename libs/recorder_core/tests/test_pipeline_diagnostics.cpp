@@ -786,4 +786,80 @@ TEST(CaptureCardWiring, ResetClearsNewWindows) {
     EXPECT_EQ(s.capture.acquire_availability, MetricAvailability::Unavailable);
 }
 
+// ---------------------------------------------------------------------------
+// Peak A/V drift (single source of truth for the UI and the session report)
+// ---------------------------------------------------------------------------
+
+TEST(PeakAvDrift, UnavailableUntilDriftIsMeasured) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
+    EXPECT_EQ(s.peak_av_drift_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PeakAvDrift, RunningMaximumOfMagnitudeIsMonotonic) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+
+    agg.OnAudioClockDrift(0, 3.0);
+    auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
+    EXPECT_EQ(s.peak_av_drift_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(s.peak_av_drift_ms, 3.0);
+
+    // A larger-magnitude (negative) drift raises the peak.
+    agg.OnAudioClockDrift(0, -7.0);
+    s = agg.BuildSnapshot(At(100), MakeStats(), DiagnosticsLifecycle::Recording, 0.6);
+    EXPECT_DOUBLE_EQ(s.peak_av_drift_ms, 7.0);
+
+    // A smaller drift does not lower the peak.
+    agg.OnAudioClockDrift(0, 1.0);
+    s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 0.7);
+    EXPECT_DOUBLE_EQ(s.peak_av_drift_ms, 7.0);
+
+    // Reset clears the peak for a fresh session.
+    agg.Reset(2, MakeConfig());
+    s = agg.BuildSnapshot(At(300), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.peak_av_drift_availability, MetricAvailability::Unavailable);
+}
+
+// ---------------------------------------------------------------------------
+// Encoder init info passthrough
+// ---------------------------------------------------------------------------
+
+TEST(EncoderInit, InvalidUntilSetThenCarriedOnSnapshots) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+
+    auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_FALSE(s.encoder_init.valid);
+
+    EncoderInitInfo info;
+    info.valid = true;
+    info.codec = VideoCodec::Av1Nvenc;
+    info.preset = NvencPreset::P5;
+    info.rc_mode = RateControlMode::VariableBitrate;
+    info.target_bitrate_kbps = 20000;
+    info.gop_length = 120;
+    info.bit_depth = BitDepth::Bit10;
+    agg.SetEncoderInitInfo(info);
+
+    s = agg.BuildSnapshot(At(100), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
+    EXPECT_TRUE(s.encoder_init.valid);
+    EXPECT_EQ(s.encoder_init.preset, NvencPreset::P5);
+    EXPECT_EQ(s.encoder_init.rc_mode, RateControlMode::VariableBitrate);
+    EXPECT_EQ(s.encoder_init.target_bitrate_kbps, 20000u);
+    EXPECT_EQ(s.encoder_init.gop_length, 120u);
+    EXPECT_EQ(s.encoder_init.bit_depth, BitDepth::Bit10);
+
+    // Carried unchanged on a later snapshot.
+    s = agg.BuildSnapshot(At(200), MakeStats(), DiagnosticsLifecycle::Recording, 0.6);
+    EXPECT_TRUE(s.encoder_init.valid);
+    EXPECT_EQ(s.encoder_init.gop_length, 120u);
+
+    // Cleared on Reset.
+    agg.Reset(2, MakeConfig());
+    s = agg.BuildSnapshot(At(300), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_FALSE(s.encoder_init.valid);
+}
+
 } // namespace
