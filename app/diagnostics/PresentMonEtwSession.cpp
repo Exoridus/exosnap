@@ -57,11 +57,8 @@ bool PresentMonEtwSession::Start() {
     last_present_qpc_ = 0;
     qpc_freq_ = 0;
     // Fresh accounting per session so a Stop()->Start() cycle does not carry over a prior
-    // session's discarded/flip totals.
-    present_count_ = 0;
-    discarded_count_ = 0;
-    mode_flip_count_ = 0;
-    last_mode_ = PresentMode::Unknown;
+    // session's discarded/flip totals. SetTargetProcessId resets it again per recording.
+    accumulator_.Reset();
     {
         std::lock_guard lk(sample_mutex_);
         impl_ = s; // shared_ptr<SessionImpl> -> shared_ptr<void>
@@ -111,19 +108,13 @@ PresentSample PresentMonEtwSession::Latest() const {
             const RawPresentEvent raw = ToRaw(*p, last_present_qpc_, qpc_freq_);
             last_present_qpc_ = p->PresentStartTime;
             PresentSample mapped = MapPresentEvent(raw);
-            // ADR 0033 extra-checks: accumulate session-cumulative aggregates. Count flips on
-            // the CLASSIFIED mode so sub-variant changes (e.g. Composed_Flip -> Composed_Copy)
-            // do not register as a present-mode flip.
-            ++present_count_;
-            if (p->FinalState == PresentResult::Discarded)
-                ++discarded_count_;
-            if (last_mode_ != PresentMode::Unknown && mapped.mode != PresentMode::Unknown && mapped.mode != last_mode_)
-                ++mode_flip_count_;
-            if (mapped.mode != PresentMode::Unknown)
-                last_mode_ = mapped.mode;
-            mapped.present_count = static_cast<uint32_t>(present_count_);
-            mapped.discarded_count = static_cast<uint32_t>(discarded_count_);
-            mapped.mode_flip_count = static_cast<uint32_t>(mode_flip_count_);
+            // ADR 0033 extra-checks: fold into the per-recording aggregates. The accumulator
+            // counts flips on the CLASSIFIED mode so sub-variant changes (e.g. Composed_Flip
+            // -> Composed_Copy) do not register as a present-mode flip.
+            accumulator_.Observe(mapped.mode, p->FinalState == PresentResult::Discarded);
+            mapped.present_count = static_cast<uint32_t>(accumulator_.present_count);
+            mapped.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
+            mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             std::lock_guard lk(sample_mutex_);
             latest_ = mapped;
         }

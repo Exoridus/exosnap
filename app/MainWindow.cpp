@@ -4820,6 +4820,7 @@ void MainWindow::buildDiagnosticsPage() {
     diagnostics_page_ = new DiagnosticsPage(stack_);
     diagnostics_page_->setPresentProvider(&present_provider_);
     diagnostics_page_->setDpcProvider(&dpc_provider_);
+    diagnostics_page_->setElevationProvider(&elevation_provider_);
     // Light cadence to surface the selected-window exclusive-fullscreen evidence,
     // which needs ~2 s to accumulate. refreshWindowEvidence() no-ops while the page
     // is hidden, so this costs nothing off the Diagnostics view.

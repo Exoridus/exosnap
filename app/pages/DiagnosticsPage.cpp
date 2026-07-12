@@ -624,6 +624,10 @@ void DiagnosticsPage::setDpcProvider(diagnostics::DpcLatencyProvider* provider) 
     dpc_provider_ = provider;
 }
 
+void DiagnosticsPage::setElevationProvider(diagnostics::IElevationProvider* provider) noexcept {
+    elevation_provider_ = provider;
+}
+
 void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
     last_live_snapshot_ = snapshot;
 
@@ -1472,6 +1476,11 @@ void DiagnosticsPage::refreshOverview() {
     }
 
     engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(output_folder_.string()).passed);
+    // Feed the measured process-elevation state so the Tier-4 Elevation fact reads
+    // truthfully ("Elevated" vs "Standard") rather than a hard-coded baseline string.
+    if (elevation_provider_ != nullptr) {
+        engine.SetElevated(elevation_provider_->IsElevated());
+    }
     // Feed the selected capture target's live HDR status so the HDR10 + H.264
     // pre-flight blocker (rec.hdr.h264) fires only on an HDR-active desktop.
     engine.SetCaptureTargetHdrActive(SelectedTargetHdrActive(selected_capture_target_, caps_));
@@ -1569,12 +1578,17 @@ void DiagnosticsPage::refreshEnvironmentFacts(const std::vector<diagnostics::Dia
         first = false;
     }
 
-    // Never leave Expert blank: if the model produced no facts (idle), keep the
-    // honest elevation baseline row so the panel still reads as environment.
+    // Never leave Expert blank: if the model produced no facts, keep a truthful
+    // elevation row so the panel still reads as environment. GenerateEnvironmentFacts
+    // always emits fact.elevation today, so this is a defensive fallback — mirror the
+    // measured state rather than a fixed string.
     if (facts.empty()) {
+        const bool elevated = elevation_provider_ != nullptr && elevation_provider_->IsElevated();
         env_facts_layout_->addWidget(makeInfoRow(
             QStringLiteral("Elevation"),
-            QStringLiteral("Standard \xe2\x80\x94 DXGI / NVAPI baseline \xc2\xb7 monitor judder still measured"),
+            elevated ? QStringLiteral("Elevated \xe2\x80\x94 PresentMon ETW present diagnostics available")
+                     : QStringLiteral("Standard \xe2\x80\x94 DXGI / NVAPI baseline \xc2\xb7 present diagnostics need "
+                                      "elevation"),
             QString(), host, true));
     }
 }

@@ -917,9 +917,14 @@ void RecommendationEngine::checkAudioSourceDegraded(DiagnosticChecklist& checkli
 // ---------------------------------------------------------------------------
 std::vector<DiagnosticResult> RecommendationEngine::GenerateEnvironmentFacts() const {
     std::vector<DiagnosticResult> facts;
+    // Truthful, measured elevation baseline (queried by the caller via IElevationProvider —
+    // the same gate PresentMonProvider uses). Elevated unlocks the PresentMon ETW present
+    // diagnostics; Standard keeps the DXGI / NVAPI baseline (judder is still measured live).
+    const std::string elevation_summary = elevated_
+                                              ? "Elevated — PresentMon ETW present diagnostics available"
+                                              : "Standard — DXGI / NVAPI baseline · present diagnostics need elevation";
     facts.push_back(MakeResult("fact.elevation", DiagnosticGroup::ConfigSnapshot, DiagnosticSeverity::Pass,
-                               DiagnosticTier::Fact, "Elevation",
-                               "Standard — DXGI / NVAPI baseline · monitor judder still measured"));
+                               DiagnosticTier::Fact, "Elevation", elevation_summary));
     if (live_audio_format_available_) {
         const std::string value =
             std::to_string(live_audio_sample_rate_) + " Hz · " + std::to_string(live_audio_channels_) + " ch";
