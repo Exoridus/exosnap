@@ -360,9 +360,11 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                 libebml::GetChild<libmatroska::KaxSeekPreRoll>(aud).SetValue(80000000ULL);
                 libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(20000000ULL);
             } else if (m_config.audio_codec == StreamAudioCodec::Pcm) {
-                // Uncompressed 16-bit signed little-endian PCM. No CodecPrivate;
-                // the bit depth is carried in the track audio header below.
-                libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue("A_PCM/INT_LIT");
+                // Uncompressed PCM. No CodecPrivate; the bit depth is carried
+                // in the track audio header below. audio_float selects the
+                // 32-bit IEEE754 float CodecID instead of signed int PCM.
+                libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue(m_config.audio_float ? "A_PCM/FLOAT_IEEE"
+                                                                                              : "A_PCM/INT_LIT");
             } else if (m_config.audio_codec == StreamAudioCodec::Flac) {
                 // Lossless FLAC. A_FLAC mandates the CodecPrivate be the native
                 // FLAC stream header (the "fLaC" marker + STREAMINFO and any

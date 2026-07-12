@@ -64,7 +64,9 @@ inline const QString kOpusComplexity =
 inline const QString kAudioSampleRate = QStringLiteral("PCM sampling rate \xC2\xB7 Opus is fixed at 48\xC2\xa0kHz");
 inline const QString kAudioChannels = QStringLiteral("Stereo preserves L/R \xC2\xB7 Mono mixes both channels");
 inline const QString kAudioBitDepth =
-    QStringLiteral("PCM/FLAC word size \xC2\xB7 16-bit sufficient for most recordings");
+    QStringLiteral("PCM/FLAC word size \xC2\xB7 16-bit sufficient for most recordings \xC2\xB7 "
+                   "32-bit float is the mix bus's native format \xE2\x80\x94 no conversion, no clipping "
+                   "headroom needed");
 inline const QString kFlacCompression = QStringLiteral("FLAC compression level (0 = fastest, 8 = smallest file)");
 inline const QString kBrickwallLimiter =
     QStringLiteral("Hard clip ceiling applied after all DSP stages \xC2\xB7 prevents digital over");

@@ -53,7 +53,8 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         // the track is marked ready with empty bytes so the mux thread's
         // codec-private readiness gate releases the pre-mux buffer.
         auto enc = std::make_unique<PcmAudioEncoder>();
-        enc->SetBitDepth(config.audio_bit_depth); // ADR 0030: configurable depth
+        enc->SetBitDepth(config.audio_bit_depth);    // ADR 0030: configurable depth
+        enc->SetFloatFormat(config.audio_pcm_float); // Float-PCM: A_PCM/FLOAT_IEEE
         setup.encoder = std::move(enc);
         setup.init_error_prefix = "PCM encoder init: ";
         break;

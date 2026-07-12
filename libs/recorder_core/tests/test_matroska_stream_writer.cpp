@@ -405,6 +405,53 @@ TEST_F(StreamWriterTest, Pcm_WritesPcmCodecIdAndBitDepth) {
     EXPECT_TRUE(SegmentSizeIsFinite(d));
 }
 
+// 2b-float. Float-PCM path: track header carries CodecID "A_PCM/FLOAT_IEEE"
+//     (not "A_PCM/INT_LIT") and BitDepth=32 when audio_float is set.
+TEST_F(StreamWriterTest, PcmFloat_WritesFloatCodecIdAndBitDepth32) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Pcm;
+    c.audio_track_count = 1;
+    c.audio_tracks[0].codec_private = {}; // PCM/float has no CodecPrivate
+    c.audio_bit_depth = 32;
+    c.audio_float = true;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(c)) << w.error();
+    FeedSeconds(w, 3.0, 30, 32);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    ASSERT_FALSE(d.empty());
+
+    // CodecID "A_PCM/FLOAT_IEEE" present in the rendered container.
+    const std::string kPcmFloatId = "A_PCM/FLOAT_IEEE";
+    const auto id_it = std::search(d.begin(), d.end(), kPcmFloatId.begin(), kPcmFloatId.end());
+    EXPECT_NE(id_it, d.end()) << "A_PCM/FLOAT_IEEE CodecID not found in output";
+
+    // The plain int CodecID must NOT appear as this track's CodecID: search for
+    // the more specific "A_PCM/INT_LIT" string, which is not a substring of
+    // "A_PCM/FLOAT_IEEE" and so must be absent from a float-only track.
+    const std::string kPcmIntId = "A_PCM/INT_LIT";
+    const auto int_id_it = std::search(d.begin(), d.end(), kPcmIntId.begin(), kPcmIntId.end());
+    EXPECT_EQ(int_id_it, d.end()) << "A_PCM/INT_LIT must not appear for a float-PCM track";
+
+    // KaxAudioBitDepth (EBML id 0x6264), 1-byte size 0x81, value 32 (0x20).
+    const std::vector<uint8_t> kBitDepth32 = {0x62, 0x64, 0x81, 0x20};
+    const auto bd_it = std::search(d.begin(), d.end(), kBitDepth32.begin(), kBitDepth32.end());
+    EXPECT_NE(bd_it, d.end()) << "KaxAudioBitDepth=32 not found in output";
+
+    EXPECT_TRUE(HasLevel1(d, kIdTracks));
+    EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
 // 2c. FLAC path: track header carries CodecID "A_FLAC", the native fLaC header
 //     as CodecPrivate, and BitDepth=16. Verified by scanning the rendered bytes.
 TEST_F(StreamWriterTest, Flac_WritesFlacCodecIdAndCodecPrivate) {

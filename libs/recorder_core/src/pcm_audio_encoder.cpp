@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace recorder_core {
 
@@ -66,6 +67,19 @@ void PcmAudioEncoder::SetBitDepth(uint32_t bits) noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// SetFloatFormat
+// ---------------------------------------------------------------------------
+
+void PcmAudioEncoder::SetFloatFormat(bool is_float) noexcept {
+    m_float = is_float;
+    if (m_float) {
+        // 32-bit IEEE754 is the only float format the mix bus produces; force
+        // it the same way SetBitDepth() silently normalizes unsupported values.
+        m_bit_depth = 32;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
@@ -101,7 +115,13 @@ void PcmAudioEncoder::FeedFloat32(const float* data, size_t total_float_samples,
     const uint32_t bytes_per_sample = m_bit_depth / 8u;
     pkt.bytes.resize(total_float_samples * bytes_per_sample);
 
-    if (m_bit_depth == 16) {
+    if (m_float) {
+        // 32-bit IEEE754 float passthrough: the mix bus already delivers the
+        // samples in this exact format, so there is no conversion at all —
+        // just a raw byte copy of the already-in-memory interleaved Float32
+        // samples (little-endian on every architecture this project targets).
+        std::memcpy(pkt.bytes.data(), data, pkt.bytes.size());
+    } else if (m_bit_depth == 16) {
         // Convert interleaved Float32 -> interleaved S16LE.
         for (size_t i = 0; i < total_float_samples; ++i) {
             const int16_t s = Float32ToS16(data[i]);

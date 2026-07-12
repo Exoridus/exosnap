@@ -1636,7 +1636,7 @@ TEST(RecordingPresetStore, TomlOnDisk_HasLiveTable_NoDefaultId) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString text = QString::fromUtf8(f.readAll());
     EXPECT_TRUE(text.contains(QStringLiteral("[live]")));
-    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 23")));
+    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 24")));
     EXPECT_FALSE(text.contains(QStringLiteral("default_id")));
     CleanupFile(path);
 }
@@ -1659,7 +1659,7 @@ TEST(RecordingPresetStore, SchemaMismatch_KeepsData_NotRepaired) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     QString text = QString::fromUtf8(f.readAll());
     f.close();
-    text.replace(QStringLiteral("schema_version = 23"), QStringLiteral("schema_version = 22"));
+    text.replace(QStringLiteral("schema_version = 24"), QStringLiteral("schema_version = 22"));
     ASSERT_TRUE(WriteTomlString(path, text));
 
     const PersistedPresetState state = store.Load();

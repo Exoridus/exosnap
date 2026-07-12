@@ -78,6 +78,19 @@ namespace {
 
 using M = ui::theme::ExoSnapMetrics;
 
+// Bit-depth combo ItemData encoding (Float-PCM). The combo stores plain int
+// bit-depth values (16/24/32) as ItemData. A fourth "32-bit float" entry needs
+// an ItemData that cannot collide with the existing "32-bit" (int) entry --
+// findData(32) must not ambiguously match both -- so float uses a negative
+// sentinel, out of range of the positive 16/24/32 int values.
+constexpr int kFloatBitDepthItemData = -32;
+
+// Encode the (bit_depth, is_float) pair the audio format model carries into
+// the single ItemData int the combo box stores.
+int EncodeBitDepthComboData(uint32_t bit_depth, bool is_float) {
+    return is_float ? kFloatBitDepthItemData : static_cast<int>(bit_depth);
+}
+
 // Draws the preset combo's option rows and, for built-in presets, a small
 // "Built-in" badge pill at the right edge of the row. Keeping the badge inside
 // the option means it no longer sits beside the combo and shifts the toolbar
@@ -3451,7 +3464,8 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
         }
         if (audio_bit_depth_combo_) {
             const QSignalBlocker b(audio_bit_depth_combo_);
-            const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+            const int idx = audio_bit_depth_combo_->findData(
+                EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
             if (idx >= 0)
                 audio_bit_depth_combo_->setCurrentIndex(idx);
         }
@@ -3603,14 +3617,20 @@ void ConfigPage::updateAudioFormatControlVisibility() {
             audio_bit_depth_combo_->clear();
             audio_bit_depth_combo_->addItem(QStringLiteral("16-bit"), 16);
             audio_bit_depth_combo_->addItem(QStringLiteral("24-bit"), 24);
-            if (is_pcm)
+            if (is_pcm) {
                 audio_bit_depth_combo_->addItem(QStringLiteral("32-bit"), 32);
-            // Restore stored value; fall back to 16-bit if not in list.
-            const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+                // 32-bit float (Float-PCM): PCM only -- libFLAC has no float mode.
+                audio_bit_depth_combo_->addItem(QStringLiteral("32-bit float"), kFloatBitDepthItemData);
+            }
+            // Restore stored value; fall back to 16-bit int if not in list.
+            const int idx = audio_bit_depth_combo_->findData(
+                EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
             audio_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0);
             // Clamp model if stored depth is unavailable for this codec.
-            if (idx < 0)
+            if (idx < 0) {
                 audio_ui_state_.audio_bit_depth = 16u;
+                audio_ui_state_.audio_pcm_float = false;
+            }
             audio_bit_depth_combo_->setEnabled(!locked);
         }
     }
@@ -3992,12 +4012,14 @@ void ConfigPage::buildAudioExpertSection() {
             hl->addStretch(1);
             audio_bit_depth_combo_ = new QComboBox(audio_bit_depth_row_);
             audio_bit_depth_combo_->setObjectName(QStringLiteral("audioBitDepthCombo"));
-            // Items seeded for PCM (16/24/32); rebuilt when codec changes.
+            // Items seeded for PCM (16/24/32/32-float); rebuilt when codec changes.
             audio_bit_depth_combo_->addItem(QStringLiteral("16-bit"), 16);
             audio_bit_depth_combo_->addItem(QStringLiteral("24-bit"), 24);
             audio_bit_depth_combo_->addItem(QStringLiteral("32-bit"), 32);
+            audio_bit_depth_combo_->addItem(QStringLiteral("32-bit float"), kFloatBitDepthItemData);
             {
-                const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+                const int idx = audio_bit_depth_combo_->findData(
+                    EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
                 audio_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 16 */);
             }
             audio_bit_depth_combo_->setFixedWidth(160);
@@ -4261,7 +4283,17 @@ void ConfigPage::buildAudioExpertSection() {
     connect(audio_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         if (idx < 0 || !audio_bit_depth_combo_)
             return;
-        audio_ui_state_.audio_bit_depth = static_cast<uint32_t>(audio_bit_depth_combo_->itemData(idx).toInt());
+        // Float-PCM uses the negative kFloatBitDepthItemData sentinel (see
+        // EncodeBitDepthComboData) so it cannot be confused with the plain
+        // int "32-bit" entry.
+        const int raw = audio_bit_depth_combo_->itemData(idx).toInt();
+        if (raw < 0) {
+            audio_ui_state_.audio_bit_depth = 32u;
+            audio_ui_state_.audio_pcm_float = true;
+        } else {
+            audio_ui_state_.audio_bit_depth = static_cast<uint32_t>(raw);
+            audio_ui_state_.audio_pcm_float = false;
+        }
         emitCurrentAudioSettings();
     });
     connect(flac_compression_spin_, &QSpinBox::valueChanged, this, [this](int val) {
@@ -5256,7 +5288,8 @@ void ConfigPage::updateExpertModeVisibility() {
         }
         if (audio_bit_depth_combo_) {
             const QSignalBlocker b(audio_bit_depth_combo_);
-            const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+            const int idx = audio_bit_depth_combo_->findData(
+                EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
             if (idx >= 0)
                 audio_bit_depth_combo_->setCurrentIndex(idx);
         }

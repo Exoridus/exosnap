@@ -10,6 +10,7 @@
 #include "pcm_audio_encoder.h"
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 using recorder_core::EncodedAudioPacket;
@@ -387,6 +388,95 @@ TEST(PcmAudioEncoder, SetBitDepth_Invalid_KeepsDefault) {
     EXPECT_EQ(enc.BitDepth(), 16u);
     enc.SetBitDepth(0); // not accepted
     EXPECT_EQ(enc.BitDepth(), 16u);
+}
+
+// ---------------------------------------------------------------------------
+// Float-PCM (A_PCM/FLOAT_IEEE): SetFloatFormat + raw Float32 passthrough
+// ---------------------------------------------------------------------------
+
+TEST(PcmAudioEncoder, DefaultIsNotFloat) {
+    PcmAudioEncoder enc;
+    EXPECT_FALSE(enc.IsFloat());
+}
+
+TEST(PcmAudioEncoder, SetFloatFormatTrue_ForcesBitDepth32) {
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(16); // deliberately wrong depth first
+    enc.SetFloatFormat(true);
+    EXPECT_TRUE(enc.IsFloat());
+    EXPECT_EQ(enc.BitDepth(), 32u);
+}
+
+TEST(PcmAudioEncoder, SetFloatFormatFalse_LeavesFloatOff) {
+    PcmAudioEncoder enc;
+    enc.SetFloatFormat(false);
+    EXPECT_FALSE(enc.IsFloat());
+}
+
+TEST(PcmAudioEncoder, CodecPrivate_IsEmpty_WhenFloat) {
+    PcmAudioEncoder enc;
+    enc.SetFloatFormat(true);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err));
+    EXPECT_TRUE(enc.CodecPrivateBytes().empty());
+}
+
+TEST(PcmAudioEncoder, Feed_Float_PacketSizeIsFourBytesPerSample) {
+    PcmAudioEncoder enc;
+    enc.SetFloatFormat(true);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err));
+
+    const std::vector<float> in = {1.0f, -0.5f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, kChannels, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    // 2 interleaved samples * 4 bytes each (raw Float32) = 8 bytes.
+    EXPECT_EQ(out[0].bytes.size(), 8u);
+}
+
+TEST(PcmAudioEncoder, Feed_Float_BytesAreBitIdenticalToInput) {
+    // The whole point of the float path is a raw byte copy -- no conversion.
+    // Round-tripping arbitrary (non-normalized, even out-of-[-1,1]) values must
+    // reproduce the exact input bit pattern, unlike the int paths which clamp.
+    PcmAudioEncoder enc;
+    enc.SetFloatFormat(true);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err));
+
+    const std::vector<float> in = {1.0f, -0.5f, 3.5f, -123.25f, 0.0f, 1.0e-30f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, kChannels, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    ASSERT_EQ(out[0].bytes.size(), in.size() * sizeof(float));
+    std::vector<float> roundtrip(in.size());
+    std::memcpy(roundtrip.data(), out[0].bytes.data(), out[0].bytes.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        EXPECT_EQ(roundtrip[i], in[i]) << "sample " << i;
+    }
+}
+
+TEST(PcmAudioEncoder, Feed_Float_PtsAndFrameCounterMatchIntPath) {
+    PcmAudioEncoder enc;
+    enc.SetFloatFormat(true);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err));
+
+    const std::vector<float> in(960, 0.25f); // 480 stereo frames
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, kChannels, out);
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, kChannels, out);
+
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out[0].pts_ns, 0u);
+    EXPECT_EQ(out[1].pts_ns, 10000000u); // 480 frames / 48000 Hz = 10 ms
+    EXPECT_EQ(frames, 960u);
 }
 
 // Static helpers: Float32ToS24LE and Float32ToS32

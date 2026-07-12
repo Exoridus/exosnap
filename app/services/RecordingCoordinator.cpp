@@ -864,6 +864,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.audio_sample_rate = plan.audio_sample_rate;
     config.audio_channels = plan.audio_channels;
     config.audio_bit_depth = plan.audio_bit_depth;
+    config.audio_pcm_float = plan.audio_pcm_float;
     config.flac_compression_level = plan.flac_compression_level;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {

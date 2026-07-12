@@ -650,6 +650,7 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     aud_tbl.emplace("audio_sample_rate", static_cast<int64_t>(aud.audio_sample_rate));
     aud_tbl.emplace("audio_channels", static_cast<int64_t>(aud.audio_channels));
     aud_tbl.emplace("audio_bit_depth", static_cast<int64_t>(aud.audio_bit_depth));
+    aud_tbl.emplace("pcm_float", aud.audio_pcm_float);
     aud_tbl.emplace("flac_compression_level", static_cast<int64_t>(aud.flac_compression_level));
 
     // audio sources as array-of-tables
@@ -955,6 +956,12 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
 
         const int64_t bd = TomlInt(tbl["audio"]["audio_bit_depth"], 16);
         aud.audio_bit_depth = (bd == 16 || bd == 24 || bd == 32) ? static_cast<uint32_t>(bd) : 16u;
+
+        // Float-PCM: older presets (schema < 24) have no "pcm_float" key and
+        // default to false (no behavior change). Cross-field consistency
+        // (Pcm-only, requires bit_depth==32) is repaired by
+        // RecordingPreset.cpp's SanitizePresetConfig, not here.
+        aud.audio_pcm_float = TomlBool(tbl["audio"]["pcm_float"], false);
 
         const int64_t fl = TomlInt(tbl["audio"]["flac_compression_level"], 5);
         aud.flac_compression_level = (fl >= 0 && fl <= 8) ? static_cast<int>(fl) : 5;

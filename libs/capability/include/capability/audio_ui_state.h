@@ -117,6 +117,11 @@ struct AudioUiState {
     // Ignored for lossy codecs (Opus/AAC). Default 16.
     uint32_t audio_bit_depth = 16;
 
+    // 32-bit float PCM (A_PCM/FLOAT_IEEE) instead of signed-int PCM. Only
+    // meaningful when audio_codec == Pcm and audio_bit_depth == 32; ignored
+    // otherwise. Default false.
+    bool audio_pcm_float = false;
+
     // FLAC compression level [0, 8]. Lossless at every level; only trades CPU
     // vs. file size. Default 5.
     int flac_compression_level = 5;
@@ -163,6 +168,7 @@ struct AudioPlanResult {
     uint32_t audio_sample_rate = 48000;
     uint32_t audio_channels = 2;
     uint32_t audio_bit_depth = 16;
+    bool audio_pcm_float = false;
     int flac_compression_level = 5;
 };
 

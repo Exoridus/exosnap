@@ -59,6 +59,7 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.audio_sample_rate = state.audio_sample_rate;
     result.audio_channels = state.audio_channels;
     result.audio_bit_depth = state.audio_bit_depth;
+    result.audio_pcm_float = state.audio_pcm_float;
     result.flac_compression_level = state.flac_compression_level;
 
     // A Display or Region target has no process to scope App/Sys to. Normalize before

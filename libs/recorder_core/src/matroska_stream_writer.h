@@ -103,7 +103,8 @@ struct MuxPacket {
 enum class StreamAudioCodec {
     Aac,  // A_AAC
     Opus, // A_OPUS
-    Pcm,  // A_PCM/INT_LIT (16-bit signed little-endian)
+    Pcm,  // A_PCM/INT_LIT (signed little-endian) or A_PCM/FLOAT_IEEE (32-bit
+          // float) -- see MatroskaStreamConfig::audio_float below.
     Flac, // A_FLAC (CodecPrivate = native fLaC header: marker + STREAMINFO)
 };
 
@@ -138,6 +139,13 @@ struct MatroskaStreamConfig {
     uint32_t audio_sample_rate = 48000;
     uint32_t audio_channels = 2;
     uint32_t audio_bit_depth = 16;
+
+    // True selects the "A_PCM/FLOAT_IEEE" CodecID instead of "A_PCM/INT_LIT"
+    // when audio_codec == StreamAudioCodec::Pcm. Ignored for every other
+    // codec. audio_bit_depth is still written as the KaxAudioBitDepth value
+    // (32 for float, enforced upstream by PcmAudioEncoder::SetFloatFormat and
+    // RecorderSession::Validate).
+    bool audio_float = false;
 
     // Reorder/interleave window bounds. A packet is only emitted into a cluster
     // once a packet at least window_ns newer (across all tracks) has arrived, so
