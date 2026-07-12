@@ -245,10 +245,15 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - No 4:2:2 chroma subsampling (4:2:0 everywhere; 4:4:4 only on the 8-bit
   H.264/HEVC path described above).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
-- Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
-  which can be reassigned on a monitor topology change. A saved Region or Display
-  target may point to a different physical monitor after a reboot or
-  reconnect/mode-set; re-select the source manually in that case.
+- Saved Display/Region targets are remembered by a hardware-stable identity
+  (monitor device path + EDID vendor/product, plus serial when the panel reports
+  one), so they survive unplug/replug, driver restarts, and reboots in a
+  different port order. The one case that cannot be resolved is two *identical*
+  monitors with no EDID serial number after their cables are swapped between
+  ports: the app refuses to guess and shows a calm "Saved display not found"
+  notice instead of silently recording the wrong monitor — re-select the source
+  once and it is remembered. Region rectangles restore proportionally to their
+  anchor display, not pixel-exact, so they follow a resolution change.
 - Device loss mid-recording is handled per device type (ADR 0046), not by a
   blanket stop-and-restart. A brief display loss holds the last frame and reopens
   the same monitor; a GPU removal ends the recording cleanly. Closing the captured

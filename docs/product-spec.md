@@ -418,9 +418,15 @@ disable overlays if required by the game." The optional PresentMon-based present
 is an out-of-process ETW consumer, opt-in and elevation-gated, never a hard dependency; the app
 degrades gracefully when not elevated.
 
-**Known target-identity boundaries.** Display identity uses the GDI device name (e.g.
-`\\.\DISPLAY1`), which can be reassigned on a topology change, so a saved Region/Display target may
-point to a different physical monitor after a reboot or reconnect — re-select in that case.
+**Known target-identity boundaries.** A saved Display or Region target is remembered by a
+hardware-stable identity (the monitor's device path plus its EDID vendor/product, and its serial
+number when the panel reports one), not the GDI device name. Saved monitor targets therefore survive
+unplug/replug, driver restarts, and reboots in a different port order, and never silently select a
+*different* physical monitor. When the saved display genuinely cannot be found — it is unplugged, or
+two identical monitors with no serial number were cable-swapped — the app does not guess: it shows a
+calm "Saved display not found" notice and leaves the source unselected until you choose one (it is
+then remembered). Region rectangles are stored relative to their anchor display, so a resolution
+change carries the rectangle proportionally rather than pixel-exact.
 
 **Device loss mid-recording (ADR 0046).** Losing a capture device during a recording is handled per
 device type — a coherent, honest policy rather than a blanket "stop and restart". The recording is

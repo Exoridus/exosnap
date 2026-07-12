@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended by ADR 0047 (2026-07-12):** the description-based `display_key` /
+`region_display_key` fields and the absolute-pixel `region` described below are superseded by a
+hardware-stable `StableDisplayId` (device path + EDID) and an anchor-relative normalized region.
+The capture sub-struct remains an environment field (excluded from dirty state); only its shape and
+match semantics changed.
 
 ## Context
 

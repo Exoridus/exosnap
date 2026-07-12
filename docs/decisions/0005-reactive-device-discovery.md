@@ -73,6 +73,6 @@ All three notifiers accept an `Enumerator` functor (`setEnumeratorForTest()`) an
 
 ## Deferred / Known Limitations
 
-- **Stable display identity** uses `QScreen::name()` = GDI device name (`\\.\DISPLAYn`). GDI names are reassigned on topology change; they are not hardware-stable across reboots or monitor swap. EDID/DISPLAYCONFIG-based stable identity is deferred to a future revision.
+- **Stable display identity** — ~~deferred~~ **superseded by ADR 0047 (2026-07-12).** Live discovery still keys on `QScreen::name()` = GDI device name, but *persisted* Display/Region targets now carry a hardware-stable `StableDisplayId` (DisplayConfig device path + EDID) and are resolved with a ranked matcher at restore. The GDI name remains only a last-resort fallback for degraded saves.
 - **No hot-swap during recording**: device changes are detected and the UI updates, but the active recording pipeline is not retargetable while a session is in progress. An honest degradation state is shown.
 - **Audio/webcam page handlers re-enumerate** on the snapshot trigger rather than consuming the snapshot directly; this avoids introducing a new snapshot-forward path through MainWindow at MVP complexity.
