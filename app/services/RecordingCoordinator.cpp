@@ -40,10 +40,13 @@
 #include <thread>
 
 #include "../diagnostics/AppLog.h"
+#include "../diagnostics/SessionReport.h"
 #include "../models/FilenameBuilder.h"
+
 #include "../models/MarkerSidecar.h"
 #include "../models/OutputPathValidator.h"
 #include "../settings/RecoveryManifestStore.h"
+#include <crash_capture/crash_scrubber.h>
 
 namespace exosnap {
 
@@ -722,6 +725,17 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     PostStateChange(UiRecordingState::Preparing);
+
+    // Mint the per-recording session id now: independent of the (nullable) recovery
+    // store, stable across split segments, and not cleared before PostResult. Reset
+    // the snapshot stash so the report for this recording cannot inherit the last
+    // one's counters.
+    recording_session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
+        has_last_snapshot_ = false;
+        last_snapshot_ = recorder_core::RecordingDiagnosticsSnapshot{};
+    }
 
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
     config.nvenc_cq = video_settings_.cq;
@@ -2178,7 +2192,98 @@ void RecordingCoordinator::FillResultFormat(UiRecordingResult& result) const {
     result.audio_codec = core.audio_codec;
 }
 
+void RecordingCoordinator::WriteSessionReportForResult(const UiRecordingResult& result) {
+    if (recording_session_id_.isEmpty()) {
+        return; // no active recording session id (e.g. a start rejected before Preparing)
+    }
+
+    const QFileInfo log_info(diagnostics::AppLog::logFilePath());
+    if (log_info.absolutePath().isEmpty()) {
+        return;
+    }
+    const QString reports_dir = log_info.absolutePath() + QStringLiteral("/reports");
+
+    diagnostics::SessionReportInputs inputs;
+    inputs.recording_session_id = recording_session_id_;
+    inputs.launch_session_id = diagnostics::AppLog::sessionId();
+    inputs.result = result;
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
+        inputs.has_snapshot = has_last_snapshot_;
+        inputs.snapshot = last_snapshot_;
+    }
+
+    const QDateTime ended = QDateTime::currentDateTime();
+    inputs.ended_at = ended.toString(Qt::ISODate);
+    inputs.started_at = ended.addMSecs(-static_cast<qint64>(result.elapsed_seconds * 1000.0)).toString(Qt::ISODate);
+
+    // Requested config (independent of the snapshot), stringified.
+    switch (resolved_user_config_.bit_depth) {
+    case capability::BitDepth::Bit10:
+        inputs.bit_depth = 10;
+        break;
+    default:
+        inputs.bit_depth = 8;
+        break;
+    }
+    inputs.chroma = (resolved_user_config_.chroma == capability::ChromaSubsampling::Cs444) ? QStringLiteral("4:4:4")
+                                                                                           : QStringLiteral("4:2:0");
+    switch (resolved_user_config_.color_range) {
+    case capability::ColorRange::Full:
+        inputs.color_range = QStringLiteral("full");
+        break;
+    case capability::ColorRange::Limited:
+        inputs.color_range = QStringLiteral("limited");
+        break;
+    default:
+        inputs.color_range = QStringLiteral("unspecified");
+        break;
+    }
+    switch (resolved_user_config_.hdr_mode) {
+    case recorder_core::HdrMode::Hdr10:
+        inputs.hdr_mode = QStringLiteral("hdr10");
+        break;
+    case recorder_core::HdrMode::TonemapSdr:
+        inputs.hdr_mode = QStringLiteral("tonemap-sdr");
+        break;
+    default:
+        inputs.hdr_mode = QStringLiteral("off");
+        break;
+    }
+
+    inputs.capture_backend = QStringLiteral("unknown");
+    if (inputs.has_snapshot) {
+        switch (inputs.snapshot.capture.source_type) {
+        case recorder_core::CaptureSourceType::Display:
+            inputs.capture_backend = QStringLiteral("dxgi-od");
+            break;
+        case recorder_core::CaptureSourceType::Window:
+        case recorder_core::CaptureSourceType::Region:
+            inputs.capture_backend = QStringLiteral("wgc");
+            break;
+        default:
+            break;
+        }
+    }
+
+    // Scrubbed output file name only (never a path) — support-correlation without PII.
+    if (!result.output_path.empty()) {
+        const QString base = QFileInfo(QString::fromStdWString(result.output_path)).fileName();
+        inputs.output_filename = QString::fromStdString(crash_capture::ScrubString(base.toStdString()));
+    }
+
+    QString error;
+    if (!diagnostics::WriteSessionReport(reports_dir, inputs, /*keep_n=*/10, /*out_path=*/nullptr, &error)) {
+        diagnostics::AppLog::warning(QStringLiteral("record.report"),
+                                     QStringLiteral("session report not written: %1").arg(error));
+    }
+}
+
 void RecordingCoordinator::PostResult(UiRecordingResult result) {
+    // Write the on-disk session report before posting: best-effort, and never blocks
+    // the result reaching the UI.
+    WriteSessionReportForResult(result);
+
     if (!on_result_ready_)
         return;
     auto cb = on_result_ready_;
@@ -2211,6 +2316,11 @@ void RecordingCoordinator::PostDiagnostics(recorder_core::RecordingDiagnosticsSn
         if (!diagnostics_guard_.Accept(snapshot)) {
             return;
         }
+        // Stash the most recent accepted snapshot so PostResult can write the
+        // session report from the end-of-session counters. The stop path emits the
+        // final Completed snapshot before PostResult.
+        last_snapshot_ = snapshot;
+        has_last_snapshot_ = true;
     }
     auto cb = on_diagnostics_updated_;
     if (QCoreApplication::instance() == nullptr) {

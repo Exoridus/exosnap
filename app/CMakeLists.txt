@@ -304,6 +304,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/EngineLogBridge.cpp
     diagnostics/StructuredLog.h
     diagnostics/StructuredLog.cpp
+    diagnostics/SessionReport.h
+    diagnostics/SessionReport.cpp
     diagnostics/DiagnosticResult.h
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.h
@@ -496,9 +498,13 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.cpp
     diagnostics/SelfTestRunner.cpp
+    # Session report writer is called by RecordingCoordinator, which is compiled
+    # into the coordinator test targets that all link this support lib.
+    diagnostics/SessionReport.cpp
 )
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
     exosnap_output_model_test_support exosnap_capability recorder_core
+    exosnap::crash_capture
     dxgi.lib mmdevapi.lib
 )
 
@@ -754,6 +760,19 @@ exosnap_add_gtest(
 )
 target_include_directories(structured_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(structured_log_tests PROPERTIES AUTOMOC ON)
+
+# Session report: the pure JSON builder (deterministic, honest unavailable metrics,
+# segments, error phase, peak drift) and the writer's prune-to-keep-N.
+exosnap_add_gtest(
+    NAME session_report_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_session_report.cpp
+        diagnostics/SessionReport.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core Qt6::Gui
+)
+target_include_directories(session_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(session_report_tests PRIVATE ole32.lib shell32.lib)
 
 # App log file rotation: size-based rotation, handle-reuse across writes, and
 # Logs-page (in-memory history) compatibility across rotation.
