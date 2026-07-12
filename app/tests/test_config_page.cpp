@@ -2582,5 +2582,93 @@ TEST_F(ConfigPageTest, CqSpinBox_MatchesTheRowInputColumnWidth) {
     EXPECT_EQ(spin->width(), container->width());
 }
 
+// ── Audio source row order + merge label (product-spec §5) ───────────────────
+
+TEST_F(ConfigPageTest, SettingsAudio_MergeControlUsesDocumentedLabel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The per-row merge control carries the exact spec label "Merge with above".
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Merge with above")))
+        << "Settings Audio rows must label the merge control 'Merge with above'";
+    // The old inverted "Separate track" label must be gone.
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Separate track")))
+        << "The inverted 'Separate track' label must no longer appear";
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_RowsFollowAppSysMicOrder) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Window target makes the App row visible so all three rows are laid out.
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Window;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Sys, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+    };
+    page.setAudioUiState(state);
+
+    page.resize(1280, 900);
+    page.show();
+    QCoreApplication::processEvents();
+
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    auto* mic_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioMicCheck"));
+    ASSERT_NE(app_check, nullptr);
+    ASSERT_NE(sys_check, nullptr);
+    ASSERT_NE(mic_check, nullptr);
+    ASSERT_TRUE(AppSectionVisible(page)) << "App row must be visible for a Window target";
+
+    const int app_y = app_check->mapToGlobal(QPoint(0, 0)).y();
+    const int sys_y = sys_check->mapToGlobal(QPoint(0, 0)).y();
+    const int mic_y = mic_check->mapToGlobal(QPoint(0, 0)).y();
+    EXPECT_LT(app_y, sys_y) << "APP row must sit above SYS row";
+    EXPECT_LT(sys_y, mic_y) << "SYS row must sit above MIC row";
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_MergeToggleReflectsAndSetsMergeWithAbove) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Window target so the App and Mic rows both carry a merge control. The Mic
+    // row starts merged (merge_with_above=true); Sys starts separate.
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Window;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Sys, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, true},
+    };
+    page.setAudioUiState(state);
+
+    auto* mic_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioMicMerge"));
+    auto* sys_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioSysMerge"));
+    ASSERT_NE(mic_merge, nullptr);
+    ASSERT_NE(sys_merge, nullptr);
+
+    // Sync direction: toggle-on == merged. A merged Mic row shows the toggle on; a
+    // separate Sys row shows it off.
+    EXPECT_TRUE(mic_merge->isChecked()) << "A merged row must show 'Merge with above' on";
+    EXPECT_FALSE(sys_merge->isChecked()) << "A separate row must show 'Merge with above' off";
+
+    // Emit direction: turning the Mic toggle off must clear merge_with_above.
+    capability::AudioUiState emitted;
+    bool got = false;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged, [&](const capability::AudioUiState& s) {
+        emitted = s;
+        got = true;
+    });
+    mic_merge->setChecked(false);
+    ASSERT_TRUE(got) << "toggling the merge control must emit audioSettingsChanged";
+    bool saw_mic = false;
+    for (const auto& row : emitted.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::Mic) {
+            saw_mic = true;
+            EXPECT_FALSE(row.merge_with_above) << "toggle-off must set merge_with_above=false";
+        }
+    }
+    EXPECT_TRUE(saw_mic) << "emitted state must carry the Mic row";
+}
+
 } // namespace
 } // namespace exosnap

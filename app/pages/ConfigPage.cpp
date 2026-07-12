@@ -1196,10 +1196,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel, QStringLiteral("speaker")));
 
     // Helper: build a source row directly into a given layout+parent.
-    // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
-    // SETTINGS-TIERS-R2: InfoHintIcon added after enabled check and after separate_check.
+    // The per-row merge control is an ExoToggle labelled "Merge with above": when it
+    // is on, the source folds into the track above instead of producing its own track.
+    // The pointer written back through `merge_check` is bound to merge_with_above, so
+    // toggle-on maps to merge_with_above = true (see the toggle handlers and sync).
+    // SETTINGS-TIERS-R2: InfoHintIcon added after enabled check and after the merge toggle.
     auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
-                                 ui::widgets::ExoCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
+                                 ui::widgets::ExoCheckBox*& enabled_check, ui::widgets::ExoToggle*& merge_check,
                                  QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
@@ -1210,10 +1213,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         db_label_out->setMinimumWidth(52);
 
-        // DF-12: pill toggle + label pair replaces the "Separate track" QCheckBox.
-        separate_check = new ui::widgets::ExoToggle(target_parent);
-        QLabel* separate_label = new QLabel(QStringLiteral("Separate track"), target_parent);
-        separate_label->setProperty("labelRole", "muted");
+        // Pill toggle + label pair for the per-row merge control (spec label, do not rename).
+        merge_check = new ui::widgets::ExoToggle(target_parent);
+        QLabel* merge_label = new QLabel(QStringLiteral("Merge with above"), target_parent);
+        merge_label->setProperty("labelRole", "muted");
 
         row->addWidget(enabled_check);
         // InfoHint for the source enable toggle (next to the checkbox).
@@ -1221,9 +1224,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                        Qt::AlignVCenter);
         row->addStretch();
         row->addWidget(db_label_out);
-        row->addWidget(separate_label);
-        row->addWidget(separate_check);
-        // InfoHint for the "Separate track" toggle.
+        row->addWidget(merge_label);
+        row->addWidget(merge_check);
+        // InfoHint for the "Merge with above" toggle.
         row->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kSeparateTrack, target_parent), 0, Qt::AlignVCenter);
         target_layout->addLayout(row);
 
@@ -1237,17 +1240,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         target_layout->addWidget(source_label);
     };
 
-    // System audio row (label + description change based on capture target kind):
-    //   Display/Region → "Computer audio"
-    //   Window        → "Other system audio"
-    makeSourceRowInto(audio_panel_layout, audio_panel, QStringLiteral("Computer audio"), sys_enabled_check_,
-                      sys_separate_check_, sys_source_label_, audio_sys_meter_, audio_sys_db_label_);
-    sys_enabled_check_->setObjectName(QStringLiteral("settingsAudioSysCheck"));
-    audio_sys_meter_->setObjectName(QStringLiteral("settingsAudioSysMeter"));
-    audio_sys_db_label_->setObjectName(QStringLiteral("settingsAudioSysDbLabel"));
+    // Audio source rows follow the documented order APP, SYS, MIC (product-spec §5).
+    // The APP row exists only while a specific application window is the capture
+    // target; when it is hidden, SYS becomes the first visible row.
 
-    // Application audio section — wrapped in a container widget that is shown
-    // for Window targets and hidden for Display/Region targets.
+    // Application audio section — wrapped in a container widget that is shown for
+    // Window targets and hidden for Display/Region targets. Its trailing rule
+    // divides it from the SYS row below and disappears together with the section.
     app_row_section_ = new QWidget(audio_panel);
     app_row_section_->setObjectName(QStringLiteral("settingsAudioAppSection"));
     {
@@ -1255,24 +1254,37 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         app_section_layout->setContentsMargins(0, 0, 0, 0);
         app_section_layout->setSpacing(audio_panel_layout->spacing());
 
+        makeSourceRowInto(app_section_layout, app_row_section_, QStringLiteral("Application audio"), app_enabled_check_,
+                          app_separate_check_, app_source_label_, audio_app_meter_, audio_app_db_label_);
+        app_enabled_check_->setObjectName(QStringLiteral("settingsAudioAppCheck"));
+        app_separate_check_->setObjectName(QStringLiteral("settingsAudioAppMerge"));
+        audio_app_meter_->setObjectName(QStringLiteral("settingsAudioAppMeter"));
+        audio_app_db_label_->setObjectName(QStringLiteral("settingsAudioAppDbLabel"));
+
         auto* app_rule = new QFrame(app_row_section_);
         app_rule->setFrameShape(QFrame::HLine);
         app_rule->setProperty("frameRole", "sectionRuleLine");
         app_section_layout->addWidget(app_rule);
-
-        makeSourceRowInto(app_section_layout, app_row_section_, QStringLiteral("Application audio"), app_enabled_check_,
-                          app_separate_check_, app_source_label_, audio_app_meter_, audio_app_db_label_);
-        app_enabled_check_->setObjectName(QStringLiteral("settingsAudioAppCheck"));
-        audio_app_meter_->setObjectName(QStringLiteral("settingsAudioAppMeter"));
-        audio_app_db_label_->setObjectName(QStringLiteral("settingsAudioAppDbLabel"));
     }
     audio_panel_layout->addWidget(app_row_section_);
     // Hidden by default — shown when target kind is Window.
     app_row_section_->setVisible(false);
 
+    // System audio row (label + description change based on capture target kind):
+    //   Display/Region → "Computer audio"
+    //   Window        → "Other system audio"
+    makeSourceRowInto(audio_panel_layout, audio_panel, QStringLiteral("Computer audio"), sys_enabled_check_,
+                      sys_separate_check_, sys_source_label_, audio_sys_meter_, audio_sys_db_label_);
+    sys_enabled_check_->setObjectName(QStringLiteral("settingsAudioSysCheck"));
+    sys_separate_check_->setObjectName(QStringLiteral("settingsAudioSysMerge"));
+    audio_sys_meter_->setObjectName(QStringLiteral("settingsAudioSysMeter"));
+    audio_sys_db_label_->setObjectName(QStringLiteral("settingsAudioSysDbLabel"));
+
     audio_panel_layout->addWidget(makeHRule(audio_panel));
     makeSourceRowInto(audio_panel_layout, audio_panel, QStringLiteral("Microphone"), mic_enabled_check_,
                       mic_separate_check_, mic_source_label_, audio_mic_meter_, audio_mic_db_label_);
+    mic_enabled_check_->setObjectName(QStringLiteral("settingsAudioMicCheck"));
+    mic_separate_check_->setObjectName(QStringLiteral("settingsAudioMicMerge"));
     audio_mic_meter_->setObjectName(QStringLiteral("settingsAudioMicMeter"));
     audio_mic_db_label_->setObjectName(QStringLiteral("settingsAudioMicDbLabel"));
 
@@ -3513,20 +3525,21 @@ void ConfigPage::applyAudioConfigurationState() {
         const QSignalBlocker sb(sys_enabled_check_);
         const QSignalBlocker ss(sys_separate_check_);
 
+        // The merge toggle reads "Merge with above": on == merge == !separate_track.
         app_enabled_check_->setEnabled(snap.app.controls_enabled);
         app_separate_check_->setEnabled(snap.app.controls_enabled);
         app_enabled_check_->setChecked(snap.app.enabled);
-        app_separate_check_->setChecked(snap.app.separate_track);
+        app_separate_check_->setChecked(!snap.app.separate_track);
 
         mic_enabled_check_->setEnabled(snap.mic.controls_enabled);
         mic_separate_check_->setEnabled(snap.mic.controls_enabled);
         mic_enabled_check_->setChecked(snap.mic.enabled);
-        mic_separate_check_->setChecked(snap.mic.separate_track);
+        mic_separate_check_->setChecked(!snap.mic.separate_track);
 
         sys_enabled_check_->setEnabled(snap.system.controls_enabled);
         sys_separate_check_->setEnabled(snap.system.controls_enabled);
         sys_enabled_check_->setChecked(snap.system.enabled);
-        sys_separate_check_->setChecked(snap.system.separate_track);
+        sys_separate_check_->setChecked(!snap.system.separate_track);
     }
 
     // Mic device combo: visible when mic source is in the plan; enabled when interactable.
@@ -5430,10 +5443,12 @@ void ConfigPage::onAudioSysToggled() {
     emitCurrentAudioSettings();
 }
 
+// The "Merge with above" toggle is on when the source folds into the track above,
+// so its checked state maps directly to merge_with_above.
 void ConfigPage::onAudioAppSeparateToggled() {
     for (auto& row : audio_ui_state_.source_rows) {
         if (row.kind == recorder_core::AudioSourceKind::App)
-            row.merge_with_above = !app_separate_check_->isChecked();
+            row.merge_with_above = app_separate_check_->isChecked();
     }
     emitCurrentAudioSettings();
 }
@@ -5441,7 +5456,7 @@ void ConfigPage::onAudioAppSeparateToggled() {
 void ConfigPage::onAudioMicSeparateToggled() {
     for (auto& row : audio_ui_state_.source_rows) {
         if (row.kind == recorder_core::AudioSourceKind::Mic)
-            row.merge_with_above = !mic_separate_check_->isChecked();
+            row.merge_with_above = mic_separate_check_->isChecked();
     }
     emitCurrentAudioSettings();
 }
@@ -5449,7 +5464,7 @@ void ConfigPage::onAudioMicSeparateToggled() {
 void ConfigPage::onAudioSysSeparateToggled() {
     for (auto& row : audio_ui_state_.source_rows) {
         if (row.kind == recorder_core::AudioSourceKind::Sys || row.kind == recorder_core::AudioSourceKind::SystemOutput)
-            row.merge_with_above = !sys_separate_check_->isChecked();
+            row.merge_with_above = sys_separate_check_->isChecked();
     }
     emitCurrentAudioSettings();
 }

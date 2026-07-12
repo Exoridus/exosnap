@@ -15,7 +15,6 @@
 #include "pages/EditExportPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
-#include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
 #include "services/CrashIssueReport.h"
@@ -200,7 +199,7 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
     {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
     {"Device", "Encoder adapters and per-GPU capability matrix.", "", true, SidebarIcon::Device},
     {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
@@ -209,7 +208,6 @@ constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
      SidebarIcon::Diagnostics},
     {"Logs", "Runtime events and recording diagnostics.", "SESSION EVENTS", true, SidebarIcon::Logs},
     {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
-    {"Output", "Recording preset management — create, export, and import presets.", "", false, SidebarIcon::Output},
     {"About", "Application identity, build metadata, and links.", "", true, SidebarIcon::About},
 }};
 
@@ -226,7 +224,6 @@ constexpr int kHotkeysPageIndex = pageIndexForIcon(SidebarIcon::Hotkeys);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
-constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 constexpr int kAboutPageIndex = pageIndexForIcon(SidebarIcon::About);
 constexpr int kDevicePageIndex = pageIndexForIcon(SidebarIcon::Device);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
@@ -235,7 +232,6 @@ static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescripto
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
-static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 static_assert(kAboutPageIndex >= 0, "About page must exist in kPageDescriptors.");
 static_assert(kDevicePageIndex >= 0, "Device page must exist in kPageDescriptors.");
 
@@ -636,15 +632,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     logs_placeholder_ = new QWidget(stack_);
     stack_->addWidget(logs_placeholder_);
     // Deferred: webcam_page_ is built by buildWebcamPage() after show().
-    // A cheap placeholder holds index kWebcamPageIndex so output_page_ etc. get
+    // A cheap placeholder holds index kWebcamPageIndex so about_page_ etc. get
     // the correct subsequent indices without any re-numbering.
     webcam_placeholder_ = new QWidget(stack_);
     stack_->addWidget(webcam_placeholder_);
-    // Deferred: output_page_ is built by buildOutputPage() after show().
-    // A cheap placeholder holds index kOutputPageIndex so about_page_ etc. get
-    // the correct subsequent indices without any re-numbering.
-    output_placeholder_ = new QWidget(stack_);
-    stack_->addWidget(output_placeholder_);
     // Deferred: about_page_ is built by buildAboutPage() after show().
     // A cheap placeholder holds index kAboutPageIndex (the last stack slot —
     // EDIT-OVERLAY-R1 removed the former EditExportPage tail slot).
@@ -770,7 +761,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                 if (recording_overlay_ && recording_overlay_->isVisible())
                     recording_overlay_->updateElapsed(elapsed);
             });
-    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kOutputPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
     connect(record_page_, &RecordPage::editExportRequested, this,
@@ -847,8 +837,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // NOTE: config_page_ diagnosticsRequested + webcamDetailsRequested connects wired in buildConfigPage().
     // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
     // are wired in buildDiagnosticsPage() after deferred construction.
-    // NOTE: webcam_page_ backToSettingsRequested and OutputPage signals are wired in
-    // buildWebcamPage() / buildOutputPage() after deferred construction.
+    // NOTE: webcam_page_ backToSettingsRequested is wired in buildWebcamPage()
+    // after deferred construction.
 
     // ---- Countdown overlay (COUNTDOWN-OVERLAY-R1) ----
     // Top-level (no Qt parent) like the other overlays; centered on the recorded monitor.
@@ -2457,9 +2447,9 @@ void MainWindow::applyRestoredGeometry() {
 }
 
 int MainWindow::navHighlightIndexFor(int index) const {
-    // Webcam and Output are sub-pages reached from Settings; keep the
-    // Settings tab lit while they are shown (no dedicated top-nav tab for them).
-    if (index == kWebcamPageIndex || index == kOutputPageIndex)
+    // Webcam is a sub-page reached from Settings; keep the Settings tab lit while
+    // it is shown (no dedicated top-nav tab for it).
+    if (index == kWebcamPageIndex)
         return kSettingsPageIndex;
     return index;
 }
@@ -2506,8 +2496,6 @@ void MainWindow::setCurrentPage(int index) {
         buildLogsPage();
     if (index == kWebcamPageIndex && !webcam_page_)
         buildWebcamPage();
-    if (index == kOutputPageIndex && !output_page_)
-        buildOutputPage();
     if (index == kAboutPageIndex && !about_page_)
         buildAboutPage();
 
@@ -2589,8 +2577,6 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
 void MainWindow::refreshPresetUi() {
     std::vector<ConfigPage::ProfileOption> config_options;
     config_options.reserve(preset_registry_.Count());
-    std::vector<OutputPage::ProfileOption> output_options;
-    output_options.reserve(preset_registry_.Count());
 
     for (const auto& preset : preset_registry_.Presets()) {
         ConfigPage::ProfileOption co;
@@ -2600,28 +2586,15 @@ void MainWindow::refreshPresetUi() {
         co.modified = false;
         co.available = true;
         config_options.push_back(co);
-
-        OutputPage::ProfileOption oo;
-        oo.id = co.id;
-        oo.label = co.label;
-        oo.built_in = co.built_in;
-        oo.modified = false;
-        oo.available = true;
-        output_options.push_back(std::move(oo));
     }
 
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-    // Neither page emits its selection-changed signal from the sync setter
-    // (setPresetOptions/setProfileOptions render only) — see
-    // ConfigPage.cpp's QSignalBlocker on the combo and OutputPage's
-    // applySelectionState split — so this replay cannot re-enter onPresetSelected.
+    // ConfigPage does not emit its selection-changed signal from the sync setter
+    // (setPresetOptions renders only — see ConfigPage.cpp's QSignalBlocker on the
+    // combo) so this replay cannot re-enter onPresetSelected.
     if (config_page_) {
         config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
-    }
-    if (output_page_) {
-        output_page_->setProfileOptions(output_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
-        output_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
 }
 
@@ -2744,7 +2717,7 @@ void MainWindow::refreshWindowEvidence() {
 
 void MainWindow::onPresetSelected(const QString& id) {
     if (id.toStdString() == preset_registry_.SelectedId())
-        return; // combo refresh echo (e.g. OutputPage's profile combo) — not a switch
+        return; // combo refresh echo (the preset combo re-selecting itself) — not a switch
     if (!record_page_ || !record_page_->canApplyPresetNow()) {
         // Reject switch during recording — revert the selector.
         refreshPresetUi();
@@ -4379,9 +4352,9 @@ void MainWindow::hydrateSecondaryPages() {
     // heaviest and the most commonly visited item; then DevicePage (construction
     // only — the adapter scan runs async on its first showEvent), HotkeysPage,
     // DiagnosticsPage, LogsPage, AboutPage, EditExportOverlay (not a stack page —
-    // see EDIT-OVERLAY-R1), WebcamPage, OutputPage.
-    // Webcam/Output come last because their fan-out replay depends on stable
-    // live_webcam_ and the preset registry, both settled before the ctor exits.
+    // see EDIT-OVERLAY-R1), WebcamPage.
+    // Webcam comes last because its fan-out replay depends on stable live_webcam_,
+    // settled before the ctor exits.
     //
     // PageHydrationController owns the singleShot(0) staging and the "perf"
     // AppLog milestone bracketing (same "<name> <elapsed> ms" convention as
@@ -4396,7 +4369,6 @@ void MainWindow::hydrateSecondaryPages() {
     steps.push_back({QStringLiteral("about"), [this] { buildAboutPage(); }});
     steps.push_back({QStringLiteral("edit-export"), [this] { buildEditExportOverlay(); }});
     steps.push_back({QStringLiteral("webcam"), [this] { buildWebcamPage(); }});
-    steps.push_back({QStringLiteral("output"), [this] { buildOutputPage(); }});
 
     page_hydration_controller_ = new PageHydrationController(std::move(steps), this);
     page_hydration_controller_->start();
@@ -5044,7 +5016,7 @@ void MainWindow::buildWebcamPage() {
     webcam_page_ = new WebcamPage(stack_);
     if (webcam_placeholder_) {
         // Replace the placeholder in-place so kWebcamPageIndex stays valid for
-        // output_page_ and about_page_ which live at higher indices.
+        // about_page_ which lives at a higher index.
         const int idx = stack_->indexOf(webcam_placeholder_);
         stack_->insertWidget(idx, webcam_page_);
         webcam_placeholder_->deleteLater();
@@ -5073,36 +5045,6 @@ void MainWindow::buildWebcamPage() {
     // S4: Apply MF-absent gate if the capability probe already resolved.
     if (runtime_caps_ready_ && !runtime_caps_.mf_webcam_available)
         webcam_page_->setMfUnavailable(true);
-}
-
-void MainWindow::buildOutputPage() {
-    if (output_page_)
-        return; // already built (e.g. by an early navigation)
-    output_page_ = new OutputPage(output_settings_, stack_);
-    if (output_placeholder_) {
-        // Replace the placeholder in-place so kOutputPageIndex stays valid for
-        // about_page_ which lives at a higher index.
-        const int idx = stack_->indexOf(output_placeholder_);
-        stack_->insertWidget(idx, output_page_);
-        output_placeholder_->deleteLater();
-        output_placeholder_ = nullptr;
-    } else {
-        stack_->addWidget(output_page_);
-    }
-    // Wire OutputPage signals — same handlers as the Settings preset row.
-    connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& id) { onPresetSelected(id); });
-    connect(output_page_, &OutputPage::saveAsNewRequested, this, &MainWindow::onSavePresetAs);
-    connect(output_page_, &OutputPage::renameActiveProfileRequested, this, &MainWindow::onRenamePreset);
-    connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, &MainWindow::onDeletePreset);
-    connect(output_page_, &OutputPage::resetActiveProfileRequested, this, &MainWindow::onResetChanges);
-    connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, &MainWindow::onExportSelectedProfile);
-    connect(output_page_, &OutputPage::importProfilesRequested, this, &MainWindow::onImportProfiles);
-    // Fan-out replay: OutputPage gets its profile list ONLY from refreshPresetUi().
-    // The ctor called refreshPresetUi() → if(output_page_) was false then, so the page
-    // never received setProfileOptions / setActiveProfileName. Calling refreshPresetUi()
-    // here is idempotent for all already-built pages (config_page_, etc.) and delivers
-    // the correct preset list + active selection to the freshly-built OutputPage.
-    refreshPresetUi();
 }
 
 } // namespace exosnap
