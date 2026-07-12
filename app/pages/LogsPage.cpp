@@ -11,16 +11,20 @@
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStandardPaths>
 #include <QStringConverter>
 #include <QStyle>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextCursor>
@@ -28,6 +32,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include "../diagnostics/StartupTrace.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
@@ -256,8 +261,20 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     export_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("download"),
                                                QString::fromUtf8(ui::theme::ActiveTheme().mut), 14,
                                                export_btn_->devicePixelRatioF()));
+    // "Create support bundle" — the primary support action, beside Copy/Export.
+    // A neutral tool (calm, not alarmist): it packages logs + diagnostics to share.
+    bundle_btn_ = new QPushButton(QStringLiteral("Create support bundle"), right_cluster);
+    bundle_btn_->setObjectName(QStringLiteral("logBundleBtn"));
+    bundle_btn_->setProperty("role", "ghost");
+    bundle_btn_->setProperty("logToolbarGhost", true);
+    bundle_btn_->setToolTip(QStringLiteral("Create a diagnostic package to share with support"));
+    bundle_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("package"),
+                                               QString::fromUtf8(ui::theme::ActiveTheme().mut), 14,
+                                               bundle_btn_->devicePixelRatioF()));
+
     right_layout->addWidget(copy_btn_);
     right_layout->addWidget(export_btn_);
+    right_layout->addWidget(bundle_btn_);
 
     control_row->addWidget(left_cluster, 1);
     control_row->addSpacing(16);
@@ -303,6 +320,25 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     connect(folder_link_, &QLabel::linkActivated, this, [this](const QString&) { onOpenFolder(); });
     layout->addLayout(footnote_row);
 
+    // Startup trace: a compact read-only table of start→milestone latencies, so
+    // startup regressions are visible instead of buried in log lines.
+    auto* startup_header = new ui::widgets::SectionRuleHeader(QStringLiteral("STARTUP"), content);
+    layout->addWidget(startup_header);
+    startup_table_ = new QTableWidget(content);
+    startup_table_->setObjectName(QStringLiteral("startupTraceTable"));
+    startup_table_->setColumnCount(2);
+    startup_table_->setHorizontalHeaderLabels({QStringLiteral("Milestone"), QStringLiteral("Elapsed")});
+    startup_table_->horizontalHeader()->setStretchLastSection(false);
+    startup_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    startup_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    startup_table_->verticalHeader()->setVisible(false);
+    startup_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    startup_table_->setSelectionMode(QAbstractItemView::NoSelection);
+    startup_table_->setFocusPolicy(Qt::NoFocus);
+    startup_table_->setMaximumHeight(180);
+    layout->addWidget(startup_table_);
+    refreshStartupTrace();
+
     auto* centering_host = new QWidget();
     auto* ch = new QHBoxLayout(centering_host);
     ch->setContentsMargins(0, 0, 0, 0);
@@ -318,6 +354,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     // D3: refresh_btn_, clear_btn_, open_folder_btn_ removed from toolbar.
     connect(copy_btn_, &QPushButton::clicked, this, &LogsPage::onCopy);
     connect(export_btn_, &QPushButton::clicked, this, &LogsPage::onExport);
+    connect(bundle_btn_, &QPushButton::clicked, this, [this]() { emit createSupportBundleRequested(); });
     connect(severity_group_, &QButtonGroup::idClicked, this, &LogsPage::onFilterClicked);
     connect(search_edit_, &QLineEdit::textChanged, this, &LogsPage::onSearchTextChanged);
     connect(search_debounce_timer_, &QTimer::timeout, this, &LogsPage::applyPendingSearch);
@@ -462,6 +499,32 @@ void LogsPage::onOpenFolder() {
         return;
     }
     QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+}
+
+void LogsPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    // Late startup milestones (first-paint, preview-live) land after this page is
+    // built, so refresh the table each time the page is shown.
+    refreshStartupTrace();
+}
+
+void LogsPage::refreshStartupTrace() {
+    if (startup_table_ == nullptr)
+        return;
+    const auto entries = diagnostics::StartupTrace::instance().entries();
+    startup_table_->setRowCount(static_cast<int>(entries.size()));
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        startup_table_->setItem(i, 0, new QTableWidgetItem(entries[i].label));
+        startup_table_->setItem(i, 1, new QTableWidgetItem(QStringLiteral("%1 ms").arg(entries[i].elapsed_ms)));
+    }
+}
+
+int LogsPage::startupTraceRowCountForTesting() const {
+    return startup_table_ != nullptr ? startup_table_->rowCount() : 0;
+}
+
+bool LogsPage::hasSupportBundleButtonForTesting() const noexcept {
+    return bundle_btn_ != nullptr && bundle_btn_->isEnabled();
 }
 
 void LogsPage::onCopy() {

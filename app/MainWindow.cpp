@@ -1,7 +1,10 @@
 #include "MainWindow.h"
 
 #include "diagnostics/AppLog.h"
+#include "diagnostics/ConfigSummary.h"
 #include "diagnostics/StartupClock.h"
+#include "diagnostics/StartupTrace.h"
+#include "diagnostics/SupportBundle.h"
 #include "models/RecordingPreset.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
@@ -49,6 +52,14 @@
 #endif
 
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion / kGitCommit
+
+#include <capability/adapter_enum.h>
+
+#include <QFileDialog>
+#include <QProcess>
+#include <QStandardPaths>
+
+#include <filesystem>
 
 #include <capability/capability_builder.h>
 #include <capability/capability_cache_key.h>
@@ -1764,8 +1775,9 @@ void MainWindow::paintEvent(QPaintEvent* event) {
     // after showEvent). Benchmark with EXOSNAP_CONFIG_DIR isolated to an empty temp.
     if (!first_paint_logged_) {
         first_paint_logged_ = true;
-        diagnostics::AppLog::info(QStringLiteral("perf"),
-                                  QStringLiteral("first-paint %1 ms").arg(diagnostics::StartupClock().elapsed()));
+        const qint64 first_paint_ms = diagnostics::StartupClock().elapsed();
+        diagnostics::AppLog::info(QStringLiteral("perf"), QStringLiteral("first-paint %1 ms").arg(first_paint_ms));
+        diagnostics::StartupTrace::instance().record(QStringLiteral("first-paint"), first_paint_ms);
         // PERF: hydrate the deferred secondary pages only AFTER the first paint, so a
         // heavy page build (ConfigPage ~1.6 s under the global QSS) never blocks the
         // window from first appearing.
@@ -4527,6 +4539,7 @@ void MainWindow::buildLogsPage() {
     if (logs_page_)
         return; // already built (e.g. by an early navigation)
     logs_page_ = new LogsPage(stack_);
+    connect(logs_page_, &LogsPage::createSupportBundleRequested, this, &MainWindow::createSupportBundle);
     if (logs_placeholder_) {
         // Replace the placeholder in-place so kLogsPageIndex stays valid for all
         // widgets already past it in the stack (webcam=5, output=6, about=7).
@@ -4537,6 +4550,102 @@ void MainWindow::buildLogsPage() {
     } else {
         stack_->addWidget(logs_page_);
     }
+}
+
+void MainWindow::createSupportBundle() {
+    using namespace exosnap::diagnostics;
+
+    const QString log_dir = QFileInfo(diagnostics::AppLog::logFilePath()).absolutePath();
+    if (log_dir.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Support bundle"),
+                             QStringLiteral("No log directory is available yet."));
+        return;
+    }
+
+    BundleInputs inputs;
+    inputs.log_dir = log_dir;
+    inputs.max_reports = 10;
+    inputs.launch_session_id = diagnostics::AppLog::sessionId();
+    inputs.created_at = QDateTime::currentDateTime().toString(Qt::ISODate);
+    inputs.scrubber_version = QStringLiteral("1");
+    inputs.app_version = QString::fromLatin1(build::kVersion);
+    inputs.commit_sha = QString::fromLatin1(build::kGitCommit);
+
+    const auto& rt = runtime_caps_.runtime;
+    inputs.capability.gpu_adapter_name = QString::fromStdString(runtime_caps_.gpu_adapter_name);
+    inputs.capability.nvenc_dll_present = rt.nvidia.nvenc_dll_present;
+    inputs.capability.nvenc_api_version =
+        rt.nvidia.nvenc_api_version_valid ? QString::number(rt.nvidia.nvenc_api_version) : QString();
+    inputs.capability.nvenc_av1 = rt.nvidia.nvenc_av1;
+    inputs.capability.nvenc_hevc = rt.nvidia.nvenc_hevc;
+    inputs.capability.nvenc_h264 = rt.nvidia.nvenc_h264;
+    inputs.capability.nvenc_444 = rt.nvidia.nvenc_yuv444_h264 || rt.nvidia.nvenc_yuv444_hevc;
+    inputs.capability.os_version_string = QString::fromStdString(rt.os.version_string);
+    inputs.capability.os_build_number = QString::number(rt.os.build_number);
+    inputs.capability.mf_aac = rt.mf_aac.available();
+    inputs.capability.mf_webcam = rt.mf_webcam.available;
+
+    for (const auto& a : capability::EnumerateAdapters()) {
+        BundleAdapter ba;
+        ba.name = QString::fromStdString(a.name);
+        ba.vendor = a.vendor == capability::AdapterVendor::Nvidia  ? QStringLiteral("NVIDIA")
+                    : a.vendor == capability::AdapterVendor::Amd   ? QStringLiteral("AMD")
+                    : a.vendor == capability::AdapterVendor::Intel ? QStringLiteral("Intel")
+                                                                   : QStringLiteral("Other");
+        ba.kind = a.kind == capability::AdapterKind::Discrete     ? QStringLiteral("discrete")
+                  : a.kind == capability::AdapterKind::Integrated ? QStringLiteral("integrated")
+                                                                  : QStringLiteral("unknown");
+        ba.vendor_id = a.vendor_id;
+        ba.device_id = a.device_id;
+        ba.dedicated_vram_bytes = a.dedicated_video_memory_bytes;
+        inputs.adapters.push_back(ba);
+    }
+
+    for (const auto& d : rt.displays) {
+        BundleDisplay bd;
+        bd.name = QString::fromStdString(d.name);
+        bd.hdr_active = d.hdr_active;
+        bd.bits_per_color = d.bits_per_color;
+        bd.min_luminance = d.min_luminance_nits;
+        bd.max_luminance = d.max_luminance_nits;
+        bd.max_full_frame_luminance = d.max_full_frame_nits;
+        inputs.displays.push_back(bd);
+    }
+
+    // Settings summary from the same ConfigSummary the Diagnostics page builds.
+    const std::string preset_name = preset_registry_.SelectedPreset().name;
+    const ConfigSummary cs = ConfigSummary::FromCurrentSettings(
+        output_settings_, video_settings_, live_audio_,
+        std::filesystem::path(settings_store_.SettingsFilePath().toStdWString()), preset_name, std::string());
+    QString settings_text;
+    for (const auto& e : cs.entries) {
+        settings_text +=
+            QStringLiteral("%1: %2\n").arg(QString::fromStdString(e.label), QString::fromStdString(e.value));
+    }
+    inputs.settings_summary = settings_text;
+
+    // Save dialog defaulting to the Desktop, then reveal (no auto-upload).
+    const QString default_name = QStringLiteral("exosnap-support-%1.zip")
+                                     .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss")));
+    const QString desktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    const QString suggested = desktop.isEmpty() ? default_name : QDir(desktop).filePath(default_name);
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save support bundle"), suggested,
+                                                      QStringLiteral("Zip archives (*.zip)"));
+    if (path.isEmpty())
+        return; // cancelled
+
+    const auto entries = CollectBundleEntries(inputs);
+    QString err;
+    if (!WriteBundleZip(path, entries, &err)) {
+        QMessageBox::warning(this, QStringLiteral("Support bundle"),
+                             QStringLiteral("Could not write the support bundle: %1").arg(err));
+        return;
+    }
+
+    // Reveal the file in Explorer (selecting it). This drives the OS file manager,
+    // not the running ExoSnap instance.
+    QProcess::startDetached(QStringLiteral("explorer.exe"),
+                            {QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
 }
 
 void MainWindow::buildHotkeysPage() {
@@ -4660,6 +4769,7 @@ void MainWindow::buildDiagnosticsPage() {
             config_page_->scrollToSection(QStringLiteral("settings/format"));
         diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Opened assisted fix %1").arg(fix_id));
     });
+    connect(diagnostics_page_, &DiagnosticsPage::createSupportBundleRequested, this, &MainWindow::createSupportBundle);
     connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
             [this]() { navigateToPage(kLogsPageIndex); });
     // Capability facts moved to the Device page; the Expert environment row links there.

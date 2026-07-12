@@ -194,11 +194,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     run_check_btn_->setProperty("role", "primary");
     run_check_btn_->setProperty("size", "sm");
     tl->addWidget(run_check_btn_, 0, Qt::AlignVCenter);
-    export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), toolbar);
+    export_report_btn_ = new QPushButton(QStringLiteral("Create support bundle"), toolbar);
     export_report_btn_->setProperty("role", "ghost");
     export_report_btn_->setProperty("size", "sm");
-    export_report_btn_->setEnabled(false);
-    export_report_btn_->setToolTip(QStringLiteral("Diagnostic report export is planned for a future build."));
+    export_report_btn_->setToolTip(QStringLiteral("Create a diagnostic package to share with support"));
     tl->addWidget(export_report_btn_, 0, Qt::AlignVCenter);
     tl->addSpacing(M::kSpaceMd);
     expert_mode_label_ = new QLabel(QStringLiteral("Expert mode"), toolbar);
@@ -999,7 +998,9 @@ void DiagnosticsPage::onRunCheck() {
 }
 
 void DiagnosticsPage::onExportReport() {
-    // Disabled/planned: report export is not wired yet.
+    // Second entry point to the one support-bundle action; MainWindow owns the
+    // single code path shared with the Logs page.
+    emit createSupportBundleRequested();
 }
 
 // ── Configuration refresh (Expert reference table) ──────────────────────────────

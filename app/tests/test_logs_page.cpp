@@ -14,6 +14,7 @@
 #include <QThread>
 
 #include "diagnostics/AppLog.h"
+#include "diagnostics/StartupTrace.h"
 #include "pages/LogsPage.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
@@ -437,6 +438,30 @@ TEST_F(LogsPageTest, PendingSnapshotEntriesAreNotDuplicatedWhenPageSubscribes) {
 
     EXPECT_EQ(page.visibleEntryCount(), 1);
     EXPECT_EQ(page.totalEntryCount(), 1);
+}
+
+TEST_F(LogsPageTest, HasAnEnabledSupportBundleButtonThatEmitsOnClick) {
+    LogsPage page;
+    EXPECT_TRUE(page.hasSupportBundleButtonForTesting());
+
+    int emitted = 0;
+    QObject::connect(&page, &LogsPage::createSupportBundleRequested, &page, [&emitted]() { ++emitted; });
+
+    auto* bundle_btn = page.findChild<QPushButton*>(QStringLiteral("logBundleBtn"));
+    ASSERT_NE(bundle_btn, nullptr);
+    bundle_btn->click();
+    EXPECT_EQ(emitted, 1);
+}
+
+TEST_F(LogsPageTest, StartupTableReflectsTheCollector) {
+    auto& trace = diagnostics::StartupTrace::instance();
+    trace.resetForTesting();
+    trace.record(QStringLiteral("main-start"), 0);
+    trace.record(QStringLiteral("first-paint"), 120);
+
+    LogsPage page;
+    page.refreshStartupTrace();
+    EXPECT_EQ(page.startupTraceRowCountForTesting(), 2);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)

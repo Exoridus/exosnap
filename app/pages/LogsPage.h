@@ -10,6 +10,7 @@ class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
+class QTableWidget;
 class QTimer;
 
 namespace exosnap {
@@ -60,9 +61,22 @@ class LogsPage : public QWidget {
     [[nodiscard]] int fullRebuildCountForTesting() const noexcept;
     [[nodiscard]] int incrementalAppendCountForTesting() const noexcept;
 
+    // Rebuild the Startup table from the current StartupTrace entries.
+    void refreshStartupTrace();
+    [[nodiscard]] int startupTraceRowCountForTesting() const;
+    [[nodiscard]] bool hasSupportBundleButtonForTesting() const noexcept;
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif
+
+  signals:
+    // Emitted when the user clicks "Create support bundle". MainWindow gathers the
+    // runtime facts and writes the archive (one code path, shared with Diagnostics).
+    void createSupportBundleRequested();
+
+  protected:
+    void showEvent(QShowEvent* event) override;
 
   private:
     void onRefresh();
@@ -97,6 +111,8 @@ class LogsPage : public QWidget {
     // refresh_btn_, open_folder_btn_, clear_btn_ removed (D3: cut from toolbar).
     QPushButton* copy_btn_ = nullptr;
     QPushButton* export_btn_ = nullptr;
+    QPushButton* bundle_btn_ = nullptr;
+    QTableWidget* startup_table_ = nullptr;
     QLabel* folder_link_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* search_debounce_timer_ = nullptr;

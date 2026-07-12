@@ -375,7 +375,7 @@ add_dependencies(exosnap exosnap_build_info)
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
-    exosnap::update
+    exosnap::update exosnap_miniz
     tomlplusplus::tomlplusplus
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib Version.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
@@ -802,6 +802,15 @@ exosnap_add_gtest(
     LIBRARIES exosnap_miniz exosnap::update exosnap::crash_capture Qt6::Core
 )
 target_include_directories(support_bundle_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Startup trace collector (header-only): ordering, de-duplication, formatter.
+exosnap_add_gtest(
+    NAME startup_trace_tests
+    TEST_PREFIX diagnostics.
+    SOURCES tests/test_startup_trace.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(startup_trace_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # App log file rotation: size-based rotation, handle-reuse across writes, and
 # Logs-page (in-memory history) compatibility across rotation.
