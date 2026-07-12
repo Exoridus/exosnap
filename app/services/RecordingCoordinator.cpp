@@ -1,5 +1,6 @@
 #include "RecordingCoordinator.h"
 
+#include "services/AtomicFileOps.h"
 #include "services/DisplayNumbering.h"
 #include "services/TargetDisplayFacts.h"
 
@@ -1798,7 +1799,29 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
             return true;
         };
 
-        const auto remux_result = recorder_core::RemuxToProgressiveMp4(transient_mkv, final_mp4, progress_cb);
+        // Remux to a sibling ".part" temp on the target's own volume, then atomically
+        // rename it onto the final path. A kill/powerloss mid-remux leaves only the
+        // temp — the user-visible output path never holds a half-written MP4 (ADR-0014).
+        const std::filesystem::path remux_temp = MakeSiblingTempPath(final_mp4);
+        auto remux_result = recorder_core::RemuxToProgressiveMp4(transient_mkv, remux_temp, progress_cb);
+
+        if (remux_result.success) {
+            if (const unsigned long move_err = AtomicReplaceInPlace(remux_temp, final_mp4); move_err != 0) {
+                // The remux produced a complete file but publishing it atomically
+                // failed. The transient MKV is still the trustworthy recording, so
+                // demote this to a remux failure: drop the temp, keep the MKV.
+                std::error_code cleanup_ec;
+                std::filesystem::remove(remux_temp, cleanup_ec);
+                remux_result = recorder_core::RemuxResult::Fail(0, "Atomic move to final output failed (Win32 error " +
+                                                                       std::to_string(move_err) + ")");
+            }
+        } else {
+            // Failed or cancelled: the target path was never written. Drop the temp so
+            // no half-written ".part" lingers. (Cancellation already removes it inside
+            // RemuxToProgressiveMp4 — this is a harmless no-op there.)
+            std::error_code cleanup_ec;
+            std::filesystem::remove(remux_temp, cleanup_ec);
+        }
 
         // Back on the recording thread; marshal everything to the Qt main thread.
         UiRecordingResult final_result = base;
@@ -1916,7 +1939,25 @@ void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job) {
                                            QString::fromStdWString(output_mp4.filename().wstring())));
 
         auto progress_cb = [this](float /*fraction*/) -> bool { return !remux_cancel_requested_.load(); };
-        const auto result = recorder_core::RemuxToProgressiveMp4(transient_mkv, output_mp4, progress_cb);
+
+        // Remux to a sibling ".part" temp on the segment output's own volume, then
+        // atomically rename it onto the segment path. A kill mid-remux leaves only the
+        // temp — the segment output path never holds a half-written MP4 (ADR-0014).
+        const std::filesystem::path segment_temp = MakeSiblingTempPath(output_mp4);
+        auto result = recorder_core::RemuxToProgressiveMp4(transient_mkv, segment_temp, progress_cb);
+
+        if (result.success) {
+            if (const unsigned long move_err = AtomicReplaceInPlace(segment_temp, output_mp4); move_err != 0) {
+                std::error_code cleanup_ec;
+                std::filesystem::remove(segment_temp, cleanup_ec);
+                result = recorder_core::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
+                                                                 std::to_string(move_err) + ")");
+            }
+        } else {
+            // Failed or cancelled: the segment path was never written. Drop the temp.
+            std::error_code cleanup_ec;
+            std::filesystem::remove(segment_temp, cleanup_ec);
+        }
 
         job.succeeded = result.success;
         job.av_error_code = result.av_error_code;
@@ -1960,11 +2001,9 @@ void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job) {
             }
             // The segment's transient MKV is retained above (it is never deleted on
             // this path) — it is the only trustworthy artefact for this segment. The
-            // partial MP4 the failed/cancelled remux may have left behind is not; remove
-            // it so it is never mistaken for a real segment output. (Cancellation already
-            // removes it inside RemuxToProgressiveMp4 — this is a harmless no-op there.)
-            std::error_code mp4_ec;
-            std::filesystem::remove(output_mp4, mp4_ec);
+            // failed/cancelled remux only ever wrote to the ".part" temp (already
+            // removed above), so the segment output path was never touched: any file
+            // sitting there is left exactly as it was.
             // Manifest entry stays; recovery UI will offer re-export.
         }
     });

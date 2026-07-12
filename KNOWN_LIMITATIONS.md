@@ -176,6 +176,12 @@ Invalid combinations are not offered.
 - For MP4 sessions, each completed segment is remuxed to MP4 in the background
   while recording continues into the next segment. "Saved" is reported only when
   all segment remuxes have completed.
+- Every MP4 remux — the single-file remux-on-stop and each per-segment remux —
+  writes to a sibling `.part` temp on the target's own volume and is atomically
+  renamed onto the output path only on success. A crash mid-remux never leaves a
+  half-written file at the user-visible output path; it leaves only the temp,
+  which the next launch cleans up. This is the same durability guarantee the
+  crash-recovery remux carries.
 - Already-finalized split segments remain independently usable.
 
 ## Crash safety and recovery

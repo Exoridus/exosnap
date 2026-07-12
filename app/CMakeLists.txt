@@ -267,6 +267,8 @@ qt_add_executable(exosnap WIN32
     services/PageHydrationController.cpp
     services/RecoveryService.h
     services/RecoveryService.cpp
+    services/AtomicFileOps.h
+    services/AtomicFileOps.cpp
     services/CrashIssueReport.h
     services/CrashIssueReport.cpp
     services/UpdateService.h
@@ -892,6 +894,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -912,6 +915,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_mp4_split_remux.cpp
         services/RecordingCoordinator.cpp
+        services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
     LIBRARIES
@@ -1689,6 +1693,7 @@ exosnap_add_gtest(
     SOURCES tests/test_recovery_service.cpp
             settings/RecoveryManifestStore.cpp
             services/RecoveryService.cpp
+            services/AtomicFileOps.cpp
             diagnostics/AppLog.cpp
     LIBRARIES exosnap_capability recorder_core Qt6::Core FFmpeg::mux
 )
@@ -1704,6 +1709,7 @@ exosnap_add_gtest(
     SOURCES tests/test_recovery_drills.cpp
             settings/RecoveryManifestStore.cpp
             services/RecoveryService.cpp
+            services/AtomicFileOps.cpp
             diagnostics/AppLog.cpp
     LIBRARIES exosnap_capability recorder_core recorder_core_testutil Qt6::Core FFmpeg::mux
 )
@@ -1718,6 +1724,7 @@ exosnap_add_gtest(
         ui/dialogs/RecoveryOverlay.cpp
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
+        services/AtomicFileOps.cpp
         diagnostics/AppLog.cpp
         ui/brand/BrandMarkWidget.cpp
         # THEME-SLICE-2C: RecoveryOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
@@ -1880,6 +1887,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            services/AtomicFileOps.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
@@ -1975,6 +1983,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_capture_frame_button.cpp
         services/RecordingCoordinator.cpp
+        services/AtomicFileOps.cpp
         services/DisplayNumbering.cpp
         settings/RecoveryManifestStore.cpp
         notifications/NotificationManager.cpp
@@ -2095,6 +2104,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            services/AtomicFileOps.cpp
             services/DisplayNumbering.cpp
             settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
@@ -2146,6 +2156,7 @@ exosnap_add_gtest(
         ui/dialogs/RecoveryOverlay.cpp
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
+        services/AtomicFileOps.cpp
         diagnostics/AppLog.cpp
         ui/brand/BrandMarkWidget.cpp
         ui/theme/ExoSnapTheme.cpp
