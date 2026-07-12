@@ -62,11 +62,11 @@ RecordingPreset MakeRegionPreset() {
     p.config = MakeDefaultPreset().config;
     p.config.capture.kind = PresetCaptureKind::Region;
     p.config.capture.has_region = true;
-    p.config.capture.region.x = 100;
-    p.config.capture.region.y = 200;
-    p.config.capture.region.width = 1280;
-    p.config.capture.region.height = 720;
-    p.config.capture.region_display_key = "monitor-0";
+    p.config.capture.region_x_norm = 0.1f;
+    p.config.capture.region_y_norm = 0.2f;
+    p.config.capture.region_w_norm = 0.5f;
+    p.config.capture.region_h_norm = 0.4f;
+    p.config.capture.region_display_id.device_path = "monitor-0";
     p.config.output.resolution.mode = OutputResolutionMode::FHD1080;
     return p;
 }
@@ -166,6 +166,48 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
         // Webcam PiP opacity — persisted explicitly since NormalizedConfigEquals
         // is not the target of this proof; check the round-tripped value directly.
         EXPECT_FLOAT_EQ(loaded_r3->config.webcam.opacity, 0.35f);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// Stable display identity sub-table round-trips (schema 25)
+// ===========================================================================
+
+TEST(RecordingPresetStore, StableDisplayId_SubTable_RoundTrips) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Stable id";
+    p.config = MakeDefaultPreset().config;
+    p.config.capture.kind = PresetCaptureKind::Display;
+    p.config.capture.display_id.device_path = "\\\\?\\DISPLAY#GSM5B09#5&abcd&UID4352#{guid}";
+    p.config.capture.display_id.edid_vendor = "GSM";
+    p.config.capture.display_id.edid_product = 23305;
+    p.config.capture.display_id.serial = "PANEL-SERIAL-1";
+    p.config.capture.display_id.friendly_name = "LG HDR 4K";
+    p.config.capture.display_id.gdi_name = "\\\\.\\DISPLAY6";
+    p.config.capture.display_id.seq_hint = 2;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, MakeDefaultPreset().config);
+    }
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.repaired);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        const auto& id = state.user_presets[0].config.capture.display_id;
+        EXPECT_EQ(id.device_path, p.config.capture.display_id.device_path);
+        EXPECT_EQ(id.edid_vendor, "GSM");
+        EXPECT_EQ(id.edid_product, 23305u);
+        EXPECT_EQ(id.serial, "PANEL-SERIAL-1");
+        EXPECT_EQ(id.friendly_name, "LG HDR 4K");
+        EXPECT_EQ(id.gdi_name, "\\\\.\\DISPLAY6");
+        EXPECT_EQ(id.seq_hint, 2);
     }
 
     CleanupFile(path);
@@ -1636,7 +1678,7 @@ TEST(RecordingPresetStore, TomlOnDisk_HasLiveTable_NoDefaultId) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString text = QString::fromUtf8(f.readAll());
     EXPECT_TRUE(text.contains(QStringLiteral("[live]")));
-    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 24")));
+    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 25")));
     EXPECT_FALSE(text.contains(QStringLiteral("default_id")));
     CleanupFile(path);
 }
@@ -1659,7 +1701,7 @@ TEST(RecordingPresetStore, SchemaMismatch_KeepsData_NotRepaired) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     QString text = QString::fromUtf8(f.readAll());
     f.close();
-    text.replace(QStringLiteral("schema_version = 24"), QStringLiteral("schema_version = 22"));
+    text.replace(QStringLiteral("schema_version = 25"), QStringLiteral("schema_version = 22"));
     ASSERT_TRUE(WriteTomlString(path, text));
 
     const PersistedPresetState state = store.Load();

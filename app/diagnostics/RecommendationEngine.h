@@ -54,6 +54,17 @@ class RecommendationEngine {
         capture_target_hdr_active_ = active;
     }
 
+    // Whether a concretely-saved capture target could not be resolved to any
+    // connected display at restore/re-resolve time (e.g. that monitor is
+    // unplugged, or identical monitors were cable-swapped). Emits a calm Display
+    // notice with a "choose a source" assisted fix. label describes the saved
+    // (missing) display. Default false — the engine only emits when the caller
+    // supplies the fact (mirrors SetOutputPathWritable).
+    void SetSavedDisplayUnresolved(bool unresolved, std::string label = {}) {
+        saved_display_unresolved_ = unresolved;
+        saved_display_label_ = std::move(label);
+    }
+
     static std::vector<std::string> GetAllRecommendationCodes();
 
   private:
@@ -73,6 +84,7 @@ class RecommendationEngine {
     void checkPresentModeFlips(DiagnosticChecklist& checklist) const;
     void checkDpcLatency(DiagnosticChecklist& checklist) const;
     void checkDiskWriteStall(DiagnosticChecklist& checklist) const;
+    void checkUnresolvedSavedDisplay(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
@@ -82,6 +94,8 @@ class RecommendationEngine {
     std::string output_filesystem_name_;     // e.g. "FAT32", "NTFS"; empty = not queried
     bool output_path_writable_ = true;       // false => emit the not-writable blocker (set by caller)
     bool capture_target_hdr_active_ = false; // true => capture target's display has Windows HDR ON (set by caller)
+    bool saved_display_unresolved_ = false;  // true => saved capture target could not be matched (set by caller)
+    std::string saved_display_label_;        // friendly name / label of the saved (missing) display
 
     // Live present-cadence correlation (v0.8.0 / ADR 0033). Extracted from an optional live
     // RecordingDiagnosticsSnapshot; all false/neutral when no live measurement is available

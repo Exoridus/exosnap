@@ -1387,26 +1387,109 @@ PresetCaptureTarget RecordPage::currentCapturePolicy() const {
         break;
     }
 
+    // PURE save path: only read the cache. The hardware-stable identity was
+    // resolved once at selection/region-change time (cacheSelectedDisplayIdentity)
+    // so this getter — called on every dirty/live-config check — never triggers
+    // display enumeration.
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        const std::string desc = RecordViewModel::TargetLabelFromCaptureTarget(target);
         if (cap.kind == PresetCaptureKind::Window) {
-            cap.window_key = desc;
+            // Windows keep a description-based key (no hardware-stable identity).
+            cap.window_key = RecordViewModel::TargetLabelFromCaptureTarget(target);
         } else {
-            // Display and Region: identify the monitor by its description.
-            cap.display_key = desc;
+            // Display / Region: hardware-stable identity, cached at selection time.
+            cap.display_id = view_model_.selected_display_id;
         }
     }
 
     if (view_model_.capture_mode == CaptureMode::Region) {
         cap.has_region = view_model_.has_region;
-        cap.region = view_model_.region;
-        // Identify the monitor that the region sits on (same as selected monitor).
-        cap.region_display_key = cap.display_key;
+        cap.region_display_id = view_model_.region_display_id;
+        cap.region_x_norm = view_model_.region_x_norm;
+        cap.region_y_norm = view_model_.region_y_norm;
+        cap.region_w_norm = view_model_.region_w_norm;
+        cap.region_h_norm = view_model_.region_h_norm;
     }
 
     return cap;
+}
+
+RecordPage::SavedDisplayResolution RecordPage::savedDisplayResolution() const {
+    SavedDisplayResolution r;
+    r.unresolved = view_model_.capture_target_unresolved;
+    r.friendly_name = view_model_.pending_display_id.friendly_name;
+    r.seq_hint = view_model_.pending_display_id.seq_hint;
+    return r;
+}
+
+void RecordPage::setDisplayEnumeratorForTest(DisplayIdentityEnumeratorFn fn) {
+    display_enumerator_ = fn ? std::move(fn) : DisplayIdentityEnumeratorFn(&EnumerateDisplayIdentities);
+}
+
+void RecordPage::cacheSelectedDisplayIdentity(const std::vector<EnumeratedDisplayIdentity>& enumerated) {
+    if (view_model_.capture_mode == CaptureMode::Window) {
+        return; // windows have no hardware-stable identity
+    }
+
+    // --- Selected monitor identity ---
+    StableDisplayId id;
+    const int idx = view_model_.selected_target_index;
+    if (idx >= 0 && idx < static_cast<int>(view_model_.targets.size())) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(idx)];
+        for (const auto& e : enumerated) {
+            if (e.hmonitor != 0 && e.hmonitor == target.native_id) {
+                id = e.id;
+                break;
+            }
+        }
+        if (id.empty()) {
+            // Save-time mapping failure (enumeration gave nothing / no join): keep
+            // at least the GDI name so the preference is not silently lost — the
+            // matcher's stage-4 fallback carries it. (For monitors, description is
+            // the GDI device name.)
+            id.gdi_name = target.description;
+        }
+    }
+    view_model_.selected_display_id = id;
+
+    // --- Region normalization (anchor = the display hosting the region origin) ---
+    if (view_model_.capture_mode == CaptureMode::Region && view_model_.has_region) {
+        const AbsoluteRegion abs{view_model_.region.x, view_model_.region.y, view_model_.region.width,
+                                 view_model_.region.height};
+        const EnumeratedDisplayIdentity* anchor = nullptr;
+        for (const auto& e : enumerated) {
+            const PhysicalRect& r = e.rc_monitor_physical;
+            if (r.valid() && abs.x >= r.left && abs.x < r.right && abs.y >= r.top && abs.y < r.bottom) {
+                anchor = &e;
+                break;
+            }
+        }
+        if (anchor == nullptr) {
+            for (const auto& e : enumerated) {
+                if (e.id == id && !id.empty()) {
+                    anchor = &e;
+                    break;
+                }
+            }
+        }
+        if (anchor != nullptr) {
+            view_model_.region_display_id = anchor->id;
+            const NormalizedRegion n = AbsoluteRegionToAnchorRelative(abs, anchor->rc_monitor_physical);
+            view_model_.region_x_norm = n.x;
+            view_model_.region_y_norm = n.y;
+            view_model_.region_w_norm = n.w;
+            view_model_.region_h_norm = n.h;
+        } else {
+            view_model_.region_display_id = id; // best effort
+        }
+    }
+}
+
+void RecordPage::notifyCaptureTargetResolution() {
+    // Capture identity is an environment field (excluded from dirty), so emitting
+    // recordingConfigChanged only refreshes the live config + diagnostics notice.
+    emit recordingConfigChanged();
 }
 
 uint32_t RecordPage::selectedTargetWindowPid() const {
@@ -1462,47 +1545,91 @@ void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
         break;
     }
 
-    // ---- 2. Resolve target by key matching ----
+    // ---- 2. Resolve target by hardware-stable identity ----
     const bool want_window = (cap.kind == PresetCaptureKind::Window);
-    const std::string& match_key = want_window ? cap.window_key : cap.display_key;
     const auto& candidate_indices = want_window ? window_target_indices_ : monitor_target_indices_;
 
+    // One enumeration for the whole restore (display + region anchor). Windows
+    // still match by description and need no enumeration.
+    const std::vector<EnumeratedDisplayIdentity> enumerated =
+        want_window ? std::vector<EnumeratedDisplayIdentity>{} : display_enumerator_();
+
     int resolved_index = -1;
-    if (match_key.empty()) {
-        // No preference: auto-pick primary/first target of the kind.
-        if (want_window && !window_target_indices_.empty()) {
-            resolved_index = window_target_indices_.front();
-        } else if (!want_window && monitor_target_index_ >= 0) {
+    bool unresolved = false;
+
+    if (want_window) {
+        if (cap.window_key.empty()) {
+            if (!window_target_indices_.empty()) {
+                resolved_index = window_target_indices_.front();
+            }
+        } else {
+            for (int idx : candidate_indices) {
+                if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+                    continue;
+                const auto& t = view_model_.targets[static_cast<std::size_t>(idx)];
+                if (RecordViewModel::TargetLabelFromCaptureTarget(t) == cap.window_key) {
+                    resolved_index = idx;
+                    break;
+                }
+            }
+        }
+    } else if (cap.display_id.empty()) {
+        // No stored preference: auto-pick primary/first monitor.
+        if (monitor_target_index_ >= 0) {
             resolved_index = monitor_target_index_;
         } else if (!candidate_indices.empty()) {
             resolved_index = candidate_indices.front();
         }
     } else {
-        // Try to match by description key.
-        for (int idx : candidate_indices) {
-            if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
-                continue;
-            const auto& t = view_model_.targets[static_cast<std::size_t>(idx)];
-            if (RecordViewModel::TargetLabelFromCaptureTarget(t) == match_key) {
-                resolved_index = idx;
-                break;
+        // Ranked match against the current displays; map HMONITOR -> target index.
+        const std::optional<DisplayMatch> match = ResolveStableDisplay(cap.display_id, enumerated);
+        if (match.has_value()) {
+            const uintptr_t hmon = enumerated[match->index].hmonitor;
+            for (int idx : candidate_indices) {
+                if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+                    continue;
+                if (view_model_.targets[static_cast<std::size_t>(idx)].native_id == hmon) {
+                    resolved_index = idx;
+                    break;
+                }
             }
         }
-        // Non-empty key with no match → UNRESOLVED: leave selection cleared.
-        // Do NOT auto-pick a different target.
+        // Saved-but-missing (or matched an HMONITOR with no target): UNRESOLVED.
+        // Leave selection cleared; do NOT auto-pick a different monitor.
+        if (resolved_index < 0) {
+            unresolved = true;
+        }
     }
 
-    // ---- 3. Apply region ----
+    // Remember the saved identity for re-resolve on topology change. A restored
+    // preference is not a manual pick (sticky bit stays clear).
+    view_model_.pending_display_id = want_window ? StableDisplayId{} : cap.display_id;
+    view_model_.capture_target_user_chosen = false;
+
+    // ---- 3. Apply region (anchor-relative -> absolute physical pixels) ----
     if (cap.kind == PresetCaptureKind::Region) {
-        if (cap.has_region) {
-            view_model_.has_region = true;
-            view_model_.region = cap.region;
-            view_model_.select_on_record = false;
+        if (cap.has_region && resolved_index >= 0) {
+            const StableDisplayId& anchor_id = cap.region_display_id.empty() ? cap.display_id : cap.region_display_id;
+            const std::optional<DisplayMatch> region_match = ResolveStableDisplay(anchor_id, enumerated);
+            if (region_match.has_value()) {
+                const PhysicalRect& anchor = enumerated[region_match->index].rc_monitor_physical;
+                const AbsoluteRegion abs = AnchorRelativeRegionToAbsolute(
+                    NormalizedRegion{cap.region_x_norm, cap.region_y_norm, cap.region_w_norm, cap.region_h_norm},
+                    anchor);
+                view_model_.has_region = true;
+                view_model_.region = recorder_core::CaptureRegion{abs.x, abs.y, abs.width, abs.height};
+                view_model_.select_on_record = false;
+            } else {
+                // Anchor display missing: do NOT drop a stale/off-screen rectangle
+                // onto the wrong pixels — signal unresolved and skip the region.
+                view_model_.has_region = false;
+                view_model_.region = {};
+                unresolved = true;
+            }
         }
-        // Region mode: do NOT clear region — preserve it for future re-enumeration.
+        // Region mode: do NOT clear an already-applied region on re-enumeration.
     } else {
         // Switching away from Region: clear stale crop via the preview-key mechanism.
-        // Reset has_region so startPreviewIfIdle() does not pass a stale crop box.
         if (view_model_.has_region) {
             view_model_.has_region = false;
             view_model_.region = {};
@@ -1512,18 +1639,73 @@ void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
 
     // ---- 4. Push target selection (apply audio kind + preview) ----
     if (resolved_index >= 0) {
-        // syncTargetSelectionToCombo handles audio plan + preview restart.
+        // syncTargetSelectionToCombo handles audio plan + preview restart. It does
+        // NOT re-enumerate here (applying_external_config_ is set): cache below.
         syncTargetSelectionToCombo(resolved_index);
+        cacheSelectedDisplayIdentity(enumerated);
     } else {
         // No resolution: update the audio kind from the capture mode, rebuild
-        // picker, and restart the preview (which will be blank if no target is
-        // selected, which is the correct "unresolved" UX).
+        // picker, and restart the preview (blank preview is the correct
+        // "unresolved" UX). Clear the stale identity cache.
         const capability::CaptureTargetKind kind_for_audio =
             want_window ? capability::CaptureTargetKind::Window : capability::CaptureTargetKind::Display;
         view_model_.ApplyTargetKindPreservingAudio(kind_for_audio);
+        view_model_.selected_display_id = StableDisplayId{};
         startPreviewIfIdle();
     }
 
+    view_model_.capture_target_unresolved = unresolved;
+    refresh();
+}
+
+void RecordPage::reResolveSavedDisplay() {
+    // Re-resolve the saved monitor identity after a topology change. Restores the
+    // selection when the display returns and the user has not manually re-chosen
+    // (sticky bit). Uses the same injectable enumerator; runs only on the snapshot
+    // trigger, never per frame.
+    if (view_model_.pending_display_id.empty() || view_model_.capture_target_user_chosen) {
+        return;
+    }
+    if (view_model_.capture_mode == CaptureMode::Window) {
+        return;
+    }
+
+    const std::vector<EnumeratedDisplayIdentity> enumerated = display_enumerator_();
+    const std::optional<DisplayMatch> match = ResolveStableDisplay(view_model_.pending_display_id, enumerated);
+    if (!match.has_value()) {
+        // Still missing: hold the unresolved state (and its notice).
+        if (!view_model_.capture_target_unresolved) {
+            view_model_.capture_target_unresolved = true;
+            notifyCaptureTargetResolution();
+        }
+        return;
+    }
+
+    const uintptr_t hmon = enumerated[match->index].hmonitor;
+    int resolved_index = -1;
+    for (int idx : monitor_target_indices_) {
+        if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+            continue;
+        if (view_model_.targets[static_cast<std::size_t>(idx)].native_id == hmon) {
+            resolved_index = idx;
+            break;
+        }
+    }
+    if (resolved_index < 0) {
+        return; // matched identity has no enumerated capture target yet
+    }
+
+    // Display returned: restore the selection (the saved target was the declared
+    // wish) and clear the unresolved flag. Suppress the manual-selection hook so
+    // the sticky bit is NOT set (this is a restore, not a user choice).
+    const bool was_applying = applying_external_config_;
+    applying_external_config_ = true;
+    syncTargetSelectionToCombo(resolved_index);
+    applying_external_config_ = was_applying;
+
+    cacheSelectedDisplayIdentity(enumerated);
+    view_model_.capture_target_unresolved = false;
+    notifyCaptureTargetResolution();
     refresh();
 }
 
@@ -2925,6 +3107,19 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
                                   .arg(logSafeTargetLabel(target))
                                   .arg(kind_changed ? QStringLiteral("yes") : QStringLiteral("no")));
 
+    // Genuine user selection (not a restore/re-resolve): resolve and cache the
+    // hardware-stable identity now — the only place enumeration runs for the
+    // save path. A manual choice is by definition resolved AND sticky, so a later
+    // return of a previously-lost display never overrides it.
+    if (!applying_external_config_ && target.kind != recorder_core::CaptureTarget::Kind::Window) {
+        const std::vector<EnumeratedDisplayIdentity> enumerated = display_enumerator_();
+        cacheSelectedDisplayIdentity(enumerated);
+        view_model_.pending_display_id = view_model_.selected_display_id;
+        view_model_.capture_target_unresolved = false;
+        view_model_.capture_target_user_chosen = true;
+        notifyCaptureTargetResolution();
+    }
+
     startPreviewIfIdle();
 }
 
@@ -3821,6 +4016,15 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
             break;
         }
     }
+
+    // User-drawn region: cache the anchor identity + normalized rect now so the
+    // pure save path can persist it without enumeration.
+    const std::vector<EnumeratedDisplayIdentity> enumerated = display_enumerator_();
+    cacheSelectedDisplayIdentity(enumerated);
+    view_model_.pending_display_id = view_model_.selected_display_id;
+    view_model_.capture_target_unresolved = false;
+    view_model_.capture_target_user_chosen = true;
+    notifyCaptureTargetResolution();
 
     // If we were in RegionSelecting (triggered from onStart), proceed to record.
     if (view_model_.state == UiRecordingState::RegionSelecting) {
@@ -5034,6 +5238,12 @@ void RecordPage::onDisplaysChanged(const exosnap::DisplaySnapshot& snap) {
     // Re-enumerate targets WITHOUT silent fallback so a vanished selection becomes
     // unresolved rather than auto-picking a different monitor.
     enumerateTargets(/*preserve_current_selection=*/true, /*allow_fallback_to_other_target=*/false);
+
+    // Re-resolve the saved monitor identity: if the target display returned and
+    // the user has not manually re-chosen, restore the selection and clear the
+    // "saved display not found" notice. Without this the notice would never
+    // clear on the display's return.
+    reResolveSavedDisplay();
 
     // If the Source Picker overlay is open, refresh its cards.
     if (source_picker_overlay_ && source_picker_overlay_->isOpen()) {

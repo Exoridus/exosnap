@@ -255,6 +255,10 @@ qt_add_executable(exosnap WIN32
     services/DisplayNumbering.h
     services/DisplayNumbering.cpp
     services/TargetDisplayFacts.h
+    services/DisplayIdentityResolver.h
+    services/DisplayIdentityResolver.cpp
+    services/DisplayIdentityEnumerator.h
+    services/DisplayIdentityEnumerator.cpp
     services/RecordingCountdownController.h
     services/RecordingCountdownController.cpp
     services/PageHydrationController.h
@@ -275,6 +279,7 @@ qt_add_executable(exosnap WIN32
     models/SettingsCompareData.cpp
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
+    models/StableDisplayId.h
     models/RecordingPreset.h
     models/RecordingPreset.cpp
     models/RecordingPresetRegistry.h
@@ -623,6 +628,17 @@ exosnap_add_gtest(
 )
 target_include_directories(recording_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_tests PRIVATE ole32.lib shell32.lib)
+
+# Stable display-identity ranked matcher + region normalization math (pure).
+exosnap_add_gtest(
+    NAME display_identity_resolver_tests
+    TEST_PREFIX display_id.
+    SOURCES
+        tests/test_display_identity_resolver.cpp
+        services/DisplayIdentityResolver.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(display_identity_resolver_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
 # preset round-trip, dirty-tracking, sanitize, and capability queries.

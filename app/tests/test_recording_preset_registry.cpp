@@ -203,7 +203,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingCapturKind_NotDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingCaptureDisplayKey_NotDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.capture.display_key = "MONITOR-001"; // Resolved on startup
+    live.capture.display_id.device_path = "MONITOR-001"; // Resolved on startup
     EXPECT_FALSE(reg.IsSelectedDirty(live));
 }
 
@@ -212,11 +212,11 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingCaptureRegion_NotDirty) {
     RecordingPresetConfig live = reg.SelectedSavedConfig();
     live.capture.kind = PresetCaptureKind::Region;
     live.capture.has_region = true;
-    live.capture.region.x = 100;
-    live.capture.region.y = 100;
-    live.capture.region.width = 640;
-    live.capture.region.height = 480;
-    live.capture.region_display_key = "\\\\?\\DISPLAY#SAM#001";
+    live.capture.region_x_norm = 0.1f;
+    live.capture.region_y_norm = 0.1f;
+    live.capture.region_w_norm = 0.5f;
+    live.capture.region_h_norm = 0.5f;
+    live.capture.region_display_id.device_path = "\\\\?\\DISPLAY#SAM#001";
     EXPECT_FALSE(reg.IsSelectedDirty(live));
 }
 
@@ -262,7 +262,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_RevertingCaptureMutation_StillClea
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
     // Mutate capture (simulates startup resolution).
-    live.capture.display_key = "MONITOR-001";
+    live.capture.display_id.device_path = "MONITOR-001";
     EXPECT_FALSE(reg.IsSelectedDirty(live));
     // Mutate a real field.
     live.countdown_seconds = 10;
@@ -419,11 +419,11 @@ TEST(RecordingPresetRegistry, AddPreset_StripsEnvironmentFields) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.output.video_codec = capability::VideoCodec::HevcNvenc;
     live.output.bit_depth = capability::BitDepth::Bit10;
-    live.capture.display_key = "monitor-1";
+    live.capture.display_id.device_path = "monitor-1";
     const std::string id = reg.AddPreset(live, "Mine");
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(reg.FindById(id)->config.output.bit_depth, defaults.bit_depth);
-    EXPECT_TRUE(reg.FindById(id)->config.capture.display_key.empty());
+    EXPECT_TRUE(reg.FindById(id)->config.capture.display_id.empty());
 }
 
 // ===========================================================================

@@ -20,12 +20,13 @@ namespace exosnap {
 // Value object: information about one display at a point in time.
 // ---------------------------------------------------------------------------
 struct DisplayInfo {
-    // STABLE KEY = QScreen::name() — this is the GDI device name on Windows
-    // (e.g. "\\.\DISPLAY1"). Note: GDI device names can be reassigned on
-    // topology change (display disconnect/reconnect or mode-set). A hardware-
-    // stable identity based on EDID or the monitor device path (SetupAPI /
-    // DISPLAYCONFIG_PATH_INFO) is deferred to a future revision. Do NOT use
-    // this id as a long-lived persistent key across reboots or monitor changes.
+    // LIVE KEY = QScreen::name() — the GDI device name on Windows
+    // (e.g. "\\.\DISPLAY1"). GDI device names can be reassigned on a topology
+    // change (disconnect/reconnect or mode-set), so this id is fine for live
+    // discovery but must NOT be used as a long-lived persistent key. For
+    // PERSISTING a capture target across reboots/monitor changes, use the
+    // hardware-stable StableDisplayId resolved by DisplayIdentityResolver /
+    // DisplayIdentityEnumerator (device path + EDID; ADR 0047).
     QString id;
 
     // Human-readable label. Uses manufacturer/model from QScreen if available,

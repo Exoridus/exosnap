@@ -84,6 +84,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkVideoBitDepthContainerCompat(checklist);
     checkDpcLatency(checklist);
     checkDiskWriteStall(checklist);
+    checkUnresolvedSavedDisplay(checklist);
     return checklist;
 }
 
@@ -747,9 +748,54 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
     checklist.results.push_back(std::move(r));
 }
 
+// ---------------------------------------------------------------------------
+// Saved display not found — calm Display notice (stable-display-identity).
+// Fires ONLY when a concretely-saved capture target could not be matched to any
+// connected display. Not a blocker: recording the primary/current display still
+// works; only the stored preference is missing.
+// ---------------------------------------------------------------------------
+void RecommendationEngine::checkUnresolvedSavedDisplay(DiagnosticChecklist& checklist) const {
+    if (!saved_display_unresolved_) {
+        return;
+    }
+
+    const std::string which =
+        saved_display_label_.empty() ? std::string("The saved display") : ("\"" + saved_display_label_ + "\"");
+
+    DiagnosticResult r = MakeResult(
+        "display.saved.unresolved", DiagnosticGroup::Display, DiagnosticSeverity::Notice, "Saved display not found",
+        "The display this preset recorded from is not currently connected, so no capture source is selected.",
+        which + " could not be matched to any connected display. This happens after that monitor is unplugged, or "
+                "after swapping cables between two identical monitors that report no serial number. Recording still "
+                "works — choose a source to record now, and it will be remembered.",
+        which + " is unavailable", "Choose a capture source to record now.");
+
+    FixAction fa;
+    fa.id = "fix.display.reselect";
+    fa.label = "Choose a source";
+    fa.safety = FixAction::Safety::Assisted;
+    fa.reversible = true;
+    fa.changes_summary = "Opens the source picker so you can pick a display or window to record.";
+    r.fix_action = fa;
+
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
-    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005",         "rec.006",
-            "rec.007", "rec.008", "rec.009", "rec.010", "rec.color.range", "rec.hdr.h264"};
+    return {"rec.001",
+            "rec.002",
+            "rec.003",
+            "rec.004",
+            "rec.005",
+            "rec.006",
+            "rec.007",
+            "rec.008",
+            "rec.009",
+            "rec.010",
+            "rec.color.range",
+            "rec.hdr.h264",
+            "display.saved.unresolved"};
 }
 
 } // namespace exosnap::diagnostics

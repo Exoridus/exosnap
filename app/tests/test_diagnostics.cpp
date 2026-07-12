@@ -916,8 +916,9 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
     // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat); the
     // color-range compatibility guard added rec.color.range; the H.264 + HDR10-native
-    // blocker added rec.hdr.h264 — expect 12 codes now.
-    EXPECT_EQ(codes.size(), 12u);
+    // blocker added rec.hdr.h264; stable display identity added display.saved.unresolved —
+    // expect 13 codes now.
+    EXPECT_EQ(codes.size(), 13u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());

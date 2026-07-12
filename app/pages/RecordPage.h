@@ -14,6 +14,8 @@
 #include "../models/WebcamSettings.h"
 #include "../services/AudioDeviceNotifier.h"
 #include "../services/DisplayDeviceNotifier.h"
+#include "../services/DisplayIdentityEnumerator.h"
+#include "../services/DisplayIdentityResolver.h"
 #include "../services/PreviewHelpers.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
@@ -130,6 +132,20 @@ class RecordPage : public QWidget {
     // Clears stale Region crop when switching away from Region mode.
     // Always restarts the preview via startPreviewIfIdle() when appropriate.
     void applyCapturePolicy(const PresetCaptureTarget& cap);
+
+    // Resolution status of the saved monitor target after restore/re-resolve.
+    // Feeds the "saved display not found" diagnostics notice. friendly_name /
+    // seq_hint describe the saved (missing) display.
+    struct SavedDisplayResolution {
+        bool unresolved = false;
+        std::string friendly_name;
+        int seq_hint = 0;
+    };
+    [[nodiscard]] SavedDisplayResolution savedDisplayResolution() const;
+
+    // Test seam: inject a fixed enumerated-identity list instead of querying
+    // real hardware (mirrors DisplayDeviceNotifier::setEnumeratorForTest).
+    void setDisplayEnumeratorForTest(DisplayIdentityEnumeratorFn fn);
 
     // Returns selected_countdown_seconds_.
     [[nodiscard]] int countdownSeconds() const;
@@ -324,6 +340,14 @@ class RecordPage : public QWidget {
     void hideResultDetailsPanel();
     void updateReportCard(); // populates pipeline stats in resultDetailsPanel
     void syncTargetSelectionToCombo(int target_index);
+    // Resolve & cache the hardware-stable identity of the current monitor/region
+    // selection from an already-enumerated list (no fresh enumeration). Runs at
+    // selection/region-change time so the pure currentCapturePolicy() save path
+    // only reads the cache and never triggers enumeration.
+    void cacheSelectedDisplayIdentity(const std::vector<EnumeratedDisplayIdentity>& enumerated);
+    // Re-resolve the saved monitor identity after a topology change; restores the
+    // selection when the display returns and the user has not manually re-chosen.
+    void reResolveSavedDisplay();
     // When allow_fallback is false the reactive path gets no silent switch:
     // a vanished target becomes unresolved (selected_target_index = -1) instead
     // of auto-picking the next monitor/window.
@@ -378,6 +402,12 @@ class RecordPage : public QWidget {
     void onDockSplit();
     void requestSplit(recorder_core::SplitTriggerSource source);
     void showMarkerFeedback(const QString& text);
+    // Notify the diagnostics surface that the saved-target resolution state may
+    // have changed (manual re-selection or a topology-driven re-resolve).
+    void notifyCaptureTargetResolution();
+
+    // Enumerates active displays -> stable identities. Injectable for tests.
+    DisplayIdentityEnumeratorFn display_enumerator_ = &EnumerateDisplayIdentities;
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;

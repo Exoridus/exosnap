@@ -235,7 +235,7 @@ Presets store the **complete** recording setup (schema version 2). A preset is t
 | Field group | Fields |
 |---|---|
 | Identity | `id` (stable unique key), `name` (user-visible label) |
-| Capture target (`PresetCaptureTarget`) | `kind` (Display/Window/Region), `display_key`, `window_key`, `has_region`, `region` (virtual-screen coords), `region_display_key` |
+| Capture target (`PresetCaptureTarget`) | `kind` (Display/Window/Region), `display_id` (`StableDisplayId`: device path + EDID, ADR 0047), `window_key`, `has_region`, `region_display_id` + normalized `region_*_norm` (anchor-relative) |
 | Output (`OutputSettingsModel`) | Container (MKV/WebM/MP4), video codec (AV1/H.264/H.265/VP9), audio codec (Opus/AAC/FLAC), quality (High/Balanced/Small/Custom CQ), FPS (24/25/30/50/60; 120 only when capability-proven), CFR/VFR, cursor capture, output folder, naming pattern |
 | Video (`VideoSettingsModel`) | CQ value, frame rate, timing mode, cursor |
 | Audio (`AudioUiState`) | System / app / mic toggles, separate tracks, mic device |

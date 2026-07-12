@@ -122,9 +122,9 @@ The following scenarios require a real machine with physical hardware and should
 
 ### Stable display identity
 
-Display IDs use `QScreen::name()` which maps to the GDI device name on Windows (e.g. `\\.\DISPLAY1`). GDI device names are **not hardware-stable**: they can be reassigned when display topology changes (disconnect/reconnect, reboot, GPU mode-set). A configuration that selects `\\.\DISPLAY2` may silently point to a different physical monitor after a reboot or topology change.
+Live display discovery still uses `QScreen::name()` = the GDI device name on Windows (e.g. `\\.\DISPLAY1`), which is **not hardware-stable** and can be reassigned on a topology change.
 
-A hardware-stable identity based on EDID serial number or `DISPLAYCONFIG_TARGET_DEVICE_NAME` (SetupAPI / `QueryDisplayConfig`) is deferred. Users who rely on a specific secondary monitor for region capture may need to re-select it after a topology change.
+**Persisted** Display/Region targets no longer ride on that name (superseded by ADR 0047). They carry a `StableDisplayId` — `DISPLAYCONFIG_TARGET_DEVICE_NAME.monitorDevicePath` + EDID vendor/product (+ serial when available) — and are resolved with a ranked matcher at restore, so a saved secondary monitor survives reboots and reconnects. The only unresolved case is identical serial-less monitors cable-swapped between ports, which reports an honest "saved display not found" notice instead of guessing.
 
 ### No active hot-swap during recording
 

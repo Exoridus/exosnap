@@ -13,6 +13,7 @@
 #include "models/CompletedRecording.h"
 #include "models/FilenameBuilder.h"
 #include "models/RecordingMarker.h"
+#include "models/StableDisplayId.h"
 
 namespace exosnap {
 
@@ -190,6 +191,22 @@ class RecordViewModel {
     bool has_region = false;
     recorder_core::CaptureRegion region{}; // virtual screen coordinates
     bool select_on_record = true;          // show overlay on each record start
+
+    // ---- Stable-display-identity cache (persistence/restore only) ----
+    // Resolved once at selection/region-change time so the pure save path
+    // (currentCapturePolicy) reads these instead of running enumeration.
+    StableDisplayId selected_display_id; // hardware-stable id of the selected monitor
+    StableDisplayId region_display_id;   // anchor display for the region
+    float region_x_norm = 0.0f;          // region as [0,1] fractions of the anchor's
+    float region_y_norm = 0.0f;          // physical rcMonitor
+    float region_w_norm = 0.0f;
+    float region_h_norm = 0.0f;
+
+    // Saved identity we are trying to restore + resolution status. Drive the
+    // "saved display not found" diagnostics notice and the re-resolve-on-return.
+    StableDisplayId pending_display_id;
+    bool capture_target_unresolved = false;  // saved target could not be matched
+    bool capture_target_user_chosen = false; // user manually re-chose since a miss (sticky)
 
     // Computed predicates
     bool CanStart() const noexcept;

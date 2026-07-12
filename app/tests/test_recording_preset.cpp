@@ -72,7 +72,7 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     for (const auto& preset : b) {
         EXPECT_EQ(preset.config.output.bit_depth, defaults.bit_depth);
         EXPECT_EQ(preset.config.output.hdr_mode, defaults.hdr_mode);
-        EXPECT_TRUE(preset.config.capture.display_key.empty());
+        EXPECT_TRUE(preset.config.capture.display_id.empty());
         EXPECT_TRUE(preset.config.capture.window_key.empty());
         EXPECT_FALSE(preset.config.capture.has_region);
     }
@@ -136,7 +136,7 @@ TEST(RecordingPreset, DefaultPreset_Countdown) {
 TEST(RecordingPreset, DefaultPreset_CaptureKind) {
     const RecordingPreset p = MakeDefaultPreset();
     EXPECT_EQ(p.config.capture.kind, PresetCaptureKind::Display);
-    EXPECT_TRUE(p.config.capture.display_key.empty());
+    EXPECT_TRUE(p.config.capture.display_id.empty());
     EXPECT_TRUE(p.config.capture.window_key.empty());
     EXPECT_FALSE(p.config.capture.has_region);
 }
@@ -918,7 +918,7 @@ TEST(RecordingPreset, NormalizedEquals_VideoQualityChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_CaptureDisplayKeyChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.capture.display_key = "MONITOR-001";
+    b.capture.display_id.device_path = "MONITOR-001";
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -926,13 +926,13 @@ TEST(RecordingPreset, NormalizedEquals_RegionRectChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     a.capture.kind = PresetCaptureKind::Region;
     a.capture.has_region = true;
-    a.capture.region.x = 0;
-    a.capture.region.y = 0;
-    a.capture.region.width = 640;
-    a.capture.region.height = 480;
+    a.capture.region_x_norm = 0.0f;
+    a.capture.region_y_norm = 0.0f;
+    a.capture.region_w_norm = 0.33f;
+    a.capture.region_h_norm = 0.44f;
 
     RecordingPresetConfig b = a;
-    b.capture.region.width = 800;
+    b.capture.region_w_norm = 0.5f;
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -998,8 +998,8 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureKindChange_StillEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_CaptureDisplayKeyChange_StillEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.capture.display_key = "MONITOR-001";
-    // display_key is excluded from dirty; preset must not show dirty on startup.
+    b.capture.display_id.device_path = "MONITOR-001";
+    // display_id is excluded from dirty; preset must not show dirty on startup.
     EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -1014,16 +1014,16 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     a.capture.kind = PresetCaptureKind::Region;
     a.capture.has_region = true;
-    a.capture.region.x = 0;
-    a.capture.region.y = 0;
-    a.capture.region.width = 640;
-    a.capture.region.height = 480;
-    a.capture.region_display_key = "\\\\?\\DISPLAY#SAM#001";
+    a.capture.region_x_norm = 0.0f;
+    a.capture.region_y_norm = 0.0f;
+    a.capture.region_w_norm = 0.5f;
+    a.capture.region_h_norm = 0.5f;
+    a.capture.region_display_id.device_path = "\\\\?\\DISPLAY#SAM#001";
 
     RecordingPresetConfig b = a;
-    b.capture.region.width = 800;
-    b.capture.region_display_key = "\\\\?\\DISPLAY#SAM#002";
-    // Region geometry and region_display_key excluded from dirty.
+    b.capture.region_w_norm = 0.8f;
+    b.capture.region_display_id.device_path = "\\\\?\\DISPLAY#SAM#002";
+    // Region geometry and region_display_id excluded from dirty.
     EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -1079,7 +1079,7 @@ TEST(RecordingPreset, DirtyEquivalent_PipBeyondTol_NotEquivalent) {
 TEST(RecordingPreset, NormalizedEquals_StillDetects_CaptureDisplayKeyChange) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.capture.display_key = "MONITOR-001";
+    b.capture.display_id.device_path = "MONITOR-001";
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -1409,7 +1409,8 @@ TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {
     live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Region;
     live.capture.has_region = true;
-    live.capture.region = recorder_core::CaptureRegion{0, 0, 1280, 720};
+    live.capture.region_w_norm = 0.5f;
+    live.capture.region_h_norm = 0.5f;
 
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     const RecordingPresetConfig stripped = StripEnvironmentFields(live);
