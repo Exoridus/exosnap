@@ -129,12 +129,14 @@ Invalid combinations are not offered.
 
 - **Audio format model** (ADR 0030): the output **sample rate** (44.1 / 48 / 96 kHz),
   **channel count** (mono / stereo), and **bit depth** for the lossless codecs
-  (PCM 16/24/32-bit; FLAC 16/24-bit) are configurable. Capture itself stays at
-  48 kHz; the engine resamples/rematrixes once after the mix bus
+  (PCM 16/24/32-bit int or 32-bit float; FLAC 16/24-bit) are configurable. Capture
+  itself stays at 48 kHz; the engine resamples/rematrixes once after the mix bus
   (libswresample). **Opus is locked to 48 kHz** (libopus accepts only
   8/12/16/24/48 kHz). Bit depth does not apply to the lossy codecs (Opus/AAC).
-  Stereo→mono uses an averaging downmix (no clipping). **Deferred:** more than 2
-  channels (5.1/7.1), float PCM (`A_PCM/FLOAT_IEEE`), and non-vetted sample rates.
+  Stereo→mono uses an averaging downmix (no clipping). 32-bit float PCM
+  (`A_PCM/FLOAT_IEEE`) is a raw passthrough of the mix bus's native format and is
+  PCM-only (FLAC has no float mode). **Deferred:** more than 2 channels (5.1/7.1)
+  and non-vetted sample rates.
   - A small (~10 ms) tail of audio may be dropped at stop when recording at a
     **non-default sample rate** (the resampler's internal buffer is not drained
     at end-of-stream); negligible for normal recordings.
@@ -351,4 +353,5 @@ upload, AMD and Intel hardware encoding, software encoding fallback, HLG and wid
 management beyond BT.2020 signaling (native HDR10/PQ has since shipped for both monitor and
 window/game capture, with in-band HEVC SEI / AV1 metadata OBUs in addition to container-level
 metadata), 4:2:2 chroma subsampling (4:4:4 has since shipped for 8-bit H.264/HEVC), more-than-stereo
-audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).
+audio (32-bit float PCM has since shipped), PCM/FLAC in MP4, and the fullscreen/exclusive capture
+matrix (0.12.x).

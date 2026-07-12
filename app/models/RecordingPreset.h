@@ -17,6 +17,10 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 //
+// v24: adds audio.pcm_float (bool) -- 32-bit float PCM (A_PCM/FLOAT_IEEE),
+// opt-in only when audio_codec == Pcm and audio_bit_depth == 32. Older
+// presets simply default to false (no behavior change).
+//
 // v23: the store's persisted unit changes from "the preset list plus a
 // startup-default id" to "the live configuration plus named snapshots".
 // A [live] table holds the config the app is actually running (restored
@@ -42,7 +46,7 @@ namespace exosnap {
 // with explicit "full" is a deliberate post-flip opt-in and is respected.
 // See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 23;
+inline constexpr int kPresetSchemaVersion = 24;
 
 // Files at or below this schema get the targeted color_range full->limited
 // rewrite (ADR 0032) on top of the ordinary field-wise repair.

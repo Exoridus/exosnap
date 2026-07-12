@@ -47,7 +47,7 @@ vetted combinations"), not arbitrary integers.
 |---|---|---|---|
 | Sample rate | 44100, 48000, 96000 Hz | 48000 | **Opus → 48000 only** (libopus accepts only 8/12/16/24/48 kHz; 44.1/96 are not Opus input rates). AAC/PCM/FLAC: all three. |
 | Channels | Mono (1), Stereo (2) | Stereo | All codecs. **5.1+ deferred** (capture side: WASAPI loopback/mic deliver mono/stereo; multichannel upmix is not a real source). |
-| Bit depth | 16, 24, 32-bit signed int | 16 | **Lossless only** — PCM: 16/24/32; FLAC: 16/24 (libFLAC caps at 24-bit native). Lossy (Opus/AAC): N/A — bit depth is internal to the codec. |
+| Bit depth | 16, 24, 32-bit signed int, 32-bit float | 16 | **Lossless only** — PCM: 16/24/32-bit int or 32-bit float; FLAC: 16/24 (libFLAC caps at 24-bit native, no float mode). Lossy (Opus/AAC): N/A — bit depth is internal to the codec. |
 
 The capture side stays **48 kHz Float32** (WASAPI shared mode + RNNoise's hard 48 kHz requirement).
 All DSP (HPF/gate/AGC/RNNoise) and the mixer/limiter continue to run at 48 kHz/Float32. Conversion
@@ -82,7 +82,11 @@ which is sample-accurate because swresample conserves sample count across the co
 bodies hardcoded assumptions need lifting:
 
 - **PCM** (`PcmAudioEncoder`): `bit_depth ∈ {16,24,32}`. Float32 → S16LE / S24LE (packed 3-byte) /
-  S32LE. Matroska CodecID stays `A_PCM/INT_LIT`; `KaxAudioBitDepth` follows the chosen depth.
+  S32LE. Matroska CodecID stays `A_PCM/INT_LIT`; `KaxAudioBitDepth` follows the chosen depth. An
+  orthogonal `audio_pcm_float` flag (valid only with `bit_depth == 32`) selects a **32-bit float**
+  passthrough instead: the mix bus already delivers Float32, so this mode is a raw byte copy — no
+  clamp, no round, no scale, simpler than the int paths. Matroska CodecID becomes
+  `A_PCM/FLOAT_IEEE`.
 - **FLAC** (`FlacAudioEncoder`): `bit_depth ∈ {16,24}` set as libFLAC `bits_per_sample`; Float32 →
   S16/S24 in `FLAC__int32` samples. **Compression level becomes configurable** `[0,8]` (default 5)
   — resolving the [[0028-flac-audio-codec]] deferral; lossless at every level, level only trades
@@ -117,8 +121,8 @@ and publishing a real player compatibility matrix. **FLAC-in-MP4 stays deferred*
 ### Config / model surface
 
 - `recorder_core::RecorderConfig` gains `audio_sample_rate`, `audio_channels`, `audio_bit_depth`,
-  `flac_compression_level`.
-- `capability::AudioUiState` + `AudioPlanResult` gain the same four fields; `BuildAudioPlan` passes
+  `flac_compression_level`, and `audio_pcm_float`.
+- `capability::AudioUiState` + `AudioPlanResult` gain the same five fields; `BuildAudioPlan` passes
   them through; the coordinator maps them into `RecorderConfig`.
 - Sanitization clamps each field to its codec-gated vetted set (e.g. selecting Opus snaps sample
   rate to 48 kHz; selecting a lossy codec hides/ignores bit depth; switching off MKV reconciles as
@@ -140,6 +144,11 @@ Controls follow the established Expert/info-hint pattern and are disabled during
 (`[audio]` section: `sample_rate`, `channels`, `bit_depth`, `flac_compression_level`). Pre-1.0
 policy: incompatible older preset files are reset, not migrated.
 
+A later bump adds `pcm_float` (bool) to the same `[audio]` section for the float-PCM flag above.
+Older presets without the key default to `false`; a stored `pcm_float=true` inconsistent with the
+codec/bit-depth gating (not `Pcm`, or `bit_depth != 32`) is silently narrowed back to `false` on
+load — the same field-wise repair pattern as the rest of this model.
+
 ## Consequences
 
 - ExoSnap records at 44.1/48/96 kHz, mono or stereo, and 16/24/32-bit lossless — the audio matrix
@@ -160,7 +169,5 @@ policy: incompatible older preset files are reset, not migrated.
   broadly-compatible sample-entry mapping is forced and validated against a real player matrix.
   MKV is PCM's home for now.
 - **>2 channels (5.1/7.1)** — no real multichannel source today; pure upmix is not worth shipping.
-- **Float PCM** (`A_PCM/FLOAT_IEEE`, 32-bit float) — integer S32 covers the archival case; float
-  PCM is a later niche.
 - **FLAC-in-MP4** — unchanged from [[0028-flac-audio-codec]]; MKV is FLAC's home.
 - **Arbitrary (non-vetted) sample rates** — deliberately not exposed.

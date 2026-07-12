@@ -712,6 +712,7 @@ TEST(AudioEncodingPreset, DefaultPreset_FormatModel_Defaults) {
     EXPECT_EQ(p.config.audio.audio_sample_rate, 48000u);
     EXPECT_EQ(p.config.audio.audio_channels, 2u);
     EXPECT_EQ(p.config.audio.audio_bit_depth, 16u);
+    EXPECT_FALSE(p.config.audio.audio_pcm_float);
     EXPECT_EQ(p.config.audio.flac_compression_level, 5);
 }
 
@@ -786,6 +787,36 @@ TEST(AudioEncodingPreset, Sanitize_FlacLevelClampsBelow0To0) {
     EXPECT_EQ(sanitized.audio.flac_compression_level, 0);
 }
 
+// --- Sanitize: audio_pcm_float (Float-PCM) ---
+
+TEST(AudioEncodingPreset, Sanitize_PcmFloatWithBitDepth32_Kept) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Pcm;
+    cfg.audio.audio_bit_depth = 32u;
+    cfg.audio.audio_pcm_float = true;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_TRUE(sanitized.audio.audio_pcm_float);
+    EXPECT_EQ(sanitized.audio.audio_bit_depth, 32u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_PcmFloatWithNonPcmCodec_NarrowedToFalse) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Flac; // not Pcm
+    cfg.audio.audio_bit_depth = 24u;
+    cfg.audio.audio_pcm_float = true; // inconsistent stored combination
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FALSE(sanitized.audio.audio_pcm_float);
+}
+
+TEST(AudioEncodingPreset, Sanitize_PcmFloatWithNon32BitDepth_NarrowedToFalse) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Pcm;
+    cfg.audio.audio_bit_depth = 16u; // inconsistent with pcm_float
+    cfg.audio.audio_pcm_float = true;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FALSE(sanitized.audio.audio_pcm_float);
+}
+
 // --- NormalizedConfigEquals / ConfigDirtyEquivalent dirty-tracking ---
 
 TEST(AudioEncodingPreset, NormalizedEquals_DifferentSampleRate_NotEqual) {
@@ -816,6 +847,15 @@ TEST(AudioEncodingPreset, NormalizedEquals_DifferentFlacLevel_NotEqual) {
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentPcmFloat_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.audio_codec = capability::AudioCodec::Pcm;
+    a.audio.audio_bit_depth = 32u;
+    RecordingPresetConfig b = a;
+    b.audio.audio_pcm_float = true;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
 TEST(AudioEncodingPreset, DirtyEquivalent_DifferentSampleRate_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
@@ -834,6 +874,15 @@ TEST(AudioEncodingPreset, DirtyEquivalent_DifferentBitDepth_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
     b.audio.audio_bit_depth = 24u;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentPcmFloat_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.audio_codec = capability::AudioCodec::Pcm;
+    a.audio.audio_bit_depth = 32u;
+    RecordingPresetConfig b = a;
+    b.audio.audio_pcm_float = true;
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -867,6 +916,25 @@ TEST(AudioEncodingPreset, StoreRoundTrip_FormatModelAllFourFields) {
     EXPECT_EQ(loaded.audio_channels, 1u);
     EXPECT_EQ(loaded.audio_bit_depth, 24u);
     EXPECT_EQ(loaded.flac_compression_level, 3);
+    QFile::remove(path);
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_PcmFloat) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.id = GeneratePresetId();
+    p.config.output.audio_codec = capability::AudioCodec::Pcm;
+    p.config.audio.audio_bit_depth = 32u;
+    p.config.audio.audio_pcm_float = true;
+    store.Save({p}, p.id, p.config);
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.user_presets.empty());
+    const auto& loaded = state.user_presets.front().config.audio;
+    EXPECT_EQ(loaded.audio_bit_depth, 32u);
+    EXPECT_TRUE(loaded.audio_pcm_float);
     QFile::remove(path);
 }
 
@@ -955,6 +1023,7 @@ TEST(AudioEncodingPreset, StoreRoundTrip_FormatModel_DefaultsOnMissingKeys) {
     EXPECT_EQ(loaded.audio_sample_rate, 48000u);
     EXPECT_EQ(loaded.audio_channels, 2u);
     EXPECT_EQ(loaded.audio_bit_depth, 16u);
+    EXPECT_FALSE(loaded.audio_pcm_float);
     EXPECT_EQ(loaded.flac_compression_level, 5);
     QFile::remove(path);
 }

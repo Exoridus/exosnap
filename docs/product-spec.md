@@ -211,10 +211,12 @@ default** and toggled individually — there is no master switch — and capture
 all stages are off.
 
 **Channel / sample-format model.** Output **sample rate** (44.1 / 48 / 96 kHz), **channel count**
-(mono or stereo), and **bit depth** for lossless codecs (PCM 16/24/32-bit; FLAC 16/24-bit) are
-configurable. Capture itself stays at 48 kHz; the engine resamples/rematrixes **once** after the mix
-bus. The default 48 kHz / stereo path is a byte-identical no-op. **Opus is locked to 48 kHz.** Bit
-depth does not apply to lossy codecs (Opus/AAC). Stereo→mono uses an averaging (no-clip) downmix.
+(mono or stereo), and **bit depth** for lossless codecs (PCM 16/24/32-bit int or 32-bit float; FLAC
+16/24-bit) are configurable. Capture itself stays at 48 kHz; the engine resamples/rematrixes **once**
+after the mix bus. The default 48 kHz / stereo path is a byte-identical no-op. **Opus is locked to
+48 kHz.** Bit depth does not apply to lossy codecs (Opus/AAC). Stereo→mono uses an averaging
+(no-clip) downmix. **32-bit float PCM** is a raw passthrough of the mix bus's native format (no
+conversion, no clipping headroom needed) and is PCM-only — FLAC has no float mode.
 
 **Opus recording defaults.** Audio application profile, 20 ms frames, complexity 10 when CPU budget
 allows, VBR/constrained VBR, per-track/channel bitrate. Restricted-lowdelay and 2.5/5 ms frames are
@@ -223,8 +225,8 @@ expert-only.
 **FLAC compression level** (0–8, default 5) is configurable; every level is lossless (level only
 trades encode CPU for file size).
 
-Deferred: more than two channels (5.1/7.1), float PCM, non-vetted sample rates. At a non-default
-sample rate, a small (~10 ms) audio tail may be dropped at stop.
+Deferred: more than two channels (5.1/7.1), non-vetted sample rates. At a non-default sample rate, a
+small (~10 ms) audio tail may be dropped at stop.
 
 ---
 

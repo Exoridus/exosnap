@@ -188,6 +188,9 @@ void MuxThread::Run() {
     // bit_depth is written for PCM and FLAC only; for lossy codecs the field is
     // ignored by MatroskaStreamWriter::Open() so any value is safe.
     sw_config_template.audio_bit_depth = m_state.config.audio_bit_depth;
+    // Float-PCM: selects A_PCM/FLOAT_IEEE over A_PCM/INT_LIT; ignored unless
+    // audio_codec == Pcm (see MatroskaStreamConfig::audio_float).
+    sw_config_template.audio_float = m_state.config.audio_pcm_float;
 
     // --- Segment state ---
     struct SegmentState {

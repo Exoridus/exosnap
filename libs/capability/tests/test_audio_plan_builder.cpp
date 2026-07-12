@@ -166,6 +166,7 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultFormatModel) {
     EXPECT_EQ(result.audio_sample_rate, 48000u);
     EXPECT_EQ(result.audio_channels, 2u);
     EXPECT_EQ(result.audio_bit_depth, 16u);
+    EXPECT_FALSE(result.audio_pcm_float);
     EXPECT_EQ(result.flac_compression_level, 5);
 }
 
@@ -181,6 +182,16 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesFormatModelFields) {
     EXPECT_EQ(result.audio_channels, 1u);
     EXPECT_EQ(result.audio_bit_depth, 24u);
     EXPECT_EQ(result.flac_compression_level, 3);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesPcmFloat) {
+    AudioUiState state;
+    state.audio_bit_depth = 32u;
+    state.audio_pcm_float = true;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_EQ(result.audio_bit_depth, 32u);
+    EXPECT_TRUE(result.audio_pcm_float);
 }
 
 TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesHighSampleRate) {

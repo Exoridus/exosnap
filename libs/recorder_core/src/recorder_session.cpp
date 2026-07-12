@@ -281,6 +281,18 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
     // Lossy codecs (Opus, AAC): bit_depth is not applicable; no validation needed.
 
+    // audio_pcm_float: 32-bit float PCM (A_PCM/FLOAT_IEEE) is Pcm-codec-only
+    // and requires audio_bit_depth == 32 -- the only depth the mix bus can
+    // supply without a lossy int conversion.
+    if (config.audio_pcm_float) {
+        if (config.audio_codec != AudioCodec::Pcm) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_pcm_float requires AudioCodec::Pcm");
+        }
+        if (config.audio_bit_depth != 32) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_pcm_float requires audio_bit_depth == 32");
+        }
+    }
+
     // Chroma: Cs420 is universal. Cs444 (AYUV, NVENC High 4:4:4 / HEVC FREXT) is an
     // 8-bit H.264/HEVC expert path — AV1 NVENC is 4:2:0 only, and 4:4:4 + 10-bit is
     // out of scope.

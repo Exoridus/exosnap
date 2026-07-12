@@ -13,6 +13,15 @@
 //
 // Float→int conversion clamps to [-1, 1] and rounds to nearest. The bit depth
 // must be set via SetBitDepth() before Init(); the default is 16.
+//
+// 32-bit float mode (SetFloatFormat(true)): the mix bus already delivers
+// interleaved Float32 samples, so this mode does no conversion at all — it is
+// a raw byte copy of the already-in-memory samples. This is the simplest of
+// the PCM paths (no clamp, no round, no scale). The Matroska CodecID becomes
+// A_PCM/FLOAT_IEEE instead of A_PCM/INT_LIT (selected by the mux layer from
+// this encoder's format, not by this class). Float mode forces the effective
+// bit depth to 32, since 32-bit IEEE754 is the only float format the mix bus
+// produces.
 
 #include <recorder_core/interfaces/IAudioEncoder.h>
 #include <recorder_core/packet_types.h>
@@ -36,6 +45,18 @@ class PcmAudioEncoder : public IAudioEncoder {
     // Return the effective bit depth (as configured, or 16 if never set).
     [[nodiscard]] uint32_t BitDepth() const noexcept {
         return m_bit_depth;
+    }
+
+    // Enable/disable 32-bit float passthrough mode. When enabled, forces the
+    // effective bit depth to 32 (32-bit IEEE754 float is the only format the
+    // mix bus can supply without a lossy int conversion) — analogous to
+    // SetBitDepth()'s existing silent-normalize pattern. Must be called before
+    // Init(); default is false (existing int-PCM behavior, unchanged).
+    void SetFloatFormat(bool is_float) noexcept;
+
+    // True when float passthrough mode is active.
+    [[nodiscard]] bool IsFloat() const noexcept {
+        return m_float;
     }
 
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error) override;
@@ -69,6 +90,7 @@ class PcmAudioEncoder : public IAudioEncoder {
     uint32_t m_sample_rate = 0;
     uint32_t m_channels = 0;
     uint32_t m_bit_depth = kBitDepth;
+    bool m_float = false;
 };
 
 } // namespace recorder_core

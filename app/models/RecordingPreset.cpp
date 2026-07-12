@@ -382,6 +382,16 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
             config.audio.audio_bit_depth = 16u;
         }
 
+        // audio_pcm_float: Pcm-only and requires audio_bit_depth == 32. An
+        // inconsistent stored combination (hand-edited preset, or an older
+        // schema regression) is silently narrowed back to false rather than
+        // rejected -- same "narrow to a safe default" pattern as the bit-depth
+        // clamp above.
+        if (config.audio.audio_pcm_float &&
+            (codec != capability::AudioCodec::Pcm || config.audio.audio_bit_depth != 32u)) {
+            config.audio.audio_pcm_float = false;
+        }
+
         if (config.audio.flac_compression_level < 0) {
             config.audio.flac_compression_level = 0;
         } else if (config.audio.flac_compression_level > 8) {
@@ -652,6 +662,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.audio.audio_bit_depth != b.audio.audio_bit_depth) {
         return false;
     }
+    if (a.audio.audio_pcm_float != b.audio.audio_pcm_float) {
+        return false;
+    }
     if (a.audio.flac_compression_level != b.audio.flac_compression_level) {
         return false;
     }
@@ -918,6 +931,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.audio.audio_bit_depth != b.audio.audio_bit_depth) {
+        return false;
+    }
+    if (a.audio.audio_pcm_float != b.audio.audio_pcm_float) {
         return false;
     }
     if (a.audio.flac_compression_level != b.audio.flac_compression_level) {

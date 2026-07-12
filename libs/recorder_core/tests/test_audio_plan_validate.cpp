@@ -135,4 +135,77 @@ TEST(AudioPlanValidateTest, Validate_AcceptsEmptyPlanWithPid) {
     EXPECT_TRUE(validation.succeeded);
 }
 
+// ---------------------------------------------------------------------------
+// audio_pcm_float: Pcm-codec-only, requires audio_bit_depth == 32.
+// ---------------------------------------------------------------------------
+
+TEST(AudioPlanValidateTest, Validate_AcceptsPcmFloatWithBitDepth32) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.container = recorder_core::Container::Matroska; // Pcm is MKV-only
+    cfg.audio_codec = recorder_core::AudioCodec::Pcm;
+    cfg.audio_bit_depth = 32;
+    cfg.audio_pcm_float = true;
+
+    RecorderResult validation{};
+    EXPECT_TRUE(session.Validate(cfg, &validation));
+    EXPECT_TRUE(validation.succeeded);
+}
+
+TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithNonPcmCodec_AacMf) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.container = recorder_core::Container::Matroska; // valid for AacMf, isolates the pcm_float check
+    cfg.audio_codec = recorder_core::AudioCodec::AacMf;
+    cfg.audio_bit_depth = 32;
+    cfg.audio_pcm_float = true;
+
+    RecorderResult validation{};
+    EXPECT_FALSE(session.Validate(cfg, &validation));
+    EXPECT_EQ(validation.error_code, E_INVALIDARG);
+    EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithNonPcmCodec_Opus) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.audio_codec = recorder_core::AudioCodec::Opus; // Opus is valid on the default WebM container
+    cfg.audio_sample_rate = 48000;                     // Opus requires 48000
+    cfg.audio_bit_depth = 32;
+    cfg.audio_pcm_float = true;
+
+    RecorderResult validation{};
+    EXPECT_FALSE(session.Validate(cfg, &validation));
+    EXPECT_EQ(validation.error_code, E_INVALIDARG);
+    EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithNonPcmCodec_Flac) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.container = recorder_core::Container::Matroska; // valid for Flac, isolates the pcm_float check
+    cfg.audio_codec = recorder_core::AudioCodec::Flac;
+    cfg.audio_bit_depth = 24;
+    cfg.audio_pcm_float = true;
+
+    RecorderResult validation{};
+    EXPECT_FALSE(session.Validate(cfg, &validation));
+    EXPECT_EQ(validation.error_code, E_INVALIDARG);
+    EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithBitDepth16) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.container = recorder_core::Container::Matroska; // Pcm is MKV-only
+    cfg.audio_codec = recorder_core::AudioCodec::Pcm;
+    cfg.audio_bit_depth = 16;
+    cfg.audio_pcm_float = true;
+
+    RecorderResult validation{};
+    EXPECT_FALSE(session.Validate(cfg, &validation));
+    EXPECT_EQ(validation.error_code, E_INVALIDARG);
+    EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace
