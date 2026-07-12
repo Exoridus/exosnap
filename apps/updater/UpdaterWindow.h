@@ -15,6 +15,7 @@
 
 #include "UpdaterController.h" // UpdaterUiState / TerminalVariant / StepStatus
 
+class QCloseEvent;
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
@@ -44,6 +45,7 @@ class UpdaterWindow : public QWidget {
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
   private:
     void buildFooter(const UpdaterUiState& state);
@@ -51,6 +53,12 @@ class UpdaterWindow : public QWidget {
 
     // Header
     QPushButton* close_button_ = nullptr;
+    // Mirrors the same "Install/Verify/Launch working" gate as the in-window
+    // close X (see render()), but also refuses WM_CLOSE arriving through any
+    // other path -- Alt+F4, the taskbar close, Windows logoff -- since the
+    // custom close button being disabled does not stop the OS from sending
+    // WM_CLOSE via those routes.
+    bool close_blocked_ = false;
 
     // Version transition
     QLabel* from_pill_ = nullptr;

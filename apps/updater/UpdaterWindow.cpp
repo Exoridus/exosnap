@@ -1,5 +1,6 @@
 #include "UpdaterWindow.h"
 
+#include <QCloseEvent>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -366,6 +367,7 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     close_button_->setEnabled(!block);
     close_button_->setToolTip(block ? QStringLiteral("Please wait - updating")
                                     : QStringLiteral("Close"));
+    close_blocked_ = block;
 
     adjustSize();
 }
@@ -476,6 +478,21 @@ void UpdaterWindow::emitForAction(const QString& action) {
         emit openNewRequested();
     else
         emit closeRequested();
+}
+
+void UpdaterWindow::closeEvent(QCloseEvent* event) {
+    // The in-window close X is disabled during Install/Verify/Launch (see
+    // render()), but that alone does not stop WM_CLOSE from reaching this
+    // window through Alt+F4, a taskbar/system-menu close, or a Windows
+    // logoff/shutdown -- Qt::FramelessWindowHint keeps the native frame's
+    // WM_CLOSE handling active even without a titlebar. Ignoring it here is
+    // what actually keeps a swap from being torn apart mid-rename; the button
+    // being disabled is only the visible half of the guard.
+    if (close_blocked_) {
+        event->ignore();
+        return;
+    }
+    event->accept();
 }
 
 void UpdaterWindow::paintEvent(QPaintEvent*) {

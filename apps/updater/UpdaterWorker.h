@@ -16,6 +16,7 @@
 #include <QObject>
 #include <QString>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -64,6 +65,21 @@
 // Close a handle returned by OpenPackageWriteLock (nullptr / INVALID are no-ops).
 // Used as the deleter for the worker's owned lock handle.
 void ClosePackageLock(void* handle) noexcept;
+
+// Blocks until `process_handle` (a Win32 HANDLE, passed as void* so this header
+// stays windows.h-free) is signaled, `cancel` flips true, or `timeout` elapses
+// -- polled at a fixed short interval rather than a single infinite wait.
+// Returns true only when the handle was actually observed signaled (the caller
+// may then read GetExitCodeProcess); false means the wait gave up early
+// (cancelled or timed out) and the caller must treat that as a failure rather
+// than block forever. This is what keeps a wedged msiexec (a hung custom
+// action, a suppressed-but-still-open reboot prompt under /qn) from pinning
+// the worker thread in an unkillable WaitForSingleObject(..., INFINITE) --
+// without it, main.cpp's shutdown path has no choice but to TerminateThread()
+// the worker after its 30 s budget, which can abandon the elevated handoff
+// mid-flight.
+[[nodiscard]] bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds timeout,
+                                          const std::atomic<bool>& cancel);
 
 // ---------------------------------------------------------------------------
 // Worker
@@ -126,7 +142,13 @@ class UpdaterWorker : public QObject {
     std::wstring package_path_;        // downloaded .zip / .msi
     std::string package_sha256_;       // expected SHA-256 of package_path_ (for the install re-lock guard)
     std::wstring launch_dir_;          // where the Launch step finds exosnap.exe
-    bool have_package_ = false;        // Download completed at least once
+    // %TEMP%\ExoSnapUpdate\<ver>\ -- holds the manifest, its signature, and the
+    // package for the whole run. Removed on the success path once Launch has
+    // confirmed the new instance is up (runLaunch); error paths already clean
+    // up their own artifacts inline and leave this alone so a Retry can reuse
+    // what was already downloaded/staged.
+    std::wstring download_dir_;
+    bool have_package_ = false; // Download completed at least once
 
     // Deny-write / deny-delete lock on package_path_, held from verification
     // until the package is consumed (closes the verify->consume TOCTOU window).

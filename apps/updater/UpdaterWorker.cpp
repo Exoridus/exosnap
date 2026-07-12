@@ -42,6 +42,7 @@ using exosnap::update::MakeSwapPlan;
 using exosnap::update::ParseManifest;
 using exosnap::update::ParseSemVer;
 using exosnap::update::ReadInstallPath;
+using exosnap::update::RepairOrphanedSwap;
 using exosnap::update::RestoreBackup;
 using exosnap::update::SelectPackage;
 using exosnap::update::SemVer;
@@ -64,6 +65,11 @@ constexpr const char* kDefaultReleasesUrl = "https://api.github.com/repos/Exorid
 
 constexpr std::chrono::seconds kCloseAppTimeout{60};
 constexpr std::chrono::seconds kInstanceMutexTimeout{15};
+constexpr std::chrono::milliseconds kMsiPollInterval{200};
+// Generous but finite: a silent MSI install normally finishes in well under a
+// minute. This is a ceiling against a wedged msiexec, not a realistic budget
+// -- see WaitForProcessOrCancel.
+constexpr std::chrono::minutes kMsiWaitTimeout{15};
 
 // Best-effort recursive delete; true when the path is gone afterwards.
 [[nodiscard]] bool RemoveTree(const std::wstring& dir) {
@@ -165,6 +171,21 @@ void ClosePackageLock(void* handle) noexcept {
     }
 }
 
+bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds timeout,
+                            const std::atomic<bool>& cancel) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    HANDLE proc = static_cast<HANDLE>(process_handle);
+    for (;;) {
+        const DWORD r = ::WaitForSingleObject(proc, static_cast<DWORD>(kMsiPollInterval.count()));
+        if (r == WAIT_OBJECT_0) {
+            return true;
+        }
+        if (cancel.load() || std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+    }
+}
+
 bool LaunchExoSnapFrom(const std::wstring& install_dir) {
     const std::wstring exe = (fs::path(install_dir) / kExeName).wstring();
     std::wstring cmdline = L"\"" + exe + L"\""; // CreateProcessW may modify the buffer
@@ -256,6 +277,7 @@ bool UpdaterWorker::runDownload() {
         emit failed(FailureCase::DownloadFailed, QStringLiteral("Can't create the download directory.")); // A1
         return false;
     }
+    download_dir_ = download_dir.wstring();
 
     // Manifest download. The detached signature (.sig sibling) is mandatory --
     // without it the manifest bytes cannot be verified.
@@ -470,6 +492,14 @@ bool UpdaterWorker::runCloseApp() {
 bool UpdaterWorker::runInstallPortable() {
     emit stepStarted(UpStep::Install);
 
+    // Heal a previous interrupted swap before touching anything else. A
+    // process kill landing between StageRename's two renames (or between its
+    // second rename failing and its own compensating restore) can leave
+    // install_dir gone while backup_dir still holds the last-known-good tree
+    // -- exactly the state a Retry after SwapError::RestoreFailed re-enters
+    // here in. No-op when install_dir already carries exosnap.exe.
+    (void)RepairOrphanedSwap(plan_);
+
     // Retry resilience (B2/B3 re-enter here): if the staging tree is gone or
     // incomplete, re-stage from the kept package; if even the package is gone,
     // fall back to the download-failed path so Retry restarts from Download.
@@ -563,7 +593,16 @@ bool UpdaterWorker::runInstallMsi() {
         return false;
     }
 
-    ::WaitForSingleObject(sei.hProcess, INFINITE);
+    // Bounded, cancel-aware wait -- not WaitForSingleObject(..., INFINITE). A
+    // wedged msiexec (a hung custom action, a suppressed-but-still-open reboot
+    // prompt under /qn) must not pin this thread forever: main.cpp's shutdown
+    // only gives the worker thread 30 s before TerminateThread()-ing it, and an
+    // uncooperative INFINITE wait guarantees that fallback fires.
+    if (!WaitForProcessOrCancel(sei.hProcess, kMsiWaitTimeout, cancel_)) {
+        ::CloseHandle(sei.hProcess);
+        emit failed(FailureCase::MsiFailed, QStringLiteral("The installer did not finish in time.")); // C2
+        return false;
+    }
     DWORD exit_code = 0;
     ::GetExitCodeProcess(sei.hProcess, &exit_code);
     ::CloseHandle(sei.hProcess);
@@ -636,6 +675,18 @@ bool UpdaterWorker::runLaunch() {
     if (args_.install_mode == InstallMode::Portable) {
         (void)exosnap::update::CleanupBackup(plan_);
     }
+
+    // The new instance is confirmed up -- the downloaded manifest/signature/
+    // package have done their job and nothing needs them again. Release the
+    // package write-lock first: it pins package_path_ (inside download_dir_)
+    // against delete, so RemoveTree would silently leave that one file behind
+    // otherwise. Best-effort: a failure here is not update-critical and must
+    // not turn a completed update into a reported failure.
+    locked_package_.reset();
+    if (!download_dir_.empty()) {
+        (void)RemoveTree(download_dir_);
+    }
+
     emit stepDone(UpStep::Launch);
     emit allDone();
     return true;

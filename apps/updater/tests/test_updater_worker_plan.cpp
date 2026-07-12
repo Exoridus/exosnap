@@ -13,6 +13,8 @@
 #include <windows.h>
 // clang-format on
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -148,6 +150,59 @@ TEST(BuildMsiexecParams, QuotesPathAndAppendsSilentFlags) {
 TEST(BuildMsiexecParams, PathWithSpacesStaysOneArgument) {
     EXPECT_EQ(BuildMsiexecParams(L"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi"),
               L"/i \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi\" /qn /norestart");
+}
+
+// ---------------------------------------------------------------------------
+// WaitForProcessOrCancel -- bounded, cancel-aware replacement for the MSI
+// handoff's old WaitForSingleObject(..., INFINITE). Exercised against a
+// manual-reset event rather than a real msiexec process: WaitForSingleObject
+// accepts any waitable kernel object, and an event gives full, instant control
+// over "signaled" without spawning anything.
+// ---------------------------------------------------------------------------
+
+class WaitForProcessOrCancelTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        event_ = ::CreateEventW(nullptr, /*bManualReset=*/TRUE, /*bInitialState=*/FALSE, nullptr);
+        ASSERT_NE(event_, nullptr);
+    }
+    void TearDown() override {
+        if (event_ != nullptr) {
+            ::CloseHandle(event_);
+        }
+    }
+    HANDLE event_ = nullptr;
+};
+
+TEST_F(WaitForProcessOrCancelTest, ReturnsTrueWhenAlreadySignaled) {
+    ::SetEvent(event_);
+    std::atomic<bool> cancel{false};
+    EXPECT_TRUE(WaitForProcessOrCancel(event_, std::chrono::seconds(5), cancel));
+}
+
+TEST_F(WaitForProcessOrCancelTest, ReturnsFalsePromptlyWhenCancelIsAlreadySet) {
+    // Never signaled; cancel is set before the call. The wait must give up on
+    // (at most) the first poll tick, not the full timeout.
+    std::atomic<bool> cancel{true};
+    const auto t0 = std::chrono::steady_clock::now();
+    EXPECT_FALSE(WaitForProcessOrCancel(event_, std::chrono::seconds(30), cancel));
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::milliseconds(1000));
+}
+
+TEST_F(WaitForProcessOrCancelTest, ReturnsFalseWhenTimeoutElapsesUnsignaled) {
+    std::atomic<bool> cancel{false};
+    const auto t0 = std::chrono::steady_clock::now();
+    EXPECT_FALSE(WaitForProcessOrCancel(event_, std::chrono::milliseconds(300), cancel));
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+    EXPECT_GE(elapsed, std::chrono::milliseconds(300));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(2000));
+}
+
+TEST_F(WaitForProcessOrCancelTest, DoesNotFalsePositiveBeforeSignaledOrCancelled) {
+    // A short timeout with neither signal nor cancel must still report false
+    // rather than true -- guards against an inverted return value.
+    std::atomic<bool> cancel{false};
+    EXPECT_FALSE(WaitForProcessOrCancel(event_, std::chrono::milliseconds(150), cancel));
 }
 
 // ---------------------------------------------------------------------------

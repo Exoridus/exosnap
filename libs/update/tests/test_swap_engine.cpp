@@ -93,6 +93,42 @@ TEST_F(SwapFixture, CleanupRemovesBackup) {
     EXPECT_FALSE(fs::exists(plan.backup_dir));
 }
 
+// ---------------------------------------------------------------------------
+// RepairOrphanedSwap -- heals a StageRename interrupted between its two
+// renames (install_dir gone, backup_dir still holding the last-known-good
+// tree).
+// ---------------------------------------------------------------------------
+
+TEST_F(SwapFixture, RepairOrphanedSwapIsNoOpWhenInstallIsIntact) {
+    EXPECT_TRUE(RepairOrphanedSwap(plan));
+    std::ifstream live(install / "exosnap.exe");
+    std::string s((std::istreambuf_iterator<char>(live)), {});
+    EXPECT_EQ(s, "old"); // untouched -- the fixture's original install
+}
+
+TEST_F(SwapFixture, RepairOrphanedSwapIsNoOpWhenNoBackupExists) {
+    fs::remove_all(install); // install missing, but nothing to restore from either
+    EXPECT_TRUE(RepairOrphanedSwap(plan));
+    EXPECT_FALSE(fs::exists(install));
+}
+
+TEST_F(SwapFixture, RepairOrphanedSwapRestoresFromBackupWhenInstallIsMissing) {
+    // Simulate the narrow force-kill window: install->backup succeeded but
+    // staging->install (and its own compensating restore, on failure) never
+    // ran, leaving install_dir gone and backup_dir holding the old version --
+    // the exact state SwapError::RestoreFailed reports.
+    fs::rename(install, fs::path(plan.backup_dir));
+    ASSERT_FALSE(fs::exists(install));
+    ASSERT_TRUE(fs::exists(plan.backup_dir));
+
+    EXPECT_TRUE(RepairOrphanedSwap(plan));
+
+    std::ifstream live(install / "exosnap.exe");
+    std::string s((std::istreambuf_iterator<char>(live)), {});
+    EXPECT_EQ(s, "old");
+    EXPECT_FALSE(fs::exists(plan.backup_dir));
+}
+
 TEST(SwapEngine, ReadFileVersionOnSystemDllAndGarbage) {
     EXPECT_TRUE(ReadFileVersion(L"C:\\Windows\\System32\\kernel32.dll").has_value());
     auto txt = fs::temp_directory_path() / "exosnap_notanexe.txt";
