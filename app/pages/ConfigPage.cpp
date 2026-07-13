@@ -63,7 +63,6 @@
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/HotkeysSettingsPanel.h"
 #include "../ui/widgets/InfoHintIcon.h"
-#include "../ui/widgets/SettingsPopoverRow.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
@@ -1450,7 +1449,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Wave 2: the SettingsCardExpander was dissolved. Split controls now live in a plain
     // QWidget that is shown/hidden by updateExpertModeVisibility() together with the
     // developer card (same expert-mode gate, no per-card expander).
-    // S5: Split controls collapsed into a SettingsPopoverRow inside the expert section.
     // Split recording (expert-gated) — built lazily on first expert-enable.
     // Record the slot so the lazy build inserts it before the output-split field.
     split_expert_insert_index_ = out_panel_layout->count();
@@ -3433,7 +3431,7 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
         if (limiter_ceiling_spin_) {
             const QSignalBlocker b(limiter_ceiling_spin_);
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
-            limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
+            limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
         }
         if (mic_hpf_check_) {
             const QSignalBlocker b(mic_hpf_check_);
@@ -4077,69 +4075,78 @@ void ConfigPage::buildAudioExpertSection() {
             aes_layout->addWidget(flac_compression_row_);
         }
 
-        // Brickwall limiter (Audio v2 — 0.6.0) — S5: collapsed into a SettingsPopoverRow.
+        // Brickwall limiter (Audio v2 — 0.6.0) — Slice 3 (cogwheels -> inline): the
+        // cogwheel popover is gone. Plain inline toggle; the ceiling spin appears
+        // inline, right-aligned in the same row, only while the limiter is on.
         {
             auto* rule = new QFrame(audio_expert_section_);
             rule->setFrameShape(QFrame::HLine);
             rule->setProperty("frameRole", "sectionRuleLine");
             aes_layout->addWidget(rule);
 
-            // Create the sub-controls first (connections are wired below in the
-            // connect() block — objectNames and pointers must survive).
-            limiter_check_ = new ui::widgets::ExoCheckBox(QString(), audio_expert_section_);
-            limiter_check_->setObjectName(QStringLiteral("limiterCheck"));
-            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+            auto* row = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* lbl = new QLabel(QStringLiteral("Brickwall limiter"), row);
+            lbl->setProperty("labelRole", "settingsRowLabel");
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kBrickwallLimiter, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
 
-            limiter_ceiling_spin_ = new QDoubleSpinBox(audio_expert_section_);
+            limiter_ceiling_spin_ = new QDoubleSpinBox(row);
             limiter_ceiling_spin_->setObjectName(QStringLiteral("limiterCeilingSpin"));
             limiter_ceiling_spin_->setRange(-60.0, 0.0);
             limiter_ceiling_spin_->setSingleStep(0.5);
             limiter_ceiling_spin_->setDecimals(1);
             limiter_ceiling_spin_->setSuffix(QStringLiteral(" dB"));
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
-            limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
+            limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
             limiter_ceiling_spin_->setFixedWidth(160);
             limiter_ceiling_spin_->setProperty("settingsRowInput", true);
+            hl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
 
-            auto* limiter_popover_row =
-                new ui::widgets::SettingsPopoverRow(QStringLiteral("Brickwall limiter"), audio_expert_section_);
-            limiter_popover_row->setInfoHint(ui::hints::kBrickwallLimiter);
-            // The existing checkbox becomes the primary control (enable/disable toggle).
-            limiter_popover_row->setPrimaryControl(limiter_check_);
-            limiter_popover_row->setProperty("settingsRow", true);
-            aes_layout->addWidget(limiter_popover_row);
+            limiter_check_ = new ui::widgets::ExoCheckBox(QString(), row);
+            limiter_check_->setObjectName(QStringLiteral("limiterCheck"));
+            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+            hl->addWidget(limiter_check_, 0, Qt::AlignVCenter);
 
-            // Ceiling spinbox goes into the popover as a labelled row.
-            auto* ceiling_row = new QWidget();
-            auto* ceiling_hl = new QHBoxLayout(ceiling_row);
-            ceiling_hl->setContentsMargins(0, 8, 0, 8);
-            ceiling_hl->setSpacing(14);
-            auto* ceiling_lbl = new QLabel(QStringLiteral("Limiter ceiling"), ceiling_row);
-            ceiling_lbl->setProperty("labelRole", "settingsRowLabel");
-            ceiling_hl->addWidget(ceiling_lbl, 1);
-            ceiling_hl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
-            ceiling_row->setProperty("settingsRow", true);
-            limiter_popover_row->popoverContentLayout()->addWidget(ceiling_row);
+            row->setProperty("settingsRow", true);
+            aes_layout->addWidget(row);
         }
 
         // A/V clock slaving (H-3) — expert toggle, default on. A single
         // enable/disable control (no sub-parameters: the controller constants are
-        // fixed, there is no meaningful user choice between thresholds).
+        // fixed, there is no meaningful user choice between thresholds). Slice 3
+        // (cogwheels -> inline): plain inline row, no popover.
         {
-            clock_slaving_check_ = new ui::widgets::ExoCheckBox(QString(), audio_expert_section_);
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            auto* row = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* lbl = new QLabel(QStringLiteral("Audio clock slaving"), row);
+            lbl->setProperty("labelRole", "settingsRowLabel");
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kClockSlaving, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
+
+            clock_slaving_check_ = new ui::widgets::ExoCheckBox(QString(), row);
             clock_slaving_check_->setObjectName(QStringLiteral("clockSlavingCheck"));
             clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
+            hl->addWidget(clock_slaving_check_, 0, Qt::AlignVCenter);
 
-            auto* clock_slaving_row =
-                new ui::widgets::SettingsPopoverRow(QStringLiteral("Audio clock slaving"), audio_expert_section_);
-            clock_slaving_row->setInfoHint(ui::hints::kClockSlaving);
-            clock_slaving_row->setPrimaryControl(clock_slaving_check_);
-            clock_slaving_row->setProperty("settingsRow", true);
-            aes_layout->addWidget(clock_slaving_row);
+            row->setProperty("settingsRow", true);
+            aes_layout->addWidget(row);
         }
 
-        // Microphone post-processing (Audio v2 — 0.6.0) — S5: 4 stage rows collapsed
-        // into a single SettingsPopoverRow. HPF → Gate → AGC → RNNoise order preserved.
+        // Microphone post-processing (Audio v2 — 0.6.0) — Slice 3 (cogwheels -> inline):
+        // the 4 stage rows sit behind an inline disclosure (chevron) instead of a
+        // cogwheel popover. HPF -> Gate -> AGC -> RNNoise order preserved.
         // Constructed here but inserted at mic_post_insert_index so it appears visually
         // immediately after the Mic channel mode row (mic source/tuning/processing grouped).
         {
@@ -4200,28 +4207,71 @@ void ConfigPage::buildAudioExpertSection() {
             mic_rnnoise_check_->setObjectName(QStringLiteral("micRnnoiseCheck"));
             mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
 
-            // --- Build the popover row. ---
-            mic_post_processing_row_ = new ui::widgets::SettingsPopoverRow(QStringLiteral("Microphone post-processing"),
-                                                                           audio_expert_section_);
-            mic_post_processing_row_->setObjectName(QStringLiteral("micPostProcessingRow"));
-            mic_post_processing_row_->setInfoHint(
-                QStringLiteral("DSP stages applied to the microphone signal before encoding"));
-            mic_post_processing_row_->setProperty("settingsRow", true);
-            aes_layout->insertWidget(mic_post_insert_index + 1, mic_post_processing_row_);
+            // --- Disclosure header row: label + info-i + live status + chevron. ---
+            mic_post_header_ = new QWidget(audio_expert_section_);
+            mic_post_header_->setObjectName(QStringLiteral("micPostProcessingHeader"));
+            auto* header_hl = new QHBoxLayout(mic_post_header_);
+            header_hl->setContentsMargins(0, 12, 0, 12);
+            header_hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+            auto* header_lbl = new QLabel(QStringLiteral("Microphone post-processing"), mic_post_header_);
+            header_lbl->setProperty("labelRole", "settingsRowLabel");
+            header_hl->addWidget(header_lbl, 0);
+            header_hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicPostProcessing, mic_post_header_), 0,
+                                 Qt::AlignVCenter);
+            header_hl->addStretch(1);
 
-            // Populate the popover: HPF toggle + cutoff, Gate toggle + threshold,
-            // AGC toggle + target, RNNoise toggle (bool-only). Each sub-stage is a
-            // mini row inside the popover content panel.
-            auto* pcl = mic_post_processing_row_->popoverContentLayout();
+            mic_post_status_label_ = new QLabel(mic_post_header_);
+            mic_post_status_label_->setObjectName(QStringLiteral("micPostProcessingStatus"));
+            mic_post_status_label_->setProperty("labelRole", "muted");
+            header_hl->addWidget(mic_post_status_label_, 0, Qt::AlignVCenter);
 
-            auto makeSubRow = [](QWidget* toggle, QDoubleSpinBox* param_spin, const QString& param_label) -> QWidget* {
-                auto* container = new QWidget();
+            mic_post_disclosure_btn_ = new QToolButton(mic_post_header_);
+            mic_post_disclosure_btn_->setObjectName(QStringLiteral("micPostProcessingDisclosure"));
+            mic_post_disclosure_btn_->setAutoRaise(true);
+            mic_post_disclosure_btn_->setCheckable(true);
+            mic_post_disclosure_btn_->setChecked(false);
+            mic_post_disclosure_btn_->setCursor(Qt::PointingHandCursor);
+            mic_post_disclosure_btn_->setFixedSize(28, 28);
+            mic_post_disclosure_btn_->setIconSize(QSize(16, 16));
+            mic_post_disclosure_btn_->setToolTip(QStringLiteral("Expand microphone post-processing stages"));
+            mic_post_disclosure_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("chevron-down"),
+                                                                    QString::fromUtf8(ui::theme::ActiveTheme().mut), 16,
+                                                                    mic_post_disclosure_btn_->devicePixelRatioF()));
+            header_hl->addWidget(mic_post_disclosure_btn_, 0, Qt::AlignVCenter);
+
+            mic_post_header_->setProperty("settingsRow", true);
+            aes_layout->insertWidget(mic_post_insert_index + 1, mic_post_header_);
+
+            // --- Disclosure content: the four stage rows, hidden until expanded. ---
+            mic_post_content_ = new QWidget(audio_expert_section_);
+            mic_post_content_->setObjectName(QStringLiteral("micPostProcessingContent"));
+            auto* content_layout = new QVBoxLayout(mic_post_content_);
+            content_layout->setContentsMargins(20, 0, 0, 12); // indent under the header label
+            content_layout->setSpacing(10);
+            mic_post_content_->setVisible(false);
+            aes_layout->insertWidget(mic_post_insert_index + 2, mic_post_content_);
+
+            // Each sub-stage is a mini row: toggle (+ info-i) and, where relevant, an
+            // indented parameter row.
+            auto makeStageRow = [](ui::widgets::ExoCheckBox* toggle, const QString& hint, QDoubleSpinBox* param_spin,
+                                   const QString& param_label, QWidget* stage_parent) -> QWidget* {
+                auto* container = new QWidget(stage_parent);
                 auto* vl = new QVBoxLayout(container);
                 vl->setContentsMargins(0, 0, 0, 0);
                 vl->setSpacing(4);
-                vl->addWidget(toggle);
+
+                auto* toggle_row = new QWidget(container);
+                auto* thl = new QHBoxLayout(toggle_row);
+                thl->setContentsMargins(0, 0, 0, 0);
+                thl->setSpacing(4);
+                thl->addWidget(toggle, 0);
+                if (!hint.isEmpty())
+                    thl->addWidget(new ui::widgets::InfoHintIcon(hint, toggle_row), 0, Qt::AlignVCenter);
+                thl->addStretch(1);
+                vl->addWidget(toggle_row);
+
                 if (param_spin) {
-                    auto* param_row = new QWidget();
+                    auto* param_row = new QWidget(container);
                     auto* hl = new QHBoxLayout(param_row);
                     hl->setContentsMargins(20, 0, 0, 0); // indent under toggle
                     hl->setSpacing(14);
@@ -4234,14 +4284,31 @@ void ConfigPage::buildAudioExpertSection() {
                 return container;
             };
 
-            pcl->addWidget(makeSubRow(mic_hpf_check_, mic_hpf_cutoff_spin_, QStringLiteral("HPF cutoff")));
-            pcl->addWidget(makeSubRow(mic_gate_check_, mic_gate_threshold_spin_, QStringLiteral("Gate threshold")));
-            pcl->addWidget(makeSubRow(mic_agc_check_, mic_agc_target_spin_, QStringLiteral("AGC target level")));
-            pcl->addWidget(makeSubRow(mic_rnnoise_check_, nullptr, QString()));
+            content_layout->addWidget(makeStageRow(mic_hpf_check_, ui::hints::kHighPassFilter, mic_hpf_cutoff_spin_,
+                                                   QStringLiteral("HPF cutoff"), mic_post_content_));
+            content_layout->addWidget(makeStageRow(mic_gate_check_, ui::hints::kNoiseGate, mic_gate_threshold_spin_,
+                                                   QStringLiteral("Gate threshold"), mic_post_content_));
+            content_layout->addWidget(makeStageRow(mic_agc_check_, ui::hints::kAgc, mic_agc_target_spin_,
+                                                   QStringLiteral("AGC target level"), mic_post_content_));
+            content_layout->addWidget(
+                makeStageRow(mic_rnnoise_check_, ui::hints::kRnnoise, nullptr, QString(), mic_post_content_));
+
+            // Expand/collapse: flip the chevron and show/hide the content container.
+            connect(mic_post_disclosure_btn_, &QToolButton::toggled, this, [this](bool expanded) {
+                if (mic_post_content_)
+                    mic_post_content_->setVisible(expanded);
+                if (mic_post_disclosure_btn_) {
+                    mic_post_disclosure_btn_->setIcon(
+                        ui::theme::lucideIcon(expanded ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
+                                              QString::fromUtf8(ui::theme::ActiveTheme().mut), 16,
+                                              mic_post_disclosure_btn_->devicePixelRatioF()));
+                    mic_post_disclosure_btn_->setToolTip(
+                        expanded ? QStringLiteral("Collapse microphone post-processing stages")
+                                 : QStringLiteral("Expand microphone post-processing stages"));
+                }
+            });
 
             // Status text: list the active stages, updated whenever any stage toggles.
-            // (Defined as a lambda stored on the row widget via a QObject property — we
-            // use a plain slot wired to all four stage checkboxes.)
             auto updateMicPostStatus = [this]() {
                 QStringList active;
                 if (mic_hpf_check_->isChecked())
@@ -4252,8 +4319,9 @@ void ConfigPage::buildAudioExpertSection() {
                     active << QStringLiteral("AGC");
                 if (mic_rnnoise_check_->isChecked())
                     active << QStringLiteral("RNNoise");
-                mic_post_processing_row_->setStatusText(active.isEmpty() ? QStringLiteral("Off")
-                                                                         : active.join(QStringLiteral(" \xC2\xB7 ")));
+                if (mic_post_status_label_)
+                    mic_post_status_label_->setText(active.isEmpty() ? QStringLiteral("Off")
+                                                                     : active.join(QStringLiteral(" \xC2\xB7 ")));
             };
             // Wire to the stage toggles so the status stays live.
             connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
@@ -4337,7 +4405,7 @@ void ConfigPage::buildAudioExpertSection() {
     connect(limiter_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
         audio_ui_state_.limiter_enabled = on;
         if (limiter_ceiling_spin_)
-            limiter_ceiling_spin_->setEnabled(on);
+            limiter_ceiling_spin_->setVisible(on);
         emitCurrentAudioSettings();
     });
     connect(limiter_ceiling_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
@@ -5282,7 +5350,7 @@ void ConfigPage::updateExpertModeVisibility() {
         if (limiter_ceiling_spin_) {
             const QSignalBlocker b(limiter_ceiling_spin_);
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
-            limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
+            limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
         }
         if (mic_hpf_check_) {
             const QSignalBlocker b(mic_hpf_check_);

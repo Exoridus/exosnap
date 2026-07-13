@@ -101,23 +101,17 @@ QToolButton#titlebarBell[hubOpen="true"]:hover {
     border: 1px solid ${accent-b2};
 }
 
-/* S5: Settings popover cog button — flat at rest, subtle bg3 hover. */
-QToolButton#settingsPopoverCog {
+/* Settings/Diagnostics polish (Slice 3): mic post-processing disclosure chevron —
+   flat at rest, subtle bg3 hover. Replaces the former settingsPopoverCog button. */
+QToolButton#micPostProcessingDisclosure {
     background: transparent;
     border: none;
     border-radius: 6px;
     padding: 0;
 }
 
-QToolButton#settingsPopoverCog:hover {
+QToolButton#micPostProcessingDisclosure:hover {
     background: ${bg3};
-}
-
-/* S5: Settings popover panel — raised card anchored below the cog button. */
-QWidget#settingsPopoverPanelInner {
-    background: ${bg2};
-    border: 1px solid ${line2};
-    border-radius: 8px;
 }
 
 /* Global recording status bar */

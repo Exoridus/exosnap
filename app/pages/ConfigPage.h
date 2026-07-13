@@ -44,7 +44,6 @@ class ExoCheckBox;
 class ExoSlider;
 class ExoToggle;
 class HotkeysSettingsPanel;
-class SettingsPopoverRow;
 class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
@@ -612,8 +611,13 @@ class ConfigPage : public QWidget {
     QDoubleSpinBox* mic_agc_target_spin_ = nullptr;
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
     ui::widgets::ExoCheckBox* mic_rnnoise_check_ = nullptr;
-    // S5: Collapsed mic post-processing popover row (HPF + Gate + AGC + RNNoise).
-    ui::widgets::SettingsPopoverRow* mic_post_processing_row_ = nullptr;
+    // Slice 3 (cogwheels -> inline): mic post-processing is an inline disclosure
+    // (chevron) instead of a cogwheel popover. Header row + status label + toggle
+    // button, plus the content container holding the four stage rows.
+    QWidget* mic_post_header_ = nullptr;
+    QLabel* mic_post_status_label_ = nullptr;
+    QToolButton* mic_post_disclosure_btn_ = nullptr;
+    QWidget* mic_post_content_ = nullptr;
 
     // Channel / sample-format model (ADR 0030 — 0.6.0).
     QComboBox* audio_sample_rate_combo_ = nullptr;

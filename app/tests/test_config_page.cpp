@@ -29,7 +29,6 @@
 #include "ui/widgets/ExoCheckBox.h"
 #include "ui/widgets/ExoToggle.h"
 #include "ui/widgets/InfoHintIcon.h"
-#include "ui/widgets/SettingsPopoverRow.h"
 #include "ui/widgets/VUMeterWidget.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 
@@ -1808,85 +1807,13 @@ TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {
     EXPECT_FALSE(card->isHidden()) << "Developer card must not be hidden when expert mode is on";
 }
 
-// ── S5: SettingsPopoverRow unit tests ────────────────────────────────────────
-
-class SettingsPopoverRowTest : public ::testing::Test {
-  protected:
-    static void SetUpTestSuite() {
-        EnsureApplication();
-    }
-};
-
-TEST_F(SettingsPopoverRowTest, ConstructsWithLabel) {
-    ui::widgets::SettingsPopoverRow row(QStringLiteral("Test row"));
-    const auto labels = row.findChildren<QLabel*>();
-    bool found = false;
-    for (const auto* lbl : labels) {
-        if (lbl->text() == QStringLiteral("Test row")) {
-            found = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(found) << "Row label must appear in SettingsPopoverRow";
-}
-
-TEST_F(SettingsPopoverRowTest, CogButtonExists) {
-    ui::widgets::SettingsPopoverRow row(QStringLiteral("Test row"));
-    auto* cog = row.findChild<QToolButton*>(QStringLiteral("settingsPopoverCog"));
-    ASSERT_NE(cog, nullptr) << "SettingsPopoverRow must contain a cog QToolButton";
-    EXPECT_TRUE(cog->isEnabled());
-}
-
-TEST_F(SettingsPopoverRowTest, PopoverContentLayout_AcceptsSubControl) {
-    ui::widgets::SettingsPopoverRow row(QStringLiteral("Mic post-processing"));
-    auto* layout = row.popoverContentLayout();
-    ASSERT_NE(layout, nullptr);
-
-    auto* sub_check = new QCheckBox(QStringLiteral("High-pass filter"));
-    sub_check->setObjectName(QStringLiteral("testHpfCheck"));
-    layout->addWidget(sub_check);
-
-    // The sub-control must be findable as a descendant of the row.
-    auto* found = row.findChild<QCheckBox*>(QStringLiteral("testHpfCheck"));
-    ASSERT_NE(found, nullptr) << "Sub-control added to popoverContentLayout must be a descendant of the row";
-}
-
-TEST_F(SettingsPopoverRowTest, SetStatusText_ShowsAndHidesLabel) {
-    ui::widgets::SettingsPopoverRow row(QStringLiteral("Microphone post-processing"));
-
-    row.setStatusText(QStringLiteral("High-pass \xC2\xB7 Gate"));
-    const auto labels = row.findChildren<QLabel*>();
-    bool found_status = false;
-    for (const auto* lbl : labels) {
-        // Use !isHidden() rather than isVisible(): in headless tests the row widget
-        // is never show()n, so isVisible() checks the full ancestor chain and returns
-        // false even when the label's own hidden flag is cleared.
-        if (lbl->text() == QStringLiteral("High-pass \xC2\xB7 Gate") && !lbl->isHidden()) {
-            found_status = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(found_status) << "setStatusText must un-hide the status label with the given text";
-
-    // Setting empty string must hide it.
-    row.setStatusText(QString());
-    bool still_unhidden = false;
-    for (const auto* lbl : row.findChildren<QLabel*>()) {
-        if (lbl->text() == QStringLiteral("High-pass \xC2\xB7 Gate") && !lbl->isHidden()) {
-            still_unhidden = true;
-            break;
-        }
-    }
-    EXPECT_FALSE(still_unhidden) << "setStatusText(empty) must hide the status label";
-}
-
-// ── S5: ConfigPage integration — sub-controls still findable by objectName ───
+// ── Cogwheels -> inline: ConfigPage integration — sub-controls still findable by objectName ───
 
 TEST_F(ConfigPageTest, S5_MicPostProcessing_SubControlsStillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
 
-    // All four mic DSP controls must still exist (reparented into popover, not deleted).
+    // All four mic DSP controls must still exist (reparented into the disclosure content, not deleted).
     EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck")), nullptr)
         << "micHpfCheck must still exist after S5 reparenting";
     EXPECT_NE(page.findChild<QDoubleSpinBox*>(QStringLiteral("micHpfCutoffSpin")), nullptr)
@@ -1934,6 +1861,101 @@ TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
         << "splitCustomMinutesSpin must still exist after S5 reparenting";
     EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin")), nullptr)
         << "splitCustomSizeSpin must still exist after S5 reparenting";
+}
+
+// ---------------------------------------------------------------------------
+// Settings/Diagnostics polish — Slice 3: cogwheels -> inline (SettingsPopoverRow removed)
+// ---------------------------------------------------------------------------
+
+// No cogwheel popover button survives anywhere on the page — the three former gears
+// (clock slaving, brickwall limiter, mic post-processing) are all flattened.
+TEST_F(ConfigPageTest, CogwheelsInline_NoSettingsPopoverCogRemains) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
+
+    EXPECT_EQ(page.findChild<QToolButton*>(QStringLiteral("settingsPopoverCog")), nullptr)
+        << "no SettingsPopoverRow cog button should remain after the cogwheels -> inline slice";
+}
+
+// Brickwall limiter: the ceiling spin is a plain inline control (no popover) whose
+// visibility tracks the limiter checkbox.
+TEST_F(ConfigPageTest, BrickwallLimiter_CeilingSpinVisibilityTracksToggle) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck"));
+    auto* ceiling = page.findChild<QDoubleSpinBox*>(QStringLiteral("limiterCeilingSpin"));
+    ASSERT_NE(check, nullptr) << "limiterCheck must exist as a plain inline toggle";
+    ASSERT_NE(ceiling, nullptr) << "limiterCeilingSpin must exist inline in the same row";
+
+    EXPECT_TRUE(check->isChecked()) << "brickwall limiter defaults on";
+    EXPECT_FALSE(ceiling->isHidden()) << "ceiling spin must be visible while the limiter is on";
+
+    check->setChecked(false);
+    EXPECT_TRUE(ceiling->isHidden()) << "ceiling spin must hide when the limiter is turned off";
+
+    check->setChecked(true);
+    EXPECT_FALSE(ceiling->isHidden()) << "ceiling spin must reappear when the limiter is turned back on";
+}
+
+// Microphone post-processing: the disclosure starts collapsed (stage rows hidden)
+// and expanding it via the chevron button reveals the four stage controls in place.
+TEST_F(ConfigPageTest, MicPostProcessing_DisclosureStartsCollapsedAndExpands) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
+    auto* content = page.findChild<QWidget*>(QStringLiteral("micPostProcessingContent"));
+    ASSERT_NE(disclosure, nullptr) << "the mic post-processing chevron disclosure button must exist";
+    ASSERT_NE(content, nullptr) << "the mic post-processing content container must exist";
+
+    EXPECT_FALSE(disclosure->isChecked()) << "the disclosure starts collapsed";
+    EXPECT_TRUE(content->isHidden()) << "stage rows stay hidden until expanded";
+
+    disclosure->setChecked(true);
+    EXPECT_FALSE(content->isHidden()) << "stage rows must appear once the disclosure is expanded";
+
+    // The four DSP stage controls are reparented into the content container, not deleted.
+    EXPECT_NE(content->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck")), nullptr);
+    EXPECT_NE(content->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micGateCheck")), nullptr);
+    EXPECT_NE(content->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micAgcCheck")), nullptr);
+    EXPECT_NE(content->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micRnnoiseCheck")), nullptr);
+
+    disclosure->setChecked(false);
+    EXPECT_TRUE(content->isHidden()) << "collapsing again must hide the stage rows";
+}
+
+// The mic post-processing header shows a live "Off" / active-stage-list status,
+// independent of whether the disclosure is expanded.
+TEST_F(ConfigPageTest, MicPostProcessing_HeaderStatusReflectsActiveStages) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* status = page.findChild<QLabel*>(QStringLiteral("micPostProcessingStatus"));
+    auto* hpf = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(hpf, nullptr);
+
+    EXPECT_EQ(status->text(), QStringLiteral("Off")) << "status reads \"Off\" when every stage is disabled";
+
+    hpf->setChecked(true);
+    EXPECT_EQ(status->text(), QStringLiteral("High-pass")) << "status label must reflect the enabled HPF stage";
+}
+
+// Audio clock slaving keeps its explanatory info-i even as a plain inline row (a
+// genuine on/off tradeoff: gentle correction vs byte-exact capture).
+TEST_F(ConfigPageTest, ClockSlaving_PlainInlineRow_NoCog) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("clockSlavingCheck"));
+    ASSERT_NE(check, nullptr);
+    // Global absence of any popover cog is covered by CogwheelsInline_NoSettingsPopoverCogRemains;
+    // here we just confirm the plain inline toggle still works end to end.
+    check->setChecked(false);
+    EXPECT_FALSE(check->isChecked());
+    check->setChecked(true);
+    EXPECT_TRUE(check->isChecked());
 }
 
 // ---------------------------------------------------------------------------
