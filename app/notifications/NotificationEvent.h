@@ -46,6 +46,7 @@ enum class NotificationAction : uint8_t {
     RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics (ADR 0033)
     OpenDiagnostics,  // navigate to the Diagnostics page for the frame-drop breakdown (FramesDropped type)
     UndoPresetSwitch, // restore the previous live config and selection (PresetSwitched type)
+    OpenHotkeys,      // navigate to Settings → Hotkeys to rebind a shortcut (HotkeyConflict type)
 };
 
 // ---------------------------------------------------------------------------

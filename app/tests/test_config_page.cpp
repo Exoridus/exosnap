@@ -362,6 +362,22 @@ TEST_F(ConfigPageTest, FilenameTokenChips_SitBehindTheTokensDisclosure) {
     EXPECT_TRUE(chip_flow->isHidden()) << "…and collapses them again";
 }
 
+TEST_F(ConfigPageTest, DeepLinkScroll_PulsesLandingOnTargetSection) {
+    // The hotkey "Rebind" notification deep-links here via scrollToSection. Even when the
+    // target card is already within the viewport the jump must give a visible cue, so
+    // scrollToSection sets a transient "landing" property (accent border via QSS) on the
+    // target section panel.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* hotkeys_panel = page.findChild<QWidget*>(QStringLiteral("settingsHotkeysPanel"));
+    ASSERT_NE(hotkeys_panel, nullptr) << "hotkeys settings panel must exist";
+    EXPECT_FALSE(hotkeys_panel->property("landing").toBool()) << "no landing cue before the jump";
+
+    page.scrollToSection(QStringLiteral("settings/hotkeys"));
+    EXPECT_TRUE(hotkeys_panel->property("landing").toBool())
+        << "scrollToSection must pulse the landing cue on the target section";
+}
+
 TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
     ConfigPage page(output_defaults_, video_defaults_);
 

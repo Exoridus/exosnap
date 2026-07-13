@@ -649,6 +649,21 @@ TEST_F(NotificationToastTest, CardHeight_AbsentBody_ReservesNoSpace) {
     EXPECT_LT(title_only, with_body);
 }
 
+// Grow-to-fit: a body long enough to wrap past two lines makes the card taller than
+// a one-line body — the old two-line cap no longer clamps it. The card grows up to
+// six lines (then ellipsizes), while the Notification Hub keeps the full text.
+TEST_F(NotificationToastTest, CardHeight_LongBody_GrowsPastTwoLines) {
+    const int one_line =
+        singleToastHeight(NotificationType::LowStorage, QStringLiteral("Short."), NotificationAction::None);
+    const QString long_body =
+        QStringLiteral("This is a deliberately long notification body that wraps far beyond two lines so the "
+                       "grow-to-fit card has to expand to several lines to show all of it before it ellipsizes.");
+    const int tall = singleToastHeight(NotificationType::LowStorage, long_body, NotificationAction::None);
+    // Beyond the old cap: at least two extra body lines over the one-line card (kBodyH
+    // is 18px), proving the body now occupies three or more lines.
+    EXPECT_GE(tall - one_line, 2 * 18);
+}
+
 TEST_F(NotificationToastTest, CardHeight_OneAction_HasNoButtonStrip) {
     // One action: the card IS the action — same height as an action-less card.
     const int no_action =

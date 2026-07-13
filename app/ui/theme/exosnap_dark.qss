@@ -171,6 +171,14 @@ QWidget[panelRole="panel"] {
     border-radius: ${radius-lg}px;
 }
 
+/* Deep-link landing cue: a brief accent border on the section a deep-link jumped to
+   (ConfigPage::scrollToSection / pulseSectionLanding), so the jump registers even when the
+   card was already in view. Set for ~1.2s, then cleared. Border-only — no geometry shift. */
+QFrame[panelRole="panel"][landing="true"],
+QWidget[panelRole="panel"][landing="true"] {
+    border-color: ${accent};
+}
+
 QFrame[panelRole="note"],
 QWidget[panelRole="note"] {
     background: ${bg3};
