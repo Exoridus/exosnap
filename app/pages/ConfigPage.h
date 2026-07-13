@@ -257,7 +257,6 @@ class ConfigPage : public QWidget {
     void updateCustomResolutionValidation();
     void onCustomWidthChanged(int value);
     void onCustomHeightChanged(int value);
-    void updateEffectiveOutputSummary();
     void onBrowse();
     void onDestinationEditingFinished();
     void onPatternEditingFinished();
@@ -296,6 +295,8 @@ class ConfigPage : public QWidget {
     void updateCompatCallout();
     void updateOutputValidationState();
     void updateExampleFilename();
+    // Middle-elides output_saves_to_full_ into output_saves_to_label_ at its current width.
+    void applyOutputSavesToElision();
 
     // Single entry point for atomic audio widget state application.
     // Derives widget visibility, enabled, checked, and label states from the
@@ -421,7 +422,6 @@ class ConfigPage : public QWidget {
     QPushButton* browse_btn_ = nullptr;
     QLineEdit* naming_edit_ = nullptr;
     QComboBox* output_res_combo_ = nullptr;
-    QLabel* output_effective_summary_label_ = nullptr;
 
     // Split recording widgets (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1).
     QComboBox* split_mode_combo_ = nullptr;
@@ -549,6 +549,7 @@ class ConfigPage : public QWidget {
     QWidget* quality_rate_section_ = nullptr;
     // v10: Output "Saves to …\path" resolved footer (mirrors the Quality footer).
     QLabel* output_saves_to_label_ = nullptr;
+    QString output_saves_to_full_; // full resolved path; middle-elided into the label
     // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
     QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
     QWidget* rate_control_row_widget_ = nullptr;

@@ -1119,11 +1119,12 @@ QLabel[labelRole="cardTitle"] {
     color: ${text0};
 }
 
-/* v10: per-card glyph chip to the left of the card title. */
+/* v10: per-card glyph chip to the left of the card title. The filled/bordered
+   box was dropped (v0.9 polish): it read as an active button. The chip is now a
+   plain accent-tinted glyph; the fixed 28x28 size keeps a stable title gutter. */
 QLabel#cardGlyphChip {
-    background: ${accent-dim};
-    border: 1px solid ${accent-b2};
-    border-radius: 8px;
+    background: transparent;
+    border: none;
 }
 
 /* v10 P3: "Expert mode" header label tints to accent while expert mode is on. */
@@ -2018,12 +2019,44 @@ QToolButton::menu-indicator {
     height: 12px;
 }
 
-/* S1-REDESIGN: Manage-presets button styled to match QPushButton[role="ghost"]. */
-QToolButton#presetManageButton {
-    background: transparent;
+/* v0.9 polish: slim preset toolbar — a flatter, quiet member of the card family.
+   Canon (suite-settings.jsx:251) wraps the preset row in surf/line/radius; the build
+   had lost the frame. radius-md reads flatter than the radius-lg cards. The plain
+   QWidget needs WA_StyledBackground to paint this (set in ConfigPage). */
+QWidget#settingsSlimToolbar {
+    background: ${bg2};
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
-    padding: 0 ${space-lg}px;
+}
+
+/* v0.9 polish: "quiet" pill — borderless icon+text, for secondary preset actions
+   (Reset / Delete) next to the ghost primary (Save as new). */
+QPushButton[role="quiet"] {
+    background: transparent;
+    border: none;
+    border-radius: ${radius-md}px;
+    padding: 0 ${space-md}px;
+    color: ${text1};
+    min-height: ${control-height}px;
+    font-weight: 600;
+}
+
+QPushButton[role="quiet"]:hover {
+    background: ${bg3};
+    color: ${text0};
+}
+
+QPushButton[role="quiet"]:disabled {
+    background: transparent;
+    color: ${text3};
+}
+
+/* v0.9 polish: overflow menu button is now a borderless "quiet" pill to match. */
+QToolButton#presetManageButton {
+    background: transparent;
+    border: none;
+    border-radius: ${radius-md}px;
+    padding: 0 ${space-md}px;
     color: ${text1};
     min-height: ${control-height}px;
     font-weight: 600;
@@ -2031,8 +2064,29 @@ QToolButton#presetManageButton {
 
 QToolButton#presetManageButton:hover {
     background: ${bg3};
-    border-color: ${line3};
     color: ${text0};
+}
+
+/* v0.9 polish: filename "tokens" disclosure — a flat inline chevron+text on the
+   filename-pattern label row. The boxed QToolButton default (border + control-height)
+   inflated the row above the plain-label rows; flatten it to label height. */
+QToolButton#tokensToggle {
+    background: transparent;
+    border: none;
+    min-height: 0;
+    padding: 0 ${space-xs}px;
+    color: ${text2};
+    font-size: 11px;
+}
+
+QToolButton#tokensToggle:hover {
+    background: transparent;
+    color: ${text0};
+}
+
+QToolButton#tokensToggle::menu-indicator {
+    image: none;
+    width: 0;
 }
 
 QToolButton#presetManageButton::menu-indicator {

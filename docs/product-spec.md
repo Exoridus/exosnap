@@ -777,8 +777,11 @@ Settings uses a **Default / Expert split**: common controls are shown up front; 
 control, bitrate, frame-timing, NVENC preset, frame pacing, audio DSP, color range, HDR handling,
 keyframe interval, chroma subsampling) are hidden behind an **Expert** toggle. The Expert toggle is
 a single global state shared with the Diagnostics page. Settings offers inline info hints (hover
-popovers on info-i icons and the countdown chevron) and search. Roadmap-only controls may appear as
-honest, disabled "planned" rows to communicate direction without enabling unimplemented behavior.
+popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
+only rows with a genuine A/B tradeoff carry the icon (plain boolean rows do not), and per-option
+helper text lives inside the popover rather than as a separate line under the control. Roadmap-only
+controls may appear as honest, disabled "planned" rows to communicate direction without enabling
+unimplemented behavior.
 
 ---
 

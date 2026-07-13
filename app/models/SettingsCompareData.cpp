@@ -83,7 +83,8 @@ const CompareData kRate{
 // ---------------------------------------------------------------------------
 const CompareData kTiming{
     QStringLiteral("Frame timing"),
-    QStringLiteral("When frames are written."),
+    QStringLiteral("When frames are written. VFR needs MKV or WebM; MP4 always records CFR "
+                   "for editor compatibility."),
     {
         {QStringLiteral("CFR"), QStringLiteral("Fixed interval \xC2\xB7 editor-friendly"), true, QString()},
         {QStringLiteral("VFR"), QStringLiteral("Only on change \xC2\xB7 smaller for static"), false, QString()},
