@@ -4453,7 +4453,6 @@ void RecordPage::refresh() {
 
     const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-    const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
     const bool recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
          view_model_.state == UiRecordingState::Stopping);
@@ -4467,6 +4466,11 @@ void RecordPage::refresh() {
     const bool active_recording = (view_model_.state == UiRecordingState::Recording);
     const bool completed_success =
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+    // The initial capability probe (LoadingCapabilities) is a passive warmup, not a
+    // user-triggered operation — surfacing an amber "warn" border around a preview
+    // that is merely settling reads as a problem when there is none. Keep it neutral
+    // (ready) until the preview is live; amber stays reserved for the real recording
+    // transitions the user initiated (starting/stopping/paused).
     if (preview_surface_host_) {
         setStyledStringProperty(preview_surface_host_, "recordState",
                                 (blocked || failed)                               ? QStringLiteral("blocked")
@@ -4474,16 +4478,15 @@ void RecordPage::refresh() {
                                 : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("paused")
                                 : countdown                                       ? QStringLiteral("countdown")
                                 : completed_success                               ? QStringLiteral("done")
-                                : (checking || starting || stopping)              ? QStringLiteral("warn")
+                                : (starting || stopping)                          ? QStringLiteral("warn")
                                                                                   : QStringLiteral("ready"));
     }
 
     preview_surface_->setRecording(recording);
     preview_surface_->setFrameTone((blocked || failed) ? ui::widgets::PreviewSurface::FrameTone::Blocked
                                    : active_recording  ? ui::widgets::PreviewSurface::FrameTone::Recording
-                                   : (paused || checking || starting || stopping)
-                                       ? ui::widgets::PreviewSurface::FrameTone::Warn
-                                       : ui::widgets::PreviewSurface::FrameTone::Ready);
+                                   : (paused || starting || stopping) ? ui::widgets::PreviewSurface::FrameTone::Warn
+                                                                      : ui::widgets::PreviewSurface::FrameTone::Ready);
     preview_surface_->setTopMetaText(QStringLiteral(""));
 
     updateSourceChip();
