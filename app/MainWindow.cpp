@@ -1740,14 +1740,28 @@ void MainWindow::showEvent(QShowEvent* event) {
                 diagnostics::AppLog::warning(
                     QStringLiteral("hotkeys"),
                     QStringLiteral("Hotkey registration failed at startup (in use elsewhere): %1").arg(joined));
+
+                // Windows has no API to reveal which process holds the combo, and we
+                // cannot steal it — a binding we could not register is dead weight that
+                // would silently swallow the key and re-warn every launch. Drop it
+                // (UnsetBinding persists the cleared binding via bindingChanged) so the
+                // action is cleanly unbound until the user picks a working shortcut. The
+                // notification routes them straight to Settings → Hotkeys.
+                for (const HotkeyAction action : failed_hotkeys)
+                    hotkey_service_->UnsetBinding(action);
+
                 if (notification_manager_) {
+                    const bool plural = failed_hotkeys.size() > 1;
                     notifications::NotificationEvent hotkey_conflict_event;
                     hotkey_conflict_event.type = notifications::NotificationType::HotkeyConflict;
                     hotkey_conflict_event.title = QStringLiteral("Hotkey unavailable");
                     hotkey_conflict_event.body =
-                        QStringLiteral("%1: already in use by Windows or another app. It won't respond "
-                                       "until you rebind it in Settings.")
+                        (plural ? QStringLiteral("%1 were already in use by Windows or another app, so ExoSnap "
+                                                 "removed them. Pick new shortcuts to re-enable them.")
+                                : QStringLiteral("%1 was already in use by Windows or another app, so ExoSnap "
+                                                 "removed it. Pick a new shortcut to re-enable it."))
                             .arg(joined);
+                    hotkey_conflict_event.action = notifications::NotificationAction::OpenHotkeys;
                     notification_manager_->Enqueue(std::move(hotkey_conflict_event));
                 }
             }
@@ -3874,6 +3888,11 @@ void MainWindow::recordEventInHub(const notifications::NotificationEvent& event)
         action_label = QStringLiteral("View diagnostics");
         is_deep_link = true;
         break;
+    case NotificationAction::OpenHotkeys:
+        action_id = QStringLiteral("settings/hotkeys");
+        action_label = QStringLiteral("Rebind");
+        is_deep_link = true;
+        break;
     case NotificationAction::Edit:
     case NotificationAction::OpenFolder:
     case NotificationAction::ShowFile:
@@ -4043,6 +4062,14 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         navigateToPage(kSettingsPageIndex);
         if (config_page_)
             config_page_->scrollToSection(QStringLiteral("settings/updates"));
+        break;
+    }
+    case NotificationAction::OpenHotkeys: {
+        // HotkeyConflict: jump to Settings → Hotkeys so the user can bind a working
+        // shortcut for the action ExoSnap had to drop at startup.
+        navigateToPage(kSettingsPageIndex);
+        if (config_page_)
+            config_page_->scrollToSection(QStringLiteral("settings/hotkeys"));
         break;
     }
     case NotificationAction::OpenDiagnostics: {

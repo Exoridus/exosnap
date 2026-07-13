@@ -5822,6 +5822,32 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
     updates_action_btn_->style()->polish(updates_action_btn_);
 }
 
+// Deep-link landing cue: briefly pulse the accent border of the jumped-to section and
+// move focus into it, so a deep-link (e.g. the hotkey "Rebind" notification action) gives
+// visible feedback even when the target card is already within the viewport —
+// ensureWidgetVisible is then a no-op and, without this, the click looks like it did
+// nothing. Cleared after ~1.2s. The single-shot timer uses the panel as its context
+// object, so it auto-cancels if the panel is destroyed before it fires.
+static void pulseSectionLanding(QWidget* panel) {
+    if (!panel)
+        return;
+    panel->setProperty("landing", true);
+    panel->style()->unpolish(panel);
+    panel->style()->polish(panel);
+    const auto controls = panel->findChildren<QWidget*>();
+    for (QWidget* control : controls) {
+        if (control->focusPolicy() != Qt::NoFocus && control->isEnabled() && control->isVisibleTo(panel)) {
+            control->setFocus(Qt::OtherFocusReason);
+            break;
+        }
+    }
+    QTimer::singleShot(1200, panel, [panel]() {
+        panel->setProperty("landing", QVariant());
+        panel->style()->unpolish(panel);
+        panel->style()->polish(panel);
+    });
+}
+
 // PS-PHASE-E: deep-link target support — scroll Settings to the named section.
 void ConfigPage::scrollToSection(const QString& section_target) {
     if (!scroll_area_)
@@ -5845,8 +5871,10 @@ void ConfigPage::scrollToSection(const QString& section_target) {
     else if (section_target == QStringLiteral("settings/updates"))
         target_widget = updates_panel_;
 
-    if (target_widget)
+    if (target_widget) {
         scroll_area_->ensureWidgetVisible(target_widget);
+        pulseSectionLanding(target_widget);
+    }
 }
 
 } // namespace exosnap

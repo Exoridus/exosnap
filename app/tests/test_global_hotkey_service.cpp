@@ -334,6 +334,40 @@ TEST_F(HotkeyServiceTest, InvalidPersistedPauseStringFallsToEmpty) {
     EXPECT_TRUE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
 }
 
+// 20b. An explicitly unset binding round-trips as unset — it must NOT fall back to
+//      the action default on reload. This is what makes the startup conflict cleanup
+//      stick: a shortcut ExoSnap had to drop (because another app held it) stays
+//      dropped across launches instead of silently returning as Alt+F9 and re-warning.
+TEST_F(HotkeyServiceTest, UnsetBindingRoundTripsAsUnsetNotDefault) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    (void)svc.SetRegistrar(&reg);
+
+    svc.UnsetBinding(HotkeyAction::ToggleRecording);
+    ASSERT_TRUE(svc.GetBinding(HotkeyAction::ToggleRecording).isEmpty());
+
+    HotkeyBindings saved{};
+    svc.SaveToStrings(saved);
+    // An explicitly-unset binding must persist as a non-empty sentinel, otherwise an
+    // empty string would reload as the Alt+F9 default.
+    EXPECT_FALSE(saved[0].trimmed().isEmpty());
+
+    GlobalHotkeyService reloaded;
+    reloaded.LoadFromStrings(saved);
+    EXPECT_TRUE(reloaded.GetBinding(HotkeyAction::ToggleRecording).isEmpty());
+}
+
+// 20c. A genuinely empty persisted string (fresh settings, never saved) still yields
+//      the action default — the sentinel is the ONLY "stay unset" marker, so first-run
+//      defaults are preserved.
+TEST_F(HotkeyServiceTest, EmptyPersistedStringStillYieldsDefault) {
+    GlobalHotkeyService svc;
+    HotkeyBindings stored = {QString(), QString(), QString(), QString(), QString()};
+    svc.LoadFromStrings(stored);
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::ToggleRecording),
+              GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording));
+}
+
 // 21. SplitRecording is unset by default (no default binding per SPLIT-RECORDING-R1).
 TEST_F(HotkeyServiceTest, SplitRecordingUnsetByDefault) {
     EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording).isEmpty());

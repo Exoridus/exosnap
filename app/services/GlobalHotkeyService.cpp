@@ -105,6 +105,17 @@ QString BuildConflictMessage(HotkeyAction conflicting, QKeySequence seq) {
         .arg(seq.toString(QKeySequence::NativeText), GlobalHotkeyService::ActionDisplayName(conflicting));
 }
 
+// Persisted marker for a binding that was explicitly cleared — by the user, or by
+// startup cleanup when the shortcut was already held elsewhere and could not be
+// registered. It round-trips as "unset" instead of falling back to the action's
+// default, so a shortcut we had to drop stays dropped across launches (otherwise a
+// non-empty default like ToggleRecording's Alt+F9 would silently return and re-warn
+// every launch). A genuinely empty string still means "never configured → use
+// default" (fresh settings on first run).
+QString UnsetSentinel() {
+    return QStringLiteral("<unset>");
+}
+
 } // namespace
 
 GlobalHotkeyService::GlobalHotkeyService(QObject* parent) : QObject(parent) {
@@ -222,6 +233,11 @@ void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         const HotkeyAction action = static_cast<HotkeyAction>(i);
         const QString& s = stored[static_cast<std::size_t>(i)];
+        if (s == UnsetSentinel()) {
+            // Explicitly cleared — stay unset, do NOT fall back to the default.
+            bindings_[static_cast<std::size_t>(i)] = QKeySequence();
+            continue;
+        }
         if (s.trimmed().isEmpty()) {
             bindings_[static_cast<std::size_t>(i)] = DefaultBinding(action);
             continue;
@@ -243,7 +259,11 @@ void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
 
 void GlobalHotkeyService::SaveToStrings(HotkeyBindings& out) const {
     for (int i = 0; i < kHotkeyActionCount; ++i) {
-        out[static_cast<std::size_t>(i)] = bindings_[static_cast<std::size_t>(i)].toString(QKeySequence::PortableText);
+        const QKeySequence& seq = bindings_[static_cast<std::size_t>(i)];
+        // Empty means "explicitly unset" once we have taken ownership of the bindings
+        // (any save implies a deliberate state) — persist the sentinel so it does not
+        // reload as the action default. Non-empty bindings serialize as portable text.
+        out[static_cast<std::size_t>(i)] = seq.isEmpty() ? UnsetSentinel() : seq.toString(QKeySequence::PortableText);
     }
 }
 

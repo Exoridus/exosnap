@@ -644,9 +644,10 @@ area and the Split Chapter action remain deferred to a later release (0.11 per A
   one timed toast is visible — a newer one replaces it; standing toasts stack above it, never
   auto-dismiss, and always carry an explicit action out. A countdown bar appears exactly on the
   toasts that leave on their own. The card grows to fit its content: no reserved space for an absent
-  body; with a single action the card itself is clickable (marked `›`); two actions get named
-  buttons. A preset switch raises no toast — only the hub entry with **Undo** (the combo box that
-  switched is the way back).
+  body; the body word-wraps and the card grows with it up to six lines, ellipsizing beyond that (the
+  hub always keeps the full untruncated text); with a single action the card itself is clickable
+  (marked `›`); two actions get named buttons. A preset switch raises no toast — only the hub entry
+  with **Undo** (the combo box that switched is the way back).
 - **On-screen overlays** (all capture-excluded and click-through): a recording-status pill + elapsed
   timer (anchored top-right of the recorded monitor), a diagnostics readout overlay (bottom-right,
   **off by default**), a countdown overlay anchored to the recorded monitor's bottom-center, and an
@@ -665,8 +666,12 @@ If a hotkey starts recording while the app window is visible, the Record view is
 window is minimized, it is not restored.
 
 If a persisted hotkey can no longer be registered at startup (another app or Windows already holds
-it), it does not fail silently: a notification names the affected action, and the hotkey is inert
-until rebound in Settings.
+it), it does not fail silently. Windows exposes no way to name the holding process or to reclaim the
+combo, so ExoSnap **drops the unregisterable binding** (it stays cleared across launches rather than
+silently swallowing the key or re-warning every start) and raises a notification naming the affected
+action. The notification carries a **Rebind** action that deep-links to Settings → Hotkeys, where the
+user can bind a working shortcut; attempting a combo already held elsewhere is reported inline there
+as a conflict.
 
 ---
 

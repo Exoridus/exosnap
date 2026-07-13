@@ -15,10 +15,14 @@
 #include <QRegion>
 #include <QScreen>
 #include <QShowEvent>
+#include <QStringList>
+#include <QTextLayout>
+#include <QTextOption>
 #include <QTimer>
 #include <QWindow>
 
 #include <algorithm>
+#include <vector>
 
 #include "notifications/NotificationManager.h"
 
@@ -115,7 +119,9 @@ constexpr int kBarH = 3; // "height: 3" — bottom hairline
 // Vertical content heights for layout calculation
 constexpr int kTitleH = 18;         // single line title
 constexpr int kBodyH = 18;          // height per body line
-constexpr int kBodyMaxLines = 2;    // word-wrap up to 2 lines; elide beyond
+constexpr int kBodyMaxLines = 6;    // grow-to-fit: word-wrap up to 6 lines; the last
+                                    // line is ellipsized beyond that (the Notification
+                                    // Hub always keeps the full untruncated body)
 constexpr int kBodyGapTop = 3;      // marginTop: 3 between title and body
 constexpr int kActionsGapTop = 11;  // marginTop: 11 before action row
 constexpr int kPillHTotal = kPillH; // pill row height
@@ -254,17 +260,75 @@ void drawDismissX(QPainter& p, const QRectF& rect, const QColor& color) {
     p.restore();
 }
 
-// Compute the number of body lines needed (0, 1 or 2) for a given body text
-// within the available text column width. An absent body occupies no space.
+// The body font, built deterministically so any measuring/wrapping path uses the
+// exact same glyph metrics the painter draws with. Kept as a free function (no
+// state) so bodyLineCount/wrapBodyLines can call it before makeToastFonts() below.
+QFont makeBodyFont() {
+    QFont f;
+    f.setFamily(QStringLiteral("Hanken Grotesk"));
+    f.setPixelSize(kBodyPx);
+    f.setWeight(QFont::Normal);
+    return f;
+}
+
+// Word-wrap `body` into at most kBodyMaxLines visible lines within `text_w`, using
+// the same font the painter uses. Returns the resolved lines (each already fit to
+// the column). When the text overflows the cap, the last line is ellipsized with
+// "…" so the cut reads as intentional — the full body still lives in the
+// Notification Hub (AdvisoryItem), which never truncates. This is the SINGLE source
+// of truth shared by toastHeight (card growth) and paintEvent (drawing).
+QStringList wrapBodyLines(const QString& body, int text_w) {
+    QStringList lines;
+    if (body.isEmpty() || text_w <= 0)
+        return lines;
+
+    const QFont font = makeBodyFont();
+    const QFontMetrics fm(font);
+
+    QTextLayout layout(body, font);
+    QTextOption opt;
+    opt.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    layout.setTextOption(opt);
+
+    struct RawLine {
+        int start;
+        int length;
+    };
+    std::vector<RawLine> raw;
+    layout.beginLayout();
+    for (;;) {
+        QTextLine line = layout.createLine();
+        if (!line.isValid())
+            break;
+        line.setLineWidth(text_w);
+        raw.push_back({line.textStart(), line.textLength()});
+    }
+    layout.endLayout();
+
+    const int total = static_cast<int>(raw.size());
+    const int visible = std::min(total, kBodyMaxLines);
+    for (int i = 0; i < visible; ++i) {
+        if (i == visible - 1 && total > kBodyMaxLines) {
+            // Overflow: fold the remainder of the body onto the last line and elide.
+            const QString remainder = body.mid(raw[i].start).simplified();
+            lines.push_back(fm.elidedText(remainder, Qt::ElideRight, text_w));
+        } else {
+            lines.push_back(body.mid(raw[i].start, raw[i].length));
+        }
+    }
+    return lines;
+}
+
+// Number of visible body lines (0..kBodyMaxLines) for a given body within the text
+// column. An absent body occupies no space. `body_fm` is retained for the cheap
+// single-line fast path; wider bodies defer to wrapBodyLines for the exact count.
 // text_w must be the same width used during paint (kToastWidth - text_x - kPadRight - kDismissSize - 6).
 int bodyLineCount(const QString& body, const QFontMetrics& body_fm, int text_w) {
     if (body.isEmpty())
         return 0;
-    // If the body fits on a single line, use 1 line.
     if (body_fm.horizontalAdvance(body) <= text_w)
         return 1;
-    // Otherwise: use 2 lines (the painter will word-wrap within the 2-line rect).
-    return kBodyMaxLines;
+    return static_cast<int>(wrapBodyLines(body, text_w).size());
 }
 
 // The text column x-start and width match the paintEvent layout exactly.
@@ -313,6 +377,10 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
         break;
     case NotificationAction::OpenDiagnostics:
         buttons.push_back({QStringLiteral("View diagnostics"), true, NotificationAction::OpenDiagnostics});
+        break;
+    case NotificationAction::OpenHotkeys:
+        // HotkeyConflict: jump to Settings → Hotkeys to bind a working shortcut.
+        buttons.push_back({QStringLiteral("Rebind"), true, NotificationAction::OpenHotkeys});
         break;
     case NotificationAction::RelaunchElevated:
         // ELEVATION-FOUNDATION-R1 (ADR 0033): "Restart as admin" unlocks the
@@ -368,6 +436,7 @@ struct ToastLayout {
     int text_x = 0;
     int title_y = 0; // window-space y of the title line (block centered to the chip)
     int body_lines = 0;
+    QStringList body_lines_text; // resolved, pre-wrapped body lines (paint reads these)
     int actions_y = 0;
     // One action: the card IS the action — no pills, a › marks it.
     bool card_is_action = false;
@@ -420,7 +489,8 @@ ToastLayout layoutFor(const notifications::NotificationEvent& event, int y_offse
 
     // Center the title+body block on the glyph chip; a title-only card centers
     // the single line, a wrapped body simply starts at the top pad.
-    L.body_lines = bodyLineCount(event.body, body_fm, kTextW);
+    L.body_lines_text = wrapBodyLines(event.body, kTextW);
+    L.body_lines = static_cast<int>(L.body_lines_text.size());
     const int text_block_h = kTitleH + (L.body_lines > 0 ? kBodyGapTop + kBodyH * L.body_lines : 0);
     const int text_y_top = y_offset + kPadTop;
     L.title_y = text_y_top + qMax(0, (kChipSize - text_block_h) / 2);
@@ -664,15 +734,17 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         p.drawText(title_rect, Qt::AlignVCenter | Qt::AlignLeft,
                    title_fm.elidedText(event.title, Qt::ElideRight, text_w));
 
-        if (L.body_lines > 0) {
+        if (!L.body_lines_text.isEmpty()) {
             p.setFont(body_font);
             p.setPen(kMut);
-            const QRect body_rect(text_x, L.title_y + kTitleH + kBodyGapTop, text_w, kBodyH * L.body_lines);
-            if (L.body_lines > 1) {
-                p.drawText(body_rect, Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap, event.body);
-            } else {
-                p.drawText(body_rect, Qt::AlignVCenter | Qt::AlignLeft,
-                           body_fm.elidedText(event.body, Qt::ElideRight, text_w));
+            // Draw each pre-wrapped line in its own kBodyH slot. wrapBodyLines already
+            // ellipsized the last line if the body overflowed the grow-to-fit cap, so
+            // the painter just lays the resolved lines down — no wrap/elide decisions here.
+            int line_y = L.title_y + kTitleH + kBodyGapTop;
+            for (const QString& line : L.body_lines_text) {
+                const QRect line_rect(text_x, line_y, text_w, kBodyH);
+                p.drawText(line_rect, Qt::AlignVCenter | Qt::AlignLeft, line);
+                line_y += kBodyH;
             }
         }
 
