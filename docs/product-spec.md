@@ -718,9 +718,13 @@ Tier-3 optimisation in a warn colour.
 **Evidence** disclosure (measured value → "why" recommendation → a log excerpt).
 
 The Diagnostics page has a **Simple (default) view** and an **Expert toggle** (a single global state
-shared with Settings that reveals depth, not a second mode). Simple shows a verdict plus exactly four
-wide readiness tiles — **Readiness · Encoder · Disk · Display** — then any Tier-1/Tier-2 card, then
-one bundled Tier-3 tip chip. The static capability matrix lives on the **Device** page, not here.
+shared with Settings that reveals depth, not a second mode). It is a top-anchored readiness dashboard
+that fills the page height rather than a centred, compact statement: a header band (verdict icon +
+headline + subline, the Run-check control, and the last-check timestamp), then a responsive tile grid
+— **Readiness · Encoder · Disk · Display · Audio · Capture target**, plus a **Last session** tile once
+a completed recording exists — that reflows from four columns down to two as the window narrows. Any
+Tier-1/Tier-2 card follows, then one bundled Tier-3 tip chip integrated into the same layout. The
+static capability matrix lives on the **Device** page, not here.
 
 **FixAction model.** Each detected issue can carry a typed, executable fix action with a safety
 class, never applied silently:

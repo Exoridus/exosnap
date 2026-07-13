@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QFrame>
+#include <QGridLayout>
 #include <QLabel>
 #include <QList>
 #include <QPushButton>
@@ -327,12 +328,16 @@ TEST_F(DiagnosticsPageTest, VerdictPipelineStagesAllPresent) {
     EXPECT_EQ(flow->card(5)->stepName(), QStringLiteral("Disk"));
 }
 
-TEST_F(DiagnosticsPageTest, FourReadinessTilesPresent) {
-    // suite-diag2.jsx ReadinessGrid: exactly four wide tiles — Readiness · Encoder ·
-    // Disk · Display — replace the old three blocker/issue/pass stat tiles.
+TEST_F(DiagnosticsPageTest, SixCoreReadinessTilesPresent) {
+    // Slice-5 redesign (docs/superpowers/specs/2026-07-13-settings-diagnostics-polish-design.md
+    // §3.3): the readiness dashboard grid carries MORE than four tiles — Readiness ·
+    // Encoder · Disk · Display · Audio · Capture target are always present; Last
+    // session joins once a completed recording exists (see LastSessionTile* below).
+    // This is a deliberate divergence from the design canon's exactly-four-tile
+    // suite-diag2.jsx ReadinessGrid.
     DiagnosticsPage page;
-    for (const char* name :
-         {"readinessTileReadiness", "readinessTileEncoder", "readinessTileDisk", "readinessTileDisplay"}) {
+    for (const char* name : {"readinessTileReadiness", "readinessTileEncoder", "readinessTileDisk",
+                             "readinessTileDisplay", "readinessTileAudio", "readinessTileTarget"}) {
         auto* tile = page.findChild<QFrame*>(QString::fromLatin1(name));
         EXPECT_NE(tile, nullptr) << "Missing readiness tile: " << name;
         if (tile)
@@ -358,6 +363,53 @@ TEST_F(DiagnosticsPageTest, ReadinessTilesPopulateAfterData) {
         << "Encoder tile should show the active encoder";
     // Display tile shows a resolution (× glyph), never the em-dash, once a screen exists.
     EXPECT_NE(TileValue(page, QStringLiteral("readinessTileDisplay")), dash);
+    // Audio tile shows the configured codec once data has loaded.
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileAudio")), dash)
+        << "Audio tile should show the active audio codec";
+    // Capture target tile always reads Window or Screen once data has loaded (never dash).
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileTarget")), dash)
+        << "Capture target tile should show a concrete target kind";
+}
+
+TEST_F(DiagnosticsPageTest, LastSessionTileHiddenUntilRecordingCompletes) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto* tile = page.findChild<QFrame*>(QStringLiteral("readinessTileSession"));
+    ASSERT_NE(tile, nullptr);
+    EXPECT_FALSE(tile->isVisible()) << "Last session tile must not claim a slot before a recording finishes";
+
+    page.setHasLastRecording(true);
+    EXPECT_TRUE(tile->isVisible());
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileSession")), QString::fromUtf8("\xe2\x80\x94"));
+
+    page.setHasLastRecording(false);
+    EXPECT_FALSE(tile->isVisible());
+}
+
+TEST_F(DiagnosticsPageTest, ReadinessTileGridReflowsNarrowerAtSmallWidths) {
+    // The tile grid is responsive (4 → 3 → 2 columns) so the dashboard still fills the
+    // height without overflow on a narrow window; assert the grid's own column-stretch
+    // count actually shrinks rather than staying fixed like the old exactly-four row.
+    DiagnosticsPage page;
+    LoadData(page);
+    page.show();
+    page.resize(1400, 900);
+    QCoreApplication::processEvents();
+
+    auto* readiness_tile = page.findChild<QFrame*>(QStringLiteral("readinessTileReadiness"));
+    ASSERT_NE(readiness_tile, nullptr);
+    auto* grid = qobject_cast<QGridLayout*>(readiness_tile->parentWidget()->layout());
+    ASSERT_NE(grid, nullptr);
+    const int wide_columns = grid->columnCount();
+
+    page.resize(500, 900);
+    QCoreApplication::processEvents();
+    const int narrow_columns = grid->columnCount();
+
+    EXPECT_LT(narrow_columns, wide_columns) << "Grid must use fewer columns at a narrow width";
+    // Tile identity survives the reflow — nothing is dropped, only re-columned.
+    EXPECT_NE(page.findChild<QFrame*>(QStringLiteral("readinessTileReadiness")), nullptr);
+    EXPECT_NE(page.findChild<QFrame*>(QStringLiteral("readinessTileEncoder")), nullptr);
 }
 
 // ---- v10 verdict logic (#6): capability matrix unavailability is NOT amber ----

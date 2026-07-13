@@ -1,6 +1,8 @@
 #pragma once
+#include <QVector>
 #include <QWidget>
 
+#include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
 #include <recorder_core/pipeline_diagnostics.h>
@@ -24,8 +26,10 @@ class QProgressBar;
 class QPushButton;
 class QToolButton;
 class QVBoxLayout;
+class QGridLayout;
 class QScrollArea;
 class QFrame;
+class QResizeEvent;
 
 namespace exosnap {
 
@@ -41,12 +45,17 @@ class ElevationLock;
 struct OutputSettingsModel;
 struct VideoSettingsModel;
 
-// Diagnostics surface (suite-diag2.jsx end-state). A Simple default view — compact
-// verdict + four readiness tiles + any Tier-1 blocker / Tier-2 measured problem +
-// one bundled Tier-3 tip chip — with an Expert toggle that reveals the full flat
-// taxonomy beneath the SAME verdict + tiles: ② Pre-flight → ③ Live → ④ Post-flight,
-// plus the elevation unlock. Capability facts moved to the Device tab, so the old
-// capability matrix is gone (see openDevicePageRequested).
+// Diagnostics surface. A Simple default view — a top-anchored readiness dashboard
+// that fills the page height: a verdict header band (icon + headline + subline +
+// Run-check + last-check) above a responsive tile grid (Readiness, Encoder, Disk,
+// Display, Audio, Capture target, and Last session once a recording exists), any
+// Tier-1 blocker / Tier-2 measured problem card, and one bundled Tier-3 tip chip —
+// with an Expert toggle that reveals the full flat taxonomy beneath the SAME band +
+// tiles: ② Pre-flight → ③ Live → ④ Post-flight, plus the elevation unlock. Capability
+// facts moved to the Device tab, so the old capability matrix is gone (see
+// openDevicePageRequested). Deliberately diverges from the design canon
+// (suite-diag2.jsx's centred, exactly-four-tile "empty calm") — see
+// docs/superpowers/specs/2026-07-13-settings-diagnostics-polish-design.md §2/§3.3.
 class DiagnosticsPage : public QWidget {
     Q_OBJECT
   public:
@@ -136,6 +145,7 @@ class DiagnosticsPage : public QWidget {
 
   protected:
     void showEvent(QShowEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
   private:
     void refreshOverview();
@@ -170,6 +180,9 @@ class DiagnosticsPage : public QWidget {
     QFrame* makeReadinessTile(const QString& object_name, const QString& title, QLabel*& out_value, QLabel*& out_sub,
                               QLabel*& out_icon);
 
+    // Re-columns the readiness dashboard grid for the current width (4 / 3 / 2 columns).
+    void reflowReadinessTiles();
+
     // ── Toolbar (Expert toggle mirrors Settings) ───────────────────────────────
     ui::widgets::ExoToggle* expert_toggle_ = nullptr;
     QLabel* expert_mode_label_ = nullptr;
@@ -188,7 +201,12 @@ class DiagnosticsPage : public QWidget {
     QPushButton* run_check_btn_ = nullptr;
     QPushButton* export_report_btn_ = nullptr;
 
-    // ── Four readiness tiles (Readiness · Encoder · Disk · Display) ─────────────
+    // ── Readiness dashboard tiles (Readiness · Encoder · Disk · Display · Audio ·
+    //    Capture target · Last session), reflowed responsively into 4/3/2 columns. ─
+    QGridLayout* tiles_grid_ = nullptr;
+    QVector<QFrame*> readiness_tiles_;
+    int tiles_columns_ = 0;
+    int tiles_active_count_ = 0;
     QFrame* readiness_tile_ = nullptr;
     QLabel* readiness_tile_value_ = nullptr;
     QLabel* readiness_tile_sub_ = nullptr;
@@ -199,6 +217,17 @@ class DiagnosticsPage : public QWidget {
     QLabel* disk_tile_sub_ = nullptr;
     QLabel* display_tile_value_ = nullptr;
     QLabel* display_tile_sub_ = nullptr;
+    QLabel* audio_tile_value_ = nullptr;
+    QLabel* audio_tile_sub_ = nullptr;
+    QLabel* target_tile_value_ = nullptr;
+    QLabel* target_tile_sub_ = nullptr;
+    QFrame* session_tile_ = nullptr;
+    QLabel* session_tile_value_ = nullptr;
+    QLabel* session_tile_sub_ = nullptr;
+    // Cached verdict counts so setHasLastRecording can repopulate the tiles.
+    int last_blockers_ = 0;
+    int last_notices_ = 0;
+    int last_cap_passes_ = 0;
 
     // ── Worst-first cards (shared: visible in both Simple + Expert) ─────────────
     QVBoxLayout* overview_issues_layout_ = nullptr;
@@ -235,6 +264,7 @@ class DiagnosticsPage : public QWidget {
 
     // ── Injected data ──────────────────────────────────────────────────────────
     capability::CapabilitySet caps_;
+    capability::AudioUiState audio_state_;
     diagnostics::CapabilitySummary cap_summary_;
     diagnostics::ConfigSummary config_summary_;
     std::string profile_name_;
