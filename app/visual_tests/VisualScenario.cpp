@@ -1290,6 +1290,23 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .settings_target = VisualSettingsTarget::Display,
      .settings_expert_mode = true},
+    // Settings/Diagnostics polish, Slice 3 (cogwheels -> inline): the Audio card's
+    // expert section with the three former SettingsPopoverRow gears now inline —
+    // Audio clock slaving (plain toggle), Brickwall limiter (toggle + inline
+    // right-aligned ceiling spin), and the mic post-processing disclosure header.
+    {.id = QStringLiteral("settings-audio-expert-inline"),
+     .title = QStringLiteral("Settings / Audio expert / Cogwheels inline"),
+     .page = VisualPage::Settings,
+     .settings_expert_mode = true,
+     .scroll_target = QStringLiteral("settings/audio")},
+    // Same card with the mic post-processing chevron expanded, revealing the four
+    // DSP stage rows (HPF / Gate / AGC / RNNoise) inline within the card.
+    {.id = QStringLiteral("settings-audio-expert-mic-post-open"),
+     .title = QStringLiteral("Settings / Audio expert / Mic post-processing open"),
+     .page = VisualPage::Settings,
+     .settings_expert_mode = true,
+     .settings_mic_post_expanded = true,
+     .scroll_target = QStringLiteral("settings/audio")},
     {.id = QStringLiteral("settings-advanced-open"),
      .title = QStringLiteral("Settings / Advanced expander open"),
      .page = VisualPage::Settings,

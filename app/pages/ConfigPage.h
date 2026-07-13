@@ -134,6 +134,12 @@ class ConfigPage : public QWidget {
     // settings scenarios force the HDR rows shown (settings-hdr-*) or hidden
     // (everything else). Sticky: a later setRuntimeCapabilities() keeps the pin.
     void applyVisualHdrDisplayPresent(bool present);
+
+    // Settings/Diagnostics polish, Slice 3 (cogwheels -> inline): open/close the
+    // Audio expert card's mic post-processing chevron disclosure so its four DSP
+    // stage rows render deterministically for visual-test scenarios. No-op if the
+    // audio-expert subtree isn't built yet (caller must enable expert mode first).
+    void applyVisualMicPostProcessingExpanded(bool expanded);
 #endif
 
     // Live audio meter update forwarded from RecordPage via MainWindow.
