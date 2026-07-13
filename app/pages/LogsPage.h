@@ -6,12 +6,13 @@
 #include <QWidget>
 
 class QButtonGroup;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
-class QTableWidget;
 class QTimer;
+class QVBoxLayout;
 
 namespace exosnap {
 
@@ -92,7 +93,7 @@ class LogsPage : public QWidget {
 
     void rebuildVisibleEntries();
     void appendMatchingEntries(const QVector<diagnostics::LogEntry>& entries);
-    void insertEntry(const diagnostics::LogEntry& entry);
+    void insertEntry(const diagnostics::LogEntry& entry, int row_index);
     void replaceDocumentFromVisibleEntries();
     void updateActionState();
     void updateStatusLabel(const QString& feedback = {});
@@ -112,7 +113,9 @@ class LogsPage : public QWidget {
     QPushButton* copy_btn_ = nullptr;
     QPushButton* export_btn_ = nullptr;
     QPushButton* bundle_btn_ = nullptr;
-    QTableWidget* startup_table_ = nullptr;
+    QFrame* startup_panel_ = nullptr;
+    QWidget* startup_rows_host_ = nullptr;
+    QVBoxLayout* startup_rows_layout_ = nullptr;
     QLabel* folder_link_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* search_debounce_timer_ = nullptr;

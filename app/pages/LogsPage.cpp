@@ -11,11 +11,12 @@
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
-#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -23,8 +24,6 @@
 #include <QStandardPaths>
 #include <QStringConverter>
 #include <QStyle>
-#include <QTableWidget>
-#include <QTableWidgetItem>
 #include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QTextCursor>
@@ -160,6 +159,56 @@ LogsPage::SeverityFilter filterFromVisual(visual::VisualLogFilter filter) {
 }
 #endif
 
+// QPlainTextEdit renders one QTextBlock per log entry (see insertEntry below). It has
+// no native concept of a per-row border, so row separators are painted as a thin
+// overlay after the base class paints its text — the same "iterate visible blocks"
+// technique QPlainTextEdit's own line-number-area example uses, so cost stays
+// proportional to the visible viewport, not the full (possibly multi-thousand-entry)
+// history. Zebra tint is handled separately via QTextBlockFormat::setBackground() in
+// insertEntry, since that participates correctly in wrapped long-message rows and in
+// text selection painting, which a paint overlay would have to reimplement.
+class LogTextEdit : public QPlainTextEdit {
+  public:
+    explicit LogTextEdit(QWidget* parent = nullptr) : QPlainTextEdit(parent) {
+        // Resolve the divider colour once and re-resolve only on a theme switch
+        // (OnThemeChanged runs `apply` immediately, then again per ReapplyTheme()),
+        // rather than re-parsing a CSS colour string on every paintEvent — this
+        // widget can hold thousands of blocks and repaints on every scroll tick.
+        ui::theme::OnThemeChanged(
+            this, [this]() { line_color_ = ui::theme::ParseThemeColor(ui::theme::ActiveTheme().line); });
+    }
+
+  protected:
+    void paintEvent(QPaintEvent* event) override {
+        QPlainTextEdit::paintEvent(event);
+
+        if (!line_color_.isValid())
+            return;
+
+        QPainter painter(viewport());
+        painter.setPen(line_color_);
+
+        const QRect visible_rect = event->rect();
+        QTextBlock block = firstVisibleBlock();
+        qreal top = blockBoundingGeometry(block).translated(contentOffset()).top();
+
+        while (block.isValid() && top <= visible_rect.bottom()) {
+            const qreal height = blockBoundingRect(block).height();
+            // No divider above the very first entry — mirrors the diagTableRow
+            // firstRow convention used for card-style tables elsewhere in the app.
+            if (block.isVisible() && block.blockNumber() > 0 && top + height >= visible_rect.top()) {
+                const int y = qRound(top);
+                painter.drawLine(visible_rect.left(), y, visible_rect.right(), y);
+            }
+            top += height;
+            block = block.next();
+        }
+    }
+
+  private:
+    QColor line_color_;
+};
+
 } // namespace
 
 LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
@@ -287,7 +336,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(status_label_);
 
-    log_viewer_ = new QPlainTextEdit(content);
+    log_viewer_ = new LogTextEdit(content);
     log_viewer_->setObjectName(QStringLiteral("logViewer"));
     log_viewer_->setReadOnly(true);
     log_viewer_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
@@ -320,23 +369,49 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     connect(folder_link_, &QLabel::linkActivated, this, [this](const QString&) { onOpenFolder(); });
     layout->addLayout(footnote_row);
 
-    // Startup trace: a compact read-only table of start→milestone latencies, so
-    // startup regressions are visible instead of buried in log lines.
+    // Startup trace: a compact read-only list of start→milestone latencies, so
+    // startup regressions are visible instead of buried in log lines. Styled as a
+    // card (panelRole="panel" + diagTableRow rows) — the same visual language as
+    // the Diagnostics/Device fact tables — instead of a QTableWidget grid.
     auto* startup_header = new ui::widgets::SectionRuleHeader(QStringLiteral("STARTUP"), content);
     layout->addWidget(startup_header);
-    startup_table_ = new QTableWidget(content);
-    startup_table_->setObjectName(QStringLiteral("startupTraceTable"));
-    startup_table_->setColumnCount(2);
-    startup_table_->setHorizontalHeaderLabels({QStringLiteral("Milestone"), QStringLiteral("Elapsed")});
-    startup_table_->horizontalHeader()->setStretchLastSection(false);
-    startup_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    startup_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    startup_table_->verticalHeader()->setVisible(false);
-    startup_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    startup_table_->setSelectionMode(QAbstractItemView::NoSelection);
-    startup_table_->setFocusPolicy(Qt::NoFocus);
-    startup_table_->setMaximumHeight(180);
-    layout->addWidget(startup_table_);
+
+    startup_panel_ = new QFrame(content);
+    startup_panel_->setObjectName(QStringLiteral("startupTracePanel"));
+    startup_panel_->setProperty("panelRole", "panel");
+    startup_panel_->setMaximumHeight(180);
+    auto* startup_panel_layout = new QVBoxLayout(startup_panel_);
+    startup_panel_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    startup_panel_layout->setSpacing(0);
+
+    auto* startup_col_header = new QWidget(startup_panel_);
+    auto* startup_col_header_layout = new QHBoxLayout(startup_col_header);
+    startup_col_header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, M::kSpaceXs);
+    startup_col_header_layout->setSpacing(M::kSpaceMd);
+    auto* startup_col_milestone = new QLabel(QStringLiteral("Milestone"), startup_col_header);
+    startup_col_milestone->setProperty("labelRole", "tableHeader");
+    auto* startup_col_elapsed = new QLabel(QStringLiteral("Elapsed"), startup_col_header);
+    startup_col_elapsed->setProperty("labelRole", "tableHeader");
+    startup_col_header_layout->addWidget(startup_col_milestone, 1);
+    startup_col_header_layout->addWidget(startup_col_elapsed, 0);
+    startup_panel_layout->addWidget(startup_col_header);
+
+    // Scrolls instead of stretching the card past its 180px cap once the milestone
+    // list outgrows it, mirroring the old table's bounded-height behaviour.
+    auto* startup_scroll = new QScrollArea(startup_panel_);
+    startup_scroll->setObjectName(QStringLiteral("startupTraceScroll"));
+    startup_scroll->setWidgetResizable(true);
+    startup_scroll->setFrameShape(QFrame::NoFrame);
+    startup_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    startup_rows_host_ = new QWidget(startup_scroll);
+    startup_rows_layout_ = new QVBoxLayout(startup_rows_host_);
+    startup_rows_layout_->setContentsMargins(0, 0, 0, 0);
+    startup_rows_layout_->setSpacing(0);
+    startup_scroll->setWidget(startup_rows_host_);
+    startup_panel_layout->addWidget(startup_scroll, 1);
+
+    layout->addWidget(startup_panel_);
     refreshStartupTrace();
 
     auto* centering_host = new QWidget();
@@ -509,18 +584,42 @@ void LogsPage::showEvent(QShowEvent* event) {
 }
 
 void LogsPage::refreshStartupTrace() {
-    if (startup_table_ == nullptr)
+    if (startup_rows_layout_ == nullptr)
         return;
+
+    QLayoutItem* child = nullptr;
+    while ((child = startup_rows_layout_->takeAt(0)) != nullptr) {
+        delete child->widget();
+        delete child;
+    }
+
     const auto entries = diagnostics::StartupTrace::instance().entries();
-    startup_table_->setRowCount(static_cast<int>(entries.size()));
-    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-        startup_table_->setItem(i, 0, new QTableWidgetItem(entries[i].label));
-        startup_table_->setItem(i, 1, new QTableWidgetItem(QStringLiteral("%1 ms").arg(entries[i].elapsed_ms)));
+
+    bool first = true;
+    for (const auto& entry : entries) {
+        auto* row = new QWidget(startup_rows_host_);
+        row->setObjectName(QStringLiteral("diagTableRow"));
+        row->setProperty("firstRow", first);
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
+        row_layout->setSpacing(M::kSpaceMd);
+
+        auto* name_label = new QLabel(entry.label, row);
+        name_label->setProperty("labelRole", "body");
+        row_layout->addWidget(name_label, 1);
+
+        auto* value_label = new QLabel(QStringLiteral("%1 ms").arg(entry.elapsed_ms), row);
+        value_label->setProperty("labelRole", "mono");
+        value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row_layout->addWidget(value_label, 0);
+
+        startup_rows_layout_->addWidget(row);
+        first = false;
     }
 }
 
 int LogsPage::startupTraceRowCountForTesting() const {
-    return startup_table_ != nullptr ? startup_table_->rowCount() : 0;
+    return startup_rows_layout_ != nullptr ? startup_rows_layout_->count() : 0;
 }
 
 bool LogsPage::hasSupportBundleButtonForTesting() const noexcept {
@@ -645,7 +744,7 @@ void LogsPage::appendMatchingEntries(const QVector<LogEntry>& entries) {
     const int previous_scroll_value = log_viewer_->verticalScrollBar()->value();
     for (const LogEntry& entry : matching) {
         visible_entries_.push_back(entry);
-        insertEntry(entry);
+        insertEntry(entry, static_cast<int>(visible_entries_.size()) - 1);
     }
     ++incremental_append_count_;
     if (autoScrollEnabled()) {
@@ -656,17 +755,33 @@ void LogsPage::appendMatchingEntries(const QVector<LogEntry>& entries) {
     updateActionState();
 }
 
-void LogsPage::insertEntry(const LogEntry& entry) {
+void LogsPage::insertEntry(const LogEntry& entry, int row_index) {
     if (!log_viewer_)
         return;
+
+    // Single source of truth for stripe parity — both callers (full rebuild and
+    // incremental append) pass the entry's absolute position in visible_entries_
+    // and let this one expression decide, instead of each computing "is this row
+    // tinted" independently and risking the two definitions drifting apart.
+    const bool zebra_tint = (row_index % 2) == 1;
 
     QTextCursor cursor(log_viewer_->document());
     cursor.movePosition(QTextCursor::End);
     if (!log_viewer_->document()->isEmpty())
         cursor.insertBlock();
 
+    const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
+
     QTextBlockFormat block_format;
     block_format.setProperty(kSeverityBlockProperty, AppLog::severityKey(entry.severity));
+    if (zebra_tint) {
+        // Subtle alternating row tint — one surface step up from the viewer's own
+        // ${bg0} background, the same "next surface" convention used for card
+        // layering elsewhere (${bg1}), rather than an invented alpha wash.
+        const QColor stripe_color = ui::theme::ParseThemeColor(theme.surf);
+        if (stripe_color.isValid())
+            block_format.setBackground(stripe_color);
+    }
     cursor.setBlockFormat(block_format);
 
     // Render each column with its own colour so level and category read as distinct
@@ -676,7 +791,6 @@ void LogsPage::insertEntry(const LogEntry& entry) {
 
     // Timestamp — quietest column (log-time / dim).  Fixed width: 23 chars.
     {
-        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
         QColor ts_color = ui::theme::ParseThemeColor(theme.log.time);
         if (!ts_color.isValid())
             ts_color = QColor(QStringLiteral("#65656A"));
@@ -714,7 +828,6 @@ void LogsPage::insertEntry(const LogEntry& entry) {
 
     // Message — primary ink (theme.ink / text0).
     {
-        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
         QColor ink_color = QColor(QString::fromUtf8(theme.ink));
         if (!ink_color.isValid())
             ink_color = QColor(QStringLiteral("#F1F1EF"));
@@ -733,8 +846,8 @@ void LogsPage::replaceDocumentFromVisibleEntries() {
 
     const int previous_scroll_value = log_viewer_->verticalScrollBar()->value();
     log_viewer_->clear();
-    for (const LogEntry& entry : visible_entries_)
-        insertEntry(entry);
+    for (int i = 0; i < visible_entries_.size(); ++i)
+        insertEntry(visible_entries_.at(i), i);
 
     if (autoScrollEnabled()) {
         log_viewer_->verticalScrollBar()->setValue(log_viewer_->verticalScrollBar()->maximum());
