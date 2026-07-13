@@ -166,6 +166,9 @@ class DiagnosticsPage : public QWidget {
     void refreshEnvironmentFacts(const std::vector<diagnostics::DiagnosticResult>& facts);
 
     void refreshReadinessTiles(int blockers, int notices, int cap_passes);
+    // Updates only the Last-session tile's text from has_last_recording_ — the narrow
+    // slice of refreshReadinessTiles() that setHasLastRecording() actually needs.
+    void updateSessionTileText();
     void setReadinessState(const QString& state);
     void applyExpertVisibility();
 
@@ -176,9 +179,10 @@ class DiagnosticsPage : public QWidget {
     QWidget* makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
                                     QToolButton*& out_toggle);
 
-    // Builds one wide readiness tile (title · value · sub, optional trailing check).
-    QFrame* makeReadinessTile(const QString& object_name, const QString& title, QLabel*& out_value, QLabel*& out_sub,
-                              QLabel*& out_icon);
+    // Builds one wide readiness tile (title · value · sub, optional trailing check),
+    // always parented to `parent` regardless of its initial active/placed state.
+    QFrame* makeReadinessTile(QWidget* parent, const QString& object_name, const QString& title, QLabel*& out_value,
+                              QLabel*& out_sub, QLabel*& out_icon);
 
     // Re-columns the readiness dashboard grid for the current width (4 / 3 / 2 columns).
     void reflowReadinessTiles();
@@ -224,10 +228,6 @@ class DiagnosticsPage : public QWidget {
     QFrame* session_tile_ = nullptr;
     QLabel* session_tile_value_ = nullptr;
     QLabel* session_tile_sub_ = nullptr;
-    // Cached verdict counts so setHasLastRecording can repopulate the tiles.
-    int last_blockers_ = 0;
-    int last_notices_ = 0;
-    int last_cap_passes_ = 0;
 
     // ── Worst-first cards (shared: visible in both Simple + Expert) ─────────────
     QVBoxLayout* overview_issues_layout_ = nullptr;

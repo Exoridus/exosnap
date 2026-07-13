@@ -274,34 +274,30 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     tiles_grid_->setContentsMargins(0, 0, 0, 0);
     tiles_grid_->setHorizontalSpacing(M::kSpaceMd);
     tiles_grid_->setVerticalSpacing(M::kSpaceMd);
-    readiness_tile_ = makeReadinessTile(QStringLiteral("readinessTileReadiness"), QStringLiteral("Readiness"),
-                                        readiness_tile_value_, readiness_tile_sub_, readiness_tile_icon_);
+    readiness_tile_ =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileReadiness"), QStringLiteral("Readiness"),
+                          readiness_tile_value_, readiness_tile_sub_, readiness_tile_icon_);
     QLabel* enc_icon = nullptr;
-    auto* encoder_tile = makeReadinessTile(QStringLiteral("readinessTileEncoder"), QStringLiteral("Encoder"),
-                                           encoder_tile_value_, encoder_tile_sub_, enc_icon);
+    auto* encoder_tile = makeReadinessTile(tiles_host, QStringLiteral("readinessTileEncoder"),
+                                           QStringLiteral("Encoder"), encoder_tile_value_, encoder_tile_sub_, enc_icon);
     QLabel* disk_icon = nullptr;
-    auto* disk_tile = makeReadinessTile(QStringLiteral("readinessTileDisk"), QStringLiteral("Disk"), disk_tile_value_,
-                                        disk_tile_sub_, disk_icon);
+    auto* disk_tile = makeReadinessTile(tiles_host, QStringLiteral("readinessTileDisk"), QStringLiteral("Disk"),
+                                        disk_tile_value_, disk_tile_sub_, disk_icon);
     QLabel* disp_icon = nullptr;
-    auto* display_tile = makeReadinessTile(QStringLiteral("readinessTileDisplay"), QStringLiteral("Display"),
-                                           display_tile_value_, display_tile_sub_, disp_icon);
+    auto* display_tile =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileDisplay"), QStringLiteral("Display"),
+                          display_tile_value_, display_tile_sub_, disp_icon);
     QLabel* audio_icon = nullptr;
-    auto* audio_tile = makeReadinessTile(QStringLiteral("readinessTileAudio"), QStringLiteral("Audio"),
+    auto* audio_tile = makeReadinessTile(tiles_host, QStringLiteral("readinessTileAudio"), QStringLiteral("Audio"),
                                          audio_tile_value_, audio_tile_sub_, audio_icon);
     QLabel* target_icon = nullptr;
-    auto* target_tile = makeReadinessTile(QStringLiteral("readinessTileTarget"), QStringLiteral("Capture target"),
-                                          target_tile_value_, target_tile_sub_, target_icon);
+    auto* target_tile =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileTarget"), QStringLiteral("Capture target"),
+                          target_tile_value_, target_tile_sub_, target_icon);
     QLabel* session_icon = nullptr;
-    session_tile_ = makeReadinessTile(QStringLiteral("readinessTileSession"), QStringLiteral("Last session"),
-                                      session_tile_value_, session_tile_sub_, session_icon);
-    // makeReadinessTile() returns a parentless QFrame; the six always-active tiles
-    // below get parented implicitly the moment reflowReadinessTiles() calls
-    // QGridLayout::addWidget() on them. The Last-session tile starts INACTIVE (gated
-    // on setHasLastRecording), so it is excluded from that addWidget() pass and would
-    // otherwise stay parentless — invisible to findChild() and leaked from the widget
-    // tree. Parent it explicitly so it always lives under the tile grid host, whether
-    // or not it is currently placed.
-    session_tile_->setParent(tiles_host);
+    session_tile_ =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileSession"), QStringLiteral("Last session"),
+                          session_tile_value_, session_tile_sub_, session_icon);
     // Disk tile carries a slim usage bar (canon ReadinessTile pct).
     disk_bar_ = new QProgressBar(disk_tile);
     disk_bar_->setObjectName(QStringLiteral("diagDiskBar"));
@@ -549,13 +545,16 @@ void DiagnosticsPage::setHasLastRecording(bool has_last_recording) {
     if (open_last_report_btn_)
         open_last_report_btn_->setEnabled(has_last_recording_);
     // The Last session tile only earns a slot once a completed recording exists.
+    // Update just this one tile's text + grid membership — this setter fires on every
+    // chrome-state change and page show, and none of those touch disk space, the GPU
+    // adapter name, or any other tile, so a full refreshReadinessTiles() re-query would
+    // be wasted work unrelated to what changed.
     if (session_tile_) {
         session_tile_->setProperty("tileActive", has_last_recording_);
         session_tile_->setVisible(has_last_recording_);
+        updateSessionTileText();
         reflowReadinessTiles();
     }
-    if (data_ready_)
-        refreshReadinessTiles(last_blockers_, last_notices_, last_cap_passes_);
 }
 
 void DiagnosticsPage::showEvent(QShowEvent* event) {
@@ -869,9 +868,15 @@ QFrame* DiagnosticsPage::makePanel(QWidget* parent) {
     return panel;
 }
 
-QFrame* DiagnosticsPage::makeReadinessTile(const QString& object_name, const QString& title, QLabel*& out_value,
-                                           QLabel*& out_sub, QLabel*& out_icon) {
-    auto* tile = new QFrame();
+QFrame* DiagnosticsPage::makeReadinessTile(QWidget* parent, const QString& object_name, const QString& title,
+                                           QLabel*& out_value, QLabel*& out_sub, QLabel*& out_icon) {
+    // Always parented up front — QGridLayout::addWidget() would otherwise be the ONLY
+    // thing that parents a tile, and a tile excluded from the active set (like the
+    // gated Last-session tile before its first activation) would stay parentless:
+    // invisible to findChild() and leaked from the widget tree. See the reflow
+    // grid's addWidget()/takeAt() dance in reflowReadinessTiles() for placement, which
+    // is a layout-membership concern, kept separate from parenting.
+    auto* tile = new QFrame(parent);
     tile->setObjectName(object_name);
     tile->setProperty("panelRole", "readinessTile");
     tile->setProperty("tileTone", "neutral");
@@ -910,6 +915,23 @@ void DiagnosticsPage::reflowReadinessTiles() {
     if (!tiles_grid_)
         return;
 
+    // Key off the PAGE's own width, not the tile-grid host's — the host sits inside a
+    // QScrollArea, so a wide grid keeps its natural (unshrunk) width and the scroll
+    // area grows a horizontal scrollbar instead of forcing a narrower layout; measuring
+    // the host would make the reflow circular (never actually narrows). The page's own
+    // width tracks the real window size directly via resizeEvent().
+    const int avail = width() - 2 * M::kSpaceXl;
+    const int width_columns = (avail >= 1000) ? 4 : (avail >= 620) ? 3 : 2;
+
+    // Cheap early-out BEFORE the active-tile scan below: resizeEvent() calls this on
+    // every QResizeEvent, and interactive window dragging fires dozens per second. Most
+    // of them don't cross a column-count threshold, so bail using the cached active
+    // count (kept in sync by whoever last changed a tile's "tileActive" property and
+    // then called this function) before paying for a QVector allocation + a
+    // property-map lookup per tile.
+    if (tiles_active_count_ > 0 && std::min(width_columns, tiles_active_count_) == tiles_columns_)
+        return;
+
     QVector<QFrame*> active;
     for (QFrame* tile : readiness_tiles_) {
         if (tile && tile->property("tileActive").toBool())
@@ -918,15 +940,7 @@ void DiagnosticsPage::reflowReadinessTiles() {
     if (active.isEmpty())
         return;
 
-    // Key off the PAGE's own width, not the tile-grid host's — the host sits inside a
-    // QScrollArea, so a wide grid keeps its natural (unshrunk) width and the scroll
-    // area grows a horizontal scrollbar instead of forcing a narrower layout; measuring
-    // the host would make the reflow circular (never actually narrows). The page's own
-    // width tracks the real window size directly via resizeEvent().
-    const int avail = width() - 2 * M::kSpaceXl;
-    int columns = (avail >= 1000) ? 4 : (avail >= 620) ? 3 : 2;
-    columns = std::min(columns, static_cast<int>(active.size()));
-
+    const int columns = std::min(width_columns, static_cast<int>(active.size()));
     if (columns == tiles_columns_ && active.size() == tiles_active_count_)
         return;
     tiles_columns_ = columns;
@@ -1043,17 +1057,17 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         w->style()->polish(w);
     };
     // Slice-5: the verdict band is a dashboard header, so the calm "ready" state also
-    // earns a soft tint (kept faint — non-alarmist per the diagnostics ethos).
-    const bool panel_tinted =
-        state == QStringLiteral("ready") || state == QStringLiteral("warn") || state == QStringLiteral("blocked");
-    const bool pill_tinted =
+    // earns a soft tint (kept faint — non-alarmist per the diagnostics ethos). Both the
+    // band and the hidden legacy status_pill_ (kept alive only so its many writers
+    // keep working; superseded by verdict_headline_) share this tint rule.
+    const bool tinted =
         state == QStringLiteral("ready") || state == QStringLiteral("warn") || state == QStringLiteral("blocked");
     if (readiness_panel_) {
-        readiness_panel_->setProperty("stateRole", panel_tinted ? QVariant(state) : QVariant());
+        readiness_panel_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
         repolish(readiness_panel_);
     }
     if (status_pill_) {
-        status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
+        status_pill_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
     }
     if (verdict_glyph_) {
@@ -1443,18 +1457,21 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
 void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_passes) {
     const QString dash = QString::fromUtf8("\xe2\x80\x94");
 
-    // Cache so a later setHasLastRecording (which toggles the Last-session tile) can
-    // repopulate the grid without recomputing the verdict.
-    last_blockers_ = blockers;
-    last_notices_ = notices;
-    last_cap_passes_ = cap_passes;
-
     const auto setTone = [](QFrame* tile, const char* tone) {
         if (!tile)
             return;
         tile->setProperty("tileTone", tone);
         tile->style()->unpolish(tile);
         tile->style()->polish(tile);
+    };
+
+    // Display names carry the backend suffix ("AV1 (NVENC)"); both the Encoder and
+    // Audio tiles add their own backend/source token on the sub line, so both need the
+    // bare codec name with that suffix trimmed off.
+    const auto stripBackendSuffix = [](QString codec) {
+        if (const int paren = codec.indexOf(QStringLiteral(" (")); paren > 0)
+            codec.truncate(paren);
+        return codec;
     };
 
     // Tile 1 — Readiness.
@@ -1492,11 +1509,8 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
     // when the adapter name is unknown.
     if (data_ready_) {
         const QString gpu = QString::fromStdString(caps_.gpu_adapter_name).trimmed();
-        QString codec = QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec));
-        // The display name carries the backend ("AV1 (NVENC)"); the tile sub adds
-        // its own backend token, so trim to the bare codec.
-        if (const int paren = codec.indexOf(QStringLiteral(" (")); paren > 0)
-            codec.truncate(paren);
+        const QString codec = stripBackendSuffix(
+            QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec)));
         encoder_tile_value_->setText(gpu.isEmpty() ? codec : gpu);
         encoder_tile_sub_->setText(
             gpu.isEmpty() ? QString::fromStdString(diagnostics::ContainerDisplayName(active_user_config_.container))
@@ -1547,9 +1561,8 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
     // Tile 5 — Audio (codec + routing summary of the configured sources; a plain
     // capability/environment readout, never coloured as a problem).
     if (data_ready_) {
-        QString codec = QString::fromStdString(diagnostics::AudioCodecDisplayName(active_user_config_.audio_codec));
-        if (const int paren = codec.indexOf(QStringLiteral(" (")); paren > 0)
-            codec.truncate(paren);
+        const QString codec = stripBackendSuffix(
+            QString::fromStdString(diagnostics::AudioCodecDisplayName(active_user_config_.audio_codec)));
         const int sources = static_cast<int>(audio_state_.IsAppEnabled()) +
                             static_cast<int>(audio_state_.IsSysEnabled()) +
                             static_cast<int>(audio_state_.IsMicEnabled());
@@ -1593,17 +1606,25 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
         target_tile_sub_->setText(target_sub);
     }
 
-    // Tile 7 — Last session (gated on a completed recording by setHasLastRecording).
-    // The real report card lives on the Edit overlay's Review step; this tile is only a
-    // calm signpost to it, never a fabricated metric.
-    if (session_tile_) {
-        if (has_last_recording_) {
-            session_tile_value_->setText(QStringLiteral("Recorded"));
-            session_tile_sub_->setText(QStringLiteral("report in Edit \xc2\xb7 Review"));
-        } else {
-            session_tile_value_->setText(dash);
-            session_tile_sub_->setText(QStringLiteral("no recording yet"));
-        }
+    // Tile 7 — Last session.
+    updateSessionTileText();
+}
+
+// Tile 7 — Last session (gated on a completed recording by setHasLastRecording). The
+// real report card lives on the Edit overlay's Review step; this tile is only a calm
+// signpost to it, never a fabricated metric. Split out from refreshReadinessTiles() so
+// setHasLastRecording() can update just this one tile's text without re-querying disk
+// space, GPU/codec names, and every other tile that has nothing to do with recording
+// completion.
+void DiagnosticsPage::updateSessionTileText() {
+    if (!session_tile_)
+        return;
+    if (has_last_recording_) {
+        session_tile_value_->setText(QStringLiteral("Recorded"));
+        session_tile_sub_->setText(QStringLiteral("report in Edit \xc2\xb7 Review"));
+    } else {
+        session_tile_value_->setText(QString::fromUtf8("\xe2\x80\x94"));
+        session_tile_sub_->setText(QStringLiteral("no recording yet"));
     }
 }
 
