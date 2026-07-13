@@ -294,6 +294,14 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     QLabel* session_icon = nullptr;
     session_tile_ = makeReadinessTile(QStringLiteral("readinessTileSession"), QStringLiteral("Last session"),
                                       session_tile_value_, session_tile_sub_, session_icon);
+    // makeReadinessTile() returns a parentless QFrame; the six always-active tiles
+    // below get parented implicitly the moment reflowReadinessTiles() calls
+    // QGridLayout::addWidget() on them. The Last-session tile starts INACTIVE (gated
+    // on setHasLastRecording), so it is excluded from that addWidget() pass and would
+    // otherwise stay parentless — invisible to findChild() and leaked from the widget
+    // tree. Parent it explicitly so it always lives under the tile grid host, whether
+    // or not it is currently placed.
+    session_tile_->setParent(tiles_host);
     // Disk tile carries a slim usage bar (canon ReadinessTile pct).
     disk_bar_ = new QProgressBar(disk_tile);
     disk_bar_->setObjectName(QStringLiteral("diagDiskBar"));
@@ -910,8 +918,12 @@ void DiagnosticsPage::reflowReadinessTiles() {
     if (active.isEmpty())
         return;
 
-    QWidget* host = tiles_grid_->parentWidget();
-    const int avail = (host && host->width() > 0) ? host->width() : width();
+    // Key off the PAGE's own width, not the tile-grid host's — the host sits inside a
+    // QScrollArea, so a wide grid keeps its natural (unshrunk) width and the scroll
+    // area grows a horizontal scrollbar instead of forcing a narrower layout; measuring
+    // the host would make the reflow circular (never actually narrows). The page's own
+    // width tracks the real window size directly via resizeEvent().
+    const int avail = width() - 2 * M::kSpaceXl;
     int columns = (avail >= 1000) ? 4 : (avail >= 620) ? 3 : 2;
     columns = std::min(columns, static_cast<int>(active.size()));
 

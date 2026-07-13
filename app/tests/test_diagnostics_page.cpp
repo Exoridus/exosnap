@@ -372,41 +372,54 @@ TEST_F(DiagnosticsPageTest, ReadinessTilesPopulateAfterData) {
 }
 
 TEST_F(DiagnosticsPageTest, LastSessionTileHiddenUntilRecordingCompletes) {
+    // Unshown top-level widgets always report isVisible() == false regardless of their
+    // own explicit setVisible() call, so use isHidden() (the widget's own flag) —
+    // matching the established pattern in ExpertContainerHiddenInSimpleShownInExpert.
     DiagnosticsPage page;
     LoadData(page);
     auto* tile = page.findChild<QFrame*>(QStringLiteral("readinessTileSession"));
     ASSERT_NE(tile, nullptr);
-    EXPECT_FALSE(tile->isVisible()) << "Last session tile must not claim a slot before a recording finishes";
+    EXPECT_TRUE(tile->isHidden()) << "Last session tile must not claim a slot before a recording finishes";
 
     page.setHasLastRecording(true);
-    EXPECT_TRUE(tile->isVisible());
+    EXPECT_FALSE(tile->isHidden());
     EXPECT_NE(TileValue(page, QStringLiteral("readinessTileSession")), QString::fromUtf8("\xe2\x80\x94"));
 
     page.setHasLastRecording(false);
-    EXPECT_FALSE(tile->isVisible());
+    EXPECT_TRUE(tile->isHidden());
 }
 
 TEST_F(DiagnosticsPageTest, ReadinessTileGridReflowsNarrowerAtSmallWidths) {
     // The tile grid is responsive (4 → 3 → 2 columns) so the dashboard still fills the
-    // height without overflow on a narrow window; assert the grid's own column-stretch
-    // count actually shrinks rather than staying fixed like the old exactly-four row.
+    // height without overflow on a narrow window. QGridLayout::columnCount() is not a
+    // usable oracle here — Qt's grid layout never shrinks its internal column
+    // bookkeeping once expanded, even after items move to fewer columns — so assert
+    // the actual GRID POSITION of a tile that must move when the column count drops
+    // (Disk is the 3rd active tile: column 2 at 4-wide, column 0 once host narrows to
+    // 2 columns).
     DiagnosticsPage page;
     LoadData(page);
     page.show();
     page.resize(1400, 900);
     QCoreApplication::processEvents();
 
-    auto* readiness_tile = page.findChild<QFrame*>(QStringLiteral("readinessTileReadiness"));
-    ASSERT_NE(readiness_tile, nullptr);
-    auto* grid = qobject_cast<QGridLayout*>(readiness_tile->parentWidget()->layout());
+    auto* disk_tile = page.findChild<QFrame*>(QStringLiteral("readinessTileDisk"));
+    ASSERT_NE(disk_tile, nullptr);
+    auto* grid = qobject_cast<QGridLayout*>(disk_tile->parentWidget()->layout());
     ASSERT_NE(grid, nullptr);
-    const int wide_columns = grid->columnCount();
+
+    int wide_row = -1, wide_col = -1, row_span = -1, col_span = -1;
+    grid->getItemPosition(grid->indexOf(disk_tile), &wide_row, &wide_col, &row_span, &col_span);
+    ASSERT_EQ(wide_row, 0) << "Disk tile should be in row 0 of the wide (4-column) layout";
+    ASSERT_EQ(wide_col, 2) << "Disk tile should be the 3rd tile (column index 2) of the wide layout";
 
     page.resize(500, 900);
     QCoreApplication::processEvents();
-    const int narrow_columns = grid->columnCount();
+    int narrow_row = -1, narrow_col = -1;
+    grid->getItemPosition(grid->indexOf(disk_tile), &narrow_row, &narrow_col, &row_span, &col_span);
 
-    EXPECT_LT(narrow_columns, wide_columns) << "Grid must use fewer columns at a narrow width";
+    EXPECT_NE(narrow_col, wide_col) << "Disk tile must re-column when the grid narrows";
+    EXPECT_GT(narrow_row, wide_row) << "Disk tile must drop to a later row once fewer columns fit";
     // Tile identity survives the reflow — nothing is dropped, only re-columned.
     EXPECT_NE(page.findChild<QFrame*>(QStringLiteral("readinessTileReadiness")), nullptr);
     EXPECT_NE(page.findChild<QFrame*>(QStringLiteral("readinessTileEncoder")), nullptr);
