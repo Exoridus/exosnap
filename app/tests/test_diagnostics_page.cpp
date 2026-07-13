@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QFrame>
+#include <QGridLayout>
 #include <QLabel>
 #include <QList>
 #include <QPushButton>
@@ -327,12 +328,16 @@ TEST_F(DiagnosticsPageTest, VerdictPipelineStagesAllPresent) {
     EXPECT_EQ(flow->card(5)->stepName(), QStringLiteral("Disk"));
 }
 
-TEST_F(DiagnosticsPageTest, FourReadinessTilesPresent) {
-    // suite-diag2.jsx ReadinessGrid: exactly four wide tiles — Readiness · Encoder ·
-    // Disk · Display — replace the old three blocker/issue/pass stat tiles.
+TEST_F(DiagnosticsPageTest, SixCoreReadinessTilesPresent) {
+    // Slice-5 redesign (docs/superpowers/specs/2026-07-13-settings-diagnostics-polish-design.md
+    // §3.3): the readiness dashboard grid carries MORE than four tiles — Readiness ·
+    // Encoder · Disk · Display · Audio · Capture target are always present; Last
+    // session joins once a completed recording exists (see LastSessionTile* below).
+    // This is a deliberate divergence from the design canon's exactly-four-tile
+    // suite-diag2.jsx ReadinessGrid.
     DiagnosticsPage page;
-    for (const char* name :
-         {"readinessTileReadiness", "readinessTileEncoder", "readinessTileDisk", "readinessTileDisplay"}) {
+    for (const char* name : {"readinessTileReadiness", "readinessTileEncoder", "readinessTileDisk",
+                             "readinessTileDisplay", "readinessTileAudio", "readinessTileTarget"}) {
         auto* tile = page.findChild<QFrame*>(QString::fromLatin1(name));
         EXPECT_NE(tile, nullptr) << "Missing readiness tile: " << name;
         if (tile)
@@ -358,6 +363,66 @@ TEST_F(DiagnosticsPageTest, ReadinessTilesPopulateAfterData) {
         << "Encoder tile should show the active encoder";
     // Display tile shows a resolution (× glyph), never the em-dash, once a screen exists.
     EXPECT_NE(TileValue(page, QStringLiteral("readinessTileDisplay")), dash);
+    // Audio tile shows the configured codec once data has loaded.
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileAudio")), dash)
+        << "Audio tile should show the active audio codec";
+    // Capture target tile always reads Window or Screen once data has loaded (never dash).
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileTarget")), dash)
+        << "Capture target tile should show a concrete target kind";
+}
+
+TEST_F(DiagnosticsPageTest, LastSessionTileHiddenUntilRecordingCompletes) {
+    // Unshown top-level widgets always report isVisible() == false regardless of their
+    // own explicit setVisible() call, so use isHidden() (the widget's own flag) —
+    // matching the established pattern in ExpertContainerHiddenInSimpleShownInExpert.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto* tile = page.findChild<QFrame*>(QStringLiteral("readinessTileSession"));
+    ASSERT_NE(tile, nullptr);
+    EXPECT_TRUE(tile->isHidden()) << "Last session tile must not claim a slot before a recording finishes";
+
+    page.setHasLastRecording(true);
+    EXPECT_FALSE(tile->isHidden());
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileSession")), QString::fromUtf8("\xe2\x80\x94"));
+
+    page.setHasLastRecording(false);
+    EXPECT_TRUE(tile->isHidden());
+}
+
+TEST_F(DiagnosticsPageTest, ReadinessTileGridReflowsNarrowerAtSmallWidths) {
+    // The tile grid is responsive (4 → 3 → 2 columns) so the dashboard still fills the
+    // height without overflow on a narrow window. QGridLayout::columnCount() is not a
+    // usable oracle here — Qt's grid layout never shrinks its internal column
+    // bookkeeping once expanded, even after items move to fewer columns — so assert
+    // the actual GRID POSITION of a tile that must move when the column count drops
+    // (Disk is the 3rd active tile: column 2 at 4-wide, column 0 once host narrows to
+    // 2 columns).
+    DiagnosticsPage page;
+    LoadData(page);
+    page.show();
+    page.resize(1400, 900);
+    QCoreApplication::processEvents();
+
+    auto* disk_tile = page.findChild<QFrame*>(QStringLiteral("readinessTileDisk"));
+    ASSERT_NE(disk_tile, nullptr);
+    auto* grid = qobject_cast<QGridLayout*>(disk_tile->parentWidget()->layout());
+    ASSERT_NE(grid, nullptr);
+
+    int wide_row = -1, wide_col = -1, row_span = -1, col_span = -1;
+    grid->getItemPosition(grid->indexOf(disk_tile), &wide_row, &wide_col, &row_span, &col_span);
+    ASSERT_EQ(wide_row, 0) << "Disk tile should be in row 0 of the wide (4-column) layout";
+    ASSERT_EQ(wide_col, 2) << "Disk tile should be the 3rd tile (column index 2) of the wide layout";
+
+    page.resize(500, 900);
+    QCoreApplication::processEvents();
+    int narrow_row = -1, narrow_col = -1;
+    grid->getItemPosition(grid->indexOf(disk_tile), &narrow_row, &narrow_col, &row_span, &col_span);
+
+    EXPECT_NE(narrow_col, wide_col) << "Disk tile must re-column when the grid narrows";
+    EXPECT_GT(narrow_row, wide_row) << "Disk tile must drop to a later row once fewer columns fit";
+    // Tile identity survives the reflow — nothing is dropped, only re-columned.
+    EXPECT_NE(page.findChild<QFrame*>(QStringLiteral("readinessTileReadiness")), nullptr);
+    EXPECT_NE(page.findChild<QFrame*>(QStringLiteral("readinessTileEncoder")), nullptr);
 }
 
 // ---- v10 verdict logic (#6): capability matrix unavailability is NOT amber ----

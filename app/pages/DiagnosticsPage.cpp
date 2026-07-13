@@ -34,6 +34,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QScrollArea>
 #include <QShowEvent>
@@ -179,15 +180,9 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     mode_caption_->setProperty("labelRole", "subtle");
     tl->addWidget(mode_caption_);
     tl->addStretch(1);
-    // The check actions live in the toolbar row — the verdict below stays a calm,
-    // centred statement (canon suite-diag2.jsx SimpleView).
-    last_check_label_ = new QLabel(QStringLiteral("Last check: â"), toolbar);
-    last_check_label_->setProperty("labelRole", "subtle");
-    tl->addWidget(last_check_label_, 0, Qt::AlignVCenter);
-    run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), toolbar);
-    run_check_btn_->setProperty("role", "primary");
-    run_check_btn_->setProperty("size", "sm");
-    tl->addWidget(run_check_btn_, 0, Qt::AlignVCenter);
+    // The primary Run-check control + last-check timestamp live in the verdict hero
+    // band below (readiness dashboard header), not the toolbar. The toolbar keeps the
+    // page identity, the support-bundle export (Expert), and the Expert toggle.
     export_report_btn_ = new QPushButton(QStringLiteral("Create support bundle"), toolbar);
     export_report_btn_->setProperty("role", "ghost");
     export_report_btn_->setProperty("size", "sm");
@@ -217,15 +212,18 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
-    // ── Verdict hero — a calm, centred statement (canon suite-diag2.jsx
-    // CompactVerdict): glyph chip + headline + sub, no panel chrome. The old
-    // status pill object stays alive (its many writers keep working) but is
-    // hidden; the headline carries the verdict now.
+    // ── Verdict hero — a top-anchored readiness-dashboard HEADER BAND (slice-5
+    // redesign, deliberate divergence from suite-diag2.jsx's centred CompactVerdict):
+    // glyph chip + headline + subline on the left, the primary Run-check control and
+    // last-check timestamp on the right. Panel chrome (readinessBanner) tints calmly
+    // by verdict state. The old status pill object stays alive (its many writers keep
+    // working) but is hidden; the headline carries the verdict now.
     readiness_panel_ = new QFrame(content);
+    readiness_panel_->setProperty("panelRole", "readinessBanner");
+    readiness_panel_->setObjectName(QStringLiteral("diagVerdictBand"));
     auto* rl = new QHBoxLayout(readiness_panel_);
-    rl->setContentsMargins(0, M::kSpaceLg, 0, 0);
+    rl->setContentsMargins(M::kSpaceLg, M::kSpaceLg, M::kSpaceLg, M::kSpaceLg);
     rl->setSpacing(M::kSpaceMd + 3);
-    rl->addStretch(1);
 
     verdict_glyph_ = new QLabel(readiness_panel_);
     verdict_glyph_->setObjectName(QStringLiteral("diagVerdictGlyph"));
@@ -242,10 +240,24 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     summary_label_ = new QLabel(QStringLiteral("Run a check to see whether this machine is set up to record well."),
                                 readiness_panel_);
     summary_label_->setProperty("labelRole", "diagVerdictSub");
-    summary_label_->setMaximumWidth(560);
+    summary_label_->setWordWrap(true);
     verdict_text->addWidget(summary_label_);
-    rl->addLayout(verdict_text, 0);
-    rl->addStretch(1);
+    rl->addLayout(verdict_text, 1);
+    rl->addSpacing(M::kSpaceMd);
+
+    // Right rail of the band: last-check timestamp above the primary Run-check button.
+    auto* verdict_actions = new QVBoxLayout();
+    verdict_actions->setSpacing(M::kSpaceSm);
+    verdict_actions->setAlignment(Qt::AlignRight);
+    last_check_label_ = new QLabel(QString::fromUtf8("Last check: \xe2\x80\x94"), readiness_panel_);
+    last_check_label_->setProperty("labelRole", "subtle");
+    last_check_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    verdict_actions->addWidget(last_check_label_, 0, Qt::AlignRight);
+    run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), readiness_panel_);
+    run_check_btn_->setProperty("role", "primary");
+    run_check_btn_->setProperty("size", "sm");
+    verdict_actions->addWidget(run_check_btn_, 0, Qt::AlignRight);
+    rl->addLayout(verdict_actions, 0);
 
     status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
     status_pill_->hide();
@@ -253,26 +265,39 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     readiness_icon_->hide();
     layout->addWidget(readiness_panel_);
 
-    // ── Four readiness tiles (the designed calm that replaces the old void) ──────
+    // ── Readiness dashboard tiles (slice-5: more than four, responsive reflow) ───
+    // Readiness · Encoder · Disk · Display · Audio · Capture target, plus a Last
+    // session tile that appears once a completed recording exists (space-permitting).
+    // reflowReadinessTiles() re-columns the grid on resize (4 → 3 → 2 columns).
     auto* tiles_host = new QWidget(content);
-    auto* tiles_grid = new QGridLayout(tiles_host);
-    tiles_grid->setContentsMargins(0, 0, 0, 0);
-    tiles_grid->setHorizontalSpacing(M::kSpaceMd);
-    tiles_grid->setVerticalSpacing(M::kSpaceMd);
-    readiness_tile_ = makeReadinessTile(QStringLiteral("readinessTileReadiness"), QStringLiteral("Readiness"),
-                                        readiness_tile_value_, readiness_tile_sub_, readiness_tile_icon_);
+    tiles_grid_ = new QGridLayout(tiles_host);
+    tiles_grid_->setContentsMargins(0, 0, 0, 0);
+    tiles_grid_->setHorizontalSpacing(M::kSpaceMd);
+    tiles_grid_->setVerticalSpacing(M::kSpaceMd);
+    readiness_tile_ =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileReadiness"), QStringLiteral("Readiness"),
+                          readiness_tile_value_, readiness_tile_sub_, readiness_tile_icon_);
     QLabel* enc_icon = nullptr;
-    auto* encoder_tile = makeReadinessTile(QStringLiteral("readinessTileEncoder"), QStringLiteral("Encoder"),
-                                           encoder_tile_value_, encoder_tile_sub_, enc_icon);
+    auto* encoder_tile = makeReadinessTile(tiles_host, QStringLiteral("readinessTileEncoder"),
+                                           QStringLiteral("Encoder"), encoder_tile_value_, encoder_tile_sub_, enc_icon);
     QLabel* disk_icon = nullptr;
-    auto* disk_tile = makeReadinessTile(QStringLiteral("readinessTileDisk"), QStringLiteral("Disk"), disk_tile_value_,
-                                        disk_tile_sub_, disk_icon);
+    auto* disk_tile = makeReadinessTile(tiles_host, QStringLiteral("readinessTileDisk"), QStringLiteral("Disk"),
+                                        disk_tile_value_, disk_tile_sub_, disk_icon);
     QLabel* disp_icon = nullptr;
-    auto* display_tile = makeReadinessTile(QStringLiteral("readinessTileDisplay"), QStringLiteral("Display"),
-                                           display_tile_value_, display_tile_sub_, disp_icon);
-    // Row 0 holds all four on wide windows; the grid naturally wraps nothing, but the
-    // four equal columns collapse gracefully within the 900 px content cap. (A 2×2
-    // fallback on very narrow windows is acceptable per the mockup intent.)
+    auto* display_tile =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileDisplay"), QStringLiteral("Display"),
+                          display_tile_value_, display_tile_sub_, disp_icon);
+    QLabel* audio_icon = nullptr;
+    auto* audio_tile = makeReadinessTile(tiles_host, QStringLiteral("readinessTileAudio"), QStringLiteral("Audio"),
+                                         audio_tile_value_, audio_tile_sub_, audio_icon);
+    QLabel* target_icon = nullptr;
+    auto* target_tile =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileTarget"), QStringLiteral("Capture target"),
+                          target_tile_value_, target_tile_sub_, target_icon);
+    QLabel* session_icon = nullptr;
+    session_tile_ =
+        makeReadinessTile(tiles_host, QStringLiteral("readinessTileSession"), QStringLiteral("Last session"),
+                          session_tile_value_, session_tile_sub_, session_icon);
     // Disk tile carries a slim usage bar (canon ReadinessTile pct).
     disk_bar_ = new QProgressBar(disk_tile);
     disk_bar_->setObjectName(QStringLiteral("diagDiskBar"));
@@ -282,12 +307,17 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     disk_bar_->setVisible(false);
     if (auto* dl = qobject_cast<QVBoxLayout*>(disk_tile->layout()))
         dl->addWidget(disk_bar_);
-    tiles_grid->addWidget(readiness_tile_, 0, 0);
-    tiles_grid->addWidget(encoder_tile, 0, 1);
-    tiles_grid->addWidget(disk_tile, 0, 2);
-    tiles_grid->addWidget(display_tile, 0, 3);
-    for (int c = 0; c < 4; ++c)
-        tiles_grid->setColumnStretch(c, 1);
+
+    // The six core tiles are always shown; the Last session tile is gated on a
+    // completed recording (setHasLastRecording), so it never claims an empty slot.
+    for (QFrame* tile : {readiness_tile_, encoder_tile, disk_tile, display_tile, audio_tile, target_tile}) {
+        tile->setProperty("tileActive", true);
+        readiness_tiles_.push_back(tile);
+    }
+    session_tile_->setProperty("tileActive", has_last_recording_);
+    session_tile_->setVisible(has_last_recording_);
+    readiness_tiles_.push_back(session_tile_);
+    reflowReadinessTiles();
     layout->addWidget(tiles_host);
 
     // ── Worst-first cards (shared: Simple + Expert) ─────────────────────────────
@@ -302,10 +332,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     connect(tip_chip_, &ui::widgets::TipChip::assistedFixRequested, this, &DiagnosticsPage::openAssistedFixRequested);
     layout->addWidget(tip_chip_);
 
-    // Simple view centres the verdict/tiles block vertically (canon SimpleView:
-    // the empty calm IS the feature): a top stretch balances the ctor's trailing
-    // addStretch(); applyExpertVisibility() flips the weights for Expert.
-    layout->insertStretch(0, 0);
+    // Slice-5: the readiness dashboard is top-anchored in BOTH views — the verdict
+    // band + tile grid fill from the top and the trailing addStretch() below absorbs
+    // the remaining height. (The old SimpleView vertical centring is intentionally
+    // dropped; see docs/product-spec §11 and the wave spec §2/§3.3.)
 
     // ── Expert-only container (phases + elevation) ──────────────────────────────
     expert_container_ = new QWidget(content);
@@ -459,7 +489,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
 
     layout->addStretch();
 
-    content->setMaximumWidth(920);
+    // Wider cap than the old centred Simple view so the responsive tile grid has room
+    // for 3–4 columns; still centred so the dashboard never stretches edge-to-edge on
+    // an ultra-wide window.
+    content->setMaximumWidth(1080);
     {
         auto* centering_host = new QWidget();
         auto* ch = new QHBoxLayout(centering_host);
@@ -511,6 +544,17 @@ void DiagnosticsPage::setHasLastRecording(bool has_last_recording) {
     has_last_recording_ = has_last_recording;
     if (open_last_report_btn_)
         open_last_report_btn_->setEnabled(has_last_recording_);
+    // The Last session tile only earns a slot once a completed recording exists.
+    // Update just this one tile's text + grid membership — this setter fires on every
+    // chrome-state change and page show, and none of those touch disk space, the GPU
+    // adapter name, or any other tile, so a full refreshReadinessTiles() re-query would
+    // be wasted work unrelated to what changed.
+    if (session_tile_) {
+        session_tile_->setProperty("tileActive", has_last_recording_);
+        session_tile_->setVisible(has_last_recording_);
+        updateSessionTileText();
+        reflowReadinessTiles();
+    }
 }
 
 void DiagnosticsPage::showEvent(QShowEvent* event) {
@@ -524,13 +568,8 @@ void DiagnosticsPage::showEvent(QShowEvent* event) {
 void DiagnosticsPage::applyExpertVisibility() {
     if (expert_container_)
         expert_container_->setVisible(expert_mode_enabled_);
-    // Simple: centre the calm block vertically. Expert: top-aligned taxonomy.
-    if (auto* content_layout =
-            readiness_panel_ ? qobject_cast<QVBoxLayout*>(readiness_panel_->parentWidget()->layout()) : nullptr) {
-        const int stretch = expert_mode_enabled_ ? 0 : 1;
-        content_layout->setStretch(0, stretch);
-        content_layout->setStretch(content_layout->count() - 1, stretch);
-    }
+    // Both views are top-anchored (slice-5): no vertical-centring stretch flip. The
+    // trailing addStretch() in the ctor absorbs the remaining height in either mode.
     if (export_report_btn_)
         export_report_btn_->setVisible(expert_mode_enabled_);
     // suite-diag2.jsx: tips are bundled (collapsed) in Simple, listed open in Expert.
@@ -580,6 +619,7 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
                                         const std::string& profile_name, const std::string& hotkeys_summary,
                                         const std::string& settings_path, bool hotkeys_ok) {
     caps_ = caps;
+    audio_state_ = audio;
     profile_name_ = profile_name;
     hotkeys_summary_ = hotkeys_summary;
     settings_path_ = settings_path;
@@ -828,9 +868,15 @@ QFrame* DiagnosticsPage::makePanel(QWidget* parent) {
     return panel;
 }
 
-QFrame* DiagnosticsPage::makeReadinessTile(const QString& object_name, const QString& title, QLabel*& out_value,
-                                           QLabel*& out_sub, QLabel*& out_icon) {
-    auto* tile = new QFrame();
+QFrame* DiagnosticsPage::makeReadinessTile(QWidget* parent, const QString& object_name, const QString& title,
+                                           QLabel*& out_value, QLabel*& out_sub, QLabel*& out_icon) {
+    // Always parented up front — QGridLayout::addWidget() would otherwise be the ONLY
+    // thing that parents a tile, and a tile excluded from the active set (like the
+    // gated Last-session tile before its first activation) would stay parentless:
+    // invisible to findChild() and leaked from the widget tree. See the reflow
+    // grid's addWidget()/takeAt() dance in reflowReadinessTiles() for placement, which
+    // is a layout-membership concern, kept separate from parenting.
+    auto* tile = new QFrame(parent);
     tile->setObjectName(object_name);
     tile->setProperty("panelRole", "readinessTile");
     tile->setProperty("tileTone", "neutral");
@@ -859,6 +905,62 @@ QFrame* DiagnosticsPage::makeReadinessTile(const QString& object_name, const QSt
     tlay->addWidget(out_sub);
 
     return tile;
+}
+
+// Re-columns the readiness dashboard grid for the current width: 4 columns on a wide
+// window, 3 at typical width, 2 when narrow. Only the active tiles (six core + the
+// gated Last-session tile) are placed. Cheap enough to run on every resize — the tile
+// count is tiny — but guarded so an unchanged (columns, count) pair is a no-op.
+void DiagnosticsPage::reflowReadinessTiles() {
+    if (!tiles_grid_)
+        return;
+
+    // Key off the PAGE's own width, not the tile-grid host's — the host sits inside a
+    // QScrollArea, so a wide grid keeps its natural (unshrunk) width and the scroll
+    // area grows a horizontal scrollbar instead of forcing a narrower layout; measuring
+    // the host would make the reflow circular (never actually narrows). The page's own
+    // width tracks the real window size directly via resizeEvent().
+    const int avail = width() - 2 * M::kSpaceXl;
+    const int width_columns = (avail >= 1000) ? 4 : (avail >= 620) ? 3 : 2;
+
+    // Cheap early-out BEFORE the active-tile scan below: resizeEvent() calls this on
+    // every QResizeEvent, and interactive window dragging fires dozens per second. Most
+    // of them don't cross a column-count threshold, so bail using the cached active
+    // count (kept in sync by whoever last changed a tile's "tileActive" property and
+    // then called this function) before paying for a QVector allocation + a
+    // property-map lookup per tile.
+    if (tiles_active_count_ > 0 && std::min(width_columns, tiles_active_count_) == tiles_columns_)
+        return;
+
+    QVector<QFrame*> active;
+    for (QFrame* tile : readiness_tiles_) {
+        if (tile && tile->property("tileActive").toBool())
+            active.push_back(tile);
+    }
+    if (active.isEmpty())
+        return;
+
+    const int columns = std::min(width_columns, static_cast<int>(active.size()));
+    if (columns == tiles_columns_ && active.size() == tiles_active_count_)
+        return;
+    tiles_columns_ = columns;
+    tiles_active_count_ = static_cast<int>(active.size());
+
+    // Detach every item without deleting the tile widgets (QWidgetItem deletion does
+    // not delete the widget), then re-place into the new column count.
+    while (QLayoutItem* item = tiles_grid_->takeAt(0))
+        delete item;
+    for (int i = 0; i < active.size(); ++i)
+        tiles_grid_->addWidget(active.at(i), i / columns, i % columns);
+    // Equalise the live columns; zero the rest so a shrunk grid does not keep width.
+    constexpr int kMaxColumns = 4;
+    for (int c = 0; c < kMaxColumns; ++c)
+        tiles_grid_->setColumnStretch(c, c < columns ? 1 : 0);
+}
+
+void DiagnosticsPage::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    reflowReadinessTiles();
 }
 
 QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
@@ -954,15 +1056,18 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         w->style()->unpolish(w);
         w->style()->polish(w);
     };
-    const bool panel_tinted = state == QStringLiteral("warn") || state == QStringLiteral("blocked");
-    const bool pill_tinted =
+    // Slice-5: the verdict band is a dashboard header, so the calm "ready" state also
+    // earns a soft tint (kept faint — non-alarmist per the diagnostics ethos). Both the
+    // band and the hidden legacy status_pill_ (kept alive only so its many writers
+    // keep working; superseded by verdict_headline_) share this tint rule.
+    const bool tinted =
         state == QStringLiteral("ready") || state == QStringLiteral("warn") || state == QStringLiteral("blocked");
     if (readiness_panel_) {
-        readiness_panel_->setProperty("stateRole", panel_tinted ? QVariant(state) : QVariant());
+        readiness_panel_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
         repolish(readiness_panel_);
     }
     if (status_pill_) {
-        status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
+        status_pill_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
     }
     if (verdict_glyph_) {
@@ -1360,6 +1465,15 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
         tile->style()->polish(tile);
     };
 
+    // Display names carry the backend suffix ("AV1 (NVENC)"); both the Encoder and
+    // Audio tiles add their own backend/source token on the sub line, so both need the
+    // bare codec name with that suffix trimmed off.
+    const auto stripBackendSuffix = [](QString codec) {
+        if (const int paren = codec.indexOf(QStringLiteral(" (")); paren > 0)
+            codec.truncate(paren);
+        return codec;
+    };
+
     // Tile 1 — Readiness.
     const int total = cap_passes + blockers + notices;
     if (blockers > 0) {
@@ -1395,11 +1509,8 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
     // when the adapter name is unknown.
     if (data_ready_) {
         const QString gpu = QString::fromStdString(caps_.gpu_adapter_name).trimmed();
-        QString codec = QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec));
-        // The display name carries the backend ("AV1 (NVENC)"); the tile sub adds
-        // its own backend token, so trim to the bare codec.
-        if (const int paren = codec.indexOf(QStringLiteral(" (")); paren > 0)
-            codec.truncate(paren);
+        const QString codec = stripBackendSuffix(
+            QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec)));
         encoder_tile_value_->setText(gpu.isEmpty() ? codec : gpu);
         encoder_tile_sub_->setText(
             gpu.isEmpty() ? QString::fromStdString(diagnostics::ContainerDisplayName(active_user_config_.container))
@@ -1445,6 +1556,75 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
     } else {
         display_tile_value_->setText(dash);
         display_tile_sub_->setText(QStringLiteral("display"));
+    }
+
+    // Tile 5 — Audio (codec + routing summary of the configured sources; a plain
+    // capability/environment readout, never coloured as a problem).
+    if (data_ready_) {
+        const QString codec = stripBackendSuffix(
+            QString::fromStdString(diagnostics::AudioCodecDisplayName(active_user_config_.audio_codec)));
+        const int sources = static_cast<int>(audio_state_.IsAppEnabled()) +
+                            static_cast<int>(audio_state_.IsSysEnabled()) +
+                            static_cast<int>(audio_state_.IsMicEnabled());
+        const QString channels = audio_state_.audio_channels <= 1 ? QStringLiteral("Mono") : QStringLiteral("Stereo");
+        const QString rate =
+            QStringLiteral("%1 kHz").arg(QString::number(audio_state_.audio_sample_rate / 1000.0, 'g', 3));
+        audio_tile_value_->setText(codec.isEmpty() ? dash : codec);
+        if (sources == 0) {
+            audio_tile_sub_->setText(QStringLiteral("no sources \xc2\xb7 silent"));
+        } else {
+            const QString src_word = sources == 1 ? QStringLiteral("source") : QStringLiteral("sources");
+            audio_tile_sub_->setText(
+                QStringLiteral("%1 %2 \xc2\xb7 %3 \xc2\xb7 %4").arg(sources).arg(src_word).arg(rate).arg(channels));
+        }
+    } else {
+        audio_tile_value_->setText(dash);
+        audio_tile_sub_->setText(QStringLiteral("audio sources"));
+    }
+
+    // Tile 6 — Capture target (what will be recorded). Prefers the concrete selected
+    // target's description; otherwise falls back to the configured target kind so the
+    // tile still reads honestly before a target is picked.
+    {
+        QString target_value;
+        QString target_sub;
+        if (selected_capture_target_.has_value()) {
+            const bool window = selected_capture_target_->kind == recorder_core::CaptureTarget::Kind::Window;
+            target_value = window ? QStringLiteral("Window") : QStringLiteral("Screen");
+            target_sub = QString::fromStdString(selected_capture_target_->description);
+            if (target_sub.trimmed().isEmpty())
+                target_sub = window ? QStringLiteral("application window") : QStringLiteral("full display");
+        } else if (data_ready_) {
+            const bool window = audio_state_.target_kind == capability::CaptureTargetKind::Window;
+            target_value = window ? QStringLiteral("Window") : QStringLiteral("Screen");
+            target_sub = window ? QStringLiteral("application window") : QStringLiteral("full display");
+        } else {
+            target_value = dash;
+            target_sub = QStringLiteral("capture target");
+        }
+        target_tile_value_->setText(target_value);
+        target_tile_sub_->setText(target_sub);
+    }
+
+    // Tile 7 — Last session.
+    updateSessionTileText();
+}
+
+// Tile 7 — Last session (gated on a completed recording by setHasLastRecording). The
+// real report card lives on the Edit overlay's Review step; this tile is only a calm
+// signpost to it, never a fabricated metric. Split out from refreshReadinessTiles() so
+// setHasLastRecording() can update just this one tile's text without re-querying disk
+// space, GPU/codec names, and every other tile that has nothing to do with recording
+// completion.
+void DiagnosticsPage::updateSessionTileText() {
+    if (!session_tile_)
+        return;
+    if (has_last_recording_) {
+        session_tile_value_->setText(QStringLiteral("Recorded"));
+        session_tile_sub_->setText(QStringLiteral("report in Edit \xc2\xb7 Review"));
+    } else {
+        session_tile_value_->setText(QString::fromUtf8("\xe2\x80\x94"));
+        session_tile_sub_->setText(QStringLiteral("no recording yet"));
     }
 }
 

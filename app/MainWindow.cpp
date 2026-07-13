@@ -2945,8 +2945,14 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     case visual::VisualPage::Diagnostics:
         if (!diagnostics_page_)
             buildDiagnosticsPage();
-        applyVisualDiagnosticsScenario(scenario);
+        // setCurrentPage() before the scenario applies data: showing the page fires
+        // DiagnosticsPage::showEvent(), which emits lastRecordingGateRefreshRequested
+        // and re-syncs setHasLastRecording() from the real (idle) record_page_ state.
+        // Applying the scenario AFTER that sync — not before — lets its deliberate
+        // has-last-recording override (the "post" scene) win as the final write,
+        // instead of being silently clobbered back to false by the gate refresh.
         setCurrentPage(kDiagnosticsPageIndex);
+        applyVisualDiagnosticsScenario(scenario);
         break;
     case visual::VisualPage::Logs:
         if (!logs_page_)
@@ -3445,7 +3451,12 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
 
     if (!scenario.diag_live.isEmpty()) {
         // The post-flight scenario shows a finished recording — enable the Phase-④
-        // "Open last report" bridge to the Edit overlay.
+        // "Open last report" bridge to the Edit overlay (and, since slice 5, the
+        // Last-session readiness tile). This is honest, not a synthetic override: the
+        // "post" scenario also sets record_state = VisualRecordState::Completed (see
+        // VisualScenario.cpp), so record_page_->hasCompletedRecording() genuinely
+        // reports true and every resync of this gate (including the showEvent-driven
+        // SETTINGS-HONESTY-R1 refresh) agrees — no race with the real gate to fight.
         diagnostics_page_->setHasLastRecording(scenario.diag_live == QStringLiteral("post"));
         diagnostics_page_->applyLiveDiagnostics(makeLiveDiagnosticsSnapshot(scenario.diag_live));
     }
