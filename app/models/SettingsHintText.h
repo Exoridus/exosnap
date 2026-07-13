@@ -83,6 +83,7 @@ inline const QString kAudioBitDepth =
 inline const QString kFlacCompression = QStringLiteral("FLAC compression level (0 = fastest, 8 = smallest file)");
 inline const QString kBrickwallLimiter =
     QStringLiteral("Hard clip ceiling applied after all DSP stages \xC2\xB7 prevents digital over");
+inline const QString kMicPostProcessing = QStringLiteral("DSP stages applied to the microphone signal before encoding");
 inline const QString kClockSlaving =
     QStringLiteral("Gently resamples audio (<= 0.05 %, inaudible) onto the video clock when the "
                    "device clock drifts \xC2\xB7 keeps long recordings in sync \xC2\xB7 off = byte-exact capture");

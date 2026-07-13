@@ -88,3 +88,15 @@ for any intentionally-shown roadmap hint.)
 - A stylesheet-themed `QToolButton` with **no** explicit `#objectName` rule falls back to the
   style's default tool-button panel (a dark filled capsule that can also swallow its icon) — every
   themed tool button (the titlebar bell, the popover cog) needs an explicit flat QSS rule.
+
+## Amendment (Settings/Diagnostics polish, Slice 3 — "cogwheels -> inline")
+
+`SettingsPopoverRow` is **removed**. A later product review found the ⚙ popover read as an extra
+click for content that didn't need hiding: *Audio clock slaving* (an empty popover around one
+toggle), *Brickwall limiter* (now a plain inline toggle with the ceiling spin appearing inline,
+right-aligned, only while on), and *Microphone post-processing* (now an inline **disclosure** —
+chevron button, no popup — expanding the four stage rows within the card). The uniform input
+language and info-i conventions in §1 are unaffected; the "reusable widgets" line in Consequences
+now reads `ExoSlider` only. Automatic split had already moved off `SettingsPopoverRow` onto a plain
+expert-gated `QWidget` before this amendment (see Wave 2 in `ConfigPage.cpp`), so its § 2 mention
+above was already stale.
