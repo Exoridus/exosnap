@@ -93,7 +93,7 @@ class LogsPage : public QWidget {
 
     void rebuildVisibleEntries();
     void appendMatchingEntries(const QVector<diagnostics::LogEntry>& entries);
-    void insertEntry(const diagnostics::LogEntry& entry, bool zebra_tint);
+    void insertEntry(const diagnostics::LogEntry& entry, int row_index);
     void replaceDocumentFromVisibleEntries();
     void updateActionState();
     void updateStatusLabel(const QString& feedback = {});
@@ -116,7 +116,6 @@ class LogsPage : public QWidget {
     QFrame* startup_panel_ = nullptr;
     QWidget* startup_rows_host_ = nullptr;
     QVBoxLayout* startup_rows_layout_ = nullptr;
-    int startup_row_count_ = 0;
     QLabel* folder_link_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* search_debounce_timer_ = nullptr;

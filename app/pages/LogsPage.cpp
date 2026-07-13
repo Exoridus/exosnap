@@ -170,19 +170,23 @@ LogsPage::SeverityFilter filterFromVisual(visual::VisualLogFilter filter) {
 class LogTextEdit : public QPlainTextEdit {
   public:
     explicit LogTextEdit(QWidget* parent = nullptr) : QPlainTextEdit(parent) {
+        // Resolve the divider colour once and re-resolve only on a theme switch
+        // (OnThemeChanged runs `apply` immediately, then again per ReapplyTheme()),
+        // rather than re-parsing a CSS colour string on every paintEvent — this
+        // widget can hold thousands of blocks and repaints on every scroll tick.
+        ui::theme::OnThemeChanged(
+            this, [this]() { line_color_ = ui::theme::ParseThemeColor(ui::theme::ActiveTheme().line); });
     }
 
   protected:
     void paintEvent(QPaintEvent* event) override {
         QPlainTextEdit::paintEvent(event);
 
-        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
-        const QColor line_color = ui::theme::ParseThemeColor(theme.line);
-        if (!line_color.isValid())
+        if (!line_color_.isValid())
             return;
 
         QPainter painter(viewport());
-        painter.setPen(line_color);
+        painter.setPen(line_color_);
 
         const QRect visible_rect = event->rect();
         QTextBlock block = firstVisibleBlock();
@@ -200,6 +204,9 @@ class LogTextEdit : public QPlainTextEdit {
             block = block.next();
         }
     }
+
+  private:
+    QColor line_color_;
 };
 
 } // namespace
@@ -587,7 +594,6 @@ void LogsPage::refreshStartupTrace() {
     }
 
     const auto entries = diagnostics::StartupTrace::instance().entries();
-    startup_row_count_ = static_cast<int>(entries.size());
 
     bool first = true;
     for (const auto& entry : entries) {
@@ -613,7 +619,7 @@ void LogsPage::refreshStartupTrace() {
 }
 
 int LogsPage::startupTraceRowCountForTesting() const {
-    return startup_row_count_;
+    return startup_rows_layout_ != nullptr ? startup_rows_layout_->count() : 0;
 }
 
 bool LogsPage::hasSupportBundleButtonForTesting() const noexcept {
@@ -738,8 +744,7 @@ void LogsPage::appendMatchingEntries(const QVector<LogEntry>& entries) {
     const int previous_scroll_value = log_viewer_->verticalScrollBar()->value();
     for (const LogEntry& entry : matching) {
         visible_entries_.push_back(entry);
-        const bool zebra_tint = ((visible_entries_.size() - 1) % 2) == 1;
-        insertEntry(entry, zebra_tint);
+        insertEntry(entry, static_cast<int>(visible_entries_.size()) - 1);
     }
     ++incremental_append_count_;
     if (autoScrollEnabled()) {
@@ -750,14 +755,22 @@ void LogsPage::appendMatchingEntries(const QVector<LogEntry>& entries) {
     updateActionState();
 }
 
-void LogsPage::insertEntry(const LogEntry& entry, bool zebra_tint) {
+void LogsPage::insertEntry(const LogEntry& entry, int row_index) {
     if (!log_viewer_)
         return;
+
+    // Single source of truth for stripe parity — both callers (full rebuild and
+    // incremental append) pass the entry's absolute position in visible_entries_
+    // and let this one expression decide, instead of each computing "is this row
+    // tinted" independently and risking the two definitions drifting apart.
+    const bool zebra_tint = (row_index % 2) == 1;
 
     QTextCursor cursor(log_viewer_->document());
     cursor.movePosition(QTextCursor::End);
     if (!log_viewer_->document()->isEmpty())
         cursor.insertBlock();
+
+    const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
 
     QTextBlockFormat block_format;
     block_format.setProperty(kSeverityBlockProperty, AppLog::severityKey(entry.severity));
@@ -765,7 +778,6 @@ void LogsPage::insertEntry(const LogEntry& entry, bool zebra_tint) {
         // Subtle alternating row tint — one surface step up from the viewer's own
         // ${bg0} background, the same "next surface" convention used for card
         // layering elsewhere (${bg1}), rather than an invented alpha wash.
-        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
         const QColor stripe_color = ui::theme::ParseThemeColor(theme.surf);
         if (stripe_color.isValid())
             block_format.setBackground(stripe_color);
@@ -779,7 +791,6 @@ void LogsPage::insertEntry(const LogEntry& entry, bool zebra_tint) {
 
     // Timestamp — quietest column (log-time / dim).  Fixed width: 23 chars.
     {
-        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
         QColor ts_color = ui::theme::ParseThemeColor(theme.log.time);
         if (!ts_color.isValid())
             ts_color = QColor(QStringLiteral("#65656A"));
@@ -817,7 +828,6 @@ void LogsPage::insertEntry(const LogEntry& entry, bool zebra_tint) {
 
     // Message — primary ink (theme.ink / text0).
     {
-        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
         QColor ink_color = QColor(QString::fromUtf8(theme.ink));
         if (!ink_color.isValid())
             ink_color = QColor(QStringLiteral("#F1F1EF"));
@@ -837,7 +847,7 @@ void LogsPage::replaceDocumentFromVisibleEntries() {
     const int previous_scroll_value = log_viewer_->verticalScrollBar()->value();
     log_viewer_->clear();
     for (int i = 0; i < visible_entries_.size(); ++i)
-        insertEntry(visible_entries_.at(i), (i % 2) == 1);
+        insertEntry(visible_entries_.at(i), i);
 
     if (autoScrollEnabled()) {
         log_viewer_->verticalScrollBar()->setValue(log_viewer_->verticalScrollBar()->maximum());
