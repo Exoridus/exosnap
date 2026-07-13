@@ -522,9 +522,14 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Diagnostics,
      .diag_live = QStringLiteral("degraded")},
     // Post-flight: a finished, saved recording (Phase ④ bridge to the Edit overlay).
+    // record_state = Completed makes record_page_->hasCompletedRecording() genuinely
+    // true, so the Diagnostics honesty gate (setHasLastRecording, incl. the
+    // showEvent-driven SETTINGS-HONESTY-R1 resync) agrees on every refresh instead of
+    // racing a synthetic per-page override that a later resync would clobber.
     {.id = QStringLiteral("diagnostics-post"),
      .title = QStringLiteral("Diagnostics — post-flight"),
      .page = VisualPage::Diagnostics,
+     .record_state = VisualRecordState::Completed,
      .diag_live = QStringLiteral("post")},
     // Elevation: Expert view showing the locked elevated-diagnostics affordance.
     {.id = QStringLiteral("diagnostics-elevation"),
