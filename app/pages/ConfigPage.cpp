@@ -5750,6 +5750,11 @@ void ConfigPage::applyVisualHdrDisplayPresent(bool present) {
     visual_hdr_display_override_ = present;
     updateVideoHdrModeControl();
 }
+
+void ConfigPage::applyVisualMicPostProcessingExpanded(bool expanded) {
+    if (mic_post_disclosure_btn_)
+        mic_post_disclosure_btn_->setChecked(expanded);
+}
 #endif
 
 void ConfigPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {

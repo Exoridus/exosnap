@@ -248,6 +248,11 @@ struct VisualScenario {
     bool settings_expert_mode = false;       // Expert mode ON → Developer card revealed
     bool settings_advanced_expanded = false; // Output card "Advanced" expander open
 
+    // Settings/Diagnostics polish, Slice 3 (cogwheels -> inline): open the Audio
+    // expert card's mic post-processing chevron disclosure so its four DSP stage
+    // rows (HPF / Gate / AGC / RNNoise) render in the capture.
+    bool settings_mic_post_expanded = false;
+
     // Scroll the active page's scroll area to a named section before capture, so
     // below-the-fold cards (e.g. the Updates card) are visible in the grab.
     // Same vocabulary as ConfigPage::scrollToSection ("settings/updates" etc.).

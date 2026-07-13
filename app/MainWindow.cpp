@@ -3097,16 +3097,22 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
 
     // ADR 0034: drive the Updates-card state and/or scroll to a section so
     // below-the-fold cards are captured. Deferred (40 ms) so it runs after layout
-    // + preset reflow but before the harness grab at t=120 ms.
-    if (!scenario.settings_update_state.isEmpty() || !scenario.scroll_target.isEmpty()) {
+    // + preset reflow but before the harness grab at t=120 ms. Settings/Diagnostics
+    // polish, Slice 3: also open the mic post-processing chevron disclosure here,
+    // before the scroll, so its final (taller) layout is what gets scrolled into view.
+    if (!scenario.settings_update_state.isEmpty() || !scenario.scroll_target.isEmpty() ||
+        scenario.settings_mic_post_expanded) {
         const QString upd_state = scenario.settings_update_state;
         const QString upd_version = scenario.settings_update_version;
         const QString scroll_to = scenario.scroll_target;
-        QTimer::singleShot(40, this, [this, upd_state, upd_version, scroll_to]() {
+        const bool mic_post_expanded = scenario.settings_mic_post_expanded;
+        QTimer::singleShot(40, this, [this, upd_state, upd_version, scroll_to, mic_post_expanded]() {
             if (!config_page_)
                 return;
             if (!upd_state.isEmpty())
                 config_page_->setUpdateStatus(upd_state, upd_version, QStringLiteral("Just now"));
+            if (mic_post_expanded)
+                config_page_->applyVisualMicPostProcessingExpanded(true);
             if (!scroll_to.isEmpty())
                 config_page_->scrollToSection(scroll_to);
         });
