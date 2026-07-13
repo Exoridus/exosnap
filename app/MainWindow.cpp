@@ -3088,6 +3088,13 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     // Expert-mode reveal deterministically for visual scenarios.
     config_page_->setExpertModeEnabled(scenario.settings_expert_mode);
 
+    // The expert HDR rows are relevance-gated on a probed HDR-active display,
+    // which is machine-dependent. Pin the gate so settings captures render the
+    // same everywhere: shown for the settings-hdr-* scenarios, hidden for the
+    // rest. The pin is sticky, so a later real probe delivery cannot flip it
+    // mid-capture.
+    config_page_->applyVisualHdrDisplayPresent(scenario.id.startsWith(QStringLiteral("settings-hdr")));
+
     // ADR 0034: drive the Updates-card state and/or scroll to a section so
     // below-the-fold cards are captured. Deferred (40 ms) so it runs after layout
     // + preset reflow but before the harness grab at t=120 ms.

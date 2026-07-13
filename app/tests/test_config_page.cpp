@@ -1668,7 +1668,11 @@ TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeCombo) {
 TEST_F(ConfigPageTest, PresenceCard_CardTitleVisible) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Presence"))) << "Settings must contain a Presence card title";
+    // v0.9 polish: the card is titled "Notifications & overlays" (renamed from the
+    // imprecise "Presence"); internal ids keep the presence_ prefix.
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Notifications & overlays")))
+        << "Settings must contain the Notifications & overlays card title";
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Presence"))) << "the old \"Presence\" card title must be gone";
 }
 
 TEST_F(ConfigPageTest, PresenceCard_AllTogglesExist) {
@@ -2407,10 +2411,19 @@ TEST_F(ConfigPageTest, HdrMode_CodecChangeToH264_DoesNotResetHdr10) {
 }
 
 // The calm inline hint ("Not available with H.264...") is visible only while
-// H.264 disables Hdr10, and hides again once a capable codec is selected.
+// H.264 disables Hdr10, and hides again once a capable codec is selected. The
+// HDR row itself is relevance-gated on an HDR-active display, so the test
+// first delivers display facts that keep the row (and thus its hint) shown.
 TEST_F(ConfigPageTest, HdrMode_H264Hint_VisibleOnlyWhenDisabled) {
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true);
+
+    auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::DisplayHdrFacts hdr_display;
+    hdr_display.name = "\\\\.\\DISPLAY1";
+    hdr_display.hdr_active = true;
+    caps.runtime.displays.push_back(hdr_display);
+    page.setRuntimeCapabilities(caps);
 
     auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
     ASSERT_NE(codec, nullptr);
@@ -2476,6 +2489,151 @@ TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
     ASSERT_NE(hdr, nullptr);
     EXPECT_EQ(hdr->currentData().toInt(), static_cast<int>(recorder_core::HdrMode::Hdr10));
     EXPECT_EQ(emit_count, 0) << "setOutputSettings must not emit formatSettingsChanged";
+}
+
+// ── v0.9 polish: expert-view relevance gating ────────────────────────────────
+// Expert rows exist only when the active codec/GPU/display can actually use
+// them; a gated-out row is hidden (no layout gap), never merely disabled.
+
+// The HDR-handling row is hidden until the probed display facts contain an
+// HDR-active display; SDR-only facts keep it hidden, an HDR-active display
+// reveals it. Pre-probe (no facts yet) counts as "no HDR display".
+TEST_F(ConfigPageTest, HdrRow_HiddenWithoutHdrActiveDisplay_ShownWithOne) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* row = page.findChild<QWidget*>(QStringLiteral("videoHdrModeRow"));
+    ASSERT_NE(row, nullptr);
+
+    // Pre-probe: no display facts → hidden.
+    EXPECT_TRUE(row->isHidden()) << "HDR row must stay hidden before display facts arrive";
+
+    // SDR-only facts → still hidden.
+    auto sdr_caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::DisplayHdrFacts sdr_display;
+    sdr_display.name = "\\\\.\\DISPLAY1";
+    sdr_display.hdr_active = false;
+    sdr_caps.runtime.displays.push_back(sdr_display);
+    page.setRuntimeCapabilities(sdr_caps);
+    EXPECT_TRUE(row->isHidden()) << "HDR row must stay hidden on an SDR-only system";
+
+    // One HDR-active display among several → shown.
+    auto hdr_caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    hdr_caps.runtime.displays.push_back(sdr_display);
+    capability::DisplayHdrFacts hdr_display;
+    hdr_display.name = "\\\\.\\DISPLAY2";
+    hdr_display.hdr_active = true;
+    hdr_caps.runtime.displays.push_back(hdr_display);
+    page.setRuntimeCapabilities(hdr_caps);
+    EXPECT_FALSE(row->isHidden()) << "HDR row must appear once an HDR-active display is detected";
+}
+
+// While the HDR row is gated out, its H.264 hint is gated out with it — the
+// hint narrates a row that is not there otherwise.
+TEST_F(ConfigPageTest, HdrRow_GatedOut_TakesTheH264HintWithIt) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    ASSERT_NE(codec, nullptr);
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+
+    // No HDR display known → neither the row nor the hint may show.
+    for (const auto* label : page.findChildren<QLabel*>()) {
+        if (label->text().contains(QStringLiteral("Not available with H.264")))
+            EXPECT_TRUE(label->isHidden()) << "the H.264 hint must not show while the HDR row is gated out";
+    }
+}
+
+// The Bit depth row exists only when the selected codec carries 10-bit at all
+// (HEVC/AV1); for 8-bit-only H.264 the whole row is hidden and the stored value
+// has snapped back to 8-bit (no stale 10-bit state behind the gate).
+TEST_F(ConfigPageTest, BitDepthRow_HiddenForH264_ShownForHevcAv1) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* row = page.findChild<QWidget*>(QStringLiteral("videoBitDepthRow"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(row, nullptr);
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(row->isHidden()) << "Bit depth row must be hidden for 8-bit-only H.264";
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(row->isHidden()) << "Bit depth row must be shown for HEVC";
+
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    EXPECT_FALSE(row->isHidden()) << "Bit depth row must be shown for AV1";
+}
+
+// The Chroma row exists only when the selected codec + active GPU can carry
+// 4:4:4 at all: hidden for AV1 (no NVENC 4:4:4 path) and hidden once a probe
+// reports the GPU cannot encode YUV444 for the selected codec. A 10-bit
+// bit-depth conflict keeps the row visible (disabled item + hint) because it
+// is user-fixable in place.
+TEST_F(ConfigPageTest, ChromaRow_HiddenForAv1AndGpuWithout444_VisibleFor10BitConflict) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* depth = page.findChild<QComboBox*>(QStringLiteral("videoBitDepthCombo"));
+    auto* row = page.findChild<QWidget*>(QStringLiteral("videoChromaRow"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(depth, nullptr);
+    ASSERT_NE(row, nullptr);
+
+    // AV1 (default) → no 4:4:4 path at all → row hidden.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    EXPECT_TRUE(row->isHidden()) << "Chroma row must be hidden for AV1 (4:2:0 only)";
+
+    // HEVC 8-bit → row shown.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(row->isHidden()) << "Chroma row must be shown for HEVC on a capable GPU";
+
+    // HEVC 10-bit → conflict is user-fixable (switch bit depth) → row stays.
+    depth->setCurrentIndex(depth->findData(static_cast<int>(capability::BitDepth::Bit10)));
+    EXPECT_FALSE(row->isHidden()) << "a 10-bit conflict must not hide the Chroma row";
+    depth->setCurrentIndex(depth->findData(static_cast<int>(capability::BitDepth::Bit8)));
+
+    // Probe says this GPU has no YUV444 encode for HEVC → row hidden.
+    auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.chroma444[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::NotImplemented, "GPU lacks YUV444"};
+    page.setRuntimeCapabilities(caps);
+    EXPECT_TRUE(row->isHidden()) << "Chroma row must be hidden when the active GPU cannot encode 4:4:4";
+}
+
+// ── v0.9 polish: regroup — Frame pacing lives in Quality & timing ───────────
+
+// Frame pacing is a timing control: its row must sit in the Quality & timing
+// card (a sibling of the frame-rate rows), not inside the Container & codecs
+// expert section, and it follows the Expert toggle like the other expert rows.
+TEST_F(ConfigPageTest, FramePacingRow_LivesInQualityCard_ExpertGated) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* row = page.findChild<QWidget*>(QStringLiteral("framePacingRow"));
+    ASSERT_NE(row, nullptr);
+    EXPECT_FALSE(row->isHidden()) << "Frame pacing row must be visible in expert mode";
+
+    // Not a descendant of the Container & codecs expert section.
+    auto* fmt_expert = page.findChild<QWidget*>(QStringLiteral("fmtExpertSection"));
+    ASSERT_NE(fmt_expert, nullptr);
+    EXPECT_EQ(fmt_expert->findChild<QComboBox*>(QStringLiteral("framePacingSelect")), nullptr)
+        << "Frame pacing must have moved out of the Container & codecs expert section";
+    EXPECT_FALSE(fmt_expert->isAncestorOf(row));
+
+    // Hosted by the Quality & timing card: the row's direct parent is the card
+    // widget that also (transitively) hosts the frame-rate combo.
+    auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(frame_rate, nullptr);
+    ASSERT_NE(row->parentWidget(), nullptr);
+    EXPECT_TRUE(row->parentWidget()->isAncestorOf(frame_rate))
+        << "Frame pacing row must be hosted by the Quality & timing card";
+
+    // Leaves with the Expert toggle.
+    page.setExpertModeEnabled(false);
+    EXPECT_TRUE(row->isHidden()) << "Frame pacing row must hide when Expert mode turns off";
 }
 
 // Destroying a shown page used to abort: WebcamSetupPanel::hideEvent stops its preview and

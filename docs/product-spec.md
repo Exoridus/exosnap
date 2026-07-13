@@ -269,16 +269,22 @@ of sync.
 
 **Bit depth.** 8-bit for all final codecs; **10-bit (P010)** is available for HEVC Main10 and AV1
 where the GPU supports it (H.264 stays 8-bit only). 10-bit is **SDR-only** — higher precision, no HDR
-transfer curve or wide gamut.
+transfer curve or wide gamut. The Expert **Bit depth** row itself only appears once the selected codec
+carries 10-bit at all (HEVC/AV1) — for H.264, which has no 10-bit path, the row is not shown rather
+than shown-and-disabled, so the expert view lists only choices that apply to the current codec.
 
 **Chroma.** **4:2:0** is the default and is universal (all codecs, 8- and 10-bit). **4:4:4** is an
 Expert-mode option available for **H.264 and HEVC at 8-bit** (NVENC High 4:4:4 Predictive / HEVC
 Range Extensions) on GPUs that report YUV444 encode support; it keeps full colour resolution (sharper
 text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC AV1 is 4:2:0 only),
-**not available at 10-bit**, and not available with native HDR10. The Expert selector disables 4:4:4
-with an explanatory hint whenever the current codec/bit-depth **or the active GPU** cannot carry it,
-and an invalid stored selection is reconciled back to 4:2:0. **4:2:2 remains unavailable** (the
-NVENC generation has no 4:2:2 path). While a recording runs in **4:4:4**, the **live preview stays
+**not available at 10-bit**, and not available with native HDR10. The Expert **Chroma subsampling**
+row itself only appears when the selected codec **and** the active GPU can carry 4:4:4 at all; for
+AV1, or for a GPU whose probe reports no YUV444 encode support for the selected codec, the row is not
+shown. When the row is relevant but a 10-bit selection is the sole conflict — a choice the user can
+resolve right there by switching Bit depth back to 8-bit — the row stays visible with the 4:4:4 item
+disabled and an explanatory hint instead of hiding, and an invalid stored selection is reconciled back
+to 4:2:0. **4:2:2 remains unavailable** (the NVENC generation has no 4:2:2 path). While a recording
+runs in **4:4:4**, the **live preview stays
 available** (it shares the composited RGB frame with the preview before the AYUV conversion — see
 the live-preview note in Section 7), and **frame snapshots stay available** as in 4:2:0: the
 CaptureFrame hotkey reads back the packed AYUV encode surface and decodes it on the CPU with the
@@ -294,15 +300,22 @@ when Full is selected. Presets carrying an older Full default are auto-migrated 
 explicit Full is respected as a deliberate opt-in.
 
 **HDR handling.** HDR-capable displays are **detected automatically**; detection is not a setting and
-cannot be turned off. Once an HDR-capable display is detected, an **expert-only HDR handling control**
+cannot be turned off. Once an HDR-active display is detected, an **expert-only HDR handling control**
 (Settings → Video, Container & codecs section) chooses the outcome:
 
 - **Tone-map to SDR** (default) — the safe, universally compatible choice.
 - **Record native HDR10** — keeps the original PQ / BT.2020 HDR10 signal.
 
+The **HDR handling** row itself only appears once at least one probed display is HDR-active. On an
+all-SDR system there is nothing this control could meaningfully change, so the row is not shown at
+all rather than shown-and-inert; it appears the moment an HDR-active display is detected and
+disappears again if none remains. A stored `hdr_mode` is never rewritten while the row is hidden —
+it takes effect again exactly as before the moment a qualifying display returns.
+
 Behavior:
 
-- On a non-HDR display the choice has no visible effect either way.
+- On a non-HDR display the choice has no visible effect either way (the row is hidden there, per
+  above).
 - **Record native HDR10** is only selectable with a codec that can carry it (**AV1 or HEVC**). With
   H.264 the option is disabled and a calm inline note explains why ("Not available with H.264 —
   switch to AV1 or HEVC"). This is never shown as a warning/error state, and switching the codec
@@ -776,7 +789,15 @@ degrades gracefully.
 Settings uses a **Default / Expert split**: common controls are shown up front; expert controls (rate
 control, bitrate, frame-timing, NVENC preset, frame pacing, audio DSP, color range, HDR handling,
 keyframe interval, chroma subsampling) are hidden behind an **Expert** toggle. The Expert toggle is
-a single global state shared with the Diagnostics page. Settings offers inline info hints (hover
+a single global state shared with the Diagnostics page. Within Expert mode, a second, narrower gate
+applies to three rows whose relevance depends on the active codec/GPU/display rather than on Expert
+mode alone: **HDR handling** (shown only once an HDR-active display is detected — Section 6), **Bit
+depth** (shown only for a codec that carries 10-bit — HEVC/AV1) and **Chroma subsampling** (shown
+only when the selected codec and the active GPU can carry 4:4:4 at all). A row that fails its
+relevance gate is not shown rather than shown-and-disabled, so the expert view lists only what
+currently applies; the Chroma row is the one exception that stays visible-but-disabled for a 10-bit
+conflict specifically, because that conflict is fixable in place (switch Bit depth back to 8-bit).
+Settings offers inline info hints (hover
 popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
 only rows with a genuine A/B tradeoff carry the icon (plain boolean rows do not), and per-option
 helper text lives inside the popover rather than as a separate line under the control. Roadmap-only

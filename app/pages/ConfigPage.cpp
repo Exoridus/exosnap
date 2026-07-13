@@ -68,6 +68,7 @@
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
 
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <optional>
@@ -901,7 +902,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
     // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
-    // Right column: Output · Webcam · Presence · Updates · Appearance.
+    // Right column: Output · Webcam · Notifications & overlays · Updates · Appearance.
     // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
     auto* columns = new QWidget(content);
     columns_layout_ = new QHBoxLayout(columns);
@@ -1130,16 +1131,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     cursor_check_->setOn(video_settings_.capture_cursor);
     // v0.9 polish: no info-i — "Capture cursor" is a self-explanatory boolean, not an
     // A/B tradeoff. Info-i is reserved for rows with a genuine choice to explain.
-    quality_layout->addWidget(
-        makeSettingsRow(quality_panel, QStringLiteral("Capture cursor"), nullptr, QString(), cursor_check_));
+    // The row pointer is kept: the lazily built expert Frame pacing row is inserted
+    // directly above it (buildFormatQualityExpertSections).
+    capture_cursor_row_ =
+        makeSettingsRow(quality_panel, QStringLiteral("Capture cursor"), nullptr, QString(), cursor_check_);
+    quality_layout->addWidget(capture_cursor_row_);
 
     // --- PS-PHASE-C / v10: Expert sections (split across two cards) ---
-    // The two Expert containers (Rate control + Bitrate in the Quality card; Bit
-    // depth, Colour range, Encoder preset, Frame pacing, Keyframe interval, HDR and
-    // Chroma in the Container card) are the heaviest interleaved subtree here; they
-    // build on first expert-enable (buildFormatQualityExpertSections()). Record the
-    // Container-card slot so the lazy build inserts the section before the compat
-    // callout that follows.
+    // The two Expert containers (Rate control + Bitrate + Frame pacing in the
+    // Quality card; Bit depth, Colour range, Encoder preset, Keyframe interval,
+    // HDR and Chroma in the Container card) are the heaviest interleaved subtree
+    // here; they build on first expert-enable (buildFormatQualityExpertSections()).
+    // Record the Container-card slot so the lazy build inserts the section before
+    // the compat callout that follows.
     fmt_expert_insert_index_ = fmt_layout->count();
 
     // --- Compat callout (D6: replaces format_display_label_ visually) ---
@@ -1189,7 +1193,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // v10 (Delta 5): stable two-column placement, priority-ordered, identical in
     // Default and Expert (Expert only adds rows in place + reveals Developer).
     //   Left  : Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert)
-    //   Right : Output · Webcam · Presence · Updates · Appearance
+    //   Right : Output · Webcam · Notifications & overlays · Updates · Appearance
     // Left cards Container/Quality/Audio are added in build order here; Hotkeys and
     // Developer are appended in the consolidation block (they are built later).
     // Right cards are parented to right_col but added to right_layout in one explicit,
@@ -1590,14 +1594,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     out_panel_layout->addWidget(output_saves_to_label_);
     // out_panel added to right_layout in the consolidation block below.
 
-    // ---- PRESENCE CARD (left column — SETTINGS-TIERS-P3) — D6: flat rows, below Webcam ----
+    // ---- NOTIFICATIONS & OVERLAYS CARD (right column — SETTINGS-TIERS-P3) ----
+    // v0.9 polish: renamed from "Presence" — the card gathers notifications,
+    // on-screen overlays, and tray behaviour, which "Presence" undersold. The
+    // bell glyph (notifications) stays; internal ids keep the presence_ prefix
+    // ("settings/presence" deep-link target included).
     {
         auto* presence_panel = makePanel(right_col);
         presence_panel_ = presence_panel;
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
         presence_layout->setSpacing(0);
-        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel, QStringLiteral("bell")));
+        presence_layout->addWidget(
+            makeCardTitle(QStringLiteral("Notifications & overlays"), presence_panel, QStringLiteral("bell")));
 
         overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
         overlay_check_->setObjectName(QStringLiteral("overlayCheck"));
@@ -1806,7 +1815,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Developer card (expert-gated, UI-only stubs) is built lazily on first
     // expert-enable — see buildDeveloperCard().
 
-    // ---- UPDATES CARD (right column, between Presence and Appearance) ----
+    // ---- UPDATES CARD (right column, between Notifications & overlays and Appearance) ----
     // v10 masonry: Updates lives in the right column. The full update service is not
     // wired through ConfigPage; controls are stubs that preserve the real shape so the
     // layout is stable and future wiring is a drop-in.
@@ -1868,7 +1877,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // ---- v10 (Delta 5): COLUMN CONSOLIDATION (stable, priority order) ----
     // Left column: Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
-    // Right column: Output · Webcam · Presence · Updates · Appearance.
+    // Right column: Output · Webcam · Notifications & overlays · Updates · Appearance.
     // Expert only reveals rows in place / shows Developer card — nothing teleports sideways.
     left_layout->addWidget(hotkeys_panel_);
     developer_insert_index_ = left_layout->count(); // slot for the lazy developer card
@@ -2424,6 +2433,13 @@ void ConfigPage::updateVideoBitDepthControl() {
         format_settings_.bit_depth = capability::BitDepth::Bit8;
     }
 
+    // Relevance gate (v0.9 polish): the row exists only when the selected codec
+    // carries 10-bit at all. An 8-bit-only codec (H.264) offers no choice, so the
+    // whole row is hidden rather than listed with a permanently disabled item —
+    // the snap-back above has already reconciled the stored value, so no stale
+    // 10-bit state is reachable while the row is gated out.
+    video_bit_depth_row_->setVisible(supports_10bit);
+
     // Enable/disable the 10-bit item per codec. Disabled items use Forbidden cursor
     // + a tooltip explaining the requirement (existing disabled-row pattern).
     if (auto* model = qobject_cast<QStandardItemModel*>(video_bit_depth_combo_->model())) {
@@ -2478,6 +2494,15 @@ void ConfigPage::updateVideoChromaControl() {
         format_settings_.chroma_subsampling = capability::ChromaSubsampling::Cs420;
     }
 
+    // Relevance gate (v0.9 polish): the row exists only when the selected codec
+    // and the active GPU can carry 4:4:4 at all (H.264/HEVC on a GPU with YUV444
+    // encode). AV1 — or a GPU whose probe reported no YUV444 path — hides the
+    // whole row; the snap-back above already reconciled any stored 4:4:4. A
+    // bit-depth conflict (10-bit selected) is user-fixable right here in the
+    // expert view, so it stays a disabled item + calm hint instead of hiding.
+    const bool row_relevant = codec_ok && gpu_ok;
+    video_chroma_row_->setVisible(row_relevant);
+
     // Reason string is three-tiered: bit-depth/codec first, then the per-GPU
     // downgrade when codec+bit-depth are fine but the active GPU can't carry it.
     QString reason = eight_bit ? QStringLiteral("4:4:4 requires H.264 or HEVC")
@@ -2515,7 +2540,9 @@ void ConfigPage::updateVideoChromaControl() {
     }
 
     if (video_chroma_hint_) {
-        video_chroma_hint_->setVisible(!supports_444);
+        // The hint only accompanies a visible row (bit-depth conflict); a row
+        // gated out for codec/GPU reasons takes its hint with it.
+        video_chroma_hint_->setVisible(row_relevant && !supports_444);
     }
 }
 
@@ -2554,6 +2581,27 @@ void ConfigPage::updateVideoHdrModeControl() {
     static const capability::CapabilitySet kHdrCaps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     const bool supports_hdr10 = capability::IsSelectable(kHdrCaps.QueryHdr10Native(format_settings_.video_codec));
     const bool locked = controls_locked_;
+
+    // Relevance gate (v0.9 polish): the HDR-handling row exists only once a
+    // display that actively reports an HDR colour space is present — the same
+    // "only an HDR-active display is treated as HDR" rule the engine and the
+    // rec.hdr.h264 blocker apply (product-spec §6). On an SDR-only system the
+    // choice has no effect either way, so the row is hidden entirely. Display
+    // facts arrive with the async runtime probe (setRuntimeCapabilities); until
+    // then the row stays hidden. The stored hdr_mode is deliberately left
+    // untouched while gated out: without an HDR-active display it changes
+    // nothing at recording time, and it comes back when the display does.
+    bool hdr_display_present = false;
+    if (runtime_caps_set_) {
+        const auto& displays = runtime_caps_.runtime.displays;
+        hdr_display_present = std::any_of(displays.begin(), displays.end(),
+                                          [](const capability::DisplayHdrFacts& d) { return d.hdr_active; });
+    }
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    if (visual_hdr_display_override_set_)
+        hdr_display_present = visual_hdr_display_override_;
+#endif
+    video_hdr_mode_row_->setVisible(hdr_display_present);
 
     // Unlike bit depth, an Hdr10 selection is NEVER snapped back to TonemapSdr here
     // when the codec becomes incompatible (e.g. a container reconcile lands on
@@ -2594,7 +2642,9 @@ void ConfigPage::updateVideoHdrModeControl() {
     }
 
     if (video_hdr_mode_hint_)
-        video_hdr_mode_hint_->setVisible(!supports_hdr10);
+        // The H.264 hint only accompanies a visible row — a row gated out by the
+        // display check takes its hint with it.
+        video_hdr_mode_hint_->setVisible(hdr_display_present && !supports_hdr10);
 }
 
 void ConfigPage::updateVideoEncoderPresetControl() {
@@ -4602,8 +4652,8 @@ void ConfigPage::buildDeveloperCard() {
 }
 
 // Startup-perf: the interleaved Expert rate/format subtree spread across the Quality
-// and Container cards (CQ precision row, Rate control + Bitrate, Bit depth, Colour
-// range, Encoder preset, Frame pacing, Keyframe interval, HDR and Chroma — ~430 LOC /
+// and Container cards (CQ precision row, Rate control + Bitrate + Frame pacing, Bit
+// depth, Colour range, Encoder preset, Keyframe interval, HDR and Chroma — ~430 LOC /
 // ~40 widgets, half of them hidden until a rate/codec toggle) is built on first
 // expert-enable instead of eagerly-then-hidden, so the default non-expert ConfigPage
 // build never pays for it. All external access to these widgets is null-guarded; the
@@ -4762,6 +4812,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
         // in updateVideoBitDepthControl().
         {
             video_bit_depth_row_ = new QWidget(fmt_expert_section_);
+            video_bit_depth_row_->setObjectName(QStringLiteral("videoBitDepthRow"));
             auto* dvl = new QVBoxLayout(video_bit_depth_row_);
             dvl->setContentsMargins(0, 0, 0, 0);
             dvl->setSpacing(0);
@@ -4882,8 +4933,14 @@ void ConfigPage::buildFormatQualityExpertSections() {
         // use case). Newest = lowest-latency newest-at-tick (WGC fallback behaviour).
         // Both are always valid — no codec/container gating. Only the recording lock
         // disables it (see updateFramePacingControl()).
+        // v0.9 polish (regroup): frame pacing is a timing control, so the row lives
+        // in the Quality & timing card — inserted right below Frame timing (before
+        // Capture cursor) in the attach block further down — not with the
+        // format-identity rows in Container & codecs. It is a standalone
+        // expert-gated row (updateExpertModeVisibility), hidden until then.
         {
-            frame_pacing_row_ = new QWidget(fmt_expert_section_);
+            frame_pacing_row_ = new QWidget(quality_panel);
+            frame_pacing_row_->setObjectName(QStringLiteral("framePacingRow"));
             auto* pvl = new QVBoxLayout(frame_pacing_row_);
             pvl->setContentsMargins(0, 0, 0, 0);
             pvl->setSpacing(0);
@@ -4911,7 +4968,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
             pvl->addLayout(phl);
             frame_pacing_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(frame_pacing_row_);
+            frame_pacing_row_->setVisible(false); // expert-gated; shown by updateExpertModeVisibility
         }
 
         // --- Keyframe interval (0.9.0 S1 Quick Trim) ---
@@ -4951,7 +5008,9 @@ void ConfigPage::buildFormatQualityExpertSections() {
 
         // --- HDR handling (expert-only) ---
         // HDR-capable displays are auto-detected elsewhere; this control only selects
-        // what the pipeline does once one is found. Off is intentionally not offered —
+        // what the pipeline does once one is found — and the whole row is
+        // relevance-gated on that detection (hidden while no probed display is
+        // HDR-active; see updateVideoHdrModeControl). Off is intentionally not offered —
         // it has no user-facing value ("break my recording") and stays enum/config-
         // internal. Hdr10 is selectable only when the chosen codec carries a native
         // HDR10 signal (capability::QueryHdr10Native — HEVC/AV1; never H.264); the
@@ -4960,6 +5019,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
         // owns that conflict at recording time (see updateVideoHdrModeControl()).
         {
             video_hdr_mode_row_ = new QWidget(fmt_expert_section_);
+            video_hdr_mode_row_->setObjectName(QStringLiteral("videoHdrModeRow"));
             auto* hvl = new QVBoxLayout(video_hdr_mode_row_);
             hvl->setContentsMargins(0, 0, 0, 0);
             hvl->setSpacing(0);
@@ -5003,6 +5063,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
         // codec/bit-depth; 4:2:2 is not offered (Ada NVENC has no 4:2:2).
         {
             video_chroma_row_ = new QWidget(fmt_expert_section_);
+            video_chroma_row_->setObjectName(QStringLiteral("videoChromaRow"));
             auto* cvl = new QVBoxLayout(video_chroma_row_);
             cvl->setContentsMargins(0, 0, 0, 0);
             cvl->setSpacing(0);
@@ -5032,9 +5093,10 @@ void ConfigPage::buildFormatQualityExpertSections() {
             video_chroma_row_->setProperty("settingsRow", true);
             fes_layout->addWidget(video_chroma_row_);
 
+            // With the row relevance-gated on codec+GPU, the only conflict this
+            // hint ever narrates is the (user-fixable) 10-bit selection.
             video_chroma_hint_ =
-                makeHint(QStringLiteral("4:4:4 needs 8-bit H.264 or HEVC \xE2\x80\x94 not available with the current "
-                                        "codec or bit depth."),
+                makeHint(QStringLiteral("4:4:4 needs 8-bit \xE2\x80\x94 switch Bit depth to 8-bit to enable it."),
                          fmt_expert_section_);
             video_chroma_hint_->setVisible(false);
             fes_layout->addWidget(video_chroma_hint_);
@@ -5050,6 +5112,16 @@ void ConfigPage::buildFormatQualityExpertSections() {
     if (quality_layout && quality_expert_insert_index_ >= 0) {
         quality_layout->insertWidget(quality_expert_insert_index_, quality_rate_section_);
         quality_layout->insertWidget(quality_expert_insert_index_ + 1, quality_expert_widget_);
+    }
+    // v0.9 polish (regroup): Frame pacing slots into the Quality & timing card
+    // between the Frame timing and Capture cursor rows. Resolved via indexOf so
+    // the two insertions above cannot skew the slot.
+    if (quality_layout && frame_pacing_row_) {
+        const int cursor_idx = capture_cursor_row_ ? quality_layout->indexOf(capture_cursor_row_) : -1;
+        if (cursor_idx >= 0)
+            quality_layout->insertWidget(cursor_idx, frame_pacing_row_);
+        else
+            quality_layout->addWidget(frame_pacing_row_);
     }
 
     // ---- Connects (Container card expert rows) ----
@@ -5208,6 +5280,11 @@ void ConfigPage::updateExpertModeVisibility() {
     // PS-PHASE-C: fmt_expert_section (rate control, bitrate, format placeholders).
     if (fmt_expert_section_)
         fmt_expert_section_->setVisible(expert_mode_enabled_);
+    // v0.9 polish (regroup): Frame pacing is a standalone expert row in the
+    // Quality & timing card (not inside quality_rate_section_), so it carries
+    // its own expert gate.
+    if (frame_pacing_row_)
+        frame_pacing_row_->setVisible(expert_mode_enabled_);
     // 0.7.0 — S7: sync the video bit-depth combo + 10-bit gating when the section shows.
     if (expert_mode_enabled_)
         updateVideoBitDepthControl();
@@ -5595,14 +5672,27 @@ void ConfigPage::applyVisualPresetSaveError(bool show) {
     if (visual_preset_error_label_)
         visual_preset_error_label_->setVisible(show);
 }
+
+void ConfigPage::applyVisualHdrDisplayPresent(bool present) {
+    // Sticky pin for the HDR-row relevance gate: visual scenarios must render the
+    // same pixels on every machine, but the real gate reads the probed display
+    // facts. Once pinned, updateVideoHdrModeControl() prefers the pin even if the
+    // real probe delivers setRuntimeCapabilities() afterwards.
+    visual_hdr_display_override_set_ = true;
+    visual_hdr_display_override_ = present;
+    updateVideoHdrModeControl();
+}
 #endif
 
 void ConfigPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
     runtime_caps_ = caps;
     runtime_caps_set_ = true;
     // Re-evaluate the 4:4:4 gate now that the active GPU's real YUV444 support is
-    // known (may disable + snap back a selection the static rule had allowed).
+    // known (may hide the row + snap back a selection the static rule had allowed).
     updateVideoChromaControl();
+    // Re-evaluate the HDR-row relevance gate now that the probed display facts
+    // (hdr_active per display) are known.
+    updateVideoHdrModeControl();
 }
 
 void ConfigPage::setReadinessStatus(const QString& status_label) {
