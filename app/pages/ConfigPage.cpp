@@ -175,17 +175,18 @@ class ChipFlowWidget : public QWidget {
         return doLayout(rect(), /*apply=*/false);
     }
     QSize minimumSizeHint() const override {
-        // Minimum: as narrow as the widest single chip.
+        // Minimum: as narrow as the widest single chip, and one row tall. The actual
+        // wrapped height comes from the flow layout (sizeHint / resizeEvent). Summing
+        // every chip's height reserved a full stacked column of empty space below the
+        // wrapped rows (the tokens-disclosure gap this fix removes).
         int max_w = 0;
-        for (auto* c : chips_)
-            max_w = qMax(max_w, c->sizeHint().width());
-        int total_h = 0;
-        for (auto* c : chips_)
-            total_h += c->sizeHint().height();
-        const int row_gap = 6;
-        if (!chips_.isEmpty())
-            total_h += row_gap * (chips_.size() - 1);
-        return {max_w, total_h};
+        int max_h = 0;
+        for (auto* c : chips_) {
+            const QSize hint = c->sizeHint();
+            max_w = qMax(max_w, hint.width());
+            max_h = qMax(max_h, hint.height());
+        }
+        return {max_w, max_h};
     }
 
   protected:
@@ -423,7 +424,7 @@ QFrame* makePanel(QWidget* parent) {
 
 // Lucide-style 24x24 stroke path data for the per-card glyph chips (v10 design set).
 // Path data mirrors shared.jsx ICON_PATHS — kept local so this file owns its glyphs
-// (LucideIcon.cpp lacks film/gauge/speaker/activity/keyboard/palette).
+// (LucideIcon.cpp lacks film/gauge/speaker/bell/keyboard/palette).
 QByteArray cardGlyphPathFor(const QString& key) {
     if (key == QLatin1String("film"))
         return QByteArrayLiteral("M3 4h18v16H3zM3 9h18M3 14h18M8 4v16M16 4v16");
@@ -435,8 +436,8 @@ QByteArray cardGlyphPathFor(const QString& key) {
         return QByteArrayLiteral("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
     if (key == QLatin1String("camera"))
         return QByteArrayLiteral("M3 7h3l2-2h8l2 2h3v12H3zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7");
-    if (key == QLatin1String("activity"))
-        return QByteArrayLiteral("M3 12h4l3 8 4-16 3 8h4");
+    if (key == QLatin1String("bell"))
+        return QByteArrayLiteral("M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0");
     if (key == QLatin1String("keyboard"))
         return QByteArrayLiteral("M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10");
     if (key == QLatin1String("download"))
@@ -507,7 +508,7 @@ QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon
         chip->setFixedSize(28, 28);
         chip->setAlignment(Qt::AlignCenter);
         const QColor accent(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac));
-        chip->setPixmap(cardGlyphPixmap(icon_key, accent, 15, chip->devicePixelRatioF()));
+        chip->setPixmap(cardGlyphPixmap(icon_key, accent, 18, chip->devicePixelRatioF()));
         hl->addWidget(chip, 0, Qt::AlignVCenter);
     }
 
@@ -767,6 +768,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* toolbar_row = new QWidget(header_zone);
         toolbar_row->setObjectName(QStringLiteral("settingsSlimToolbar"));
         toolbar_row->setProperty("role", "settingsToolbar");
+        // Plain QWidget: needs WA_StyledBackground to paint the QSS slim-toolbar frame.
+        toolbar_row->setAttribute(Qt::WA_StyledBackground, true);
 
         auto* toolbar_hl = new QHBoxLayout(toolbar_row);
         toolbar_hl->setContentsMargins(14, 8, 10, 8);
@@ -805,14 +808,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // Reset (shown only while the live config is (changed))
         preset_reset_btn_ = new QPushButton(QStringLiteral("Reset"), toolbar_row);
         preset_reset_btn_->setObjectName(QStringLiteral("presetResetButton"));
-        preset_reset_btn_->setProperty("role", "ghost");
+        preset_reset_btn_->setProperty("role", "quiet");
         preset_reset_btn_->setVisible(false);
         toolbar_hl->addWidget(preset_reset_btn_, 0, Qt::AlignVCenter);
 
         // Delete (shown only for a selected user preset)
         preset_delete_btn_ = new QPushButton(QStringLiteral("Delete"), toolbar_row);
         preset_delete_btn_->setObjectName(QStringLiteral("presetDeleteButton"));
-        preset_delete_btn_->setProperty("role", "ghost");
+        preset_delete_btn_->setProperty("role", "quiet");
         preset_delete_btn_->setVisible(false);
         toolbar_hl->addWidget(preset_delete_btn_, 0, Qt::AlignVCenter);
 
@@ -885,6 +888,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         ewb_text->setObjectName(QStringLiteral("expertWarnBannerText"));
         ewb_text->setWordWrap(true);
         ewb_hl->addWidget(ewb_text, 1);
+
+        // v0.9 polish: the terse caution keeps its info-i for the concrete detail (which
+        // settings narrow compatibility), so the banner stays a short sentence.
+        auto* ewb_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertBannerDetail, expert_warn_banner_);
+        ewb_info->setObjectName(QStringLiteral("expertWarnBannerInfoHint"));
+        ewb_hl->addWidget(ewb_info, 0, Qt::AlignVCenter);
 
         expert_warn_banner_->setVisible(expert_mode_enabled_);
         layout->addWidget(expert_warn_banner_);
@@ -1119,9 +1128,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     cursor_check_ = new ui::widgets::ExoToggle(quality_panel);
     cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
     cursor_check_->setOn(video_settings_.capture_cursor);
-    quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Capture cursor"),
-                                              new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, quality_panel),
-                                              QString(), cursor_check_));
+    // v0.9 polish: no info-i — "Capture cursor" is a self-explanatory boolean, not an
+    // A/B tradeoff. Info-i is reserved for rows with a genuine choice to explain.
+    quality_layout->addWidget(
+        makeSettingsRow(quality_panel, QStringLiteral("Capture cursor"), nullptr, QString(), cursor_check_));
 
     // --- PS-PHASE-C / v10: Expert sections (split across two cards) ---
     // The two Expert containers (Rate control + Bitrate in the Quality card; Bit
@@ -1168,8 +1178,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     compat_ok_label_->setObjectName(QStringLiteral("compatOkLabel"));
     compat_ok_label_->setProperty("labelRole", "muted");
 
-    quality_layout->addWidget(makeHint(
-        QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), quality_panel));
+    // v0.9 polish: the VFR-availability note moved into the Frame timing compare popover
+    // (SettingsCompareData "timing" subtitle) — inline helper text lives in the info-i now.
     quality_layout->addWidget(compat_ok_label_);
 
     // Pre-fill codec combos (D6: free choice, fills once)
@@ -1219,9 +1229,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         merge_label->setProperty("labelRole", "muted");
 
         row->addWidget(enabled_check);
-        // InfoHint for the source enable toggle (next to the checkbox).
-        row->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioSourceEnable, target_parent), 0,
-                       Qt::AlignVCenter);
+        // v0.9 polish: no info-i on the plain enable toggle — a row carries at most one
+        // info-i, and the genuine tradeoff here is the Merge/separate-track control below.
         row->addStretch();
         row->addWidget(db_label_out);
         row->addWidget(merge_label);
@@ -1338,9 +1347,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // the lazy build inserts it above the trailing hint + summary.
     audio_expert_insert_index_ = audio_panel_layout->count();
 
-    audio_panel_layout->addWidget(
-        makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
-
+    // v0.9 polish: the "separate tracks…" explanation moved into the per-row
+    // Merge/separate-track info-i (kSeparateTrack) — no card-level inline helper text.
     audio_summary_label_ = new QLabel(audio_panel);
     audio_summary_label_->setProperty("labelRole", "muted");
     audio_summary_label_->setWordWrap(true);
@@ -1354,7 +1362,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
     webcam_panel_layout->setSpacing(10);
-    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel, QStringLiteral("camera")));
+    webcam_panel_layout->addWidget(
+        makeCardTitle(QStringLiteral("Webcam"), webcam_panel, QStringLiteral("camera"),
+                      new ui::widgets::InfoHintIcon(ui::hints::kWebcamPlacement, webcam_panel)));
 
     webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
     webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
@@ -1435,10 +1445,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_resolution_validation_label_->setObjectName(QStringLiteral("customResolutionValidationLabel"));
     custom_resolution_validation_label_->setVisible(false);
     out_panel_layout->addWidget(custom_resolution_validation_label_);
-
-    output_effective_summary_label_ = makeHint(QString(), out_panel);
-    output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
-    out_panel_layout->addWidget(output_effective_summary_label_);
 
     // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) — Wave 2: expert-gated section ----
     // Wave 2: the SettingsCardExpander was dissolved. Split controls now live in a plain
@@ -1564,7 +1570,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 QStringLiteral("When a recording stops it opens straight in Edit, preloaded with the clip. "
                                "Off: a notification offers Edit and Show-in-folder instead."),
                 out_panel),
-            QStringLiteral("On \xe2\x80\x94 jumps to Edit \xc2\xb7 Off \xe2\x80\x94 notify only"), open_editor_toggle));
+            QString(), open_editor_toggle));
     }
 #endif // NDEBUG
 
@@ -1575,7 +1581,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_saves_to_label_ = new QLabel(out_panel);
     output_saves_to_label_->setObjectName(QStringLiteral("outputSavesToLabel"));
     output_saves_to_label_->setProperty("labelRole", "muted");
-    output_saves_to_label_->setWordWrap(true);
+    // v0.9 polish: keep the resolved path to one line, middle-elided to the available
+    // width (a long path used to wrap to several lines). Ignored width lets the label
+    // shrink instead of forcing the card wider; re-elided on resize via eventFilter.
+    output_saves_to_label_->setWordWrap(false);
+    output_saves_to_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    output_saves_to_label_->installEventFilter(this);
     out_panel_layout->addWidget(output_saves_to_label_);
     // out_panel added to right_layout in the consolidation block below.
 
@@ -1586,8 +1597,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
         presence_layout->setSpacing(0);
-        presence_layout->addWidget(
-            makeCardTitle(QStringLiteral("Presence"), presence_panel, QStringLiteral("activity")));
+        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel, QStringLiteral("bell")));
 
         overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
         overlay_check_->setObjectName(QStringLiteral("overlayCheck"));
@@ -2115,7 +2125,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     updateFrameRateSelection();
     updateTimingSelection();
     updateOutputResolutionSelection();
-    updateEffectiveOutputSummary();
     updateResponsiveLayout();
 
     QPointer<ConfigPage> safe = this;
@@ -2146,6 +2155,10 @@ bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
     if (watched == quality_cq_spin_ && event->type() == QEvent::Wheel && !quality_cq_spin_->hasFocus()) {
         event->ignore();
         return true;
+    }
+    // Re-elide the resolved "Saves as <path>" footer when the label is resized.
+    if (watched == output_saves_to_label_ && event->type() == QEvent::Resize) {
+        applyOutputSavesToElision();
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -2182,7 +2195,6 @@ void ConfigPage::emitCurrentFormatSettings() {
     updateFormatDisplay();
     updateTimingSelection();
     updateSplitSelection();
-    updateEffectiveOutputSummary();
     updateOutputValidationState();
     updateExampleFilename();
     emit formatSettingsChanged(format_settings_);
@@ -2228,7 +2240,6 @@ void ConfigPage::onFrameRateChanged(int index) {
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
     updateQualitySegmentSelection();
-    updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
 }
 
@@ -2241,7 +2252,6 @@ void ConfigPage::onTimingSelected(int timing_id) {
     }
     updateTimingSelection();
     updateQualitySegmentSelection();
-    updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
 }
 
@@ -2881,7 +2891,6 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateFormatDisplay();
     updateOutputResolutionSelection();
     updateCustomResolutionVisibility();
-    updateEffectiveOutputSummary();
     updateSplitSelection();
 
     if (destination_edit_) {
@@ -2941,7 +2950,6 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     }
 
     updateQualitySegmentSelection();
-    updateEffectiveOutputSummary();
 }
 
 void ConfigPage::updateQualitySegmentSelection() {
@@ -3133,7 +3141,6 @@ void ConfigPage::onCustomWidthChanged(int value) {
     format_settings_.resolution.custom_width = static_cast<uint32_t>(value);
     SanitizeOutputResolution(format_settings_.resolution);
     updateCustomResolutionVisibility();
-    updateEffectiveOutputSummary();
     emitCurrentFormatSettings();
 }
 
@@ -3143,22 +3150,7 @@ void ConfigPage::onCustomHeightChanged(int value) {
     format_settings_.resolution.custom_height = static_cast<uint32_t>(value);
     SanitizeOutputResolution(format_settings_.resolution);
     updateCustomResolutionVisibility();
-    updateEffectiveOutputSummary();
     emitCurrentFormatSettings();
-}
-
-void ConfigPage::updateEffectiveOutputSummary() {
-    if (!output_effective_summary_label_)
-        return;
-
-    const QString summary =
-        QStringLiteral("Output: %1 · %2 · %3 · %4 · %5 · %6")
-            .arg(resolutionLabel(format_settings_.resolution),
-                 frameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den),
-                 video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"),
-                 videoCodecLabel(format_settings_.video_codec), audioCodecLabel(format_settings_.audio_codec),
-                 containerLabel(format_settings_.container));
-    output_effective_summary_label_->setText(summary);
 }
 
 void ConfigPage::setOutputFolder(const std::filesystem::path& folder) {
@@ -3381,11 +3373,20 @@ void ConfigPage::updateExampleFilename() {
         BuildOutputPath(format_settings_.output_folder, format_settings_.naming_pattern, format_settings_.container,
                         std::time(nullptr), ExamplePreviewContext(active_profile_name_, format_settings_));
     // Canon: one resolved footer line — "✓ Saves as <full path>". The separate
-    // "Example:" line said the same thing twice.
-    if (output_saves_to_label_) {
-        output_saves_to_label_->setText(QStringLiteral("\xe2\x9c\x93 Saves as  ") +
-                                        QString::fromStdWString(output_path.wstring()));
-    }
+    // "Example:" line said the same thing twice. The path is kept full and
+    // middle-elided to the label width (applyOutputSavesToElision).
+    output_saves_to_full_ = QStringLiteral("\xe2\x9c\x93 Saves as  ") + QString::fromStdWString(output_path.wstring());
+    applyOutputSavesToElision();
+}
+
+void ConfigPage::applyOutputSavesToElision() {
+    if (!output_saves_to_label_)
+        return;
+    const int avail = output_saves_to_label_->width();
+    const QString elided =
+        avail > 0 ? output_saves_to_label_->fontMetrics().elidedText(output_saves_to_full_, Qt::ElideMiddle, avail)
+                  : output_saves_to_full_;
+    output_saves_to_label_->setText(elided);
 }
 
 void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {

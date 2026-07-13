@@ -28,13 +28,6 @@ QFrame* makeHairline(QWidget* parent) {
     return line;
 }
 
-QLabel* makeNote(const QString& text, QWidget* parent) {
-    auto* label = new QLabel(text, parent);
-    label->setProperty("labelRole", "muted");
-    label->setWordWrap(true);
-    return label;
-}
-
 } // namespace
 
 WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
@@ -56,7 +49,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     auto* right_col = new QWidget(this);
     auto* right_layout = new QVBoxLayout(right_col);
     right_layout->setContentsMargins(0, 0, 0, 0);
-    right_layout->setSpacing(10);
+    right_layout->setSpacing(8);
 
     // Enable toggle row
     auto* enable_row = new QWidget(right_col);
@@ -130,12 +123,8 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     mr->addWidget(mirror_toggle_);
     right_layout->addWidget(mirror_row);
 
-    right_layout->addWidget(makeHairline(right_col));
-
-    // Placement note (no controls here)
-    right_layout->addWidget(
-        makeNote(QStringLiteral("Position and size are configured in the Record preview."), right_col));
-
+    // v0.9 polish: the placement note moved into the Webcam card's info-i (kWebcamPlacement),
+    // which also reclaims the trailing hairline + note row that padded the card height.
     right_layout->addStretch(1);
     root->addWidget(right_col, 1);
 

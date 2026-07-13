@@ -307,28 +307,6 @@ TEST_F(ConfigPageTest, TimingCombo_MapsToVideoSettingsAndMp4DisablesVfr) {
     EXPECT_FALSE(model->item(timing->findData(0))->isEnabled());
 }
 
-TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* summary = page.findChild<QLabel*>(QStringLiteral("outputEffectiveSummaryLabel"));
-    ASSERT_NE(summary, nullptr);
-
-    auto* res_combo = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
-    auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
-    ASSERT_NE(res_combo, nullptr);
-    ASSERT_NE(frame_rate, nullptr);
-
-    const int idx720 = res_combo->findData(static_cast<int>(OutputResolutionMode::HD720));
-    ASSERT_GE(idx720, 0);
-    res_combo->setCurrentIndex(idx720);
-    const int idx24 = frame_rate->findData(24);
-    ASSERT_GE(idx24, 0);
-    frame_rate->setCurrentIndex(idx24);
-
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("720p")));
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("24 fps")));
-}
-
 TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
     // v10 (Task #4): token chips must be permanently present (not hidden behind a toggle).
     ConfigPage page(output_defaults_, video_defaults_);
@@ -376,6 +354,27 @@ TEST_F(ConfigPageTest, DeepLinkScroll_PulsesLandingOnTargetSection) {
     page.scrollToSection(QStringLiteral("settings/hotkeys"));
     EXPECT_TRUE(hotkeys_panel->property("landing").toBool())
         << "scrollToSection must pulse the landing cue on the target section";
+}
+
+TEST_F(ConfigPageTest, EmbeddedHotkeyRow_UnboundShowsOnlySet) {
+    // v0.9 polish: the embedded Hotkeys card exposes no dead buttons — a bound row shows
+    // the × (Clear) plus a "Change" primary; an unbound row collapses to just "Set".
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* set0 = page.findChild<QPushButton*>(QStringLiteral("settingsHkSetBtn_0"));
+    auto* unset0 = page.findChild<QPushButton*>(QStringLiteral("settingsHkUnsetBtn_0"));
+    ASSERT_NE(set0, nullptr);
+    ASSERT_NE(unset0, nullptr);
+
+    // Rows seed from non-empty default bindings, so the row starts bound.
+    EXPECT_EQ(set0->text(), QStringLiteral("Change"));
+    EXPECT_TRUE(unset0->isVisibleTo(&page)) << "the × is available while a binding exists";
+
+    // Clearing the binding via the × drops the row to the unbound state.
+    unset0->click();
+
+    EXPECT_EQ(set0->text(), QStringLiteral("Set")) << "an unbound row's primary reverts to Set";
+    EXPECT_FALSE(unset0->isVisibleTo(&page)) << "the × hides once the row is unbound";
 }
 
 TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {

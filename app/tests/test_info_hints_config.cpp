@@ -140,11 +140,13 @@ TEST_F(InfoHintsConfigTest, ConfigPage_FrameRate_HasInfoHint) {
     EXPECT_GE(count, 1) << "Frame rate setting must have an InfoHint";
 }
 
-TEST_F(InfoHintsConfigTest, ConfigPage_CaptureCursor_HasInfoHint) {
+TEST_F(InfoHintsConfigTest, ConfigPage_CaptureCursor_HasNoInfoHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
+    // v0.9 polish: "Capture cursor" is a self-explanatory boolean, not an A/B tradeoff,
+    // so it deliberately carries no info-i (icon reserved for rows with a real choice).
     const int count = CountHintsWithText(page, ui::hints::kCaptureCursor);
-    EXPECT_GE(count, 1) << "Capture cursor setting must have an InfoHint";
+    EXPECT_EQ(count, 0) << "Capture cursor is a plain boolean and must not carry an info-i";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_OutputResolution_HasCompareHint) {
@@ -156,12 +158,13 @@ TEST_F(InfoHintsConfigTest, ConfigPage_OutputResolution_HasCompareHint) {
     EXPECT_GE(count, 1) << "Output resolution row must contain a CompareHint widget";
 }
 
-TEST_F(InfoHintsConfigTest, ConfigPage_AudioSourceEnable_HasInfoHints) {
+TEST_F(InfoHintsConfigTest, ConfigPage_AudioSourceEnable_HasNoInfoHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // At least sys + mic source enable hints (app row may be hidden for Display target).
+    // v0.9 polish: a source row carries at most one info-i. The plain enable toggle drops
+    // its icon; the genuine tradeoff (merge vs separate track) keeps it — see SeparateTrack.
     const int count = CountHintsWithText(page, ui::hints::kAudioSourceEnable);
-    EXPECT_GE(count, 2) << "Audio source enable hints must be present for at least sys and mic sources";
+    EXPECT_EQ(count, 0) << "The enable toggle must not carry an info-i (one per source row)";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_SeparateTrack_HasInfoHints) {

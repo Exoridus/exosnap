@@ -28,10 +28,16 @@ inline const QString kOutputResolution = QStringLiteral("Downscale to save size 
 
 // ---- Audio ----
 inline const QString kAudioSourceEnable = QStringLiteral("Include this source");
-inline const QString kSeparateTrack = QStringLiteral("Combine into one track");
+inline const QString kSeparateTrack =
+    QStringLiteral("On \xC2\xB7 combines into the track above \xC2\xB7 Off \xC2\xB7 separate track, each source on "
+                   "its own channel for editing");
 inline const QString kAudioCodecOpus = QStringLiteral("Best quality-per-bit \xC2\xB7 MKV/WebM");
 inline const QString kAudioCodecAac = QStringLiteral("Wide compatibility \xC2\xB7 MP4");
 inline const QString kMicDevice = QStringLiteral("How stereo mics are mapped");
+
+// ---- Webcam ----
+// v0.9 polish: absorbed the former in-card placement note into the card's info-i.
+inline const QString kWebcamPlacement = QStringLiteral("Position and size are configured in the Record preview.");
 
 // ---- Output / files ----
 inline const QString kOutputFolder = QStringLiteral("Where recordings are saved");
@@ -41,6 +47,13 @@ inline const QString kSplitRecording = QStringLiteral("New file every N min / ~N
 // ---- Expert mode toggle ----
 inline const QString kExpertMode = QStringLiteral("Expert mode reveals lower-level controls that can produce "
                                                   "incompatible files. Enable only if you know why.");
+
+// v0.9 polish: the expert-warning banner keeps a terse caution; this info-i carries the
+// concrete detail of what narrows compatibility, so the banner itself stays short.
+inline const QString kExpertBannerDetail =
+    QStringLiteral("Codec, bit depth, chroma subsampling, colour range and HDR handling each narrow which "
+                   "players and editors can open the file. Every row explains its own tradeoff \xE2\x80\x94 "
+                   "pick the recommended value if unsure.");
 
 // ---- Presence / Appearance (moved from AdvancedPage in SETTINGS-TIERS-P3) ----
 inline const QString kRecordingOverlay = QStringLiteral("On-screen REC badge \xC2\xB7 excluded from capture");
