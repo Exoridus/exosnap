@@ -80,10 +80,12 @@ class ConfigPage : public QWidget {
     // which renders it (with its own mirror) instead of opening a second reader.
     void setWebcamPreviewFrame(const QImage& frame);
     void setReadinessStatus(const QString& status_label);
-    // Delivers the async-probed runtime capabilities so the expert 4:4:4 chroma
-    // gate can consult the ACTIVE GPU's real YUV444 support (per codec) instead
-    // of only the static codec/bit-depth rule. Stores a copy and re-evaluates the
-    // chroma control. Before this arrives, the static rule stands (pre-probe).
+    // Delivers the async-probed runtime capabilities so (a) the expert 4:4:4
+    // chroma gate can consult the ACTIVE GPU's real YUV444 support (per codec)
+    // instead of only the static codec/bit-depth rule, and (b) the expert HDR
+    // rows can gate on whether any probed display is HDR-active. Stores a copy
+    // and re-evaluates both controls. Before this arrives, the static chroma
+    // rule stands and the HDR rows stay hidden (no display facts yet).
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     // Preset card contract: options = presets (id + label); selected_id = active preset;
     // dirty = unsaved changes.
@@ -126,6 +128,12 @@ class ConfigPage : public QWidget {
     // Passing true shows a deterministic error label (name-conflict copy);
     // passing false hides it.  No real save is performed.
     void applyVisualPresetSaveError(bool show);
+
+    // Pin the HDR-display relevance gate for deterministic visual scenarios.
+    // The real gate reads the probed display facts (machine-dependent), so the
+    // settings scenarios force the HDR rows shown (settings-hdr-*) or hidden
+    // (everything else). Sticky: a later setRuntimeCapabilities() keeps the pin.
+    void applyVisualHdrDisplayPresent(bool present);
 #endif
 
     // Live audio meter update forwarded from RecordPage via MainWindow.
@@ -329,10 +337,10 @@ class ConfigPage : public QWidget {
     void buildSplitExpertSection();
     void buildDeveloperCard();
     // Startup-perf: the interleaved Expert rate/format subtree (CQ precision row,
-    // rate control + bitrate on the Quality card; bit depth, colour range, encoder
-    // preset, frame pacing, keyframe interval, HDR and chroma on the Container card)
-    // builds on first expert-enable. The two _insert_index_ members record where the
-    // sections slot back into their respective card layouts.
+    // rate control + bitrate + frame pacing on the Quality card; bit depth, colour
+    // range, encoder preset, keyframe interval, HDR and chroma on the Container
+    // card) builds on first expert-enable. The two _insert_index_ members record
+    // where the sections slot back into their respective card layouts.
     void buildFormatQualityExpertSections();
 
     capability::AudioUiState audio_ui_state_;
@@ -522,7 +530,7 @@ class ConfigPage : public QWidget {
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
     QWidget* hotkeys_panel_ = nullptr; // card wrapper (for search filtering + scrollToSection)
-    // Updates card (right column, between Presence and Appearance).
+    // Updates card (right column, between Notifications & overlays and Appearance).
     QWidget* updates_panel_ = nullptr;
     // ADR 0034 Phase A: live Updates-card controls.
     ui::widgets::ExoToggle* updates_auto_toggle_ = nullptr;
@@ -576,9 +584,15 @@ class ConfigPage : public QWidget {
     // valid for every codec (H.264/HEVC/AV1) and every container.
     QWidget* video_encoder_preset_row_ = nullptr;
     QComboBox* video_encoder_preset_combo_ = nullptr;
-    // Frame pacing (ADR 0035 Slice 2): Smooth / Newest selector. Never gated.
+    // Frame pacing (ADR 0035 Slice 2): Smooth / Newest selector. Never
+    // capability-gated. v0.9 polish: lives in the Quality & timing card (it is a
+    // timing control, not format identity), as a standalone expert-gated row
+    // inserted before the Capture cursor row.
     QWidget* frame_pacing_row_ = nullptr;
     QComboBox* frame_pacing_combo_ = nullptr;
+    // "Capture cursor" row container — the anchor the lazily built Frame pacing
+    // row is inserted above in the Quality & timing card.
+    QWidget* capture_cursor_row_ = nullptr;
     // Keyframe interval (0.9.0 S1): 2 s / 1 s / 0.5 s. Expert only.
     QComboBox* keyframe_interval_combo_ = nullptr;
 
@@ -642,6 +656,10 @@ class ConfigPage : public QWidget {
     // Created lazily on first applyVisualPresetSaveError(true) call and placed
     // below the preset selector row.  Hidden in all non-error-scenario states.
     QLabel* visual_preset_error_label_ = nullptr;
+    // applyVisualHdrDisplayPresent pin: when _set_ is true the HDR-row relevance
+    // gate uses _override_ instead of the probed display facts.
+    bool visual_hdr_display_override_set_ = false;
+    bool visual_hdr_display_override_ = false;
 #endif
 };
 
