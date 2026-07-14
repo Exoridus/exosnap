@@ -364,6 +364,7 @@ target_sources(exosnap PRIVATE
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.cpp>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.h>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.cpp>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordOptions.cpp>"
 )
 
 if(WIN32)
@@ -915,7 +916,7 @@ exosnap_add_gtest(
     TEST_PREFIX auto_record.
     SOURCES
         tests/test_auto_record_harness.cpp
-        auto_record/AutoRecordHarness.cpp
+        auto_record/AutoRecordOptions.cpp
     LIBRARIES Qt6::Core
 )
 target_include_directories(auto_record_harness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
