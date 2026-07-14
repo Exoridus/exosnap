@@ -3,6 +3,8 @@
 #include <QString>
 #include <QStringList>
 
+class QApplication;
+
 namespace exosnap::auto_record {
 
 enum class TargetKind { Monitor, Window, Region };
@@ -27,5 +29,13 @@ struct AutoRecordOptions {
 
 bool HasAutoRecordRequest(const QStringList& args);
 bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QString* error);
+
+// Headless "bare mode" drive loop: builds and drives a standalone
+// exosnap::RecordingCoordinator directly from CLI-configured options, produces a
+// real recording file, and prints exactly one JSON result line to stdout. No
+// MainWindow, no preview window (preview mode is Task 3). Returns the process exit
+// code: 0 on a successful recording, non-zero on any failure (target not found,
+// StartRecording refused, capability block, timeout).
+int RunAutoRecord(QApplication& app, const AutoRecordOptions& options);
 
 } // namespace exosnap::auto_record
