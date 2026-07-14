@@ -582,16 +582,34 @@ TEST_F(EditExportPageTest, PreviewStopsAtEndOfClipWithNoAudioStream) {
     page.setPreviewPlaying(true);
     ASSERT_TRUE(page.isPreviewPlaying());
 
-    // Let the preview timer (33 ms) run past the 1-second duration.
-    QTest::qWait(1200);
+    // Let the preview timer (33 ms) run past the 1-second duration. This
+    // binary links gtest, not Qt Test (see the SendMouse comment above), so
+    // QTest::qWait is unavailable -- WaitMs pumps a real Qt event loop for
+    // real wall-clock time instead, which is what the 33 ms QTimer needs to
+    // actually fire repeatedly.
+    WaitMs(1200);
 
     EXPECT_FALSE(page.isPreviewPlaying());
     EXPECT_EQ(page.previewPositionMs(), 1000);
 }
 ```
 
-Check the top of the test file for a `QTest` include; if `#include <QTest>` is not already present,
-add it next to the other Qt includes.
+Add a `WaitMs` helper next to `SettleLayout` (same anonymous namespace, top of the file):
+
+```cpp
+// Pumps a real Qt event loop for `ms` wall-clock milliseconds -- unlike
+// SettleLayout's processEvents() loop, this actually lets QTimer-driven
+// code (e.g. EditExportPage's 33 ms preview_timer_) fire repeatedly.
+void WaitMs(int ms) {
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+```
+
+Add `#include <QEventLoop>` and `#include <QTimer>` to the file's existing include block if not
+already present (check first — `EditExportPage.h`, which this file includes, only forward-declares
+`QTimer`, so the test `.cpp` needs its own include to call `QTimer::singleShot`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
