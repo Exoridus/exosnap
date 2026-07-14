@@ -79,7 +79,7 @@ void EditPlayerSession::SetOnFrameReady(std::function<void(DecodedVideoFrame)> c
     impl_->on_frame = std::move(callback);
 }
 
-void EditPlayerSession::Play() {
+void EditPlayerSession::Play(int64_t start_us) {
     if (impl_->playing)
         return;
 
@@ -106,7 +106,7 @@ void EditPlayerSession::Play() {
         impl_->audio.Start();
 
     impl_->engine.StartPlaybackDecode(
-        0, [this](DecodedVideoFrame frame) { impl_->DeliverFrame(std::move(frame)); },
+        start_us, [this](DecodedVideoFrame frame) { impl_->DeliverFrame(std::move(frame)); },
         [this](DecodedAudioBlock block) {
             if (impl_->has_audio && block.interleaved_stereo)
                 impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);

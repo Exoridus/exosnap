@@ -58,8 +58,12 @@ class EditPlayerSession {
     void SetOnFrameReady(std::function<void(DecodedVideoFrame)> callback);
 
     // Starts continuous playback (decode thread + audio renderer, if
-    // present) from the current position. No-op if not open.
-    void Play();
+    // present) from start_us. No-op if not open. The caller is responsible
+    // for tracking "current position" (this class holds no position state of
+    // its own beyond what a live playback/seek thread is doing) -- pass the
+    // caller's own last-known position (e.g. after a pause or a scrub) to
+    // resume from there; pass 0 to start from the beginning.
+    void Play(int64_t start_us = 0);
 
     // Pauses continuous playback. No-op if not open or not playing.
     void Pause();
