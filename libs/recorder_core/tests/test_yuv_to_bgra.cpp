@@ -34,7 +34,9 @@ namespace {
 
 using recorder_core::ColorRange;
 using recorder_core::ConvertAyuvToBgra;
+using recorder_core::ConvertFullPlanarYuv420ToBgra;
 using recorder_core::ConvertYuv420ToBgra;
+using recorder_core::FullPlanarYuv420Frame;
 using recorder_core::MatrixCoefficients;
 using recorder_core::PackedAyuvFrame;
 using recorder_core::PlanarYuv420Frame;
@@ -448,4 +450,133 @@ TEST(YuvToBgra, DegenerateInputsAreNoOps) {
     for (uint8_t b : out) {
         EXPECT_EQ(b, 0xAB);
     }
+}
+
+// --- Fully-planar YUV420 (separate Y/U/V planes -- FFmpeg AV_PIX_FMT_YUV420P /
+// YUV420P10LE software-decoder output) golden vectors. Reuses the exact NV12
+// goldens above -- same normalized Y'/Cb'/Cr' values, different memory layout.
+
+TEST(FullPlanarYuv420ToBgra, GoldenBt709Limited8Bit) {
+    // Same golden pixel as GoldenBt709Limited's third case: Y=126,Cr=180 -> (221,100,128).
+    constexpr uint32_t kW = 2, kH = 2;
+    std::vector<uint8_t> y_plane(kW * kH, 126);
+    std::vector<uint8_t> u_plane(1, 128); // 2x2 luma -> 1x1 chroma
+    std::vector<uint8_t> v_plane(1, 180);
+
+    FullPlanarYuv420Frame src;
+    src.y_plane = y_plane.data();
+    src.y_stride_bytes = kW;
+    src.u_plane = u_plane.data();
+    src.u_stride_bytes = 1;
+    src.v_plane = v_plane.data();
+    src.v_stride_bytes = 1;
+    src.width = kW;
+    src.height = kH;
+    src.bits_per_sample = 8;
+
+    recorder_core::YuvToBgraParams params;
+    params.matrix = recorder_core::MatrixCoefficients::Bt709;
+    params.range = recorder_core::ColorRange::Limited;
+
+    std::vector<uint8_t> out(kW * kH * 4, 0);
+    ConvertFullPlanarYuv420ToBgra(src, params, out.data(), kW * 4);
+
+    for (uint32_t i = 0; i < kW * kH; ++i) {
+        const uint8_t* px = out.data() + i * 4;
+        EXPECT_NEAR(static_cast<int>(px[2]), 221, 1) << "R at pixel " << i;
+        EXPECT_NEAR(static_cast<int>(px[1]), 100, 1) << "G at pixel " << i;
+        EXPECT_NEAR(static_cast<int>(px[0]), 128, 1) << "B at pixel " << i;
+        EXPECT_EQ(px[3], 255);
+    }
+}
+
+TEST(FullPlanarYuv420ToBgra, GoldenBt709Limited10Bit) {
+    // Same golden as GoldenP010Bt709Limited's third case: Y=504,Cr=720 -> (221,100,128),
+    // but as 16-bit little-endian words with the FULL 10-bit value (no <<6 left-justify --
+    // that packing is P010-specific; planar YUV420P10LE stores the plain 10-bit value).
+    constexpr uint32_t kW = 2, kH = 2;
+    std::vector<uint16_t> y_plane(kW * kH, 504);
+    std::vector<uint16_t> u_plane(1, 512);
+    std::vector<uint16_t> v_plane(1, 720);
+
+    FullPlanarYuv420Frame src;
+    src.y_plane = reinterpret_cast<const uint8_t*>(y_plane.data());
+    src.y_stride_bytes = static_cast<uint32_t>(kW * sizeof(uint16_t));
+    src.u_plane = reinterpret_cast<const uint8_t*>(u_plane.data());
+    src.u_stride_bytes = static_cast<uint32_t>(sizeof(uint16_t));
+    src.v_plane = reinterpret_cast<const uint8_t*>(v_plane.data());
+    src.v_stride_bytes = static_cast<uint32_t>(sizeof(uint16_t));
+    src.width = kW;
+    src.height = kH;
+    src.bits_per_sample = 10;
+
+    recorder_core::YuvToBgraParams params;
+    params.matrix = recorder_core::MatrixCoefficients::Bt709;
+    params.range = recorder_core::ColorRange::Limited;
+
+    std::vector<uint8_t> out(kW * kH * 4, 0);
+    ConvertFullPlanarYuv420ToBgra(src, params, out.data(), kW * 4);
+
+    for (uint32_t i = 0; i < kW * kH; ++i) {
+        const uint8_t* px = out.data() + i * 4;
+        EXPECT_NEAR(static_cast<int>(px[2]), 221, 1) << "R at pixel " << i;
+        EXPECT_NEAR(static_cast<int>(px[1]), 100, 1) << "G at pixel " << i;
+        EXPECT_NEAR(static_cast<int>(px[0]), 128, 1) << "B at pixel " << i;
+        EXPECT_EQ(px[3], 255);
+    }
+}
+
+TEST(FullPlanarYuv420ToBgra, NonUniformChromaBlocksEveryPixel) {
+    // Same 4x4 four-quadrant scenario as YuvToBgra.NonUniformChromaBlocksEveryPixel,
+    // re-expressed with separate U/V planes instead of interleaved UV.
+    constexpr uint32_t kW = 4, kH = 4;
+    std::vector<uint8_t> y_plane(kW * kH, 128);
+    // 2x2 chroma grid (one sample per 2x2 luma block).
+    const std::vector<uint8_t> u_plane = {128, 180, 128, 180};
+    const std::vector<uint8_t> v_plane = {180, 128, 128, 180};
+    struct Rgb {
+        int r, g, b;
+    };
+    const Rgb expected_blocks[2][2] = {
+        {{210, 104, 128}, {128, 118, 224}},
+        {{128, 128, 128}, {210, 94, 224}},
+    };
+
+    FullPlanarYuv420Frame src;
+    src.y_plane = y_plane.data();
+    src.y_stride_bytes = kW;
+    src.u_plane = u_plane.data();
+    src.u_stride_bytes = kW / 2;
+    src.v_plane = v_plane.data();
+    src.v_stride_bytes = kW / 2;
+    src.width = kW;
+    src.height = kH;
+    src.bits_per_sample = 8;
+
+    recorder_core::YuvToBgraParams params;
+    params.matrix = recorder_core::MatrixCoefficients::Bt709;
+    params.range = recorder_core::ColorRange::Full;
+
+    std::vector<uint8_t> out(kW * kH * 4, 0);
+    ConvertFullPlanarYuv420ToBgra(src, params, out.data(), kW * 4);
+
+    for (uint32_t r = 0; r < kH; ++r) {
+        for (uint32_t c = 0; c < kW; ++c) {
+            const Rgb& want = expected_blocks[r / 2][c / 2];
+            const uint8_t* px = out.data() + (r * kW + c) * 4;
+            EXPECT_NEAR(static_cast<int>(px[2]), want.r, 1) << "R at (" << r << "," << c << ")";
+            EXPECT_NEAR(static_cast<int>(px[1]), want.g, 1) << "G at (" << r << "," << c << ")";
+            EXPECT_NEAR(static_cast<int>(px[0]), want.b, 1) << "B at (" << r << "," << c << ")";
+            EXPECT_EQ(px[3], 255);
+        }
+    }
+}
+
+TEST(FullPlanarYuv420ToBgra, DegenerateInputsAreNoOps) {
+    std::vector<uint8_t> out(16, 0xAB);
+    FullPlanarYuv420Frame src; // all zero/null by default
+    recorder_core::YuvToBgraParams params;
+    ConvertFullPlanarYuv420ToBgra(src, params, out.data(), 4);
+    for (uint8_t b : out)
+        EXPECT_EQ(b, 0xAB);
 }

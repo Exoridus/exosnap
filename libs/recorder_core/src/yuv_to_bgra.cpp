@@ -174,6 +174,70 @@ void ConvertYuv420ToBgra(const PlanarYuv420Frame& src, const YuvToBgraParams& pa
     }
 }
 
+void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
+                                   uint32_t out_stride_bytes) {
+    if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
+        src.v_plane == nullptr || out_bgra == nullptr)
+        return;
+
+    const FixedCoefs c = ComputeCoefs(params.matrix, params.range, src.bits_per_sample);
+
+    if (src.bits_per_sample > 8) {
+        // YUV420P10LE: plain 16-bit little-endian values in [0, 1023] (no P010
+        // left-justification -- unlike the semi-planar path above).
+        for (uint32_t row = 0; row < src.height; ++row) {
+            const auto* y_row =
+                reinterpret_cast<const uint16_t*>(src.y_plane + static_cast<size_t>(row) * src.y_stride_bytes);
+            const auto* u_row =
+                reinterpret_cast<const uint16_t*>(src.u_plane + static_cast<size_t>(row / 2u) * src.u_stride_bytes);
+            const auto* v_row =
+                reinterpret_cast<const uint16_t*>(src.v_plane + static_cast<size_t>(row / 2u) * src.v_stride_bytes);
+            uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
+            for (uint32_t col = 0; col < src.width; col += 2u) {
+                const int32_t u_val = static_cast<int32_t>(u_row[col / 2u]) - c.c_off;
+                const int32_t v_val = static_cast<int32_t>(v_row[col / 2u]) - c.c_off;
+                const int32_t b_term = c.c_bu * u_val;
+                const int32_t g_term = -c.c_gu * u_val - c.c_gv * v_val;
+                const int32_t r_term = c.c_rv * v_val;
+                const uint32_t pair_end = (col + 2u <= src.width) ? (col + 2u) : src.width;
+                for (uint32_t p = col; p < pair_end; ++p) {
+                    const int32_t luma = c.c_y * (static_cast<int32_t>(y_row[p]) - c.y_off);
+                    uint8_t* px = out_row + static_cast<size_t>(p) * 4u;
+                    px[0] = ClampFixedToByte(luma + b_term); // B
+                    px[1] = ClampFixedToByte(luma + g_term); // G
+                    px[2] = ClampFixedToByte(luma + r_term); // R
+                    px[3] = 255u;                            // A
+                }
+            }
+        }
+        return;
+    }
+
+    // YUV420P: 8-bit samples, separate U/V planes.
+    for (uint32_t row = 0; row < src.height; ++row) {
+        const uint8_t* y_row = src.y_plane + static_cast<size_t>(row) * src.y_stride_bytes;
+        const uint8_t* u_row = src.u_plane + static_cast<size_t>(row / 2u) * src.u_stride_bytes;
+        const uint8_t* v_row = src.v_plane + static_cast<size_t>(row / 2u) * src.v_stride_bytes;
+        uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
+        for (uint32_t col = 0; col < src.width; col += 2u) {
+            const int32_t u_val = static_cast<int32_t>(u_row[col / 2u]) - c.c_off;
+            const int32_t v_val = static_cast<int32_t>(v_row[col / 2u]) - c.c_off;
+            const int32_t b_term = c.c_bu * u_val;
+            const int32_t g_term = -c.c_gu * u_val - c.c_gv * v_val;
+            const int32_t r_term = c.c_rv * v_val;
+            const uint32_t pair_end = (col + 2u <= src.width) ? (col + 2u) : src.width;
+            for (uint32_t p = col; p < pair_end; ++p) {
+                const int32_t luma = c.c_y * (static_cast<int32_t>(y_row[p]) - c.y_off);
+                uint8_t* px = out_row + static_cast<size_t>(p) * 4u;
+                px[0] = ClampFixedToByte(luma + b_term); // B
+                px[1] = ClampFixedToByte(luma + g_term); // G
+                px[2] = ClampFixedToByte(luma + r_term); // R
+                px[3] = 255u;                            // A
+            }
+        }
+    }
+}
+
 void ConvertAyuvToBgra(const PackedAyuvFrame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
                        uint32_t out_stride_bytes) {
     if (src.width == 0 || src.height == 0 || src.data == nullptr || out_bgra == nullptr)
