@@ -17,6 +17,7 @@
 // playback master clock -- feed it to AudioClockMs() (playback_clock.h).
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -39,9 +40,14 @@ struct SwrContext;
 
 namespace recorder_core {
 
+// Ring capacity used unless a caller overrides it. 1 second @ 48 kHz stereo
+// is the fixed backpressure point that paces the playback decode thread --
+// see docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md.
+inline constexpr uint32_t kDefaultRingCapacityFrames = 48000;
+
 class WasapiAudioRenderer {
   public:
-    WasapiAudioRenderer();
+    explicit WasapiAudioRenderer(uint32_t ring_capacity_frames = kDefaultRingCapacityFrames);
     ~WasapiAudioRenderer();
 
     WasapiAudioRenderer(const WasapiAudioRenderer&) = delete;
@@ -58,8 +64,11 @@ class WasapiAudioRenderer {
     void Stop();
 
     // Appends `frame_count` stereo frames (frame_count * 2 floats,
-    // interleaved L,R) to the internal ring buffer. Safe to call from any
-    // thread. No-op if not initialized.
+    // interleaved L,R) to the internal ring buffer, blocking the caller
+    // until enough room is available (this is the playback pacing point --
+    // see the class doc comment above). A blocked call is woken early by
+    // Stop(), which drops whatever had not yet been inserted rather than
+    // writing it. Safe to call from any thread. No-op if frame_count is 0.
     void PushSamples(const float* interleaved_stereo, uint32_t frame_count);
 
     // Cumulative frames actually written to the render endpoint so far --
@@ -92,7 +101,11 @@ class WasapiAudioRenderer {
     std::atomic<bool> running_{false};
 
     std::mutex ring_mutex_;
-    std::deque<float> ring_; // interleaved stereo float32 @ 48kHz, pre-device-resample
+    std::deque<float> ring_;          // interleaved stereo float32 @ 48kHz, pre-device-resample
+    std::condition_variable ring_cv_; // paired with ring_mutex_: signaled when ring space frees up
+                                      // or a Stop() is in progress
+    bool stop_requested_ = false;     // guarded by ring_mutex_; wakes+drops any blocked PushSamples
+    uint32_t ring_capacity_floats_;   // ring_ capacity in interleaved floats (frames * channels)
 
     std::atomic<uint64_t> frames_rendered_{0};
 

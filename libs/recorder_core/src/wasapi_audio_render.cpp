@@ -48,7 +48,9 @@ WORD ResolveRenderWaveFormatTag(const WAVEFORMATEX* fmt) {
 }
 } // namespace
 
-WasapiAudioRenderer::WasapiAudioRenderer() = default;
+WasapiAudioRenderer::WasapiAudioRenderer(uint32_t ring_capacity_frames)
+    : ring_capacity_floats_(ring_capacity_frames * kEngineChannels) {
+}
 
 WasapiAudioRenderer::~WasapiAudioRenderer() {
     Shutdown();
@@ -178,23 +180,56 @@ void WasapiAudioRenderer::Start() {
 }
 
 void WasapiAudioRenderer::Stop() {
-    if (!running_.load())
-        return;
+    // Always wake anything blocked in PushSamples(), even if the render
+    // thread was never started (Init() succeeded but Start() wasn't called
+    // yet, or this is a second Stop() call) -- a caller further up the stack
+    // (EditPlayerSession::Pause(), see the pacing design doc) relies on this
+    // to make StopPlaybackDecode()'s join() unable to hang forever on a
+    // decode thread stuck inside a full ring nothing is draining anymore.
     running_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(ring_mutex_);
+        stop_requested_ = true;
+    }
+    ring_cv_.notify_all();
     if (buffer_event_ != nullptr)
         SetEvent(static_cast<HANDLE>(buffer_event_)); // wake the render thread so it can observe running_==false
     if (render_thread_.joinable())
         render_thread_.join();
-    if (audio_client_ != nullptr)
+    if (initialized_ && audio_client_ != nullptr)
         audio_client_->Stop();
+    {
+        std::lock_guard<std::mutex> lock(ring_mutex_);
+        stop_requested_ = false; // reset so a subsequent Start()/PushSamples() cycle blocks normally again
+        ring_.clear();           // drop whatever was left queued; a fresh Play() starts clean
+    }
 }
 
 void WasapiAudioRenderer::PushSamples(const float* interleaved_stereo, uint32_t frame_count) {
-    if (!initialized_ || interleaved_stereo == nullptr || frame_count == 0)
+    if (interleaved_stereo == nullptr || frame_count == 0)
         return;
-    std::lock_guard<std::mutex> lock(ring_mutex_);
-    ring_.insert(ring_.end(), interleaved_stereo,
-                 interleaved_stereo + static_cast<size_t>(frame_count) * kEngineChannels);
+    // Not gated on initialized_: the ring is a pure producer/consumer queue,
+    // independent of whether a real device is open. In production this is
+    // only ever called after Init() succeeded (EditPlayerSession only pushes
+    // when HasAudioStream() is true, which requires a successful Init()), and
+    // Init() always clears any pre-existing ring contents via its own
+    // Shutdown() call, so nothing pushed before Init() can leak into
+    // playback -- this just makes the ring's blocking/capacity behavior
+    // independently unit-testable without a real WASAPI render device.
+    size_t remaining = static_cast<size_t>(frame_count) * kEngineChannels;
+    const float* src = interleaved_stereo;
+    std::unique_lock<std::mutex> lock(ring_mutex_);
+    while (remaining > 0) {
+        ring_cv_.wait(lock, [&] { return stop_requested_ || ring_.size() < ring_capacity_floats_; });
+        if (stop_requested_)
+            return; // renderer is stopping: drop whatever's left rather than insert it
+        const size_t room = ring_capacity_floats_ - ring_.size();
+        const size_t take =
+            std::min<size_t>(room, remaining); // explicit template arg: windows.h's min() macro (no NOMINMAX here)
+        ring_.insert(ring_.end(), src, src + take);
+        src += take;
+        remaining -= take;
+    }
 }
 
 uint64_t WasapiAudioRenderer::FramesRendered() const noexcept {
@@ -260,6 +295,7 @@ void WasapiAudioRenderer::RenderThreadMain() {
             engine_buf.assign(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
             ring_.erase(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
         }
+        ring_cv_.notify_all(); // wake any PushSamples() blocked waiting for room
         const uint32_t engine_frames = static_cast<uint32_t>(engine_buf.size() / kEngineChannels);
 
         BYTE* device_data = nullptr;
