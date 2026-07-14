@@ -37,6 +37,11 @@ interrupts them and is not acceptable.
   after editing a QSS theme (an invalid `${token}` crashes at launch). Confirm the process
   survives, then close it. Nothing else.
 - Judge pixels with the `--visual-test` render harness. Judge behavior with the widget tests.
+- `--auto-record` is the same class of exception as `--visual-test`: CLI/env-configured, never
+  mouse/keyboard synthesis or window automation. Bare mode never creates a window; preview mode
+  creates one off-screen only to reuse the existing preview/hub and screenshot machinery, never to
+  click through it. Recording output always goes through `EXOSNAP_OUTPUT_DIR` to a scratch directory
+  and is never committed.
 - If a change can only be verified by clicking through the live app, **stop and ask the developer
   to do it.** Never do it yourself, and never do it without asking first.
 
