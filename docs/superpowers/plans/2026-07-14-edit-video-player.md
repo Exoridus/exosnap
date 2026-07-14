@@ -1683,6 +1683,16 @@ Create `libs/recorder_core/include/recorder_core/wasapi_audio_render.h`:
 struct IMMDevice;
 struct IAudioClient;
 struct IAudioRenderClient;
+// Forward-declared at GLOBAL scope deliberately (not inside namespace
+// recorder_core below): the real definition lives in libswresample's
+// swresample.h, which this public header must not include (keeps FFmpeg out
+// of the public API surface). Writing `struct SwrContext* resampler_` INSIDE
+// the recorder_core namespace block instead would declare a distinct
+// recorder_core::SwrContext type via elaborated-type-specifier injection --
+// a different type from the real ::SwrContext the .cpp's reinterpret_cast
+// needs to match. Declaring it here, before the namespace, ensures both this
+// header and wasapi_audio_render.cpp's casts refer to the same global type.
+struct SwrContext;
 
 namespace recorder_core {
 
@@ -1727,10 +1737,12 @@ class WasapiAudioRenderer {
     IAudioClient* audio_client_ = nullptr;
     IAudioRenderClient* render_client_ = nullptr;
     void* buffer_event_ = nullptr; // HANDLE, opaque here to keep windows.h out of this header
-    struct SwrContext* resampler_ = nullptr; // opaque, only used if device format != 48k/stereo/float32
+    SwrContext* resampler_ = nullptr; // opaque (::SwrContext, forward-declared above), only used if
+                                      // the device format != 48k/stereo/float32
 
     uint32_t device_sample_rate_ = 0;
     uint32_t device_channels_ = 0;
+    uint32_t device_bytes_per_sample_ = 4; // bytes/sample in device_data buffers (float32 default, 2 if int16)
     uint32_t buffer_frame_count_ = 0;
 
     std::thread render_thread_;
@@ -1833,6 +1845,7 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     }
     device_sample_rate_ = mix_format->nSamplesPerSec;
     device_channels_ = mix_format->nChannels;
+    device_bytes_per_sample_ = 4; // default float32; corrected below if the device format differs
 
     hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, kBufferDurationHns, 0,
                                    mix_format, nullptr);
@@ -1855,6 +1868,11 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
         } else if (mix_format->wFormatTag == WAVE_FORMAT_PCM) {
             out_fmt = AV_SAMPLE_FMT_S16;
         }
+        // The render thread's silence-padding math (RenderThreadMain) needs the
+        // ACTUAL bytes-per-sample the resampler is about to write, not an
+        // assumed float32 -- a PCM/int16 device would otherwise get the wrong
+        // padding stride.
+        device_bytes_per_sample_ = (out_fmt == AV_SAMPLE_FMT_S16) ? 2u : 4u;
 
         AVChannelLayout in_layout{}, out_layout{};
         av_channel_layout_default(&in_layout, static_cast<int>(kEngineChannels));
@@ -2003,12 +2021,15 @@ void WasapiAudioRenderer::RenderThreadMain() {
             const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(engine_buf.data());
             const int produced = swr_convert(swr, &device_data, static_cast<int>(available_frames), &in_ptr,
                                              static_cast<int>(engine_frames));
-            if (produced < static_cast<int>(available_frames)) {
-                // Pad any shortfall with silence rather than leaving garbage.
-                const size_t frame_bytes = device_channels_ * sizeof(float); // approximation; exact stride
-                                                                             // is device-format-dependent,
-                                                                             // silence padding is best-effort.
-                (void)frame_bytes;
+            if (produced >= 0 && static_cast<uint32_t>(produced) < available_frames) {
+                // Pad any shortfall with silence rather than leaving garbage, using the
+                // ACTUAL device sample format's byte stride (set in Init() -- float32 or
+                // int16, whichever the resampler was configured to emit), not an assumed one.
+                const size_t device_frame_bytes = static_cast<size_t>(device_channels_) * device_bytes_per_sample_;
+                uint8_t* tail = device_data + static_cast<size_t>(produced) * device_frame_bytes;
+                const size_t tail_bytes =
+                    (static_cast<size_t>(available_frames) - static_cast<size_t>(produced)) * device_frame_bytes;
+                memset(tail, 0, tail_bytes);
             }
             render_client_->ReleaseBuffer(available_frames, produced > 0 ? 0 : AUDCLNT_BUFFERFLAGS_SILENT);
         }
@@ -2045,6 +2066,7 @@ void WasapiAudioRenderer::Shutdown() {
     }
     device_sample_rate_ = 0;
     device_channels_ = 0;
+    device_bytes_per_sample_ = 4;
     buffer_frame_count_ = 0;
     initialized_ = false;
 }
