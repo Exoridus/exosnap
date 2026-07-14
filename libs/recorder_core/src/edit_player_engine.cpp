@@ -7,6 +7,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libswresample/swresample.h>
 }
 
 #include <algorithm>
@@ -58,6 +59,18 @@ struct CodecCtxGuard {
     CodecCtxGuard() = default;
     CodecCtxGuard(const CodecCtxGuard&) = delete;
     CodecCtxGuard& operator=(const CodecCtxGuard&) = delete;
+};
+
+// RAII wrapper for one SwrContext*.
+struct SwrCtxGuard {
+    SwrContext* ctx = nullptr;
+    ~SwrCtxGuard() {
+        if (ctx)
+            swr_free(&ctx);
+    }
+    SwrCtxGuard() = default;
+    SwrCtxGuard(const SwrCtxGuard&) = delete;
+    SwrCtxGuard& operator=(const SwrCtxGuard&) = delete;
 };
 
 // RAII wrapper for AVPacket*, matching mp4_remuxer.cpp's PacketGuard.
@@ -131,6 +144,11 @@ struct EditPlayerEngine::Impl {
     std::atomic<bool> playback_running{false};
     std::atomic<bool> playback_cancel{false};
     std::mutex playback_mutex; // guards start/stop against concurrent calls
+    // Playback audio resampler (decoder-native -> 48 kHz stereo float32).
+    // Built by the playback thread per session; only ever freed/rebuilt after
+    // that thread has been joined (StartPlaybackDecode/Close), never
+    // concurrently with it.
+    SwrCtxGuard resampler;
 
     [[nodiscard]] bool IsOpen() const noexcept {
         return fmt.ctx != nullptr;
@@ -221,6 +239,10 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
 
 void EditPlayerEngine::Close() {
     StopPlaybackDecode();
+    // Safe only after the join above: the playback thread owns the resampler
+    // while it runs.
+    if (impl_->resampler.ctx)
+        swr_free(&impl_->resampler.ctx);
     if (impl_->video_codec.ctx)
         avcodec_free_context(&impl_->video_codec.ctx);
     if (impl_->audio_codec.ctx)
@@ -363,6 +385,45 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
     }
 }
 
+// ---- Continuous playback decode helpers ----
+
+// Fixed playback audio output format (see DecodedAudioBlock's contract):
+// 48 kHz stereo interleaved float32, the product's own internal mix-bus
+// format.
+constexpr uint32_t kPlaybackOutSampleRate = 48000;
+constexpr uint32_t kPlaybackOutChannels = 2;
+
+// Builds the playback audio resampler (decoder-native format -> the fixed
+// output format above), following the same swr_alloc_set_opts2 + swr_init
+// convention as OutputFormatAudioSrc::BuildSwrContext. Returns nullptr on
+// failure; playback then continues video-only for the session.
+SwrContext* BuildPlaybackResampler(AVCodecContext* actx) {
+    AVChannelLayout out_layout{};
+    av_channel_layout_default(&out_layout, static_cast<int>(kPlaybackOutChannels));
+    SwrContext* swr = nullptr;
+    const int ret = swr_alloc_set_opts2(&swr, &out_layout, AV_SAMPLE_FMT_FLT, static_cast<int>(kPlaybackOutSampleRate),
+                                        &actx->ch_layout, actx->sample_fmt, actx->sample_rate, 0, nullptr);
+    av_channel_layout_uninit(&out_layout);
+    if (ret < 0 || swr == nullptr) {
+        LogWarn("swr_alloc_set_opts2 failed -- continuing video-only for this playback session");
+        return nullptr;
+    }
+    if (swr_init(swr) < 0) {
+        swr_free(&swr);
+        LogWarn("swr_init failed -- continuing video-only for this playback session");
+        return nullptr;
+    }
+    return swr;
+}
+
+// Microsecond pts for one decoded frame, with the same missing-timestamp
+// fallback DecodeForwardToTarget applies (best_effort_timestamp, else t=0 --
+// never AV_NOPTS_VALUE into av_rescale_q).
+int64_t FramePtsUs(const AVFrame* frame, AVRational tb) noexcept {
+    const int64_t raw = (frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame->best_effort_timestamp : 0;
+    return av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE});
+}
+
 } // namespace
 
 std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_us) {
@@ -392,13 +453,149 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
     return DecodeForwardToTarget(fmt_ctx, vctx, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range);
 }
 
-// Real bodies added in Task 6; safe no-ops here so the class already links
-// and behaves correctly for the scrub-only (DecodeFrameAt) path.
-void EditPlayerEngine::StartPlaybackDecode(int64_t /*start_us*/, VideoFrameCallback /*on_video*/,
-                                           AudioBlockCallback /*on_audio*/) {
+void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio) {
+    std::lock_guard<std::mutex> lock(impl_->playback_mutex);
+    if (!impl_->IsOpen() || impl_->playback_running.load())
+        return;
+
+    // A previous session's thread may have finished on its own (EOF) without
+    // StopPlaybackDecode() ever being called. Assigning over a still-joinable
+    // std::thread calls std::terminate, so reap it first (it has already run
+    // to completion -- playback_running is false).
+    if (impl_->playback_thread.joinable())
+        impl_->playback_thread.join();
+
+    impl_->playback_cancel.store(false);
+    impl_->playback_running.store(true);
+
+    impl_->playback_thread = std::thread([impl = impl_.get(), start_us = std::max<int64_t>(start_us, 0),
+                                          on_video = std::move(on_video), on_audio = std::move(on_audio)]() {
+        AVFormatContext* fmt_ctx = impl->fmt.ctx;
+        AVCodecContext* vctx = impl->video_codec.ctx;
+        AVCodecContext* actx = impl->audio_codec.ctx;
+
+        // Seek to the keyframe at or before start_us and discard any
+        // decoder-buffered frames from before it -- same convention as
+        // DecodeFrameAt. A failed seek is logged and playback continues from
+        // the demuxer's current position rather than producing nothing.
+        AVStream* vst = fmt_ctx->streams[impl->video_stream_idx];
+        const int64_t seek_ts = av_rescale_q(start_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
+        const int seek_ret = av_seek_frame(fmt_ctx, impl->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
+        if (seek_ret < 0)
+            LogWarn((std::string("playback av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());
+        avcodec_flush_buffers(vctx);
+        if (actx != nullptr)
+            avcodec_flush_buffers(actx);
+
+        // (Re)build the audio resampler for this session. Freeing a previous
+        // session's context is safe here: that session's thread was joined
+        // before this one was spawned.
+        if (impl->resampler.ctx != nullptr)
+            swr_free(&impl->resampler.ctx);
+        if (actx != nullptr)
+            impl->resampler.ctx = BuildPlaybackResampler(actx);
+        const bool audio_enabled = (actx != nullptr && impl->resampler.ctx != nullptr);
+
+        PacketGuard pkt(av_packet_alloc());
+        FrameGuard frame(av_frame_alloc());
+        if (pkt.pkt == nullptr || frame.frame == nullptr) {
+            impl->playback_running.store(false);
+            return;
+        }
+
+        const AVRational vtb = vst->time_base;
+        const AVRational atb =
+            audio_enabled ? fmt_ctx->streams[impl->audio_stream_idx]->time_base : AVRational{1, AV_TIME_BASE};
+
+        bool draining = false;
+        while (!impl->playback_cancel.load()) {
+            const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
+            if (read_ret < 0) {
+                // EOF (or a terminal read error): enter drain mode on both
+                // decoders so their buffered frames still come out below.
+                draining = true;
+                avcodec_send_packet(vctx, nullptr);
+                if (audio_enabled)
+                    avcodec_send_packet(actx, nullptr);
+            } else if (pkt.pkt->stream_index == impl->video_stream_idx) {
+                // EAGAIN cannot happen: the drain loops below always empty
+                // both decoders before the next send (same contract note as
+                // DecodeForwardToTarget). A real send error (e.g. a corrupt
+                // packet) is logged and that packet skipped.
+                const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
+                av_packet_unref(pkt.pkt);
+                if (send_ret < 0)
+                    LogWarn(
+                        (std::string("playback avcodec_send_packet (video) failed: ") + av_err2str(send_ret)).c_str());
+            } else if (audio_enabled && pkt.pkt->stream_index == impl->audio_stream_idx) {
+                const int send_ret = avcodec_send_packet(actx, pkt.pkt);
+                av_packet_unref(pkt.pkt);
+                if (send_ret < 0)
+                    LogWarn(
+                        (std::string("playback avcodec_send_packet (audio) failed: ") + av_err2str(send_ret)).c_str());
+            } else {
+                av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
+            }
+
+            // Drain video frames. Every decoded frame is delivered (that is
+            // the point of continuous playback), so the one BGRA conversion +
+            // allocation per frame inside ConvertToDecodedFrame is the
+            // structural minimum -- the buffer's ownership crosses to the
+            // consumer via the DecodedVideoFrame shared_ptr, so it cannot be
+            // pooled or reused here.
+            while (!impl->playback_cancel.load()) {
+                if (avcodec_receive_frame(vctx, frame.frame) < 0)
+                    break; // EAGAIN (need more input) or EOF (fully drained)
+                if (IsConvertibleFrame(frame.frame))
+                    on_video(
+                        ConvertToDecodedFrame(frame.frame, FramePtsUs(frame.frame, vtb), impl->matrix, impl->range));
+                av_frame_unref(frame.frame);
+            }
+
+            // Drain audio frames, resampling each to 48 kHz stereo float32.
+            while (audio_enabled && !impl->playback_cancel.load()) {
+                if (avcodec_receive_frame(actx, frame.frame) < 0)
+                    break;
+                // Capture the pts BEFORE av_frame_unref resets the frame.
+                const int64_t pts_us = FramePtsUs(frame.frame, atb);
+                const int64_t max_out_frames = swr_get_out_samples(impl->resampler.ctx, frame.frame->nb_samples);
+                if (max_out_frames <= 0) {
+                    av_frame_unref(frame.frame);
+                    continue;
+                }
+                auto pcm =
+                    std::make_shared<std::vector<float>>(static_cast<size_t>(max_out_frames) * kPlaybackOutChannels);
+                uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm->data());
+                const int produced = swr_convert(impl->resampler.ctx, &out_ptr, static_cast<int>(max_out_frames),
+                                                 frame.frame->extended_data, frame.frame->nb_samples);
+                av_frame_unref(frame.frame);
+                if (produced <= 0)
+                    continue;
+                pcm->resize(static_cast<size_t>(produced) * kPlaybackOutChannels);
+                DecodedAudioBlock block;
+                block.pts_us = pts_us;
+                block.frame_count = static_cast<uint32_t>(produced);
+                block.interleaved_stereo = std::move(pcm);
+                on_audio(std::move(block));
+            }
+
+            if (draining)
+                break; // EOF reached and both decoders fully drained above
+        }
+
+        impl->playback_running.store(false);
+    });
 }
 
 void EditPlayerEngine::StopPlaybackDecode() {
+    // Same mutex as StartPlaybackDecode -- Impl's playback_mutex contract is
+    // that start/stop are safe against concurrent calls. The playback thread
+    // itself never takes this mutex, so joining under it cannot deadlock.
+    std::lock_guard<std::mutex> lock(impl_->playback_mutex);
+    impl_->playback_cancel.store(true);
+    if (impl_->playback_thread.joinable())
+        impl_->playback_thread.join();
+    impl_->playback_running.store(false);
 }
 
 } // namespace recorder_core

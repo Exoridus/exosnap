@@ -2,6 +2,7 @@
 
 #include "recorder_core/edit_player_engine.h"
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 
@@ -39,6 +40,34 @@ TEST(EditPlayerEngine, ClosedEngineReportsNoStreams) {
 TEST(EditPlayerEngine, DecodeFrameAtWithoutOpenReturnsNullopt) {
     EditPlayerEngine engine;
     EXPECT_FALSE(engine.DecodeFrameAt(0).has_value());
+}
+
+TEST(EditPlayerEngine, StartStopPlaybackDecodeWithoutOpenIsSafeNoOp) {
+    EditPlayerEngine engine;
+    std::atomic<int> video_calls{0};
+    engine.StartPlaybackDecode(
+        0, [&](recorder_core::DecodedVideoFrame) { ++video_calls; }, [](recorder_core::DecodedAudioBlock) {});
+    engine.StopPlaybackDecode();
+    EXPECT_EQ(video_calls.load(), 0);
+}
+
+TEST(EditPlayerEngine, StopPlaybackDecodeWithoutStartIsSafeNoOp) {
+    EditPlayerEngine engine;
+    engine.StopPlaybackDecode(); // must not crash / hang
+    SUCCEED();
+}
+
+TEST(EditPlayerEngine, RepeatedStartStopPlaybackDecodeWithoutOpenIsSafe) {
+    // Start/stop are lifecycle-idempotent while nothing is open: repeated
+    // starts, double-stops, and a Close in the middle must all be safe no-ops.
+    EditPlayerEngine engine;
+    for (int i = 0; i < 3; ++i) {
+        engine.StartPlaybackDecode(0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {});
+        engine.StopPlaybackDecode();
+        engine.StopPlaybackDecode(); // double-stop must be safe
+    }
+    engine.Close();
+    SUCCEED();
 }
 
 } // namespace
