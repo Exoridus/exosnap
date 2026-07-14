@@ -126,6 +126,14 @@ class MainWindow : public QMainWindow {
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
+
+    // Automation accessor for the --auto-record preview harness: exposes the Record
+    // page so the harness can wait for coordinatorInitialized(), select a capture
+    // target, and drive the coordinator the page already owns. Returns nullptr only
+    // before the page is constructed (it is built in the MainWindow ctor).
+    [[nodiscard]] RecordPage* recordPage() const noexcept {
+        return record_page_;
+    }
 #endif
 
   signals:

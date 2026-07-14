@@ -193,6 +193,16 @@ class RecordPage : public QWidget {
     [[nodiscard]] RecordingCoordinator* recordingCoordinator() const noexcept {
         return coordinator_.get();
     }
+
+    // Automation entry point for --auto-record preview mode; NOT reachable from any UI
+    // interaction. Selects a capture target through the same private path the source
+    // picker's accept handler uses (sets capture_mode + syncTargetSelectionToCombo),
+    // which drives the audio target_kind, the coordinator target-context, and the
+    // idle-preview restart. Requires targets to have been enumerated already (i.e. call
+    // after coordinatorInitialized() has fired). Monitor mode selects the first monitor;
+    // Window mode selects the first window whose description contains window_title_substr
+    // (case-insensitive). Returns false when no matching target is enumerated.
+    bool selectCaptureTargetForAutomation(recorder_core::CaptureTarget::Kind kind, const QString& window_title_substr);
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif

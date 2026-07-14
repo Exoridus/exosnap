@@ -360,6 +360,9 @@ target_sources(exosnap PRIVATE
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.cpp>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.h>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.cpp>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.h>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.cpp>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordOptions.cpp>"
 )
 
 if(WIN32)
@@ -377,10 +380,16 @@ if(WIN32)
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
+# EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and EXOSNAP_ENABLE_AUTO_RECORD_HARNESS are relied upon to
+# always be defined together: AutoRecordHarness.h unconditionally declares the preview-mode
+# RunAutoRecord(MainWindow&) overload, but its definition is gated on
+# EXOSNAP_ENABLE_VISUAL_TEST_HARNESS while main.cpp calls it under EXOSNAP_ENABLE_AUTO_RECORD_HARNESS
+# — decoupling the two in the future would produce a non-obvious link error.
 target_compile_definitions(exosnap PRIVATE
     NOMINMAX
     EXOSNAP_BUILD_CONFIG="$<CONFIG>"
     "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
+    "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_AUTO_RECORD_HARNESS=1>"
 )
 add_dependencies(exosnap exosnap_build_info)
 
@@ -902,6 +911,16 @@ target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_
 # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME auto_record_harness_tests
+    TEST_PREFIX auto_record.
+    SOURCES
+        tests/test_auto_record_harness.cpp
+        auto_record/AutoRecordOptions.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(auto_record_harness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # MP4-SPLIT-REMUX-R1: per-segment manifest lifecycle, disk reserve, split settings.
 exosnap_add_gtest(
