@@ -1,6 +1,6 @@
 # Edit Video Player — Pacing Fix — Design
 
-Status: approved (brainstorming), 2026-07-14. Not yet implemented.
+Status: implemented, 2026-07-14.
 
 ## Problem
 
