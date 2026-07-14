@@ -170,6 +170,21 @@ void WasapiAudioRenderer::Start() {
     if (!initialized_ || running_.load())
         return;
     frames_rendered_.store(0);
+    {
+        // Reset here, not at the end of Stop(): the decode thread that was
+        // pushing into this ring is not guaranteed to have stopped yet when
+        // Stop() returns (EditPlayerSession::Pause() calls audio.Stop()
+        // BEFORE engine.StopPlaybackDecode() precisely so a blocked push can
+        // still be woken -- see the pacing design doc). If stop_requested_
+        // were cleared there instead, a still-running decode thread could
+        // refill this ring and block again with nothing left to wake it,
+        // reintroducing the exact join-hang that ordering was meant to
+        // prevent. Resetting on the next Start() instead guarantees no
+        // pusher is confused about whether a stop is in progress.
+        std::lock_guard<std::mutex> lock(ring_mutex_);
+        stop_requested_ = false;
+        ring_.clear();
+    }
     const HRESULT hr = audio_client_->Start();
     if (FAILED(hr)) {
         LogError("IAudioClient::Start failed -- render thread not started");
@@ -198,11 +213,8 @@ void WasapiAudioRenderer::Stop() {
         render_thread_.join();
     if (initialized_ && audio_client_ != nullptr)
         audio_client_->Stop();
-    {
-        std::lock_guard<std::mutex> lock(ring_mutex_);
-        stop_requested_ = false; // reset so a subsequent Start()/PushSamples() cycle blocks normally again
-        ring_.clear();           // drop whatever was left queued; a fresh Play() starts clean
-    }
+    // Deliberately do NOT reset stop_requested_ or clear the ring here --
+    // see the comment in Start(), which does both instead.
 }
 
 void WasapiAudioRenderer::PushSamples(const float* interleaved_stereo, uint32_t frame_count) {

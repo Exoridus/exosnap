@@ -17,6 +17,17 @@ struct EditPlayerSession::Impl {
     bool has_audio = false;
     bool playing = false;
 
+    // WasapiAudioRenderer::FramesRendered() (and therefore AudioClockMs())
+    // resets to 0 on every Start() -- it measures time-since-resume, not
+    // absolute clip position. Frame PTS values from the engine, and the
+    // start_us a caller passes to Play(), are both absolute media time. This
+    // offset bridges the two: set to the start_us of the current playback
+    // run, added back into every clock read in PollFrame()/
+    // CurrentPositionMs(). Only ever written from the caller's own UI thread
+    // (Play(), same as the rest of this class's public API contract), so no
+    // extra synchronization is needed to read it from those same methods.
+    int64_t playback_start_us = 0;
+
     std::function<void(DecodedVideoFrame)> on_frame;
     std::mutex callback_mutex; // guards on_frame against concurrent Set/invoke
 
@@ -35,7 +46,16 @@ struct EditPlayerSession::Impl {
     // audio ring's job (WasapiAudioRenderer); this queue only smooths
     // delivery and never blocks the decode thread -- see
     // docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md.
-    static constexpr size_t kVideoQueueCapacity = 4;
+    //
+    // Capacity must cover the same decode-ahead window the audio ring
+    // allows before it blocks the (shared) decode thread -- kDefaultRing-
+    // CapacityFrames is 200 ms of audio, so at the product's fastest
+    // supported frame rate (60 fps CFR, product spec default profile) that
+    // window holds up to 12 video frames; a drop-oldest queue narrower than
+    // that would discard frames before the clock ever reaches them,
+    // starving PollFrame() for the whole clip. 16 leaves headroom above the
+    // 60 fps worst case.
+    static constexpr size_t kVideoQueueCapacity = 16;
     std::deque<DecodedVideoFrame> video_queue;
     std::mutex video_queue_mutex;
 
@@ -130,6 +150,7 @@ void EditPlayerSession::Play(int64_t start_us) {
     }
 
     impl_->playing = true;
+    impl_->playback_start_us = start_us;
 
     if (impl_->has_audio)
         impl_->audio.Start();
@@ -176,7 +197,8 @@ std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
     if (!impl_->has_audio)
         return std::nullopt; // caller must drive the no-audio fallback via SeekTo() instead
 
-    const int64_t clock_ms = AudioClockMs(impl_->audio.FramesRendered(), impl_->audio.SampleRate());
+    const int64_t clock_ms =
+        impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesRendered(), impl_->audio.SampleRate());
 
     std::lock_guard<std::mutex> lock(impl_->video_queue_mutex);
     if (impl_->video_queue.empty())
@@ -205,7 +227,7 @@ std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
     if (!impl_->has_audio)
         return 0;
-    return AudioClockMs(impl_->audio.FramesRendered(), impl_->audio.SampleRate());
+    return impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesRendered(), impl_->audio.SampleRate());
 }
 
 } // namespace recorder_core

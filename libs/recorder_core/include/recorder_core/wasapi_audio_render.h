@@ -40,10 +40,16 @@ struct SwrContext;
 
 namespace recorder_core {
 
-// Ring capacity used unless a caller overrides it. 1 second @ 48 kHz stereo
-// is the fixed backpressure point that paces the playback decode thread --
-// see docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md.
-inline constexpr uint32_t kDefaultRingCapacityFrames = 48000;
+// Ring capacity used unless a caller overrides it. 200 ms @ 48 kHz stereo is
+// the fixed backpressure point that paces the playback decode thread -- see
+// docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md. Kept
+// deliberately small: since audio and video packets are read on the SAME
+// decode thread, this capacity also bounds how far ahead of the audio clock
+// the decode thread can race before PushSamples() blocks it -- and that
+// same decode-ahead window is what EditPlayerSession's video queue has to
+// hold without dropping frames the clock hasn't reached yet
+// (EditPlayerSession::Impl::kVideoQueueCapacity is sized to match this).
+inline constexpr uint32_t kDefaultRingCapacityFrames = 9600;
 
 class WasapiAudioRenderer {
   public:
