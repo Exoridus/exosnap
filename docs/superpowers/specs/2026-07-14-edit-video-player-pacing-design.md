@@ -90,6 +90,16 @@ audio ring to pace against and no continuous playback queue is used at all. Inst
 same as today) — reusing the already-correct, already-thread-safe single-frame decode path (generation
 counter included) instead of building a second continuous-decode/pacing mechanism for a rare case.
 
+**Accepted trade-off, not a defect:** `SeekTo()` synchronously joins the previous seek's worker thread
+from the caller (the UI thread) before spawning a new one. For a no-audio clip this means every 33 ms
+tick can briefly block the UI thread on that join — and if a single `DecodeFrameAt()` (keyframe seek +
+forward-decode) ever takes longer than one tick interval (e.g. an unusually large keyframe interval
+combined with slow software AV1 decode), the UI could visibly stall for that tick. This was a
+deliberate choice made when this design was reviewed: the alternative (a second bounded, blocking
+continuous-decode/pacing mechanism just for the no-audio case) was rejected as more concurrent
+machinery than a rare edge case (a user muting every audio source before recording) justifies. Worth
+revisiting with real numbers from a live check if it turns out to matter in practice.
+
 ### Shutdown ordering fix
 
 `EditPlayerSession::Pause()` must call `impl_->audio.Stop()` **before** `impl_->engine.
