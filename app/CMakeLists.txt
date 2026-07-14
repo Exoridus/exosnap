@@ -1353,6 +1353,8 @@ exosnap_add_gtest(
         tests/test_edit_export_page.cpp
         pages/EditExportPage.cpp
         ui/widgets/EditTimeline.cpp
+        ui/widgets/EditPlayerSurface.h
+        ui/widgets/EditPlayerSurface.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
@@ -1371,6 +1373,8 @@ exosnap_add_gtest(
         ui/dialogs/EditExportOverlay.cpp
         pages/EditExportPage.cpp
         ui/widgets/EditTimeline.cpp
+        ui/widgets/EditPlayerSurface.h
+        ui/widgets/EditPlayerSurface.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
