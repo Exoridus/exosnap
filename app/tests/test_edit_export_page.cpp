@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QEventLoop>
 #include <QFrame>
 #include <QLabel>
 #include <QMetaMethod>
@@ -9,6 +10,7 @@
 #include <QPoint>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QTimer>
 #include <QWidget>
 
 #include "models/EditTimelineModel.h"
@@ -41,6 +43,15 @@ class EditExportPageTest : public ::testing::Test {
 void SettleLayout() {
     for (int i = 0; i < 8; ++i)
         QCoreApplication::processEvents();
+}
+
+// Pumps a real Qt event loop for `ms` wall-clock milliseconds -- unlike
+// SettleLayout's processEvents() loop, this actually lets QTimer-driven
+// code (e.g. EditExportPage's 33 ms preview_timer_) fire repeatedly.
+void WaitMs(int ms) {
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
 }
 
 // Synthesize mouse events directly (the test binaries link gtest, not Qt Test).
@@ -452,6 +463,24 @@ TEST_F(EditExportPageTest, ScrubPausesAndResumesOnlyIfPreviouslyPlaying) {
     // Release: the preview was playing before the scrub, so it resumes.
     SendMouse(timeline, QEvent::MouseButtonRelease, later);
     EXPECT_TRUE(page.isPreviewPlaying());
+}
+
+TEST_F(EditExportPageTest, PreviewStopsAtEndOfClipWithNoAudioStream) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(1.0)); // 1-second clip: reaches the end in a couple of ticks
+    page.setPhase(EditExportPage::Phase::Edit);
+    SettleLayout();
+
+    page.setPreviewPlaying(true);
+    ASSERT_TRUE(page.isPreviewPlaying());
+
+    // Let the preview timer (33 ms) run past the 1-second duration.
+    WaitMs(1200);
+
+    EXPECT_FALSE(page.isPreviewPlaying());
+    EXPECT_EQ(page.previewPositionMs(), 1000);
 }
 
 TEST_F(EditExportPageTest, ScrubWhilePausedStaysPaused) {

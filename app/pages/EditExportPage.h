@@ -142,6 +142,7 @@ class EditExportPage : public QWidget {
     void refreshPlayButton();
     void updatePlayerHeight();
     [[nodiscard]] qint64 durationMs() const noexcept;
+    static QImage DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame);
 
     Phase phase_ = Phase::Review;
 

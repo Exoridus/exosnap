@@ -725,15 +725,13 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
         const bool opened = player_session_->Open(std::filesystem::path(ctx_.mkv_master_path.toStdWString()), open_err);
         if (opened) {
             player_session_->SetOnFrameReady([this](recorder_core::DecodedVideoFrame frame) {
-                // Invoked from the session's internal decode/seek threads --
-                // never touch player_surface_ here. The QImage below is a
-                // zero-copy view over frame.bgra; .copy() detaches it while
-                // this lambda still keeps the shared buffer alive, and the
-                // queued call carries the detached copy (by value) onto the
-                // UI thread's event queue.
-                const QImage img(frame.bgra->data(), static_cast<int>(frame.width), static_cast<int>(frame.height),
-                                 static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32);
-                QMetaObject::invokeMethod(this, "onDecodedFrameReady", Qt::QueuedConnection, Q_ARG(QImage, img.copy()));
+                // Invoked from the session's internal seek-worker thread
+                // (scrub/trim-drag path only -- continuous playback frames
+                // now go through PollFrame() in onPreviewTick() instead, see
+                // below). Never touch player_surface_ here; marshal onto the
+                // UI thread.
+                QMetaObject::invokeMethod(this, "onDecodedFrameReady", Qt::QueuedConnection,
+                                          Q_ARG(QImage, DecodedFrameToQImage(frame)));
             });
             // Show the clip's first frame as a poster instead of the
             // placeholder while the user is still reviewing.
@@ -809,13 +807,16 @@ void EditExportPage::setPreviewPlaying(bool playing) {
         return; // unknown duration: nothing to play against
     preview_playing_ = playing;
     if (preview_playing_) {
-        // preview_timer_/preview_elapsed_ keep driving the playhead position
-        // via onPreviewTick exactly as before; the session decodes/presents
-        // frames for that same span (its internal audio clock, when present,
-        // drives the actual frame pacing).
         preview_elapsed_->restart();
         preview_timer_->start();
-        if (player_session_)
+        // Continuous decode (EditPlayerSession::Play()) is only engaged when
+        // there's an audio stream to pace it against -- see onPreviewTick().
+        // A clip with no audio stream is driven entirely by the per-tick
+        // SeekTo() fallback there instead; starting continuous decode here
+        // for a no-audio clip would just race through the file unthrottled
+        // for frames nothing ever consumes (see
+        // docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md).
+        if (player_session_ && player_session_->HasAudioStream())
             player_session_->Play(preview_position_ms_ * 1000); // ms -> us: resume from where the
                                                                 // playhead actually is (a pause or
                                                                 // a prior scrub), not the beginning
@@ -850,8 +851,28 @@ void EditExportPage::refreshPlayButton() {
     play_pause_btn_->setIcon(QIcon(renderEditIcon(glyph, 24, themeColor(ActiveTheme().ink))));
 }
 
+QImage EditExportPage::DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame) {
+    const QImage img(frame.bgra->data(), static_cast<int>(frame.width), static_cast<int>(frame.height),
+                     static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32);
+    return img.copy(); // detach: frame.bgra's buffer lifetime is not guaranteed beyond this call
+}
+
 void EditExportPage::onPreviewTick() {
-    preview_position_ms_ += preview_elapsed_->restart();
+    const bool paced_by_audio = player_session_ && player_session_->HasAudioStream();
+    if (paced_by_audio) {
+        // Audio is the pacing AND position source of truth while it exists
+        // -- no independent wall-clock estimate to keep in sync with it.
+        preview_position_ms_ = ClampPlayheadMs(player_session_->CurrentPositionMs(), durationMs());
+        if (auto frame = player_session_->PollFrame())
+            onDecodedFrameReady(DecodedFrameToQImage(*frame)); // already on the UI thread: direct call
+    } else {
+        preview_position_ms_ += preview_elapsed_->restart();
+        if (player_session_)
+            player_session_->SeekTo(preview_position_ms_ * 1000); // ms -> us: no-audio pacing fallback
+                                                                  // (safe no-op if not open, matching
+                                                                  // EditPlayerSession's own contract)
+    }
+
     const qint64 total = durationMs();
     if (preview_position_ms_ >= total) {
         preview_position_ms_ = total;
