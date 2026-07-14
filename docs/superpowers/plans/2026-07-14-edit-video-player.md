@@ -2258,8 +2258,12 @@ class EditPlayerSession {
     void SetOnFrameReady(std::function<void(DecodedVideoFrame)> callback);
 
     // Starts continuous playback (decode thread + audio renderer, if
-    // present) from the current position. No-op if not open.
-    void Play();
+    // present) from start_us. No-op if not open. The caller is responsible
+    // for tracking "current position" (this class holds no position state of
+    // its own beyond what a live playback/seek thread is doing) -- pass the
+    // caller's own last-known position (e.g. after a pause or a scrub) to
+    // resume from there; pass 0 to start from the beginning.
+    void Play(int64_t start_us = 0);
 
     // Pauses continuous playback. No-op if not open or not playing.
     void Pause();
@@ -2365,16 +2369,34 @@ void EditPlayerSession::SetOnFrameReady(std::function<void(DecodedVideoFrame)> c
     impl_->on_frame = std::move(callback);
 }
 
-void EditPlayerSession::Play() {
+void EditPlayerSession::Play(int64_t start_us) {
     if (impl_->playing)
         return;
+
+    // Ensure any in-flight scrub seek (spawned by SeekTo) has fully finished
+    // before playback starts. EditPlayerEngine's DecodeFrameAt (the scrub
+    // path) and its continuous playback thread share the same demux/decode
+    // contexts with no internal synchronization between the two -- that is
+    // the engine's documented single-writer contract, enforced by callers,
+    // not by the engine itself. SeekTo() already guarantees the other
+    // direction (it calls Pause() before seeking), but without this join the
+    // normal resume-on-release flow (scrub -> SeekTo spawns a background
+    // seek -> user releases -> Play()) could start the playback thread while
+    // that seek thread is still running DecodeFrameAt on the same contexts --
+    // a genuine data race, not just a redundant frame delivery.
+    {
+        std::lock_guard<std::mutex> lock(impl_->seek_thread_mutex);
+        if (impl_->seek_thread.joinable())
+            impl_->seek_thread.join();
+    }
+
     impl_->playing = true;
 
     if (impl_->has_audio)
         impl_->audio.Start();
 
     impl_->engine.StartPlaybackDecode(
-        0,
+        start_us,
         [this](DecodedVideoFrame frame) { impl_->DeliverFrame(std::move(frame)); },
         [this](DecodedAudioBlock block) {
             if (impl_->has_audio && block.interleaved_stereo)
@@ -2852,7 +2874,10 @@ void EditExportPage::setPreviewPlaying(bool playing) {
         preview_elapsed_->restart();
         preview_timer_->start();
         if (player_session_)
-            player_session_->Play();
+            player_session_->Play(preview_position_ms_ * 1000); // ms -> us: resume from where
+                                                                 // the playhead actually is (a
+                                                                 // pause or a prior scrub), not
+                                                                 // always from the beginning
     } else {
         preview_timer_->stop();
         if (player_session_)
