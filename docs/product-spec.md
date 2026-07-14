@@ -635,9 +635,10 @@ the model leaves nothing else for the user to choose. A **keyframe interval** se
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
 
-**Current boundary:** trim, markers, and stream-copy export are implemented and reachable end to end,
-including the playhead/scrub interaction (a position clock). Decoded video frames inside the player
-area and the Split Chapter action remain deferred to a later release (0.11 per ADR 0022).
+**Current boundary:** trim, markers, stream-copy export, and real decoded-frame preview (video +
+synchronized audio, FFmpeg-decode + Qt-paint) are implemented and reachable end to end, including
+the playhead/scrub/trim-handle interactions against the real decoder. The Split Chapter action
+remains deferred to a later release (0.11 per ADR 0022).
 
 ---
 
@@ -954,9 +955,9 @@ release binaries will be signed once the certificate is issued.
 - Distributed as portable ZIP and MSI (both unsigned for now).
 - Not present in current builds: Replay Buffer; chapter export from the Edit/Output/Save surface
   (Quick Trim and markers are implemented and reachable; container chapter export is deliberately
-  out of scope for the MVP); video preview playback inside the Edit/Output/Save overlay; HDR beyond
-  BT.2020 (HDR handling now covers both monitor and WGC window/game capture via an FP16 frame pool;
-  no HLG/wide-gamut is the confirmed 1.0 scope); 4:2:2 chroma and 10-bit 4:4:4
+  out of scope for the MVP); HDR beyond BT.2020 (HDR handling now covers both monitor and WGC
+  window/game capture via an FP16 frame pool; no HLG/wide-gamut is the confirmed 1.0 scope); 4:2:2
+  chroma and 10-bit 4:4:4
   (8-bit 4:4:4 for H.264/HEVC is implemented as an Expert option); multi-vendor hardware encoding;
   immediate in-session crash reporter; the fullscreen/borderless/exclusive game-capture matrix. The
   in-place dual-swap updater has since shipped (see Section 13) and is no longer on this list.
