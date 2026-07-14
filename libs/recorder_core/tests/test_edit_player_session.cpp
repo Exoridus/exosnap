@@ -33,4 +33,18 @@ TEST(EditPlayerSession, CloseWithoutOpenIsSafeNoOp) {
     SUCCEED();
 }
 
+TEST(EditPlayerSession, PollFrameWithoutAudioStreamReturnsNullopt) {
+    EditPlayerSession session;
+    // has_audio starts false on a never-opened session (see
+    // ClosedSessionReportsNoAudioStream above) -- PollFrame() is only valid
+    // while HasAudioStream() is true; the caller must use the wall-clock
+    // SeekTo() fallback otherwise.
+    EXPECT_FALSE(session.PollFrame().has_value());
+}
+
+TEST(EditPlayerSession, CurrentPositionMsWithoutAudioStreamIsZero) {
+    EditPlayerSession session;
+    EXPECT_EQ(session.CurrentPositionMs(), 0);
+}
+
 } // namespace

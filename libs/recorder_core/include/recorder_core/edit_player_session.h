@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace recorder_core {
@@ -74,6 +75,23 @@ class EditPlayerSession {
     // caller's job, same as today's onScrubStarted/onScrubFinished). A newer
     // SeekTo() call supersedes an in-flight older one.
     void SeekTo(int64_t target_us);
+
+    // Pulls the next frame to display, paced by the audio master clock.
+    // Valid only while HasAudioStream() is true -- returns nullopt
+    // unconditionally otherwise (the caller must drive the no-audio
+    // fallback by calling SeekTo() itself once per tick instead; see
+    // docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md).
+    // Also returns nullopt if no frames are currently queued, or if the
+    // clock hasn't advanced to the next queued frame's timestamp yet.
+    // Intended to be polled from the caller's own UI-thread timer.
+    [[nodiscard]] std::optional<DecodedVideoFrame> PollFrame();
+
+    // Current playback position derived from the audio master clock (0 if no
+    // audio stream, or not currently playing). Kept separate from
+    // PollFrame() because the caller needs to advance the displayed
+    // position on every tick, even the ones where PollFrame() itself
+    // returns nullopt (clock hasn't reached the next frame yet).
+    [[nodiscard]] int64_t CurrentPositionMs() const noexcept;
 
   private:
     struct Impl;
