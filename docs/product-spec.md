@@ -637,8 +637,12 @@ original recording is never mutated during export; not-yet-exported edits are di
 
 **Current boundary:** trim, markers, stream-copy export, and real decoded-frame preview (video +
 synchronized audio, FFmpeg-decode + Qt-paint) are implemented and reachable end to end, including
-the playhead/scrub/trim-handle interactions against the real decoder. The Split Chapter action
-remains deferred to a later release (0.11 per ADR 0022).
+the playhead/scrub/trim-handle interactions against the real decoder. The one exception is a
+4:4:4-chroma recording (Section 6's Expert 4:4:4 option, H.264/HEVC 8-bit only): the player's
+decoder does not yet handle that pixel format, so those clips show the "Preview unavailable"
+placeholder instead of a decoded frame — trim, markers, and export are unaffected, since export is
+pure stream-copy and never depends on the preview decoder. The Split Chapter action remains
+deferred to a later release (0.11 per ADR 0022).
 
 ---
 
