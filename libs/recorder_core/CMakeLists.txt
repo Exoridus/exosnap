@@ -1037,6 +1037,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_preview_publish_gate PRIVATE src)
 
+# Pure playback-clock math for the Edit-page video player: audio-clock derivation
+# from rendered-sample count, and video-frame selection/drop-counting against
+# that clock. No FFmpeg/COM/Qt.
+exosnap_add_gtest(
+    NAME test_playback_clock
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_playback_clock.cpp
+            src/playback_clock.cpp
+)
+target_include_directories(test_playback_clock PRIVATE src)
+
 # Producer-side shared GPU texture for the WYSIWYG preview tap: create the
 # NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on
 # a second D3D11 device and verify the pixels round-trip; plus the non-blocking
