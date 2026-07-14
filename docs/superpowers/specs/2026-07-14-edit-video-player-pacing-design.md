@@ -113,10 +113,19 @@ which does not exist today.
 
 - `WasapiAudioRenderer`: a new test confirms `PushSamples()` blocks when the ring is at capacity and
   that `Stop()` wakes a blocked push without hanging (bounded with a test-side deadline so a pacing
-  regression fails the test instead of hanging the suite).
-- `EditPlayerSession`: new tests for `PollFrame()` against a fake/injected queue — correct frame
-  selection, correct drop counting, `nullopt` on an empty queue or a clock that hasn't reached the
-  first frame yet, and that `Play()` clears any stale queued frames from a previous run.
+  regression fails the test instead of hanging the suite). This works without calling `Init()` (the
+  ring is a producer/consumer queue independent of a real device), matching this file's existing
+  convention of never depending on real WASAPI hardware in tests.
+- `EditPlayerSession`: `video_queue` lives inside the class's private `Impl` (pimpl) with no seam to
+  inject fake frames into it from a test, and the only way to make real frames flow through it is a
+  real opened file feeding a real continuous decode thread — the same "no real file/hardware in unit
+  tests" boundary `test_edit_player_engine.cpp` already draws (it covers only the nonexistent-file
+  path today). `PollFrame()`'s actual selection/drop math is not new logic — it is a thin wrapper
+  around the already-tested `SelectFrameForClock`, which fully covers the selection and positional-
+  drop-count behavior on its own. What *is* independently testable without a file or device: `nullopt`
+  handling when `HasAudioStream() == false` (both `PollFrame()` and `CurrentPositionMs()`), since that
+  path is reachable on a never-opened session, matching this file's existing
+  `ClosedSessionReportsNoAudioStream`-style tests.
 - `AudioClockMs`/`SelectFrameForClock` themselves are already covered (Task 4, unchanged by this fix).
 - No test depends on a real WASAPI render device or real video decode — live playback verification
   (does it actually look/sound right, is A/V sync correct) is a manual check for the user, same as
