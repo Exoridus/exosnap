@@ -107,6 +107,12 @@ the automated gates and the updater RC live-check above:
       playback for the drag and resumes only if it was playing before, the playhead follows
       playback, and a marker JSON sidecar is written only when at least one marker survives the
       trim.
+- [ ] **Edit overlay real decoded playback.** In the same walkthrough, confirm the player actually
+      shows decoded video (not a placeholder) and that audio is present and stays in sync with the
+      picture through a play/pause/scrub cycle, for a clip that has an audio track. Also open a
+      clip recorded with the Expert 4:4:4 chroma option and confirm it shows the documented
+      "Preview unavailable" placeholder instead of a decoded frame (trim/markers/export still work).
+      Not automatable (real audio-clock pacing and a real decoder, no mock seam).
 - [ ] **Audio-endpoint loss mid-recording ends cleanly.** During a `SYS`-row recording, remove or
       switch the playback endpoint device: the recording ends with a visible AudioCapture error
       rather than silently continuing muted. Not automatable (no device seam in the test harness).
