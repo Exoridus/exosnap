@@ -724,7 +724,7 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
         std::string open_err;
         const bool opened = player_session_->Open(std::filesystem::path(ctx_.mkv_master_path.toStdWString()), open_err);
         if (opened) {
-            player_session_->SetOnFrameReady([this](recorder_core::DecodedVideoFrame frame) {
+            player_session_->SetOnFrameReady([this](const recorder_core::DecodedVideoFrame& frame) {
                 // Invoked from the session's internal seek-worker thread
                 // (scrub/trim-drag path only -- continuous playback frames
                 // now go through PollFrame() in onPreviewTick() instead, see
