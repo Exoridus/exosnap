@@ -201,7 +201,7 @@ void WasapiAudioRenderer::PushSamples(const float* interleaved_stereo, uint32_t 
         if (stop_requested_)
             return; // renderer is stopping: drop whatever's left rather than insert it
         const size_t room = ring_capacity_floats_ - ring_.size();
-        const size_t take = std::min(room, remaining);
+        const size_t take = std::min<size_t>(room, remaining); // explicit template arg: windows.h's min() macro (no NOMINMAX here)
         ring_.insert(ring_.end(), src, src + take);
         src += take;
         remaining -= take;
