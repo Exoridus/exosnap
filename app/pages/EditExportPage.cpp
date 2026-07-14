@@ -3,6 +3,7 @@
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/widgets/EditPlayerSurface.h"
 #include "../ui/widgets/EditTimeline.h"
 
 #include <QByteArray>
@@ -220,9 +221,8 @@ void EditExportPage::buildUi() {
     auto* player_layout = new QVBoxLayout(player_frame_);
     player_layout->setAlignment(Qt::AlignCenter);
 
-    // 60px circular play/pause toggle. Drives the preview position clock (the
-    // decoded-frame view is still deferred; the playhead and scrub semantics
-    // are real).
+    // 60px circular play/pause toggle. Drives the preview position clock and
+    // the real decoder session (player_session_).
     play_pause_btn_ = new QPushButton(player_frame_);
     play_pause_btn_->setObjectName(QStringLiteral("editExportPlayPauseBtn"));
     play_pause_btn_->setFixedSize(60, 60);
@@ -230,8 +230,7 @@ void EditExportPage::buildUi() {
     play_pause_btn_->setIconSize(QSize(24, 24));
     play_pause_btn_->setToolTip(QStringLiteral("Play / pause preview"));
 
-    player_sub_ = new QLabel(QStringLiteral("Video preview — coming in 0.11"), player_frame_);
-    player_sub_->setAlignment(Qt::AlignCenter);
+    player_surface_ = new ui::widgets::EditPlayerSurface(player_frame_);
 
     player_meta_label_ = new QLabel(this);
     player_meta_label_->setObjectName(QStringLiteral("editExportPlayerMeta"));
@@ -239,7 +238,7 @@ void EditExportPage::buildUi() {
 
     player_layout->addStretch();
     player_layout->addWidget(play_pause_btn_, 0, Qt::AlignHCenter);
-    player_layout->addWidget(player_sub_);
+    player_layout->addWidget(player_surface_);
     player_layout->addStretch();
     player_layout->addWidget(player_meta_label_);
 
@@ -590,7 +589,7 @@ void EditExportPage::applyThemeStyles() {
     // Re-render the play/pause glyph (its tint follows ActiveTheme().ink).
     refreshPlayButton();
 
-    player_sub_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.dim));
+    // (player_surface_ paints its own panel/placeholder; no QSS involvement.)
     player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(t.dim));
 
     // ---- Review Panel ----
@@ -714,6 +713,34 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             recorder_core::ExtractKeyframeTimestamps(std::filesystem::path(ctx_.mkv_master_path.toStdWString()));
     }
 
+    // --- Open the real decoder session for the new clip (replaces the previous one, if any) ---
+    // Clear any previous clip's frame first: until the new session delivers a
+    // frame the surface shows its placeholder, which doubles as the
+    // "Preview unavailable" fallback when Open() fails.
+    if (player_surface_)
+        player_surface_->clearFrame();
+    player_session_ = std::make_unique<recorder_core::EditPlayerSession>();
+    if (!ctx_.mkv_master_path.isEmpty()) {
+        std::string open_err;
+        const bool opened = player_session_->Open(std::filesystem::path(ctx_.mkv_master_path.toStdWString()), open_err);
+        if (opened) {
+            player_session_->SetOnFrameReady([this](recorder_core::DecodedVideoFrame frame) {
+                // Invoked from the session's internal decode/seek threads --
+                // never touch player_surface_ here. The QImage below is a
+                // zero-copy view over frame.bgra; .copy() detaches it while
+                // this lambda still keeps the shared buffer alive, and the
+                // queued call carries the detached copy (by value) onto the
+                // UI thread's event queue.
+                const QImage img(frame.bgra->data(), static_cast<int>(frame.width), static_cast<int>(frame.height),
+                                 static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32);
+                QMetaObject::invokeMethod(this, "onDecodedFrameReady", Qt::QueuedConnection, Q_ARG(QImage, img.copy()));
+            });
+            // Show the clip's first frame as a poster instead of the
+            // placeholder while the user is still reviewing.
+            player_session_->SeekTo(0);
+        }
+    }
+
     // --- Reset the preview clock and the timeline for the new clip ---
     duration_seconds_ = ctx_.duration_seconds;
     setPreviewPlaying(false);
@@ -782,10 +809,20 @@ void EditExportPage::setPreviewPlaying(bool playing) {
         return; // unknown duration: nothing to play against
     preview_playing_ = playing;
     if (preview_playing_) {
+        // preview_timer_/preview_elapsed_ keep driving the playhead position
+        // via onPreviewTick exactly as before; the session decodes/presents
+        // frames for that same span (its internal audio clock, when present,
+        // drives the actual frame pacing).
         preview_elapsed_->restart();
         preview_timer_->start();
+        if (player_session_)
+            player_session_->Play(preview_position_ms_ * 1000); // ms -> us: resume from where the
+                                                                // playhead actually is (a pause or
+                                                                // a prior scrub), not the beginning
     } else {
         preview_timer_->stop();
+        if (player_session_)
+            player_session_->Pause();
     }
     refreshPlayButton();
 }
@@ -822,6 +859,11 @@ void EditExportPage::onPreviewTick() {
     }
     if (timeline_)
         timeline_->setPositionMs(preview_position_ms_);
+}
+
+void EditExportPage::onDecodedFrameReady(QImage frame) {
+    if (player_surface_)
+        player_surface_->setFrame(std::move(frame));
 }
 
 // ---- Timeline interaction ----
@@ -867,6 +909,13 @@ void EditExportPage::onTrimHandleReleased(qint64 start_ms, qint64 end_ms) {
             trim_end_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_end_us_ / 1000 : total_ms;
         timeline_->setTrimRangeMs(snapped_start, snapped_end);
     }
+
+    // Show the frame at the (possibly snapped) boundary the handle landed on.
+    if (player_session_) {
+        const int64_t shown_us = (start_ms <= 0) ? trim_end_us_ : trim_start_us_;
+        if (shown_us != recorder_core::TrimRange::kNoTimestamp)
+            player_session_->SeekTo(shown_us);
+    }
 }
 
 void EditExportPage::onScrubStarted() {
@@ -877,9 +926,11 @@ void EditExportPage::onScrubStarted() {
 }
 
 void EditExportPage::onScrubMoved(qint64 position_ms) {
-    // The preview position follows the drag (this is where a decoded frame
-    // view will seek once it exists).
+    // The preview position follows the drag; the decoder shows the frame at
+    // the scrub target (a newer SeekTo supersedes an in-flight older one).
     preview_position_ms_ = ClampPlayheadMs(position_ms, durationMs());
+    if (player_session_)
+        player_session_->SeekTo(preview_position_ms_ * 1000); // ms -> us
 }
 
 void EditExportPage::onScrubFinished() {
@@ -1063,6 +1114,11 @@ void EditExportPage::updatePlayerHeight() {
 void EditExportPage::hideEvent(QHideEvent* event) {
     // Overlay dismissed / page hidden: the preview clock must not keep running.
     setPreviewPlaying(false);
+    // ...and neither must the decoder session's worker threads (or its WASAPI
+    // renderer). setEditContext() opens a fresh session the next time the
+    // overlay is shown for a clip.
+    if (player_session_)
+        player_session_->Close();
     QWidget::hideEvent(event);
 }
 
