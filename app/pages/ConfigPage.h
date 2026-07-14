@@ -2,15 +2,15 @@
 #include <QImage>
 #include <QWidget>
 
-#include "../../../libs/capability/include/capability/audio_ui_state.h"
-#include "../../../libs/capability/include/capability/capability_set.h"
-#include "../../../libs/recorder_core/include/recorder_core/audio_input_device.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
 #include "../services/AudioDeviceNotifier.h"
 #include "../services/WebcamDeviceNotifier.h"
 #include "../viewmodels/PresentationState.h"
+#include <capability/audio_ui_state.h>
+#include <capability/capability_set.h>
+#include <recorder_core/audio_input_device.h>
 
 #include <filesystem>
 #include <string>

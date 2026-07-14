@@ -42,7 +42,6 @@
 #include <capability/resolver.h>
 #include <capability/support_level.h>
 
-#include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
 #include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathPolicy.h"
@@ -66,6 +65,7 @@
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
+#include <recorder_core/audio_track_model.h>
 
 #include <algorithm>
 #include <cmath>

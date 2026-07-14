@@ -4,8 +4,8 @@
 #include "services/DisplayNumbering.h"
 #include "services/TargetDisplayFacts.h"
 
-#include "../../../libs/recorder_core/src/loopback_meter_service.h"
-#include "../../../libs/recorder_core/src/mic_meter_service.h"
+#include "../../libs/recorder_core/src/loopback_meter_service.h"
+#include "../../libs/recorder_core/src/mic_meter_service.h"
 
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/mp4_remuxer.h>
