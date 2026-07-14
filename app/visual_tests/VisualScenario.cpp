@@ -1884,6 +1884,25 @@ const QVector<VisualScenario> kEditExportScenarios = {
      .edit_export_container = QStringLiteral("MKV")},
 };
 
+// EditPlayerSurface (EDIT-VIDEO-PLAYER Task 9): pixel-proves the new paint
+// surface standalone, ahead of it being wired into EditExportPage for real.
+// Rendered via a harness-only host widget layered over the EditExport overlay
+// (see MainWindow::applyVisualEditExportScenario) since EditExportPage does
+// not own an EditPlayerSurface instance yet.
+const QVector<VisualScenario> kEditPlayerSurfaceScenarios = {
+    // "edit-player-surface-empty": placeholder-only state.
+    {.id = QStringLiteral("edit-player-surface-empty"),
+     .title = QStringLiteral("Edit Export / Player Surface Empty"),
+     .page = VisualPage::EditExport,
+     .edit_player_surface_mode = QStringLiteral("empty")},
+    // "edit-player-surface-frame": a synthetic solid-color test image, proving
+    // letterbox/aspect-fit layout without a real decoder.
+    {.id = QStringLiteral("edit-player-surface-frame"),
+     .title = QStringLiteral("Edit Export / Player Surface Frame"),
+     .page = VisualPage::EditExport,
+     .edit_player_surface_mode = QStringLiteral("frame")},
+};
+
 // About surface (State Spec "About · Notification Hub"). The About page is pure
 // identity + facts + links; update status surfaces as a Hub advisory, not on the
 // page, so a single page scenario covers it.
@@ -1944,6 +1963,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kSplitRecordingScenarios);
         merged.append(kPolishR1Scenarios);
         merged.append(kEditExportScenarios);
+        merged.append(kEditPlayerSurfaceScenarios);
         merged.append(kAboutScenarios);
         merged.append(kUpdatesScenarios);
         merged.append(kDevicePageScenarios);

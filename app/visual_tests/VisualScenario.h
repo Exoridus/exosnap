@@ -319,6 +319,16 @@ struct VisualScenario {
     // | "saving" (determinate, uses finalizing_overlay_saving_percent).
     QString finalizing_overlay_mode;
     int finalizing_overlay_saving_percent = 0;
+
+    // --- EditPlayerSurface (EDIT-VIDEO-PLAYER Task 9) ---
+    // Edit-page video player surface: "empty" (placeholder only) or "frame"
+    // (a synthetic solid-color test image, proving the letterbox/aspect-fit
+    // math -- no real decoder runs in the harness, consistent with how every
+    // other visual scenario works). EditPlayerSurface is not wired into
+    // EditExportPage yet (that lands in a later task); until then this is
+    // rendered via a harness-only host widget layered over the EditExport
+    // overlay -- see MainWindow::applyVisualEditExportScenario.
+    QString edit_player_surface_mode; // "" (not applicable) | "empty" | "frame"
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

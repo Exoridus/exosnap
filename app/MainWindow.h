@@ -76,6 +76,12 @@ class RecordingErrorOverlay;
 struct RecordingErrorModel;
 } // namespace ui::dialogs
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace ui::widgets {
+class EditPlayerSurface;
+} // namespace ui::widgets
+#endif
+
 namespace ui::overlay {
 class CountdownOverlayWindow;
 class DiagnosticsOverlayWindow;
@@ -360,6 +366,12 @@ class MainWindow : public QMainWindow {
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
     void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
     void applyVisualEditExportScenario(const visual::VisualScenario& scenario);
+    // EDIT-VIDEO-PLAYER Task 9: lazily builds a harness-only EditPlayerSurface
+    // host layered over the EditExport overlay. EditPlayerSurface is not wired
+    // into EditExportPage yet (a later task's job) -- this proves its paint
+    // path in isolation via --visual-test, driven directly by pointer (no
+    // findChild lookup, since the production page owns no instance yet).
+    void ensureEditPlayerSurfaceVisualTestHost();
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
@@ -370,6 +382,12 @@ class MainWindow : public QMainWindow {
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
     ui::dialogs::FinalizingOverlay* finalizing_overlay_ = nullptr;
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // EDIT-VIDEO-PLAYER Task 9: harness-only host for EditPlayerSurface (see
+    // ensureEditPlayerSurfaceVisualTestHost()). Never built/shown outside the
+    // visual-test harness; not the real production instance.
+    ui::widgets::EditPlayerSurface* edit_player_surface_visual_test_ = nullptr;
+#endif
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
     ui::dialogs::RecordingErrorOverlay* recording_error_overlay_ = nullptr;
     ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;

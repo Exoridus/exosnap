@@ -46,6 +46,7 @@
 #include "ui/widgets/NotificationBell.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include "ui/widgets/EditPlayerSurface.h"
 #include "visual_tests/VisualScenario.h"
 
 #include <QToolButton>
@@ -4465,6 +4466,48 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     // stack_->currentIndex() is now kRecordPageIndex, so the shared post-switch
     // title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex())) in
     // applyVisualScenario() already highlights Record correctly.
+
+    // EDIT-VIDEO-PLAYER Task 9: EditPlayerSurface is not wired into
+    // EditExportPage yet (a later task's job) -- proven here via a harness-only
+    // host layered over the overlay.
+    if (!scenario.edit_player_surface_mode.isEmpty()) {
+        ensureEditPlayerSurfaceVisualTestHost();
+        if (scenario.edit_player_surface_mode == QStringLiteral("frame")) {
+            QImage test_img(320, 180, QImage::Format_RGB32);
+            test_img.fill(QColor("#3a6b5c")); // arbitrary solid color -- proves paint path, not color accuracy
+            edit_player_surface_visual_test_->setFrame(test_img);
+        } else {
+            edit_player_surface_visual_test_->clearFrame();
+        }
+        edit_player_surface_visual_test_->show();
+        edit_player_surface_visual_test_->raise();
+        // edit_export_overlay_ is not synced to its final on-screen geometry yet
+        // at this point in RunVisualTestHarness: EditExportOverlay::openOverlay()
+        // (just above) calls syncGeometryToParent() against centralWidget(), but
+        // the top-level MainWindow itself is not shown until AFTER
+        // applyVisualScenario() returns (see RunVisualTestHarness), and
+        // EditExportOverlay's own showEvent()-driven re-sync only fires once that
+        // happens. Deferring one event-loop tick lets this harness-only host pick
+        // up the real final size instead of whatever pre-show geometry the
+        // overlay had when openOverlay() ran above.
+        QTimer::singleShot(0, this, [this]() {
+            if (!edit_export_overlay_ || !edit_player_surface_visual_test_)
+                return;
+            const QRect host_rect = edit_export_overlay_->rect();
+            const int margin_x = host_rect.width() / 6;
+            const int margin_y = host_rect.height() / 6;
+            edit_player_surface_visual_test_->setGeometry(host_rect.adjusted(margin_x, margin_y, -margin_x, -margin_y));
+            edit_player_surface_visual_test_->raise();
+        });
+    } else if (edit_player_surface_visual_test_) {
+        edit_player_surface_visual_test_->hide();
+    }
+}
+
+void MainWindow::ensureEditPlayerSurfaceVisualTestHost() {
+    if (edit_player_surface_visual_test_)
+        return;
+    edit_player_surface_visual_test_ = new ui::widgets::EditPlayerSurface(edit_export_overlay_);
 }
 #endif
 
