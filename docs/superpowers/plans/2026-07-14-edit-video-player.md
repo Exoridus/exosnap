@@ -1346,18 +1346,17 @@ TEST(EditPlayerEngine, StopPlaybackDecodeWithoutStartIsSafeNoOp) {
     engine.StopPlaybackDecode(); // must not crash / hang
     SUCCEED();
 }
-
-TEST(EditPlayerEngine, DestructorStopsRunningPlaybackDecode) {
-    // Regression guard: the destructor must join the thread, never leak/detach it.
-    {
-        EditPlayerEngine engine;
-        engine.StartPlaybackDecode(0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {});
-    } // destructor runs here
-    SUCCEED(); // reaching this line without a hang/crash is the assertion
-}
 ```
 
 Add `#include <atomic>` near the top of the test file's includes.
+
+(No "destructor joins a REAL running decode thread" test is written here: `StartPlaybackDecode`
+returns immediately without spawning a thread unless `impl_->IsOpen()` — i.e. `Open()` already
+succeeded against a real, decodable file, which (per Task 5's own testing note) cannot be
+synthesized in this test environment. A test that called `StartPlaybackDecode` on an un-opened
+engine and asserted "no hang" would be asserting the exact same no-op path the two tests above
+already cover, just under a misleading name. The real thread-join-while-playing path is exercised
+live in Task 11's live-verify pass, using an actual recorded file.)
 
 - [ ] **Step 2: Run and confirm they compile+pass against the current no-op bodies**
 
@@ -1545,9 +1544,7 @@ cmake --build --preset windows-x64-debug --target test_edit_player_engine
 pwsh scripts/run-tests.ps1 -Filter test_edit_player_engine
 ```
 
-Expected: PASS, all 7 cases (4 from Task 5 + 3 new). `DestructorStopsRunningPlaybackDecode` proves
-the thread is joined, not leaked, even with no real media (the thread hits EOF/`AVERROR_EOF`
-immediately on `av_read_frame` since no file was opened, but the join contract is what's tested).
+Expected: PASS, all 6 cases (4 from Task 5 + 2 new).
 
 - [ ] **Step 5: Rebuild the full library**
 
