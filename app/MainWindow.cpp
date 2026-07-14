@@ -28,6 +28,7 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/EditExportOverlay.h"
+#include "ui/dialogs/FinalizingOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
@@ -45,6 +46,7 @@
 #include "ui/widgets/NotificationBell.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include "ui/widgets/EditPlayerSurface.h"
 #include "visual_tests/VisualScenario.h"
 
 #include <QToolButton>
@@ -2017,6 +2019,43 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     // enabled state in sync with whether a completed recording actually exists.
     if (diagnostics_page_ && record_page_)
         diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
+
+    // FinalizingOverlay: shown for the FULL Stopping/Saving duration (not only on
+    // a close attempt — replaces the native QMessageBox closeEvent used to show).
+    // Container finalize (Stopping) is normally near-instant, a brief flash;
+    // an MP4 remux (Saving) is visibly longer and gets real progress via
+    // remuxProgressChanged above. showFinalizing() is idempotent to call again
+    // on every refresh while Stopping (cheap: just resets to "Finishing…"/
+    // indeterminate, matching the label having no progress data either way).
+    const bool is_finalizing =
+        (record_status_label_ == QStringLiteral("STOPPING") || record_status_label_ == QStringLiteral("SAVING"));
+    if (is_finalizing) {
+        buildFinalizingOverlay();
+        // Stopping always precedes Saving (session_.Record() fully drains before
+        // PostStateChange(Saving) — see RecordingCoordinator.cpp), so the overlay
+        // is already visible by the time Saving begins; showSaving() (via the
+        // remuxProgressChanged connect above) takes over the label/progress text
+        // as soon as the first tick arrives. Re-asserting "Finishing…" here only
+        // while still Stopping avoids clobbering that once Saving has taken over.
+        if (record_status_label_ == QStringLiteral("STOPPING"))
+            finalizing_overlay_->showFinalizing();
+    } else if (was_finalizing_ && finalizing_overlay_) {
+        finalizing_overlay_->hideOverlay();
+    }
+    was_finalizing_ = is_finalizing;
+
+    // "Open editor when finished": auto-navigate to the Edit overlay on the
+    // not-SAVED -> SAVED edge (a successful completion — SAVED only appears
+    // when view_model_.last_succeeded, see RecordPage::statusLabelFor), never
+    // on a failure. Hooked here rather than in the recordingResultReady handler
+    // because PostResult() runs BEFORE PostStateChange(Completed) on the engine
+    // side, so at result-ready time record_status_label_ still reads STOPPING/
+    // SAVING and navigateToEditExportPage's own recording/countdown guard would
+    // reject the call; this state is fully settled by the time it's observed here.
+    const bool is_saved = (record_status_label_ == QStringLiteral("SAVED"));
+    if (is_saved && !was_saved_ && persisted_settings_.open_editor_when_finished && record_page_)
+        navigateToEditExportPage(record_page_->currentEditContext());
+    was_saved_ = is_saved;
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {
@@ -2310,15 +2349,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // near-instant, and the bounded join budget caps it even in the worst case.
     // There is deliberately no "force close" option here: unlike the MP4 remux
     // (which leaves the transient MKV intact), aborting the container finalize
-    // would corrupt the recording being written.
+    // would corrupt the recording being written. No separate dialog is shown —
+    // FinalizingOverlay (onRecordChromeStateChanged) is already visible for the
+    // full Stopping duration by this point, so the block is self-explanatory;
+    // a native QMessageBox here used to be the only place in the app that
+    // surfaced feedback as a separate OS window instead of in-app.
     if (record_status_label_ == QStringLiteral("STOPPING")) {
-        QMessageBox msgBox(this);
-        msgBox.setWindowTitle(QStringLiteral("Finishing recording"));
-        msgBox.setText(QStringLiteral("ExoSnap is finalizing your recording and cannot be closed yet. This "
-                                      "usually takes only a moment — please try again once saving is complete."));
-        msgBox.setIcon(QMessageBox::Information);
-        msgBox.setStandardButtons(QMessageBox::Ok);
-        msgBox.exec();
         event->ignore();
         return;
     }
@@ -2908,6 +2944,18 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         if (scenario.audio_degraded_notification_count > 0 && notification_manager_) {
             notification_manager_->Enqueue(notifications::MakeAudioSourceDegradedEvent(
                 static_cast<uint32_t>(scenario.audio_degraded_notification_count)));
+        }
+        // FinalizingOverlay: drives it directly (see VisualScenario.h's
+        // finalizing_overlay_mode doc comment) — the harness does not exercise
+        // the real chromeStateChanged signal chain the overlay normally listens on.
+        if (scenario.finalizing_overlay_mode == QStringLiteral("stopping")) {
+            buildFinalizingOverlay();
+            finalizing_overlay_->showFinalizing();
+        } else if (scenario.finalizing_overlay_mode == QStringLiteral("saving")) {
+            buildFinalizingOverlay();
+            finalizing_overlay_->showSaving(scenario.finalizing_overlay_saving_percent);
+        } else if (finalizing_overlay_) {
+            finalizing_overlay_->hideOverlay();
         }
         break;
     case visual::VisualPage::Settings:
@@ -3695,28 +3743,38 @@ void MainWindow::initNotificationToasts() {
                 if (!notification_manager_)
                     return;
 
+                // "Open editor when finished": the Edit overlay opening directly (wired
+                // in onRecordChromeStateChanged, on the SAVED transition) already IS the
+                // post-recording feedback; the toast's Edit/Show-in-folder actions would
+                // be a redundant second path to the same place. Suppressed here, not by
+                // returning early — the frames-dropped follow-up below must still fire
+                // regardless of this setting.
+                const bool suppress_saved_toast = succeeded && persisted_settings_.open_editor_when_finished;
+
                 notifications::NotificationEvent event;
                 if (succeeded) {
-                    // Trigger 2: recording saved successfully.
-                    event.type = notifications::NotificationType::Saved;
-                    event.title = QStringLiteral("Recording saved");
-                    // Prefer the filename; fall back to a generic body.
-                    if (!output_path.isEmpty()) {
-                        const QString name =
-                            output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
-                                ? output_path.mid(
-                                      output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) + 1)
-                                : output_path;
-                        event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
-                    } else {
-                        event.body = QStringLiteral("File saved to output folder");
+                    if (!suppress_saved_toast) {
+                        // Trigger 2: recording saved successfully.
+                        event.type = notifications::NotificationType::Saved;
+                        event.title = QStringLiteral("Recording saved");
+                        // Prefer the filename; fall back to a generic body.
+                        if (!output_path.isEmpty()) {
+                            const QString name =
+                                output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
+                                    ? output_path.mid(
+                                          output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) + 1)
+                                    : output_path;
+                            event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
+                        } else {
+                            event.body = QStringLiteral("File saved to output folder");
+                        }
+                        // Primary action: navigate to the Edit/Output page for the saved
+                        // recording. Secondary action: reveal the file in Explorer.
+                        // Both share action_payload (the output file path).
+                        event.action = notifications::NotificationAction::Edit;
+                        event.secondary_action = notifications::NotificationAction::OpenFolder;
+                        event.action_payload = output_path;
                     }
-                    // Primary action: navigate to the Edit/Output page for the saved
-                    // recording. Secondary action: reveal the file in Explorer.
-                    // Both share action_payload (the output file path).
-                    event.action = notifications::NotificationAction::Edit;
-                    event.secondary_action = notifications::NotificationAction::OpenFolder;
-                    event.action_payload = output_path;
                 } else if (error_phase == QStringLiteral("DiskSpace")) {
                     // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
                     // Mappe spec: action "Change folder" (primary) + "Dismiss".
@@ -3732,7 +3790,8 @@ void MainWindow::initNotificationToasts() {
                     // The modal carries the full detail and the opt-in error report.
                     return;
                 }
-                notification_manager_->Enqueue(std::move(event));
+                if (!suppress_saved_toast)
+                    notification_manager_->Enqueue(std::move(event));
 
                 // DROP-NOTIFY: on a successful save, raise a separate caution toast when
                 // REAL frame drops occurred — encoder backpressure only. Benign drops
@@ -3764,6 +3823,15 @@ void MainWindow::initNotificationToasts() {
             [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
                 last_backpressure_drops_ = snapshot.capture.frames_dropped_backpressure;
             });
+
+    // FinalizingOverlay: MP4 remux progress ticks, only meaningful while the
+    // overlay is actually showing Saving (guarded inside FinalizingOverlay itself
+    // is unnecessary here — showSaving() is only ever called while state==Saving,
+    // enforced by the STOPPING/SAVING edge-detection in onRecordChromeStateChanged).
+    connect(record_page_, &RecordPage::remuxProgressChanged, this, [this](float fraction) {
+        if (finalizing_overlay_ && record_status_label_ == QStringLiteral("SAVING"))
+            finalizing_overlay_->showSaving(static_cast<int>(fraction * 100.0f + 0.5f));
+    });
 
     // AUDIO-DEGRADED-NOTIFY-R1 (ADR 0046 follow-up): a second, independent tee of the
     // same live diagnostics stream — raises/refreshes/clears the standing "audio source
@@ -4031,14 +4099,20 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
     using notifications::NotificationAction;
     switch (action) {
     case NotificationAction::Edit: {
-        // Navigate to the Edit/Output page for the saved recording.
-        // Metadata fields beyond the file path are not available in the toast
-        // context; the page shows "–" for missing fields, which is acceptable.
+        // Navigate to the Edit/Output page for the saved recording. The toast only
+        // carries the output path (event.action_payload); recover the full metadata
+        // (duration, size, resolution, codecs, container, markers) the same way the
+        // result-panel Edit button and Recent-menu Edit action already do, via
+        // RecordPage's current-recording/history lookup — not the bare-path stub
+        // this used to build, which left every detail row and the Edit timeline
+        // showing "–" / 00:00.
         const QString path = event.action_payload.trimmed();
-        exosnap::EditContext toast_ctx;
-        toast_ctx.output_path = path;
-        toast_ctx.mkv_master_path = path; // best-effort fallback (may not be correct for MP4)
-        navigateToEditExportPage(toast_ctx);
+        exosnap::EditContext ctx;
+        ctx.output_path = path;
+        ctx.mkv_master_path = path; // best-effort fallback if record_page_ is unavailable
+        if (record_page_)
+            ctx = record_page_->editContextForOutputPath(path);
+        navigateToEditExportPage(ctx);
         break;
     }
     case NotificationAction::OpenFolder: {
@@ -4392,6 +4466,48 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     // stack_->currentIndex() is now kRecordPageIndex, so the shared post-switch
     // title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex())) in
     // applyVisualScenario() already highlights Record correctly.
+
+    // EDIT-VIDEO-PLAYER Task 9: EditPlayerSurface is not wired into
+    // EditExportPage yet (a later task's job) -- proven here via a harness-only
+    // host layered over the overlay.
+    if (!scenario.edit_player_surface_mode.isEmpty()) {
+        ensureEditPlayerSurfaceVisualTestHost();
+        if (scenario.edit_player_surface_mode == QStringLiteral("frame")) {
+            QImage test_img(320, 180, QImage::Format_RGB32);
+            test_img.fill(QColor("#3a6b5c")); // arbitrary solid color -- proves paint path, not color accuracy
+            edit_player_surface_visual_test_->setFrame(test_img);
+        } else {
+            edit_player_surface_visual_test_->clearFrame();
+        }
+        edit_player_surface_visual_test_->show();
+        edit_player_surface_visual_test_->raise();
+        // edit_export_overlay_ is not synced to its final on-screen geometry yet
+        // at this point in RunVisualTestHarness: EditExportOverlay::openOverlay()
+        // (just above) calls syncGeometryToParent() against centralWidget(), but
+        // the top-level MainWindow itself is not shown until AFTER
+        // applyVisualScenario() returns (see RunVisualTestHarness), and
+        // EditExportOverlay's own showEvent()-driven re-sync only fires once that
+        // happens. Deferring one event-loop tick lets this harness-only host pick
+        // up the real final size instead of whatever pre-show geometry the
+        // overlay had when openOverlay() ran above.
+        QTimer::singleShot(0, this, [this]() {
+            if (!edit_export_overlay_ || !edit_player_surface_visual_test_)
+                return;
+            const QRect host_rect = edit_export_overlay_->rect();
+            const int margin_x = host_rect.width() / 6;
+            const int margin_y = host_rect.height() / 6;
+            edit_player_surface_visual_test_->setGeometry(host_rect.adjusted(margin_x, margin_y, -margin_x, -margin_y));
+            edit_player_surface_visual_test_->raise();
+        });
+    } else if (edit_player_surface_visual_test_) {
+        edit_player_surface_visual_test_->hide();
+    }
+}
+
+void MainWindow::ensureEditPlayerSurfaceVisualTestHost() {
+    if (edit_player_surface_visual_test_)
+        return;
+    edit_player_surface_visual_test_ = new ui::widgets::EditPlayerSurface(edit_export_overlay_);
 }
 #endif
 
@@ -4676,6 +4792,12 @@ void MainWindow::buildConfigPage() {
         persisted_settings_.show_notifications = show;
         settings_store_.Save(persisted_settings_);
         updateNotificationToastsEnabled();
+    });
+
+    config_page_->setOpenEditorWhenFinished(persisted_settings_.open_editor_when_finished);
+    connect(config_page_, &ConfigPage::openEditorWhenFinishedChanged, this, [this](bool open) {
+        persisted_settings_.open_editor_when_finished = open;
+        settings_store_.Save(persisted_settings_);
     });
 
     // ---- Fan-out replay ----
@@ -5060,6 +5182,16 @@ void MainWindow::buildEditExportOverlay() {
             [this]() { record_page_->setEditOverlayActive(true); });
     connect(edit_export_overlay_, &ui::dialogs::EditExportOverlay::closed, this,
             [this]() { record_page_->setEditOverlayActive(false); });
+}
+
+void MainWindow::buildFinalizingOverlay() {
+    if (finalizing_overlay_)
+        return; // already built
+    // Same DXGI-safe recipe as buildEditExportOverlay(): parented to the central
+    // widget so it correctly composites over the native DXGI live-preview HWND —
+    // never a child stacked directly inside RecordPage/PreviewSurface.
+    finalizing_overlay_ = new ui::dialogs::FinalizingOverlay(centralWidget());
+    finalizing_overlay_->hide();
 }
 
 void MainWindow::buildWebcamPage() {

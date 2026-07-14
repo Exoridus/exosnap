@@ -1,3 +1,6 @@
+#Git worktrees (agent-managed isolated workspaces)
+/.worktrees/
+
 #Build output
 /build/
 /build-*/

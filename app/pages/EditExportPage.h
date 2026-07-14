@@ -1,14 +1,17 @@
 #pragma once
+#include <QImage>
 #include <QString>
 #include <QVector>
 #include <QWidget>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <thread>
 #include <vector>
 
 #include "../models/RecordingMarker.h"
+#include <recorder_core/edit_player_session.h>
 #include <recorder_core/mp4_remuxer.h>
 #include <recorder_core/pipeline_diagnostics.h>
 
@@ -27,7 +30,8 @@ namespace exosnap {
 
 namespace ui::widgets {
 class EditTimeline;
-}
+class EditPlayerSurface;
+} // namespace ui::widgets
 
 // Context passed to EditExportPage when opening the edit surface.
 // Contains everything needed for the Review, Edit, and Output phases.
@@ -90,9 +94,9 @@ class EditExportPage : public QWidget {
     }
     void setPhase(Phase phase);
 
-    // Preview playback clock: drives the timeline playhead. The video frame
-    // itself is still the deferred 0.11 preview — the clock, playhead, and
-    // scrub semantics are real and a frame view will attach to this position.
+    // Preview playback clock: drives the timeline playhead. The decoded frame
+    // itself is driven by player_session_ (real decode); this clock stays the
+    // playhead-position source the UI already had — see setPreviewPlaying().
     void setPreviewPlaying(bool playing);
     [[nodiscard]] bool isPreviewPlaying() const noexcept {
         return preview_playing_;
@@ -123,6 +127,7 @@ class EditExportPage : public QWidget {
     void onScrubMoved(qint64 position_ms);
     void onScrubFinished();
     void onPreviewTick();
+    void onDecodedFrameReady(QImage frame); // marshalled onto the UI thread via invokeMethod
 
   protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -137,6 +142,7 @@ class EditExportPage : public QWidget {
     void refreshPlayButton();
     void updatePlayerHeight();
     [[nodiscard]] qint64 durationMs() const noexcept;
+    static QImage DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame);
 
     Phase phase_ = Phase::Review;
 
@@ -203,8 +209,14 @@ class EditExportPage : public QWidget {
     // Player-Area
     QFrame* player_frame_ = nullptr;
     QPushButton* play_pause_btn_ = nullptr;
-    QLabel* player_sub_ = nullptr;
+    ui::widgets::EditPlayerSurface* player_surface_ = nullptr;
     QLabel* player_meta_label_ = nullptr;
+
+    // Real decoder session driving player_surface_. Opened per clip in
+    // setEditContext(), closed in hideEvent(). Its frame callback fires on
+    // internal worker threads and is marshalled to the UI thread via
+    // onDecodedFrameReady (Qt::QueuedConnection).
+    std::unique_ptr<recorder_core::EditPlayerSession> player_session_;
 
     // Timeline (interactive: trim handles, markers, playhead)
     ui::widgets::EditTimeline* timeline_ = nullptr;

@@ -61,6 +61,39 @@ struct PlanarYuv420Frame {
 void ConvertYuv420ToBgra(const PlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
                          uint32_t out_stride_bytes);
 
+// Describes one fully-planar 4:2:0 YUV frame: separate Y, U, V planes (no
+// chroma interleaving). This is the layout FFmpeg's software decoders use
+// (AV_PIX_FMT_YUV420P for 8-bit, AV_PIX_FMT_YUV420P10LE for 10-bit) -- as
+// opposed to PlanarYuv420Frame's semi-planar interleaved-UV layout, which
+// models the DXGI capture/encode surfaces (NV12/P010).
+//
+// *_stride_bytes are the row pitch and may exceed width/2 (chroma) or width
+// (luma) * bytes-per-sample when the source buffer is padded.
+//
+// 10-bit (YUV420P10LE) samples are plain 16-bit little-endian values in
+// [0, 1023] -- unlike P010, there is no <<6 left-justification.
+struct FullPlanarYuv420Frame {
+    const uint8_t* y_plane = nullptr;
+    uint32_t y_stride_bytes = 0;
+    const uint8_t* u_plane = nullptr;
+    uint32_t u_stride_bytes = 0;
+    const uint8_t* v_plane = nullptr;
+    uint32_t v_stride_bytes = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t bits_per_sample = 8; // 8 (YUV420P) or 10 (YUV420P10LE)
+};
+
+// Converts one fully-planar 4:2:0 YUV frame to top-down BGRA8888 (B, G, R, A
+// byte order; alpha always 255/opaque). Same matrix/range semantics as
+// ConvertYuv420ToBgra -- only the input memory layout differs.
+//
+// out_bgra must have at least `height * out_stride_bytes` bytes available;
+// out_stride_bytes must be >= src.width * 4. Does nothing if src.width,
+// src.height, a plane pointer, or out_bgra is 0/null.
+void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
+                                   uint32_t out_stride_bytes);
+
 // Describes one packed 4:4:4 AYUV frame (DXGI_FORMAT_AYUV): a single plane,
 // 4 bytes per pixel, memory byte order [V, U, Y, A] (matching the AYUV encode
 // surface the RGB->AYUV compute shader writes — see gpu_rgb_to_ayuv.cpp).

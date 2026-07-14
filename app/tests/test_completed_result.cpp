@@ -176,6 +176,59 @@ TEST_F(CompletedResultTest, CanOpenInEditor_TrueForSingleSegmentList) {
     EXPECT_TRUE(CanOpenInEditor(rec));
 }
 
+// --- FindRecordingByPath (notification-toast Edit action needs a full,
+// metadata-carrying EditContext, not just the bare output path it's handed) ---
+
+TEST_F(CompletedResultTest, FindRecordingByPath_MatchesCurrent) {
+    CompletedRecording current;
+    current.file_path = QStringLiteral("C:/out/current.mkv");
+    QVector<CompletedRecording> history;
+
+    const CompletedRecording* found =
+        FindRecordingByPath(QStringLiteral("C:/out/current.mkv"), current, /*current_valid=*/true, history);
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found, &current);
+}
+
+TEST_F(CompletedResultTest, FindRecordingByPath_IgnoresCurrentWhenInvalid) {
+    // current_valid=false models hasCompletedRecording()==false — current's
+    // contents are stale/default and must never be matched against.
+    CompletedRecording current;
+    current.file_path = QStringLiteral("C:/out/current.mkv");
+    QVector<CompletedRecording> history;
+
+    const CompletedRecording* found =
+        FindRecordingByPath(QStringLiteral("C:/out/current.mkv"), current, /*current_valid=*/false, history);
+    EXPECT_EQ(found, nullptr);
+}
+
+TEST_F(CompletedResultTest, FindRecordingByPath_FallsBackToHistory) {
+    // A toast for an OLDER recording, clicked after a newer one has already
+    // completed and become "current" — must resolve to the history entry
+    // matching the toast's own path, not the unrelated current recording.
+    CompletedRecording current;
+    current.file_path = QStringLiteral("C:/out/newer.mkv");
+
+    CompletedRecording older;
+    older.file_path = QStringLiteral("C:/out/older.mkv");
+    QVector<CompletedRecording> history = {older};
+
+    const CompletedRecording* found =
+        FindRecordingByPath(QStringLiteral("C:/out/older.mkv"), current, /*current_valid=*/true, history);
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found, &history[0]);
+}
+
+TEST_F(CompletedResultTest, FindRecordingByPath_NoMatchReturnsNull) {
+    CompletedRecording current;
+    current.file_path = QStringLiteral("C:/out/current.mkv");
+    QVector<CompletedRecording> history;
+
+    const CompletedRecording* found =
+        FindRecordingByPath(QStringLiteral("C:/out/gone.mkv"), current, /*current_valid=*/true, history);
+    EXPECT_EQ(found, nullptr);
+}
+
 // --- Multi-segment results (SPLIT-RECORDING-R1) ---
 
 TEST_F(CompletedResultTest, SingleFileRecording_SegmentCountIsOne) {

@@ -68,12 +68,19 @@ namespace ui::dialogs {
 class AboutOverlay;
 class CrashReportOverlay;
 class EditExportOverlay;
+class FinalizingOverlay;
 class RecoveryOverlay;
 class WhatsNewOverlay;
 class SourcePickerOverlay;
 class RecordingErrorOverlay;
 struct RecordingErrorModel;
 } // namespace ui::dialogs
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace ui::widgets {
+class EditPlayerSurface;
+} // namespace ui::widgets
+#endif
 
 namespace ui::overlay {
 class CountdownOverlayWindow;
@@ -222,6 +229,10 @@ class MainWindow : public QMainWindow {
     // source_picker_overlay_), never added to stack_. Lazy: built on first use,
     // same staged-hydration timing as the former stack-tail page.
     void buildEditExportOverlay();
+    // Builds FinalizingOverlay (parented to centralWidget(), same DXGI-safe recipe
+    // as buildEditExportOverlay()). Lazy: built on first use — normally the first
+    // recording's Stopping transition, well before first paint would ever matter.
+    void buildFinalizingOverlay();
     // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
     // Ends with applySettings(live_webcam_) to replay preset-applied state.
     void buildWebcamPage();
@@ -355,6 +366,12 @@ class MainWindow : public QMainWindow {
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
     void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
     void applyVisualEditExportScenario(const visual::VisualScenario& scenario);
+    // EDIT-VIDEO-PLAYER Task 9: lazily builds a harness-only EditPlayerSurface
+    // host layered over the EditExport overlay. EditPlayerSurface is not wired
+    // into EditExportPage yet (a later task's job) -- this proves its paint
+    // path in isolation via --visual-test, driven directly by pointer (no
+    // findChild lookup, since the production page owns no instance yet).
+    void ensureEditPlayerSurfaceVisualTestHost();
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
@@ -364,6 +381,13 @@ class MainWindow : public QMainWindow {
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
+    ui::dialogs::FinalizingOverlay* finalizing_overlay_ = nullptr;
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // EDIT-VIDEO-PLAYER Task 9: harness-only host for EditPlayerSurface (see
+    // ensureEditPlayerSurfaceVisualTestHost()). Never built/shown outside the
+    // visual-test harness; not the real production instance.
+    ui::widgets::EditPlayerSurface* edit_player_surface_visual_test_ = nullptr;
+#endif
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
     ui::dialogs::RecordingErrorOverlay* recording_error_overlay_ = nullptr;
     ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;
@@ -469,6 +493,14 @@ class MainWindow : public QMainWindow {
     bool recording_active_ = false;
     // ADR-0014: true while the MP4 remux job is running after the engine stopped.
     bool remuxing_active_ = false;
+    // Edge-detection for record_status_label_ becoming "SAVED" (a successful
+    // completion, per RecordPage::statusLabelFor), used to auto-open the Edit
+    // overlay exactly once per completed recording when
+    // PersistedAppSettings::open_editor_when_finished is on.
+    bool was_saved_ = false;
+    // Edge-detection for record_status_label_ being STOPPING or SAVING (a
+    // recording finalizing), drives FinalizingOverlay show/hide.
+    bool was_finalizing_ = false;
     // TRAY-CLOSE-TO-TRAY-R1: set to true when the user explicitly quits via the
     // tray menu "Quit" action so closeEvent bypasses the hide-to-tray logic.
     bool force_quit_ = false;

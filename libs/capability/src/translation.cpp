@@ -48,6 +48,9 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     const bool is_mkv_h264_aac = final_config.container == Container::Matroska &&
                                  final_config.video_codec == VideoCodec::H264Nvenc &&
                                  final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
+    const bool is_mkv_h264_opus = final_config.container == Container::Matroska &&
+                                  final_config.video_codec == VideoCodec::H264Nvenc &&
+                                  final_config.audio_codec == AudioCodec::Opus && valid_chroma_depth;
     const bool is_mkv_av1_pcm = final_config.container == Container::Matroska &&
                                 final_config.video_codec == VideoCodec::Av1Nvenc &&
                                 final_config.audio_codec == AudioCodec::Pcm && valid_chroma_depth;
@@ -79,13 +82,13 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
                                  final_config.video_codec == VideoCodec::HevcNvenc &&
                                  final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
 
-    if (!is_webm_av1_opus && !is_mkv_av1_aac && !is_mkv_av1_opus && !is_mkv_h264_aac && !is_mkv_av1_pcm &&
-        !is_mkv_h264_pcm && !is_mkv_av1_flac && !is_mkv_h264_flac && !is_mkv_hevc_aac && !is_mkv_hevc_opus &&
-        !is_mkv_hevc_pcm && !is_mkv_hevc_flac && !is_mp4_h264_aac && !is_mp4_hevc_aac) {
+    if (!is_webm_av1_opus && !is_mkv_av1_aac && !is_mkv_av1_opus && !is_mkv_h264_aac && !is_mkv_h264_opus &&
+        !is_mkv_av1_pcm && !is_mkv_h264_pcm && !is_mkv_av1_flac && !is_mkv_h264_flac && !is_mkv_hevc_aac &&
+        !is_mkv_hevc_opus && !is_mkv_hevc_pcm && !is_mkv_hevc_flac && !is_mp4_h264_aac && !is_mp4_hevc_aac) {
         ResolveResult failure = resolved;
         failure.succeeded = false;
         failure.invalidity.push_back(InvalidReason{
-            "translation", "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|PCM|FLAC), "
+            "translation", "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|Opus|PCM|FLAC), "
                            "Matroska+HEVC+(AAC|Opus|PCM|FLAC), or MP4+(H264|HEVC)+AAC, with 4:2:0 8-bit "
                            "(or 10-bit with HEVC/AV1) or 4:4:4 8-bit with H.264/HEVC, "
                            "can be translated to recorder_core."});
@@ -127,6 +130,10 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
         core_config.container = recorder_core::Container::Matroska;
         core_config.video_codec = recorder_core::VideoCodec::H264Nvenc;
         core_config.audio_codec = recorder_core::AudioCodec::AacMf;
+    } else if (is_mkv_h264_opus) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::H264Nvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::Opus;
     } else if (is_mkv_av1_pcm) {
         core_config.container = recorder_core::Container::Matroska;
         core_config.video_codec = recorder_core::VideoCodec::Av1Nvenc;

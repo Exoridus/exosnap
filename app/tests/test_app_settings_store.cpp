@@ -247,6 +247,61 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingShowNotifications_DefaultsToT
     EXPECT_TRUE(loaded.show_notifications);
 }
 
+// open_editor_when_finished round-trip tests. Was a debug-only ADR-0031
+// roadmap-dummy toggle (no engine setting backed it, no Release row existed);
+// now a real, persisted preference: default OFF (unchanged post-recording
+// behavior — a notification toast offers Edit/Show-in-folder), ON opens the
+// Edit overlay directly with no toast.
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultOpenEditorWhenFinishedIsFalse) {
+    PersistedAppSettings settings;
+    EXPECT_FALSE(settings.open_editor_when_finished);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.open_editor_when_finished = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.open_editor_when_finished);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_False) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.open_editor_when_finished = false;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.open_editor_when_finished);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingOpenEditorWhenFinished_DefaultsToFalse) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the open_editor_when_finished key in [editor].
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.open_editor_when_finished);
+}
+
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());

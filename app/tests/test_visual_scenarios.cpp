@@ -138,6 +138,9 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("edit-trimmed"),
         QStringLiteral("edit-output"),
         QStringLiteral("edit-done"),
+        // EditPlayerSurface scenarios (EDIT-VIDEO-PLAYER Task 9).
+        QStringLiteral("edit-player-surface-empty"),
+        QStringLiteral("edit-player-surface-frame"),
     };
 
     for (const QString& id : required)
@@ -563,6 +566,28 @@ TEST(VisualScenarioTest, OtherScenarios_DoNotDriveAudioDegradedNotification) {
         if (s.id == QStringLiteral("record-recording-audio-degraded"))
             continue;
         EXPECT_EQ(s.audio_degraded_notification_count, 0) << s.id.toStdString();
+    }
+}
+
+// EditPlayerSurface scenarios (EDIT-VIDEO-PLAYER Task 9) carry deterministic
+// mode strings and route to the EditExport page.
+TEST(VisualScenarioTest, EditPlayerSurfaceScenariosCarryDeterministicState) {
+    const VisualScenario* empty = FindVisualScenario(QStringLiteral("edit-player-surface-empty"));
+    ASSERT_NE(empty, nullptr);
+    EXPECT_EQ(empty->page, VisualPage::EditExport);
+    EXPECT_EQ(empty->edit_player_surface_mode, QStringLiteral("empty"));
+
+    const VisualScenario* frame = FindVisualScenario(QStringLiteral("edit-player-surface-frame"));
+    ASSERT_NE(frame, nullptr);
+    EXPECT_EQ(frame->page, VisualPage::EditExport);
+    EXPECT_EQ(frame->edit_player_surface_mode, QStringLiteral("frame"));
+}
+
+TEST(VisualScenarioTest, OtherScenarios_DoNotDriveEditPlayerSurface) {
+    for (const VisualScenario& s : VisualScenarioRegistry()) {
+        if (s.id == QStringLiteral("edit-player-surface-empty") || s.id == QStringLiteral("edit-player-surface-frame"))
+            continue;
+        EXPECT_TRUE(s.edit_player_surface_mode.isEmpty()) << s.id.toStdString();
     }
 }
 

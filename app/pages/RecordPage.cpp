@@ -1806,6 +1806,22 @@ EditContext RecordPage::currentEditContext() const {
     return ctx;
 }
 
+EditContext RecordPage::editContextForOutputPath(const QString& output_path) const {
+    const auto& vm = view_model_;
+    if (const CompletedRecording* rec =
+            FindRecordingByPath(output_path, vm.current_completed_recording, vm.last_succeeded, vm.recent_recordings)) {
+        if (rec == &vm.current_completed_recording)
+            return currentEditContext(); // carries the live-session extras
+        return MakeEditContext(*rec);
+    }
+    // No match (e.g. trimmed from the bounded history) — same minimal shape the
+    // notification-toast Edit action used before this path existed.
+    EditContext ctx;
+    ctx.output_path = output_path;
+    ctx.mkv_master_path = output_path;
+    return ctx;
+}
+
 void RecordPage::cancelRemux() {
     if (coordinator_)
         coordinator_->CancelRemux();
@@ -2985,6 +3001,7 @@ void RecordPage::initCoordinator() {
     coordinator_->SetRemuxProgressCallback([this](float fraction) {
         if (transport_dock_)
             transport_dock_->setSavingProgress(fraction);
+        emit remuxProgressChanged(fraction);
     });
 
     enumerateTargets(false);
@@ -4598,9 +4615,13 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setCountdownSeconds(selected_countdown_seconds_);
 
     const bool recording_for_timer = recording || paused || stopping;
-    transport_dock_->setTimerText(saving      ? QStringLiteral("Saving…")
-                                  : preparing ? QStringLiteral("Preparing…")
-                                              : buildTimerText(recording_for_timer || countdown));
+    // While saving, TransportDock owns the timer label exclusively (it renders
+    // "Saving… N%" itself, driven by setSavingProgress ticks from the remux
+    // callback below) — refresh() must not stomp that with a static string.
+    if (!saving) {
+        transport_dock_->setTimerText(preparing ? QStringLiteral("Preparing…")
+                                                : buildTimerText(recording_for_timer || countdown));
+    }
     transport_dock_->setTimerRole(recording             ? QStringLiteral("recording")
                                   : paused              ? QStringLiteral("paused")
                                   : countdown           ? QStringLiteral("countdown")

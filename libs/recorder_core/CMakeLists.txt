@@ -305,6 +305,8 @@ add_library(recorder_core STATIC
     src/output_format_audio_src.cpp
     src/output_format_audio_src.h
     src/wasapi_capture_src.cpp
+    include/recorder_core/wasapi_audio_render.h
+    src/wasapi_audio_render.cpp
     src/wasapi_loopback.cpp
     src/wasapi_loopback_src.cpp
     src/wasapi_process_loopback_src.cpp
@@ -336,6 +338,12 @@ add_library(recorder_core STATIC
     src/loopback_meter_service.cpp
     include/recorder_core/mp4_remuxer.h
     src/mp4_remuxer.cpp
+    include/recorder_core/edit_player_engine.h
+    src/edit_player_engine.cpp
+    src/playback_clock.h
+    src/playback_clock.cpp
+    include/recorder_core/edit_player_session.h
+    src/edit_player_session.cpp
 )
 
 target_include_directories(recorder_core
@@ -368,6 +376,7 @@ target_link_libraries(recorder_core
         user32.lib
         runtimeobject.lib
         ole32.lib
+        avrt.lib
         mfplat.lib
         mf.lib
         mfuuid.lib
@@ -1036,6 +1045,56 @@ exosnap_add_gtest(
     SOURCES tests/test_preview_publish_gate.cpp
 )
 target_include_directories(test_preview_publish_gate PRIVATE src)
+
+# WasapiAudioRenderer lifecycle safety (construct/destruct/push/stop without a
+# real device session). No hardware in CI -- real render is user-live-verified.
+exosnap_add_gtest(
+    NAME test_wasapi_audio_render
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_wasapi_audio_render.cpp
+            src/wasapi_audio_render.cpp
+    LIBRARIES recorder_core FFmpeg::swresample avrt.lib
+)
+target_include_directories(test_wasapi_audio_render PRIVATE src include)
+
+# Pure playback-clock math for the Edit-page video player: audio-clock derivation
+# from rendered-sample count, and video-frame selection/drop-counting against
+# that clock. No FFmpeg/COM/Qt.
+exosnap_add_gtest(
+    NAME test_playback_clock
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_playback_clock.cpp
+            src/playback_clock.cpp
+)
+target_include_directories(test_playback_clock PRIVATE src)
+
+# EditPlayerEngine: file-open/stream-discovery/error-path coverage only (no
+# real compressed bitstream can be synthesized in this test environment --
+# real decode is user-live-verified, see the plan's Task 11). FFmpeg::mux is
+# listed explicitly because the test compiles src/edit_player_engine.cpp
+# itself and needs the libavformat/libavcodec headers at compile time
+# (recorder_core links FFmpeg PRIVATE, so its include dirs don't propagate).
+exosnap_add_gtest(
+    NAME test_edit_player_engine
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_edit_player_engine.cpp
+            src/edit_player_engine.cpp
+            src/yuv_to_bgra.cpp
+    LIBRARIES recorder_core FFmpeg::mux
+)
+target_include_directories(test_edit_player_engine PRIVATE src include)
+
+# EditPlayerSession: the top-level orchestrator's lifecycle safety (no real
+# file/device touched -- real playback is user-live-verified, see the plan's
+# Task 11). Links the full recorder_core library, which now includes
+# edit_player_session.cpp itself.
+exosnap_add_gtest(
+    NAME test_edit_player_session
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_edit_player_session.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_edit_player_session PRIVATE src include)
 
 # Producer-side shared GPU texture for the WYSIWYG preview tap: create the
 # NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on

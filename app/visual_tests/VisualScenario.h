@@ -310,6 +310,25 @@ struct VisualScenario {
     // reported in the JSON manifest and its rendering is covered by
     // NotificationToastWindow's own widget tests.
     int audio_degraded_notification_count = 0;
+
+    // --- FinalizingOverlay (MainWindow-owned, drives it directly) ---
+    // The overlay listens to record_status_label_/chromeStateChanged, a signal
+    // chain this harness does not exercise (RecordPage::applyVisualScenario sets
+    // view_model_ fields directly, bypassing the coordinator/state-machine).
+    // "none" (default, overlay hidden) | "stopping" (indeterminate, "Finishing…")
+    // | "saving" (determinate, uses finalizing_overlay_saving_percent).
+    QString finalizing_overlay_mode;
+    int finalizing_overlay_saving_percent = 0;
+
+    // --- EditPlayerSurface (EDIT-VIDEO-PLAYER Task 9) ---
+    // Edit-page video player surface: "empty" (placeholder only) or "frame"
+    // (a synthetic solid-color test image, proving the letterbox/aspect-fit
+    // math -- no real decoder runs in the harness, consistent with how every
+    // other visual scenario works). EditPlayerSurface is not wired into
+    // EditExportPage yet (that lands in a later task); until then this is
+    // rendered via a harness-only host widget layered over the EditExport
+    // overlay -- see MainWindow::applyVisualEditExportScenario.
+    QString edit_player_surface_mode; // "" (not applicable) | "empty" | "frame"
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

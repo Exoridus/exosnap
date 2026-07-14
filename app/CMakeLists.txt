@@ -102,6 +102,8 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerWindowRules.h
     ui/dialogs/EditExportOverlay.h
     ui/dialogs/EditExportOverlay.cpp
+    ui/dialogs/FinalizingOverlay.h
+    ui/dialogs/FinalizingOverlay.cpp
     ui/dialogs/CrashReportPanel.h
     ui/dialogs/CrashReportPanel.cpp
     ui/dialogs/CrashReportOverlay.h
@@ -124,6 +126,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/PreviewSurface.cpp
     ui/widgets/CameraPreview.h
     ui/widgets/CameraPreview.cpp
+    ui/widgets/EditPlayerSurface.h
+    ui/widgets/EditPlayerSurface.cpp
     ui/widgets/WebcamSetupPanel.h
     ui/widgets/WebcamSetupPanel.cpp
     ui/widgets/CaptureTargetCard.h
@@ -1349,6 +1353,8 @@ exosnap_add_gtest(
         tests/test_edit_export_page.cpp
         pages/EditExportPage.cpp
         ui/widgets/EditTimeline.cpp
+        ui/widgets/EditPlayerSurface.h
+        ui/widgets/EditPlayerSurface.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
@@ -1367,6 +1373,8 @@ exosnap_add_gtest(
         ui/dialogs/EditExportOverlay.cpp
         pages/EditExportPage.cpp
         ui/widgets/EditTimeline.cpp
+        ui/widgets/EditPlayerSurface.h
+        ui/widgets/EditPlayerSurface.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
