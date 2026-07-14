@@ -305,6 +305,8 @@ add_library(recorder_core STATIC
     src/output_format_audio_src.cpp
     src/output_format_audio_src.h
     src/wasapi_capture_src.cpp
+    include/recorder_core/wasapi_audio_render.h
+    src/wasapi_audio_render.cpp
     src/wasapi_loopback.cpp
     src/wasapi_loopback_src.cpp
     src/wasapi_process_loopback_src.cpp
@@ -368,6 +370,7 @@ target_link_libraries(recorder_core
         user32.lib
         runtimeobject.lib
         ole32.lib
+        avrt.lib
         mfplat.lib
         mf.lib
         mfuuid.lib
@@ -1036,6 +1039,17 @@ exosnap_add_gtest(
     SOURCES tests/test_preview_publish_gate.cpp
 )
 target_include_directories(test_preview_publish_gate PRIVATE src)
+
+# WasapiAudioRenderer lifecycle safety (construct/destruct/push/stop without a
+# real device session). No hardware in CI -- real render is user-live-verified.
+exosnap_add_gtest(
+    NAME test_wasapi_audio_render
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_wasapi_audio_render.cpp
+            src/wasapi_audio_render.cpp
+    LIBRARIES recorder_core FFmpeg::swresample avrt.lib
+)
+target_include_directories(test_wasapi_audio_render PRIVATE src include)
 
 # Pure playback-clock math for the Edit-page video player: audio-clock derivation
 # from rendered-sample count, and video-frame selection/drop-counting against
