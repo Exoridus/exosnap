@@ -342,6 +342,8 @@ add_library(recorder_core STATIC
     src/edit_player_engine.cpp
     src/playback_clock.h
     src/playback_clock.cpp
+    include/recorder_core/edit_player_session.h
+    src/edit_player_session.cpp
 )
 
 target_include_directories(recorder_core
@@ -1081,6 +1083,18 @@ exosnap_add_gtest(
     LIBRARIES recorder_core FFmpeg::mux
 )
 target_include_directories(test_edit_player_engine PRIVATE src include)
+
+# EditPlayerSession: the top-level orchestrator's lifecycle safety (no real
+# file/device touched -- real playback is user-live-verified, see the plan's
+# Task 11). Links the full recorder_core library, which now includes
+# edit_player_session.cpp itself.
+exosnap_add_gtest(
+    NAME test_edit_player_session
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_edit_player_session.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_edit_player_session PRIVATE src include)
 
 # Producer-side shared GPU texture for the WYSIWYG preview tap: create the
 # NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on
