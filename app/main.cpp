@@ -21,6 +21,9 @@
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualTestHarness.h"
 #endif
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+#include "auto_record/AutoRecordHarness.h"
+#endif
 
 #if defined(Q_OS_WIN)
 #include <crash_capture/crash_capture.h>
@@ -132,6 +135,17 @@ int main(int argc, char* argv[]) {
         qInfo().noquote() << "visual test: isolated config dir" << isolated;
     }
 #endif
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+    // Same rationale as the visual-test isolation above: an auto-record run must
+    // never write into the developer's real config directory.
+    if (exosnap::auto_record::HasAutoRecordRequest(QCoreApplication::arguments()) &&
+        !qEnvironmentVariableIsSet("EXOSNAP_CONFIG_DIR")) {
+        const QString isolated = QDir(QDir::tempPath()).filePath(QStringLiteral("exosnap-auto-record"));
+        QDir().mkpath(isolated);
+        qputenv("EXOSNAP_CONFIG_DIR", isolated.toUtf8());
+        qInfo().noquote() << "auto-record: isolated config dir" << isolated;
+    }
+#endif
     const qint64 qapplication_created_ms = exosnap::diagnostics::StartupClock().elapsed();
     app.setApplicationName("ExoSnap");
 
@@ -182,9 +196,22 @@ int main(int argc, char* argv[]) {
     constexpr bool visual_test_requested = false;
 #endif
 
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+    exosnap::auto_record::AutoRecordOptions auto_record_options;
+    QString auto_record_parse_error;
+    const bool auto_record_requested = exosnap::auto_record::HasAutoRecordRequest(QCoreApplication::arguments());
+    if (auto_record_requested && !exosnap::auto_record::ParseAutoRecordOptions(
+                                     QCoreApplication::arguments(), &auto_record_options, &auto_record_parse_error)) {
+        qCritical().noquote() << auto_record_parse_error;
+        return 2;
+    }
+#else
+    constexpr bool auto_record_requested = false;
+#endif
+
 #if defined(Q_OS_WIN)
     HANDLE hMutex = nullptr;
-    if (!visual_test_requested) {
+    if (!visual_test_requested && !auto_record_requested) {
         hMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
         if (hMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
             CloseHandle(hMutex);
@@ -245,6 +272,18 @@ int main(int argc, char* argv[]) {
     const exosnap::services::RelaunchHandoff startup_handoff =
         exosnap::services::ParseRelaunchArgs(QCoreApplication::arguments());
 
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+    if (auto_record_requested && !auto_record_options.enable_preview) {
+        const int rc = exosnap::auto_record::RunAutoRecord(app, auto_record_options);
+#if defined(Q_OS_WIN)
+        if (!crash_dir.empty())
+            exosnap::crash_capture::MarkCleanExit(crash_dir);
+        exosnap::crash_capture::Shutdown();
+#endif
+        return rc;
+    }
+#endif
+
     exosnap::MainWindow win;
     win.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
     if (!app_icon.isNull()) {
@@ -265,6 +304,18 @@ int main(int argc, char* argv[]) {
         exosnap::crash_capture::Shutdown();
 #endif
         return visual_rc;
+    }
+#endif
+
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+    if (auto_record_requested && auto_record_options.enable_preview) {
+        const int rc = exosnap::auto_record::RunAutoRecord(app, win, auto_record_options);
+#if defined(Q_OS_WIN)
+        if (!crash_dir.empty())
+            exosnap::crash_capture::MarkCleanExit(crash_dir);
+        exosnap::crash_capture::Shutdown();
+#endif
+        return rc;
     }
 #endif
 
