@@ -151,6 +151,7 @@ class ConfigPage : public QWidget {
     void setShowOverlay(bool show);
     void setShowDiagnosticsOverlay(bool show);
     void setShowNotifications(bool show);
+    void setOpenEditorWhenFinished(bool open);
     void setKeepRunningInTray(bool keep);
     void setShowQuickControls(bool show);
     // ADR 0033: seeds the "Present & tearing diagnostics" opt-in toggle from
@@ -221,6 +222,7 @@ class ConfigPage : public QWidget {
     void showOverlayChanged(bool show);
     void showDiagnosticsOverlayChanged(bool show);
     void showNotificationsChanged(bool show);
+    void openEditorWhenFinishedChanged(bool open);
     void keepRunningInTrayChanged(bool keep);
     void showQuickControlsChanged(bool show);
     // ADR 0033: emitted when the user toggles the present-diagnostics opt-in.
@@ -513,6 +515,7 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* diagnostics_overlay_check_ = nullptr;
     ui::widgets::ExoToggle* notifications_check_ = nullptr;
     ui::widgets::ExoToggle* keep_in_tray_check_ = nullptr;
+    ui::widgets::ExoToggle* open_editor_when_finished_check_ = nullptr;
     ui::widgets::ExoToggle* quick_controls_check_ = nullptr;
     // ADR 0033: present & tearing diagnostics opt-in (elevation-gated).
     ui::widgets::ExoToggle* present_diag_check_ = nullptr;

@@ -407,6 +407,22 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_y = 0.75f,
      .webcam_w = 0.25f,
      .webcam_h = 0.25f},
+    // FinalizingOverlay pixel checks — drives MainWindow's overlay directly
+    // (see VisualScenario.h's finalizing_overlay_mode doc comment) since it
+    // listens on a signal chain this harness does not otherwise exercise.
+    {.id = QStringLiteral("record-finalizing-stopping"),
+     .title = QStringLiteral("Record / FinalizingOverlay Stopping"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .finalizing_overlay_mode = QStringLiteral("stopping")},
+    {.id = QStringLiteral("record-finalizing-saving"),
+     .title = QStringLiteral("Record / FinalizingOverlay Saving"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .finalizing_overlay_mode = QStringLiteral("saving"),
+     .finalizing_overlay_saving_percent = 42},
     {.id = QStringLiteral("settings-webcam-mirror-off"),
      .title = QStringLiteral("Settings / Webcam Mirror Off"),
      .page = VisualPage::Settings,

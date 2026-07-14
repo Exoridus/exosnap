@@ -1557,24 +1557,21 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_layout_->addWidget(output_fields, 1);
     out_panel_layout->addWidget(output_split);
 
-    // v10 (Delta 3): "Open editor when finished" — a real row in the Output card,
-    // off by default. No engine setting backs this yet, so per ADR 0031 it is a
-    // debug-only roadmap dummy (compiled out of Release) rather than inventing
-    // engine behaviour.
-#ifndef NDEBUG
+    // "Open editor when finished" — a real row in the Output card, off by
+    // default. Was an ADR-0031 debug-only roadmap dummy with no engine setting
+    // behind it; now backed by PersistedAppSettings::open_editor_when_finished.
     {
-        auto* open_editor_toggle = new ui::widgets::ExoToggle(out_panel);
-        open_editor_toggle->setObjectName(QStringLiteral("roadmapDummy_openEditor"));
-        open_editor_toggle->setOn(false);
+        open_editor_when_finished_check_ = new ui::widgets::ExoToggle(out_panel);
+        open_editor_when_finished_check_->setObjectName(QStringLiteral("openEditorWhenFinishedCheck"));
+        open_editor_when_finished_check_->setOn(false);
         out_panel_layout->addWidget(makeSettingsRow(
             out_panel, QStringLiteral("Open editor when finished"),
             new ui::widgets::InfoHintIcon(
                 QStringLiteral("When a recording stops it opens straight in Edit, preloaded with the clip. "
                                "Off: a notification offers Edit and Show-in-folder instead."),
                 out_panel),
-            QString(), open_editor_toggle));
+            QString(), open_editor_when_finished_check_));
     }
-#endif // NDEBUG
 
     // v10 (Delta 2): resolved "Saves to …\path" footer — mirrors the Quality &
     // timing card's "✓ Current format" footer. Shows the destination folder +
@@ -1908,6 +1905,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(overlay_check_, &QAbstractButton::toggled, this, &ConfigPage::showOverlayChanged);
     connect(diagnostics_overlay_check_, &QAbstractButton::toggled, this, &ConfigPage::showDiagnosticsOverlayChanged);
     connect(notifications_check_, &QAbstractButton::toggled, this, &ConfigPage::showNotificationsChanged);
+    connect(open_editor_when_finished_check_, &QAbstractButton::toggled, this,
+            &ConfigPage::openEditorWhenFinishedChanged);
     connect(keep_in_tray_check_, &QAbstractButton::toggled, this, &ConfigPage::keepRunningInTrayChanged);
     connect(quick_controls_check_, &QAbstractButton::toggled, this, &ConfigPage::showQuickControlsChanged);
     connect(present_diag_check_, &QAbstractButton::toggled, this, &ConfigPage::presentDiagnosticsOptInToggled);
@@ -5513,6 +5512,13 @@ void ConfigPage::setShowNotifications(bool show) {
     if (notifications_check_) {
         const QSignalBlocker blocker(notifications_check_);
         notifications_check_->setOn(show);
+    }
+}
+
+void ConfigPage::setOpenEditorWhenFinished(bool open) {
+    if (open_editor_when_finished_check_) {
+        const QSignalBlocker blocker(open_editor_when_finished_check_);
+        open_editor_when_finished_check_->setOn(open);
     }
 }
 

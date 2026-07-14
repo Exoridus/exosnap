@@ -102,6 +102,8 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerWindowRules.h
     ui/dialogs/EditExportOverlay.h
     ui/dialogs/EditExportOverlay.cpp
+    ui/dialogs/FinalizingOverlay.h
+    ui/dialogs/FinalizingOverlay.cpp
     ui/dialogs/CrashReportPanel.h
     ui/dialogs/CrashReportPanel.cpp
     ui/dialogs/CrashReportOverlay.h

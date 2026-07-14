@@ -185,6 +185,30 @@ struct CompletedRecording {
     return rec.fileExists() && !rec.isMultiSegment();
 }
 
+// Resolves a completed recording by its output path — the notification-toast Edit
+// action only ever carries the bare path (event.action_payload), never a full
+// EditContext, so this is how it recovers the same metadata (duration, size,
+// resolution, codecs, container) the result-panel Edit button and Recent-menu Edit
+// action already have via MakeEditContext(). Checks `current` first (it may carry
+// live-session extras a history row cannot: mkv master path, peak A/V drift,
+// diagnostics snapshot) but only when `current_valid` — an invalid/default `current`
+// must never be matched against. Falls back to `history` so a toast for an older
+// recording, clicked after a newer one has completed and become "current", still
+// resolves to its own data rather than the wrong (unrelated) current recording.
+// Returns nullptr if no match — callers fall back to a minimal best-effort context.
+[[nodiscard]] inline const CompletedRecording* FindRecordingByPath(const QString& output_path,
+                                                                   const CompletedRecording& current,
+                                                                   bool current_valid,
+                                                                   const QVector<CompletedRecording>& history) {
+    if (current_valid && current.file_path == output_path)
+        return &current;
+    for (const auto& rec : history) {
+        if (rec.file_path == output_path)
+            return &rec;
+    }
+    return nullptr;
+}
+
 inline bool operator==(const CompletedRecording& a, const CompletedRecording& b) noexcept {
     return a.file_path == b.file_path && a.file_size_bytes == b.file_size_bytes &&
            a.duration_seconds == b.duration_seconds && a.source_width == b.source_width &&

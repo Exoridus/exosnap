@@ -69,8 +69,10 @@ class TransportDock : public QFrame {
     // flight so coalesced clicks do not pile up.
     void setSplitEnabled(bool enabled);
 
-    // ADR-0014: update remux progress displayed in the Saving state.
-    // fraction in [0, 1]; pass -1 for indeterminate (spinner/pulse).
+    // ADR-0014: update remux progress displayed in the Saving state, as
+    // "Saving… N%" in the timer label (fraction clamped to [0, 1]). No-op
+    // while state() != Saving — a late/stale tick from a just-finished remux
+    // must never clobber whatever the timer label has moved on to showing.
     void setSavingProgress(float fraction);
 
   signals:
@@ -93,9 +95,11 @@ class TransportDock : public QFrame {
   private:
     void applyState();
     void openChevronMenu();
+    void applySavingProgressText();
 
     State state_ = State::Ready;
     bool primary_enabled_ = true;
+    float saving_progress_ = 0.0f;
 
     QWidget* toggles_row_ = nullptr;
     AudioSourceToggle* system_toggle_ = nullptr;

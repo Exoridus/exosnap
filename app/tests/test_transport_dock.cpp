@@ -176,6 +176,51 @@ TEST_F(TransportDockTest, TimerTextAndRoleApply) {
     EXPECT_EQ(timer->property("timerState").toString(), QStringLiteral("recording"));
 }
 
+// ── ADR-0014 remux progress: the "Saving…" text was static (setSavingProgress
+// was a documented no-op) even though the fraction was already delivered from
+// RunRemuxJob's progress callback all the way down to this call — dropped on
+// the floor at the very last step. ──────────────────────────────────────────
+
+TEST_F(TransportDockTest, SavingState_ShowsZeroPercentBeforeFirstProgressTick) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Saving);
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("Saving… 0%"));
+}
+
+TEST_F(TransportDockTest, SavingProgress_UpdatesTimerLabelPercentage) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Saving);
+    dock.setSavingProgress(0.42f);
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("Saving… 42%"));
+}
+
+TEST_F(TransportDockTest, SavingProgress_ClampsOutOfRangeFraction) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Saving);
+    dock.setSavingProgress(1.5f);
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("Saving… 100%"));
+}
+
+TEST_F(TransportDockTest, SavingProgress_IgnoredOutsideSavingState) {
+    // A stale/late progress tick from a just-finished remux must not clobber
+    // the timer label once the dock has already moved past Saving.
+    TransportDock dock;
+    dock.setState(TransportDock::State::Saving);
+    dock.setSavingProgress(0.5f);
+    dock.setState(TransportDock::State::Ready);
+    dock.setTimerText(QStringLiteral("00:00:00"));
+    dock.setSavingProgress(0.9f); // late tick, arrives after the state moved on
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("00:00:00"));
+}
+
 // ── Audio meter API ──────────────────────────────────────────────────────────
 
 TEST_F(TransportDockTest, SetMeterLevel_SystemToggleReceivesLevel) {

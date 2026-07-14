@@ -65,6 +65,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.show_notifications = settings.value(QStringLiteral("show_notifications"), true).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("editor"));
+    // "Open editor when finished" toggle (default OFF).
+    // Pre-1.0: no migration; missing key defaults to false.
+    persisted.open_editor_when_finished = settings.value(QStringLiteral("open_editor_when_finished"), false).toBool();
+    settings.endGroup();
+
     settings.beginGroup(QStringLiteral("tray"));
     // TRAY-CLOSE-TO-TRAY-R1: close-to-tray opt-in (default OFF).
     persisted.keep_running_in_tray = settings.value(QStringLiteral("keep_running_in_tray"), false).toBool();
@@ -173,6 +179,10 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);
     // NOTIFY-TOASTS-R1: notification toasts toggle.
     settings.setValue(QStringLiteral("show_notifications"), settings_snapshot.show_notifications);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("editor"));
+    settings.setValue(QStringLiteral("open_editor_when_finished"), settings_snapshot.open_editor_when_finished);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("tray"));

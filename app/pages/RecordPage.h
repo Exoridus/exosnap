@@ -175,6 +175,17 @@ class RecordPage : public QWidget {
     // (empty-path) EditContext otherwise.
     [[nodiscard]] EditContext currentEditContext() const;
 
+    // Resolves the full EditContext (duration, size, resolution, codecs, container,
+    // markers) for a completed recording identified only by its output path — the
+    // notification-toast Edit action carries just that path (event.action_payload),
+    // never a full context. Prefers the live current recording's extras when the
+    // path matches it; otherwise falls back to the Recent-recordings history so a
+    // toast for an older recording (clicked after a newer one has since completed)
+    // still resolves to its own data. Falls back to a minimal (output_path-only)
+    // context if the path matches neither — e.g. the recording has scrolled out of
+    // the bounded history.
+    [[nodiscard]] EditContext editContextForOutputPath(const QString& output_path) const;
+
     // ADR-0014: Cancel an in-progress MP4 remux job.  Safe to call when not
     // remuxing (no-op).  Called by MainWindow::closeEvent when the user chooses
     // "Cancel save and close".
@@ -252,6 +263,11 @@ class RecordPage : public QWidget {
     // error_phase: engine error phase string (non-empty on failure; "DiskSpace" for
     //   disk-monitor auto-stop, other values for engine failures).
     void recordingResultReady(bool succeeded, const QString& output_path, const QString& error_phase);
+
+    // ADR-0014: MP4 remux progress ticks, forwarded alongside the existing
+    // transport_dock_->setSavingProgress() call so MainWindow's FinalizingOverlay
+    // can show the same percentage. fraction in [0, 1].
+    void remuxProgressChanged(float fraction);
 
     // RECORDING-ERROR-MODAL-R1: emitted on a recording FAILURE that is not the
     // disk-space auto-stop (which has its own actionable "Storage running low"

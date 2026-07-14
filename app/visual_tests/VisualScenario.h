@@ -310,6 +310,15 @@ struct VisualScenario {
     // reported in the JSON manifest and its rendering is covered by
     // NotificationToastWindow's own widget tests.
     int audio_degraded_notification_count = 0;
+
+    // --- FinalizingOverlay (MainWindow-owned, drives it directly) ---
+    // The overlay listens to record_status_label_/chromeStateChanged, a signal
+    // chain this harness does not exercise (RecordPage::applyVisualScenario sets
+    // view_model_ fields directly, bypassing the coordinator/state-machine).
+    // "none" (default, overlay hidden) | "stopping" (indeterminate, "Finishing…")
+    // | "saving" (determinate, uses finalizing_overlay_saving_percent).
+    QString finalizing_overlay_mode;
+    int finalizing_overlay_saving_percent = 0;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

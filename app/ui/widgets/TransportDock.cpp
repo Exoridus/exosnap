@@ -25,6 +25,8 @@
 #include <QSvgRenderer>
 #include <QTimer>
 
+#include <algorithm>
+
 namespace exosnap::ui::widgets {
 namespace {
 
@@ -396,7 +398,11 @@ void TransportDock::setState(State state) {
     if (state_ == state)
         return;
     state_ = state;
+    if (state_ == State::Saving)
+        saving_progress_ = 0.0f; // a stale fraction from a previous remux must not leak in
     applyState();
+    if (state_ == State::Saving)
+        applySavingProgressText(); // "Saving… 0%" immediately, before the first tick
 }
 
 void TransportDock::setPrimaryEnabled(bool enabled) {
@@ -506,10 +512,15 @@ void TransportDock::openChevronMenu() {
     chevron_leave_timer_->start();
 }
 
-void TransportDock::setSavingProgress(float /*fraction*/) {
-    // Progress value reserved for future progress bar; currently the "Saving…"
-    // label in the completed_row left zone is sufficient feedback.
-    // The timer label in the center zone shows "Saving…" via setTimerText().
+void TransportDock::setSavingProgress(float fraction) {
+    saving_progress_ = fraction;
+    if (state_ == State::Saving)
+        applySavingProgressText();
+}
+
+void TransportDock::applySavingProgressText() {
+    const int pct = static_cast<int>(std::clamp(saving_progress_, 0.0f, 1.0f) * 100.0f + 0.5f);
+    timer_label_->setText(QStringLiteral("Saving… %1%").arg(pct));
 }
 
 void TransportDock::setTimerText(const QString& text) {
