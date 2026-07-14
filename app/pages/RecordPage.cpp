@@ -3166,6 +3166,33 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     startPreviewIfIdle();
 }
 
+bool RecordPage::selectCaptureTargetForAutomation(recorder_core::CaptureTarget::Kind kind,
+                                                  const QString& window_title_substr) {
+    // Mirror onSourcePickerAccepted's monitor/window branch: resolve the target index,
+    // set the capture mode, then route through the SAME syncTargetSelectionToCombo the
+    // real source-picker click handler calls (audio target_kind, coordinator
+    // target-context, and the idle-preview restart all follow from there).
+    int resolved_index = -1;
+    for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(i)];
+        if (target.kind != kind)
+            continue;
+        if (kind == recorder_core::CaptureTarget::Kind::Window &&
+            !QString::fromStdString(target.description).contains(window_title_substr, Qt::CaseInsensitive)) {
+            continue;
+        }
+        resolved_index = i;
+        break;
+    }
+    if (resolved_index < 0)
+        return false;
+
+    view_model_.capture_mode =
+        (kind == recorder_core::CaptureTarget::Kind::Window) ? CaptureMode::Window : CaptureMode::Monitor;
+    syncTargetSelectionToCombo(resolved_index);
+    return true;
+}
+
 bool RecordPage::isCountdownActive() const noexcept {
     return countdown_.isRunning() || view_model_.state == UiRecordingState::Countdown;
 }

@@ -5,6 +5,11 @@
 
 class QApplication;
 
+namespace exosnap {
+class MainWindow;
+class RecordingCoordinator;
+} // namespace exosnap
+
 namespace exosnap::auto_record {
 
 enum class TargetKind { Monitor, Window, Region };
@@ -37,5 +42,23 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
 // code: 0 on a successful recording, non-zero on any failure (target not found,
 // StartRecording refused, capability block, timeout).
 int RunAutoRecord(QApplication& app, const AutoRecordOptions& options);
+
+// Shared drive loop: seeds the coordinator's capability gate, commits the CLI output
+// format, selects the capture target, starts + stops the recording after the requested
+// duration, and prints exactly one JSON result line. Both the bare-mode entry point
+// (above) and the preview-mode entry point (below) call this on their coordinator —
+// bare mode on a coordinator it constructs itself, preview mode on the one the Record
+// page owns. Returns the process exit code.
+int RunAutoRecordOnCoordinator(QApplication& app, RecordingCoordinator& coordinator, const AutoRecordOptions& options);
+
+// Preview-mode drive loop: shows an OFF-SCREEN MainWindow (never activated, placed on a
+// non-primary screen when one exists), waits for the real async capability probe to
+// bring the Record page's coordinator up through the same idle-preview machinery the
+// live app uses (NOT the frozen --visual-test fixture), records via
+// RunAutoRecordOnCoordinator on that coordinator, and — when options.screenshot_path is
+// set — writes a screenshot of the rendered Record page. Falls back to bare mode when
+// options.enable_preview is false. Defined only in the visual-test-harness-enabled build
+// (debug); declared here so main.cpp can call it.
+int RunAutoRecord(QApplication& app, MainWindow& window, const AutoRecordOptions& options);
 
 } // namespace exosnap::auto_record

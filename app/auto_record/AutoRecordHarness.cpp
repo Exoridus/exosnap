@@ -24,6 +24,18 @@
 #include "../services/RecordingCoordinator.h"
 #include "../viewmodels/RecordViewModel.h"
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QGuiApplication>
+#include <QScreen>
+
+#include "../MainWindow.h"
+#include "../diagnostics/AppLog.h"
+#include "../pages/RecordPage.h"
+#include "../visual_tests/VisualTestHarness.h"
+#endif
+
 namespace exosnap::auto_record {
 namespace {
 
@@ -323,14 +335,13 @@ int FailWith(const QString& error_detail) {
 
 } // namespace
 
-int RunAutoRecord(QApplication& app, const AutoRecordOptions& options) {
+int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator& coordinator,
+                               const AutoRecordOptions& options) {
     if (options.target == TargetKind::Region) {
         // Region capture (Monitor + crop_region) is out of the v1 checklist scope for
         // the harness; reject it honestly rather than silently recording the full monitor.
         return FailWith(QStringLiteral("region target is not supported by --auto-record yet"));
     }
-
-    exosnap::RecordingCoordinator coordinator;
 
     // Synchronous capability probe. Bare mode has no UI responsiveness constraint, so
     // it skips the worker-thread hop MainWindow uses (app/MainWindow.cpp:1093-1109).
@@ -432,5 +443,137 @@ int RunAutoRecord(QApplication& app, const AutoRecordOptions& options) {
     PrintResultLine(ResultToJson(ok, final_output_path, QString(), final_error));
     return ok ? 0 : 1;
 }
+
+int RunAutoRecord(QApplication& app, const AutoRecordOptions& options) {
+    // Bare mode: own the coordinator directly, then run the shared drive loop on it.
+    exosnap::RecordingCoordinator coordinator;
+    return RunAutoRecordOnCoordinator(app, coordinator, options);
+}
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+
+namespace {
+
+// Waits (bounded) for the Record page's coordinator to be built AND brought to Ready by
+// the REAL async capability probe. Ready means the probe has already delivered
+// (OnCapabilitiesReady ran on the UI thread), so a later queued delivery cannot clobber
+// the Recording state mid-run once RunAutoRecordOnCoordinator enters its event loop.
+//
+// The wait hinges on the real coordinatorInitialized() signal (emitted as the last
+// statement of initCoordinator(), after enumerateTargets()/startPreviewIfIdle()) to
+// observe the coordinator coming into existence; State() is then polled — a real,
+// in-memory public read, not a log scrape or a blind sleep — because RecordPage owns
+// the single state-changed callback and exposes no "became Ready" signal a non-owner
+// can connect to. Returns the coordinator on Ready, or nullptr on a capability block or
+// timeout (with a reason written to *error).
+exosnap::RecordingCoordinator* WaitForCoordinatorReady(exosnap::RecordPage& page, int timeout_ms, QString* error) {
+    QElapsedTimer clock;
+    clock.start();
+    QEventLoop loop;
+    QTimer poll;
+    exosnap::RecordingCoordinator* ready = nullptr;
+    QObject::connect(&poll, &QTimer::timeout, &loop, [&]() {
+        exosnap::RecordingCoordinator* coordinator = page.recordingCoordinator();
+        if (coordinator != nullptr) {
+            const UiRecordingState state = coordinator->State();
+            if (state == UiRecordingState::Ready) {
+                ready = coordinator;
+                loop.quit();
+                return;
+            }
+            if (state == UiRecordingState::Blocked) {
+                if (error != nullptr)
+                    *error = QString::fromStdWString(coordinator->CapabilityStatusText());
+                loop.quit();
+                return;
+            }
+        }
+        if (clock.elapsed() >= timeout_ms) {
+            if (error != nullptr)
+                *error = QStringLiteral("coordinator did not reach Ready within %1 ms").arg(timeout_ms);
+            loop.quit();
+        }
+    });
+    poll.start(25);
+    loop.exec();
+    return ready;
+}
+
+} // namespace
+
+int RunAutoRecord(QApplication& app, exosnap::MainWindow& window, const AutoRecordOptions& options) {
+    if (!options.enable_preview) {
+        // --enable-preview absent: fall back to headless bare mode, no window shown.
+        return RunAutoRecord(app, options);
+    }
+    if (options.target == TargetKind::Region) {
+        return FailWith(QStringLiteral("region target is not supported by --auto-record yet"));
+    }
+
+    // Off-screen placement — mirrors VisualTestHarness capture-mode geometry: never
+    // activate (WA_ShowWithoutActivating) and prefer a non-primary screen so the
+    // developer's primary desktop is never covered.
+    window.setAttribute(Qt::WA_ShowWithoutActivating, true);
+    QScreen* target_screen = nullptr;
+    {
+        const QList<QScreen*> screens = QGuiApplication::screens();
+        QScreen* const primary = QGuiApplication::primaryScreen();
+        for (QScreen* screen : screens) {
+            if (screen != primary) {
+                target_screen = screen;
+                break;
+            }
+        }
+        if (target_screen == nullptr)
+            target_screen = primary;
+    }
+    window.resize(1280, 820);
+    window.showNormal();
+    // showEvent restores persisted user geometry on first show; re-apply the off-screen
+    // placement afterwards so the window lands on the intended (non-primary) screen.
+    if (target_screen != nullptr) {
+        window.move(target_screen->availableGeometry().topLeft());
+        window.resize(1280, 820);
+    }
+
+    exosnap::RecordPage* record_page = window.recordPage();
+    if (record_page == nullptr)
+        return FailWith(QStringLiteral("preview mode: MainWindow has no Record page"));
+
+    // Let the real, worker-thread capability probe + deferred coordinator init run and
+    // bring the coordinator to Ready through the live idle-preview path.
+    QString wait_error;
+    exosnap::RecordingCoordinator* coordinator = WaitForCoordinatorReady(*record_page, 20000, &wait_error);
+    if (coordinator == nullptr)
+        return FailWith(QStringLiteral("preview mode: %1").arg(wait_error));
+
+    // Select the requested target through the same private path a source-picker click
+    // uses, so the live preview shows exactly what will be recorded.
+    const auto want_kind = (options.target == TargetKind::Window) ? recorder_core::CaptureTarget::Kind::Window
+                                                                  : recorder_core::CaptureTarget::Kind::Monitor;
+    if (!record_page->selectCaptureTargetForAutomation(want_kind, options.target_window_title)) {
+        const QString what = options.target == TargetKind::Monitor
+                                 ? QStringLiteral("monitor")
+                                 : QStringLiteral("window matching \"%1\"").arg(options.target_window_title);
+        return FailWith(QStringLiteral("no matching capture target (%1)").arg(what));
+    }
+
+    // Drive the recording on the coordinator the Record page owns. RunAutoRecordOnCoordinator
+    // re-delivers caps (a redundant Ready->Ready now that the async probe has already landed)
+    // and, via RecordPage's still-wired state-changed callback, the idle preview is live
+    // before the recording start.
+    const int rc = RunAutoRecordOnCoordinator(app, *coordinator, options);
+
+    if (!options.screenshot_path.isEmpty()) {
+        if (!exosnap::visual::WriteVisualScreenshot(window, options.screenshot_path)) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("auto-record"),
+                QStringLiteral("preview screenshot write failed: %1").arg(options.screenshot_path));
+        }
+    }
+    return rc;
+}
+
+#endif // EXOSNAP_ENABLE_VISUAL_TEST_HARNESS
 
 } // namespace exosnap::auto_record
