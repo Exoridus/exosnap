@@ -53,7 +53,8 @@ TEST(SelectFrameForClock, ExactMatchSelectsThatFrame) {
     const auto sel = SelectFrameForClock(pts_ms, 200);
     ASSERT_TRUE(sel.index.has_value());
     EXPECT_EQ(*sel.index, 1u);
-    EXPECT_EQ(sel.dropped_count, 0u);
+    EXPECT_EQ(sel.dropped_count, 1u); // pts 100 dropped -- dropped_count is purely positional,
+                                      // per FrameSelection::dropped_count's own doc comment
 }
 
 TEST(SelectFrameForClock, ClockPastAllFramesSelectsLastAndDropsRest) {

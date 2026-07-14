@@ -23,9 +23,7 @@ FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, in
 
     const size_t selected_index = static_cast<size_t>(std::distance(available_pts_ms.begin(), it)) - 1u;
     sel.index = selected_index;
-    // Drop frames before this one only if the clock has advanced past this frame's time.
-    // If the clock exactly matches, don't drop yet (consumer is just now at this frame).
-    sel.dropped_count = (clock_ms == available_pts_ms[selected_index]) ? 0u : selected_index;
+    sel.dropped_count = selected_index; // every frame strictly before it is now stale
     return sel;
 }
 
