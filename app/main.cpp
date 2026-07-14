@@ -211,7 +211,19 @@ int main(int argc, char* argv[]) {
 
 #if defined(Q_OS_WIN)
     HANDLE hMutex = nullptr;
+    // In a Release build both harness macros are undefined, so visual_test_requested and
+    // auto_record_requested are both `constexpr false` — the compound condition folds to a
+    // compile-time constant and MSVC's /W4 flags it (C4127), which /WX then hard-fails on.
+    // The check is a genuine runtime branch in non-Release builds, so suppress locally
+    // rather than restructure (matches this codebase's existing MSVC-suppression convention).
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4127) // conditional expression is constant (Release-only fold)
+#endif
     if (!visual_test_requested && !auto_record_requested) {
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
         hMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
         if (hMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
             CloseHandle(hMutex);
