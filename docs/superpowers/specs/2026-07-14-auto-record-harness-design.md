@@ -96,11 +96,16 @@ reported failure):
 {
   "status": "ok",
   "output_path": "...",
-  "session_report_path": "...",
-  "screenshot_path": "...",
+  "session_report_path": "",
   "error_detail": ""
 }
 ```
+
+`session_report_path` is always empty: `RecordingCoordinator` writes its session report to disk
+internally but exposes no public accessor for the path, so the harness has nothing to read. Adding
+one is a small, separate follow-up, not covered here. `screenshot_path` is not part of the contract
+— in preview mode the caller already knows the path, since it's the same `--screenshot-path` value
+they passed on the command line; echoing it back would be redundant.
 
 The harness never blocks indefinitely: a bounded grace period after `StopRecording()` (covering
 remux) is enforced, after which it exits with an explicit timeout status rather than hanging.

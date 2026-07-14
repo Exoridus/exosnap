@@ -3171,7 +3171,12 @@ bool RecordPage::selectCaptureTargetForAutomation(recorder_core::CaptureTarget::
     // Mirror onSourcePickerAccepted's monitor/window branch: resolve the target index,
     // set the capture mode, then route through the SAME syncTargetSelectionToCombo the
     // real source-picker click handler calls (audio target_kind, coordinator
-    // target-context, and the idle-preview restart all follow from there).
+    // target-context, and the idle-preview restart all follow from there). Unlike the
+    // real handler, this intentionally skips emit recordingConfigChanged() and the
+    // trailing refresh() — the harness commits output/video config straight onto the
+    // coordinator (SetOutputSettings/SetVideoSettings) rather than through the UI's
+    // config-broadcast path, and there are no UI widgets to refresh that anything is
+    // observing.
     int resolved_index = -1;
     for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(i)];

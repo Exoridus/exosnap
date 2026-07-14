@@ -175,6 +175,12 @@ int FailWith(const QString& error_detail) {
     return 1;
 }
 
+// Shared between RunAutoRecordOnCoordinator and the preview-mode RunAutoRecord entry
+// point below — both reject a Region target with the identical message.
+QString RegionNotSupportedError() {
+    return QStringLiteral("region target is not supported by --auto-record yet");
+}
+
 } // namespace
 
 int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator& coordinator,
@@ -182,7 +188,7 @@ int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator&
     if (options.target == TargetKind::Region) {
         // Region capture (Monitor + crop_region) is out of the v1 checklist scope for
         // the harness; reject it honestly rather than silently recording the full monitor.
-        return FailWith(QStringLiteral("region target is not supported by --auto-record yet"));
+        return FailWith(RegionNotSupportedError());
     }
 
     // Synchronous capability probe. Bare mode has no UI responsiveness constraint, so
@@ -301,13 +307,13 @@ namespace {
 // (OnCapabilitiesReady ran on the UI thread), so a later queued delivery cannot clobber
 // the Recording state mid-run once RunAutoRecordOnCoordinator enters its event loop.
 //
-// The wait hinges on the real coordinatorInitialized() signal (emitted as the last
-// statement of initCoordinator(), after enumerateTargets()/startPreviewIfIdle()) to
-// observe the coordinator coming into existence; State() is then polled — a real,
-// in-memory public read, not a log scrape or a blind sleep — because RecordPage owns
-// the single state-changed callback and exposes no "became Ready" signal a non-owner
-// can connect to. Returns the coordinator on Ready, or nullptr on a capability block or
-// timeout (with a reason written to *error).
+// The wait is a bounded poll (25ms interval, up to timeout_ms) of real, in-memory
+// getters — page.recordingCoordinator() for non-null, then coordinator->State() — not
+// a connection to coordinatorInitialized() or any other signal, and not a log scrape.
+// RecordPage owns the single state-changed callback and exposes no "became Ready"
+// signal a non-owner can connect to, so polling the getters is the only observation
+// point available. Returns the coordinator on Ready, or nullptr on a capability block
+// or timeout (with a reason written to *error).
 exosnap::RecordingCoordinator* WaitForCoordinatorReady(exosnap::RecordPage& page, int timeout_ms, QString* error) {
     QElapsedTimer clock;
     clock.start();
@@ -349,7 +355,7 @@ int RunAutoRecord(QApplication& app, exosnap::MainWindow& window, const AutoReco
         return RunAutoRecord(app, options);
     }
     if (options.target == TargetKind::Region) {
-        return FailWith(QStringLiteral("region target is not supported by --auto-record yet"));
+        return FailWith(RegionNotSupportedError());
     }
 
     // Off-screen placement — mirrors VisualTestHarness capture-mode geometry: never

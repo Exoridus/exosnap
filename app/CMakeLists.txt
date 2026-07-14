@@ -382,6 +382,11 @@ if(WIN32)
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
+# EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and EXOSNAP_ENABLE_AUTO_RECORD_HARNESS are relied upon to
+# always be defined together: AutoRecordHarness.h unconditionally declares the preview-mode
+# RunAutoRecord(MainWindow&) overload, but its definition is gated on
+# EXOSNAP_ENABLE_VISUAL_TEST_HARNESS while main.cpp calls it under EXOSNAP_ENABLE_AUTO_RECORD_HARNESS
+# — decoupling the two in the future would produce a non-obvious link error.
 target_compile_definitions(exosnap PRIVATE
     NOMINMAX
     EXOSNAP_BUILD_CONFIG="$<CONFIG>"
