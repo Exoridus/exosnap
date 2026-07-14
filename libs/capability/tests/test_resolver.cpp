@@ -481,6 +481,28 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264AacCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264OpusCombo) {
+    // Regression: Matroska + H264 + Opus was missing from the translation allow-list
+    // (every sibling combo — AV1/HEVC + Opus, H264 + AAC/PCM/FLAC — was present) so a
+    // request for it threw std::invalid_argument instead of translating, which hung
+    // the recording-prepare worker thread when uncaught (--auto-record repro:
+    // --container mkv --chroma 444 --video-codec h264 with the default audio codec).
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    UserRecorderConfig config;
+    config.container = Container::Matroska;
+    config.video_codec = VideoCodec::H264Nvenc;
+    config.audio_codec = AudioCodec::Opus;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264Nvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
+}
+
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvHevcAacCombo) {
     // 0.7.0: MKV + HEVC is ValidUnvalidated in the baseline, so ToRecorderCoreConfig
     // must translate it to recorder_core::VideoCodec::HevcNvenc.
