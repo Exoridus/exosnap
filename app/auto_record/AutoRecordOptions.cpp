@@ -142,6 +142,17 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
                     *error = QStringLiteral("--duration requires a positive integer");
                 return false;
             }
+        } else if (arg == QStringLiteral("--repeat-cycles")) {
+            QString value;
+            if (!require_value(&value))
+                return false;
+            bool ok = false;
+            parsed.repeat_cycles = value.toInt(&ok);
+            if (!ok || parsed.repeat_cycles <= 0) {
+                if (error)
+                    *error = QStringLiteral("--repeat-cycles requires a positive integer");
+                return false;
+            }
         } else if (arg == QStringLiteral("--capture-frame-at")) {
             QString value;
             if (!require_value(&value))

@@ -245,51 +245,64 @@ int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator&
         return FailWith(QStringLiteral("no matching capture target (%1)").arg(what));
     }
 
-    // Result is delivered via callback, posted to this (Qt main) thread by the
-    // coordinator — possibly asynchronously after a background remux for MP4. Capture
-    // it and quit the loop as soon as it lands; the safety timer below is only a
-    // fallback for a hang.
-    QString final_output_path;
-    QString final_error;
-    bool have_result = false;
-    bool succeeded = false;
-    coordinator.SetResultReadyCallback([&](const UiRecordingResult& result) {
-        have_result = true;
-        succeeded = result.succeeded;
-        final_output_path = QString::fromStdWString(result.output_path);
-        final_error = QString::fromStdWString(result.error_detail);
-        app.quit();
-    });
-
     const capability::AudioUiState audio_state = BuildAudioUiState(options);
-    if (!coordinator.StartRecording(selected_target, audio_state)) {
-        return FailWith(QStringLiteral("StartRecording refused (coordinator not ready or busy)"));
+
+    // repeat_cycles > 1 drives N start/stop cycles on this same coordinator instance
+    // instead of exiting after one, so the capture hub sees the "warm" (already-leased,
+    // reopen-on-next-start) state a real recording after a prior one in the same running
+    // app session has — a cold-process single cycle cannot exercise that path. One JSON
+    // result line per cycle; the process exit code reflects whether every cycle succeeded.
+    bool all_ok = true;
+    for (int cycle = 0; cycle < options.repeat_cycles; ++cycle) {
+        // Result is delivered via callback, posted to this (Qt main) thread by the
+        // coordinator — possibly asynchronously after a background remux for MP4. Capture
+        // it and quit the loop as soon as it lands; the safety timer below is only a
+        // fallback for a hang.
+        QString final_output_path;
+        QString final_error;
+        bool have_result = false;
+        bool succeeded = false;
+        coordinator.SetResultReadyCallback([&](const UiRecordingResult& result) {
+            have_result = true;
+            succeeded = result.succeeded;
+            final_output_path = QString::fromStdWString(result.output_path);
+            final_error = QString::fromStdWString(result.error_detail);
+            app.quit();
+        });
+
+        if (!coordinator.StartRecording(selected_target, audio_state)) {
+            return FailWith(
+                QStringLiteral("StartRecording refused (coordinator not ready or busy, cycle %1)").arg(cycle + 1));
+        }
+
+        // Optional mid-recording frame capture (PNG to the output folder).
+        if (options.capture_frame_at_seconds > 0) {
+            QTimer::singleShot(options.capture_frame_at_seconds * 1000, &app,
+                               [&coordinator]() { coordinator.CaptureFrame(); });
+        }
+
+        // Stop after the requested duration.
+        QTimer::singleShot(options.duration_seconds * 1000, &app, [&coordinator]() { coordinator.StopRecording(); });
+
+        // Safety net: if the result never arrives (hang, crash-in-teardown), quit anyway so
+        // the process exits with a failure rather than blocking forever. Generous enough to
+        // cover finalize + an MP4 remux of a short clip.
+        constexpr int kGraceMs = 30000;
+        QTimer::singleShot(options.duration_seconds * 1000 + kGraceMs, &app, [&app]() { app.quit(); });
+
+        app.exec();
+
+        const bool ok = have_result && succeeded && final_error.isEmpty() && !final_output_path.isEmpty();
+        if (!ok && final_error.isEmpty()) {
+            final_error = have_result ? QStringLiteral("recording did not produce an output file")
+                                      : QStringLiteral("timed out waiting for the recording result");
+        }
+        PrintResultLine(ResultToJson(ok, final_output_path, QString(), final_error));
+        all_ok = all_ok && ok;
+        if (!ok)
+            break; // don't keep cycling once one cycle has already failed/hung
     }
-
-    // Optional mid-recording frame capture (PNG to the output folder).
-    if (options.capture_frame_at_seconds > 0) {
-        QTimer::singleShot(options.capture_frame_at_seconds * 1000, &app,
-                           [&coordinator]() { coordinator.CaptureFrame(); });
-    }
-
-    // Stop after the requested duration.
-    QTimer::singleShot(options.duration_seconds * 1000, &app, [&coordinator]() { coordinator.StopRecording(); });
-
-    // Safety net: if the result never arrives (hang, crash-in-teardown), quit anyway so
-    // the process exits with a failure rather than blocking forever. Generous enough to
-    // cover finalize + an MP4 remux of a short clip.
-    constexpr int kGraceMs = 30000;
-    QTimer::singleShot(options.duration_seconds * 1000 + kGraceMs, &app, [&app]() { app.quit(); });
-
-    app.exec();
-
-    const bool ok = have_result && succeeded && final_error.isEmpty() && !final_output_path.isEmpty();
-    if (!ok && final_error.isEmpty()) {
-        final_error = have_result ? QStringLiteral("recording did not produce an output file")
-                                  : QStringLiteral("timed out waiting for the recording result");
-    }
-    PrintResultLine(ResultToJson(ok, final_output_path, QString(), final_error));
-    return ok ? 0 : 1;
+    return all_ok ? 0 : 1;
 }
 
 int RunAutoRecord(QApplication& app, const AutoRecordOptions& options) {
