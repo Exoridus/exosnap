@@ -531,6 +531,9 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     # Session report writer is called by RecordingCoordinator, which is compiled
     # into the coordinator test targets that all link this support lib.
     diagnostics/SessionReport.cpp
+    # logEvent is called by RecordingCoordinator::SyncWebcamService and
+    # WebcamService, both compiled into targets that link this support lib.
+    diagnostics/StructuredLog.cpp
 )
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
     exosnap_output_model_test_support exosnap_capability recorder_core
