@@ -73,4 +73,27 @@ struct PreviewTapPlan {
     return plan;
 }
 
+// Pure: whether the DXGI capture hub's publish loop must (re)create the shared
+// texture and re-announce a fresh PreviewTapDesc to the preview consumer, vs.
+// publishing the next frame into the existing shared texture unchanged. True
+// whenever the shared texture is not yet valid, its dimensions/format no
+// longer match the captured frame, or the display's HDR facts have changed
+// since the tap was last resolved. An Advanced-Color desktop keeps delivering
+// the same FP16 format across a live Windows-HDR (or Auto-HDR) toggle, so
+// dimensions/format alone cannot detect that the previously-resolved tap
+// (peak_scale / transform) has gone stale — the hdr_active / max_luminance
+// comparison is what catches that case (see DxgiCaptureHubService::WorkerProc).
+[[nodiscard]] inline bool ShouldRepublishCaptureTap(bool shared_valid, uint32_t shared_width, uint32_t shared_height,
+                                                    DXGI_FORMAT shared_format, uint32_t frame_width,
+                                                    uint32_t frame_height, DXGI_FORMAT frame_format,
+                                                    bool last_hdr_active, float last_max_luminance_nits,
+                                                    bool current_hdr_active,
+                                                    float current_max_luminance_nits) noexcept {
+    if (!shared_valid || frame_width != shared_width || frame_height != shared_height ||
+        frame_format != shared_format) {
+        return true;
+    }
+    return current_hdr_active != last_hdr_active || current_max_luminance_nits != last_max_luminance_nits;
+}
+
 } // namespace recorder_core

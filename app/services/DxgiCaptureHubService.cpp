@@ -153,6 +153,15 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
     uint32_t sharedH = 0;
     DXGI_FORMAT sharedFmt = DXGI_FORMAT_UNKNOWN;
     bool announceFailed = false;
+    // Last HDR facts the tap descriptor was resolved from. A live Windows-HDR
+    // toggle (or Auto-HDR) can leave desc.{Width,Height,Format} unchanged — an
+    // Advanced-Color desktop keeps delivering FP16 in both states — so those
+    // alone are not sufficient to notice the tap has gone stale; hdr_active /
+    // max_luminance_nits must be compared every tick too, or the preview keeps
+    // tone-mapping with the peak/mode from whenever the texture was last
+    // (re)created, silently disagreeing with the display's current HDR state.
+    bool lastHdrActive = false;
+    float lastMaxLuminanceNits = 0.0f;
 
     const auto resetPublisher = [&]() {
         shared.Reset();
@@ -160,6 +169,8 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
         sharedH = 0;
         sharedFmt = DXGI_FORMAT_UNKNOWN;
         announceFailed = false;
+        lastHdrActive = false;
+        lastMaxLuminanceNits = 0.0f;
     };
 
     const auto publish = [&](const HubFrame& frame) {
@@ -167,7 +178,10 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             return;
         D3D11_TEXTURE2D_DESC desc{};
         frame.texture->GetDesc(&desc);
-        if (!shared.Valid() || desc.Width != sharedW || desc.Height != sharedH || desc.Format != sharedFmt) {
+        const recorder_core::HdrDisplayFacts& facts = producer->DisplayFacts();
+        if (recorder_core::ShouldRepublishCaptureTap(shared.Valid(), sharedW, sharedH, sharedFmt, desc.Width,
+                                                     desc.Height, desc.Format, lastHdrActive, lastMaxLuminanceNits,
+                                                     facts.hdr_active, facts.max_luminance_nits)) {
             HANDLE handle = nullptr;
             std::string err;
             if (!shared.Create(producer->Device(), desc.Width, desc.Height, desc.Format, &handle, err)) {
@@ -180,7 +194,8 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             sharedW = desc.Width;
             sharedH = desc.Height;
             sharedFmt = desc.Format;
-            const recorder_core::HdrDisplayFacts& facts = producer->DisplayFacts();
+            lastHdrActive = facts.hdr_active;
+            lastMaxLuminanceNits = facts.max_luminance_nits;
             const recorder_core::PreviewTapDesc tap =
                 recorder_core::ResolveRawCaptureTapDesc(desc.Format, facts.hdr_active, facts.max_luminance_nits);
             // Ownership of the NT handle transfers to the sink.
