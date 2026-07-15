@@ -8,6 +8,7 @@
 #include "mux_thread.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
+#include "session_stop_reset.h"
 #include "video_thread.h"
 #include "wasapi_capture_src.h"
 #include "wasapi_loopback_src.h"
@@ -401,6 +402,9 @@ void RecorderSession::Stop() {
     const auto st = m_impl->State();
     st->pause_requested.store(false);
     st->stop_requested.store(true);
+    // Survives Record()'s own state reset if this Stop() raced ahead of the next
+    // Record() call for this session (see session_stop_reset.h).
+    st->stop_requested_before_next_record.store(true);
     st->SignalStopEvent();
     st->premux_cv.notify_all();
     st->mux_cv.notify_all();
@@ -490,10 +494,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // Reset session state
     {
         auto& st = *state_ptr;
-        st.stop_requested.store(false);
-        if (st.stop_event) {
-            ResetEvent(st.stop_event); // re-arm the Win32 stop mirror
-        }
+        // Preserves (instead of discarding) a Stop() that raced ahead of this
+        // Record() call — see session_stop_reset.h.
+        ResetStopRequestedForNewSession(st);
         {
             std::lock_guard lk(st.failure_mutex);
             st.failure_recorded = false;
@@ -758,9 +761,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     bool finalizeStalled = false;
 
     if (!hasNullHandle) {
-        // --- Diagnostic instrumentation for the "fast start/stop leaves the
-        // FinalizingOverlay spinning for a long-but-finite time" investigation
-        // (2026-07-15). TEMPORARY: remove once the root cause is confirmed. ---
+        // Shutdown-timing observability (added during the 2026-07-15 "fast
+        // start/stop leaves the FinalizingOverlay spinning" investigation; kept
+        // permanently — low-volume, shutdown-only, useful for any future
+        // finalize-timing report). ---
         const auto shutdown_wait_start = std::chrono::steady_clock::now();
         auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) -> uint64_t {
             return static_cast<uint64_t>(

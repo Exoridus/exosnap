@@ -521,6 +521,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_mux_queue_backpressure PRIVATE src)
 
+# Fresh-session stop_requested reset (session_stop_reset.h): a Stop() call that
+# races ahead of the next Record() call must not be silently discarded by
+# Record()'s own state reset. Pure logic against a plain SessionState — no
+# capture hardware, no threads.
+exosnap_add_gtest(
+    NAME test_session_stop_reset
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_session_stop_reset.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_session_stop_reset PRIVATE src)
+
 # Worker teardown ownership: an abandoned (stalled/hung) worker keeps its
 # SessionState and capture source alive through the thread's shared ownership,
 # wakes on the stop/failure flags, and runs out cleanly — never a detach into
