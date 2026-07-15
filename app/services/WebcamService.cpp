@@ -1,5 +1,7 @@
 #include "WebcamService.h"
 
+#include "../diagnostics/StructuredLog.h"
+
 #include <QCoreApplication>
 #include <QMetaObject>
 
@@ -471,7 +473,16 @@ bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uin
 }
 
 void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop) {
+    // TEMPORARY diagnostic instrumentation (2026-07-15) for the "webcam toggle
+    // on, no preview, camera light never turns on" live-verify report. Remove
+    // once the root cause is confirmed from a captured engine.jsonl.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.thread_main.start",
+                          {{"device_id_empty", device_id.empty() ? "true" : "false"},
+                           {"want_width", std::to_string(width)},
+                           {"want_height", std::to_string(height)},
+                           {"want_fps", std::to_string(fps)}});
     if (!IsMfPresent()) {
+        diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.mf_not_present");
         running_.store(false);
         return;
     }
@@ -491,16 +502,31 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // always be accepted even if its timestamp is smaller than the old reader's.
     long long last_delivered_ts = -1;
 
+    // TEMPORARY (2026-07-15, see above): log the first OpenReader failure of a
+    // retry streak (not every 500ms retry, to avoid spamming engine.jsonl) and
+    // the transition back to success.
+    bool open_failure_logged = false;
+
     // Outer loop: (re)open the device and drain it; on loss, fall back here to poll
     // a reopen. The last stored frame is NEVER cleared here, so it stays frozen for
     // the whole gap; has_frame_ is reset only by Stop().
     while (!stop.stop_requested()) {
         auto ctx = OpenReader(device_id, width, height, fps);
         if (!ctx) {
+            if (!open_failure_logged) {
+                diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.open_reader.failed",
+                                      {{"device_id_empty", device_id.empty() ? "true" : "false"}});
+                open_failure_logged = true;
+            }
             // Device not (yet) available: hold whatever frame we have and retry.
             std::this_thread::sleep_for(kReconnectDelay);
             continue;
         }
+        if (open_failure_logged)
+            open_failure_logged = false;
+        diagnostics::logEvent(
+            diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
+            {{"negotiated_width", std::to_string(ctx->width)}, {"negotiated_height", std::to_string(ctx->height)}});
         last_delivered_ts = -1; // fresh reader: its first sample always passes.
 
         const int W = ctx->width;

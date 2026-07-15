@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include "../diagnostics/DiskSpaceThresholds.h"
+#include "../diagnostics/StructuredLog.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -611,6 +612,20 @@ void RecordingCoordinator::SyncWebcamService(bool force_restart) {
     const bool want_running = webcam_settings_.enabled && !webcam_settings_.device_id.empty() &&
                               (is_recording_.load() || prepare_in_flight_.load() || webcam_preview_active_ ||
                                webcam_settings_preview_active_);
+    // TEMPORARY diagnostic instrumentation (2026-07-15) for the "webcam toggle
+    // on, no preview, camera never activates" live-verify report. Both the
+    // Settings panel and the Record-page dock toggle converge here, so this is
+    // the single choke point to observe want_running's inputs. Remove once the
+    // root cause is confirmed from a captured engine.jsonl.
+    diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.sync",
+                          {{"enabled", webcam_settings_.enabled ? "true" : "false"},
+                           {"device_id_empty", webcam_settings_.device_id.empty() ? "true" : "false"},
+                           {"is_recording", is_recording_.load() ? "true" : "false"},
+                           {"webcam_preview_active", webcam_preview_active_ ? "true" : "false"},
+                           {"webcam_settings_preview_active", webcam_settings_preview_active_ ? "true" : "false"},
+                           {"want_running", want_running ? "true" : "false"},
+                           {"force_restart", force_restart ? "true" : "false"},
+                           {"currently_running", webcam_service_.IsRunning() ? "true" : "false"}});
     if (!want_running) {
         webcam_service_.Stop();
         return;
