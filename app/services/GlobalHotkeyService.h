@@ -47,6 +47,13 @@ class IHotkeyRegistrar {
     virtual void Unregister(int id) = 0;
 };
 
+// Not internally synchronized: every public method must be called from the
+// thread that owns this QObject (the thread SetRegistrar's IHotkeyRegistrar is
+// also driven from). This isn't an implementation shortcut — Win32
+// RegisterHotKey/UnregisterHotKey deliver WM_HOTKEY to, and must be called
+// from, the thread pumping the associated message loop, so cross-thread calls
+// would be wrong even with a mutex around bindings_. Enforced by an assert
+// (debug builds) at every public entry point rather than left implicit.
 class GlobalHotkeyService : public QObject {
     Q_OBJECT
   public:
@@ -96,6 +103,9 @@ class GlobalHotkeyService : public QObject {
   private:
     void CommitBinding(HotkeyAction action, QKeySequence seq);
     RebindResult AttemptRegistration(HotkeyAction action, QKeySequence new_seq, QKeySequence old_seq);
+    // Asserts the calling thread is this object's owning thread — see the class
+    // comment above. No-op in release builds (matches Q_ASSERT).
+    void AssertOwnerThread() const;
 
     IHotkeyRegistrar* registrar_ = nullptr;
     std::array<QKeySequence, static_cast<std::size_t>(kHotkeyActionCount)> bindings_{};
