@@ -79,3 +79,48 @@ TEST(RawCaptureTapDesc, UnknownPeakFallsBackGracefully) {
     EXPECT_EQ(d.transform, PreviewTapTransform::ScrgbHdr);
     EXPECT_FLOAT_EQ(d.peak_scale, 12.5f);
 }
+
+// ---- Capture-hub republish decision (DxgiCaptureHubService::WorkerProc) ----
+
+TEST(ShouldRepublishCaptureTap, NoSharedTextureYetAlwaysRepublishes) {
+    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/false, 0, 0, DXGI_FORMAT_UNKNOWN, 2560, 1440,
+                                          DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                          /*last_hdr_active=*/false, /*last_max_luminance_nits=*/0.0f,
+                                          /*current_hdr_active=*/false, /*current_max_luminance_nits=*/0.0f));
+}
+
+TEST(ShouldRepublishCaptureTap, DimensionOrFormatChangeRepublishes) {
+    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 1920, 1080, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440,
+                                          DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f, false, 0.0f));
+    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_B8G8R8A8_UNORM, 2560, 1440,
+                                          DXGI_FORMAT_R16G16B16A16_FLOAT, false, 0.0f, false, 0.0f));
+}
+
+TEST(ShouldRepublishCaptureTap, UnchangedFrameWithUnchangedFactsDoesNotRepublish) {
+    EXPECT_FALSE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560,
+                                           1440, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                           /*last_hdr_active=*/true, /*last_max_luminance_nits=*/1000.0f,
+                                           /*current_hdr_active=*/true, /*current_max_luminance_nits=*/1000.0f));
+}
+
+TEST(ShouldRepublishCaptureTap, HdrActiveToggleWithUnchangedFormatStillRepublishes) {
+    // The regression this guards: an Advanced-Color desktop keeps delivering
+    // FP16 across a live Windows-HDR (or Auto-HDR) toggle, so dimensions/format
+    // alone never notice the display's HDR state flipped underneath the
+    // already-shared texture. Before the fix this returned false, leaving the
+    // preview tone-mapped with a stale peak/transform until an unrelated
+    // resolution change forced a refresh.
+    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440,
+                                          DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                          /*last_hdr_active=*/false, /*last_max_luminance_nits=*/0.0f,
+                                          /*current_hdr_active=*/true, /*current_max_luminance_nits=*/1000.0f));
+}
+
+TEST(ShouldRepublishCaptureTap, MaxLuminanceChangeAloneRepublishes) {
+    // The display's reported peak can change (e.g. a driver renegotiation) while
+    // hdr_active stays true; the stale peak_scale must still be refreshed.
+    EXPECT_TRUE(ShouldRepublishCaptureTap(/*shared_valid=*/true, 2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440,
+                                          DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                          /*last_hdr_active=*/true, /*last_max_luminance_nits=*/400.0f,
+                                          /*current_hdr_active=*/true, /*current_max_luminance_nits=*/1000.0f));
+}

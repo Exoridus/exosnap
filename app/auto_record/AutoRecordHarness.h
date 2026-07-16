@@ -30,6 +30,8 @@ struct AutoRecordOptions {
     int duration_seconds = 10;
     int capture_frame_at_seconds = -1; // -1 = disabled
     QString screenshot_path;           // preview mode only
+    int repeat_cycles = 1;             // run N start/stop cycles on the same coordinator
+                                       // (warm capture-hub state) instead of exiting after one
 };
 
 bool HasAutoRecordRequest(const QStringList& args);
@@ -37,16 +39,19 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
 
 // Headless "bare mode" drive loop: builds and drives a standalone
 // exosnap::RecordingCoordinator directly from CLI-configured options, produces a
-// real recording file, and prints exactly one JSON result line to stdout. No
-// MainWindow, no preview window (preview mode is Task 3). Returns the process exit
-// code: 0 on a successful recording, non-zero on any failure (target not found,
-// StartRecording refused, capability block, timeout).
+// real recording file, and prints one JSON result line to stdout per cycle
+// (options.repeat_cycles, default 1). No MainWindow, no preview window (preview
+// mode is Task 3). Returns the process exit code: 0 when every cycle succeeded,
+// non-zero on any failure (target not found, StartRecording refused, capability
+// block, timeout) — cycling stops at the first failed cycle.
 int RunAutoRecord(QApplication& app, const AutoRecordOptions& options);
 
 // Shared drive loop: seeds the coordinator's capability gate, commits the CLI output
-// format, selects the capture target, starts + stops the recording after the requested
-// duration, and prints exactly one JSON result line. Both the bare-mode entry point
-// (above) and the preview-mode entry point (below) call this on their coordinator —
+// format, selects the capture target, then runs options.repeat_cycles start/stop
+// cycles on it (same coordinator instance across cycles, so a later cycle sees
+// whatever "warm" capture-hub state the previous cycle left behind), printing one
+// JSON result line per cycle. Both the bare-mode entry point (above) and the
+// preview-mode entry point (below) call this on their coordinator —
 // bare mode on a coordinator it constructs itself, preview mode on the one the Record
 // page owns. Returns the process exit code.
 int RunAutoRecordOnCoordinator(QApplication& app, RecordingCoordinator& coordinator, const AutoRecordOptions& options);

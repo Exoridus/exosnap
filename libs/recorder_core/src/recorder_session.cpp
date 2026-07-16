@@ -8,6 +8,7 @@
 #include "mux_thread.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
+#include "session_stop_reset.h"
 #include "video_thread.h"
 #include "wasapi_capture_src.h"
 #include "wasapi_loopback_src.h"
@@ -15,6 +16,9 @@
 #include "wgc_capture.h"
 #include "worker_join.h"
 
+#include <recorder_core/logging/logging.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -93,6 +97,10 @@ struct RecorderSession::Impl {
     std::mutex state_mutex;
     std::shared_ptr<SessionState> state = std::make_shared<SessionState>();
     bool workers_leaked = false; // guarded by state_mutex
+    // A Stop() that arrives outside Record()'s active-recording window (see
+    // session_stop_reset.h). Deliberately NOT on SessionState: it must survive
+    // the state swap above. Guarded by state_mutex.
+    PendingStopTracker pending_stop;
 
     StatsCallback stats_callback;
     MeterCallback meter_callback;
@@ -395,7 +403,14 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 // ---------------------------------------------------------------------------
 
 void RecorderSession::Stop() {
-    const auto st = m_impl->State();
+    std::shared_ptr<SessionState> st;
+    {
+        std::lock_guard lk(m_impl->state_mutex);
+        st = m_impl->state;
+        // Only a Stop() outside the active-recording window needs to survive into
+        // the next Record() call — see session_stop_reset.h.
+        m_impl->pending_stop.NoteStop(m_impl->recording.load());
+    }
     st->pause_requested.store(false);
     st->stop_requested.store(true);
     st->SignalStopEvent();
@@ -475,6 +490,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // swap in a fresh one so the leaked worker drains against the old state
     // (kept alive by its own shared_ptr) while this session starts clean.
     std::shared_ptr<SessionState> state_ptr;
+    bool pre_stop = false;
     {
         std::lock_guard lk(m_impl->state_mutex);
         if (m_impl->workers_leaked) {
@@ -482,15 +498,22 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             m_impl->workers_leaked = false;
         }
         state_ptr = m_impl->state;
+        // Consumed here (under the same lock as the swap above) so a Stop() that
+        // raced ahead of this Record() call is honored regardless of whether the
+        // swap just happened — see session_stop_reset.h.
+        pre_stop = m_impl->pending_stop.Consume();
     }
 
     // Reset session state
     {
         auto& st = *state_ptr;
-        st.stop_requested.store(false);
-        if (st.stop_event) {
-            ResetEvent(st.stop_event); // re-arm the Win32 stop mirror
-        }
+        // Preserves (instead of discarding) a Stop() that raced ahead of this
+        // Record() call — see session_stop_reset.h.
+        ResetStopRequestedForNewSession(st, pre_stop);
+        // A Pause() left set by a session that ended without going through Stop()
+        // (e.g. RecordFailure while paused) must not silently carry into the next
+        // recording.
+        st.pause_requested.store(false);
         {
             std::lock_guard lk(st.failure_mutex);
             st.failure_recorded = false;
@@ -525,6 +548,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.video_epoch_qpc_100ns.store(0);
         st.split_request_seq.store(0);
         st.split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::ManualButton));
+        // An "armed but unconsumed" size-split from a session that ended before
+        // mux_thread's begin_new_segment reset it must not suppress the first
+        // size-based split of the next recording.
+        st.size_split_armed.store(false);
         {
             std::lock_guard slk(st.snapshot_callback_mutex);
             st.snapshot_requested.store(false);
@@ -755,6 +782,17 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     bool finalizeStalled = false;
 
     if (!hasNullHandle) {
+        // Shutdown-timing observability (added during the 2026-07-15 "fast
+        // start/stop leaves the FinalizingOverlay spinning" investigation; kept
+        // permanently — low-volume, shutdown-only, useful for any future
+        // finalize-timing report). ---
+        const auto shutdown_wait_start = std::chrono::steady_clock::now();
+        auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) -> uint64_t {
+            return static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                    .count());
+        };
+
         // --- Phase 1: producer workers under the short budget. Phase 1 of the wait
         // is still unbounded until stop_requested, so recording duration is never
         // capped; only the post-stop drain is bounded (kProducerJoinBudgetMs). ---
@@ -776,15 +814,42 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
         }
 
+        {
+            const uint64_t phase1_ms = elapsedMsSince(shutdown_wait_start);
+            const logging::LogField fields[] = {
+                {"phase1_elapsed_ms", std::to_string(phase1_ms)},
+                {"video_joined", videoJoined ? "true" : "false"},
+                {"audio_all_joined",
+                 std::all_of(audioJoined.begin(), audioJoined.end(), [](bool b) { return b; }) ? "true" : "false"},
+                {"wait_failed", jr.wait_failed ? "true" : "false"},
+            };
+            logging::log(logging::LogLevel::Info, "recorder_session", "shutdown: phase1 (producer join) complete",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
+
         // --- Phase 2: mux/finalize under a progress-based wait. Sample the bytes
         // the Matroska writer has committed (published from inside Finalize()) and
         // keep waiting while they grow; abort only on a genuine stall. ---
         FinalizeProgressTracker finalizeTracker(kFinalizeStallWindowMs, kFinalizeHardCapMs);
         const auto phase2_start = std::chrono::steady_clock::now();
+        uint64_t lastLoggedElapsedMs = 0;
+        {
+            const uint64_t bytes0 = state_ptr->mux_bytes_written.load(std::memory_order_relaxed);
+            const logging::LogField fields[] = {{"baseline_bytes", std::to_string(bytes0)}};
+            logging::log(logging::LogLevel::Info, "recorder_session", "shutdown: phase2 (finalize) begin",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
         for (;;) {
             const DWORD w = WaitForSingleObject(muxHandle, kFinalizePollIntervalMs);
             if (w == WAIT_OBJECT_0) {
                 muxJoined = muxThread->Join(0);
+                const uint64_t elapsed_ms = elapsedMsSince(phase2_start);
+                const logging::LogField fields[] = {
+                    {"phase2_elapsed_ms", std::to_string(elapsed_ms)},
+                    {"final_bytes", std::to_string(finalizeTracker.last_bytes())},
+                };
+                logging::log(logging::LogLevel::Info, "recorder_session", "shutdown: phase2 (finalize) joined",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
                 break;
             }
             if (w == WAIT_FAILED) {
@@ -794,11 +859,25 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
             // WAIT_TIMEOUT: sample finalize byte progress and decide whether to keep waiting.
             const uint64_t bytes = state_ptr->mux_bytes_written.load(std::memory_order_relaxed);
-            const uint64_t elapsed_ms = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - phase2_start)
-                    .count());
+            const uint64_t elapsed_ms = elapsedMsSince(phase2_start);
+            if (elapsed_ms - lastLoggedElapsedMs >= 1000) {
+                lastLoggedElapsedMs = elapsed_ms;
+                const logging::LogField fields[] = {
+                    {"phase2_elapsed_ms", std::to_string(elapsed_ms)},
+                    {"bytes", std::to_string(bytes)},
+                    {"last_progress_ms", std::to_string(finalizeTracker.last_progress_ms())},
+                };
+                logging::log(logging::LogLevel::Info, "recorder_session", "shutdown: phase2 (finalize) waiting",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
             if (finalizeTracker.Observe(bytes, elapsed_ms) == FinalizeWaitDecision::StalledAbort) {
                 finalizeStalled = true;
+                const logging::LogField fields[] = {
+                    {"phase2_elapsed_ms", std::to_string(elapsed_ms)},
+                    {"bytes", std::to_string(bytes)},
+                };
+                logging::log(logging::LogLevel::Warn, "recorder_session", "shutdown: phase2 (finalize) stalled-abort",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
                 break;
             }
         }
@@ -936,6 +1015,14 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         const RecordingDiagnosticsSnapshot snapshot =
             state_ptr->diagnostics.BuildSnapshot(diag_now, result.stats, lifecycle, result.stats.elapsed_seconds);
         m_impl->diagnostics_callback(snapshot);
+    }
+
+    // Discard any Stop() that arrived after m_impl->recording dropped above (e.g.
+    // an extra click during finalize) — it targets this already-finishing session,
+    // not the next Record() call.
+    {
+        std::lock_guard lk(m_impl->state_mutex);
+        (void)m_impl->pending_stop.Consume();
     }
 
     return result;

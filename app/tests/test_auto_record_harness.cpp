@@ -22,6 +22,25 @@ TEST(AutoRecordHarness, ParsesDefaults) {
     EXPECT_EQ(opts.duration_seconds, 10);
     EXPECT_EQ(opts.container, QStringLiteral("mkv"));
     EXPECT_FALSE(opts.enable_preview);
+    EXPECT_EQ(opts.repeat_cycles, 1);
+}
+
+TEST(AutoRecordHarness, ParsesRepeatCycles) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--repeat-cycles"), QStringLiteral("5")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_EQ(opts.repeat_cycles, 5);
+}
+
+TEST(AutoRecordHarness, RejectsNonPositiveRepeatCycles) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--repeat-cycles"), QStringLiteral("0")};
+    EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error));
+    EXPECT_FALSE(error.isEmpty());
 }
 
 TEST(AutoRecordHarness, ParsesFullOptionSet) {

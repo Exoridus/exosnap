@@ -543,6 +543,12 @@ exosnap_add_app_test_support(exosnap_device_service_test_support
     services/WebcamDeviceNotifier.cpp
     services/DisplayDeviceNotifier.cpp
     services/WebcamService.cpp
+    # WebcamService calls exosnap::diagnostics::logEvent (NV12 open diagnostics);
+    # every target that pulls in this lib needs the symbol, and this is the one
+    # place all of them already link (RecordingCoordinator's own logEvent calls
+    # ride along, since every RecordingCoordinator.cpp test target also links
+    # this lib).
+    diagnostics/StructuredLog.cpp
 )
 target_link_libraries(exosnap_device_service_test_support PUBLIC
     exosnap_app_log_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core

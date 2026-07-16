@@ -56,27 +56,50 @@ std::string WcharToString(const WCHAR* w) {
 // We prefer MFVideoFormat_ARGB32 (= BGRA in memory on little-endian Windows).
 // Falls back to YUY2 when ARGB32 is unavailable; YUY2 is then converted to BGRA below.
 
-bool TrySetBgraOutputType(IMFSourceReader* reader) {
+bool TrySetBgraOutputType(IMFSourceReader* reader, HRESULT* out_hr = nullptr) {
     // Request ARGB32 output (BGRA in memory).
     winrt::com_ptr<IMFMediaType> type;
     HRESULT hr = MFCreateMediaType(type.put());
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        if (out_hr)
+            *out_hr = hr;
         return false;
+    }
     type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_ARGB32);
     hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, type.get());
+    if (out_hr)
+        *out_hr = hr;
     return SUCCEEDED(hr);
 }
 
-bool TrySetYuy2OutputType(IMFSourceReader* reader) {
+bool TrySetYuy2OutputType(IMFSourceReader* reader, HRESULT* out_hr = nullptr) {
     winrt::com_ptr<IMFMediaType> type;
     HRESULT hr = MFCreateMediaType(type.put());
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        if (out_hr)
+            *out_hr = hr;
         return false;
+    }
     type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_YUY2);
     hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, type.get());
+    if (out_hr)
+        *out_hr = hr;
     return SUCCEEDED(hr);
+}
+
+// MFVideoFormat_* subtype GUIDs encode a FourCC in Data1 (e.g. 'MJPG', 'NV12',
+// 'YUY2', 'H264') against a fixed base GUID suffix — readable/loggable without a
+// lookup table for the common camera formats this matters for.
+std::string SubtypeFourCc(const GUID& g) {
+    char buf[5] = {static_cast<char>(g.Data1 & 0xFF), static_cast<char>((g.Data1 >> 8) & 0xFF),
+                   static_cast<char>((g.Data1 >> 16) & 0xFF), static_cast<char>((g.Data1 >> 24) & 0xFF), 0};
+    for (char& c : buf) {
+        if (c != 0 && (c < 0x20 || c > 0x7E))
+            return "non_fourcc";
+    }
+    return buf;
 }
 
 // Convert YUY2 → BGRA (row-major, in-place output buffer).
@@ -124,19 +147,38 @@ struct ReaderContext {
 };
 
 // Try to open an IMFSourceReader on device_id (or first device if empty).
-std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w, int want_h, int /*want_fps*/) {
+// fail_reason names the exact step that bailed (with its HRESULT and, for the
+// output-type negotiation, the camera's actual native format) so a failure log
+// distinguishes "no device enumerated" from "device found but
+// ActivateObject/CreateSourceReader/output-type negotiation failed" instead of
+// a single undifferentiated "open_reader.failed" — this is what found the
+// 2026-07-15 NV12-only-camera bug (see MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING
+// below) and is worth keeping for the next camera-specific failure.
+std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w, int want_h, int /*want_fps*/,
+                                        std::string* fail_reason = nullptr) {
+    const auto fail = [&](const char* step, HRESULT hr) {
+        if (fail_reason) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s hr=0x%08lX", step, static_cast<unsigned long>(hr));
+            *fail_reason = buf;
+        }
+        return std::nullopt;
+    };
+
     // Create device attributes filter.
     winrt::com_ptr<IMFAttributes> attrs;
-    if (FAILED(MFCreateAttributes(attrs.put(), 1)))
-        return std::nullopt;
+    HRESULT hr = MFCreateAttributes(attrs.put(), 1);
+    if (FAILED(hr))
+        return fail("MFCreateAttributes", hr);
     attrs->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
 
     IMFActivate** devices = nullptr;
     UINT32 count = 0;
-    if (FAILED(MFEnumDeviceSources(attrs.get(), &devices, &count)) || count == 0) {
+    hr = MFEnumDeviceSources(attrs.get(), &devices, &count);
+    if (FAILED(hr) || count == 0) {
         if (devices)
             CoTaskMemFree(devices);
-        return std::nullopt;
+        return fail(FAILED(hr) ? "MFEnumDeviceSources" : "MFEnumDeviceSources:no_devices", hr);
     }
 
     // Find matching device or pick first.
@@ -158,22 +200,42 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         devices[i]->Release();
     CoTaskMemFree(devices);
     if (!selected)
-        return std::nullopt;
+        return fail("no_matching_device", E_FAIL);
 
     winrt::com_ptr<IMFMediaSource> source;
-    HRESULT hr = selected->ActivateObject(IID_PPV_ARGS(source.put()));
+    hr = selected->ActivateObject(IID_PPV_ARGS(source.put()));
     selected->Release();
     if (FAILED(hr))
-        return std::nullopt;
+        return fail("ActivateObject", hr);
 
-    // Reader attributes: enable hardware decoding.
+    // Reader attributes: enable the ADVANCED video processor MFT so
+    // SetCurrentMediaType can convert an NV12-native camera (the frame-server
+    // default for most UVC devices at their configured resolution — confirmed
+    // live via an isolated probe against a real device: GetNativeMediaType
+    // returns NV12 only) to ARGB32 output below. The plain
+    // MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING attribute only covers YUV->RGB32
+    // conversion, NOT YUV->ARGB32 (the alpha channel is the difference) — the
+    // same probe confirmed ARGB32 negotiation still fails with only that
+    // attribute set, which is why an NV12-only camera opened fine in Windows'
+    // own Camera app (a different, wider MF topology) but failed here.
     winrt::com_ptr<IMFAttributes> readerAttrs;
-    MFCreateAttributes(readerAttrs.put(), 1);
+    hr = MFCreateAttributes(readerAttrs.put(), 1);
+    if (FAILED(hr))
+        return fail("MFCreateAttributes:readerAttrs", hr);
+    readerAttrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
 
     winrt::com_ptr<IMFSourceReader> reader;
     hr = MFCreateSourceReaderFromMediaSource(source.get(), readerAttrs.get(), reader.put());
     if (FAILED(hr))
-        return std::nullopt;
+        return fail("MFCreateSourceReaderFromMediaSource", hr);
+
+    // Captures what the native-format enumeration actually found (or didn't) so a
+    // failed BGRA/YUY2 negotiation below is explained by the real native format
+    // instead of a bare HRESULT. Logged only on failure.
+    bool native_match_found = false;
+    std::string native_match_fourcc;
+    UINT32 native_enum_count = 0;
+    HRESULT native_set_hr = S_OK;
 
     // Try to set desired resolution on the native media type first.
     // Enumerate and pick the best matching format.
@@ -181,6 +243,7 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         winrt::com_ptr<IMFMediaType> native;
         if (FAILED(reader->GetNativeMediaType(kFirstVideoStream, i, native.put())))
             break;
+        ++native_enum_count;
         GUID sub{};
         native->GetGUID(MF_MT_SUBTYPE, &sub);
         UINT64 sz = 0;
@@ -188,26 +251,42 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         const UINT32 nw = static_cast<UINT32>(sz >> 32);
         const UINT32 nh = static_cast<UINT32>(sz & 0xFFFFFFFF);
         if (static_cast<int>(nw) == want_w && static_cast<int>(nh) == want_h) {
-            reader->SetCurrentMediaType(kFirstVideoStream, nullptr, native.get());
+            native_match_found = true;
+            native_match_fourcc = SubtypeFourCc(sub);
+            native_set_hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, native.get());
             break;
         }
     }
 
     // Set output type to BGRA or YUY2.
-    bool is_bgra = TrySetBgraOutputType(reader.get());
-    if (!is_bgra && !TrySetYuy2OutputType(reader.get()))
+    HRESULT bgra_hr = S_OK;
+    HRESULT yuy2_hr = S_OK;
+    bool is_bgra = TrySetBgraOutputType(reader.get(), &bgra_hr);
+    if (!is_bgra && !TrySetYuy2OutputType(reader.get(), &yuy2_hr)) {
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+                 "no_bgra_or_yuy2_output_type bgra_hr=0x%08lX yuy2_hr=0x%08lX native_matches=%u/%lu "
+                 "native_fourcc=%s native_set_hr=0x%08lX",
+                 static_cast<unsigned long>(bgra_hr), static_cast<unsigned long>(yuy2_hr), native_match_found ? 1u : 0u,
+                 static_cast<unsigned long>(native_enum_count),
+                 native_match_found ? native_match_fourcc.c_str() : "(no exact match)",
+                 static_cast<unsigned long>(native_set_hr));
+        if (fail_reason)
+            *fail_reason = buf;
         return std::nullopt;
+    }
 
     // Read actual output dimensions.
     winrt::com_ptr<IMFMediaType> currentType;
-    if (FAILED(reader->GetCurrentMediaType(kFirstVideoStream, currentType.put())))
-        return std::nullopt;
+    hr = reader->GetCurrentMediaType(kFirstVideoStream, currentType.put());
+    if (FAILED(hr))
+        return fail("GetCurrentMediaType", hr);
     UINT64 sz = 0;
     currentType->GetUINT64(MF_MT_FRAME_SIZE, &sz);
     const int actual_w = static_cast<int>(sz >> 32);
     const int actual_h = static_cast<int>(sz & 0xFFFFFFFF);
     if (actual_w <= 0 || actual_h <= 0)
-        return std::nullopt;
+        return fail("invalid_output_dimensions", E_FAIL);
 
     ReaderContext ctx;
     ctx.reader = std::move(reader);
