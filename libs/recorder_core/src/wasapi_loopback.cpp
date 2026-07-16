@@ -58,8 +58,11 @@ bool WasapiLoopback::Init(std::string& out_error) {
     constexpr uint32_t kRequiredChannels = 2;
     constexpr LONGLONG kHnsBuffer = 2000000LL; // 200 ms
 
-    m_lastFatalErrorHr = S_OK;
-    m_lastFatalErrorMsg.clear();
+    // Mirrors WasapiCaptureSrc/WasapiProcessLoopbackSrc: releases whatever a
+    // prior Init() call left acquired (including one that failed partway
+    // through) before acquiring anything new, so a caller re-Init()ing without
+    // an explicit Shutdown() in between never leaks the earlier COM references.
+    Shutdown();
 
     IMMDeviceEnumerator* pEnum = nullptr;
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pEnum));
@@ -76,6 +79,7 @@ bool WasapiLoopback::Init(std::string& out_error) {
         char buf[80];
         snprintf(buf, sizeof(buf), "GetDefaultAudioEndpoint 0x%08lX", static_cast<unsigned long>(hr));
         out_error = buf;
+        Shutdown();
         return false;
     }
 
@@ -100,6 +104,7 @@ bool WasapiLoopback::Init(std::string& out_error) {
         char buf[80];
         snprintf(buf, sizeof(buf), "Activate(IAudioClient) 0x%08lX", static_cast<unsigned long>(hr));
         out_error = buf;
+        Shutdown();
         return false;
     }
 
@@ -134,6 +139,7 @@ bool WasapiLoopback::Init(std::string& out_error) {
         char buf[80];
         snprintf(buf, sizeof(buf), "IAudioClient::Initialize(LOOPBACK) 0x%08lX", static_cast<unsigned long>(hr));
         out_error = buf;
+        Shutdown();
         return false;
     }
 
@@ -142,6 +148,7 @@ bool WasapiLoopback::Init(std::string& out_error) {
         char buf[80];
         snprintf(buf, sizeof(buf), "GetService(IAudioCaptureClient) 0x%08lX", static_cast<unsigned long>(hr));
         out_error = buf;
+        Shutdown();
         return false;
     }
 
@@ -150,6 +157,7 @@ bool WasapiLoopback::Init(std::string& out_error) {
         char buf[80];
         snprintf(buf, sizeof(buf), "IAudioClient::Start 0x%08lX", static_cast<unsigned long>(hr));
         out_error = buf;
+        Shutdown();
         return false;
     }
     return true;

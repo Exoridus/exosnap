@@ -1,5 +1,7 @@
 #include "GlobalHotkeyService.h"
 
+#include <QThread>
+
 #if defined(Q_OS_WIN)
 #include <windows.h>
 #endif
@@ -127,7 +129,14 @@ GlobalHotkeyService::GlobalHotkeyService(QObject* parent) : QObject(parent) {
     bindings_[4] = DefaultBinding(HotkeyAction::SplitRecording);
 }
 
+void GlobalHotkeyService::AssertOwnerThread() const {
+    Q_ASSERT_X(QThread::currentThread() == thread(), "GlobalHotkeyService",
+               "called off the owning thread — RegisterHotKey/UnregisterHotKey must run on the "
+               "thread pumping this object's message loop");
+}
+
 std::vector<HotkeyAction> GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
+    AssertOwnerThread();
     registrar_ = registrar;
     std::vector<HotkeyAction> failed;
     if (!registrar_)
@@ -151,6 +160,7 @@ std::vector<HotkeyAction> GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* re
 }
 
 RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequence seq) {
+    AssertOwnerThread();
     const int idx = static_cast<int>(action);
     if (idx < 0 || idx >= kHotkeyActionCount)
         return {false, RebindError::ExternalConflict, action, QStringLiteral("Unknown action")};
@@ -197,6 +207,7 @@ RebindResult GlobalHotkeyService::TrySetBinding(HotkeyAction action, QKeySequenc
 }
 
 void GlobalHotkeyService::UnsetBinding(HotkeyAction action) {
+    AssertOwnerThread();
     const int idx = static_cast<int>(action);
     if (idx < 0 || idx >= kHotkeyActionCount)
         return;
@@ -222,6 +233,7 @@ void GlobalHotkeyService::ResetAllToDefaults() {
 }
 
 QKeySequence GlobalHotkeyService::GetBinding(HotkeyAction action) const {
+    AssertOwnerThread();
     const int idx = static_cast<int>(action);
     if (idx < 0 || idx >= kHotkeyActionCount)
         return {};
@@ -229,6 +241,7 @@ QKeySequence GlobalHotkeyService::GetBinding(HotkeyAction action) const {
 }
 
 void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
+    AssertOwnerThread();
     // Load every registered action; empty stored strings fall back to defaults.
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         const HotkeyAction action = static_cast<HotkeyAction>(i);
@@ -258,6 +271,7 @@ void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
 }
 
 void GlobalHotkeyService::SaveToStrings(HotkeyBindings& out) const {
+    AssertOwnerThread();
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         const QKeySequence& seq = bindings_[static_cast<std::size_t>(i)];
         // Empty means "explicitly unset" once we have taken ownership of the bindings

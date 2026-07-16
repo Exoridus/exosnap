@@ -512,7 +512,8 @@ void WebcamService::SetFrameCallback(QObject* receiver, FrameCallback cb) {
 }
 
 bool WebcamService::Start(const std::string& device_id, int width, int height, int fps) {
-    Stop();
+    std::lock_guard lk(control_mutex_);
+    StopLocked();
     running_.store(true);
     thread_ = std::jthread([this, device_id, width, height, fps](std::stop_token st) {
         ThreadMain(device_id, width, height, fps, std::move(st));
@@ -521,6 +522,11 @@ bool WebcamService::Start(const std::string& device_id, int width, int height, i
 }
 
 void WebcamService::Stop() {
+    std::lock_guard lk(control_mutex_);
+    StopLocked();
+}
+
+void WebcamService::StopLocked() {
     if (thread_.joinable()) {
         thread_.request_stop();
         thread_.join();

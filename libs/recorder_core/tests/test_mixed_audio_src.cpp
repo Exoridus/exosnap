@@ -486,7 +486,11 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_ShortBuffer_EmitsExactFrameCountNoPadding)
     mixer.Shutdown();
 }
 
-TEST(MixedAudioSrcTest, MixedAudioSrc_PartialInitFailure_ShutsDownAlreadyInitializedSources) {
+TEST(MixedAudioSrcTest, MixedAudioSrc_PartialInitFailure_ShutsDownEveryTouchedSourceIncludingTheFailedOne) {
+    // REGRESSION: a source whose own Init() fails can still have partially
+    // acquired resources (e.g. WasapiLoopback::Init() acquiring a device/audio
+    // client before a later step fails) — it must be shut down too, not just the
+    // sources that already succeeded.
     std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
     auto* first = new MockAudioCaptureSource();
     auto* second = new MockAudioCaptureSource();
@@ -501,7 +505,7 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_PartialInitFailure_ShutsDownAlreadyInitial
     EXPECT_EQ(first->init_call_count, 1);
     EXPECT_EQ(second->init_call_count, 1);
     EXPECT_EQ(first->shutdown_call_count, 1);
-    EXPECT_EQ(second->shutdown_call_count, 0);
+    EXPECT_EQ(second->shutdown_call_count, 1);
 }
 
 TEST(MixedAudioSrcTest, MixedAudioSrc_ReleaseBuffer_OnlyReleasesAcquiredSources) {
