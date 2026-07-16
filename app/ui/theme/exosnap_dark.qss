@@ -3187,15 +3187,17 @@ QWidget#editExportOverlayPanel {
 }
 
 /* Record source row "Recent" button — QToolButton has no [role="ghost"] attribute
-   selector support, so it gets its own rule matching QPushButton[role="ghost"]
-   (mirrors QToolButton#presetManageButton's existing treatment). */
+   selector support, so it gets its own rule. Sized to match its actual row
+   sibling, QPushButton#recordChangeSourceButton, exactly (min-height 30px,
+   padding 0 12px) — not control-height's default 36px, which made this button
+   visibly taller/bulkier than everything else in the same row. */
 QToolButton#recordRecentButton {
     background: transparent;
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
-    padding: 0 ${space-lg}px;
+    padding: 0 12px;
     color: ${text1};
-    min-height: ${control-height}px;
+    min-height: 30px;
     font-weight: 600;
 }
 

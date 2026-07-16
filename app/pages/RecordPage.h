@@ -287,6 +287,12 @@ class RecordPage : public QWidget {
     // frame_path: full path to the saved PNG file.
     void captureFrameSaved(const QString& frame_path);
 
+    // Emitted when a Record-page quick action (frame capture, split request)
+    // is rejected or fails. Success is silent — the resulting file/segment
+    // count is its own confirmation, no in-page status text. MainWindow turns
+    // this into a NotificationType::CaptureActionFailed toast.
+    void captureActionFailed(const QString& message);
+
     // COUNTDOWN-OVERLAY-R1: emitted whenever countdown state changes.
     // active=true while the pre-record countdown is running.
     // remaining_seconds: current digit value (1..duration_seconds).
@@ -429,11 +435,9 @@ class RecordPage : public QWidget {
     QString buildFormatChipsText() const;
     QString buildTimerText(bool recording) const;
     bool isSourceSelectionLocked() const;
-    void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
     void onDockAddMarker();
     void onDockSplit();
     void requestSplit(recorder_core::SplitTriggerSource source);
-    void showMarkerFeedback(const QString& text);
     // Notify the diagnostics surface that the saved-target resolution state may
     // have changed (manual re-selection or a topology-driven re-resolve).
     void notifyCaptureTargetResolution();
@@ -545,12 +549,6 @@ class RecordPage : public QWidget {
 
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
-    QLabel* capture_frame_status_label_ = nullptr;
-    QTimer* capture_frame_status_timer_ = nullptr;
-
-    // Marker feedback label (brief flash near the dock)
-    QLabel* marker_feedback_label_ = nullptr;
-    QTimer* marker_feedback_timer_ = nullptr;
 
     // View-layer elapsed-time fallback used while live backend stats are pending.
     // Starts when recording begins; pauses/resumes with the recording state.
