@@ -27,6 +27,9 @@
 
 #if defined(Q_OS_WIN)
 #include <crash_capture/crash_capture.h>
+#include <update/install_mode_detector.h>
+#include <update/swap_engine.h>
+#include <update/update_types.h>
 
 #include <filesystem>
 #include <string>
@@ -106,6 +109,19 @@ int main(int argc, char* argv[]) {
     // real one. LOAD_LIBRARY_SEARCH_APPLICATION_DIR keeps the app's own directory
     // (where the Qt/FFmpeg DLLs deployed by windeployqt live) searchable.
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+
+    // Self-heal an update swap interrupted between its two directory renames
+    // (see swap_engine.h — a process kill in that narrow window, or between a
+    // failed second rename and its own compensating restore, can leave the
+    // registry-recorded install dir gone with the last-known-good tree stranded
+    // in its ".old" sibling). The updater already runs this after every swap;
+    // this covers the case where the updater itself never got to. No-op when
+    // the install dir already carries exosnap.exe (the overwhelmingly common
+    // case) or there is no registry-recorded install path (e.g. a dev build).
+    if (const auto install_dir = exosnap::update::ReadInstallPath(); install_dir.has_value() && !install_dir->empty()) {
+        const auto swap_plan = exosnap::update::MakeSwapPlan(*install_dir, exosnap::update::SemVer{});
+        (void)exosnap::update::RepairOrphanedSwap(swap_plan);
+    }
 #endif
 
     // PERF-MEASURE: start the process-global startup clock before anything else so
