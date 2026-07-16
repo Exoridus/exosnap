@@ -1042,13 +1042,26 @@ void SourcePickerPanel::updateSummaryLabel() {
             region_summary_value_label_->setText(
                 region_summary_.trimmed().isEmpty() ? QStringLiteral("No region saved yet.") : region_summary_);
         }
-        const QString region_text = (has_region_ && !region_summary_.trimmed().isEmpty())
-                                        ? QStringLiteral("Region · %1").arg(region_summary_)
-                                        : QStringLiteral("Region · no saved region");
-        const QString select_mode = region_select_on_record_check_ && region_select_on_record_check_->isChecked()
-                                        ? QStringLiteral(" · overlay opens when recording starts")
-                                        : QStringLiteral(" · use Pick region now... to set one");
-        summary_label_->setText(region_text + select_mode);
+        // The coordinates form and the "use Pick region now..." hint are mutually
+        // exclusive: once a region is saved, prompting the user to go pick one is
+        // stale advice, not an additional detail. Deferred-to-record-time can
+        // still be noted alongside saved coordinates (it explains why nothing
+        // needs picking right now even though a region already exists), but the
+        // "go pick one" hint only ever appears when there is nothing to show yet.
+        const bool have_region = has_region_ && !region_summary_.trimmed().isEmpty();
+        const bool defer_to_record = region_select_on_record_check_ && region_select_on_record_check_->isChecked();
+        QString summary_text;
+        if (have_region) {
+            summary_text = QStringLiteral("Region · %1").arg(region_summary_);
+            if (defer_to_record) {
+                summary_text += QStringLiteral(" · overlay opens when recording starts");
+            }
+        } else if (defer_to_record) {
+            summary_text = QStringLiteral("Region · overlay opens when recording starts");
+        } else {
+            summary_text = QStringLiteral("Region · use Pick region now... to set one");
+        }
+        summary_label_->setText(summary_text);
         return;
     }
 

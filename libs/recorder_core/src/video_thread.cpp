@@ -1872,6 +1872,11 @@ void VideoThread::Run() {
     uint64_t split_last_seq = m_state.split_request_seq.load();
     bool split_armed = false;
     SplitTriggerSource split_armed_trigger = SplitTriggerSource::ManualButton;
+    // Whether an additional trigger arriving while `split_armed` is already
+    // pending has been logged for the current boundary (see maybeArmSplit).
+    // Reset every time a new boundary arms so the next coalesced trigger, if
+    // any, is reported too instead of only ever the first one.
+    bool split_armed_secondary_logged = false;
 
     const bool split_auto_enabled = (m_state.config.split.duration_ms > 0);
     const uint64_t split_auto_interval_ns = split_auto_enabled ? (m_state.config.split.duration_ms * 1000000ULL) : 0ULL;
@@ -1896,22 +1901,45 @@ void VideoThread::Run() {
     };
 
     auto maybeArmSplit = [&](uint64_t pts_ns) {
-        if (split_armed)
-            return; // a boundary is already pending; coalesce further requests
         const uint64_t seq = m_state.split_request_seq.load();
-        bool manual = (seq != split_last_seq);
-        bool automatic = (pts_ns >= next_auto_threshold_ns);
+        const bool manual = (seq != split_last_seq);
+        const bool automatic = (pts_ns >= next_auto_threshold_ns);
+        if (split_armed) {
+            // A boundary is already pending (forced IDR requested, waiting for the
+            // next keyframe to land). A second trigger landing in this window still
+            // coalesces into the same boundary -- one forced IDR is correct, the
+            // segment split itself is unaffected -- but it previously vanished from
+            // the log with no trace. Note it once per pending boundary so a manual
+            // split and an automatic split that land close together are both
+            // visible instead of only whichever one armed first.
+            if ((manual || automatic) && !split_armed_secondary_logged) {
+                split_armed_secondary_logged = true;
+                logging::LogField fields[] = {{"segment_index", std::to_string(current_segment_index + 1u)},
+                                              {"trigger", manual ? "manual" : "automatic"},
+                                              {"session_pts_ms", std::to_string(pts_ns / 1000000ULL)}};
+                logging::log(logging::LogLevel::Info, "video_thread",
+                             "additional split trigger coalesced into pending boundary",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
+            return; // a boundary is already pending; coalesce further requests
+        }
         if (!manual && !automatic)
             return;
         split_last_seq = seq; // consume manual requests up to here (coalesced)
         split_armed = true;
+        split_armed_secondary_logged = false;
         split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
                                      : SplitTriggerSource::AutomaticDuration;
         nvenc.RequestKeyframe();
         m_state.diagnostics.OnForcedKeyframe();
         m_state.diagnostics.SetSplitPending(true);
+        // Both conditions can be true in the same call (e.g. a seq-based split --
+        // manual button, hotkey, or automatic size-split -- coincides with the
+        // independent duration timer crossing its threshold); name both triggers
+        // instead of letting the ternary silently pick one.
+        const char* trigger_label = (manual && automatic) ? "manual+automatic" : (manual ? "manual" : "automatic");
         logging::LogField fields[] = {{"segment_index", std::to_string(current_segment_index + 1u)},
-                                      {"trigger", manual ? "manual" : "automatic"},
+                                      {"trigger", trigger_label},
                                       {"session_pts_ms", std::to_string(pts_ns / 1000000ULL)}};
         logging::log(logging::LogLevel::Info, "video_thread", "split boundary armed (forced keyframe requested)",
                      std::span<const logging::LogField>(fields, std::size(fields)));

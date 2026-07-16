@@ -1567,8 +1567,10 @@ void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_p
                             static_cast<int>(audio_state_.IsSysEnabled()) +
                             static_cast<int>(audio_state_.IsMicEnabled());
         const QString channels = audio_state_.audio_channels <= 1 ? QStringLiteral("Mono") : QStringLiteral("Stereo");
+        // Non-breaking space between the number and its unit: word-wrap must
+        // never split "48 kHz" onto two lines mid-value inside the tile subline.
         const QString rate =
-            QStringLiteral("%1 kHz").arg(QString::number(audio_state_.audio_sample_rate / 1000.0, 'g', 3));
+            QStringLiteral("%1\xc2\xa0kHz").arg(QString::number(audio_state_.audio_sample_rate / 1000.0, 'g', 3));
         audio_tile_value_->setText(codec.isEmpty() ? dash : codec);
         if (sources == 0) {
             audio_tile_sub_->setText(QStringLiteral("no sources \xc2\xb7 silent"));
