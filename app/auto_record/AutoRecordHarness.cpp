@@ -275,22 +275,41 @@ int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator&
                 QStringLiteral("StartRecording refused (coordinator not ready or busy, cycle %1)").arg(cycle + 1));
         }
 
-        // Optional mid-recording frame capture (PNG to the output folder).
+        // Stack-local (not &app-parented) singleShot timers: a timer bound to the
+        // long-lived &app across --repeat-cycles iterations would keep counting
+        // down after its own cycle's app.exec() returns and could fire during a
+        // later cycle's event loop. Stopped explicitly below before the next
+        // cycle starts.
+        QTimer captureFrameTimer;
+        captureFrameTimer.setSingleShot(true);
         if (options.capture_frame_at_seconds > 0) {
-            QTimer::singleShot(options.capture_frame_at_seconds * 1000, &app,
-                               [&coordinator]() { coordinator.CaptureFrame(); });
+            // Optional mid-recording frame capture (PNG to the output folder).
+            QObject::connect(&captureFrameTimer, &QTimer::timeout, &app,
+                             [&coordinator]() { coordinator.CaptureFrame(); });
+            captureFrameTimer.start(options.capture_frame_at_seconds * 1000);
         }
 
         // Stop after the requested duration.
-        QTimer::singleShot(options.duration_seconds * 1000, &app, [&coordinator]() { coordinator.StopRecording(); });
+        QTimer stopTimer;
+        stopTimer.setSingleShot(true);
+        QObject::connect(&stopTimer, &QTimer::timeout, &app, [&coordinator]() { coordinator.StopRecording(); });
+        stopTimer.start(options.duration_seconds * 1000);
 
         // Safety net: if the result never arrives (hang, crash-in-teardown), quit anyway so
         // the process exits with a failure rather than blocking forever. Generous enough to
         // cover finalize + an MP4 remux of a short clip.
         constexpr int kGraceMs = 30000;
-        QTimer::singleShot(options.duration_seconds * 1000 + kGraceMs, &app, [&app]() { app.quit(); });
+        QTimer graceTimer;
+        graceTimer.setSingleShot(true);
+        QObject::connect(&graceTimer, &QTimer::timeout, &app, [&app]() { app.quit(); });
+        graceTimer.start(options.duration_seconds * 1000 + kGraceMs);
 
         app.exec();
+
+        // None of these may survive into the next cycle's app.exec().
+        captureFrameTimer.stop();
+        stopTimer.stop();
+        graceTimer.stop();
 
         const bool ok = have_result && succeeded && final_error.isEmpty() && !final_output_path.isEmpty();
         if (!ok && final_error.isEmpty()) {
