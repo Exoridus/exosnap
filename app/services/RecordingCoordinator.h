@@ -145,6 +145,10 @@ class RecordingCoordinator {
     // Webcam overlay
     void SetWebcamSettings(const WebcamSettings& settings);
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
+    // Receiver-scoped open-reader status transitions (see WebcamService::
+    // SetStatusCallback): forwarded verbatim so the Record dock can flag a webcam
+    // that cannot be opened. Dropped if the receiver dies.
+    void SetWebcamStatusCallback(QObject* receiver, WebcamService::StatusCallback cb);
     // Request that the shared webcam capture run while idle (not recording) so the
     // Record preview can show a live PiP.  Recording always owns the device; this
     // only affects the Ready/idle state.  Idempotent and safe to call repeatedly.

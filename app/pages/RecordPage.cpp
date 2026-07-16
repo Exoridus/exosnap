@@ -3016,6 +3016,15 @@ void RecordPage::initCoordinator() {
         emit remuxProgressChanged(fraction);
     });
 
+    // Surface webcam open-reader failures on the dock toggle: the capture thread
+    // reports the transition (streak begins / recovers); updateTransportDock gates
+    // the visible error on the toggle actually being enabled.
+    coordinator_->SetWebcamStatusCallback(this, [this](bool ok, const QString& reason) {
+        webcam_open_failed_ = !ok;
+        webcam_open_fail_reason_ = reason;
+        updateTransportDock();
+    });
+
     enumerateTargets(false);
 
     view_model_.SetState(coordinator_->State());
@@ -4611,6 +4620,15 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setToggleTooltip(QStringLiteral("webcam"), webcam_device_present_
                                                                     ? QStringLiteral("Webcam")
                                                                     : QStringLiteral("No camera connected"));
+    // Open-reader failures only matter while the toggle is on; turning the webcam
+    // off clears the error with no separate reset path. The error tooltip replaces
+    // the plain one set above.
+    const bool webcam_error = current_webcam_settings_.enabled && webcam_open_failed_;
+    transport_dock_->setToggleError(QStringLiteral("webcam"), webcam_error);
+    if (webcam_error) {
+        transport_dock_->setToggleTooltip(QStringLiteral("webcam"),
+                                          QStringLiteral("Camera can't be opened — %1").arg(webcam_open_fail_reason_));
+    }
 
     // Ready-only gate (default true): the screenshot button reads a GPU frame back
     // from the live DXGI preview, so hold it disabled until that preview has actually

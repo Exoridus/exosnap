@@ -525,6 +525,11 @@ class RecordPage : public QWidget {
     // Cameras seen by the last device snapshot. Starts true so the toggle is not
     // greyed out before the first enumeration has had a chance to answer.
     bool webcam_device_present_ = true;
+    // Latest open-reader status from WebcamService: true once the capture thread
+    // reports it cannot open the camera, cleared on recovery. Only surfaced on the
+    // dock toggle while the webcam is enabled (see updateTransportDock).
+    bool webcam_open_failed_ = false;
+    QString webcam_open_fail_reason_;
     // Mirrors webcam_device_present_ for the mic source: follows the hardware
     // as reported by the audio device notifier / initial enumeration.
     bool mic_device_present_ = true;

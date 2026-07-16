@@ -118,6 +118,15 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // posted just before the receiving page died was still delivered.
     void SetFrameCallback(QObject* receiver, FrameCallback cb);
 
+    using StatusCallback = std::function<void(bool ok, QString reason)>;
+    // Fires on open-reader transitions only (a failure streak begins → ok=false
+    // with the reason; recovery to a successful open → ok=true, reason empty). The
+    // first successful open of a run also fires ok=true. It is marshaled to
+    // `receiver`'s thread and dropped if the receiver died — same delivery contract
+    // as SetFrameCallback(receiver, cb). Stop() resets the streak state without
+    // firing.
+    void SetStatusCallback(QObject* receiver, StatusCallback cb);
+
     // Start capture; stops any existing capture first.
     // device_id: MF symbolic link (from EnumerateDevices). Empty opens no device
     // (see ResolveWebcamDeviceId — callers must resolve a concrete id first).
@@ -136,6 +145,10 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // without a live capture device.
     void PostFrame(QImage img);
 
+    // Marshals an open-reader status transition to the status callback's receiver
+    // thread. Same receiver-scoped, queued delivery as PostFrame.
+    void PostStatus(bool ok, QString reason);
+
   private:
     void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
     void StoreFrame(int width, int height, std::vector<uint8_t> bgra);
@@ -147,6 +160,11 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     // receiver_ means the receiver has been destroyed and the frame is dropped.
     QPointer<QObject> receiver_;
     bool receiver_bound_ = false;
+
+    // Status delivery is always receiver-scoped (no legacy unbound path): a null
+    // status_receiver_ drops the event, mirroring the frame receiver contract.
+    StatusCallback status_callback_;
+    QPointer<QObject> status_receiver_;
 
     // Start()/Stop() are called from more than one thread (RecordingCoordinator's
     // UI-thread SyncWebcamService() and its background recording_thread_ both call
