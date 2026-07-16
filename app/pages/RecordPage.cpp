@@ -989,10 +989,14 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // Reserve this label's layout slot even while hidden: it and
     // marker_feedback_label_ are stretch-0 siblings of preview_column_ (the only
     // stretch-1 widget) in `root` below, so without this a toggling toast
-    // visibly grows/shrinks the preview every time it shows or hides.
+    // visibly grows/shrinks the preview every time it shows or hides. Pinned to
+    // exactly one text line (not sizeHint()'s potentially larger guess) so the
+    // permanently-reserved gap this trades in for stays minimal — every toast
+    // message here is a single short line in practice.
     QSizePolicy capture_frame_status_policy = capture_frame_status_label_->sizePolicy();
     capture_frame_status_policy.setRetainSizeWhenHidden(true);
     capture_frame_status_label_->setSizePolicy(capture_frame_status_policy);
+    capture_frame_status_label_->setFixedHeight(capture_frame_status_label_->fontMetrics().height());
     capture_frame_status_label_->setVisible(false);
     capture_frame_status_timer_ = new QTimer(this);
     capture_frame_status_timer_->setSingleShot(true);
@@ -1006,6 +1010,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     QSizePolicy marker_feedback_policy = marker_feedback_label_->sizePolicy();
     marker_feedback_policy.setRetainSizeWhenHidden(true);
     marker_feedback_label_->setSizePolicy(marker_feedback_policy);
+    marker_feedback_label_->setFixedHeight(marker_feedback_label_->fontMetrics().height());
     marker_feedback_label_->setVisible(false);
     marker_feedback_timer_ = new QTimer(this);
     marker_feedback_timer_->setSingleShot(true);
@@ -2734,9 +2739,7 @@ void RecordPage::initCoordinator() {
     // Bind delivery to this page: PreviewService enqueues onto `this`, so Qt drops
     // any in-flight frame if the page is destroyed. That is what makes the raw
     // `this` capture below safe -- the lambda never runs after the page is gone.
-    preview_service_->SetFrameCallback(this, [this, safeSurface](QImage frame) {
-        // Store the latest frame for Ready-state capture frame action.
-        latest_preview_frame_ = frame;
+    preview_service_->SetFrameCallback(this, [safeSurface](QImage frame) {
         if (safeSurface && !safeSurface->isDxgiPreviewActive())
             safeSurface->setLiveFrame(std::move(frame));
     });
@@ -3005,7 +3008,20 @@ void RecordPage::initCoordinator() {
         if (transport_dock_)
             transport_dock_->setSplitEnabled(!coordinator_->IsSplitPending());
     });
-    coordinator_->SetReadyFrameSource([this]() -> QImage { return latest_preview_frame_; });
+    // Ready-state screenshot: the live DXGI preview renders directly into a
+    // native child HWND (Qt never sees those pixels), so the only real frame
+    // source is a GPU readback of what the renderer is currently presenting —
+    // see PreviewSurface::requestDxgiSnapshot / DxgiPreviewRenderer::RequestSnapshot.
+    coordinator_->SetReadyFrameRequester([this](RecordingCoordinator::ReadyFrameCallback cb) {
+        if (!preview_surface_) {
+            cb(false, 0, 0, {}, QStringLiteral("No preview surface"));
+            return;
+        }
+        preview_surface_->requestDxgiSnapshot(
+            [cb](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra, std::string err) mutable {
+                cb(ok, w, h, std::move(bgra), QString::fromStdString(err));
+            });
+    });
 
     // ADR-0014: Forward remux progress to the TransportDock Saving state.
     coordinator_->SetRemuxProgressCallback([this](float fraction) {
