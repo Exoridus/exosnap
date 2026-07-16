@@ -297,6 +297,10 @@ void AppLog::error(const QString& category, const QString& message) {
     write(LogSeverity::Error, category, message);
 }
 
+void AppLog::critical(const QString& category, const QString& message) {
+    write(LogSeverity::Critical, category, message);
+}
+
 void AppLog::write(LogSeverity severity, const QString& category, const QString& message) {
     if (!passesMinSeverity(severity))
         return;
@@ -381,6 +385,8 @@ QString AppLog::severityLabel(LogSeverity severity) {
         return QStringLiteral("WARNING");
     case LogSeverity::Error:
         return QStringLiteral("ERROR");
+    case LogSeverity::Critical:
+        return QStringLiteral("CRITICAL");
     }
     return QStringLiteral("INFO");
 }
@@ -395,6 +401,8 @@ QString AppLog::severityKey(LogSeverity severity) {
         return QStringLiteral("warning");
     case LogSeverity::Error:
         return QStringLiteral("error");
+    case LogSeverity::Critical:
+        return QStringLiteral("critical");
     }
     return QStringLiteral("info");
 }

@@ -81,7 +81,7 @@ QPushButton* makeFilterButton(const QString& object_name, const QString& label, 
 }
 
 bool isIssueSeverity(LogSeverity severity) {
-    return severity == LogSeverity::Warning || severity == LogSeverity::Error;
+    return severity == LogSeverity::Warning || severity == LogSeverity::Error || severity == LogSeverity::Critical;
 }
 
 QString entriesToText(const QVector<LogEntry>& entries) {
@@ -933,6 +933,9 @@ QTextCharFormat LogsPage::formatForSeverity(LogSeverity severity) const {
         color = ui::theme::ParseThemeColor(theme.log.warn);
         break;
     case LogSeverity::Error:
+    case LogSeverity::Critical:
+        // Critical reuses Error's color (no new design token) — the two are
+        // distinguished by label/key ("CRITICAL" vs "ERROR"), not by color.
         color = ui::theme::ParseThemeColor(theme.log.error);
         break;
     }

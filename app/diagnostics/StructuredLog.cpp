@@ -17,6 +17,8 @@ recorder_core::logging::LogLevel ToEngineLevel(LogSeverity severity) {
         return LogLevel::Warn;
     case LogSeverity::Error:
         return LogLevel::Error;
+    case LogSeverity::Critical:
+        return LogLevel::Critical;
     }
     return LogLevel::Info;
 }

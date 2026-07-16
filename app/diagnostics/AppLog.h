@@ -15,6 +15,13 @@ enum class LogSeverity {
     Info,
     Warning,
     Error,
+    // Distinguishes a genuinely fatal engine state (session cannot continue)
+    // from a routine, recoverable Error. Ranked above Error — a min-severity
+    // filter set to Error still shows Critical entries (setMinSeverity's
+    // static_cast<int> comparison depends on this ordering). Currently only
+    // reached via EngineLogBridge bridging recorder_core::logging::LogLevel::
+    // Critical; nothing in the app layer emits it directly (yet).
+    Critical,
 };
 
 struct LogEntry {
@@ -52,6 +59,7 @@ class AppLog final : public QObject {
     static void info(const QString& category, const QString& message);
     static void warning(const QString& category, const QString& message);
     static void error(const QString& category, const QString& message);
+    static void critical(const QString& category, const QString& message);
     static void write(LogSeverity severity, const QString& category, const QString& message);
 
     [[nodiscard]] static QVector<LogEntry> history();
