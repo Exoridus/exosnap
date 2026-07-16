@@ -1288,7 +1288,7 @@ void DxgiPreviewRenderer::RenderFrame() {
                            static_cast<int>(contentH));
     }
 
-    if (drawnSrv != nullptr && !framePresented_.load(std::memory_order_relaxed)) {
+    if (drawnSrv != nullptr && drawnW != 0 && drawnH != 0 && !framePresented_.load(std::memory_order_relaxed)) {
         framePresented_.store(true, std::memory_order_release);
         if (firstFrameCallback_)
             firstFrameCallback_();
