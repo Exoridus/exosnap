@@ -35,6 +35,15 @@ wchar_t g_crash_dir[kCrashDirMax] = {};
 LPTOP_LEVEL_EXCEPTION_FILTER g_previous_filter = nullptr;
 bool g_installed = false;
 
+// Serializes MiniDumpWriteDump calls: Microsoft documents dbghelp.dll as not
+// safe to call concurrently from multiple threads of the same process, so two
+// threads crashing close together could otherwise race inside it — a hang or a
+// corrupt dump. A raw CRITICAL_SECTION (not std::mutex) so entering/leaving it
+// from the exception filter touches only kernel32, never the CRT/heap (see the
+// file banner above). Initialized once, outside crash context, alongside the
+// filter install below.
+CRITICAL_SECTION g_dump_lock;
+
 // What goes into the dump. Deliberately not MiniDumpWithFullMemory: ExoSnap
 // holds large video staging buffers, and a full dump of a recording session runs
 // to gigabytes. This set keeps every thread's stack, the referenced heap blocks
@@ -69,8 +78,10 @@ LONG WINAPI WriteDumpFilter(EXCEPTION_POINTERS* exception_pointers) {
     info.ExceptionPointers = exception_pointers;
     info.ClientPointers = FALSE;
 
+    EnterCriticalSection(&g_dump_lock);
     MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, kDumpType, exception_pointers ? &info : nullptr,
                       nullptr, nullptr);
+    LeaveCriticalSection(&g_dump_lock);
     CloseHandle(file);
 
     // Hand control back to any previously installed filter (Windows Error
@@ -106,6 +117,7 @@ bool InstallLocalMinidumpHandler(const std::string& crash_dir) {
     }
 
     if (!g_installed) {
+        InitializeCriticalSection(&g_dump_lock);
         g_previous_filter = SetUnhandledExceptionFilter(WriteDumpFilter);
         g_installed = true;
     }
