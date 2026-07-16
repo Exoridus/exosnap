@@ -438,6 +438,59 @@ int RunAutoRecord(QApplication& app, exosnap::MainWindow& window, const AutoReco
         return FailWith(QStringLiteral("no matching capture target (%1)").arg(what));
     }
 
+    if (options.capture_frame_in_ready) {
+        // Exercises the DXGI-preview-renderer readback path specifically (Ready
+        // state, idle preview, no recording) — the engine's own snapshot path
+        // is already covered by --capture-frame-at during an active recording.
+        // No recording is started; this is a standalone check.
+        //
+        // The DXGI preview renderer starts asynchronously on its own thread
+        // (device/swap-chain/shader init, then the first present) after
+        // selectCaptureTargetForAutomation returns, so the very first attempt
+        // can race a preview that hasn't rendered its first frame yet — retry
+        // on a short poll rather than treating that as a hard failure (a real
+        // user clicking the button has been looking at an already-live preview
+        // for seconds, so this race is a test-harness-only concern).
+        bool have_result = false;
+        bool succeeded = false;
+        QString result_path;
+        QString result_error;
+        coordinator->SetFrameCapturedCallback([&](bool success, const QString& path, const QString& error) {
+            have_result = true;
+            succeeded = success;
+            result_path = path;
+            result_error = error;
+        });
+
+        QElapsedTimer clock;
+        clock.start();
+        QEventLoop loop;
+        QTimer retryTimer;
+        retryTimer.setInterval(200);
+        QObject::connect(&retryTimer, &QTimer::timeout, &loop, [&]() {
+            have_result = false;
+            coordinator->CaptureFrame();
+        });
+        QTimer pollTimer;
+        pollTimer.setInterval(25);
+        QObject::connect(&pollTimer, &QTimer::timeout, &loop, [&]() {
+            if ((have_result && succeeded) || clock.elapsed() >= 10000)
+                loop.quit();
+        });
+        coordinator->CaptureFrame();
+        retryTimer.start();
+        pollTimer.start();
+        loop.exec();
+        retryTimer.stop();
+        pollTimer.stop();
+
+        if (!have_result) {
+            return FailWith(QStringLiteral("capture-frame-in-ready: timed out waiting for the result"));
+        }
+        PrintResultLine(ResultToJson(succeeded, result_path, QString(), result_error));
+        return succeeded ? 0 : 1;
+    }
+
     // Drive the recording on the coordinator the Record page owns. RunAutoRecordOnCoordinator
     // re-delivers caps (a redundant Ready->Ready now that the async probe has already landed)
     // and, via RecordPage's still-wired state-changed callback, the idle preview is live

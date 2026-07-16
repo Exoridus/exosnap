@@ -107,6 +107,19 @@ class DxgiPreviewRenderer {
     // not in pushed mode (a no-op there). The revert itself runs on the render thread.
     void EndPushedSource();
 
+    // --- Snapshot (screenshot-button) support ---
+    // One-shot readback of the next rendered frame: whatever is currently on
+    // screen — the fully composited, tone-mapped, WYSIWYG content (same source
+    // RenderFrame() presents, including the webcam PiP and cursor) — as tightly
+    // packed BGRA8. Thread-safe: callable from any thread. The callback fires on
+    // the RENDER thread (not marshaled here — mirrors how the engine's own
+    // RequestFrameSnapshot callback fires from VideoThread; callers that touch
+    // Qt/UI state must hop to the main thread themselves, as RecordingCoordinator
+    // already does for the engine's snapshot path).
+    using SnapshotCallback =
+        std::function<void(bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra, std::string error)>;
+    void RequestSnapshot(SnapshotCallback callback);
+
   private:
     static LRESULT CALLBACK ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -150,6 +163,18 @@ class DxgiPreviewRenderer {
     // shared overlay shader (OverlayMode::Cursor). Render-thread only; a no-op
     // without valid monitor bounds.
     void RenderCursorSprite(int contentX, int contentY, int contentW, int contentH);
+    // Services a pending RequestSnapshot() by blitting the current source SRV
+    // (the SAME one RenderFrame() draws to screen this tick — pushedSdrSRV_/
+    // pushedLocalSRV_/latestFrameSRV_) into a dedicated full-resolution render
+    // target and reading THAT back, instead of the small, letterboxed preview
+    // swap-chain back buffer: the preview widget is typically far smaller than
+    // the captured source and pillarboxed/letterboxed with black bars, neither
+    // of which belongs in "what the encoder sees". srv/srcW/srcH being null/0
+    // means no real source has been drawn yet this tick (e.g. the first ticks
+    // after the preview starts) — the callback then reports failure instead of
+    // handing back a black image. Render-thread only; called from RenderFrame()
+    // right before Present().
+    void PerformSnapshotIfRequested(ID3D11ShaderResourceView* srv, uint32_t srcW, uint32_t srcH);
 
     HWND parentHwnd_ = nullptr;
     HWND childHwnd_ = nullptr;
@@ -272,6 +297,20 @@ class DxgiPreviewRenderer {
     uint32_t pushedHeight_ = 0;
     // Pure switch-over state (active / has-frame / wgc-stopped); render-thread-owned.
     PushedSourceState pushed_;
+
+    // --- Snapshot state ---
+    std::atomic<bool> snapshotRequested_{false};
+    std::mutex snapshotCallbackMutex_;
+    SnapshotCallback snapshotCallback_;
+    // Render-thread-owned; reallocated only when the source size changes.
+    // snapshotRenderTex_/RTV_: full-resolution off-screen target the source SRV
+    // is blitted into (unscaled, no letterbox) using the same shader as the
+    // on-screen draw. snapshotStagingTex_: CPU-readable copy of that target.
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> snapshotRenderTex_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> snapshotRenderRTV_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> snapshotStagingTex_;
+    uint32_t snapshotStagingWidth_ = 0;
+    uint32_t snapshotStagingHeight_ = 0;
 };
 
 } // namespace exosnap

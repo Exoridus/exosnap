@@ -76,6 +76,22 @@ TEST_F(EngineLogBridgeTest, EngineSeveritiesMapOntoApplicationSeverities) {
     EXPECT_EQ(err->severity, diagnostics::LogSeverity::Error);
 }
 
+// REGRESSION: Critical and Error used to both collapse onto LogSeverity::Error,
+// losing the distinction between a genuinely fatal engine state and a routine,
+// recoverable error in the Logs page.
+TEST_F(EngineLogBridgeTest, CriticalStaysDistinctFromError) {
+    recorder_core::logging::log(recorder_core::logging::LogLevel::Error, "capture.err2", "lost");
+    recorder_core::logging::log(recorder_core::logging::LogLevel::Critical, "capture.crit", "fatal");
+
+    const auto err = FindLast(QStringLiteral("capture.err2"));
+    const auto crit = FindLast(QStringLiteral("capture.crit"));
+    ASSERT_TRUE(err.has_value());
+    ASSERT_TRUE(crit.has_value());
+    EXPECT_EQ(err->severity, diagnostics::LogSeverity::Error);
+    EXPECT_EQ(crit->severity, diagnostics::LogSeverity::Critical);
+    EXPECT_NE(err->severity, crit->severity);
+}
+
 // After shutdown the sink is detached, so a late engine record cannot reach a
 // half-destroyed AppLog during application teardown.
 TEST_F(EngineLogBridgeTest, RecordsAfterShutdownDoNotReachTheApplicationLog) {

@@ -1238,14 +1238,29 @@ void DxgiPreviewRenderer::RenderFrame() {
         d3dContext_->Draw(3, 0);
     };
 
+    // Tracks the SRV + dimensions actually drawn this tick (vs. the back buffer
+    // only having been cleared to black) — both for the snapshot readback below
+    // (which blits this same source at full resolution, unscaled) and so a
+    // snapshot taken before the first frame arrives reports "not ready yet"
+    // instead of silently handing back a black image.
+    ID3D11ShaderResourceView* drawnSrv = nullptr;
+    uint32_t drawnW = 0;
+    uint32_t drawnH = 0;
     if (drawPushed) {
         // An FP16 scRGB tap is drawn from its tone-mapped SDR surface; every other
         // format samples the raw private copy directly.
-        drawSource(pushedSdrSRV_ ? pushedSdrSRV_.Get() : pushedLocalSRV_.Get(), pushedWidth_, pushedHeight_);
+        drawnSrv = pushedSdrSRV_ ? pushedSdrSRV_.Get() : pushedLocalSRV_.Get();
+        drawnW = pushedWidth_;
+        drawnH = pushedHeight_;
+        drawSource(drawnSrv, drawnW, drawnH);
     } else {
         std::lock_guard lock(frameMutex_);
-        if (latestFrame_ && latestFrameSRV_ && srcWidth_ > 0 && srcHeight_ > 0)
-            drawSource(latestFrameSRV_.Get(), srcWidth_, srcHeight_);
+        if (latestFrame_ && latestFrameSRV_ && srcWidth_ > 0 && srcHeight_ > 0) {
+            drawnSrv = latestFrameSRV_.Get();
+            drawnW = srcWidth_;
+            drawnH = srcHeight_;
+            drawSource(drawnSrv, drawnW, drawnH);
+        }
     }
 
     // Composite the webcam PiP (+ chrome) over the main frame's content rect — but
@@ -1265,7 +1280,131 @@ void DxgiPreviewRenderer::RenderFrame() {
                            static_cast<int>(contentH));
     }
 
+    if (snapshotRequested_.load(std::memory_order_acquire)) {
+        PerformSnapshotIfRequested(drawnSrv, drawnW, drawnH);
+    }
+
     swapChain_->Present(1, 0);
+}
+
+void DxgiPreviewRenderer::RequestSnapshot(SnapshotCallback callback) {
+    {
+        std::lock_guard lock(snapshotCallbackMutex_);
+        snapshotCallback_ = std::move(callback);
+    }
+    snapshotRequested_.store(true, std::memory_order_release);
+}
+
+void DxgiPreviewRenderer::PerformSnapshotIfRequested(ID3D11ShaderResourceView* srv, uint32_t srcW, uint32_t srcH) {
+    SnapshotCallback cb;
+    {
+        std::lock_guard lock(snapshotCallbackMutex_);
+        cb = std::move(snapshotCallback_);
+        snapshotCallback_ = nullptr;
+    }
+    snapshotRequested_.store(false, std::memory_order_release);
+    if (!cb)
+        return;
+
+    if (srv == nullptr || srcW == 0 || srcH == 0) {
+        cb(false, 0, 0, {}, "Preview has not rendered a frame yet");
+        return;
+    }
+
+    // Lazily (re)allocate the full-resolution render target + staging texture to
+    // match the source's current size (the source can change size across a
+    // reconnect/resolution change).
+    if (!snapshotRenderTex_ || snapshotStagingWidth_ != srcW || snapshotStagingHeight_ != srcH) {
+        D3D11_TEXTURE2D_DESC rd{};
+        rd.Width = srcW;
+        rd.Height = srcH;
+        rd.MipLevels = 1;
+        rd.ArraySize = 1;
+        rd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        rd.SampleDesc = {1, 0};
+        rd.Usage = D3D11_USAGE_DEFAULT;
+        rd.BindFlags = D3D11_BIND_RENDER_TARGET;
+        snapshotRenderTex_.Reset();
+        snapshotRenderRTV_.Reset();
+        HRESULT rhr = d3dDevice_->CreateTexture2D(&rd, nullptr, snapshotRenderTex_.GetAddressOf());
+        if (SUCCEEDED(rhr)) {
+            rhr = d3dDevice_->CreateRenderTargetView(snapshotRenderTex_.Get(), nullptr,
+                                                     snapshotRenderRTV_.GetAddressOf());
+        }
+        if (FAILED(rhr)) {
+            char errbuf[80];
+            snprintf(errbuf, sizeof(errbuf), "snapshot render target failed 0x%08lX", static_cast<unsigned long>(rhr));
+            snapshotRenderTex_.Reset();
+            snapshotRenderRTV_.Reset();
+            cb(false, 0, 0, {}, errbuf);
+            return;
+        }
+
+        D3D11_TEXTURE2D_DESC sd = rd;
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        sd.BindFlags = 0;
+        snapshotStagingTex_.Reset();
+        const HRESULT shr = d3dDevice_->CreateTexture2D(&sd, nullptr, snapshotStagingTex_.GetAddressOf());
+        if (FAILED(shr)) {
+            char errbuf[80];
+            snprintf(errbuf, sizeof(errbuf), "snapshot staging tex failed 0x%08lX", static_cast<unsigned long>(shr));
+            cb(false, 0, 0, {}, errbuf);
+            return;
+        }
+        snapshotStagingWidth_ = srcW;
+        snapshotStagingHeight_ = srcH;
+    }
+
+    // Blit the source SRV into the full-resolution render target — same shader
+    // and opaque-quad constants as the on-screen draw, but covering the WHOLE
+    // target (no letterbox/pillarbox, no downscale to the preview widget's
+    // size): this is meant to match what the encoder sees, not the small
+    // on-screen preview.
+    d3dContext_->OMSetRenderTargets(1, snapshotRenderRTV_.GetAddressOf(), nullptr);
+    D3D11_VIEWPORT vp{};
+    vp.TopLeftX = 0.0f;
+    vp.TopLeftY = 0.0f;
+    vp.Width = static_cast<float>(srcW);
+    vp.Height = static_cast<float>(srcH);
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    d3dContext_->RSSetViewports(1, &vp);
+    const recorder_core::OverlayPixelConstants pc = OpaqueQuadConstants();
+    d3dContext_->UpdateSubresource(constantBuffer_.Get(), 0, nullptr, &pc, 0, 0);
+    d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetShaderResources(0, 1, &srv);
+    d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+    d3dContext_->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
+    d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    d3dContext_->Draw(3, 0);
+
+    d3dContext_->CopyResource(snapshotStagingTex_.Get(), snapshotRenderTex_.Get());
+
+    // Map for CPU read (synchronization point — stalls until the GPU copy above
+    // completes; typically <1 ms, same as the engine's own snapshot readback).
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT mhr = d3dContext_->Map(snapshotStagingTex_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(mhr)) {
+        char errbuf[80];
+        snprintf(errbuf, sizeof(errbuf), "snapshot map failed 0x%08lX", static_cast<unsigned long>(mhr));
+        cb(false, 0, 0, {}, errbuf);
+        return;
+    }
+
+    // RowPitch can exceed width*4 due to GPU row alignment — copy row by row
+    // into a tightly packed buffer rather than a single bulk memcpy.
+    std::vector<uint8_t> bgra(static_cast<size_t>(srcW) * srcH * 4);
+    const auto* src = static_cast<const uint8_t*>(mapped.pData);
+    const size_t rowBytes = static_cast<size_t>(srcW) * 4;
+    for (uint32_t y = 0; y < srcH; ++y) {
+        std::memcpy(bgra.data() + static_cast<size_t>(y) * rowBytes, src + static_cast<size_t>(y) * mapped.RowPitch,
+                    rowBytes);
+    }
+    d3dContext_->Unmap(snapshotStagingTex_.Get(), 0);
+
+    cb(true, srcW, srcH, std::move(bgra), {});
 }
 
 void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& target, uint32_t frame_interval_ms,

@@ -23,8 +23,9 @@ diagnostics::LogSeverity ToAppSeverity(recorder_core::logging::LogLevel level) {
     case LogLevel::Warn:
         return diagnostics::LogSeverity::Warning;
     case LogLevel::Error:
-    case LogLevel::Critical:
         return diagnostics::LogSeverity::Error;
+    case LogLevel::Critical:
+        return diagnostics::LogSeverity::Critical;
     }
     return diagnostics::LogSeverity::Info;
 }

@@ -392,6 +392,14 @@ void VideoThread::Run() {
                      std::span<const logging::LogField>(wgcFields, std::size(wgcFields)));
     }
 
+    // hdr_active as resolved above, kept for the periodic re-check below (same
+    // monitor handle used on both paths — the WGC path's documented "resolved once
+    // at session start" limitation applies here too).
+    const bool initialHdrActive = useOdCapture ? odSrc.HdrActive() : wgcHdrFacts.hdr_active;
+    const HMONITOR hdrCheckMonitor =
+        useOdCapture ? reinterpret_cast<HMONITOR>(target.native_id)
+                     : MonitorFromWindow(reinterpret_cast<HWND>(target.native_id), MONITOR_DEFAULTTONEAREST);
+
     // Capture dimensions
     const int32_t sourceWidthSigned =
         useOdCapture ? static_cast<int32_t>(odSrc.Width()) : static_cast<int32_t>(item.Size().Width);
@@ -1414,6 +1422,35 @@ void VideoThread::Run() {
         }
         }
     };
+
+    // Periodic HDR-state re-check: hdr_active is otherwise resolved once above and
+    // never revisited, so a Windows HDR toggle mid-recording silently kept encoding
+    // under stale tone-map/native-HDR10 decisions — the last pre-toggle frame
+    // duplicated forever with only a one-time WARN log. Cleanly stop instead:
+    // RecordFailure() finalizes the file normally (same as any other capture
+    // failure) so the user can start a fresh recording with facts resolved anew.
+    // Polled rather than acted on every frame — an interactive HDR toggle doesn't
+    // need sub-second detection, and re-querying DXGI output desc every frame
+    // would be wasted GPU-adjacent work in the hot loop.
+    auto lastHdrCheckAt = std::chrono::steady_clock::now();
+    constexpr auto kHdrCheckPollDelay = std::chrono::seconds{2};
+    const auto CheckHdrStateChanged = [&]() {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastHdrCheckAt < kHdrCheckPollDelay) {
+            return;
+        }
+        lastHdrCheckAt = now;
+        HdrDisplayFacts freshFacts;
+        if (!QueryDisplayHdrFacts(hdrCheckMonitor, freshFacts)) {
+            return; // transient query failure — don't false-positive a stop
+        }
+        if (freshFacts.hdr_active != initialHdrActive) {
+            m_state.RecordFailure(E_ABORT, ErrorPhase::VideoCapture,
+                                  initialHdrActive ? "Windows HDR was turned off during recording"
+                                                   : "Windows HDR was turned on during recording");
+        }
+    };
+
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
     winrt::event_token closedToken{};
@@ -2361,6 +2398,11 @@ void VideoThread::Run() {
                 break;
             }
 
+            CheckHdrStateChanged();
+            if (m_state.stop_requested.load()) {
+                break;
+            }
+
             // OD recovery: while holding after a recoverable acquire loss, retry
             // Reopen() on a throttle rather than draining a dead/closed source. On
             // success the drain below resumes on the fresh duplication (same encode
@@ -2875,6 +2917,11 @@ void VideoThread::Run() {
                 std::lock_guard lk(m_state.stats_mutex);
                 m_state.stats.source_loss = true;
                 m_state.stop_requested.store(true);
+                break;
+            }
+
+            CheckHdrStateChanged();
+            if (m_state.stop_requested.load()) {
                 break;
             }
 

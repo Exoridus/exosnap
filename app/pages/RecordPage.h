@@ -552,9 +552,6 @@ class RecordPage : public QWidget {
     QLabel* marker_feedback_label_ = nullptr;
     QTimer* marker_feedback_timer_ = nullptr;
 
-    // Latest preview frame for Ready-state Capture Frame.
-    QImage latest_preview_frame_;
-
     // View-layer elapsed-time fallback used while live backend stats are pending.
     // Starts when recording begins; pauses/resumes with the recording state.
     QElapsedTimer recording_wall_clock_;

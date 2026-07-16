@@ -8,8 +8,12 @@
 #include <QString>
 #include <QWidget>
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "../../models/WebcamSettings.h"
 #include "../../services/PreviewHelpers.h"
@@ -77,6 +81,13 @@ class PreviewSurface : public QWidget {
                            bool raw_source_frames = false);
     // Revert to the DXGI preview's own WGC capture. No-op if no renderer exists.
     void endPushedSource();
+
+    // One-shot readback of whatever the DXGI preview is currently showing (the
+    // fully composited, tone-mapped WYSIWYG frame — same content the renderer
+    // presents). No-op (callback fires with ok=false) if no DXGI preview is
+    // active. See DxgiPreviewRenderer::RequestSnapshot for the threading
+    // contract: the callback fires on the render thread, not the UI thread.
+    void requestDxgiSnapshot(std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)> callback);
 
     void setTopMetaText(const QString& text);
     // Help text shown under the branded empty-state placeholder (no live preview).

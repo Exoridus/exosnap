@@ -2222,8 +2222,96 @@ void RecordingCoordinator::SetPreviewCaptureReleaseHook(PreviewCaptureReleaseHoo
     preview_capture_release_hook_ = std::move(hook);
 }
 
-void RecordingCoordinator::SetReadyFrameSource(std::function<QImage()> getter) {
-    ready_frame_source_ = std::move(getter);
+void RecordingCoordinator::SetReadyFrameRequester(ReadyFrameRequester requester) {
+    ready_frame_requester_ = std::move(requester);
+}
+
+void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, const std::wstring& folder,
+                                                  bool has_target_context, const FilenameTargetContext& target_context,
+                                                  const QString& log_context_suffix, bool ok, uint32_t width,
+                                                  uint32_t height, std::vector<uint8_t> bgra, const QString& error) {
+    using diagnostics::AppLog;
+
+    if (!ok) {
+        AppLog::warning(QStringLiteral("capture_frame"),
+                        QStringLiteral("readback failed") + log_context_suffix + QStringLiteral(": ") + error);
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [cb, error]() mutable {
+                if (cb)
+                    cb(false, {}, error);
+            },
+            Qt::QueuedConnection);
+        return;
+    }
+
+    // Build output path (collision-safe) from folder and context. Runs off the
+    // caller's thread (VideoThread for Recording/Paused, the DXGI preview render
+    // thread for Ready) — capture everything needed by value, never `this`.
+    std::thread([cb, folder, has_target_context, target_context, log_context_suffix, width, height,
+                 bgra = std::move(bgra)]() mutable {
+        const QString dir_path = QString::fromStdWString(folder);
+        const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
+        QString name_base = datetime;
+        if (has_target_context && !target_context.target_name.empty()) {
+            QString tname = QString::fromStdWString(target_context.target_name);
+            static const QRegularExpression kBad(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f]"));
+            tname.replace(kBad, QStringLiteral("_"));
+            if (tname.length() > 32)
+                tname = tname.left(32);
+            name_base += QStringLiteral("_") + tname;
+        }
+        name_base += QStringLiteral("_frame");
+
+        QDir out_dir(dir_path);
+        if (!out_dir.exists())
+            out_dir.mkpath(QStringLiteral("."));
+
+        auto uniquePath = [&]() -> QString {
+            QString p = out_dir.absoluteFilePath(name_base + QStringLiteral(".png"));
+            if (!QFileInfo::exists(p))
+                return p;
+            for (int s = 1; s <= 999; ++s) {
+                p = out_dir.absoluteFilePath(QStringLiteral("%1_%2.png").arg(name_base).arg(s, 3, 10, QChar('0')));
+                if (!QFileInfo::exists(p))
+                    return p;
+            }
+            return p;
+        };
+        const QString out_path = uniquePath();
+
+        // BGRA bytes → QImage (Format_ARGB32 = B G R A in memory order, little-endian).
+        QImage img(static_cast<int>(width), static_cast<int>(height), QImage::Format_ARGB32);
+        std::memcpy(img.bits(), bgra.data(), bgra.size());
+
+        const QString tmp_path = out_path + QStringLiteral(".tmp");
+        bool saved = img.save(tmp_path, "PNG");
+        if (saved) {
+            if (QFileInfo::exists(out_path))
+                QFile::remove(out_path);
+            saved = QFile::rename(tmp_path, out_path);
+        }
+        if (!saved)
+            QFile::remove(tmp_path);
+
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [cb, saved, out_path, log_context_suffix]() mutable {
+                if (saved) {
+                    AppLog::info(QStringLiteral("capture_frame"),
+                                 QStringLiteral("frame saved") + log_context_suffix + QStringLiteral(": ") + out_path);
+                    if (cb)
+                        cb(true, out_path, {});
+                } else {
+                    AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("PNG write failed") +
+                                                                         log_context_suffix + QStringLiteral(": ") +
+                                                                         out_path);
+                    if (cb)
+                        cb(false, {}, QStringLiteral("Failed to write PNG file"));
+                }
+            },
+            Qt::QueuedConnection);
+    }).detach();
 }
 
 void RecordingCoordinator::CaptureFrame() {
@@ -2244,164 +2332,32 @@ void RecordingCoordinator::CaptureFrame() {
         session_.RequestFrameSnapshot([cb_copy, folder, has_ctx, ctx](bool ok, uint32_t w, uint32_t h,
                                                                       std::vector<uint8_t> bgra,
                                                                       const std::string& err) mutable {
-            if (!ok) {
-                AppLog::warning(QStringLiteral("capture_frame"),
-                                QStringLiteral("readback failed: ") + QString::fromStdString(err));
-                QMetaObject::invokeMethod(
-                    QCoreApplication::instance(),
-                    [cb_copy, msg = QString::fromStdString(err)]() mutable {
-                        if (cb_copy)
-                            cb_copy(false, {}, msg);
-                    },
-                    Qt::QueuedConnection);
-                return;
-            }
-
-            // Build output path (collision-safe) from folder and context.
-            const QString dir_path = QString::fromStdWString(folder);
-            const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
-            QString name_base = datetime;
-            if (has_ctx && !ctx.target_name.empty()) {
-                QString tname = QString::fromStdWString(ctx.target_name);
-                // Sanitize
-                static const QRegularExpression kBad(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f]"));
-                tname.replace(kBad, QStringLiteral("_"));
-                if (tname.length() > 32)
-                    tname = tname.left(32);
-                name_base += QStringLiteral("_") + tname;
-            }
-            name_base += QStringLiteral("_frame");
-
-            QDir out_dir(dir_path);
-            if (!out_dir.exists())
-                out_dir.mkpath(QStringLiteral("."));
-
-            auto uniquePath = [&]() -> QString {
-                QString p = out_dir.absoluteFilePath(name_base + QStringLiteral(".png"));
-                if (!QFileInfo::exists(p))
-                    return p;
-                for (int s = 1; s <= 999; ++s) {
-                    p = out_dir.absoluteFilePath(QStringLiteral("%1_%2.png").arg(name_base).arg(s, 3, 10, QChar('0')));
-                    if (!QFileInfo::exists(p))
-                        return p;
-                }
-                return p;
-            };
-            const QString out_path = uniquePath();
-
-            // PNG write off the VideoThread (detached worker thread).
-            std::thread([cb_copy, w, h, bgra = std::move(bgra), out_path]() mutable {
-                // BGRA bytes → QImage (Format_BGRA8888 = B G R A in memory order)
-                QImage img(static_cast<int>(w), static_cast<int>(h), QImage::Format_ARGB32);
-                std::memcpy(img.bits(), bgra.data(), bgra.size());
-
-                const QString tmp_path = out_path + QStringLiteral(".tmp");
-                bool saved = img.save(tmp_path, "PNG");
-                if (saved) {
-                    if (QFileInfo::exists(out_path))
-                        QFile::remove(out_path);
-                    saved = QFile::rename(tmp_path, out_path);
-                }
-                if (!saved)
-                    QFile::remove(tmp_path);
-
-                QMetaObject::invokeMethod(
-                    QCoreApplication::instance(),
-                    [cb_copy, saved, out_path]() mutable {
-                        if (saved) {
-                            AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("frame saved: ") + out_path);
-                            if (cb_copy)
-                                cb_copy(true, out_path, {});
-                        } else {
-                            AppLog::warning(QStringLiteral("capture_frame"),
-                                            QStringLiteral("PNG write failed: ") + out_path);
-                            if (cb_copy)
-                                cb_copy(false, {}, QStringLiteral("Failed to write PNG file"));
-                        }
-                    },
-                    Qt::QueuedConnection);
-            }).detach();
+            WriteSnapshotAndNotify(cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
+                                   QString::fromStdString(err));
         });
         return;
     }
 
     if (st == UiRecordingState::Ready) {
-        if (!ready_frame_source_) {
+        if (!ready_frame_requester_) {
             AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("no preview frame source in Ready state"));
             if (on_frame_captured_)
                 on_frame_captured_(false, {}, QStringLiteral("No preview frame available"));
             return;
         }
-        QImage frame = ready_frame_source_();
-        if (frame.isNull()) {
-            AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("preview frame not yet available"));
-            if (on_frame_captured_)
-                on_frame_captured_(false, {}, QStringLiteral("No preview frame available yet"));
-            return;
-        }
 
-        AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("snapshot from preview (Ready)"));
+        AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("snapshot requested (Ready)"));
 
+        const FrameCapturedCallback cb_copy = on_frame_captured_;
         const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
-        const FrameCapturedCallback cb_copy = on_frame_captured_;
 
-        std::thread([cb_copy, frame = std::move(frame), folder, has_ctx, ctx]() mutable {
-            const QString dir_path = QString::fromStdWString(folder);
-            const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
-            QString name_base = datetime;
-            if (has_ctx && !ctx.target_name.empty()) {
-                QString tname = QString::fromStdWString(ctx.target_name);
-                static const QRegularExpression kBad(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f]"));
-                tname.replace(kBad, QStringLiteral("_"));
-                if (tname.length() > 32)
-                    tname = tname.left(32);
-                name_base += QStringLiteral("_") + tname;
-            }
-            name_base += QStringLiteral("_frame");
-
-            QDir out_dir(dir_path);
-            if (!out_dir.exists())
-                out_dir.mkpath(QStringLiteral("."));
-
-            QString out_path = out_dir.absoluteFilePath(name_base + QStringLiteral(".png"));
-            if (QFileInfo::exists(out_path)) {
-                for (int s = 1; s <= 999; ++s) {
-                    out_path =
-                        out_dir.absoluteFilePath(QStringLiteral("%1_%2.png").arg(name_base).arg(s, 3, 10, QChar('0')));
-                    if (!QFileInfo::exists(out_path))
-                        break;
-                }
-            }
-
-            const QString tmp_path = out_path + QStringLiteral(".tmp");
-            bool saved = frame.save(tmp_path, "PNG");
-            if (saved) {
-                if (QFileInfo::exists(out_path))
-                    QFile::remove(out_path);
-                saved = QFile::rename(tmp_path, out_path);
-            }
-            if (!saved)
-                QFile::remove(tmp_path);
-
-            QMetaObject::invokeMethod(
-                QCoreApplication::instance(),
-                [cb_copy, saved, out_path]() mutable {
-                    if (saved) {
-                        AppLog::info(QStringLiteral("capture_frame"),
-                                     QStringLiteral("frame saved (Ready): ") + out_path);
-                        if (cb_copy)
-                            cb_copy(true, out_path, {});
-                    } else {
-                        AppLog::warning(QStringLiteral("capture_frame"),
-                                        QStringLiteral("PNG write failed (Ready): ") + out_path);
-                        if (cb_copy)
-                            cb_copy(false, {}, QStringLiteral("Failed to write PNG file"));
-                    }
-                },
-                Qt::QueuedConnection);
-        }).detach();
+        ready_frame_requester_([cb_copy, folder, has_ctx, ctx](bool ok, uint32_t w, uint32_t h,
+                                                               std::vector<uint8_t> bgra, const QString& err) mutable {
+            WriteSnapshotAndNotify(cb_copy, folder, has_ctx, ctx, QStringLiteral(" (Ready)"), ok, w, h, std::move(bgra),
+                                   err);
+        });
         return;
     }
 

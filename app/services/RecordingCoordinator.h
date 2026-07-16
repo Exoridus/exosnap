@@ -257,9 +257,17 @@ class RecordingCoordinator {
     // True while the background remux job is running (Saving state).
     [[nodiscard]] bool IsRemuxing() const noexcept;
 
-    // Inject a getter for the latest preview QImage (used in Ready state).
-    // The getter is called on the calling thread; must be safe to call from the UI thread.
-    void SetReadyFrameSource(std::function<QImage()> getter);
+    // Callback shape for a Ready-state frame request: fires with the readback
+    // result (BGRA8, tightly packed) or ok=false with a reason.
+    using ReadyFrameCallback =
+        std::function<void(bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra, QString error)>;
+    // Inject the async requester for the live Ready-state preview frame (the
+    // actual DXGI-rendered WYSIWYG content, not a Qt-side copy — Ready-state
+    // preview is a native child HWND Qt never sees pixels for). Must be safe to
+    // call from the UI thread; the callback it eventually invokes may fire on a
+    // different thread (see PreviewSurface::requestDxgiSnapshot).
+    using ReadyFrameRequester = std::function<void(ReadyFrameCallback)>;
+    void SetReadyFrameRequester(ReadyFrameRequester requester);
 
     // Request a frame capture. Saves a PNG to the active output folder.
     // Valid in Ready, Recording, and Paused states.
@@ -267,6 +275,19 @@ class RecordingCoordinator {
     void CaptureFrame();
 
   private:
+    // Shared tail of CaptureFrame()'s Recording/Paused and Ready paths: converts
+    // a raw BGRA readback (or a failure) into a saved PNG + FrameCapturedCallback
+    // notification. Static and parameter-only (no captured `this`) so it stays
+    // safe to invoke from a background-thread-fired snapshot callback — matches
+    // this class's existing convention of never capturing `this` into a callback
+    // that fires off a worker thread it does not own the lifetime of.
+    // log_context_suffix distinguishes the two call sites in the app log only
+    // (e.g. " (Ready)").
+    static void WriteSnapshotAndNotify(FrameCapturedCallback cb, const std::wstring& folder, bool has_target_context,
+                                       const FilenameTargetContext& target_context, const QString& log_context_suffix,
+                                       bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra,
+                                       const QString& error);
+
     // Immutable snapshot of every input and config model StartRecording's device
     // work reads, copied by value on the UI thread before the preparation worker
     // starts. "Thin gate, fat worker": the worker reads exclusively from this
@@ -540,7 +561,7 @@ class RecordingCoordinator {
     FrameCapturedCallback on_frame_captured_;
     PreviewSharedHandleReadyCallback on_preview_shared_handle_ready_;
     PreviewCaptureReleaseHook preview_capture_release_hook_;
-    std::function<QImage()> ready_frame_source_;
+    ReadyFrameRequester ready_frame_requester_;
 
     std::optional<std::string> mic_meter_device_id_;
     recorder_core::MicChannelMode mic_meter_channel_mode_ = recorder_core::MicChannelMode::Auto;

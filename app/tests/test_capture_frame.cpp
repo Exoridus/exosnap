@@ -154,9 +154,10 @@ TEST_F(CaptureFrameTest, ReadyStateWithNoPreviewSourceReportsError) {
 
     // Simulate Ready state by providing capabilities.
     // Without real hardware we cannot call OnCapabilitiesReady successfully,
-    // so we test the path by directly verifying the SetReadyFrameSource contract:
-    // when a null QImage is returned, CaptureFrame must report failure.
-    coord.SetReadyFrameSource([]() -> QImage { return {}; });
+    // so we test the path by directly verifying the SetReadyFrameRequester contract:
+    // when the requester reports failure, CaptureFrame must report failure.
+    coord.SetReadyFrameRequester(
+        [](RecordingCoordinator::ReadyFrameCallback cb) { cb(false, 0, 0, {}, QStringLiteral("no frame")); });
 
     // We cannot reach Ready state in unit tests without hardware.
     // Verify contract: calling CaptureFrame with null getter on unsupported state reports failure.
@@ -186,13 +187,13 @@ TEST_F(CaptureFrameTest, FrameCapturedCallbackIsSettable) {
 TEST_F(CaptureFrameTest, ReadyFrameSourceIsInjectable) {
     RecordingCoordinator coord;
     int source_calls = 0;
-    coord.SetReadyFrameSource([&]() -> QImage {
+    coord.SetReadyFrameRequester([&](RecordingCoordinator::ReadyFrameCallback cb) {
         ++source_calls;
-        return {};
+        cb(false, 0, 0, {}, QStringLiteral("no frame"));
     });
-    // Even if the source is set, CaptureFrame in non-Ready state won't call it.
+    // Even if the requester is set, CaptureFrame in non-Ready state won't call it.
     coord.CaptureFrame();
-    // In LoadingCapabilities state the source is not called — state gating.
+    // In LoadingCapabilities state the requester is not called — state gating.
     EXPECT_EQ(source_calls, 0);
 }
 

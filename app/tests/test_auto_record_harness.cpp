@@ -85,6 +85,23 @@ TEST(AutoRecordHarness, ParsesFullOptionSet) {
     EXPECT_EQ(opts.capture_frame_at_seconds, 3);
 }
 
+TEST(AutoRecordHarness, ParsesCaptureFrameInReadyFlag) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--enable-preview"), QStringLiteral("--capture-frame-in-ready")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_TRUE(opts.capture_frame_in_ready);
+}
+
+TEST(AutoRecordHarness, CaptureFrameInReadyDefaultsFalse) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_FALSE(opts.capture_frame_in_ready);
+}
+
 TEST(AutoRecordHarness, RejectsWindowTargetWithoutTitle) {
     AutoRecordOptions opts;
     QString error;
