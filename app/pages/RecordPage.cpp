@@ -812,6 +812,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
     connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this,
             &RecordPage::onWebcamOverlayMoved);
+    // The Ready-state screenshot readback needs a rendered DXGI frame; re-evaluate the
+    // dock gate the moment the preview presents its first one.
+    connect(preview_surface_, &ui::widgets::PreviewSurface::dxgiFirstFrameRendered, this,
+            [this]() { updateTransportDock(); });
     // PREVIEW-PANEL (canon suite-record.jsx:209): the surface fills the host so the
     // host is the single rounded panel. No 16:9 widget clamp / centering stretches —
     // live content letterboxes INSIDE the surface; the placeholder fills the panel.
@@ -2506,6 +2510,11 @@ void RecordPage::startPreviewIfIdle() {
     if (preview_surface_)
         preview_surface_->setLiveFrame(QImage{});
     last_preview_key_ = {};
+
+    // The preview was just torn down (and any new one below has not presented a frame
+    // yet), so drop the Ready-state screenshot gate now — on every path out of here,
+    // including the early returns below. The first-frame signal re-enables it later.
+    updateTransportDock();
 
     if (!is_idle || !has_target)
         return;
@@ -4595,6 +4604,11 @@ void RecordPage::updateTransportDock() {
                                                                     ? QStringLiteral("Webcam")
                                                                     : QStringLiteral("No camera connected"));
 
+    // Ready-only gate (default true): the screenshot button reads a GPU frame back
+    // from the live DXGI preview, so hold it disabled until that preview has actually
+    // presented a frame. dxgiFirstFrameRendered re-runs this once the frame lands.
+    transport_dock_->setCaptureFrameAvailable(preview_surface_ && preview_surface_->isDxgiSnapshotReady());
+
     // v10: no Completed dock state. The dock always returns to Ready after a
     // recording finishes; the result is surfaced via the NotificationManager
     // toast (wired in MainWindow::initNotificationToasts via recordingResultReady).
@@ -5297,6 +5311,11 @@ void RecordPage::onDisplaysChanged(const exosnap::DisplaySnapshot& snap) {
     if (source_picker_overlay_ && source_picker_overlay_->isOpen()) {
         pushSourceDataToPicker();
     }
+
+    // A topology change may have invalidated the region and stopped the preview above,
+    // and reResolveSavedDisplay()'s refresh() is not reached on every path — reconcile
+    // the Ready-state screenshot gate with the current preview state.
+    updateTransportDock();
 
     diagnostics::AppLog::info(
         QStringLiteral("display"),
