@@ -4137,6 +4137,9 @@ void RecordPage::populateMicDeviceCombo() {
     for (std::size_t i = 0; i < devices.size(); ++i) {
         mic_devices_.push_back(devices[i]);
     }
+    // Initial value before the first AudioDeviceNotifier event (which then keeps
+    // this in sync via onAudioDevicesChanged).
+    mic_device_present_ = !devices.empty();
 
     bool found = false;
     if (previous_id.has_value()) {
@@ -4586,8 +4589,13 @@ void RecordPage::updateTransportDock() {
     const bool toggles_interactive = !isSourceSelectionLocked() && !(blocked || failed);
     transport_dock_->setToggleState(QStringLiteral("system"), view_model_.audio_ui_state.IsSysEnabled(),
                                     toggles_interactive);
+    // Same policy as the webcam toggle: with no capture device attached there
+    // is nothing to turn on (ShouldEnableWebcamToggle's has_device && !locked).
     transport_dock_->setToggleState(QStringLiteral("mic"), view_model_.audio_ui_state.IsMicEnabled(),
-                                    toggles_interactive);
+                                    toggles_interactive && mic_device_present_);
+    transport_dock_->setToggleTooltip(QStringLiteral("mic"), mic_device_present_
+                                                                 ? QStringLiteral("Microphone")
+                                                                 : QStringLiteral("No microphone connected"));
     // App toggle is only relevant in Window-capture mode; hide it in Display/Region.
     const bool has_app_source =
         std::any_of(view_model_.audio_ui_state.source_rows.begin(), view_model_.audio_ui_state.source_rows.end(),
@@ -5148,6 +5156,9 @@ void RecordPage::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap)
     // QSignalBlocker it will NOT emit audioSettingsChanged, satisfying the
     // no-dirty guarantee.
     populateMicDeviceCombo();
+
+    mic_device_present_ = !snap.inputs.isEmpty();
+    updateTransportDock();
 
     // Handle semantic Default (nullopt): if the default microphone changed and a
     // mic preflight meter is running, rebind it to the new default endpoint.

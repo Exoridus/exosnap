@@ -525,6 +525,9 @@ class RecordPage : public QWidget {
     // Cameras seen by the last device snapshot. Starts true so the toggle is not
     // greyed out before the first enumeration has had a chance to answer.
     bool webcam_device_present_ = true;
+    // Mirrors webcam_device_present_ for the mic source: follows the hardware
+    // as reported by the audio device notifier / initial enumeration.
+    bool mic_device_present_ = true;
     // Latched intent for a recording start requested before caps resolved; replayed
     // from the caps-delivery path (setRuntimeCapabilities) so the click is never dropped.
     bool start_requested_awaiting_caps_ = false;
