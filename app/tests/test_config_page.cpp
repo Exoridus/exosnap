@@ -622,6 +622,71 @@ TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
     EXPECT_FALSE(small_segment->property("qualitySegmentSelected").toBool());
 }
 
+// The "✓ Current format" footer summarises frame rate + timing, but its refresh
+// used to hang off the container/codec paths only: changing the frame-rate combo
+// (currentIndexChanged fires for programmatic setCurrentIndex too) never called
+// updateFormatDisplay(), so the footer kept showing the construction-time
+// "60 fps · CFR" regardless of the actual selection.
+TEST_F(ConfigPageTest, FormatSummary_RefreshesOnFrameRateComboChange) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(frame_rate, nullptr);
+    auto* summary = page.findChild<QLabel*>(QStringLiteral("compatOkLabel"));
+    ASSERT_NE(summary, nullptr);
+
+    const int idx24 = frame_rate->findData(24);
+    ASSERT_GE(idx24, 0);
+    frame_rate->setCurrentIndex(idx24);
+
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("24 fps")))
+        << "Summary must follow the frame-rate combo, got: " << summary->text().toStdString();
+}
+
+// Same stale-summary bug on the fully programmatic path (preset load / visual
+// harness): setVideoSettings() syncs every combo behind QSignalBlockers, so the
+// footer must be refreshed explicitly there.
+TEST_F(ConfigPageTest, FormatSummary_RefreshesOnSetVideoSettings) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* summary = page.findChild<QLabel*>(QStringLiteral("compatOkLabel"));
+    ASSERT_NE(summary, nullptr);
+
+    VideoSettingsModel changed = video_defaults_;
+    changed.frame_rate_num = 24;
+    changed.frame_rate_den = 1;
+    changed.cfr = true;
+    page.setVideoSettings(changed);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("24 fps")))
+        << "Summary must follow setVideoSettings, got: " << summary->text().toStdString();
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("CFR")));
+
+    changed.frame_rate_num = 60;
+    changed.cfr = false;
+    page.setVideoSettings(changed);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("60 fps")));
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("VFR")))
+        << "Summary must follow the CFR/VFR flag, got: " << summary->text().toStdString();
+}
+
+// The Frame timing combo drives video_settings_.cfr through onTimingSelected();
+// the footer must follow it as well (same signal path as the frame-rate combo).
+TEST_F(ConfigPageTest, FormatSummary_RefreshesOnTimingComboChange) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* timing = page.findChild<QComboBox*>(QStringLiteral("timingCombo"));
+    ASSERT_NE(timing, nullptr);
+    auto* summary = page.findChild<QLabel*>(QStringLiteral("compatOkLabel"));
+    ASSERT_NE(summary, nullptr);
+
+    const int vfr_idx = timing->findData(0);
+    ASSERT_GE(vfr_idx, 0);
+    timing->setCurrentIndex(vfr_idx);
+
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("VFR")))
+        << "Summary must follow the timing combo, got: " << summary->text().toStdString();
+}
+
 TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     ConfigPage page(output_defaults_, video_defaults_);
 
