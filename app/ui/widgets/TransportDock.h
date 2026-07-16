@@ -60,6 +60,10 @@ class TransportDock : public QFrame {
     // when disabled). No-op for an unknown key.
     void setToggleTooltip(const QString& key, const QString& text);
 
+    // Marks a source toggle as errored (device cannot be opened). Coral state
+    // on the pill; no-op for an unknown key.
+    void setToggleError(const QString& key, bool error);
+
     // Live audio meter for source toggles. key: "system" | "mic" | "app".
     // level01: 0.0 = silence/inactive, 1.0 = peak. Webcam has no audio meter.
     void setMeterLevel(const QString& key, float level01);

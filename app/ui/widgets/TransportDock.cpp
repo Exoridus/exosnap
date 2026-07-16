@@ -585,6 +585,20 @@ void TransportDock::setToggleTooltip(const QString& key, const QString& text) {
         toggle->setToolTip(text);
 }
 
+void TransportDock::setToggleError(const QString& key, bool error) {
+    AudioSourceToggle* toggle = nullptr;
+    if (key == QLatin1String("system"))
+        toggle = system_toggle_;
+    else if (key == QLatin1String("mic"))
+        toggle = mic_toggle_;
+    else if (key == QLatin1String("webcam"))
+        toggle = webcam_toggle_;
+    else if (key == QLatin1String("app"))
+        toggle = app_toggle_;
+    if (toggle)
+        toggle->setErrorState(error);
+}
+
 void TransportDock::setSplitEnabled(bool enabled) {
     if (split_enabled_ == enabled)
         return;
