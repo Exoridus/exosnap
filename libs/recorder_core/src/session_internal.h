@@ -137,16 +137,6 @@ struct SessionState {
     // Cooperative stop token set by Stop() or any fatal worker failure
     std::atomic<bool> stop_requested{false};
 
-    // A Stop() call that arrives before the next Record() call has begun (e.g.
-    // RecordingCoordinator::StopRecording() racing the coordinator's async
-    // prepare phase — disk check, webcam open, the idle-preview capture-lease
-    // handoff — for a fast start/stop) must not be silently discarded by
-    // Record()'s own "fresh session" reset of stop_requested. Stop() sets this
-    // alongside stop_requested; Record()'s reset consumes it via
-    // ResetStopRequestedForNewSession (session_stop_reset.h) instead of always
-    // starting false.
-    std::atomic<bool> stop_requested_before_next_record{false};
-
     // Win32 mirror of stop_requested for producers that block in
     // WaitForMultipleObjects (the event-driven WASAPI capture drain): set
     // wherever stop_requested is raised through Stop()/RecordFailure() so a

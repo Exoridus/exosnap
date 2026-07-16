@@ -97,6 +97,10 @@ struct RecorderSession::Impl {
     std::mutex state_mutex;
     std::shared_ptr<SessionState> state = std::make_shared<SessionState>();
     bool workers_leaked = false; // guarded by state_mutex
+    // A Stop() that arrives outside Record()'s active-recording window (see
+    // session_stop_reset.h). Deliberately NOT on SessionState: it must survive
+    // the state swap above. Guarded by state_mutex.
+    PendingStopTracker pending_stop;
 
     StatsCallback stats_callback;
     MeterCallback meter_callback;
@@ -399,12 +403,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 // ---------------------------------------------------------------------------
 
 void RecorderSession::Stop() {
-    const auto st = m_impl->State();
+    std::shared_ptr<SessionState> st;
+    {
+        std::lock_guard lk(m_impl->state_mutex);
+        st = m_impl->state;
+        // Only a Stop() outside the active-recording window needs to survive into
+        // the next Record() call — see session_stop_reset.h.
+        m_impl->pending_stop.NoteStop(m_impl->recording.load());
+    }
     st->pause_requested.store(false);
     st->stop_requested.store(true);
-    // Survives Record()'s own state reset if this Stop() raced ahead of the next
-    // Record() call for this session (see session_stop_reset.h).
-    st->stop_requested_before_next_record.store(true);
     st->SignalStopEvent();
     st->premux_cv.notify_all();
     st->mux_cv.notify_all();
@@ -482,6 +490,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // swap in a fresh one so the leaked worker drains against the old state
     // (kept alive by its own shared_ptr) while this session starts clean.
     std::shared_ptr<SessionState> state_ptr;
+    bool pre_stop = false;
     {
         std::lock_guard lk(m_impl->state_mutex);
         if (m_impl->workers_leaked) {
@@ -489,6 +498,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             m_impl->workers_leaked = false;
         }
         state_ptr = m_impl->state;
+        // Consumed here (under the same lock as the swap above) so a Stop() that
+        // raced ahead of this Record() call is honored regardless of whether the
+        // swap just happened — see session_stop_reset.h.
+        pre_stop = m_impl->pending_stop.Consume();
     }
 
     // Reset session state
@@ -496,7 +509,11 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         auto& st = *state_ptr;
         // Preserves (instead of discarding) a Stop() that raced ahead of this
         // Record() call — see session_stop_reset.h.
-        ResetStopRequestedForNewSession(st);
+        ResetStopRequestedForNewSession(st, pre_stop);
+        // A Pause() left set by a session that ended without going through Stop()
+        // (e.g. RecordFailure while paused) must not silently carry into the next
+        // recording.
+        st.pause_requested.store(false);
         {
             std::lock_guard lk(st.failure_mutex);
             st.failure_recorded = false;
@@ -531,6 +548,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.video_epoch_qpc_100ns.store(0);
         st.split_request_seq.store(0);
         st.split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::ManualButton));
+        // An "armed but unconsumed" size-split from a session that ended before
+        // mux_thread's begin_new_segment reset it must not suppress the first
+        // size-based split of the next recording.
+        st.size_split_armed.store(false);
         {
             std::lock_guard slk(st.snapshot_callback_mutex);
             st.snapshot_requested.store(false);
@@ -994,6 +1015,14 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         const RecordingDiagnosticsSnapshot snapshot =
             state_ptr->diagnostics.BuildSnapshot(diag_now, result.stats, lifecycle, result.stats.elapsed_seconds);
         m_impl->diagnostics_callback(snapshot);
+    }
+
+    // Discard any Stop() that arrived after m_impl->recording dropped above (e.g.
+    // an extra click during finalize) — it targets this already-finishing session,
+    // not the next Record() call.
+    {
+        std::lock_guard lk(m_impl->state_mutex);
+        (void)m_impl->pending_stop.Consume();
     }
 
     return result;

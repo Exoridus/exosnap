@@ -2,48 +2,78 @@
 
 #include "session_stop_reset.h"
 
+using recorder_core::PendingStopTracker;
 using recorder_core::ResetStopRequestedForNewSession;
 using recorder_core::SessionState;
 
-// REGRESSION (fast start/stop finalize-hang): a Stop() call that races ahead of
-// the next Record() call (StopRecording() fires while the coordinator's async
-// prepare phase is still running) must survive Record()'s own state reset
-// instead of being silently discarded.
-TEST(SessionStopReset, PreservesStopRequestedBeforeRecord) {
+// ---------------------------------------------------------------------------
+// ResetStopRequestedForNewSession — pure application of a consumed pre_stop
+// onto a fresh SessionState.
+// ---------------------------------------------------------------------------
+
+TEST(ResetStopRequestedForNewSession, AppliesPendingStop) {
     SessionState state;
-    // Simulate what RecorderSession::Stop() does when called before Record().
-    state.stop_requested.store(true);
-    state.stop_requested_before_next_record.store(true);
 
-    const bool initial = ResetStopRequestedForNewSession(state);
+    ResetStopRequestedForNewSession(state, /*pre_stop=*/true);
 
-    EXPECT_TRUE(initial);
     EXPECT_TRUE(state.stop_requested.load());
     EXPECT_EQ(WaitForSingleObject(state.stop_event, 0), WAIT_OBJECT_0) << "stop_event must stay signaled";
 }
 
-// A stale stop_requested left over from the previous (already-finished) session
-// must NOT leak into the new one when no stop was requested for this session.
-TEST(SessionStopReset, StartsCleanWithoutAPendingStop) {
+TEST(ResetStopRequestedForNewSession, StartsCleanWithoutAPendingStop) {
     SessionState state;
     state.stop_requested.store(true); // stale true from a just-finished session
+    SetEvent(state.stop_event);
 
-    const bool initial = ResetStopRequestedForNewSession(state);
+    ResetStopRequestedForNewSession(state, /*pre_stop=*/false);
 
-    EXPECT_FALSE(initial);
     EXPECT_FALSE(state.stop_requested.load());
     EXPECT_EQ(WaitForSingleObject(state.stop_event, 0), WAIT_TIMEOUT) << "stop_event must be re-armed (unsignaled)";
 }
 
-// The pending flag is consumed (one-shot): a second reset without an intervening
-// Stop() call must not resurrect the earlier stop.
-TEST(SessionStopReset, PendingFlagIsConsumedNotSticky) {
-    SessionState state;
-    state.stop_requested_before_next_record.store(true);
+// ---------------------------------------------------------------------------
+// PendingStopTracker — the Impl-level state machine that decides whether a
+// Stop() call must survive into the next Record() call.
+// ---------------------------------------------------------------------------
 
-    ASSERT_TRUE(ResetStopRequestedForNewSession(state));
-    const bool second = ResetStopRequestedForNewSession(state);
+// REGRESSION (fast start/stop finalize-hang): a Stop() call that races ahead of
+// the next Record() call (StopRecording() fires while the coordinator's async
+// prepare phase is still running, i.e. no Record() is actively recording yet)
+// must survive Record()'s own state reset instead of being silently discarded.
+TEST(PendingStopTracker, StopBeforeRecordingSurvivesIntoNextRecord) {
+    PendingStopTracker tracker;
 
-    EXPECT_FALSE(second);
-    EXPECT_FALSE(state.stop_requested.load());
+    tracker.NoteStop(/*recording=*/false);
+
+    EXPECT_TRUE(tracker.Consume());
+}
+
+// REGRESSION: a Stop() call during an ALREADY-ACTIVE recording (the ordinary
+// case — stop_requested/stop_event on the current SessionState handle it) must
+// NOT be remembered, or it would poison the very next recording by making it
+// stop itself instantly on start.
+TEST(PendingStopTracker, StopDuringActiveRecordingDoesNotLeakForward) {
+    PendingStopTracker tracker;
+
+    tracker.NoteStop(/*recording=*/true);
+
+    EXPECT_FALSE(tracker.Consume());
+}
+
+// The pending flag is consumed (one-shot): a second consume without an
+// intervening NoteStop() must not resurrect the earlier stop.
+TEST(PendingStopTracker, ConsumeIsOneShot) {
+    PendingStopTracker tracker;
+    tracker.NoteStop(/*recording=*/false);
+
+    ASSERT_TRUE(tracker.Consume());
+
+    EXPECT_FALSE(tracker.Consume());
+}
+
+// A no-op default state must not report a pending stop.
+TEST(PendingStopTracker, StartsClean) {
+    PendingStopTracker tracker;
+
+    EXPECT_FALSE(tracker.Consume());
 }
