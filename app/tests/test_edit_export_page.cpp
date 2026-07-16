@@ -13,6 +13,8 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <cstdlib>
+
 #include "models/EditTimelineModel.h"
 #include "models/RecordingMarker.h"
 #include "pages/EditExportPage.h"
@@ -501,6 +503,80 @@ TEST_F(EditExportPageTest, ScrubWhilePausedStaysPaused) {
     SendMouse(timeline, QEvent::MouseButtonRelease, mid);
     EXPECT_FALSE(page.isPreviewPlaying()) << "paused before the scrub => stays paused after release";
     EXPECT_NEAR(static_cast<double>(page.previewPositionMs()), 40000.0, 500.0);
+}
+
+// ---- Play button centering (P9) ----
+
+TEST_F(EditExportPageTest, PlayButtonIsCenteredOverThePlayerSurface) {
+    // The play/pause toggle floats centered in the video rectangle, not pinned
+    // to its top edge — it shares the player frame with the surface and lands
+    // near the frame's vertical center.
+    EditExportPage page;
+    page.resize(1000, 800);
+    page.setEditContext(MakeContext(100.0));
+    page.setPhase(EditExportPage::Phase::Review);
+    page.show();
+    // updatePlayerHeight() re-sizes the frame from a resize-event filter after
+    // the first layout pass; pump a real event loop so the grid re-lays out
+    // against the frame's final height before asserting geometry.
+    SettleLayout();
+    WaitMs(50);
+    SettleLayout();
+
+    auto* frame = page.findChild<QFrame*>(QStringLiteral("editExportPlayer"));
+    ASSERT_NE(frame, nullptr);
+    auto* play_btn = page.findChild<QPushButton*>(QStringLiteral("editExportPlayPauseBtn"));
+    ASSERT_NE(play_btn, nullptr);
+
+    // The button is overlaid inside the player frame (not stacked above it).
+    EXPECT_EQ(play_btn->parentWidget(), frame);
+
+    ASSERT_GT(frame->height(), 120);
+    const int frame_center_y = frame->rect().center().y();
+    const int btn_center_y = play_btn->geometry().center().y(); // in frame coords
+    EXPECT_LE(std::abs(btn_center_y - frame_center_y), 50)
+        << "play button center " << btn_center_y << " should sit near the frame center " << frame_center_y << " [frame "
+        << frame->width() << "x" << frame->height() << ", btn geo " << play_btn->geometry().x() << ","
+        << play_btn->geometry().y() << " parent=" << play_btn->parentWidget()->objectName().toStdString() << "]";
+}
+
+// ---- Unified empty-value copy in the post-recording report (P10) ----
+
+TEST_F(EditExportPageTest, ReviewReportUsesEmDashForMissingValuesNotUnavailable) {
+    // With no diagnostics snapshot and no drift measurement, every empty value in
+    // the post-recording report reads as the unified em dash — never a stray
+    // "unavailable" string or an en dash.
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.duration_seconds = 100.0;
+    ctx.av_drift_available = false; // no drift data
+    page.setEditContext(ctx);
+    page.setPhase(EditExportPage::Phase::Review);
+
+    const QString em_dash = QString::fromUtf8("\xe2\x80\x94");
+    const QString en_dash = QString::fromUtf8("\xe2\x80\x93");
+
+    QLabel* drops = nullptr;
+    QLabel* drift = nullptr;
+    QLabel* health = nullptr;
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        if (lbl->text().startsWith(QStringLiteral("Frame drops:")))
+            drops = lbl;
+        else if (lbl->text().startsWith(QStringLiteral("Peak A/V drift:")))
+            drift = lbl;
+        else if (lbl->text().startsWith(QStringLiteral("Pipeline health:")))
+            health = lbl;
+    }
+    ASSERT_NE(drops, nullptr);
+    ASSERT_NE(drift, nullptr);
+    ASSERT_NE(health, nullptr);
+
+    for (QLabel* lbl : {drops, drift, health}) {
+        EXPECT_TRUE(lbl->text().contains(em_dash)) << lbl->text().toStdString();
+        EXPECT_FALSE(lbl->text().contains(en_dash)) << lbl->text().toStdString();
+        EXPECT_FALSE(lbl->text().contains(QStringLiteral("unavailable"))) << lbl->text().toStdString();
+    }
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {

@@ -59,10 +59,12 @@ Top-level navigation is **six items**, in order:
 - **About** — application identity, build metadata, and links.
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
-recording stops, the surface opens over Record (dimmed backdrop) on the Review step and is stepped
+recording stops, the surface opens over Record on the Review step and is stepped
 forward in three linear phases — **Review → Edit → Output** — one at a time via the primary button,
-with a top stepper that always highlights the current phase. **Back** steps back one phase at a time
-(Output → Edit → Review); from Review, Back (or Escape / backdrop click, except while exporting)
+with a top stepper that always highlights the current phase. As a full-window editor surface, the
+overlay covers the entire client area — including the window chrome (logo and notification bell) —
+with an opaque backdrop, so no chrome shows through behind it. **Back** steps back one phase at a
+time (Output → Edit → Review); from Review, Back (or Escape / backdrop click, except while exporting)
 closes the overlay and returns to Record. The Review step consumes the post-flight diagnostic report
 produced during recording.
 

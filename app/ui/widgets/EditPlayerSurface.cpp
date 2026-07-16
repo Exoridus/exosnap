@@ -72,8 +72,13 @@ void EditPlayerSurface::paintEvent(QPaintEvent* /*event*/) {
 
     if (!placeholder_.isEmpty()) {
         painter.setPen(QColor(255, 255, 255, 120));
-        const QRectF text_rect = frame_rect.adjusted(16, 16, -16, -16);
-        painter.drawText(text_rect, Qt::AlignCenter | Qt::TextWordWrap, placeholder_);
+        // The play/pause control floats centered over this surface (60 px circle),
+        // so the placeholder caption sits below the vertical center — clear of the
+        // control — instead of colliding with it.
+        constexpr qreal kCaptionOffset = 44.0; // 30 px control half-height + gap
+        QRectF text_rect = frame_rect.adjusted(16, 16, -16, -16);
+        text_rect.setTop(std::min(frame_rect.center().y() + kCaptionOffset, text_rect.bottom() - 16.0));
+        painter.drawText(text_rect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, placeholder_);
     }
 }
 
