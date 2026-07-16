@@ -1856,6 +1856,13 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
 }
 
 void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
+    // Frozen visual fixture — same rule as setOutputSettings/setVideoSettings
+    // above. Without this, the deferred secondary-page hydration replays the
+    // real persisted webcam config after applyVisualScenario() and turns the
+    // scenario's dock toggle back off before the capture.
+    if (visual_test_mode_)
+        return;
+
     WebcamSettings s = SanitizeWebcamSettings(settings);
 
     // First-time default placement: bottom-right, camera-aspect, moderate size.
@@ -2291,6 +2298,11 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
                 preview_surface_->setWebcamFrame(MakeVisualTestWebcamFrame());
         }
     }
+
+    // Webcam open-failure fixture: drives the dock toggle's coral error state.
+    // Only rendered while the toggle is on (refresh() gates it on enabled).
+    webcam_open_failed_ = scenario.webcam_open_failed;
+    webcam_open_fail_reason_ = scenario.webcam_open_fail_reason;
 
     refresh();
 
