@@ -139,12 +139,22 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
   private:
     void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
     void StoreFrame(int width, int height, std::vector<uint8_t> bgra);
+    // Body of Stop(); caller must hold control_mutex_.
+    void StopLocked();
 
     FrameCallback frame_callback_;
     // When receiver_bound_ is true, delivery is scoped to receiver_: a null
     // receiver_ means the receiver has been destroyed and the frame is dropped.
     QPointer<QObject> receiver_;
     bool receiver_bound_ = false;
+
+    // Start()/Stop() are called from more than one thread (RecordingCoordinator's
+    // UI-thread SyncWebcamService() and its background recording_thread_ both call
+    // in directly around a recording's start/finish) with no other synchronization
+    // between them once is_recording_ has settled. Guards thread_ against
+    // concurrent Start()/Stop() calls racing each other's request_stop()/join()/
+    // reassignment, which is undefined behavior on a plain std::jthread member.
+    std::mutex control_mutex_;
     std::jthread thread_;
     std::atomic<bool> running_{false};
 
