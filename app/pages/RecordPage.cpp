@@ -3018,7 +3018,7 @@ void RecordPage::initCoordinator() {
             return;
         }
         preview_surface_->requestDxgiSnapshot(
-            [cb](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra, std::string err) mutable {
+            [cb](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra, const std::string& err) mutable {
                 cb(ok, w, h, std::move(bgra), QString::fromStdString(err));
             });
     });

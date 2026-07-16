@@ -283,9 +283,10 @@ class RecordingCoordinator {
     // that fires off a worker thread it does not own the lifetime of.
     // log_context_suffix distinguishes the two call sites in the app log only
     // (e.g. " (Ready)").
-    static void WriteSnapshotAndNotify(FrameCapturedCallback cb, std::wstring folder, bool has_target_context,
-                                       FilenameTargetContext target_context, QString log_context_suffix, bool ok,
-                                       uint32_t width, uint32_t height, std::vector<uint8_t> bgra, QString error);
+    static void WriteSnapshotAndNotify(FrameCapturedCallback cb, const std::wstring& folder, bool has_target_context,
+                                       const FilenameTargetContext& target_context, const QString& log_context_suffix,
+                                       bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra,
+                                       const QString& error);
 
     // Immutable snapshot of every input and config model StartRecording's device
     // work reads, copied by value on the UI thread before the preparation worker

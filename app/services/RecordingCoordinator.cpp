@@ -2211,10 +2211,10 @@ void RecordingCoordinator::SetReadyFrameRequester(ReadyFrameRequester requester)
     ready_frame_requester_ = std::move(requester);
 }
 
-void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, std::wstring folder,
-                                                  bool has_target_context, FilenameTargetContext target_context,
-                                                  QString log_context_suffix, bool ok, uint32_t width, uint32_t height,
-                                                  std::vector<uint8_t> bgra, QString error) {
+void RecordingCoordinator::WriteSnapshotAndNotify(FrameCapturedCallback cb, const std::wstring& folder,
+                                                  bool has_target_context, const FilenameTargetContext& target_context,
+                                                  const QString& log_context_suffix, bool ok, uint32_t width,
+                                                  uint32_t height, std::vector<uint8_t> bgra, const QString& error) {
     using diagnostics::AppLog;
 
     if (!ok) {
@@ -2339,7 +2339,7 @@ void RecordingCoordinator::CaptureFrame() {
         const FilenameTargetContext ctx = output_target_context_;
 
         ready_frame_requester_([cb_copy, folder, has_ctx, ctx](bool ok, uint32_t w, uint32_t h,
-                                                               std::vector<uint8_t> bgra, QString err) mutable {
+                                                               std::vector<uint8_t> bgra, const QString& err) mutable {
             WriteSnapshotAndNotify(cb_copy, folder, has_ctx, ctx, QStringLiteral(" (Ready)"), ok, w, h, std::move(bgra),
                                    err);
         });
