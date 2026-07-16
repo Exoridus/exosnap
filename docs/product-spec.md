@@ -381,6 +381,11 @@ The capture exists only while the preview is visible and is closed with it. Wind
 previews run their own Windows Graphics Capture of the selected target (see KNOWN_LIMITATIONS for
 the exact boundary).
 
+**Ready-state dock gating.** The single-frame capture (screenshot) button reads a frame back from the
+live preview, so in the Ready state it stays disabled until that preview has actually rendered its
+first frame. The Record-dock microphone toggle is likewise non-interactive while no audio input
+device is present, showing the tooltip `No microphone connected`.
+
 **Live preview (WYSIWYG during recording).** **Once recording starts, the preview shows exactly the
 frame the engine is encoding** — the composited, pre-encode source (cursor and webcam PiP already
 baked in) is shared to the preview through a GPU texture, and the preview's own capture stops. There
@@ -415,7 +420,9 @@ live setup preview; the camera opens only while it is on (opening Settings → W
 camera on by itself). The webcam is never recorded without a selected device (the first available
 camera is pre-selected when one exists). With **no camera attached** the Record dock's webcam
 control is unavailable and says so; attaching one makes it available again. Unplugging the last
-camera never loses the stored choice — it returns when the device does. The device, resolution, mirror, opacity and
+camera never loses the stored choice — it returns when the device does. When the toggle is on but the
+selected camera cannot be opened, the dock button shows a coral error state and its tooltip names the
+reason (`Camera can't be opened — <reason>`). The device, resolution, mirror, opacity and
 chroma-key options stay editable regardless of the on/off state. The webcam is the only feature that depends
 on Windows Media Foundation: on Windows N/KN editions without the Media Feature Pack, the app still
 launches and records normally, but the webcam UI is disabled with a notice referencing the Media

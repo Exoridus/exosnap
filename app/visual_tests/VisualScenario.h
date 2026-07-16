@@ -329,6 +329,15 @@ struct VisualScenario {
     // rendered via a harness-only host widget layered over the EditExport
     // overlay -- see MainWindow::applyVisualEditExportScenario.
     QString edit_player_surface_mode; // "" (not applicable) | "empty" | "frame"
+
+    // --- Webcam open-failure (record-webcam-error) ---
+    // Drives the Record dock's webcam toggle into its coral error state. Only
+    // meaningful while the toggle is on (webcam_pip_enabled), matching production:
+    // RecordPage gates the error on current_webcam_settings_.enabled &&
+    // webcam_open_failed_. The reason fills the "Camera can't be opened — <reason>"
+    // tooltip. Trailing fields so existing positional initializers stay valid.
+    bool webcam_open_failed = false;
+    QString webcam_open_fail_reason;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

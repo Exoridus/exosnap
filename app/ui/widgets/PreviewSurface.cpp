@@ -10,6 +10,7 @@
 #include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -267,6 +268,12 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
         return false;
     }
 
+    // Fires on the render thread; hop to the GUI thread bound to `this` so a
+    // callback racing surface teardown is dropped by Qt instead of delivered.
+    dxgi_renderer_->SetFirstFramePresentedCallback([this]() {
+        QMetaObject::invokeMethod(this, [this]() { emit dxgiFirstFrameRendered(); }, Qt::QueuedConnection);
+    });
+
     // Pass the crop box (if any) so the renderer crops the monitor frame to the
     // selected region.  For Display and Window targets this is std::nullopt.
     if (!dxgi_renderer_->StartCapture(target, frame_rate_num, frame_rate_den, std::move(crop_box))) {
@@ -314,6 +321,12 @@ bool PreviewSurface::tryStartDxgiPushedPreview(const recorder_core::CaptureTarge
         return false;
     }
 
+    // Fires on the render thread; hop to the GUI thread bound to `this` so a
+    // callback racing surface teardown is dropped by Qt instead of delivered.
+    dxgi_renderer_->SetFirstFramePresentedCallback([this]() {
+        QMetaObject::invokeMethod(this, [this]() { emit dxgiFirstFrameRendered(); }, Qt::QueuedConnection);
+    });
+
     if (!dxgi_renderer_->StartPushedOnly(target, frame_rate_num, frame_rate_den)) {
         diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
                                      QStringLiteral("DxgiPreviewRenderer StartPushedOnly failed"));
@@ -341,6 +354,10 @@ void PreviewSurface::stopDxgiPreview() {
 
 bool PreviewSurface::isDxgiPreviewActive() const noexcept {
     return dxgi_active_ && dxgi_renderer_ && dxgi_renderer_->IsActive();
+}
+
+bool PreviewSurface::isDxgiSnapshotReady() const noexcept {
+    return isDxgiPreviewActive() && dxgi_renderer_->HasPresentedFrame();
 }
 
 void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height,

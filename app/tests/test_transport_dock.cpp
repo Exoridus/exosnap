@@ -469,6 +469,18 @@ TEST_F(TransportDockTest, DockToggle_WebcamTooltipUpdatable) {
     EXPECT_EQ(toggle->toolTip(), QStringLiteral("Webcam"));
 }
 
+TEST_F(TransportDockTest, ToggleErrorState_ForwardsToTheToggle) {
+    TransportDock dock;
+    dock.setToggleError(QStringLiteral("webcam"), true);
+    auto* toggle = Toggle(dock, QStringLiteral("webcam"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->hasErrorState());
+    EXPECT_TRUE(toggle->property("toggleError").toBool());
+
+    dock.setToggleError(QStringLiteral("webcam"), false);
+    EXPECT_FALSE(toggle->hasErrorState());
+}
+
 TEST_F(TransportDockTest, DockToggle_AppAudioTooltip) {
     // The app toggle tooltip reads "App audio" (v10 user spec); the icon key still drives the window SVG path.
     TransportDock dock;

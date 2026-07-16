@@ -513,6 +513,11 @@ void WebcamService::SetFrameCallback(QObject* receiver, FrameCallback cb) {
     receiver_bound_ = true;
 }
 
+void WebcamService::SetStatusCallback(QObject* receiver, StatusCallback cb) {
+    status_callback_ = std::move(cb);
+    status_receiver_ = receiver;
+}
+
 bool WebcamService::Start(const std::string& device_id, int width, int height, int fps) {
     std::lock_guard lk(control_mutex_);
     StopLocked();
@@ -558,14 +563,6 @@ bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uin
 }
 
 void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop) {
-    // TEMPORARY diagnostic instrumentation (2026-07-15) for the "webcam toggle
-    // on, no preview, camera light never turns on" live-verify report. Remove
-    // once the root cause is confirmed from a captured engine.jsonl.
-    diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.thread_main.start",
-                          {{"device_id_empty", device_id.empty() ? "true" : "false"},
-                           {"want_width", std::to_string(width)},
-                           {"want_height", std::to_string(height)},
-                           {"want_fps", std::to_string(fps)}});
     if (!IsMfPresent()) {
         diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.mf_not_present");
         running_.store(false);
@@ -587,10 +584,13 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // always be accepted even if its timestamp is smaller than the old reader's.
     long long last_delivered_ts = -1;
 
-    // TEMPORARY (2026-07-15, see above): log the first OpenReader failure of a
-    // retry streak (not every 500ms retry, to avoid spamming engine.jsonl) and
-    // the transition back to success.
+    // Streak state for the open-reader transition log and status callback: the
+    // failed/succeeded events (and PostStatus emits) fire once per streak, on the
+    // first failed open and the recovery to a successful open — never on every
+    // 500ms retry, which would spam engine.jsonl. first_open makes the very first
+    // successful open of a run a recovery transition too (a harmless ok=true).
     bool open_failure_logged = false;
+    bool first_open = true;
 
     // Outer loop: (re)open the device and drain it; on loss, fall back here to poll
     // a reopen. The last stored frame is NEVER cleared here, so it stays frozen for
@@ -604,15 +604,20 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
                     diagnostics::LogSeverity::Warning, "webcam", "webcam.open_reader.failed",
                     {{"device_id_empty", device_id.empty() ? "true" : "false"}, {"reason", fail_reason}});
                 open_failure_logged = true;
+                PostStatus(false, QString::fromStdString(fail_reason));
             }
             // Device not (yet) available: hold whatever frame we have and retry.
             std::this_thread::sleep_for(kReconnectDelay);
             continue;
         }
+        const bool recovered = open_failure_logged || first_open;
         open_failure_logged = false;
+        first_open = false;
         diagnostics::logEvent(
             diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
             {{"negotiated_width", std::to_string(ctx->width)}, {"negotiated_height", std::to_string(ctx->height)}});
+        if (recovered)
+            PostStatus(true, {});
         last_delivered_ts = -1; // fresh reader: its first sample always passes.
 
         const int W = ctx->width;
@@ -707,6 +712,19 @@ void WebcamService::PostFrame(QImage img) {
     auto cb = frame_callback_;
     QMetaObject::invokeMethod(
         target, [cb, img = std::move(img)]() mutable { cb(std::move(img)); }, Qt::QueuedConnection);
+}
+
+void WebcamService::PostStatus(bool ok, QString reason) {
+    if (!status_callback_)
+        return;
+    // Status delivery is always receiver-scoped: a receiver already gone means
+    // there is nothing to deliver to, so drop the transition.
+    QObject* target = status_receiver_.data();
+    if (target == nullptr)
+        return;
+    auto cb = status_callback_;
+    QMetaObject::invokeMethod(
+        target, [cb, ok, reason = std::move(reason)]() mutable { cb(ok, std::move(reason)); }, Qt::QueuedConnection);
 }
 
 } // namespace exosnap

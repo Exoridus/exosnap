@@ -72,6 +72,7 @@ AudioSourceToggle::AudioSourceToggle(const QString& icon_key, const QString& sou
     setObjectName(QStringLiteral("audioSourceToggle"));
     setProperty("sourceKey", source_key_);
     setProperty("toggleOn", false);
+    setProperty("toggleError", false);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::NoFocus);
     setFixedSize(kDiameter, kTotalHeight);
@@ -82,6 +83,14 @@ void AudioSourceToggle::setOn(bool on) {
         return;
     on_ = on;
     setProperty("toggleOn", on_);
+    update();
+}
+
+void AudioSourceToggle::setErrorState(bool error) {
+    if (error_ == error)
+        return;
+    error_ = error;
+    setProperty("toggleError", error_);
     update();
 }
 
@@ -126,7 +135,16 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     const QColor ink(QString::fromUtf8(t.ink));
 
     QColor fill, border, icon_color;
-    if (on_) {
+    if (on_ && error_) {
+        // Same construction as the on-state, but coral: the source is enabled
+        // yet its device cannot be opened.
+        const QColor error_c(QString::fromUtf8(t.error));
+        fill = error_c;
+        fill.setAlphaF(0.14f);
+        border = error_c;
+        border.setAlphaF(0.60f);
+        icon_color = error_c;
+    } else if (on_) {
         // suite-record.jsx:108-111 SourceToggle on-state:
         //   background var(--ac-dim) = accent @ acDim(0.14); border var(--ac-b2) = accent @ acB2(0.60).
         fill = accent;

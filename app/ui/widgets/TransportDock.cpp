@@ -436,7 +436,7 @@ void TransportDock::applyState() {
     stop_btn_->setVisible(recording || paused);
     // Capture-frame: shown in ready/recording/paused; disabled while saving/blocked.
     capture_frame_btn_->setVisible(show_ready || recording || paused);
-    capture_frame_btn_->setEnabled((ready || recording || paused) && primary_enabled_);
+    capture_frame_btn_->setEnabled(((ready && capture_frame_available_) || recording || paused) && primary_enabled_);
     add_marker_btn_->setVisible(recording || paused);
     add_marker_btn_->setEnabled(recording || paused);
     // Split: visible only with an active session; disabled mid-transition.
@@ -585,6 +585,20 @@ void TransportDock::setToggleTooltip(const QString& key, const QString& text) {
         toggle->setToolTip(text);
 }
 
+void TransportDock::setToggleError(const QString& key, bool error) {
+    AudioSourceToggle* toggle = nullptr;
+    if (key == QLatin1String("system"))
+        toggle = system_toggle_;
+    else if (key == QLatin1String("mic"))
+        toggle = mic_toggle_;
+    else if (key == QLatin1String("webcam"))
+        toggle = webcam_toggle_;
+    else if (key == QLatin1String("app"))
+        toggle = app_toggle_;
+    if (toggle)
+        toggle->setErrorState(error);
+}
+
 void TransportDock::setSplitEnabled(bool enabled) {
     if (split_enabled_ == enabled)
         return;
@@ -593,6 +607,13 @@ void TransportDock::setSplitEnabled(bool enabled) {
         const bool active = state_ == State::Recording || state_ == State::Paused;
         split_btn_->setEnabled(active && split_enabled_);
     }
+}
+
+void TransportDock::setCaptureFrameAvailable(bool available) {
+    if (capture_frame_available_ == available)
+        return;
+    capture_frame_available_ = available;
+    applyState();
 }
 
 void TransportDock::setMeterLevel(const QString& key, float level01) {

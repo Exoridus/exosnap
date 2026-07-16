@@ -33,6 +33,13 @@ class AudioSourceToggle : public QAbstractButton {
         return interactive_;
     }
 
+    // Error pill: the source is ON but its device cannot be opened (e.g. the
+    // camera is in use or rejects every output format). Coral ring + icon.
+    void setErrorState(bool error);
+    [[nodiscard]] bool hasErrorState() const noexcept {
+        return error_;
+    }
+
     [[nodiscard]] const QString& sourceKey() const {
         return source_key_;
     }
@@ -60,6 +67,7 @@ class AudioSourceToggle : public QAbstractButton {
     QString source_key_;
     bool on_ = false;
     bool interactive_ = true;
+    bool error_ = false;
     float meter_level_ = 0.0f;
     bool meter_active_ = false;
 };

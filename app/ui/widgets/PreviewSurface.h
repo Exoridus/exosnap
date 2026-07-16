@@ -69,6 +69,9 @@ class PreviewSurface : public QWidget {
                                    uint32_t frame_rate_den);
     void stopDxgiPreview();
     [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
+    // True while the live DXGI preview has presented at least one real frame —
+    // the exact condition under which requestDxgiSnapshot can succeed.
+    [[nodiscard]] bool isDxgiSnapshotReady() const noexcept;
     void repositionDxgiPreview();
 
     // Switch the active DXGI preview to a shared source texture: the engine's
@@ -164,6 +167,9 @@ class PreviewSurface : public QWidget {
   signals:
     void webcamOverlayMoved(QRectF rect_norm);
     void webcamSelectionChanged(bool selected);
+    // Emitted once per DXGI preview run when the renderer presents its first real
+    // frame — the moment isDxgiSnapshotReady() flips true. Marshaled to this thread.
+    void dxgiFirstFrameRendered();
 
   protected:
     void paintEvent(QPaintEvent* event) override;

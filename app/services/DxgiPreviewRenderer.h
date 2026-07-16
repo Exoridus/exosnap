@@ -120,6 +120,13 @@ class DxgiPreviewRenderer {
         std::function<void(bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra, std::string error)>;
     void RequestSnapshot(SnapshotCallback callback);
 
+    // Fires once, on the RENDER thread, the first time a real source frame is
+    // presented (same condition under which RequestSnapshot succeeds). Set it
+    // before StartCapture/StartPushedOnly. Callers marshal to their own thread.
+    void SetFirstFramePresentedCallback(std::function<void()> cb);
+    // True once a real source frame has been presented in this renderer run.
+    [[nodiscard]] bool HasPresentedFrame() const noexcept;
+
   private:
     static LRESULT CALLBACK ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -302,6 +309,14 @@ class DxgiPreviewRenderer {
     std::atomic<bool> snapshotRequested_{false};
     std::mutex snapshotCallbackMutex_;
     SnapshotCallback snapshotCallback_;
+    // True once a real source frame has been presented in this renderer run.
+    // Set only in RenderFrame() on the render thread; reset only in
+    // StartCapture/StartPushedOnly before the render thread is created. No
+    // mutex needed: writes and reads never race across those two windows.
+    std::atomic<bool> framePresented_{false};
+    // Set before StartCapture/StartPushedOnly (no lock); read only on the
+    // render thread thereafter.
+    std::function<void()> firstFrameCallback_;
     // Render-thread-owned; reallocated only when the source size changes.
     // snapshotRenderTex_/RTV_: full-resolution off-screen target the source SRV
     // is blitted into (unscaled, no letterbox) using the same shader as the

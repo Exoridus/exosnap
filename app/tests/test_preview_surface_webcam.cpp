@@ -334,5 +334,14 @@ TEST_F(PreviewSurfaceWebcamTest, OverlayRowsHideBelowMinimumWidth) {
     EXPECT_TRUE(right->isVisibleTo(surface_.get()));
 }
 
+// SNAPSHOT-GATE: the Ready-state screenshot readback requires a live DXGI preview
+// that has drawn a real frame. A surface with no DXGI preview can never satisfy that
+// precondition, so it must report not-ready (the TransportDock gate stays disabled).
+TEST(PreviewSurfaceSnapshotReady, NotReadyWithoutDxgiPreview) {
+    EnsureApplication();
+    PreviewSurface surface;
+    EXPECT_FALSE(surface.isDxgiSnapshotReady());
+}
+
 } // namespace
 } // namespace exosnap::ui::widgets

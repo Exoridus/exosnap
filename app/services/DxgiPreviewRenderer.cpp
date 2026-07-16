@@ -146,6 +146,10 @@ bool DxgiPreviewRenderer::StartCapture(const recorder_core::CaptureTarget& targe
 
     pushedOnlyMode_ = false;
 
+    // Same fence as cropBox_/pushedOnlyMode_ above: reset before the render
+    // thread starts so this run's first presented frame fires the callback.
+    framePresented_.store(false, std::memory_order_release);
+
     const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
     active_.store(true);
 
@@ -179,6 +183,10 @@ bool DxgiPreviewRenderer::StartPushedOnly(const recorder_core::CaptureTarget& ta
     }
 
     pushedOnlyMode_ = true;
+
+    // Same fence as cropBox_/pushedOnlyMode_ above: reset before the render
+    // thread starts so this run's first presented frame fires the callback.
+    framePresented_.store(false, std::memory_order_release);
 
     const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
     active_.store(true);
@@ -1280,6 +1288,12 @@ void DxgiPreviewRenderer::RenderFrame() {
                            static_cast<int>(contentH));
     }
 
+    if (drawnSrv != nullptr && drawnW != 0 && drawnH != 0 && !framePresented_.load(std::memory_order_relaxed)) {
+        framePresented_.store(true, std::memory_order_release);
+        if (firstFrameCallback_)
+            firstFrameCallback_();
+    }
+
     if (snapshotRequested_.load(std::memory_order_acquire)) {
         PerformSnapshotIfRequested(drawnSrv, drawnW, drawnH);
     }
@@ -1293,6 +1307,14 @@ void DxgiPreviewRenderer::RequestSnapshot(SnapshotCallback callback) {
         snapshotCallback_ = std::move(callback);
     }
     snapshotRequested_.store(true, std::memory_order_release);
+}
+
+void DxgiPreviewRenderer::SetFirstFramePresentedCallback(std::function<void()> cb) {
+    firstFrameCallback_ = std::move(cb);
+}
+
+bool DxgiPreviewRenderer::HasPresentedFrame() const noexcept {
+    return framePresented_.load(std::memory_order_acquire);
 }
 
 void DxgiPreviewRenderer::PerformSnapshotIfRequested(ID3D11ShaderResourceView* srv, uint32_t srcW, uint32_t srcH) {

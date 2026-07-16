@@ -812,6 +812,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
     connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this,
             &RecordPage::onWebcamOverlayMoved);
+    // The Ready-state screenshot readback needs a rendered DXGI frame; re-evaluate the
+    // dock gate the moment the preview presents its first one.
+    connect(preview_surface_, &ui::widgets::PreviewSurface::dxgiFirstFrameRendered, this,
+            [this]() { updateTransportDock(); });
     // PREVIEW-PANEL (canon suite-record.jsx:209): the surface fills the host so the
     // host is the single rounded panel. No 16:9 widget clamp / centering stretches —
     // live content letterboxes INSIDE the surface; the placeholder fills the panel.
@@ -1852,6 +1856,13 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
 }
 
 void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
+    // Frozen visual fixture — same rule as setOutputSettings/setVideoSettings
+    // above. Without this, the deferred secondary-page hydration replays the
+    // real persisted webcam config after applyVisualScenario() and turns the
+    // scenario's dock toggle back off before the capture.
+    if (visual_test_mode_)
+        return;
+
     WebcamSettings s = SanitizeWebcamSettings(settings);
 
     // First-time default placement: bottom-right, camera-aspect, moderate size.
@@ -2288,6 +2299,11 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         }
     }
 
+    // Webcam open-failure fixture: drives the dock toggle's coral error state.
+    // Only rendered while the toggle is on (refresh() gates it on enabled).
+    webcam_open_failed_ = scenario.webcam_open_failed;
+    webcam_open_fail_reason_ = scenario.webcam_open_fail_reason;
+
     refresh();
 
     // Split recording visual state (SPLIT-RECORDING-R1): override the transport
@@ -2506,6 +2522,11 @@ void RecordPage::startPreviewIfIdle() {
     if (preview_surface_)
         preview_surface_->setLiveFrame(QImage{});
     last_preview_key_ = {};
+
+    // The preview was just torn down (and any new one below has not presented a frame
+    // yet), so drop the Ready-state screenshot gate now — on every path out of here,
+    // including the early returns below. The first-frame signal re-enables it later.
+    updateTransportDock();
 
     if (!is_idle || !has_target)
         return;
@@ -3005,6 +3026,15 @@ void RecordPage::initCoordinator() {
         if (transport_dock_)
             transport_dock_->setSavingProgress(fraction);
         emit remuxProgressChanged(fraction);
+    });
+
+    // Surface webcam open-reader failures on the dock toggle: the capture thread
+    // reports the transition (streak begins / recovers); updateTransportDock gates
+    // the visible error on the toggle actually being enabled.
+    coordinator_->SetWebcamStatusCallback(this, [this](bool ok, const QString& reason) {
+        webcam_open_failed_ = !ok;
+        webcam_open_fail_reason_ = reason;
+        updateTransportDock();
     });
 
     enumerateTargets(false);
@@ -4128,6 +4158,9 @@ void RecordPage::populateMicDeviceCombo() {
     for (std::size_t i = 0; i < devices.size(); ++i) {
         mic_devices_.push_back(devices[i]);
     }
+    // Initial value before the first AudioDeviceNotifier event (which then keeps
+    // this in sync via onAudioDevicesChanged).
+    mic_device_present_ = !devices.empty();
 
     bool found = false;
     if (previous_id.has_value()) {
@@ -4577,8 +4610,13 @@ void RecordPage::updateTransportDock() {
     const bool toggles_interactive = !isSourceSelectionLocked() && !(blocked || failed);
     transport_dock_->setToggleState(QStringLiteral("system"), view_model_.audio_ui_state.IsSysEnabled(),
                                     toggles_interactive);
+    // Same policy as the webcam toggle: with no capture device attached there
+    // is nothing to turn on (ShouldEnableWebcamToggle's has_device && !locked).
     transport_dock_->setToggleState(QStringLiteral("mic"), view_model_.audio_ui_state.IsMicEnabled(),
-                                    toggles_interactive);
+                                    toggles_interactive && mic_device_present_);
+    transport_dock_->setToggleTooltip(QStringLiteral("mic"), mic_device_present_
+                                                                 ? QStringLiteral("Microphone")
+                                                                 : QStringLiteral("No microphone connected"));
     // App toggle is only relevant in Window-capture mode; hide it in Display/Region.
     const bool has_app_source =
         std::any_of(view_model_.audio_ui_state.source_rows.begin(), view_model_.audio_ui_state.source_rows.end(),
@@ -4594,6 +4632,20 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setToggleTooltip(QStringLiteral("webcam"), webcam_device_present_
                                                                     ? QStringLiteral("Webcam")
                                                                     : QStringLiteral("No camera connected"));
+    // Open-reader failures only matter while the toggle is on; turning the webcam
+    // off clears the error with no separate reset path. The error tooltip replaces
+    // the plain one set above.
+    const bool webcam_error = current_webcam_settings_.enabled && webcam_open_failed_;
+    transport_dock_->setToggleError(QStringLiteral("webcam"), webcam_error);
+    if (webcam_error) {
+        transport_dock_->setToggleTooltip(QStringLiteral("webcam"),
+                                          QStringLiteral("Camera can't be opened — %1").arg(webcam_open_fail_reason_));
+    }
+
+    // Ready-only gate (default true): the screenshot button reads a GPU frame back
+    // from the live DXGI preview, so hold it disabled until that preview has actually
+    // presented a frame. dxgiFirstFrameRendered re-runs this once the frame lands.
+    transport_dock_->setCaptureFrameAvailable(preview_surface_ && preview_surface_->isDxgiSnapshotReady());
 
     // v10: no Completed dock state. The dock always returns to Ready after a
     // recording finishes; the result is surfaced via the NotificationManager
@@ -5135,6 +5187,9 @@ void RecordPage::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap)
     // no-dirty guarantee.
     populateMicDeviceCombo();
 
+    mic_device_present_ = !snap.inputs.isEmpty();
+    updateTransportDock();
+
     // Handle semantic Default (nullopt): if the default microphone changed and a
     // mic preflight meter is running, rebind it to the new default endpoint.
     if (!view_model_.audio_ui_state.selected_mic_device_id.has_value()) {
@@ -5297,6 +5352,11 @@ void RecordPage::onDisplaysChanged(const exosnap::DisplaySnapshot& snap) {
     if (source_picker_overlay_ && source_picker_overlay_->isOpen()) {
         pushSourceDataToPicker();
     }
+
+    // A topology change may have invalidated the region and stopped the preview above,
+    // and reResolveSavedDisplay()'s refresh() is not reached on every path — reconcile
+    // the Ready-state screenshot gate with the current preview state.
+    updateTransportDock();
 
     diagnostics::AppLog::info(
         QStringLiteral("display"),

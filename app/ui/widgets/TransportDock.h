@@ -60,6 +60,10 @@ class TransportDock : public QFrame {
     // when disabled). No-op for an unknown key.
     void setToggleTooltip(const QString& key, const QString& text);
 
+    // Marks a source toggle as errored (device cannot be opened). Coral state
+    // on the pill; no-op for an unknown key.
+    void setToggleError(const QString& key, bool error);
+
     // Live audio meter for source toggles. key: "system" | "mic" | "app".
     // level01: 0.0 = silence/inactive, 1.0 = peak. Webcam has no audio meter.
     void setMeterLevel(const QString& key, float level01);
@@ -68,6 +72,11 @@ class TransportDock : public QFrame {
     // Recording/Paused; this disables it briefly while a split transition is in
     // flight so coalesced clicks do not pile up.
     void setSplitEnabled(bool enabled);
+
+    // Ready-state screenshot gating: false while the live preview has not yet
+    // rendered a frame (a snapshot request would fail). Only affects Ready —
+    // in Recording/Paused the frame comes from the recording pipeline.
+    void setCaptureFrameAvailable(bool available);
 
     // ADR-0014: update remux progress displayed in the Saving state, as
     // "Saving… N%" in the timer label (fraction clamped to [0, 1]). No-op
@@ -123,6 +132,7 @@ class TransportDock : public QFrame {
     QPushButton* add_marker_btn_ = nullptr;
     QPushButton* split_btn_ = nullptr;
     bool split_enabled_ = true;
+    bool capture_frame_available_ = true;
 
     // Hover-triggered countdown menu (v10): opens on chevron enter, stays open
     // while the cursor is inside the chevron or the menu. Closed on leave.
