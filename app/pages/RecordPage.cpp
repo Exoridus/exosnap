@@ -986,6 +986,13 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     capture_frame_status_label_->setObjectName(QStringLiteral("captureFrameStatusLabel"));
     capture_frame_status_label_->setAlignment(Qt::AlignCenter);
     capture_frame_status_label_->setWordWrap(true);
+    // Reserve this label's layout slot even while hidden: it and
+    // marker_feedback_label_ are stretch-0 siblings of preview_column_ (the only
+    // stretch-1 widget) in `root` below, so without this a toggling toast
+    // visibly grows/shrinks the preview every time it shows or hides.
+    QSizePolicy capture_frame_status_policy = capture_frame_status_label_->sizePolicy();
+    capture_frame_status_policy.setRetainSizeWhenHidden(true);
+    capture_frame_status_label_->setSizePolicy(capture_frame_status_policy);
     capture_frame_status_label_->setVisible(false);
     capture_frame_status_timer_ = new QTimer(this);
     capture_frame_status_timer_->setSingleShot(true);
@@ -996,6 +1003,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     marker_feedback_label_->setProperty("labelRole", QStringLiteral("markerFeedback"));
     marker_feedback_label_->setAlignment(Qt::AlignCenter);
     marker_feedback_label_->setWordWrap(true);
+    QSizePolicy marker_feedback_policy = marker_feedback_label_->sizePolicy();
+    marker_feedback_policy.setRetainSizeWhenHidden(true);
+    marker_feedback_label_->setSizePolicy(marker_feedback_policy);
     marker_feedback_label_->setVisible(false);
     marker_feedback_timer_ = new QTimer(this);
     marker_feedback_timer_->setSingleShot(true);
@@ -3471,18 +3481,10 @@ void RecordPage::requestSplit(recorder_core::SplitTriggerSource source) {
     if (!coordinator_)
         return;
 
-    // Split recording is supported only for Matroska containers (MKV/WebM).
-    // MP4 uses IMF Sink Writer which cannot produce segmented output.
-    const bool mkv =
-        (current_container_ == capability::Container::Matroska || current_container_ == capability::Container::WebM);
-    if (!mkv) {
-        showCaptureFrameStatus(false, QString(),
-                               QStringLiteral("Split recording is only available with MKV or WebM output."));
-        return;
-    }
-
-    // The coordinator does the authoritative state validation and coalescing; the
-    // button and hotkey both funnel through this single typed path.
+    // The coordinator does the authoritative state and container-compatibility
+    // validation (and coalescing); the button and hotkey both funnel through
+    // this single typed path. A rejection reaches the user via the split
+    // feedback callback (see SetSplitFeedbackCallback), same as an accepted split.
     const bool accepted = coordinator_->RequestSplit(source);
     if (accepted && transport_dock_)
         transport_dock_->setSplitEnabled(false); // re-enabled when the segment is reported

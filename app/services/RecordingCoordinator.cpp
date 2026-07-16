@@ -1298,6 +1298,21 @@ bool RecordingCoordinator::RequestSplit(recorder_core::SplitTriggerSource source
         return false;
     }
 
+    // Split recording is supported only for Matroska containers (MKV/WebM); MP4
+    // uses IMF Sink Writer, which cannot produce segmented output. This is the
+    // single authoritative gate — RequestSplit is the only entry point for a
+    // manual split (button/hotkey), so callers must not duplicate this check.
+    if (output_settings_.container != capability::Container::Matroska &&
+        output_settings_.container != capability::Container::WebM) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("split"),
+            QStringLiteral("rejected: container does not support split (container=%1 source=%2)")
+                .arg(static_cast<int>(output_settings_.container))
+                .arg(QLatin1String(SplitTriggerName(source))));
+        PostSplitFeedback(false, QStringLiteral("Split recording is only available with MKV or WebM output."));
+        return false;
+    }
+
     // Coalesce concurrent requests: only one boundary may be pending at a time.
     // The engine also coalesces via a monotonic seq, but rejecting here keeps the
     // UI feedback honest ("already splitting") and avoids spurious toasts.
