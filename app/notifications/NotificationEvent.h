@@ -26,6 +26,9 @@ enum class NotificationType : uint8_t {
                          // honest silence while the engine retries (ADR 0046); standing while any
                          // source stays degraded, replaced in place if the degraded set changes,
                          // cleared the moment every source reactivates (or the recording ends).
+    CaptureActionFailed, // a Record-page quick action (frame capture, split request) was rejected
+                         // or failed; success is silent (the resulting file/segment is its own
+                         // confirmation), only failures surface here.
 };
 
 // ---------------------------------------------------------------------------

@@ -982,48 +982,16 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    capture_frame_status_label_ = new QLabel(this);
-    capture_frame_status_label_->setObjectName(QStringLiteral("captureFrameStatusLabel"));
-    capture_frame_status_label_->setAlignment(Qt::AlignCenter);
-    capture_frame_status_label_->setWordWrap(true);
-    // Reserve this label's layout slot even while hidden: it and
-    // marker_feedback_label_ are stretch-0 siblings of preview_column_ (the only
-    // stretch-1 widget) in `root` below, so without this a toggling toast
-    // visibly grows/shrinks the preview every time it shows or hides. Pinned to
-    // exactly one text line (not sizeHint()'s potentially larger guess) so the
-    // permanently-reserved gap this trades in for stays minimal — every toast
-    // message here is a single short line in practice.
-    QSizePolicy capture_frame_status_policy = capture_frame_status_label_->sizePolicy();
-    capture_frame_status_policy.setRetainSizeWhenHidden(true);
-    capture_frame_status_label_->setSizePolicy(capture_frame_status_policy);
-    capture_frame_status_label_->setFixedHeight(capture_frame_status_label_->fontMetrics().height());
-    capture_frame_status_label_->setVisible(false);
-    capture_frame_status_timer_ = new QTimer(this);
-    capture_frame_status_timer_->setSingleShot(true);
-    connect(capture_frame_status_timer_, &QTimer::timeout, capture_frame_status_label_, &QLabel::hide);
-
-    marker_feedback_label_ = new QLabel(this);
-    marker_feedback_label_->setObjectName(QStringLiteral("markerFeedbackLabel"));
-    marker_feedback_label_->setProperty("labelRole", QStringLiteral("markerFeedback"));
-    marker_feedback_label_->setAlignment(Qt::AlignCenter);
-    marker_feedback_label_->setWordWrap(true);
-    QSizePolicy marker_feedback_policy = marker_feedback_label_->sizePolicy();
-    marker_feedback_policy.setRetainSizeWhenHidden(true);
-    marker_feedback_label_->setSizePolicy(marker_feedback_policy);
-    marker_feedback_label_->setFixedHeight(marker_feedback_label_->fontMetrics().height());
-    marker_feedback_label_->setVisible(false);
-    marker_feedback_timer_ = new QTimer(this);
-    marker_feedback_timer_->setSingleShot(true);
-    connect(marker_feedback_timer_, &QTimer::timeout, marker_feedback_label_, &QLabel::hide);
 
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
     // The pre-flight readiness gate + recent-recordings list are not part of the v10
     // layout: blockers disable the Record button and Diagnostics carries the detail;
-    // the finished state returns to Ready with a result toast.
-    root->addWidget(capture_frame_status_label_, 0);
-    root->addWidget(marker_feedback_label_, 0);
+    // the finished state returns to Ready with a result toast. Capture-frame/marker/
+    // split feedback has no in-page widget at all (success is silent; failures surface
+    // via the app-wide notification toast — see captureActionFailed) so preview_column_
+    // never shares layout space with anything transient.
     root->addWidget(transport_dock_, 0);
 
     updatePreviewHeightClamp();
@@ -2999,11 +2967,20 @@ void RecordPage::initCoordinator() {
     });
 
     coordinator_->SetFrameCapturedCallback([this](bool success, const QString& path, const QString& error) {
-        showCaptureFrameStatus(success, path, error);
+        // Success is silent — the saved PNG is its own confirmation, and
+        // MainWindow already turns captureFrameSaved into a "Frame saved" toast
+        // with an Open Folder action. Only a failure needs to reach the user.
+        if (success) {
+            if (!path.isEmpty())
+                emit captureFrameSaved(path);
+            return;
+        }
+        emit captureActionFailed(error.isEmpty() ? QStringLiteral("Capture failed") : error);
     });
     coordinator_->SetSplitFeedbackCallback([this](bool accepted, const QString& message) {
-        // Reuse the transient capture-frame status banner for split feedback.
-        showCaptureFrameStatus(accepted, QString(), message);
+        // Success is silent — the segment count elsewhere already reflects it.
+        if (!accepted)
+            emit captureActionFailed(message);
         // Re-enable the split button once the transition reports a new segment.
         if (transport_dock_)
             transport_dock_->setSplitEnabled(!coordinator_->IsSplitPending());
@@ -3514,62 +3491,8 @@ void RecordPage::onDockAddMarker() {
     if (st != UiRecordingState::Recording && st != UiRecordingState::Paused)
         return;
     coordinator_->AddMarker(RecordingMarkerType::General);
-    const auto& markers = coordinator_->Markers();
-    const size_t count = markers.size();
-    if (count == 0)
-        return;
-    const auto& last = markers.back();
-    const uint64_t secs = last.time_ms / 1000;
-    const uint64_t mins = secs / 60;
-    const uint64_t hrs = mins / 60;
-    const uint64_t ms = last.time_ms % 1000;
-    const QString text = QStringLiteral("Marker %1 · %2:%3:%4.%5")
-                             .arg(count, 2, 10, QChar('0'))
-                             .arg(hrs, 2, 10, QChar('0'))
-                             .arg(mins % 60, 2, 10, QChar('0'))
-                             .arg(secs % 60, 2, 10, QChar('0'))
-                             .arg(ms, 3, 10, QChar('0'));
-    showMarkerFeedback(text);
-}
-
-void RecordPage::showMarkerFeedback(const QString& text) {
-    if (!marker_feedback_label_ || !marker_feedback_timer_)
-        return;
-    marker_feedback_label_->setText(text);
-    marker_feedback_label_->setVisible(true);
-    marker_feedback_timer_->start(2000);
-}
-
-void RecordPage::showCaptureFrameStatus(bool success, const QString& path, const QString& error) {
-    if (!capture_frame_status_label_ || !capture_frame_status_timer_)
-        return;
-    if (success) {
-        // A path means a saved frame; otherwise `error` carries a plain status
-        // message (used for split feedback like "Started segment 2").
-        if (path.isEmpty() && !error.isEmpty()) {
-            capture_frame_status_label_->setText(error);
-            capture_frame_status_label_->setToolTip({});
-        } else {
-            const QString name = QFileInfo(path).fileName();
-            capture_frame_status_label_->setText(QStringLiteral("Frame saved: %1").arg(name));
-            capture_frame_status_label_->setToolTip(path);
-            // CAPTURE-FRAME-DOCK-BUTTON-R1: success toast on frame save.
-            if (!path.isEmpty()) {
-                emit captureFrameSaved(path);
-            }
-        }
-        capture_frame_status_label_->setProperty("statusRole", QStringLiteral("success"));
-    } else {
-        capture_frame_status_label_->setText(error.isEmpty() ? QStringLiteral("Capture failed") : error);
-        capture_frame_status_label_->setToolTip({});
-        capture_frame_status_label_->setProperty("statusRole", QStringLiteral("error"));
-    }
-    capture_frame_status_label_->style()->unpolish(capture_frame_status_label_);
-    capture_frame_status_label_->style()->polish(capture_frame_status_label_);
-    capture_frame_status_label_->setVisible(true);
-    capture_frame_status_timer_->start(3000);
-    // CAPTURE-FRAME-DOCK-BUTTON-R1: dock button state is driven by applyState() via
-    // updateTransportDock(); no separate re-enable call needed here.
+    // Success is silent — the marker timeline/count elsewhere is its own
+    // confirmation; markers cannot fail visibly (AddMarker has no error path).
 }
 
 void RecordPage::onSelectMonitorTarget() {

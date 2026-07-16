@@ -154,7 +154,8 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
     case notifications::NotificationType::AudioSourceDegraded: // caution tone, shared with LowStorage
         return {kCautionC, kCautionDim, kCautionB};
     case notifications::NotificationType::UnexpectedStop:
-    case notifications::NotificationType::SettingsSaveFailed: // error tone, shared with UnexpectedStop
+    case notifications::NotificationType::SettingsSaveFailed:  // error tone, shared with UnexpectedStop
+    case notifications::NotificationType::CaptureActionFailed: // error tone, shared with UnexpectedStop
         return {kErrorC, kErrorDim, kErrorB};
     case notifications::NotificationType::RecoveryAvailable:
         return {kInfoC, kInfoDim, kInfoB};
@@ -215,7 +216,8 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
         break;
     }
     case notifications::NotificationType::UnexpectedStop:
-    case notifications::NotificationType::SettingsSaveFailed: { // error glyph, shared with UnexpectedStop
+    case notifications::NotificationType::SettingsSaveFailed:    // error glyph, shared with UnexpectedStop
+    case notifications::NotificationType::CaptureActionFailed: { // error glyph, shared with UnexpectedStop
         // error / circle-x
         p.drawEllipse(circle);
         const float d = r * 0.38f;

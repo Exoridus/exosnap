@@ -115,6 +115,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_SettingsSaveFailed;
     case NotificationType::AudioSourceDegraded:
         return kDismissMs_AudioSourceDegraded;
+    case NotificationType::CaptureActionFailed:
+        return kDismissMs_CaptureActionFailed;
     }
     return kDismissMs_Saved;
 }

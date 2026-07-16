@@ -3879,6 +3879,20 @@ void MainWindow::initNotificationToasts() {
         notification_manager_->Enqueue(std::move(event));
     });
 
+    // Record-page quick action (frame capture, split request) rejected or failed.
+    // Success is silent by design (RecordPage::captureActionFailed doc comment);
+    // only this failure path surfaces to the user, and only via the app-wide
+    // toast — never an in-page widget, so it never affects the preview's layout.
+    connect(record_page_, &RecordPage::captureActionFailed, this, [this](const QString& message) {
+        if (!notification_manager_)
+            return;
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::CaptureActionFailed;
+        event.title = QStringLiteral("Action failed");
+        event.body = message;
+        notification_manager_->Enqueue(std::move(event));
+    });
+
     // ── Trigger 4: RecoveryAvailable is enqueued in checkAndShowRecoveryOverlay() ──
     // (Wired there directly to avoid duplicating the candidate-count check.)
 
