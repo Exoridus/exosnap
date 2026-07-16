@@ -302,5 +302,30 @@ TEST_F(CaptureFrameButtonTest, DockButton_ClickEmitsCaptureFrameClicked) {
     EXPECT_TRUE(fired);
 }
 
+// ── Test 14: Ready-state capture-frame gated on preview-frame availability ──
+
+TEST_F(CaptureFrameButtonTest, ReadyState_CaptureFrameDisabledUntilPreviewFrameAvailable) {
+    ui::widgets::TransportDock dock;
+    dock.setState(ui::widgets::TransportDock::State::Ready);
+    dock.setCaptureFrameAvailable(false);
+    auto* btn = dock.findChild<QPushButton*>(QStringLiteral("recordDockCaptureFrame"));
+    ASSERT_NE(btn, nullptr);
+    EXPECT_FALSE(btn->isEnabled());
+
+    dock.setCaptureFrameAvailable(true);
+    EXPECT_TRUE(btn->isEnabled());
+}
+
+// ── Test 15: Recording-state capture-frame ignores preview-frame availability ──
+
+TEST_F(CaptureFrameButtonTest, RecordingState_CaptureFrameIgnoresPreviewAvailability) {
+    ui::widgets::TransportDock dock;
+    dock.setState(ui::widgets::TransportDock::State::Recording);
+    dock.setCaptureFrameAvailable(false); // Ready-only gate
+    auto* btn = dock.findChild<QPushButton*>(QStringLiteral("recordDockCaptureFrame"));
+    ASSERT_NE(btn, nullptr);
+    EXPECT_TRUE(btn->isEnabled());
+}
+
 } // namespace
 } // namespace exosnap

@@ -69,6 +69,11 @@ class TransportDock : public QFrame {
     // flight so coalesced clicks do not pile up.
     void setSplitEnabled(bool enabled);
 
+    // Ready-state screenshot gating: false while the live preview has not yet
+    // rendered a frame (a snapshot request would fail). Only affects Ready —
+    // in Recording/Paused the frame comes from the recording pipeline.
+    void setCaptureFrameAvailable(bool available);
+
     // ADR-0014: update remux progress displayed in the Saving state, as
     // "Saving… N%" in the timer label (fraction clamped to [0, 1]). No-op
     // while state() != Saving — a late/stale tick from a just-finished remux
@@ -123,6 +128,7 @@ class TransportDock : public QFrame {
     QPushButton* add_marker_btn_ = nullptr;
     QPushButton* split_btn_ = nullptr;
     bool split_enabled_ = true;
+    bool capture_frame_available_ = true;
 
     // Hover-triggered countdown menu (v10): opens on chevron enter, stays open
     // while the cursor is inside the chevron or the menu. Closed on leave.
