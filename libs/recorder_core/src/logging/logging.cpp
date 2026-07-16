@@ -95,7 +95,13 @@ void initialize(const LoggerConfig& config) {
     s.logger = std::make_shared<spdlog::logger>("exosnap", sink);
     s.logger->set_pattern("%v");
     s.logger->set_level(spdlog::level::trace);
-    s.logger->flush_on(spdlog::level::info);
+    // Flush at the same threshold as the minimum level actually accepted below
+    // (not a separately hardcoded constant): every record that gets past the
+    // s.minimumLevel reject in log() is also eligible to be the one that
+    // triggers a flush, so a crash right after a just-lowered minimumLevel
+    // starts admitting a new (lower) severity can never leave it sitting
+    // unflushed in spdlog's buffer.
+    s.logger->flush_on(to_spdlog_level(config.minimumLevel));
 
     s.ringCapacity = config.ringCapacity;
     s.minimumLevel = config.minimumLevel;
