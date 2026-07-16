@@ -29,9 +29,16 @@ struct AutoRecordOptions {
     HdrMode hdr_mode = HdrMode::Off;
     int duration_seconds = 10;
     int capture_frame_at_seconds = -1; // -1 = disabled
-    QString screenshot_path;           // preview mode only
-    int repeat_cycles = 1;             // run N start/stop cycles on the same coordinator
-                                       // (warm capture-hub state) instead of exiting after one
+    // Preview mode only: capture a frame while the coordinator is still Ready
+    // (idle preview, before recording starts) instead of running a recording at
+    // all. Exercises the DXGI-preview-renderer readback path specifically (the
+    // engine's own snapshot path is already covered by capture_frame_at_seconds
+    // during an active recording). Reports one JSON result line and exits —
+    // no recording is started when this is set.
+    bool capture_frame_in_ready = false;
+    QString screenshot_path; // preview mode only
+    int repeat_cycles = 1;   // run N start/stop cycles on the same coordinator
+                             // (warm capture-hub state) instead of exiting after one
 };
 
 bool HasAutoRecordRequest(const QStringList& args);

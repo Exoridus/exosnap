@@ -167,6 +167,8 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
         } else if (arg == QStringLiteral("--screenshot-path")) {
             if (!require_value(&parsed.screenshot_path))
                 return false;
+        } else if (arg == QStringLiteral("--capture-frame-in-ready")) {
+            parsed.capture_frame_in_ready = true;
         }
     }
 

@@ -354,6 +354,16 @@ void PreviewSurface::endPushedSource() {
         dxgi_renderer_->EndPushedSource();
 }
 
+void PreviewSurface::requestDxgiSnapshot(
+    std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)> callback) {
+    if (!isDxgiPreviewActive()) {
+        if (callback)
+            callback(false, 0, 0, {}, "No live DXGI preview");
+        return;
+    }
+    dxgi_renderer_->RequestSnapshot(std::move(callback));
+}
+
 void PreviewSurface::repositionDxgiPreview() {
     applyDxgiPreviewResize();
 }
