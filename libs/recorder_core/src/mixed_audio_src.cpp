@@ -87,7 +87,12 @@ bool MixedAudioSrc::Init(std::string& out_error) {
         std::string src_err;
         if (!sources_[i]->Init(src_err)) {
             out_error = "MixedAudioSrc::Init: source " + std::to_string(i) + " failed: " + src_err;
-            for (size_t k = 0; k < i; ++k) {
+            // Shut down every source touched so far, INCLUDING the one that just
+            // failed: a failed Init() can still have partially acquired resources
+            // (see e.g. WasapiLoopback::Init(), which now self-cleans on every
+            // failure path, but that contract isn't guaranteed for every source
+            // type) — Shutdown() on an already-clean source is a safe no-op.
+            for (size_t k = 0; k <= i; ++k) {
                 sources_[k]->Shutdown();
             }
             return false;
