@@ -534,7 +534,10 @@ TEST_F(EditExportPageTest, PlayButtonIsCenteredOverThePlayerSurface) {
     ASSERT_GT(frame->height(), 120);
     const int frame_center_y = frame->rect().center().y();
     const int btn_center_y = play_btn->geometry().center().y(); // in frame coords
-    EXPECT_LE(std::abs(btn_center_y - frame_center_y), 50)
+    // Tight tolerance: Qt::AlignCenter puts the button within rounding distance
+    // of the frame center; the pre-fix bug offset it by ~54 px, so 10 px still
+    // cleanly separates "centered" from the failure mode.
+    EXPECT_LE(std::abs(btn_center_y - frame_center_y), 10)
         << "play button center " << btn_center_y << " should sit near the frame center " << frame_center_y << " [frame "
         << frame->width() << "x" << frame->height() << ", btn geo " << play_btn->geometry().x() << ","
         << play_btn->geometry().y() << " parent=" << play_btn->parentWidget()->objectName().toStdString() << "]";

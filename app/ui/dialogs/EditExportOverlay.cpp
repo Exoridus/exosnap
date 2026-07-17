@@ -37,8 +37,8 @@ EditExportOverlay::EditExportOverlay(QWidget* parent) : QWidget(parent) {
     page_ = new EditExportPage(this);
     page_->setObjectName(QStringLiteral("editExportOverlayPanel")); // additive QSS panel framing
     // Required for the QSS background/border on the plain-QWidget page to paint —
-    // without it the dimmed Record page bleeds through the page body (same idiom
-    // as SourcePickerPanel).
+    // without it the overlay's backdrop shows through the page body instead of the
+    // panel framing (same idiom as SourcePickerPanel).
     page_->setAttribute(Qt::WA_StyledBackground, true);
 
     auto* root = new QVBoxLayout(this);

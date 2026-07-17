@@ -13,6 +13,15 @@ functionally-unchanged `EditExportPage` instead of swapping it into the `QStacke
 "Surface shape (current): overlay" below; the original "In-window mode" rationale is kept
 for history but no longer describes the shipped shape.
 
+**Amended (UI-polish round): opaque backdrop.** The overlay's backdrop was originally
+semi-transparent (the SourcePickerOverlay dim, alpha 158), leaving the Record page dimly
+visible underneath. It is now painted **fully opaque**: any alpha below 255 lets the window
+chrome (logo, notification bell) bleed through the margin band around the hosted page, in
+every phase. The "Record page dimly visible underneath" property is deliberately given up —
+the transient over-Record relationship is carried by the overlay's structure (parenting,
+dismiss behavior), not by see-through pixels. Passages below that described the backdrop as
+"dimmed" have been updated accordingly.
+
 ## Context
 
 After a recording stops, users need to decide what to do with the captured file: keep the MKV
@@ -40,7 +49,8 @@ Several surface-shape options were considered:
 child widget instead of adding it to the main `QStackedWidget`. It follows the exact technical
 recipe already established by `SourcePickerOverlay`: a plain `QWidget` parented to the
 `MainWindow` central widget (a sibling of the title bar and the page stack), sized to the full
-client area, with a dimmed backdrop painted in `paintEvent`. This parenting is required —
+client area, with an opaque backdrop painted in `paintEvent` (originally a semi-transparent
+dim; amended — see "Amended: opaque backdrop" in Status). This parenting is required —
 verified empirically — for the backdrop to correctly composite over the native DXGI live-preview
 child window (Qt promotes the overlapping sibling to its own native window).
 
@@ -250,8 +260,11 @@ tab"; updated for "overlay" vs. the original "mode/stack replacement"):
 - Keeps top-level nav at 5 items (Record · Settings · Diagnostics · Logs · About).
 - The edit workflow is linear and transient — users enter it, decide, and leave.
 - Adding a persistent tab implies the surface is always accessible, which is premature.
-- An overlay (vs. a stack page) makes the "transient, over Record" relationship visible in the
-  UI itself: the Record page is still there underneath, dimmed, not navigated away from.
+- An overlay (vs. a stack page) keeps the "transient, over Record" relationship structural:
+  the Record page is still there underneath, not navigated away from, and dismissing lands
+  back on it directly. (Originally the backdrop was also semi-transparent so Record stayed
+  dimly *visible*; that pixel-level cue was deliberately given up when the backdrop became
+  opaque — any alpha below 255 lets the window chrome bleed through. See the Status amendment.)
 - Back / Done / dismissing the overlay all resolve to the same `closeOverlay()`, cleanly, without
   touching nav history (there was never any to pollute, but the overlay makes this structurally
   true rather than just behaviorally true).
