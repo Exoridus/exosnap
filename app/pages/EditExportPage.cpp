@@ -14,6 +14,7 @@
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QIcon>
@@ -218,8 +219,19 @@ void EditExportPage::buildUi() {
     // height-for-width without a subclass).
     player_frame_->installEventFilter(this);
 
-    auto* player_layout = new QVBoxLayout(player_frame_);
-    player_layout->setAlignment(Qt::AlignCenter);
+    // The surface fills the frame; the play/pause toggle floats centered over
+    // it, and the meta label sits in the bottom-right corner. A single-cell
+    // QGridLayout overlays all three (children added later paint on top), so the
+    // play button lands in the middle of the video rectangle rather than pinned
+    // to its top edge.
+    auto* player_layout = new QGridLayout(player_frame_);
+    player_layout->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
+    // The single cell must absorb the frame's full height (the surface's size
+    // hint alone would otherwise cap the row and push the overlay off-center).
+    player_layout->setRowStretch(0, 1);
+    player_layout->setColumnStretch(0, 1);
+
+    player_surface_ = new ui::widgets::EditPlayerSurface(player_frame_);
 
     // 60px circular play/pause toggle. Drives the preview position clock and
     // the real decoder session (player_session_).
@@ -230,17 +242,13 @@ void EditExportPage::buildUi() {
     play_pause_btn_->setIconSize(QSize(24, 24));
     play_pause_btn_->setToolTip(QStringLiteral("Play / pause preview"));
 
-    player_surface_ = new ui::widgets::EditPlayerSurface(player_frame_);
-
-    player_meta_label_ = new QLabel(this);
+    player_meta_label_ = new QLabel(player_frame_);
     player_meta_label_->setObjectName(QStringLiteral("editExportPlayerMeta"));
     player_meta_label_->setAlignment(Qt::AlignRight | Qt::AlignBottom);
 
-    player_layout->addStretch();
-    player_layout->addWidget(play_pause_btn_, 0, Qt::AlignHCenter);
-    player_layout->addWidget(player_surface_);
-    player_layout->addStretch();
-    player_layout->addWidget(player_meta_label_);
+    player_layout->addWidget(player_surface_, 0, 0);
+    player_layout->addWidget(play_pause_btn_, 0, 0, Qt::AlignCenter);
+    player_layout->addWidget(player_meta_label_, 0, 0, Qt::AlignRight | Qt::AlignBottom);
 
     left_layout->addWidget(player_frame_);
 
@@ -253,11 +261,11 @@ void EditExportPage::buildUi() {
 
     review_title_ = new QLabel(QStringLiteral("Post-recording report"), review_panel_);
 
-    review_drop_label_ = new QLabel(QStringLiteral("Frame drops: \xe2\x80\x93"), review_panel_);
+    review_drop_label_ = new QLabel(QStringLiteral("Frame drops: \xe2\x80\x94"), review_panel_);
 
-    review_drift_label_ = new QLabel(QStringLiteral("Peak A/V drift: \xe2\x80\x93"), review_panel_);
+    review_drift_label_ = new QLabel(QStringLiteral("Peak A/V drift: \xe2\x80\x94"), review_panel_);
 
-    review_health_label_ = new QLabel(QStringLiteral("Pipeline health: \xe2\x80\x93"), review_panel_);
+    review_health_label_ = new QLabel(QStringLiteral("Pipeline health: \xe2\x80\x94"), review_panel_);
 
     review_layout->addWidget(review_title_);
     review_layout->addWidget(review_drop_label_);
@@ -436,7 +444,7 @@ void EditExportPage::buildUi() {
         auto* key = new QLabel(key_text, row);
         fact_keys_.push_back(key);
 
-        val_label_ref = new QLabel(QStringLiteral("–"), row);
+        val_label_ref = new QLabel(QStringLiteral("\xe2\x80\x94"), row);
         val_label_ref->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
         row_layout->addWidget(key);
@@ -666,7 +674,7 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             const double pct = 100.0 * static_cast<double>(total_dropped) / static_cast<double>(total_frames);
             review_drop_label_->setText(QStringLiteral("Frame drops: %1%").arg(pct, 0, 'f', 1));
         } else {
-            review_drop_label_->setText(QStringLiteral("Frame drops: \xe2\x80\x93"));
+            review_drop_label_->setText(QStringLiteral("Frame drops: \xe2\x80\x94"));
         }
     }
 
@@ -675,7 +683,9 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             review_drift_label_->setText(
                 QStringLiteral("Peak A/V drift: \xc2\xb1%1\xc2\xa0ms").arg(ctx_.peak_av_drift_ms, 0, 'f', 0));
         } else {
-            review_drift_label_->setText(QStringLiteral("A/V drift: unavailable"));
+            // No drift measurement is "no data" (same as MainWindow's own drift
+            // readout), not a distinct state — show the unified empty-value glyph.
+            review_drift_label_->setText(QStringLiteral("Peak A/V drift: \xe2\x80\x94"));
         }
     }
 
@@ -700,7 +710,7 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             }
             review_health_label_->setText(QStringLiteral("Pipeline health: %1").arg(QLatin1String(health_str)));
         } else {
-            review_health_label_->setText(QStringLiteral("Pipeline health: \xe2\x80\x93"));
+            review_health_label_->setText(QStringLiteral("Pipeline health: \xe2\x80\x94"));
         }
     }
 
@@ -770,19 +780,19 @@ void EditExportPage::setRecordingInfo(const QString& file_path, const QString& d
 
     // Update detail rail
     if (fact_duration_val_)
-        fact_duration_val_->setText(duration_.isEmpty() ? QStringLiteral("–") : duration_);
+        fact_duration_val_->setText(duration_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : duration_);
     if (fact_size_val_)
-        fact_size_val_->setText(size_.isEmpty() ? QStringLiteral("–") : size_);
+        fact_size_val_->setText(size_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : size_);
     if (fact_res_val_)
-        fact_res_val_->setText(resolution_.isEmpty() ? QStringLiteral("–") : resolution_);
+        fact_res_val_->setText(resolution_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : resolution_);
     if (fact_fps_val_)
-        fact_fps_val_->setText(fps_.isEmpty() ? QStringLiteral("–") : fps_);
+        fact_fps_val_->setText(fps_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : fps_);
     if (fact_video_val_)
-        fact_video_val_->setText(video_codec_.isEmpty() ? QStringLiteral("–") : video_codec_);
+        fact_video_val_->setText(video_codec_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : video_codec_);
     if (fact_audio_val_)
-        fact_audio_val_->setText(audio_codec_.isEmpty() ? QStringLiteral("–") : audio_codec_);
+        fact_audio_val_->setText(audio_codec_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : audio_codec_);
     if (fact_container_val_)
-        fact_container_val_->setText(container_.isEmpty() ? QStringLiteral("–") : container_);
+        fact_container_val_->setText(container_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : container_);
 
     // Update player meta
     if (player_meta_label_)
@@ -1107,8 +1117,14 @@ void EditExportPage::refreshPhase() {
 }
 
 bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
-    if (obj == player_frame_ && event->type() == QEvent::Resize)
-        updatePlayerHeight();
+    if (obj == player_frame_ && event->type() == QEvent::Resize) {
+        // Defer to the next event-loop tick: setFixedHeight() from inside the
+        // frame's own Resize delivery triggers a nested resize whose layout
+        // pass is then overwritten when the original (stale-size) QResizeEvent
+        // reaches the frame's QGridLayout — leaving the overlaid play button
+        // positioned against the old height (off-center).
+        QMetaObject::invokeMethod(this, &EditExportPage::updatePlayerHeight, Qt::QueuedConnection);
+    }
     return QWidget::eventFilter(obj, event);
 }
 

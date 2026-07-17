@@ -3179,7 +3179,7 @@ QFrame[panelRole="accentNote"] {
 
 /* ── EDIT-OVERLAY-R1: EditExportPage hosted as an overlay over Record ──
    (ADR 0022 update). Framed panel look for the hosted page inside
-   EditExportOverlay's dimmed backdrop — mirrors the sourcePickerDialog treatment. */
+   EditExportOverlay's opaque backdrop — mirrors the sourcePickerDialog treatment. */
 QWidget#editExportOverlayPanel {
     background: ${bg1};
     border: 1px solid ${line2};

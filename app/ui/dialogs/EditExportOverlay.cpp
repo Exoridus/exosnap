@@ -14,8 +14,12 @@
 namespace exosnap::ui::dialogs {
 namespace {
 
-// Backdrop tint — matches SourcePickerOverlay's Hybrid modal dim (rgba(8,8,10, 0.62)).
-constexpr int kBackdropAlpha = 158;
+// Backdrop is fully opaque here (unlike SourcePickerOverlay's semi-transparent
+// Hybrid modal dim): this overlay hosts a full editor surface that spans the
+// whole client area, including the window chrome (logo + notification bell) at
+// the top. A semi-transparent backdrop let that chrome bleed through the margin
+// band; an opaque fill fully occludes it so no chrome pixel shows in any phase.
+constexpr int kBackdropAlpha = 255;
 // The hosted page reads as a full editor surface, not a small centered dialog —
 // a thin margin keeps a visible/clickable backdrop band for dismiss-by-click.
 constexpr int kOverlayMargin = 20;
@@ -33,8 +37,8 @@ EditExportOverlay::EditExportOverlay(QWidget* parent) : QWidget(parent) {
     page_ = new EditExportPage(this);
     page_->setObjectName(QStringLiteral("editExportOverlayPanel")); // additive QSS panel framing
     // Required for the QSS background/border on the plain-QWidget page to paint —
-    // without it the dimmed Record page bleeds through the page body (same idiom
-    // as SourcePickerPanel).
+    // without it the overlay's backdrop shows through the page body instead of the
+    // panel framing (same idiom as SourcePickerPanel).
     page_->setAttribute(Qt::WA_StyledBackground, true);
 
     auto* root = new QVBoxLayout(this);

@@ -17,7 +17,7 @@ namespace exosnap::ui::dialogs {
 // functionally-unchanged EditExportPage over the Record page instead of swapping
 // it in as a QStackedWidget page. Same technical recipe as SourcePickerOverlay: a
 // plain QWidget sibling parented to the MainWindow central widget so it covers the
-// full client area (title bar included) with a dimmed backdrop, which Qt correctly
+// full client area (title bar included) with an opaque backdrop, which Qt correctly
 // composites over the native DXGI live-preview HWND (the overlapping sibling gets
 // auto-promoted to its own native window). Do not change this parenting recipe.
 //
