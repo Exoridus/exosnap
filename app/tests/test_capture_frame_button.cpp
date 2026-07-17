@@ -5,18 +5,26 @@
 // transport dock.  The notification / toast path is unchanged.
 //
 // Tests cover:
-//   1. NotificationManager enqueues a "Frame saved" success event with the right fields.
-//   2. The event has type Saved, action OpenFolder, non-empty title + body.
-//   3. Enqueueing a frame-saved event with the folder path does not crash.
+//   1. NotificationManager enqueues a "Frame saved" event with type Saved, action
+//      OpenFolder, and non-empty title/body.
+//   2. The event body contains the filename and folder, and forwards the frame
+//      path as action_payload.
+//   3. Enqueueing a frame-saved event does not crash and stays visible.
 //   4. Frame-saved toast is auto-dismissible (5 s dwell via kDismissMs_Saved).
 //   5. Frame-saved toast has an Open-folder action.
-//   6. State-gating: CaptureFrame rejected in LoadingCapabilities state.
-//   7. Multiple frame-saved events stack in the queue (capped at kMaxVisible).
+//   6. State-gating: CaptureFrame() is rejected (callback fires, ok=false) in
+//      LoadingCapabilities state.
+//   7. A burst of frame-saved events collapses to a single, newest toast.
 //   8. "Frame saved" title is distinct from "Recording saved".
 //   9. Frame-path payload is forwarded to action_payload.
-//  10. Dismiss clears the frame-saved toast.
-//  11. Dock button exists on TransportDock with correct object name + tooltip.
-//  12. Dock button is visible in Ready state and hidden in Saving/Completed.
+//  10. Dismiss() clears the frame-saved toast.
+//  11. Dock button exists on TransportDock with the right object name, tooltip,
+//      accessible name, icon-only text, and 44×44 fixed size.
+//  12. Dock button is visible in Ready/Recording/Paused/Saving/Completed, and
+//      disabled (not hidden) only while Saving.
+//  13. Clicking the enabled dock button emits captureFrameClicked.
+//  14. In Ready state, the button is disabled until a preview frame is available.
+//  15. In Recording state, the button ignores preview-frame availability.
 //
 // Follows the QCoreApplication-fixture pattern (no GPU / real window needed).
 // ctest runs each test in isolation via --gtest_filter.
