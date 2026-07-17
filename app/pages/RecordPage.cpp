@@ -615,6 +615,9 @@ WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const 
 } // namespace
 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == source_name_label_ && event->type() == QEvent::Resize) {
+        applySourceNameElision();
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -755,6 +758,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
     source_name_label_->setWordWrap(false);
     source_name_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    // Re-elide the source descriptor whenever the label itself is resized: the
+    // chip is a stretch item, so a late layout pass can widen it after updateSourceChip
+    // already ran with a narrower width. The filter re-runs the elision against the
+    // final width so the full descriptor shows when there is room for it.
+    source_name_label_->installEventFilter(this);
 
     source_chip_layout->addWidget(source_name_label_, 1);
     source_chip_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -1863,6 +1871,8 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     if (visual_test_mode_)
         return;
 
+    const bool was_enabled = current_webcam_settings_.enabled;
+
     WebcamSettings s = SanitizeWebcamSettings(settings);
 
     // First-time default placement: bottom-right, camera-aspect, moderate size.
@@ -1878,6 +1888,15 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     }
 
     current_webcam_settings_ = s;
+
+    // A fresh enable must start visually neutral: clear any stale open-failure so
+    // turning the webcam off and on again doesn't flash the coral error state until
+    // a NEW failed-open event actually occurs. The failure is only meaningful
+    // while the toggle is on, so it is reset on the enabled→disabled transition.
+    if (was_enabled && !s.enabled) {
+        webcam_open_failed_ = false;
+        webcam_open_fail_reason_.clear();
+    }
 
     if (preview_surface_) {
         preview_surface_->setAspectRatioLocked(s.aspect_ratio_locked);
@@ -1899,12 +1918,11 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     // change came from the Settings panel (not from clicking the dock toggle itself).
     // Otherwise enabling the webcam in Settings makes the PiP appear while the dock
     // toggle still reads "off", which looks like the camera turned on by itself.
-    if (transport_dock_) {
-        const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-        const bool failed = (view_model_.state == UiRecordingState::Failed);
-        transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled,
-                                        !(blocked || failed));
-    }
+    // Route through updateTransportDock() (it no-ops without a dock) so the toggle
+    // state, its interactivity (no-camera / locked-transport gating) and the
+    // open-failure error/tooltip are all driven from one place instead of a
+    // divergent direct set.
+    updateTransportDock();
 }
 
 void RecordPage::setSettingsWebcamPreviewActive(bool active) {
@@ -2268,6 +2286,14 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         break;
     }
 
+    // FinalizingOverlay Saving fixture: the overlay itself is driven by MainWindow,
+    // but the page must report the matching transport state so the title-bar pill
+    // reads "Saving" through the real chromeStateChanged chain instead of claiming
+    // "Ready" while the file is still being written. (Deferred refreshes re-emit
+    // the same state, so the pill stays consistent up to the capture.)
+    if (scenario.finalizing_overlay_mode == QLatin1String("saving"))
+        view_model_.SetState(UiRecordingState::Saving);
+
     // Deterministic webcam PiP fixture: configure placement/mirror and inject a
     // synthetic camera frame (no real capture). refresh() applies the state-driven
     // edit lock; selection is set afterwards so the lock policy is respected.
@@ -2279,11 +2305,36 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         wc.width = 1280;
         wc.height = 720;
         wc.fps = 30;
-        wc.overlay_user_placed = true; // use the scenario's exact placement verbatim
-        wc.overlay.x_norm = scenario.webcam_x;
-        wc.overlay.y_norm = scenario.webcam_y;
-        wc.overlay.w_norm = scenario.webcam_w;
-        wc.overlay.h_norm = scenario.webcam_h;
+        if (scenario.webcam_default_placement && preview_surface_) {
+            // Pin the production first-run placement (defaultWebcamOverlayRect):
+            // bottom-right with an edge inset, sized by the camera aspect. The rect
+            // depends on the surface's laid-out size, and the harness applies the
+            // scenario before the window is shown — recompute once deferred (before
+            // the 120 ms capture) so the placement reflects the final geometry.
+            const double cam_ar = wc.height > 0 ? static_cast<double>(wc.width) / static_cast<double>(wc.height) : 0.0;
+            const QRectF def = preview_surface_->defaultWebcamOverlayRect(cam_ar);
+            wc.overlay_user_placed = false;
+            wc.overlay.x_norm = static_cast<float>(def.x());
+            wc.overlay.y_norm = static_cast<float>(def.y());
+            wc.overlay.w_norm = static_cast<float>(def.width());
+            wc.overlay.h_norm = static_cast<float>(def.height());
+            QTimer::singleShot(0, this, [this, cam_ar]() {
+                if (!preview_surface_)
+                    return;
+                const QRectF late = preview_surface_->defaultWebcamOverlayRect(cam_ar);
+                current_webcam_settings_.overlay.x_norm = static_cast<float>(late.x());
+                current_webcam_settings_.overlay.y_norm = static_cast<float>(late.y());
+                current_webcam_settings_.overlay.w_norm = static_cast<float>(late.width());
+                current_webcam_settings_.overlay.h_norm = static_cast<float>(late.height());
+                preview_surface_->setWebcamOverlayRect(late);
+            });
+        } else {
+            wc.overlay_user_placed = true; // use the scenario's exact placement verbatim
+            wc.overlay.x_norm = scenario.webcam_x;
+            wc.overlay.y_norm = scenario.webcam_y;
+            wc.overlay.w_norm = scenario.webcam_w;
+            wc.overlay.h_norm = scenario.webcam_h;
+        }
         current_webcam_settings_ = SanitizeWebcamSettings(wc);
 
         if (preview_surface_) {
@@ -4638,8 +4689,14 @@ void RecordPage::updateTransportDock() {
     const bool webcam_error = current_webcam_settings_.enabled && webcam_open_failed_;
     transport_dock_->setToggleError(QStringLiteral("webcam"), webcam_error);
     if (webcam_error) {
-        transport_dock_->setToggleTooltip(QStringLiteral("webcam"),
-                                          QStringLiteral("Camera can't be opened — %1").arg(webcam_open_fail_reason_));
+        // Known failure reasons get a plain-language sentence plus the raw diagnostic
+        // in parentheses; anything unmapped falls back to the raw reason alone.
+        const QString friendly = FriendlyWebcamOpenFailure(webcam_open_fail_reason_);
+        const QString tip =
+            (friendly == webcam_open_fail_reason_)
+                ? QStringLiteral("Camera can't be opened — %1").arg(webcam_open_fail_reason_)
+                : QStringLiteral("Camera can't be opened — %1 (%2)").arg(friendly, webcam_open_fail_reason_);
+        transport_dock_->setToggleTooltip(QStringLiteral("webcam"), tip);
     }
 
     // Ready-only gate (default true): the screenshot button reads a GPU frame back
@@ -4807,12 +4864,13 @@ void RecordPage::updateSourceChip() {
 
     const bool locked = isSourceSelectionLocked();
     const bool has_any_source = !monitor_target_indices_.empty() || !window_target_indices_.empty();
-    const int width_hint =
-        source_chip_panel_ ? ((source_chip_panel_->width() > 0) ? source_chip_panel_->width() - 20 : 520) : 520;
-    const QString compact_elided =
-        source_name_label_->fontMetrics().elidedText(compact_source, Qt::ElideRight, (std::max)(180, width_hint));
 
-    source_name_label_->setText(compact_elided);
+    // Cache the full descriptor and elide it against the label's live width. The
+    // event filter re-runs applySourceNameElision() on the label's resize so a later
+    // layout pass that widens the chip re-expands the text instead of leaving it
+    // over-elided.
+    source_name_full_ = compact_source;
+    applySourceNameElision();
     source_name_label_->setToolTip(compact_source);
     source_lock_label_->setVisible(locked);
     source_lock_label_->setText(locked ? QStringLiteral("Source locked") : QString{});
@@ -4855,6 +4913,21 @@ void RecordPage::updateSourceChip() {
         format_chips_label_->setText(buildFormatChipsText());
         format_chips_label_->setVisible(has_selection);
     }
+}
+
+void RecordPage::applySourceNameElision() {
+    if (!source_name_label_)
+        return;
+    // Elide against the label's REAL current width (the space it will actually paint
+    // into), not a panel width captured before the row finished laying out. Re-run
+    // from the label's resize event so a late widening re-expands the descriptor
+    // rather than leaving it stuck over-elided. A not-yet-laid-out label (width
+    // 0) falls back to a sane default width until its first resize event lands.
+    const int avail = source_name_label_->width() > 0 ? source_name_label_->width() : 520;
+    const QString elided =
+        source_name_label_->fontMetrics().elidedText(source_name_full_, Qt::ElideRight, (std::max)(180, avail));
+    if (source_name_label_->text() != elided)
+        source_name_label_->setText(elided);
 }
 
 bool RecordPage::isSourceSelectionLocked() const {

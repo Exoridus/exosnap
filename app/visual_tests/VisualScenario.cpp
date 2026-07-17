@@ -302,10 +302,9 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_state = VisualWebcamState::Active,
      .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
      .webcam_pip_enabled = true,
-     .webcam_x = 0.75f,
-     .webcam_y = 0.75f,
-     .webcam_w = 0.25f,
-     .webcam_h = 0.25f},
+     // Pins the REAL first-run placement (bottom-right, inset from both edges) via
+     // the production default-rect path instead of a hand-set flush corner rect.
+     .webcam_default_placement = true},
     {.id = QStringLiteral("record-webcam-selected"),
      .title = QStringLiteral("Record / Webcam Selected"),
      .page = VisualPage::Record,

@@ -1811,6 +1811,18 @@ target_include_directories(webcam_read_policy_tests PRIVATE ${CMAKE_CURRENT_SOUR
 target_link_libraries(webcam_read_policy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_read_policy_tests PROPERTIES AUTOMOC ON)
 
+# Pure copy mapping for the dock's webcam open-failure tooltip
+# (FriendlyWebcamOpenFailure) — string logic only, no MF calls or live device.
+exosnap_add_gtest(
+    NAME webcam_open_failure_copy_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_open_failure_copy.cpp
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(webcam_open_failure_copy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(webcam_open_failure_copy_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(webcam_open_failure_copy_tests PROPERTIES AUTOMOC ON)
+
 # The hub's loop against a fake producer: refcounted open/close, the held frame
 # across loss and unbounded reopen, and the lease handover. No GPU, no WGC, no
 # threads -- Pump() is stepped by hand.

@@ -418,11 +418,20 @@ surfaced in two always-in-sync places — Settings → Webcam and the Record-pag
 button) — and is off by default. Turning it on both includes the webcam in the recording and starts the
 live setup preview; the camera opens only while it is on (opening Settings → Webcam no longer turns the
 camera on by itself). The webcam is never recorded without a selected device (the first available
-camera is pre-selected when one exists). With **no camera attached** the Record dock's webcam
+camera is pre-selected when one exists). By default the picture-in-picture starts in the
+bottom-right corner of the preview with a small margin from both edges (it is not flush to the
+corner); it can then be moved and resized anywhere. In the Record preview the picture-in-picture is
+kept clear of the stats footer and the frame border so those are never hidden behind it — a
+preview-only presentation detail; the recorded file composites the camera from the same placement.
+With **no camera attached** the Record dock's webcam
 control is unavailable and says so; attaching one makes it available again. Unplugging the last
 camera never loses the stored choice — it returns when the device does. When the toggle is on but the
 selected camera cannot be opened, the dock button shows a coral error state and its tooltip names the
-reason (`Camera can't be opened — <reason>`). The device, resolution, mirror, opacity and
+reason (`Camera can't be opened — <reason>`). Recognised failures read as a plain-language sentence
+with the raw diagnostic in parentheses (e.g. the camera offers no compatible video format, or is in
+use by another application); unrecognised failures show the raw reason verbatim. Turning the webcam
+off clears the error, so re-enabling it starts neutral until a new open failure actually occurs. The
+device, resolution, mirror, opacity and
 chroma-key options stay editable regardless of the on/off state. The webcam is the only feature that depends
 on Windows Media Foundation: on Windows N/KN editions without the Media Feature Pack, the app still
 launches and records normally, but the webcam UI is disabled with a notice referencing the Media
