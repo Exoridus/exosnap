@@ -2246,6 +2246,7 @@ void ConfigPage::onFrameRateChanged(int index) {
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
     updateQualitySegmentSelection();
+    updateFormatDisplay();
     emitCurrentVideoSettings();
 }
 
@@ -2258,6 +2259,7 @@ void ConfigPage::onTimingSelected(int timing_id) {
     }
     updateTimingSelection();
     updateQualitySegmentSelection();
+    updateFormatDisplay();
     emitCurrentVideoSettings();
 }
 
@@ -2997,6 +2999,14 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     }
 
     updateQualitySegmentSelection();
+
+    // The "✓ Current format" summary reads video_settings_.frame_rate_*/cfr
+    // directly (see updateCompatCallout()). setVideoSettings() is the
+    // programmatic path (preset load, visual-test harness) and every combo
+    // sync above runs behind a QSignalBlocker, so nothing downstream would
+    // otherwise refresh the summary label — it used to go stale showing
+    // whatever was current when the page was constructed.
+    updateFormatDisplay();
 }
 
 void ConfigPage::updateQualitySegmentSelection() {
@@ -4979,7 +4989,11 @@ void ConfigPage::buildFormatQualityExpertSections() {
                                                  static_cast<int>(recorder_core::NvencPreset::P2));
             video_encoder_preset_combo_->addItem(QStringLiteral("P3"),
                                                  static_cast<int>(recorder_core::NvencPreset::P3));
-            video_encoder_preset_combo_->addItem(QStringLiteral("P4 \xe2\x80\x94 Balanced (default)"),
+            // Shorter label than "P4 — Balanced (default)": that clipped hard at the
+            // row's fixed combo width. The "default" callout still lives in the
+            // info-i tooltip (kEncoderPreset), so dropping it from the visible
+            // label loses no information.
+            video_encoder_preset_combo_->addItem(QStringLiteral("P4 \xC2\xB7 Balanced"),
                                                  static_cast<int>(recorder_core::NvencPreset::P4));
             video_encoder_preset_combo_->addItem(QStringLiteral("P5"),
                                                  static_cast<int>(recorder_core::NvencPreset::P5));
@@ -5706,42 +5720,26 @@ void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
 
 void ConfigPage::applyVisualPresetSaveError(bool show) {
     if (show && !visual_preset_error_label_) {
-        // Lazily insert the error label directly below the preset selector row in
-        // the same parent QWidget.  We locate the overflow button's parent layout
-        // and insert the label after the selector row.
-        QWidget* panel = profile_overflow_btn_ ? profile_overflow_btn_->parentWidget() : nullptr;
-        if (!panel)
+        // The warning must land on its own row *below* the slim toolbar, not
+        // inside the toolbar's QHBoxLayout — sharing that row let the warning
+        // text eat the preset combo's stretch space and squeeze it down to a
+        // sliver (e.g. "Gaming ("). profile_overflow_btn_'s parent is the
+        // toolbar row itself; the toolbar row's parent is the header zone that
+        // stacks the toolbar vertically, which is where the warning belongs.
+        QWidget* toolbar_row = profile_overflow_btn_ ? profile_overflow_btn_->parentWidget() : nullptr;
+        QWidget* header_zone = toolbar_row ? toolbar_row->parentWidget() : nullptr;
+        auto* header_vl = header_zone ? qobject_cast<QVBoxLayout*>(header_zone->layout()) : nullptr;
+        if (!header_vl)
             return;
-        visual_preset_error_label_ = new QLabel(panel);
+        visual_preset_error_label_ = new QLabel(header_zone);
         visual_preset_error_label_->setObjectName(QStringLiteral("presetVisualErrorLabel"));
         visual_preset_error_label_->setProperty("labelRole", "validationError");
         visual_preset_error_label_->setWordWrap(true);
         visual_preset_error_label_->setText(
             QStringLiteral("⚠ Name already exists. Choose a different name before saving."));
-        // Insert into the panel's layout immediately after the selector row.
-        if (QLayout* lay = panel->layout()) {
-            // Find the position of profile_overflow_btn_ in the layout and insert
-            // the error label right below the row that contains it.
-            int insert_pos = lay->count(); // fallback: append
-            for (int i = 0; i < lay->count(); ++i) {
-                QLayoutItem* item = lay->itemAt(i);
-                if (!item)
-                    continue;
-                if (QLayout* sub = item->layout()) {
-                    for (int j = 0; j < sub->count(); ++j) {
-                        QLayoutItem* sub_item = sub->itemAt(j);
-                        if (sub_item && sub_item->widget() == profile_overflow_btn_) {
-                            insert_pos = i + 1;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (auto* vlay = qobject_cast<QVBoxLayout*>(lay))
-                vlay->insertWidget(insert_pos, visual_preset_error_label_);
-            else
-                lay->addWidget(visual_preset_error_label_);
-        }
+        const int toolbar_index = header_vl->indexOf(toolbar_row);
+        header_vl->insertWidget(toolbar_index >= 0 ? toolbar_index + 1 : header_vl->count(),
+                                visual_preset_error_label_);
     }
     if (visual_preset_error_label_)
         visual_preset_error_label_->setVisible(show);
