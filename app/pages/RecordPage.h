@@ -374,6 +374,10 @@ class RecordPage : public QWidget {
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateSourceChip();
+    // Elides the cached source descriptor against the label's ACTUAL current width
+    // (re-run from the label's resize event) so a late layout pass that widens the
+    // chip re-expands the text instead of leaving it stuck over-elided.
+    void applySourceNameElision();
     void updateResultDetailsPanel();
     void hideResultDetailsPanel();
     void updateReportCard(); // populates pipeline stats in resultDetailsPanel
@@ -470,6 +474,9 @@ class RecordPage : public QWidget {
     QWidget* source_row_ = nullptr;
     QFrame* source_chip_panel_ = nullptr;
     QLabel* source_name_label_ = nullptr;
+    // Full (un-elided) source descriptor, cached so applySourceNameElision() can
+    // re-elide against the label's live width on every resize.
+    QString source_name_full_;
     QLabel* source_lock_label_ = nullptr;
     // Header meta strip: output format readout (canon suite-record.jsx:301).
     QLabel* format_chips_label_ = nullptr;

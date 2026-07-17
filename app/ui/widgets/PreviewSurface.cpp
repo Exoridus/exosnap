@@ -662,9 +662,25 @@ void PreviewSurface::syncWebcamOverlayToDxgi() {
     chroma.softness = webcam_chroma_.softness;
     chroma.spill_reduction = webcam_chroma_.spill_reduction;
 
+    // Preview-only clip: keep the composited PiP off the stats footer + frame border
+    // in the live DXGI preview, matching the Qt paint path. The recording compositor
+    // consumes the un-clipped webcam_rect_norm_, so WYSIWYG for the FILE is preserved;
+    // only the on-screen preview geometry is trimmed. Intersect the placement
+    // with the content rect expressed in the same normalised (source-relative) space.
+    QRectF preview_rect_norm = webcam_rect_norm_;
+    const QRectF fr = displayedFrameRect();
+    if (fr.width() > 1.0 && fr.height() > 1.0) {
+        const QRectF content = previewContentRect();
+        const QRectF content_norm((content.left() - fr.left()) / fr.width(), (content.top() - fr.top()) / fr.height(),
+                                  content.width() / fr.width(), content.height() / fr.height());
+        const QRectF clipped = webcam_rect_norm_.intersected(content_norm);
+        if (clipped.width() > 0.0 && clipped.height() > 0.0)
+            preview_rect_norm = clipped;
+    }
+
     dxgi_renderer_->SetWebcamOverlayState(
-        show, selected, static_cast<float>(webcam_rect_norm_.x()), static_cast<float>(webcam_rect_norm_.y()),
-        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_,
+        show, selected, static_cast<float>(preview_rect_norm.x()), static_cast<float>(preview_rect_norm.y()),
+        static_cast<float>(preview_rect_norm.width()), static_cast<float>(preview_rect_norm.height()), webcam_mirror_,
         webcam_opacity_, chroma);
     if (show && !webcam_frame_.isNull()) {
         const QImage& img = webcam_frame_;
@@ -702,9 +718,35 @@ QRectF PreviewSurface::defaultWebcamOverlayRect(double camera_aspect_w_over_h) c
     h_px = std::clamp(h_px, kMinOverlayNorm * H, H);
     const double w_norm = std::clamp(w_px / W, kMinOverlayNorm, 1.0);
     const double h_norm = std::clamp(h_px / H, kMinOverlayNorm, 1.0);
-    const double x_norm = std::max(0.0, 1.0 - w_norm);
-    const double y_norm = std::max(0.0, 1.0 - h_norm);
+    // Leave a comfortable margin from the content edges instead of sitting flush in
+    // the corner. 12 logical px, expressed in this frame's normalised space so
+    // it scales with the content rect. The inset lives ONLY in the DEFAULT rect; the
+    // recording compositor consumes the same normalised placement, so the file gets
+    // the identical inset placement (WYSIWYG) — only the flush-corner start moves.
+    const double inset_x = 12.0 / W;
+    const double inset_y = 12.0 / H;
+    const double x_norm = std::max(0.0, 1.0 - w_norm - inset_x);
+    const double y_norm = std::max(0.0, 1.0 - h_norm - inset_y);
     return sanitizeOverlayRect(QRectF(x_norm, y_norm, w_norm, h_norm));
+}
+
+QRectF PreviewSurface::previewContentRect() const {
+    // Start inside the 1px rounded frame border (the tone glow paints ~2px, so a 2px
+    // inset keeps the PiP clear of the frame edge too).
+    QRectF r = QRectF(rect()).adjusted(2.0, 2.0, -2.0, -2.0);
+    // Reserve the bottom stats-footer strip so the PiP never overpaints it. bottom_row_
+    // is laid out at (height - pad_bottom - bottom_height); keep a small gap above it.
+    if (bottom_row_ != nullptr) {
+        constexpr qreal kFooterGap = 4.0;
+        const qreal footer_top = static_cast<qreal>(bottom_row_->geometry().top()) - kFooterGap;
+        if (footer_top < r.bottom())
+            r.setBottom(footer_top);
+    }
+    if (r.width() < 0.0)
+        r.setWidth(0.0);
+    if (r.height() < 0.0)
+        r.setHeight(0.0);
+    return r;
 }
 
 // Returns the webcam overlay rect in widget pixel coordinates.
@@ -1214,6 +1256,12 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     // (syncWebcamOverlayToDxgi). This path drives the QImage preview and all
     // deterministic visual-test scenarios (which run with DXGI stopped).
     if (webcam_enabled_) {
+        // Clip the PiP to the content rect so it never overpaints the stats footer or
+        // the frame border in the preview. Preview-only: the recording compositor
+        // draws the PiP un-clipped from the same normalised placement, so the file is
+        // unchanged. The whole block (image, placeholder, edit chrome) is clipped.
+        painter.save();
+        painter.setClipRect(previewContentRect());
         const QRectF cam_rect = webcamPixelRect();
         const bool show_chrome = webcam_selected_ && webcamEditingAllowed();
         if (!webcam_frame_.isNull()) {
@@ -1269,6 +1317,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             }
             painter.restore();
         }
+        painter.restore(); // release the preview content-rect clip
     }
 
     // SUITE-PHASE-F: In-window countdown ring.

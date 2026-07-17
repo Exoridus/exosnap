@@ -186,6 +186,11 @@ class PreviewSurface : public QWidget {
     QRectF webcamPixelRect() const;
     QRectF displayedFrameRect() const;
     QRectF displayedFrameRectForSource(int srcW, int srcH) const;
+    // Preview-only clip region for the webcam PiP: inside the frame border and clear
+    // of the bottom stats footer, so the PiP never overpaints that chrome on screen.
+    // WYSIWYG: the recording compositor has no such chrome, so this clip is applied
+    // ONLY in the preview (Qt paint + DXGI overlay geometry), never to the file.
+    QRectF previewContentRect() const;
     DragMode hitTestWebcam(QPointF pos) const;
     void applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers modifiers);
     void snapOverlayRectToCurrentAspect();

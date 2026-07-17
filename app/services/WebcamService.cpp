@@ -357,6 +357,29 @@ std::string ResolveWebcamDeviceId(const std::string& configured_id, const std::v
     return {};
 }
 
+QString FriendlyWebcamOpenFailure(const QString& raw_reason) {
+    // No compatible pixel format: the camera exposes neither a BGRA nor a YUY2
+    // output type the reader can convert (the NV12-only-camera failure class).
+    if (raw_reason.contains(QStringLiteral("no_bgra_or_yuy2_output_type"), Qt::CaseInsensitive))
+        return QStringLiteral("Camera doesn't offer a compatible video format");
+
+    // Device busy / already opened by another application. Media Foundation
+    // surfaces this as a sharing-violation / busy HRESULT while activating the
+    // media source or starting the reader; the raw reason embeds it as "hr=0x…".
+    static constexpr const char* kBusyHresults[] = {
+        "0x80070020", // HRESULT_FROM_WIN32(ERROR_SHARING_VIOLATION) — camera opened elsewhere
+        "0x800700AA", // HRESULT_FROM_WIN32(ERROR_BUSY)
+        "0xC00D3704", // MF_E_HW_MFT_FAILED_START_STREAMING — capture hardware already streaming
+    };
+    for (const char* code : kBusyHresults) {
+        if (raw_reason.contains(QLatin1String(code), Qt::CaseInsensitive))
+            return QStringLiteral("Camera is in use by another application");
+    }
+
+    // Unknown reason: hand back the raw string so the caller shows it verbatim.
+    return raw_reason;
+}
+
 // ---------------------------------------------------------------------------
 // S4: MF presence probe (once-per-process, cached)
 // ---------------------------------------------------------------------------

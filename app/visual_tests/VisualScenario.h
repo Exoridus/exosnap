@@ -338,6 +338,13 @@ struct VisualScenario {
     // tooltip. Trailing fields so existing positional initializers stay valid.
     bool webcam_open_failed = false;
     QString webcam_open_fail_reason;
+
+    // --- Webcam default placement (record-webcam-default-pip) ---
+    // When true, ignore webcam_x/y/w/h and place the PiP through the production
+    // default-placement path (PreviewSurface::defaultWebcamOverlayRect), so the
+    // scenario pins the real first-run placement instead of a hand-set rect.
+    // Trailing field so existing positional initializers stay valid.
+    bool webcam_default_placement = false;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

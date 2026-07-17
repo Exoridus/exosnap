@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QObject>
 #include <QPointer>
+#include <QString>
 #include <recorder_core/recorder_session.h>
 
 #include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
@@ -63,6 +64,13 @@ bool ShouldOpenWebcamPreview(bool webcam_enabled, bool has_device) noexcept;
 // rather than failing after the fact. A locked transport (failed or blocked
 // session) disables it regardless.
 [[nodiscard]] bool ShouldEnableWebcamToggle(bool has_device, bool transport_locked) noexcept;
+
+// Maps a raw webcam open-failure reason (as produced by the reader-open path — a
+// short step tag plus HRESULT / pixel-format diagnostics) to a short, user-facing
+// sentence for the dock tooltip. Returns the raw string UNCHANGED when there is no
+// known mapping, so the caller can append the "(<raw>)" technical suffix only for
+// recognised reasons. Pure string logic (no MF calls), so it is unit-pinned.
+[[nodiscard]] QString FriendlyWebcamOpenFailure(const QString& raw_reason);
 
 // Chooses the webcam device id to select given the currently-configured id and
 // the available devices. An explicit choice (non-empty id) is always kept — even
