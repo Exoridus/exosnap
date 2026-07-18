@@ -205,7 +205,7 @@ TEST_F(NotificationHubPanelTest, ClearAdvisories_ResetsUnreadCount) {
     EXPECT_EQ(panel.unreadCount(), 0);
 }
 
-// --- AdvisoryItem entry padding / alignment (Slice B) ---------------------------
+// --- AdvisoryItem entry padding / alignment ------------------------------------
 // The unread dot used to sit before the title and consume title-row space only on
 // unread rows, shoving the title right against its own body and against read rows.
 // These tests pin the trailing-dot layout: every title left edge lines up with the
