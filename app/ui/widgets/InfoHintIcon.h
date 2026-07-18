@@ -16,12 +16,19 @@ namespace exosnap::ui::widgets {
 //
 // The tooltip is shown/hidden explicitly (QToolTip::showText/hideText) rather
 // than left to Qt's automatic per-motion QEvent::ToolTip dispatch:
-//   - Multi-monitor: the hover anchor is QCursor::pos() (the OS-reported
-//     cursor position), not a widget-derived point such as
-//     mapToGlobal(rect().center()) — the latter can be computed against a
-//     stale per-window DPI/screen association right after the window is
-//     dragged to a differently-scaled monitor, landing the tooltip on the
-//     wrong display.
+//   - Multi-monitor: both trigger paths anchor defensively instead of trusting
+//     a single widget-derived point, which can be computed against a stale
+//     per-window DPI/screen association right after the window is dragged to
+//     a differently-scaled monitor, landing the tooltip on the wrong display.
+//     Hover (enterEvent) anchors on QCursor::pos() — the OS-reported cursor
+//     position, always correct regardless of screen. Keyboard focus
+//     (focusInEvent) has no cursor position to fall back on, so it resolves
+//     the widget's own screen() explicitly and clamps mapToGlobal(rect().
+//     center()) into that screen's available geometry if it ever lands
+//     outside it — the same defensive pattern CompareHint::repositionPopover()
+//     uses for its popover. Only one of the two paths can be the actual
+//     source of a given multi-monitor report; both are hardened because
+//     static analysis could not pin down which.
 //   - Flicker: a poll timer (mirrors TransportDock::openChevronMenu /
 //     CompareHint's hover_timer_) closes the tooltip only once the cursor has
 //     settled truly outside a small hysteresis band around the icon, instead

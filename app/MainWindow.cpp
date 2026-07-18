@@ -2468,25 +2468,29 @@ void MainWindow::saveWindowGeometryToSettings() {
 
 void MainWindow::applyRestoredGeometry() {
     const auto& geo = persisted_settings_.window_geometry;
+    // Resolved once below (title-strip intersect, or primary fallback) and reused for
+    // the final B3 clamp — see the comment on that clamp for why it must not be
+    // re-queried via this->screen().
+    QScreen* target_screen = nullptr;
+
     if (geo.width > 0 && geo.height > 0) {
         // The title bar region that must remain accessible so the user can move the window.
         const QRect title_strip(geo.x, geo.y, std::min(geo.width, 200), 40);
 
-        QScreen* screen = nullptr;
         for (QScreen* s : QGuiApplication::screens()) {
             if (s->availableGeometry().intersects(title_strip)) {
-                screen = s;
+                target_screen = s;
                 break;
             }
         }
 
         // Saved position lands on no connected monitor: center on primary.
-        const bool center_on_primary = screen == nullptr;
+        const bool center_on_primary = target_screen == nullptr;
         if (center_on_primary)
-            screen = QGuiApplication::primaryScreen();
-        if (screen != nullptr) {
+            target_screen = QGuiApplication::primaryScreen();
+        if (target_screen != nullptr) {
             const QRect saved(geo.x, geo.y, geo.width, geo.height);
-            setGeometry(ui::ClampRestoredWindowGeometry(saved, screen->availableGeometry(),
+            setGeometry(ui::ClampRestoredWindowGeometry(saved, target_screen->availableGeometry(),
                                                         QSize(minimumWidth(), minimumHeight()), center_on_primary));
         }
 
@@ -2501,10 +2505,23 @@ void MainWindow::applyRestoredGeometry() {
     // only guarantees a reachable title strip, so a bottom overhang under the taskbar
     // can still slip through), or Qt's own first-launch default placement when there is
     // no persisted geometry at all — pull it fully inside the work area of whichever
-    // screen it ended up on. Runs once, here on first show; never re-applied while the
-    // window is live, so a user who deliberately drags the window under the taskbar
-    // afterwards is free to do so.
-    QScreen* target_screen = this->screen();
+    // screen it ended up on.
+    //
+    // Reuses the screen resolved above instead of re-querying this->screen(): right
+    // after setGeometry() (above) moves the window onto a non-primary monitor's
+    // coordinates, Qt/Windows updates the QWindow→QScreen association asynchronously,
+    // so this->screen() can still report the primary screen within this same
+    // showEvent — which would clamp a legitimately restored Screen-2 position back
+    // onto Screen 1's work area (e.g. saved (2100,100,800,600) -> (1120,100,800,600)),
+    // a multi-monitor restore regression. When there was no persisted geometry at all
+    // (first launch, target_screen still unset here) fall back to this->screen() —
+    // Qt's own first-placement decision — then primaryScreen().
+    //
+    // Runs once, here on first show; never re-applied while the window is live, so a
+    // user who deliberately drags the window under the taskbar afterwards is free to
+    // do so.
+    if (target_screen == nullptr)
+        target_screen = this->screen();
     if (target_screen == nullptr)
         target_screen = QGuiApplication::primaryScreen();
     if (target_screen != nullptr)

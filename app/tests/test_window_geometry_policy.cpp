@@ -92,5 +92,21 @@ TEST(ClampWindowToWorkAreaTest, WindowAlreadyInsideIsUnchanged) {
     EXPECT_EQ(out, window);
 }
 
+// Caller-consistency guard: the clamp is pure rect arithmetic, so it must treat a
+// non-primary monitor's work area (non-zero origin, e.g. a second 1920x1040 screen
+// sitting to the right of the primary) exactly like the primary's origin-anchored
+// one. A window already fully inside SCREEN 2's work area must come back unchanged
+// — this is the caller-side property MainWindow::applyRestoredGeometry() relies on
+// when it passes the resolved target screen's availableGeometry() (not
+// this->screen(), which can still report the primary screen immediately after
+// setGeometry() moves the window cross-monitor, before Qt/Windows updates the
+// QWindow->QScreen association).
+TEST(ClampWindowToWorkAreaTest, SecondMonitorWithNonZeroOriginRectStaysUnchanged) {
+    const QRect avail(1920, 0, 1920, 1040);  // Screen 2, to the right of a 1920-wide primary
+    const QRect window(2100, 100, 800, 600); // fully inside Screen 2's work area
+    const QRect out = ClampWindowToWorkArea(window, avail);
+    EXPECT_EQ(out, window);
+}
+
 } // namespace
 } // namespace exosnap::ui

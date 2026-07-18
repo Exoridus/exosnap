@@ -1,9 +1,12 @@
 #include "InfoHintIcon.h"
 
+#include <algorithm>
+
 #include <QCursor>
 #include <QEnterEvent>
 #include <QFocusEvent>
 #include <QRect>
+#include <QScreen>
 #include <QSize>
 #include <QTimer>
 #include <QToolTip>
@@ -78,9 +81,11 @@ void InfoHintIcon::enterEvent(QEnterEvent* event) {
     // (mapToGlobal(rect().center())): QCursor::pos() is always correct regardless
     // of screen, whereas mapToGlobal() can be computed against a stale per-window
     // DPI/screen association right after the window is dragged to a differently
-    // scaled monitor — the previous explicit call here used mapToGlobal and, on a
-    // multi-monitor / mixed-DPI desktop, could resolve to the wrong screen and pop
+    // scaled monitor — the previous explicit call here used mapToGlobal and could,
+    // on a multi-monitor / mixed-DPI desktop, resolve to the wrong screen and pop
     // the tooltip up on the edge of the primary display instead of under the icon.
+    // (See focusInEvent below for the keyboard-triggered path, which has no cursor
+    // position to use and is hardened differently.)
     QToolTip::showText(QCursor::pos(), hint_text_, this);
     hover_timer_->start();
 }
@@ -97,7 +102,24 @@ void InfoHintIcon::leaveEvent(QEvent* event) {
 void InfoHintIcon::focusInEvent(QFocusEvent* event) {
     QToolButton::focusInEvent(event);
     updateIcon(true);
-    QToolTip::showText(mapToGlobal(rect().center()), hint_text_, this);
+    // No cursor position to anchor on for a keyboard-only trigger (unlike enterEvent
+    // above), so mapToGlobal(rect().center()) is the only available point — but it is
+    // subject to the same staleness risk: right after the window is dragged to a
+    // differently scaled monitor, mapToGlobal() can be computed against a stale
+    // per-window DPI/screen association before Qt/Windows updates it. Rather than
+    // trust that point outright, resolve the widget's own screen explicitly and clamp
+    // the point into its available geometry if it ever lands outside — the same
+    // defensive pattern CompareHint::repositionPopover() already uses (screen() first,
+    // clamp into availableGeometry()) for its popover.
+    QPoint anchor = mapToGlobal(rect().center());
+    if (QScreen* widget_screen = this->screen()) {
+        const QRect avail = widget_screen->availableGeometry();
+        if (!avail.contains(anchor)) {
+            anchor.setX(std::clamp(anchor.x(), avail.left(), avail.right()));
+            anchor.setY(std::clamp(anchor.y(), avail.top(), avail.bottom()));
+        }
+    }
+    QToolTip::showText(anchor, hint_text_, this);
     hover_timer_->start();
 }
 
