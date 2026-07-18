@@ -411,11 +411,13 @@ instead, until the capture source is reopened.
 On the rare HDR10 display whose desktop frames arrive already in PQ, the engine cannot composite
 overlays and records **without the webcam and cursor**. When that happens the Record preview drops
 its picture-in-picture to match the file, and a notification says so. The preview never shows an
-overlay the recording will not contain. Its opacity is adjustable (Settings → Webcam, 0–100%, default 100%) and
-applied identically in the Record-page preview and the recorded output. The same holds for the mirror and the
-chroma key: the live preview composites the picture-in-picture with the identical key colour, tolerance,
-softness and spill reduction the encoder uses, so a green screen that looks clean while setting up is the
-one that lands in the file. Its on/off is a single control
+overlay the recording will not contain. Webcam opacity (0–100%, default 100%) is applied identically in the
+Record-page preview and the recorded output; it is currently taken from the active preset/configuration
+rather than from a UI control. The mirror is a live, UI-editable control and its preview matches the file.
+The chroma key composites the same way: the live preview uses the identical key colour, tolerance, softness
+and spill reduction the encoder uses, so a green screen that looks clean while setting up is the one that
+lands in the file — but those chroma parameters, like opacity, are applied from the active
+preset/configuration and are not currently exposed as UI controls. Its on/off is a single control
 surfaced in two always-in-sync places — Settings → Webcam and the Record-page transport dock (camera
 button) — and is off by default. Turning it on both includes the webcam in the recording and starts the
 live setup preview; the camera opens only while it is on (opening Settings → Webcam no longer turns the
@@ -433,8 +435,9 @@ reason (`Camera can't be opened — <reason>`). Recognised failures read as a pl
 with the raw diagnostic in parentheses (e.g. the camera offers no compatible video format, or is in
 use by another application); unrecognised failures show the raw reason verbatim. Turning the webcam
 off clears the error, so re-enabling it starts neutral until a new open failure actually occurs. The
-device, resolution, mirror, opacity and
-chroma-key options stay editable regardless of the on/off state. The webcam is the only feature that depends
+device, resolution and mirror stay editable regardless of the on/off state (webcam opacity and chroma-key
+parameters are applied from the active preset/configuration and are not currently UI-adjustable). The
+webcam is the only feature that depends
 on Windows Media Foundation: on Windows N/KN editions without the Media Feature Pack, the app still
 launches and records normally, but the webcam UI is disabled with a notice referencing the Media
 Feature Pack and a "Webcam (MF)" row appears in Diagnostics.

@@ -1281,6 +1281,7 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(hotkeys_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(hotkeys_settings_panel_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
 set_target_properties(hotkeys_settings_panel_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(

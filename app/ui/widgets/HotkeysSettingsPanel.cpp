@@ -105,6 +105,7 @@ void HotkeysSettingsPanel::setEditingLocked(bool locked) {
         reset_all_btn_->setEnabled(!locked);
 }
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 void HotkeysSettingsPanel::applyVisualState(const QString& custom_binding_0, const QString& custom_binding_1,
                                             int capture_row, int conflict_row, const QString& conflict_message,
                                             bool locked) {
@@ -141,6 +142,7 @@ void HotkeysSettingsPanel::applyVisualState(const QString& custom_binding_0, con
 
     setEditingLocked(locked);
 }
+#endif // EXOSNAP_ENABLE_VISUAL_TEST_HARNESS
 
 void HotkeysSettingsPanel::buildRow(int index, const QString& action, const QKeySequence& default_binding,
                                     QVBoxLayout* parent_layout, QWidget* parent_widget) {

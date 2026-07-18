@@ -27,6 +27,9 @@ class CameraPreview : public QWidget {
 
     // Set the message shown when no frame is present (supports '\n').
     void setPlaceholderText(const QString& text);
+    [[nodiscard]] const QString& placeholderText() const {
+        return placeholder_;
+    }
 
     // Mirror the preview horizontally (no vertical flip) so the Settings preview
     // reflects the same mirror state as the Record PiP and the recorded output.

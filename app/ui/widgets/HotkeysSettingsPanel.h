@@ -38,13 +38,16 @@ class HotkeysSettingsPanel : public QWidget {
     // Lock / unlock editing while recording is active.
     void setEditingLocked(bool locked);
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Visual-harness only: render the panel in a representative state without a live
     // GlobalHotkeyService (no Win32 registration), mirroring the contract of the
     // former standalone hotkeys page. custom_binding_0/1 are portable key-sequence
     // strings for rows 0/1 (empty = keep default); capture_row / conflict_row are
     // row indices (-1 = none); locked mirrors the recording-in-progress lock.
+    // Never compiled into Release builds.
     void applyVisualState(const QString& custom_binding_0, const QString& custom_binding_1, int capture_row,
                           int conflict_row, const QString& conflict_message, bool locked);
+#endif
 
     // The "Reset all" button — owned + wired here, but placed by the embedding card
     // in its header (canon: card header carries the single Reset all). Reparent it

@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 
 #include "models/WebcamSettings.h"
+#include "ui/widgets/CameraPreview.h"
 #include "ui/widgets/ExoToggle.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 
@@ -81,6 +83,72 @@ TEST_F(WebcamSetupPanelTest, EnableToggle_PreservesSeededOpacity) {
 
     ASSERT_GE(count, 1);
     EXPECT_FLOAT_EQ(last_opacity, 0.4f);
+}
+
+// ---------------------------------------------------------------------------
+// S4: MF-absent gate. Migrated from the removed test_webcam_page.cpp — the
+// embedded Settings webcam card is the shipped surface that carries this gate.
+// ---------------------------------------------------------------------------
+
+TEST_F(WebcamSetupPanelTest, SetMfUnavailable_DisablesEnableToggle) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.setMfUnavailable(true);
+
+    auto* enable = panel.findChild<ui::widgets::ExoToggle*>(QStringLiteral("webcamPanelEnableToggle"));
+    ASSERT_NE(enable, nullptr);
+    EXPECT_FALSE(enable->isEnabled()) << "Enable toggle must be disabled when MF is unavailable";
+}
+
+TEST_F(WebcamSetupPanelTest, SetMfUnavailable_DisablesDeviceCombo) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.setMfUnavailable(true);
+
+    auto* combo = panel.findChild<QComboBox*>(QStringLiteral("webcamPanelDeviceCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_FALSE(combo->isEnabled()) << "Device combo must be disabled when MF is unavailable";
+}
+
+TEST_F(WebcamSetupPanelTest, SetMfUnavailable_ShowsMediaFeaturePackNotice) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.setMfUnavailable(true);
+
+    // The gate surfaces its notice in the preview placeholder (the card has no
+    // standalone notice label).
+    auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+    EXPECT_TRUE(preview->placeholderText().contains(QStringLiteral("Media Feature Pack"), Qt::CaseInsensitive))
+        << "Notice must mention Media Feature Pack. text=" << preview->placeholderText().toStdString();
+}
+
+TEST_F(WebcamSetupPanelTest, SetMfUnavailable_SetControlsLockedIsNoOp) {
+    // After setMfUnavailable the controls must stay disabled even if
+    // setControlsLocked(false) is called — the MF gate wins.
+    ui::widgets::WebcamSetupPanel panel;
+    panel.setMfUnavailable(true);
+    panel.setControlsLocked(false); // must be a no-op
+
+    auto* combo = panel.findChild<QComboBox*>(QStringLiteral("webcamPanelDeviceCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_FALSE(combo->isEnabled()) << "Combo must stay disabled after setMfUnavailable + unlock";
+}
+
+TEST_F(WebcamSetupPanelTest, DeviceCombo_DisabledWhenRecordingLocked) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.setControlsLocked(true);
+
+    auto* combo = panel.findChild<QComboBox*>(QStringLiteral("webcamPanelDeviceCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_FALSE(combo->isEnabled()) << "Device combo must be disabled while recording is locked";
+}
+
+TEST_F(WebcamSetupPanelTest, DeviceCombo_ReenabledWhenLockReleased) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.setControlsLocked(true);
+    panel.setControlsLocked(false);
+
+    auto* combo = panel.findChild<QComboBox*>(QStringLiteral("webcamPanelDeviceCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_TRUE(combo->isEnabled()) << "Device combo must re-enable after the recording lock is released";
 }
 
 } // namespace
