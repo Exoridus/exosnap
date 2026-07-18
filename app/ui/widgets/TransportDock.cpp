@@ -188,7 +188,10 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     setMinimumHeight(72);
 
     auto* grid = new QGridLayout(this);
-    grid->setContentsMargins(18, 12, 18, 12);
+    // Wider left/right inset than top/bottom: the bar is a full pill (border-radius =
+    // half-height in QSS), so the leftmost toggle and the rightmost action must sit
+    // clear of the deep corner arcs rather than tucking into the rounding.
+    grid->setContentsMargins(30, 12, 30, 12);
     grid->setHorizontalSpacing(16);
     grid->setVerticalSpacing(0);
     grid->setColumnStretch(0, 1);

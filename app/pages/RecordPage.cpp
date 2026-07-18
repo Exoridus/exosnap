@@ -40,10 +40,13 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
@@ -52,6 +55,7 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
@@ -109,6 +113,26 @@ QLabel* makeLabel(const QString& text, const char* role, QWidget* parent) {
     auto* label = new QLabel(text, parent);
     label->setProperty("labelRole", role);
     return label;
+}
+
+// Renders a Lucide glyph with a fixed trailing gap baked into the pixmap so the
+// icon->label spacing is identical whether the host is a QPushButton or a
+// QToolButton. The two share this row (Change source / Recent) but their built-in
+// icon spacings differ, which left the pair with visibly uneven icon rhythm; a
+// baked gap makes the leading space deterministic and equal on both. glyph_px and
+// gap_px are logical pixels; the pixmap is rendered at device resolution and keeps
+// its devicePixelRatio so it stays crisp on HiDPI.
+QIcon iconWithTrailingGap(const QString& name, const QString& color, int glyph_px, int gap_px, qreal dpr) {
+    const QPixmap glyph = ui::theme::lucidePixmap(name, color, glyph_px, dpr);
+    const int w_dev = static_cast<int>(std::lround((glyph_px + gap_px) * dpr));
+    const int h_dev = static_cast<int>(std::lround(glyph_px * dpr));
+    QPixmap padded(w_dev, h_dev);
+    padded.setDevicePixelRatio(dpr);
+    padded.fill(Qt::transparent);
+    QPainter painter(&padded);
+    painter.drawPixmap(0, 0, glyph); // glyph left-aligned; the gap sits on the trailing edge
+    painter.end();
+    return QIcon(padded);
 }
 
 void setStyledStringProperty(QWidget* widget, const char* property_name, const QString& value) {
@@ -776,15 +800,25 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     format_chips_label_ = makeLabel("", "recordFormatChips", source_row_);
     format_chips_label_->setVisible(false);
 
+    // Shared glyph metrics for the two header buttons (Recent / Change source): one
+    // icon size and one baked icon->label gap so the pair reads as coherent siblings
+    // regardless of their differing widget classes (QToolButton vs QPushButton).
+    constexpr int kHeaderGlyphPx = 15;
+    constexpr int kHeaderGlyphGap = 3;
+
     // EDIT-OVERLAY-R1: quiet "Recent" button — reopens an older recording, either
     // externally (existing onRecentItemOpen behavior) or in the Edit overlay (new).
     // The menu is rebuilt from view_model_.recent_recordings just before it shows.
     recent_recordings_btn_ = new QToolButton(source_row_);
     recent_recordings_btn_->setObjectName("recordRecentButton");
     recent_recordings_btn_->setText(QStringLiteral("Recent"));
-    // Canon (suite-record.jsx:304): quiet button with the clock glyph.
-    recent_recordings_btn_->setIcon(ui::theme::lucideIcon(
-        QStringLiteral("clock"), QString::fromUtf8(ui::theme::ActiveTheme().mut), 14, devicePixelRatioF()));
+    // Canon (suite-record.jsx:304): quiet button with the clock glyph. The glyph and
+    // its trailing gap are shared with Change source (kHeaderGlyphPx / kHeaderGlyphGap)
+    // so both header buttons read as one coherent pair.
+    recent_recordings_btn_->setIcon(iconWithTrailingGap(QStringLiteral("clock"),
+                                                        QString::fromUtf8(ui::theme::ActiveTheme().mut), kHeaderGlyphPx,
+                                                        kHeaderGlyphGap, devicePixelRatioF()));
+    recent_recordings_btn_->setIconSize(QSize(kHeaderGlyphPx + kHeaderGlyphGap, kHeaderGlyphPx));
     recent_recordings_btn_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     recent_recordings_btn_->setPopupMode(QToolButton::InstantPopup);
     recent_recordings_btn_->setToolTip(QStringLiteral("Reopen a past recording."));
@@ -798,9 +832,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     change_source_btn_ = new QPushButton("Change source", source_row_);
     change_source_btn_->setObjectName("recordChangeSourceButton");
     change_source_btn_->setProperty("role", "ghost");
-    // Canon (suite-record.jsx:304): ghost button with the layers glyph.
-    change_source_btn_->setIcon(ui::theme::lucideIcon(
-        QStringLiteral("layers"), QString::fromUtf8(ui::theme::ActiveTheme().ac), 14, devicePixelRatioF()));
+    // Canon (suite-record.jsx:304): ghost button with the layers glyph. Same glyph
+    // size + baked trailing gap as the Recent button so the pair is visually even.
+    change_source_btn_->setIcon(iconWithTrailingGap(QStringLiteral("layers"),
+                                                    QString::fromUtf8(ui::theme::ActiveTheme().ac), kHeaderGlyphPx,
+                                                    kHeaderGlyphGap, devicePixelRatioF()));
+    change_source_btn_->setIconSize(QSize(kHeaderGlyphPx + kHeaderGlyphGap, kHeaderGlyphPx));
     change_source_btn_->setEnabled(false);
 
     // Order per canon: [source chip, stretch] [format chips] [Source locked | Recent + Change source]
@@ -992,7 +1029,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_details_outer->addWidget(delete_confirm_overlay_);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+    // Snug top inset so the source-row header sits just under the nav bar (matching the
+    // header offset the other pages use) instead of floating below a tall margin — the
+    // reclaimed space grows the preview. Left/right/bottom keep the standard page gutter.
+    root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceSm,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
 
     root->setSpacing(10);
