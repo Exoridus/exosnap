@@ -149,7 +149,10 @@ struct VisualScenario {
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
     bool cfr = true;
-    capability::Container container = capability::Container::WebM;
+    // Shipped default fixture: MKV + AV1 + Opus (the product default profile), so
+    // renders show the real out-of-the-box format instead of WebM. Scenarios that
+    // genuinely need a different container set it explicitly.
+    capability::Container container = capability::Container::Matroska;
     capability::VideoCodec video_codec = capability::VideoCodec::Av1Nvenc;
     capability::AudioCodec audio_codec = capability::AudioCodec::Opus;
     QString reconciliation_warning;
@@ -164,7 +167,7 @@ struct VisualScenario {
     int source_refresh_generation = 0;  // monotonic generation counter
 
     // --- Completed result scenarios (OUTPUT-RESULTS-R1) ---
-    QString result_file_name = QStringLiteral("visual-test-recording.webm");
+    QString result_file_name = QStringLiteral("visual-test-recording.mkv");
     uint64_t result_file_size_bytes = 52ULL * 1024ULL * 1024ULL;
     double result_duration_seconds = 83.0;
     bool result_file_exists = true;

@@ -516,6 +516,11 @@ class MainWindow : public QMainWindow {
     bool pre_fullscreen_maximized_ = false;
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;
+    // Visual-test only: pin a deterministic GPU adapter name in Diagnostics so it
+    // matches the Device page's fixture and never shows the real machine adapter.
+    // Sticky, because the async caps-ready path re-assigns runtime_caps_ wholesale
+    // after the scenario is applied; refreshDiagnosticsData() re-applies it.
+    bool visual_diagnostics_gpu_override_ = false;
     // Disk cache for the last known-good CapabilitySet (warm-start only — see
     // CapabilityCacheStore). A cache hit hydrates runtime_caps_/runtime_caps_ready_
     // early so Device/Diagnostics are not blank during the async probe's cold

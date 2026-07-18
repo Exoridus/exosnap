@@ -140,6 +140,14 @@ class ConfigPage : public QWidget {
     // stage rows render deterministically for visual-test scenarios. No-op if the
     // audio-expert subtree isn't built yet (caller must enable expert mode first).
     void applyVisualMicPostProcessingExpanded(bool expanded);
+
+    // Force the Output card into a Custom-resolution state with (intentionally
+    // out-of-range) width/height so both the custom fields and the invalid
+    // indicator render deterministically. The real path (SanitizeOutputResolution)
+    // resets any unusable custom size back to Native, so this seam bypasses it to
+    // pin the honest invalid state for the settings-output-custom-resolution-invalid
+    // scenario. No settings are persisted.
+    void applyVisualCustomResolutionInvalid(int width, int height);
 #endif
 
     // Live audio meter update forwarded from RecordPage via MainWindow.
