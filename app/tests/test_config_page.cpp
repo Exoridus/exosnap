@@ -1436,45 +1436,64 @@ TEST_F(ConfigPageTest, SetPresetOptions_SelectedIsNotDefault_NoBadgeWidget) {
         << "presetDefaultBadge must not exist (removed in S1-redesign)";
 }
 
-// Spec rule 1: Save as new + Reset appear exactly when the live config is (changed).
-TEST_F(ConfigPageTest, ChangedState_ShowsSaveAsNewAndReset) {
+namespace {
+// Helper: fetch a named action from the preset overflow ("…") menu by its text.
+QAction* PresetMenuAction(ConfigPage& page, const QString& text) {
+    auto* manage_btn = page.findChild<QToolButton*>(QStringLiteral("presetManageButton"));
+    if (!manage_btn || !manage_btn->menu())
+        return nullptr;
+    for (QAction* a : manage_btn->menu()->actions())
+        if (a->text() == text)
+            return a;
+    return nullptr;
+}
+} // namespace
+
+// Toolbar simplification: "Save as new…" is the only standalone button (shown while
+// (changed)); Reset moved into the overflow menu and is enabled exactly while (changed).
+TEST_F(ConfigPageTest, ChangedState_ShowsSaveAsNewButtonAndEnablesResetAction) {
     ConfigPage page(output_defaults_, video_defaults_);
     std::vector<ConfigPage::ProfileOption> opts;
     opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
     page.setPresetOptions(opts, QStringLiteral("preset.default"), /*dirty=*/false);
 
     auto* save_as = page.findChild<QPushButton*>(QStringLiteral("presetSaveAsButton"));
-    auto* reset = page.findChild<QPushButton*>(QStringLiteral("presetResetButton"));
+    auto* reset = PresetMenuAction(page, QStringLiteral("Reset"));
     ASSERT_NE(save_as, nullptr);
     ASSERT_NE(reset, nullptr);
+    // The standalone Reset button is gone.
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("presetResetButton")), nullptr);
     EXPECT_FALSE(save_as->isVisibleTo(&page));
-    EXPECT_FALSE(reset->isVisibleTo(&page));
+    EXPECT_FALSE(reset->isEnabled());
 
     page.setPresetDirty(true);
     EXPECT_TRUE(save_as->isVisibleTo(&page));
-    EXPECT_TRUE(reset->isVisibleTo(&page));
+    EXPECT_TRUE(reset->isEnabled());
 }
 
-// Spec rule 2: Delete appears for a user preset regardless of (changed),
-// and never for a built-in.
-TEST_F(ConfigPageTest, DeleteButton_UserPresetOnly_IndependentOfChanged) {
+// Delete is a menu action now: enabled for a user preset regardless of (changed),
+// and disabled for a built-in.
+TEST_F(ConfigPageTest, DeleteAction_UserPresetOnly_IndependentOfChanged) {
     ConfigPage page(output_defaults_, video_defaults_);
     std::vector<ConfigPage::ProfileOption> opts;
     opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
     opts.push_back({QStringLiteral("preset.abc"), QStringLiteral("Mine"), false, false, true, {}});
 
-    auto* del = [&] {
-        page.setPresetOptions(opts, QStringLiteral("preset.abc"), /*dirty=*/false);
-        return page.findChild<QPushButton*>(QStringLiteral("presetDeleteButton"));
-    }();
+    // The standalone Delete button is gone.
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("presetDeleteButton")), nullptr);
+
+    page.setPresetOptions(opts, QStringLiteral("preset.abc"), /*dirty=*/false);
+    auto* del = PresetMenuAction(page, QStringLiteral("Delete"));
     ASSERT_NE(del, nullptr);
-    EXPECT_TRUE(del->isVisibleTo(&page)); // clean user preset is deletable
+    EXPECT_TRUE(del->isEnabled()); // clean user preset is deletable
 
     page.setPresetOptions(opts, QStringLiteral("preset.default"), /*dirty=*/true);
-    EXPECT_FALSE(del->isVisibleTo(&page)); // built-in: never
+    EXPECT_FALSE(del->isEnabled()); // built-in: never
 }
 
-TEST_F(ConfigPageTest, OverflowMenu_HasExactlyFourActions_RenameDisabledForBuiltIn) {
+// The overflow menu holds every secondary action; the duplicate "Save as new…" entry is
+// gone (it is the standalone button), and Rename is built-in-gated.
+TEST_F(ConfigPageTest, OverflowMenu_HasSecondaryActions_RenameDisabledForBuiltIn) {
     ConfigPage page(output_defaults_, video_defaults_);
     std::vector<ConfigPage::ProfileOption> opts;
     opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
@@ -1487,13 +1506,15 @@ TEST_F(ConfigPageTest, OverflowMenu_HasExactlyFourActions_RenameDisabledForBuilt
     for (QAction* a : manage_btn->menu()->actions())
         if (!a->isSeparator())
             texts << a->text();
-    EXPECT_EQ(texts, (QStringList() << QStringLiteral("Save as new\xe2\x80\xa6") << QStringLiteral("Rename\xe2\x80\xa6")
-                                    << QStringLiteral("Export\xe2\x80\xa6") << QStringLiteral("Import\xe2\x80\xa6")));
-    // Save as new stays reachable even when clean; Rename is built-in-gated.
-    EXPECT_TRUE(manage_btn->menu()->actions().first()->isEnabled());
-    for (QAction* a : manage_btn->menu()->actions())
-        if (a->text() == QStringLiteral("Rename\xe2\x80\xa6"))
-            EXPECT_FALSE(a->isEnabled());
+    EXPECT_EQ(texts, (QStringList() << QStringLiteral("Rename\xe2\x80\xa6") << QStringLiteral("Reset")
+                                    << QStringLiteral("Delete") << QStringLiteral("Export\xe2\x80\xa6")
+                                    << QStringLiteral("Import\xe2\x80\xa6")));
+    // The overflow menu no longer duplicates "Save as new…".
+    EXPECT_EQ(PresetMenuAction(page, QStringLiteral("Save as new\xe2\x80\xa6")), nullptr);
+    // Rename stays intentionally disabled for a built-in preset.
+    auto* rename = PresetMenuAction(page, QStringLiteral("Rename\xe2\x80\xa6"));
+    ASSERT_NE(rename, nullptr);
+    EXPECT_FALSE(rename->isEnabled());
 }
 
 // (changed) is a hint rendered in the combo text, not a warning widget.
@@ -1568,33 +1589,33 @@ TEST_F(ConfigPageTest, SetPresetOptionsDoesNotEmitPresetSelected) {
     EXPECT_EQ(emit_count, 0) << "setPresetOptions must not emit presetSelected";
 }
 
-TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesPresetSaveButtons) {
+TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesPresetActions) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     // Make the page dirty (Save as new / Reset) and select a user preset (Delete)
-    // so all three contextual buttons are normally enabled.
+    // so the button + its menu actions are normally enabled.
     std::vector<ConfigPage::ProfileOption> opts;
     opts.push_back({QStringLiteral("preset.default"), QStringLiteral("Default"), true, false, true, {}});
     opts.push_back({QStringLiteral("preset.abc"), QStringLiteral("Mine"), false, false, true, {}});
     page.setPresetOptions(opts, QStringLiteral("preset.abc"), /*dirty=*/true);
 
     auto* save_as_btn = page.findChild<QPushButton*>(QStringLiteral("presetSaveAsButton"));
-    auto* reset_btn = page.findChild<QPushButton*>(QStringLiteral("presetResetButton"));
-    auto* delete_btn = page.findChild<QPushButton*>(QStringLiteral("presetDeleteButton"));
+    auto* reset_action = PresetMenuAction(page, QStringLiteral("Reset"));
+    auto* delete_action = PresetMenuAction(page, QStringLiteral("Delete"));
     ASSERT_NE(save_as_btn, nullptr);
-    ASSERT_NE(reset_btn, nullptr);
-    ASSERT_NE(delete_btn, nullptr);
+    ASSERT_NE(reset_action, nullptr);
+    ASSERT_NE(delete_action, nullptr);
 
     // Baseline: before lock, all three are enabled.
     EXPECT_TRUE(save_as_btn->isEnabled());
-    EXPECT_TRUE(reset_btn->isEnabled());
-    EXPECT_TRUE(delete_btn->isEnabled());
+    EXPECT_TRUE(reset_action->isEnabled());
+    EXPECT_TRUE(delete_action->isEnabled());
 
     page.setRecordingControlsLocked(true);
 
     EXPECT_FALSE(save_as_btn->isEnabled()) << "Save As button must be disabled when locked";
-    EXPECT_FALSE(reset_btn->isEnabled()) << "Reset button must be disabled when locked";
-    EXPECT_FALSE(delete_btn->isEnabled()) << "Delete button must be disabled when locked";
+    EXPECT_FALSE(reset_action->isEnabled()) << "Reset action must be disabled when locked";
+    EXPECT_FALSE(delete_action->isEnabled()) << "Delete action must be disabled when locked";
 
     auto* manage_btn = page.findChild<QToolButton*>(QStringLiteral("presetManageButton"));
     ASSERT_NE(manage_btn, nullptr);
@@ -1669,14 +1690,15 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
 
 // ---- Split-by-size controls (SPLIT-BY-SIZE-R1) ----------------------------
 
-TEST_F(ConfigPageTest, SplitSizeModeCombo_ExistsWithOffAndCustomItems) {
+TEST_F(ConfigPageTest, SplitSizeModeToggle_ReplacesTheOffCustomCombo) {
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
-    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
-    ASSERT_NE(combo, nullptr);
-    // Should have at least Off and Custom.
-    EXPECT_GE(combo->count(), 2);
+    // The old Off/Custom combo is gone; on/off is an ExoToggle.
+    EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo")), nullptr);
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitSizeModeToggle"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isOn()); // default: split by size off
 }
 
 TEST_F(ConfigPageTest, SplitSizeMode_Off_HidesCustomSizeSpin) {
@@ -1712,7 +1734,7 @@ TEST_F(ConfigPageTest, SplitSizeMode_Custom_ShowsCustomSizeSpin) {
     EXPECT_EQ(spin->value(), 512);
 }
 
-TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeCombo) {
+TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeToggle) {
     OutputSettingsModel settings = output_defaults_;
     settings.container = capability::Container::Mp4;
     settings.split.size_mode = SplitSizeMode::Custom;
@@ -1722,9 +1744,79 @@ TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeCombo) {
     page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
-    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitSizeModeToggle"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isEnabled());
+    // The persisted mode is preserved (Custom) even though MP4 cannot honour it.
+    EXPECT_TRUE(toggle->isOn());
+}
+
+// ---- Split toggles: on/off maps to the SplitRecordingMode::Off enum, interval/size
+//      editors only appear while the toggle is on (persistence model unchanged) --------
+
+TEST_F(ConfigPageTest, SplitModeToggle_OffHidesIntervalRow_OnShowsIt) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.split.mode = SplitRecordingMode::Off;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    page.setOutputSettings(settings);
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
+    auto* interval_row = page.findChild<QWidget*>(QStringLiteral("splitIntervalRow"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_NE(interval_row, nullptr);
+    EXPECT_FALSE(toggle->isOn());
+    EXPECT_TRUE(interval_row->isHidden()) << "interval selector hidden while split is off";
+
+    // Turning the toggle on selects a concrete interval and reveals the selector.
+    toggle->setOn(true);
+    EXPECT_FALSE(interval_row->isHidden());
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
     ASSERT_NE(combo, nullptr);
-    EXPECT_FALSE(combo->isEnabled());
+    EXPECT_NE(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Off));
+}
+
+TEST_F(ConfigPageTest, SplitModeToggle_OffEmitsModeOff) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.split.mode = SplitRecordingMode::Every30Min;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    page.setOutputSettings(settings);
+
+    OutputSettingsModel emitted;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged,
+                     [&emitted](const OutputSettingsModel& m) { emitted = m; });
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->isOn());
+    toggle->setOn(false);
+    EXPECT_EQ(emitted.split.mode, SplitRecordingMode::Off) << "toggle off persists as SplitRecordingMode::Off";
+}
+
+TEST_F(ConfigPageTest, SplitSizeToggle_OnEmitsCustom_OffEmitsOff) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.split.size_mode = SplitSizeMode::Off;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    page.setOutputSettings(settings);
+
+    OutputSettingsModel emitted;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged,
+                     [&emitted](const OutputSettingsModel& m) { emitted = m; });
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitSizeModeToggle"));
+    ASSERT_NE(toggle, nullptr);
+    toggle->setOn(true);
+    EXPECT_EQ(emitted.split.size_mode, SplitSizeMode::Custom);
+    toggle->setOn(false);
+    EXPECT_EQ(emitted.split.size_mode, SplitSizeMode::Off);
 }
 
 // ── SETTINGS-TIERS-P3: Presence + Appearance cards (moved from AdvancedPage) ──
@@ -1923,13 +2015,15 @@ TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
     page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitModeCombo")), nullptr)
-        << "splitModeCombo must still exist after S5 reparenting";
-    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo")), nullptr)
-        << "splitSizeModeCombo must still exist after S5 reparenting";
+        << "splitModeCombo (interval selector) must still exist";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle")), nullptr)
+        << "splitModeToggle must exist";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitSizeModeToggle")), nullptr)
+        << "splitSizeModeToggle replaces the old splitSizeModeCombo";
     EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("splitCustomMinutesSpin")), nullptr)
-        << "splitCustomMinutesSpin must still exist after S5 reparenting";
+        << "splitCustomMinutesSpin must still exist";
     EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin")), nullptr)
-        << "splitCustomSizeSpin must still exist after S5 reparenting";
+        << "splitCustomSizeSpin must still exist";
 }
 
 // ---------------------------------------------------------------------------

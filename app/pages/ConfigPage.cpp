@@ -522,14 +522,6 @@ QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon
     return row;
 }
 
-// Mono uppercase "eyebrow" label that sits directly above a form control.
-// Used outside the Settings Output card (e.g. Advanced / Developer section).
-QLabel* makeFieldLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text.toUpper(), parent);
-    l->setProperty("labelRole", "fieldLabel");
-    return l;
-}
-
 // D6: Normal-case sub-section label for the Output card (no mono/uppercase).
 // Matches the settingsRowLabel role used by makeSettingsRow left-side labels.
 QLabel* makeOutputSubLabel(const QString& text, QWidget* parent) {
@@ -614,9 +606,8 @@ QWidget* makeSettingsRow(QWidget* parent, const QString& label, QWidget* hint_wi
     return container;
 }
 
-// Build a QWidget containing a fieldLabel + an InfoHintIcon side-by-side.
-// Use this wherever a plain makeFieldLabel would be placed; the result is
-// reparented to parent and can be inserted into any layout.
+// Build a QWidget containing a mono "eyebrow" fieldLabel + an InfoHintIcon side-by-side.
+// The result is reparented to parent and can be inserted into any layout.
 QWidget* makeFieldLabelWithHint(const QString& text, const QString& hint_text, QWidget* parent) {
     auto* row = new QWidget(parent);
     auto* hl = new QHBoxLayout(row);
@@ -798,28 +789,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_status_label_->setVisible(false);
         toolbar_hl->addWidget(profile_status_label_, 0, Qt::AlignVCenter);
 
-        // Save as new (shown only while the live config is (changed))
+        // The one visible action button: "Save as new…" (shown only while the live
+        // config is (changed)). Every other preset action lives in the "…" menu so the
+        // toolbar stays a selector + a single button + an overflow menu.
         preset_save_as_btn_ = new QPushButton(QStringLiteral("Save as new\xe2\x80\xa6"), toolbar_row);
         preset_save_as_btn_->setObjectName(QStringLiteral("presetSaveAsButton"));
         preset_save_as_btn_->setProperty("role", "ghost");
         preset_save_as_btn_->setVisible(false);
         toolbar_hl->addWidget(preset_save_as_btn_, 0, Qt::AlignVCenter);
 
-        // Reset (shown only while the live config is (changed))
-        preset_reset_btn_ = new QPushButton(QStringLiteral("Reset"), toolbar_row);
-        preset_reset_btn_->setObjectName(QStringLiteral("presetResetButton"));
-        preset_reset_btn_->setProperty("role", "quiet");
-        preset_reset_btn_->setVisible(false);
-        toolbar_hl->addWidget(preset_reset_btn_, 0, Qt::AlignVCenter);
-
-        // Delete (shown only for a selected user preset)
-        preset_delete_btn_ = new QPushButton(QStringLiteral("Delete"), toolbar_row);
-        preset_delete_btn_->setObjectName(QStringLiteral("presetDeleteButton"));
-        preset_delete_btn_->setProperty("role", "quiet");
-        preset_delete_btn_->setVisible(false);
-        toolbar_hl->addWidget(preset_delete_btn_, 0, Qt::AlignVCenter);
-
-        // Overflow menu button
+        // Overflow menu button. Holds the secondary actions as enabled/disabled entries
+        // (Rename is intentionally disabled for built-in presets; Reset/Delete follow the
+        // dirty / user-preset gates the standalone buttons used to apply).
         profile_overflow_btn_ = new QToolButton(toolbar_row);
         profile_overflow_btn_->setObjectName(QStringLiteral("presetManageButton"));
         profile_overflow_btn_->setText(QStringLiteral("\xe2\x80\xa6"));
@@ -827,8 +808,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
         auto* profile_menu = new QMenu(profile_overflow_btn_);
-        save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new\xe2\x80\xa6"));
         rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename\xe2\x80\xa6"));
+        reset_preset_action_ = profile_menu->addAction(QStringLiteral("Reset"));
+        delete_preset_action_ = profile_menu->addAction(QStringLiteral("Delete"));
         profile_menu->addSeparator();
         export_preset_action_ = profile_menu->addAction(QStringLiteral("Export\xe2\x80\xa6"));
         import_presets_action_ = profile_menu->addAction(QStringLiteral("Import\xe2\x80\xa6"));
@@ -860,43 +842,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         header_vl->addWidget(toolbar_row);
 
         layout->addWidget(header_zone);
-    }
-
-    // ---- EXPERT WARNING BANNER (P2) ----
-    // Amber banner above the card grid, visible only in expert mode. Re-introduces the
-    // old expert_warn_label_ banner that was downgraded to an inline InfoHint icon; the
-    // InfoHint by the toggle stays for in-place help, the banner restores the prominent
-    // "files may not play everywhere" caution.
-    {
-        expert_warn_banner_ = new QWidget(content);
-        expert_warn_banner_->setObjectName(QStringLiteral("expertWarnBanner"));
-        auto* ewb_hl = new QHBoxLayout(expert_warn_banner_);
-        ewb_hl->setContentsMargins(15, 11, 15, 11);
-        ewb_hl->setSpacing(10);
-
-        auto* ewb_icon = new QLabel(expert_warn_banner_);
-        ewb_icon->setObjectName(QStringLiteral("expertWarnBannerIcon"));
-        ewb_icon->setFixedSize(15, 15);
-        ewb_icon->setAlignment(Qt::AlignCenter);
-        ewb_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("alert-triangle"),
-                                                    QString::fromUtf8(ui::theme::ActiveTheme().caution), 15,
-                                                    expert_warn_banner_->devicePixelRatioF()));
-        ewb_hl->addWidget(ewb_icon, 0, Qt::AlignVCenter);
-
-        auto* ewb_text = new QLabel(QStringLiteral("Expert settings can produce files that won't play everywhere."),
-                                    expert_warn_banner_);
-        ewb_text->setObjectName(QStringLiteral("expertWarnBannerText"));
-        ewb_text->setWordWrap(true);
-        ewb_hl->addWidget(ewb_text, 1);
-
-        // v0.9 polish: the terse caution keeps its info-i for the concrete detail (which
-        // settings narrow compatibility), so the banner stays a short sentence.
-        auto* ewb_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertBannerDetail, expert_warn_banner_);
-        ewb_info->setObjectName(QStringLiteral("expertWarnBannerInfoHint"));
-        ewb_hl->addWidget(ewb_info, 0, Qt::AlignVCenter);
-
-        expert_warn_banner_->setVisible(expert_mode_enabled_);
-        layout->addWidget(expert_warn_banner_);
     }
 
     // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
@@ -1412,6 +1357,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_res_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(OutputResolutionMode::Custom));
 
     // Custom resolution width/height fields (CUSTOM-OUTPUT-RESOLUTION-R1).
+    // Laid out as a standard settings row: a "Custom size" label on the left and the
+    // width × height inputs right-aligned to the same column the resolution combo above
+    // uses. Both spin boxes share one fixed width, separated by a muted "×".
     custom_resolution_widget_ = new QWidget(out_panel);
     custom_resolution_widget_->setObjectName(QStringLiteral("customResolutionWidget"));
     custom_resolution_widget_->setVisible(false);
@@ -1419,29 +1367,36 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_res_layout->setContentsMargins(0, 0, 0, 0);
     custom_res_layout->setSpacing(8);
 
-    auto* width_label = new QLabel(QStringLiteral("Width"), custom_resolution_widget_);
-    width_label->setProperty("labelRole", "settingsRowLabel");
+    auto* custom_size_label = new QLabel(QStringLiteral("Custom size"), custom_resolution_widget_);
+    custom_size_label->setProperty("labelRole", "settingsRowLabel");
+
+    constexpr int kCustomResSpinWidth = 92;
     custom_width_spin_ = new QSpinBox(custom_resolution_widget_);
     custom_width_spin_->setObjectName(QStringLiteral("customWidthSpin"));
     custom_width_spin_->setRange(320, 7680);
     custom_width_spin_->setSingleStep(2);
     custom_width_spin_->setSuffix(QStringLiteral(" px"));
+    custom_width_spin_->setFixedWidth(kCustomResSpinWidth);
+    custom_width_spin_->setProperty("settingsRowInput", true);
     custom_width_spin_->setToolTip(QStringLiteral("Custom output width (320–7680)"));
 
-    auto* height_label = new QLabel(QStringLiteral("Height"), custom_resolution_widget_);
-    height_label->setProperty("labelRole", "settingsRowLabel");
+    auto* times_label = new QLabel(QStringLiteral("\xc3\x97"), custom_resolution_widget_); // ×
+    times_label->setProperty("labelRole", "muted");
+
     custom_height_spin_ = new QSpinBox(custom_resolution_widget_);
     custom_height_spin_->setObjectName(QStringLiteral("customHeightSpin"));
     custom_height_spin_->setRange(180, 7680);
     custom_height_spin_->setSingleStep(2);
     custom_height_spin_->setSuffix(QStringLiteral(" px"));
+    custom_height_spin_->setFixedWidth(kCustomResSpinWidth);
+    custom_height_spin_->setProperty("settingsRowInput", true);
     custom_height_spin_->setToolTip(QStringLiteral("Custom output height (180–7680)"));
 
-    custom_res_layout->addWidget(width_label);
-    custom_res_layout->addWidget(custom_width_spin_);
-    custom_res_layout->addWidget(height_label);
-    custom_res_layout->addWidget(custom_height_spin_);
-    custom_res_layout->addStretch();
+    custom_res_layout->addWidget(custom_size_label);
+    custom_res_layout->addStretch(1);
+    custom_res_layout->addWidget(custom_width_spin_, 0, Qt::AlignVCenter);
+    custom_res_layout->addWidget(times_label, 0, Qt::AlignVCenter);
+    custom_res_layout->addWidget(custom_height_spin_, 0, Qt::AlignVCenter);
     out_panel_layout->addWidget(custom_resolution_widget_);
 
     custom_resolution_validation_label_ = makeHint(QString(), out_panel);
@@ -1988,11 +1943,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::webcamPreviewActiveRequested);
     // Preset management connections — toolbar buttons.
     connect(preset_save_as_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePresetAs);
-    connect(preset_reset_btn_, &QPushButton::clicked, this, &ConfigPage::resetChangesRequested);
-    connect(preset_delete_btn_, &QPushButton::clicked, this, &ConfigPage::onDeletePreset);
     // Preset management connections — overflow menu.
-    connect(save_preset_as_action_, &QAction::triggered, this, &ConfigPage::onSavePresetAs);
     connect(rename_preset_action_, &QAction::triggered, this, &ConfigPage::onRenamePreset);
+    connect(reset_preset_action_, &QAction::triggered, this, &ConfigPage::resetChangesRequested);
+    connect(delete_preset_action_, &QAction::triggered, this, &ConfigPage::onDeletePreset);
     connect(export_preset_action_, &QAction::triggered, this, [this]() {
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Preset"), QString(),
                                                           QStringLiteral("TOML files (*.toml)"));
@@ -2290,9 +2244,29 @@ void ConfigPage::onOutputResolutionSelected(int mode_id) {
     emitCurrentFormatSettings();
 }
 
+void ConfigPage::onSplitToggled(bool on) {
+    if (!split_toggle_)
+        return;
+    // Toggle off ⟺ mode Off. Toggle on adopts the interval currently shown in the combo
+    // (which retains the last-chosen value across on/off flips); the persisted enum is
+    // unchanged, so preset/TOML round-trips stay identical.
+    if (on) {
+        SplitRecordingMode mode = SplitRecordingMode::Every15Min;
+        if (split_mode_combo_ && split_mode_combo_->currentIndex() >= 0)
+            mode = static_cast<SplitRecordingMode>(split_mode_combo_->currentData().toInt());
+        format_settings_.split.mode = mode;
+    } else {
+        format_settings_.split.mode = SplitRecordingMode::Off;
+    }
+    SanitizeSplitSettings(format_settings_.split);
+    updateSplitSelection();
+    emitCurrentFormatSettings();
+}
+
 void ConfigPage::onSplitModeChanged(int index) {
     if (!split_mode_combo_)
         return;
+    // The combo only carries the non-Off intervals now; a change means the toggle is on.
     const auto mode = static_cast<SplitRecordingMode>(split_mode_combo_->itemData(index).toInt());
     format_settings_.split.mode = mode;
     SanitizeSplitSettings(format_settings_.split);
@@ -2301,13 +2275,19 @@ void ConfigPage::onSplitModeChanged(int index) {
 }
 
 void ConfigPage::updateSplitSelection() {
-    if (!split_mode_combo_)
+    if (!split_toggle_)
         return;
     const SplitRecordingSettings& s = format_settings_.split;
     // MP4 cannot produce segmented output (IMF Sink Writer); the configured split
     // mode is preserved untouched so switching back to MKV/WebM restores it.
     const bool split_supported = format_settings_.container != capability::Container::Mp4;
+    const bool split_on = s.mode != SplitRecordingMode::Off;
     {
+        QSignalBlocker block_toggle(split_toggle_);
+        split_toggle_->setOn(split_on);
+    }
+    // Reflect the active interval in the combo while on; leave its last selection when off.
+    if (split_mode_combo_ && split_on) {
         QSignalBlocker block_combo(split_mode_combo_);
         const int idx = split_mode_combo_->findData(static_cast<int>(s.mode));
         if (idx >= 0)
@@ -2317,11 +2297,16 @@ void ConfigPage::updateSplitSelection() {
         QSignalBlocker block_spin(split_custom_minutes_spin_);
         split_custom_minutes_spin_->setValue(static_cast<int>(s.custom_minutes));
     }
-    split_mode_combo_->setEnabled(split_supported);
+    split_toggle_->setEnabled(split_supported);
+    if (split_mode_combo_)
+        split_mode_combo_->setEnabled(split_supported);
     if (split_custom_minutes_spin_)
         split_custom_minutes_spin_->setEnabled(split_supported);
+    // Interval selector only while on; custom-minutes editor only while on + Custom.
+    if (split_interval_row_)
+        split_interval_row_->setVisible(split_on);
     if (split_custom_widget_)
-        split_custom_widget_->setVisible(split_supported && s.mode == SplitRecordingMode::Custom);
+        split_custom_widget_->setVisible(split_on && split_supported && s.mode == SplitRecordingMode::Custom);
 
     if (split_summary_label_) {
         if (!split_supported) {
@@ -2340,36 +2325,35 @@ void ConfigPage::updateSplitSelection() {
     updateSplitSizeSelection();
 }
 
-void ConfigPage::onSplitSizeModeChanged(int index) {
-    if (!split_size_mode_combo_)
+void ConfigPage::onSplitSizeToggled(bool on) {
+    if (!split_size_toggle_)
         return;
-    const auto mode = static_cast<SplitSizeMode>(split_size_mode_combo_->itemData(index).toInt());
-    format_settings_.split.size_mode = mode;
+    // Only one non-Off size mode exists, so the toggle maps directly onto Custom/Off.
+    format_settings_.split.size_mode = on ? SplitSizeMode::Custom : SplitSizeMode::Off;
     SanitizeSplitSettings(format_settings_.split);
     updateSplitSizeSelection();
     emitCurrentFormatSettings();
 }
 
 void ConfigPage::updateSplitSizeSelection() {
-    if (!split_size_mode_combo_)
+    if (!split_size_toggle_)
         return;
     const SplitRecordingSettings& s = format_settings_.split;
     const bool split_supported = format_settings_.container != capability::Container::Mp4;
+    const bool size_on = s.size_mode != SplitSizeMode::Off;
     {
-        QSignalBlocker block_combo(split_size_mode_combo_);
-        const int idx = split_size_mode_combo_->findData(static_cast<int>(s.size_mode));
-        if (idx >= 0)
-            split_size_mode_combo_->setCurrentIndex(idx);
+        QSignalBlocker block_toggle(split_size_toggle_);
+        split_size_toggle_->setOn(size_on);
     }
     if (split_custom_size_spin_) {
         QSignalBlocker block_spin(split_custom_size_spin_);
         split_custom_size_spin_->setValue(static_cast<int>(s.custom_size_mb));
     }
-    split_size_mode_combo_->setEnabled(split_supported);
+    split_size_toggle_->setEnabled(split_supported);
     if (split_custom_size_spin_)
         split_custom_size_spin_->setEnabled(split_supported);
     if (split_size_custom_widget_)
-        split_size_custom_widget_->setVisible(split_supported && s.size_mode == SplitSizeMode::Custom);
+        split_size_custom_widget_->setVisible(size_on && split_supported);
 }
 
 void ConfigPage::onCursorChanged() {
@@ -3277,26 +3261,23 @@ void ConfigPage::updatePresetActionState() {
         profile_status_label_->style()->polish(profile_status_label_);
     }
 
-    // Save as new / Reset: shown exactly while the live config is (changed).
+    // "Save as new…": the one visible action button, shown exactly while the live
+    // config is (changed).
     if (preset_save_as_btn_) {
         preset_save_as_btn_->setVisible(preset_dirty_);
         preset_save_as_btn_->setEnabled(preset_dirty_ && !locked);
     }
-    if (preset_reset_btn_) {
-        preset_reset_btn_->setVisible(preset_dirty_);
-        preset_reset_btn_->setEnabled(preset_dirty_ && !locked);
-    }
-    // Delete: shown for a selected user preset, regardless of (changed).
-    if (preset_delete_btn_) {
-        preset_delete_btn_->setVisible(user_preset);
-        preset_delete_btn_->setEnabled(user_preset && !locked);
-    }
 
-    // Menu actions.
-    if (save_preset_as_action_)
-        save_preset_as_action_->setEnabled(!locked); // permanently reachable
+    // Overflow menu actions. Reset and Delete moved here from standalone buttons; they
+    // stay reachable but disable when their old visibility gate would have hidden them
+    // (Reset: only while (changed); Delete: only for a user preset). Rename is
+    // intentionally disabled for built-in presets.
     if (rename_preset_action_)
         rename_preset_action_->setEnabled(user_preset && !locked);
+    if (reset_preset_action_)
+        reset_preset_action_->setEnabled(preset_dirty_ && !locked);
+    if (delete_preset_action_)
+        delete_preset_action_->setEnabled(user_preset && !locked);
     if (export_preset_action_)
         export_preset_action_->setEnabled(!active_preset_id_.isEmpty());
     if (import_presets_action_)
@@ -4526,9 +4507,13 @@ void ConfigPage::buildSplitExpertSection() {
         split_expert_layout->setSpacing(8);
 
         // --- Create all sub-controls first (objectNames + values preserved as before). ---
+        // On/off is now an ExoToggle; the interval combo only carries the non-Off modes.
+        split_toggle_ = new ui::widgets::ExoToggle(split_expert_section_);
+        split_toggle_->setObjectName(QStringLiteral("splitModeToggle"));
+        split_toggle_->setOn(false);
+
         split_mode_combo_ = new QComboBox(split_expert_section_);
         split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
-        split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
         split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
         split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
         split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
@@ -4556,20 +4541,19 @@ void ConfigPage::buildSplitExpertSection() {
         split_summary_label_ = makeHint(QString(), split_expert_section_);
         split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
 
-        split_size_mode_combo_ = new QComboBox(split_expert_section_);
-        split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
-        split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
-        split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
-        split_size_mode_combo_->setToolTip(
-            QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
+        // Split-by-size on/off is an ExoToggle too (there is only one non-Off size mode).
+        split_size_toggle_ = new ui::widgets::ExoToggle(split_expert_section_);
+        split_size_toggle_->setObjectName(QStringLiteral("splitSizeModeToggle"));
+        split_size_toggle_->setOn(false);
 
         split_size_custom_widget_ = new QWidget(split_expert_section_);
+        split_size_custom_widget_->setObjectName(QStringLiteral("splitSizeCustomWidget"));
         auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
         split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
         split_size_custom_layout->setSpacing(8);
-        auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
+        auto* split_size_label = new QLabel(QStringLiteral("Segment size"), split_size_custom_widget_);
         split_size_label->setProperty("labelRole", "settingsRowLabel");
-        split_custom_size_spin_ = new QSpinBox(split_expert_section_);
+        split_custom_size_spin_ = new QSpinBox(split_size_custom_widget_);
         split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
         // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
         split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
@@ -4579,6 +4563,7 @@ void ConfigPage::buildSplitExpertSection() {
             QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
                            "is reached first triggers the split."));
         split_size_custom_layout->addWidget(split_size_label);
+        split_size_custom_layout->addStretch();
         split_size_custom_layout->addWidget(split_custom_size_spin_);
         split_size_custom_widget_->setVisible(false);
 
@@ -4588,35 +4573,44 @@ void ConfigPage::buildSplitExpertSection() {
         split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Automatic split"),
                                                                   ui::hints::kSplitRecording, split_expert_section_));
 
-        // "Split recording" (by time) sub-section.
-        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_));
+        // "Split recording" (by time) sub-section: label + on/off toggle on one row; the
+        // interval selector only appears once the toggle is on.
+        auto* split_time_header = new QWidget(split_expert_section_);
+        auto* split_time_header_hl = new QHBoxLayout(split_time_header);
+        split_time_header_hl->setContentsMargins(0, 4, 0, 4);
+        split_time_header_hl->setSpacing(8);
+        split_time_header_hl->addWidget(makeOutputSubLabel(QStringLiteral("Split recording"), split_time_header), 1);
+        split_time_header_hl->addWidget(split_toggle_, 0, Qt::AlignVCenter);
+        split_expert_layout->addWidget(split_time_header);
 
-        auto* split_row = new QWidget(split_expert_section_);
-        auto* split_row_hl = new QHBoxLayout(split_row);
+        split_interval_row_ = new QWidget(split_expert_section_);
+        split_interval_row_->setObjectName(QStringLiteral("splitIntervalRow"));
+        auto* split_row_hl = new QHBoxLayout(split_interval_row_);
         split_row_hl->setContentsMargins(0, 4, 0, 4);
         split_row_hl->setSpacing(8);
         split_row_hl->addWidget(split_mode_combo_, 0);
         split_row_hl->addWidget(split_custom_widget_, 0);
         split_row_hl->addStretch();
-        split_expert_layout->addWidget(split_row);
+        split_interval_row_->setVisible(false);
+        split_expert_layout->addWidget(split_interval_row_);
         split_expert_layout->addWidget(split_summary_label_);
 
-        // "Split by size" sub-section.
-        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_));
-
-        auto* split_size_row = new QWidget(split_expert_section_);
-        auto* split_size_row_hl = new QHBoxLayout(split_size_row);
-        split_size_row_hl->setContentsMargins(0, 4, 0, 4);
-        split_size_row_hl->setSpacing(8);
-        split_size_row_hl->addWidget(split_size_mode_combo_, 0);
-        split_size_row_hl->addWidget(split_size_custom_widget_, 0);
-        split_size_row_hl->addStretch();
-        split_expert_layout->addWidget(split_size_row);
+        // "Split by size" sub-section: label + on/off toggle on one row; the custom size
+        // spin only appears once the toggle is on.
+        auto* split_size_header = new QWidget(split_expert_section_);
+        auto* split_size_header_hl = new QHBoxLayout(split_size_header);
+        split_size_header_hl->setContentsMargins(0, 4, 0, 4);
+        split_size_header_hl->setSpacing(8);
+        split_size_header_hl->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_size_header), 1);
+        split_size_header_hl->addWidget(split_size_toggle_, 0, Qt::AlignVCenter);
+        split_expert_layout->addWidget(split_size_header);
+        split_expert_layout->addWidget(split_size_custom_widget_);
     }
     if (auto* out_panel_layout = qobject_cast<QVBoxLayout*>(out_panel_->layout())) {
         out_panel_layout->insertWidget(split_expert_insert_index_, split_expert_section_);
     }
 
+    connect(split_toggle_, &ui::widgets::ExoToggle::toggled, this, &ConfigPage::onSplitToggled);
     connect(split_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitModeChanged);
     connect(split_custom_minutes_spin_, &QSpinBox::valueChanged, this, [this](int minutes) {
         format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
@@ -4624,7 +4618,7 @@ void ConfigPage::buildSplitExpertSection() {
         updateSplitSelection();
         emitCurrentFormatSettings();
     });
-    connect(split_size_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitSizeModeChanged);
+    connect(split_size_toggle_, &ui::widgets::ExoToggle::toggled, this, &ConfigPage::onSplitSizeToggled);
     connect(split_custom_size_spin_, &QSpinBox::valueChanged, this, [this](int size_mb) {
         format_settings_.split.custom_size_mb = static_cast<uint32_t>(size_mb);
         SanitizeSplitSettings(format_settings_.split);
@@ -4647,8 +4641,12 @@ void ConfigPage::buildDeveloperCard() {
         developer_card_ = makePanel(left_col);
         developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
         auto* dev_layout = new QVBoxLayout(developer_card_);
-        dev_layout->setContentsMargins(18, 14, 18, 14);
-        dev_layout->setSpacing(M::kSpaceSm);
+        // Flat card style: same content margins + zero inter-row spacing as every other
+        // settings card. Rows are built with makeSettingsRow (label left, control right,
+        // hairline separators) instead of the old nested compactRow frames, so the
+        // Developer card no longer renders cards-inside-a-card.
+        dev_layout->setContentsMargins(18, 16, 18, 18);
+        dev_layout->setSpacing(0);
         dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
         // SETTINGS-HONESTY-R1 (review F2): the old hint ("not persisted between
         // sessions") became false once the log level was genuinely wired + persisted.
@@ -4664,62 +4662,46 @@ void ConfigPage::buildDeveloperCard() {
         // severities (Debug/Info/Warning/Error); inventing a fifth would mean adding a
         // LogSeverity nothing in the app actually emits, so the combo is honest about
         // what levels exist instead.
+        auto* log_level_combo = new QComboBox(developer_card_);
+        log_level_combo->setObjectName(QStringLiteral("developerLogLevelCombo"));
+        log_level_combo->setMinimumWidth(160);
+        log_level_combo->setMaximumWidth(220);
+        log_level_combo->addItem(QStringLiteral("Off"), QStringLiteral("Off"));
+        log_level_combo->addItem(QStringLiteral("Error"), QStringLiteral("Error"));
+        log_level_combo->addItem(QStringLiteral("Warning"), QStringLiteral("Warning"));
+        log_level_combo->addItem(QStringLiteral("Info"), QStringLiteral("Info"));
+        log_level_combo->addItem(QStringLiteral("Debug"), QStringLiteral("Debug"));
+        // Review F3: name the consequence — raising the level drops lines from
+        // support diagnostics, which is exactly the surprise a user should see coming.
+        log_level_combo->setToolTip(
+            QStringLiteral("Raising this hides lower-severity lines from the in-app log and session log "
+                           "file — support diagnostics may be incomplete."));
+        developer_log_level_combo_ = log_level_combo;
         {
-            auto* row = new QFrame(developer_card_);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), row));
-            auto* log_level_combo = new QComboBox(row);
-            log_level_combo->setObjectName(QStringLiteral("developerLogLevelCombo"));
-            log_level_combo->setMinimumWidth(220);
-            log_level_combo->setMaximumWidth(320);
-            log_level_combo->addItem(QStringLiteral("Off"), QStringLiteral("Off"));
-            log_level_combo->addItem(QStringLiteral("Error"), QStringLiteral("Error"));
-            log_level_combo->addItem(QStringLiteral("Warning"), QStringLiteral("Warning"));
-            log_level_combo->addItem(QStringLiteral("Info"), QStringLiteral("Info"));
-            log_level_combo->addItem(QStringLiteral("Debug"), QStringLiteral("Debug"));
-            // Review F3: name the consequence — raising the level drops lines from
-            // support diagnostics, which is exactly the surprise a user should see coming.
-            log_level_combo->setToolTip(
-                QStringLiteral("Raising this hides lower-severity lines from the in-app log and session log "
-                               "file — support diagnostics may be incomplete."));
-            developer_log_level_combo_ = log_level_combo;
-            {
-                const int idx = log_level_combo->findData(developer_log_level_);
-                log_level_combo->setCurrentIndex(idx >= 0 ? idx : 4); // fallback: Debug (record everything)
-            }
-            connect(log_level_combo, &QComboBox::currentIndexChanged, this, [this](int index) {
-                if (!developer_log_level_combo_)
-                    return;
-                const QString level = developer_log_level_combo_->itemData(index).toString();
-                if (level.isEmpty())
-                    return;
-                developer_log_level_ = level;
-                emit developerLogLevelChanged(level);
-            });
-            rl->addWidget(log_level_combo);
-            dev_layout->addWidget(row);
+            const int idx = log_level_combo->findData(developer_log_level_);
+            log_level_combo->setCurrentIndex(idx >= 0 ? idx : 4); // fallback: Debug (record everything)
         }
+        connect(log_level_combo, &QComboBox::currentIndexChanged, this, [this](int index) {
+            if (!developer_log_level_combo_)
+                return;
+            const QString level = developer_log_level_combo_->itemData(index).toString();
+            if (level.isEmpty())
+                return;
+            developer_log_level_ = level;
+            emit developerLogLevelChanged(level);
+        });
+        dev_layout->addWidget(makeSettingsRow(developer_card_, QStringLiteral("Developer logging level"), nullptr,
+                                              QString(), log_level_combo, /*first=*/true));
 
         // NVTX profiling markers: no NVTX infrastructure exists anywhere in the app
         // (no headers, no instrumentation calls) — honestly disabled + tooltip rather
         // than building speculative NVTX plumbing for a control nothing else uses yet.
-        {
-            auto* row = new QFrame(developer_card_);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabel(QStringLiteral("Profiling"), row));
-            auto* nvtx_check = new ui::widgets::ExoCheckBox(QStringLiteral("Enable NVTX / profiling markers"), row);
-            nvtx_check->setObjectName(QStringLiteral("nvtxProfilingCheck"));
-            nvtx_check->setEnabled(false);
-            nvtx_check->setToolTip(QStringLiteral("Profiling markers are planned for a future build."));
-            rl->addWidget(nvtx_check);
-            dev_layout->addWidget(row);
-        }
+        auto* nvtx_check = new ui::widgets::ExoCheckBox(QString(), developer_card_);
+        nvtx_check->setObjectName(QStringLiteral("nvtxProfilingCheck"));
+        nvtx_check->setEnabled(false);
+        nvtx_check->setToolTip(QStringLiteral("Profiling markers are planned for a future build."));
+        dev_layout->addWidget(makeSettingsRow(developer_card_, QStringLiteral("NVTX / profiling markers"), nullptr,
+                                              QStringLiteral("Planned for a future build"), nvtx_check));
 
         developer_card_->setVisible(expert_mode_enabled_);
     }
@@ -5326,9 +5308,6 @@ void ConfigPage::updateExpertModeVisibility() {
     if (expert_mode_enabled_ && !audio_expert_built_) {
         buildAudioExpertSection();
     }
-    // P2: amber warning banner above the grid follows the expert gate.
-    if (expert_warn_banner_)
-        expert_warn_banner_->setVisible(expert_mode_enabled_);
     // P3: "Expert mode" label tints to accent when on (QSS repolish on property change).
     if (expert_mode_label_) {
         expert_mode_label_->setProperty("expertOn", expert_mode_enabled_);

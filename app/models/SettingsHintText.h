@@ -48,13 +48,6 @@ inline const QString kSplitRecording = QStringLiteral("New file every N min / ~N
 inline const QString kExpertMode = QStringLiteral("Expert mode reveals lower-level controls that can produce "
                                                   "incompatible files. Enable only if you know why.");
 
-// v0.9 polish: the expert-warning banner keeps a terse caution; this info-i carries the
-// concrete detail of what narrows compatibility, so the banner itself stays short.
-inline const QString kExpertBannerDetail =
-    QStringLiteral("Codec, bit depth, chroma subsampling, colour range and HDR handling each narrow which "
-                   "players and editors can open the file. Every row explains its own tradeoff \xE2\x80\x94 "
-                   "pick the recommended value if unsure.");
-
 // ---- Presence / Appearance (moved from AdvancedPage in SETTINGS-TIERS-P3) ----
 inline const QString kRecordingOverlay = QStringLiteral("On-screen REC badge \xC2\xB7 excluded from capture");
 inline const QString kDiagnosticsOverlay = QStringLiteral("Live fps/drops on screen \xC2\xB7 excluded");
