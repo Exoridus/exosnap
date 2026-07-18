@@ -7,6 +7,8 @@
 #include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
 
+#include <QColor>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -15,8 +17,11 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSize>
+#include <QSlider>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 namespace exosnap::ui::widgets {
 
@@ -27,6 +32,22 @@ QFrame* makeHairline(QWidget* parent) {
     line->setProperty("frameRole", "sectionRuleLine");
     return line;
 }
+
+QString pct(int value) {
+    return QString::number(value) + QStringLiteral("%");
+}
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+WebcamChromaKeyColorMode colorModeFromString(const QString& mode) {
+    if (mode.compare(QStringLiteral("blue"), Qt::CaseInsensitive) == 0)
+        return WebcamChromaKeyColorMode::Blue;
+    if (mode.compare(QStringLiteral("magenta"), Qt::CaseInsensitive) == 0)
+        return WebcamChromaKeyColorMode::Magenta;
+    if (mode.compare(QStringLiteral("custom"), Qt::CaseInsensitive) == 0)
+        return WebcamChromaKeyColorMode::Custom;
+    return WebcamChromaKeyColorMode::Green;
+}
+#endif
 
 } // namespace
 
@@ -123,6 +144,102 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     mr->addWidget(mirror_toggle_);
     right_layout->addWidget(mirror_row);
 
+    // Reusable "label + slider + percent" row builder (0–100 %), matching the
+    // compact Settings row rhythm.
+    auto addSliderRow = [&](const QString& label_text, const QString& object_name, int def, QSlider*& slider,
+                            QLabel*& value_label, QWidget* row_parent) -> QWidget* {
+        auto* row = new QWidget(row_parent);
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(0, 0, 0, 0);
+        rl->setSpacing(8);
+        auto* lbl = new QLabel(label_text, row);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        rl->addWidget(lbl, 1);
+        slider = new QSlider(Qt::Horizontal, row);
+        slider->setObjectName(object_name);
+        slider->setRange(0, 100);
+        slider->setValue(def);
+        slider->setFixedWidth(140);
+        rl->addWidget(slider, 0);
+        value_label = new QLabel(pct(def), row);
+        value_label->setProperty("labelRole", "settingsRowLabel");
+        value_label->setFixedWidth(38);
+        value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        rl->addWidget(value_label, 0);
+        return row;
+    };
+
+    // ── Overlay opacity (live-editable, same lock class as Mirror) ────────────
+    right_layout->addWidget(addSliderRow(QStringLiteral("Overlay opacity"), QStringLiteral("webcamPanelOpacitySlider"),
+                                         100, opacity_slider_, opacity_value_label_, right_col));
+
+    right_layout->addWidget(makeHairline(right_col));
+
+    // ── Chroma key: collapsed group; the header toggle expands/collapses it ────
+    auto* chroma_header = new QWidget(right_col);
+    auto* chr = new QHBoxLayout(chroma_header);
+    chr->setContentsMargins(0, 0, 0, 0);
+    chr->setSpacing(10);
+    auto* chroma_label = new QLabel(QStringLiteral("Chroma key"), chroma_header);
+    chroma_label->setProperty("labelRole", "settingsRowLabel");
+    chr->addWidget(chroma_label, 1);
+    chroma_toggle_ = new ExoToggle(chroma_header);
+    chroma_toggle_->setObjectName(QStringLiteral("webcamPanelChromaToggle"));
+    chroma_toggle_->setChecked(false);
+    chr->addWidget(chroma_toggle_);
+    right_layout->addWidget(chroma_header);
+
+    // Collapsible body: hidden until the toggle enables chroma keying.
+    chroma_body_ = new QWidget(right_col);
+    chroma_body_->setObjectName(QStringLiteral("webcamPanelChromaBody"));
+    auto* cb = new QVBoxLayout(chroma_body_);
+    cb->setContentsMargins(0, 2, 0, 0);
+    cb->setSpacing(8);
+
+    // Key colour: swatch preview + preset chips + custom picker.
+    auto* color_row = new QWidget(chroma_body_);
+    auto* clr = new QHBoxLayout(color_row);
+    clr->setContentsMargins(0, 0, 0, 0);
+    clr->setSpacing(8);
+    auto* color_label = new QLabel(QStringLiteral("Key colour"), color_row);
+    color_label->setProperty("labelRole", "settingsRowLabel");
+    clr->addWidget(color_label, 1);
+
+    chroma_swatch_ = new QPushButton(color_row);
+    chroma_swatch_->setObjectName(QStringLiteral("webcamPanelChromaSwatch"));
+    chroma_swatch_->setToolTip(QStringLiteral("Current key colour"));
+    chroma_swatch_->setFixedSize(22, 22);
+    chroma_swatch_->setCursor(Qt::PointingHandCursor);
+    chroma_swatch_->setFlat(true);
+    clr->addWidget(chroma_swatch_, 0);
+
+    auto makeChip = [&](const QString& text, const QString& object_name) -> QPushButton* {
+        auto* btn = new QPushButton(text, color_row);
+        btn->setObjectName(object_name);
+        btn->setCheckable(true);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setProperty("role", "ghost");
+        clr->addWidget(btn, 0);
+        return btn;
+    };
+    chroma_green_btn_ = makeChip(QStringLiteral("Green"), QStringLiteral("webcamPanelChromaGreenBtn"));
+    chroma_blue_btn_ = makeChip(QStringLiteral("Blue"), QStringLiteral("webcamPanelChromaBlueBtn"));
+    chroma_magenta_btn_ = makeChip(QStringLiteral("Magenta"), QStringLiteral("webcamPanelChromaMagentaBtn"));
+    chroma_custom_btn_ = makeChip(QStringLiteral("Custom…"), QStringLiteral("webcamPanelChromaCustomBtn"));
+    chroma_green_btn_->setChecked(true);
+
+    cb->addWidget(color_row);
+    cb->addWidget(addSliderRow(QStringLiteral("Tolerance"), QStringLiteral("webcamPanelChromaToleranceSlider"), 40,
+                               tolerance_slider_, tolerance_value_label_, chroma_body_));
+    cb->addWidget(addSliderRow(QStringLiteral("Softness"), QStringLiteral("webcamPanelChromaSoftnessSlider"), 15,
+                               softness_slider_, softness_value_label_, chroma_body_));
+    cb->addWidget(addSliderRow(QStringLiteral("Spill reduction"), QStringLiteral("webcamPanelChromaSpillSlider"), 30,
+                               spill_slider_, spill_value_label_, chroma_body_));
+
+    right_layout->addWidget(chroma_body_);
+    chroma_body_->setVisible(false); // collapsed while disabled
+    updateChromaSwatch();
+
     // v0.9 polish: the placement note moved into the Webcam card's info-i (kWebcamPlacement),
     // which also reclaims the trailing hairline + note row that padded the card height.
     right_layout->addStretch(1);
@@ -139,6 +256,38 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
             &WebcamSetupPanel::onResolutionChanged);
     connect(mirror_toggle_, &ExoToggle::toggled, this, &WebcamSetupPanel::onMirrorToggled);
     connect(rescan_btn_, &QPushButton::clicked, this, &WebcamSetupPanel::onRescan);
+    connect(opacity_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onOpacityChanged);
+    connect(chroma_toggle_, &ExoToggle::toggled, this, &WebcamSetupPanel::onChromaEnableToggled);
+    connect(chroma_green_btn_, &QPushButton::clicked, this,
+            [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Green); });
+    connect(chroma_blue_btn_, &QPushButton::clicked, this,
+            [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Blue); });
+    connect(chroma_magenta_btn_, &QPushButton::clicked, this,
+            [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Magenta); });
+    // The swatch and the "Custom…" chip open the same colour picker (the obvious
+    // expectation for a clickable colour swatch).
+    const auto pick_custom_color = [this]() {
+        const auto& ck = current_settings_.chroma_key;
+        const QColor initial = (ck.color_mode == WebcamChromaKeyColorMode::Custom)
+                                   ? QColor(ck.custom_r, ck.custom_g, ck.custom_b)
+                                   : QColor(ck.active_color().r, ck.active_color().g, ck.active_color().b);
+        const QColor picked = QColorDialog::getColor(initial, this, QStringLiteral("Pick chroma key colour"));
+        if (!picked.isValid()) {
+            // Restore the checked state to the still-active mode (the chip was
+            // clicked, flipping its checked flag before the dialog was cancelled).
+            updateChromaColorButtons();
+            return;
+        }
+        current_settings_.chroma_key.custom_r = static_cast<uint8_t>(picked.red());
+        current_settings_.chroma_key.custom_g = static_cast<uint8_t>(picked.green());
+        current_settings_.chroma_key.custom_b = static_cast<uint8_t>(picked.blue());
+        onColorModeChanged(WebcamChromaKeyColorMode::Custom);
+    };
+    connect(chroma_custom_btn_, &QPushButton::clicked, this, pick_custom_color);
+    connect(chroma_swatch_, &QPushButton::clicked, this, pick_custom_color);
+    connect(tolerance_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onToleranceChanged);
+    connect(softness_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onSoftnessChanged);
+    connect(spill_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onSpillReductionChanged);
 
     // Watchdog: surface a non-technical hint if no frame arrives after 3 s.
     watchdog_ = new QTimer(this);
@@ -208,6 +357,36 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
         }
     }
 
+    // Overlay opacity.
+    if (opacity_slider_) {
+        opacity_slider_->setValue(static_cast<int>(std::lround(s.opacity * 100.0f)));
+        if (opacity_value_label_)
+            opacity_value_label_->setText(pct(opacity_slider_->value()));
+    }
+
+    // Chroma-key group.
+    if (chroma_toggle_)
+        chroma_toggle_->setChecked(s.chroma_key.enabled);
+    if (chroma_body_)
+        chroma_body_->setVisible(s.chroma_key.enabled);
+    updateChromaColorButtons();
+    updateChromaSwatch();
+    if (tolerance_slider_) {
+        tolerance_slider_->setValue(static_cast<int>(std::lround(s.chroma_key.tolerance * 100.0f)));
+        if (tolerance_value_label_)
+            tolerance_value_label_->setText(pct(tolerance_slider_->value()));
+    }
+    if (softness_slider_) {
+        softness_slider_->setValue(static_cast<int>(std::lround(s.chroma_key.softness * 100.0f)));
+        if (softness_value_label_)
+            softness_value_label_->setText(pct(softness_slider_->value()));
+    }
+    if (spill_slider_) {
+        spill_slider_->setValue(static_cast<int>(std::lround(s.chroma_key.spill_reduction * 100.0f)));
+        if (spill_value_label_)
+            spill_value_label_->setText(pct(spill_slider_->value()));
+    }
+
     suppress_signals_ = false;
 
     if (isVisible())
@@ -222,6 +401,21 @@ void WebcamSetupPanel::setControlsLocked(bool locked) {
     rescan_btn_->setEnabled(!locked);
     enable_toggle_->setEnabled(true);
     mirror_toggle_->setEnabled(true);
+    // Opacity and chroma-key parameters are pushed live during recording via
+    // RecorderSession::UpdateWebcamOverlay, so they stay editable while locked —
+    // the same class as Mirror (only device/resolution/rescan are restart-class).
+    if (opacity_slider_)
+        opacity_slider_->setEnabled(true);
+    if (chroma_toggle_)
+        chroma_toggle_->setEnabled(true);
+    for (auto* btn : {chroma_swatch_, chroma_green_btn_, chroma_blue_btn_, chroma_magenta_btn_, chroma_custom_btn_}) {
+        if (btn)
+            btn->setEnabled(true);
+    }
+    for (auto* slider : {tolerance_slider_, softness_slider_, spill_slider_}) {
+        if (slider)
+            slider->setEnabled(true);
+    }
 }
 
 // S4: Gate the entire panel when mfplat.dll is absent at runtime.
@@ -242,6 +436,18 @@ void WebcamSetupPanel::setMfUnavailable(bool unavailable) {
         rescan_btn_->setEnabled(false);
     if (mirror_toggle_)
         mirror_toggle_->setEnabled(false);
+    if (opacity_slider_)
+        opacity_slider_->setEnabled(false);
+    if (chroma_toggle_)
+        chroma_toggle_->setEnabled(false);
+    for (auto* btn : {chroma_swatch_, chroma_green_btn_, chroma_blue_btn_, chroma_magenta_btn_, chroma_custom_btn_}) {
+        if (btn)
+            btn->setEnabled(false);
+    }
+    for (auto* slider : {tolerance_slider_, softness_slider_, spill_slider_}) {
+        if (slider)
+            slider->setEnabled(false);
+    }
 
     // Show a placeholder in the preview area.
     if (camera_preview_) {
@@ -266,6 +472,82 @@ void WebcamSetupPanel::onMirrorToggled(bool mirror) {
         camera_preview_->setMirror(mirror);
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onOpacityChanged(int value) {
+    if (opacity_value_label_)
+        opacity_value_label_->setText(pct(value));
+    current_settings_.opacity = value / 100.0f;
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onChromaEnableToggled(bool enabled) {
+    current_settings_.chroma_key.enabled = enabled;
+    // Expand the group when enabled, collapse it when disabled (the header toggle
+    // is the disclosure control).
+    if (chroma_body_)
+        chroma_body_->setVisible(enabled);
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onColorModeChanged(WebcamChromaKeyColorMode mode) {
+    current_settings_.chroma_key.color_mode = mode;
+    updateChromaColorButtons();
+    updateChromaSwatch();
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onToleranceChanged(int value) {
+    if (tolerance_value_label_)
+        tolerance_value_label_->setText(pct(value));
+    current_settings_.chroma_key.tolerance = value / 100.0f;
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onSoftnessChanged(int value) {
+    if (softness_value_label_)
+        softness_value_label_->setText(pct(value));
+    current_settings_.chroma_key.softness = value / 100.0f;
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onSpillReductionChanged(int value) {
+    if (spill_value_label_)
+        spill_value_label_->setText(pct(value));
+    current_settings_.chroma_key.spill_reduction = value / 100.0f;
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::updateChromaColorButtons() {
+    const auto mode = current_settings_.chroma_key.color_mode;
+    if (chroma_green_btn_)
+        chroma_green_btn_->setChecked(mode == WebcamChromaKeyColorMode::Green);
+    if (chroma_blue_btn_)
+        chroma_blue_btn_->setChecked(mode == WebcamChromaKeyColorMode::Blue);
+    if (chroma_magenta_btn_)
+        chroma_magenta_btn_->setChecked(mode == WebcamChromaKeyColorMode::Magenta);
+    if (chroma_custom_btn_)
+        chroma_custom_btn_->setChecked(mode == WebcamChromaKeyColorMode::Custom);
+}
+
+void WebcamSetupPanel::updateChromaSwatch() {
+    if (!chroma_swatch_)
+        return;
+    const auto ac = current_settings_.chroma_key.active_color();
+    const QColor fill(ac.r, ac.g, ac.b);
+    // Inline stylesheet on this one widget only (dynamic colour): never touches the
+    // theme QSS, so it cannot trip the ${token} start-up crash.
+    const QString border = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line);
+    chroma_swatch_->setStyleSheet(QStringLiteral("QPushButton#webcamPanelChromaSwatch {"
+                                                 " background-color: %1; border: 1px solid %2;"
+                                                 " border-radius: 4px; }")
+                                      .arg(fill.name(), border));
 }
 
 void WebcamSetupPanel::onDeviceChanged(int) {
@@ -489,7 +771,8 @@ void WebcamSetupPanel::setPreviewFrame(const QImage& frame) {
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-void WebcamSetupPanel::applyVisualState(bool available, bool mirror) {
+void WebcamSetupPanel::applyVisualState(bool available, bool mirror, bool chroma_enabled,
+                                        const QString& chroma_color_mode) {
     visual_test_mode_ = true;
     stopPreview();
     suppress_signals_ = true;
@@ -499,6 +782,28 @@ void WebcamSetupPanel::applyVisualState(bool available, bool mirror) {
     mirror_toggle_->setChecked(mirror);
     if (camera_preview_)
         camera_preview_->setMirror(mirror);
+
+    // Chroma-key group: deterministic enable + key-colour mode so the
+    // settings-webcam-chroma-* scenarios render visibly distinct (group open with
+    // the selected key colour, or collapsed when disabled).
+    current_settings_.chroma_key.enabled = chroma_enabled;
+    if (!chroma_color_mode.isEmpty()) {
+        const auto mode = colorModeFromString(chroma_color_mode);
+        current_settings_.chroma_key.color_mode = mode;
+        if (mode == WebcamChromaKeyColorMode::Custom) {
+            // A distinctive non-preset colour so the "custom" render is visibly
+            // different from the green/blue swatches.
+            current_settings_.chroma_key.custom_r = 255;
+            current_settings_.chroma_key.custom_g = 140;
+            current_settings_.chroma_key.custom_b = 0;
+        }
+    }
+    if (chroma_toggle_)
+        chroma_toggle_->setChecked(chroma_enabled);
+    if (chroma_body_)
+        chroma_body_->setVisible(chroma_enabled);
+    updateChromaColorButtons();
+    updateChromaSwatch();
 
     if (available) {
         device_combo_->addItem(QStringLiteral("Visual Test Camera"), QStringLiteral("visual-test-camera"));
@@ -546,12 +851,28 @@ WebcamSettings WebcamSetupPanel::collectSettings() const {
 
     s.mirror = mirror_toggle_->isChecked();
 
-    // Preserve overlay, chroma, and opacity from current (panel does not expose these controls).
+    // Overlay placement + aspect-lock have no UI here (they live on the Record
+    // preview) — pass them through from what was last applied.
     s.overlay = current_settings_.overlay;
     s.overlay_user_placed = current_settings_.overlay_user_placed;
     s.aspect_ratio_locked = current_settings_.aspect_ratio_locked;
-    s.chroma_key = current_settings_.chroma_key;
-    s.opacity = current_settings_.opacity;
+
+    // Overlay opacity from the slider.
+    s.opacity = opacity_slider_ ? opacity_slider_->value() / 100.0f : current_settings_.opacity;
+
+    // Chroma-key: on/off + parameters from the controls; colour mode and custom
+    // RGB are tracked in current_settings_ (set by the colour-mode buttons).
+    s.chroma_key.enabled = chroma_toggle_ ? chroma_toggle_->isChecked() : current_settings_.chroma_key.enabled;
+    s.chroma_key.color_mode = current_settings_.chroma_key.color_mode;
+    s.chroma_key.custom_r = current_settings_.chroma_key.custom_r;
+    s.chroma_key.custom_g = current_settings_.chroma_key.custom_g;
+    s.chroma_key.custom_b = current_settings_.chroma_key.custom_b;
+    s.chroma_key.tolerance =
+        tolerance_slider_ ? tolerance_slider_->value() / 100.0f : current_settings_.chroma_key.tolerance;
+    s.chroma_key.softness =
+        softness_slider_ ? softness_slider_->value() / 100.0f : current_settings_.chroma_key.softness;
+    s.chroma_key.spill_reduction =
+        spill_slider_ ? spill_slider_->value() / 100.0f : current_settings_.chroma_key.spill_reduction;
 
     return SanitizeWebcamSettings(s);
 }

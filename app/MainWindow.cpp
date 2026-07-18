@@ -3216,7 +3216,8 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     // deterministically without opening a real camera.
     if (scenario.webcam_state != visual::VisualWebcamState::None) {
         config_page_->applyVisualWebcamState(scenario.webcam_state == visual::VisualWebcamState::Active,
-                                             scenario.webcam_mirror);
+                                             scenario.webcam_mirror, scenario.webcam_chroma_enabled,
+                                             scenario.webcam_chroma_color_mode);
     }
 
     // Hotkeys-card scenarios (default / custom / conflict / capture) drive the
@@ -3642,7 +3643,8 @@ void MainWindow::applyVisualDeviceDiscoveryScenario(const visual::VisualScenario
         // Only override if the scenario is on the Settings page (the webcam
         // card lives there); the Record preview uses a separate path.
         if (scenario.page == visual::VisualPage::Settings)
-            config_page_->applyVisualWebcamState(cam_available, mirror);
+            config_page_->applyVisualWebcamState(cam_available, mirror, scenario.webcam_chroma_enabled,
+                                                 scenario.webcam_chroma_color_mode);
     }
 }
 #endif

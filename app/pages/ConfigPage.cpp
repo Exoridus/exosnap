@@ -5713,9 +5713,10 @@ void ConfigPage::setWebcamPreviewFrame(const QImage& frame) {
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
+void ConfigPage::applyVisualWebcamState(bool available, bool mirror, bool chroma_enabled,
+                                        const QString& chroma_color_mode) {
     if (webcam_setup_panel_)
-        webcam_setup_panel_->applyVisualState(available, mirror);
+        webcam_setup_panel_->applyVisualState(available, mirror, chroma_enabled, chroma_color_mode);
 }
 
 void ConfigPage::applyVisualHotkeysState(const QString& custom_binding_0, const QString& custom_binding_1,

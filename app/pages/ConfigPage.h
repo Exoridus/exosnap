@@ -122,7 +122,8 @@ class ConfigPage : public QWidget {
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Drive the embedded Webcam card deterministically for visual-test scenarios.
-    void applyVisualWebcamState(bool available, bool mirror);
+    void applyVisualWebcamState(bool available, bool mirror, bool chroma_enabled = false,
+                                const QString& chroma_color_mode = QString());
 
     // Visual-harness only: drive the embedded hotkeys card into a representative
     // state (custom bindings / capture / conflict / lock) without a live service.

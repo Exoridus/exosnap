@@ -445,9 +445,10 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_state = VisualWebcamState::Unavailable},
     // Webcam chroma-key scenarios route to the Settings page's embedded webcam
     // card — the sole home for webcam config now that the standalone WebcamPage is
-    // gone. Enable toggle + resolution/FPS render on the card; the chroma
-    // enable/color-mode is carried in the manifest (webcam.chroma). NOTE: the card
-    // exposes no chroma control, so these four render pixel-identically today.
+    // gone. The card's chroma-key group renders these distinctly: disabled →
+    // collapsed group; green/blue/custom → group open with the matching key-colour
+    // swatch (webcam_chroma_enabled + webcam_chroma_color_mode drive the panel via
+    // applyVisualWebcamState).
     {.id = QStringLiteral("settings-webcam-chroma-disabled"),
      .title = QStringLiteral("Settings / Webcam / Chroma Disabled"),
      .page = VisualPage::Settings,
