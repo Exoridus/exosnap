@@ -96,7 +96,7 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         setup.empty_codec_private_error = "FLAC codec private is empty after Init";
         break;
     }
-    default: {
+    case AudioCodec::AacMf: {
         auto enc = std::make_unique<FdkAacEncoder>();
         enc->SetBitrateKbps(config.audio_bitrate_kbps);
         setup.encoder = std::move(enc);
@@ -104,6 +104,15 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         setup.empty_codec_private_error = "FDK-AAC codec private is empty after Init";
         break;
     }
+        // Deliberately no default: label (CV-BUG-004). This switch must stay
+        // exhaustive over every named AudioCodec enumerator so /W4 (and
+        // -Wswitch on Clang/GCC) flags a future enumerator added here without a
+        // matching case, instead of silently routing it into whichever branch
+        // happened to be last. A value outside the known enumerators (e.g. an
+        // out-of-range int cast from a corrupted config) simply falls through
+        // with setup.encoder left null; AudioThread::Run() below turns a null
+        // encoder into a visible RecordFailure instead of building an AAC
+        // encoder for an unrecognized codec.
     }
     return setup;
 }
@@ -219,6 +228,16 @@ void AudioThread::Run() {
 
     // --- Encoder init (the only codec-specific part of this worker) ---
     EncoderSetup setup = MakeEncoderSetup(m_state.config);
+    if (!setup.encoder) {
+        // config.audio_codec held a value outside the known AudioCodec
+        // enumerators (CV-BUG-004) — surface it the same way every other
+        // pre-encode failure in this function is surfaced, rather than
+        // dereferencing a null encoder or silently falling back to AAC.
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::AudioEncode, "Unrecognized audio codec");
+        source_->Shutdown();
+        uninitCom();
+        return;
+    }
     IAudioEncoder& encoder = *setup.encoder;
     {
         std::string err;
