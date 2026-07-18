@@ -939,6 +939,11 @@ unimplemented behavior.
   automated upload to **Sentry with EU data residency**, compiled in only for official builds — so
   self-built binaries never upload.
 - Reports are privacy-scrubbed (see Privacy).
+- **Consent is revisitable from Settings.** The crash dialog's "Send reports automatically next
+  time" opt-in is not a one-way choice: **Settings → Advanced → "Send crash reports
+  automatically"** shows and controls the same consent state. Turning it on grants silent
+  auto-send immediately (no need to wait for the next crash); turning it off revokes consent, so
+  the next crash shows the consent dialog again instead of auto-sending.
 
 **Signing status.** Builds are **not yet code-signed** (portable ZIP and MSI); Windows SmartScreen
 may warn on first launch. ExoSnap participates in the SignPath Foundation free code-signing program;

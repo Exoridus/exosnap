@@ -4168,6 +4168,25 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
     }
 }
 
+void MainWindow::onAutoSendCrashReportsToggled(bool enabled) {
+    persisted_settings_.auto_send_crash_reports = enabled;
+    settings_store_.Save(persisted_settings_);
+
+    if (enabled) {
+        // Matches the crash dialog's silent-consent path (checkAndShowCrashReportOverlay):
+        // grant consent immediately rather than waiting for the next crash.
+        crash_capture::GiveUserConsent();
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Auto-send enabled from Settings — consent granted"));
+    } else {
+        // Revoke so the next crash shows the consent dialog again instead of
+        // silently auto-sending.
+        crash_capture::RevokeUserConsent();
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Auto-send disabled from Settings — consent revoked"));
+    }
+}
+
 void MainWindow::dispatchNotificationAction(const notifications::NotificationEvent& event,
                                             notifications::NotificationAction action) {
     using notifications::NotificationAction;
@@ -4835,6 +4854,8 @@ void MainWindow::buildConfigPage() {
     config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
     connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
             &MainWindow::onPresentDiagnosticsOptInToggled);
+    config_page_->setAutoSendCrashReports(persisted_settings_.auto_send_crash_reports);
+    connect(config_page_, &ConfigPage::autoSendCrashReportsToggled, this, &MainWindow::onAutoSendCrashReportsToggled);
     // Route Settings webcam panel Rescan through the webcam notifier.
     // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
     auto* setup_panel =

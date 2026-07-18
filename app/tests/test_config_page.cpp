@@ -2930,5 +2930,91 @@ TEST_F(ConfigPageTest, SettingsAudio_MergeToggleReflectsAndSetsMergeWithAbove) {
     EXPECT_TRUE(saw_mic) << "emitted state must carry the Mic row";
 }
 
+// ── Crash-report auto-send consent toggle (Developer/Advanced card) ────────────
+
+TEST_F(ConfigPageTest, CrashReportsToggle_HiddenBeforeExpertMode) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The Developer/Advanced card (and its crash-report toggle) is built lazily
+    // on first expert-enable, so by default it doesn't exist yet.
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
+    EXPECT_EQ(toggle, nullptr) << "crashReportsAutoSendToggle must not exist before expert mode is enabled";
+}
+
+TEST_F(ConfigPageTest, CrashReportsToggle_VisibleAndLabeledWhenExpertModeEnabled) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // Developer card is lazily built on first expert-enable
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
+    ASSERT_NE(toggle, nullptr) << "crashReportsAutoSendToggle must exist once expert mode is enabled";
+    EXPECT_FALSE(toggle->isHidden());
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Send crash reports automatically")))
+        << "toggle row must carry the plain-language label";
+}
+
+TEST_F(ConfigPageTest, CrashReportsToggle_DefaultsOff) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isChecked()) << "consent defaults to off, matching auto_send_crash_reports' default";
+}
+
+TEST_F(ConfigPageTest, CrashReportsToggle_SetterAppliesBeforeAndAfterLazyBuild) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Seed the persisted "on" state before the Developer card exists -- it must
+    // be remembered and applied once the card is lazily constructed (same
+    // contract as setDeveloperLogLevel).
+    page.setAutoSendCrashReports(true);
+
+    page.setExpertModeEnabled(true);
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->isChecked()) << "the pre-seeded consent state must survive the lazy build";
+
+    // Once the card exists, the setter must also apply immediately.
+    page.setAutoSendCrashReports(false);
+    EXPECT_FALSE(toggle->isChecked());
+}
+
+TEST_F(ConfigPageTest, CrashReportsToggle_TurningOnEmitsSignalTrue) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_FALSE(toggle->isChecked());
+
+    bool got = false;
+    bool emitted_value = false;
+    QObject::connect(&page, &ConfigPage::autoSendCrashReportsToggled, [&](bool enabled) {
+        got = true;
+        emitted_value = enabled;
+    });
+    toggle->setChecked(true);
+    ASSERT_TRUE(got) << "turning the toggle on must emit autoSendCrashReportsToggled";
+    EXPECT_TRUE(emitted_value);
+}
+
+TEST_F(ConfigPageTest, CrashReportsToggle_TurningOffEmitsSignalFalse) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setAutoSendCrashReports(true);
+    page.setExpertModeEnabled(true);
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_TRUE(toggle->isChecked());
+
+    bool got = false;
+    bool emitted_value = true;
+    QObject::connect(&page, &ConfigPage::autoSendCrashReportsToggled, [&](bool enabled) {
+        got = true;
+        emitted_value = enabled;
+    });
+    toggle->setChecked(false);
+    ASSERT_TRUE(got) << "turning the toggle off must emit autoSendCrashReportsToggled";
+    EXPECT_FALSE(emitted_value);
+}
+
 } // namespace
 } // namespace exosnap

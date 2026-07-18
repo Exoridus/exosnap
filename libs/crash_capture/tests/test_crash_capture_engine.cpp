@@ -236,6 +236,24 @@ TEST_F(CrashEngineLifecycleTest, ConsentGateDoesNotCrashBeforeInit) {
     EXPECT_NO_FATAL_FAILURE(RevokeUserConsent());
 }
 
+TEST_F(CrashEngineLifecycleTest, ConsentCanBeToggledRepeatedlyAfterInit) {
+    // The Settings "Send crash reports automatically" toggle (unlike the
+    // one-shot crash dialog) can call GiveUserConsent()/RevokeUserConsent() many
+    // times in a single session as the user flips the setting back and forth.
+    // Round-tripping must never crash regardless of whether sentry-native is
+    // linked.
+    CrashCaptureConfig cfg;
+    cfg.crash_dir = crash_dir_;
+    cfg.handler_exe_path = ResolveHandlerExePath();
+    cfg.app_version = "0.4.0";
+    Initialize(cfg);
+
+    EXPECT_NO_FATAL_FAILURE(GiveUserConsent());
+    EXPECT_NO_FATAL_FAILURE(RevokeUserConsent());
+    EXPECT_NO_FATAL_FAILURE(GiveUserConsent());
+    EXPECT_NO_FATAL_FAILURE(RevokeUserConsent());
+}
+
 TEST_F(CrashEngineLifecycleTest, SetEncoderContextDoesNotCrash) {
     CrashCaptureConfig cfg;
     cfg.crash_dir = crash_dir_;

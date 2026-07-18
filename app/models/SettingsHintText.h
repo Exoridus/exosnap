@@ -124,6 +124,14 @@ inline const QString kVideoHdrMode =
                    "Record native HDR10 keeps the original PQ/BT.2020 signal but needs HEVC or AV1. "
                    "Has no effect when the display is not HDR.");
 
+// ---- Crash reporting (Developer/Advanced card) ----
+// Mirrors the crash dialog's "Send reports automatically next time" opt-in
+// (CrashReportPanel) so the choice can be revisited later without waiting for
+// another crash.
+inline const QString kCrashReporting =
+    QStringLiteral("Off \xC2\xB7 the next crash asks again. On \xC2\xB7 future crashes are sent automatically, "
+                   "no dialog.");
+
 // ---- Skipped (control does not exist in current UI) ----
 // kPerTrackGain          — per-track gain (0.6 wave)
 // kMute                  — per-track mute (0.6 wave)
@@ -132,6 +140,5 @@ inline const QString kVideoHdrMode =
 // kAutoOpenOutput        — auto-open Output page (Output-editor wave)
 // kCountdownOverlay      — countdown overlay (future wave)
 // kUpdateChannel         — update channel (0.4 wave, inside UpdateSettingsPanel, not in scope)
-// kCrashReporting        — crash reporting (0.4 wave, inside CrashReportPanel, not in scope)
 
 } // namespace exosnap::ui::hints
