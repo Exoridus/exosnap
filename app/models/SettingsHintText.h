@@ -4,24 +4,44 @@
 
 // SETTINGS-TIERS-R2 Phase 2: per-setting InfoHint strings.
 //
-// Verbatim from .workspace/design/info-hints-content.md (the authoritative source).
-// Only strings whose setting control exists as a UI widget today are included here.
-// Future-wave entries (0.6/0.7) are omitted until the controls exist.
+// Two styles coexist, both rendered by InfoHintIcon's QToolTip:
+//   - Terse one-liners for rows whose tradeoff is a single short clause. "·"
+//     (U+00B7 MIDDLE DOT, "\xC2\xB7") separates an effect from its tradeoff.
+//   - Rich-text cards for rows that need real explanation. QToolTip renders HTML,
+//     so these carry a short **bold lead line** followed by deliberate <br> breaks.
+//     detail::card() wraps the body in a fixed-width block so the tooltip word-wraps
+//     to a readable column instead of one very wide line (QTextDocument honours a
+//     table cell's width where a bare block's width is not guaranteed). Rich-text
+//     bodies must avoid a literal '<' (use the ≤ glyph, not "<=") and a raw '&'.
 //
-// Style: terse (~2-4 words or one short clause). "·" separates effect/tradeoff.
+// Wording stays calm and factual, consistent with docs/product-spec.md. InfoHintIcon
+// flattens any markup for the screen-reader accessible name.
+//
+// Style: terse rows ~2-4 words or one short clause; cards a bold lead + a few lines.
 namespace exosnap::ui::hints {
+
+namespace detail {
+// Fixed-width rich-text block: gives QToolTip a bounded (~250px) column to wrap the
+// body into. The body is authored with a bold lead line and deliberate <br> breaks.
+inline QString card(const QString& body) {
+    return QStringLiteral("<qt><table><tr><td width=\"250\">") + body + QStringLiteral("</td></tr></table></qt>");
+}
+} // namespace detail
 
 // ---- Video / Format & encoding ----
 inline const QString kContainer = QStringLiteral("MKV safest \xC2\xB7 MP4 most compatible");
 inline const QString kVideoCodecAv1 = QStringLiteral("Best compression \xC2\xB7 newer players");
 inline const QString kVideoCodecH264 = QStringLiteral("Universal compatibility \xC2\xB7 larger files");
-inline const QString kQualityPreset =
-    QStringLiteral("Constant-quality presets: Small \xe2\x89\x88 CQ 30 (smaller files), "
-                   "Balanced \xe2\x89\x88 CQ 24, High \xe2\x89\x88 CQ 19 (sharper, larger files). "
-                   "Lower CQ = higher quality.");
-inline const QString kConstantQuality = QStringLiteral("Quantizer target, 1\xe2\x80\x93"
-                                                       "51 \xC2\xB7 lower = better quality, larger files. "
-                                                       "19 = High, 24 = Balanced, 30 = Small.");
+inline const QString kQualityPreset = detail::card(QStringLiteral("<b>Constant-quality presets.</b><br>"
+                                                                  "Small \xe2\x89\x88 CQ 30 (smaller files).<br>"
+                                                                  "Balanced \xe2\x89\x88 CQ 24.<br>"
+                                                                  "High \xe2\x89\x88 CQ 19 (sharper, larger files).<br>"
+                                                                  "Lower CQ = higher quality."));
+inline const QString kConstantQuality =
+    detail::card(QStringLiteral("<b>Quantizer target (1\xe2\x80\x93"
+                                "51).</b><br>"
+                                "Lower = better quality, larger files.<br>"
+                                "19 = High \xC2\xB7 24 = Balanced \xC2\xB7 30 = Small."));
 inline const QString kFrameRate = QStringLiteral("Constant rate \xC2\xB7 editor-friendly");
 inline const QString kCaptureCursor = QStringLiteral("Show the mouse pointer");
 inline const QString kOutputResolution = QStringLiteral("Downscale to save size \xC2\xB7 re-encodes");
@@ -29,8 +49,9 @@ inline const QString kOutputResolution = QStringLiteral("Downscale to save size 
 // ---- Audio ----
 inline const QString kAudioSourceEnable = QStringLiteral("Include this source");
 inline const QString kSeparateTrack =
-    QStringLiteral("On \xC2\xB7 combines into the track above \xC2\xB7 Off \xC2\xB7 separate track, each source on "
-                   "its own channel for editing");
+    detail::card(QStringLiteral("<b>Track routing.</b><br>"
+                                "On: combines into the track above.<br>"
+                                "Off: separate track \xE2\x80\x94 each source keeps its own channel for editing."));
 inline const QString kAudioCodecOpus = QStringLiteral("Best quality-per-bit \xC2\xB7 MKV/WebM");
 inline const QString kAudioCodecAac = QStringLiteral("Wide compatibility \xC2\xB7 MP4");
 inline const QString kMicDevice = QStringLiteral("How stereo mics are mapped");
@@ -45,15 +66,18 @@ inline const QString kFilenamePattern = QStringLiteral("Tokens for auto-naming")
 inline const QString kSplitRecording = QStringLiteral("New file every N min / ~N GB");
 
 // ---- Expert mode toggle ----
-inline const QString kExpertMode = QStringLiteral("Expert mode reveals lower-level controls that can produce "
-                                                  "incompatible files. Enable only if you know why.");
+inline const QString kExpertMode =
+    detail::card(QStringLiteral("<b>Expert mode.</b><br>"
+                                "Reveals lower-level controls that can produce incompatible files.<br>"
+                                "Enable only if you know why."));
 
 // v0.9 polish: the expert-warning banner keeps a terse caution; this info-i carries the
 // concrete detail of what narrows compatibility, so the banner itself stays short.
-inline const QString kExpertBannerDetail =
-    QStringLiteral("Codec, bit depth, chroma subsampling, colour range and HDR handling each narrow which "
-                   "players and editors can open the file. Every row explains its own tradeoff \xE2\x80\x94 "
-                   "pick the recommended value if unsure.");
+inline const QString kExpertBannerDetail = detail::card(
+    QStringLiteral("<b>What narrows compatibility.</b><br>"
+                   "Codec, bit depth, chroma subsampling, colour range and HDR handling each narrow which players "
+                   "and editors can open the file.<br>"
+                   "Every row explains its own tradeoff \xE2\x80\x94 pick the recommended value if unsure."));
 
 // ---- Presence / Appearance (moved from AdvancedPage in SETTINGS-TIERS-P3) ----
 inline const QString kRecordingOverlay = QStringLiteral("On-screen REC badge \xC2\xB7 excluded from capture");
@@ -64,7 +88,9 @@ inline const QString kNotifications = QStringLiteral("Toasts for saved / low dis
 inline const QString kAccent = QStringLiteral("App highlight color");
 
 // ---- Audio expert (0.6.0) ----
-inline const QString kRateControlMode = QStringLiteral("CQ = constant quality \xC2\xB7 VBR/CBR needs bitrate target");
+inline const QString kRateControlMode = detail::card(QStringLiteral("<b>Rate control.</b><br>"
+                                                                    "CQ = constant quality.<br>"
+                                                                    "VBR/CBR needs a bitrate target."));
 inline const QString kVideoBitrate = QStringLiteral("Target bitrate for VBR/CBR \xC2\xB7 ignored in CQ mode");
 inline const QString kMicGain = QStringLiteral("Boost or cut the microphone level before encoding");
 inline const QString kMicChannelMode = QStringLiteral("How stereo mic inputs are mapped to the recorded channel");
@@ -77,52 +103,69 @@ inline const QString kOpusComplexity =
 inline const QString kAudioSampleRate = QStringLiteral("PCM sampling rate \xC2\xB7 Opus is fixed at 48\xC2\xa0kHz");
 inline const QString kAudioChannels = QStringLiteral("Stereo preserves L/R \xC2\xB7 Mono mixes both channels");
 inline const QString kAudioBitDepth =
-    QStringLiteral("PCM/FLAC word size \xC2\xB7 16-bit sufficient for most recordings \xC2\xB7 "
-                   "32-bit float is the mix bus's native format \xE2\x80\x94 no conversion, no clipping "
-                   "headroom needed");
+    detail::card(QStringLiteral("<b>Bit depth.</b><br>"
+                                "PCM/FLAC word size.<br>"
+                                "16-bit is sufficient for most recordings.<br>"
+                                "32-bit float is the mix bus's native format \xE2\x80\x94 no conversion and no "
+                                "clipping, so no headroom is needed."));
 inline const QString kFlacCompression = QStringLiteral("FLAC compression level (0 = fastest, 8 = smallest file)");
 inline const QString kBrickwallLimiter =
-    QStringLiteral("Hard clip ceiling applied after all DSP stages \xC2\xB7 prevents digital over");
+    detail::card(QStringLiteral("<b>Brickwall limiter.</b><br>"
+                                "Hard ceiling applied after all DSP stages \xE2\x80\x94 prevents samples from "
+                                "exceeding 0\xC2\xA0"
+                                "dBFS (digital clipping)."));
 inline const QString kMicPostProcessing = QStringLiteral("DSP stages applied to the microphone signal before encoding");
 inline const QString kClockSlaving =
-    QStringLiteral("Gently resamples audio (<= 0.05 %, inaudible) onto the video clock when the "
-                   "device clock drifts \xC2\xB7 keeps long recordings in sync \xC2\xB7 off = byte-exact capture");
+    detail::card(QStringLiteral("<b>A/V clock slaving.</b><br>"
+                                "Gently resamples audio (\xe2\x89\xa4 0.05 %, inaudible) onto the video clock when the "
+                                "device clock drifts \xE2\x80\x94 keeps long recordings in sync.<br>"
+                                "Off = byte-exact capture."));
 inline const QString kHighPassFilter = QStringLiteral("HPF removes low-frequency rumble below the cutoff frequency");
 inline const QString kNoiseGate = QStringLiteral("Silences the mic when input falls below the threshold");
 inline const QString kAgc = QStringLiteral("Automatic gain control normalises mic loudness to the target level");
 inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression \xC2\xB7 removes background noise");
 inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
 inline const QString kVideoBitDepth =
-    QStringLiteral("8-bit is universal \xC2\xB7 10-bit needs HEVC or AV1 (smoother gradients, larger files)");
+    detail::card(QStringLiteral("<b>Bit depth.</b><br>"
+                                "8-bit is universal.<br>"
+                                "10-bit needs HEVC or AV1 \xE2\x80\x94 smoother gradients, larger files."));
 inline const QString kChromaSubsampling =
-    QStringLiteral("4:2:0 is universal and the right choice for almost everything. 4:4:4 keeps full colour "
-                   "resolution (sharper text/UI, larger files) but needs 8-bit H.264 or HEVC \xE2\x80\x94 not "
-                   "available with AV1 or 10-bit.");
+    detail::card(QStringLiteral("<b>Chroma subsampling.</b><br>"
+                                "4:2:0 is universal and the right choice for almost everything.<br>"
+                                "4:4:4 keeps full colour resolution (sharper text and UI, larger files) but needs "
+                                "8-bit H.264 or HEVC \xE2\x80\x94 not available with AV1 or 10-bit."));
 inline const QString kVideoColorRange =
-    QStringLiteral("Limited is compatible with every player. Full keeps marginally more tonal detail, but some "
-                   "common players (notably VLC) ignore the range flag and expand as Limited, so Full-range "
-                   "recordings look too dark there \xE2\x80\x94 only choose Full if your whole playback chain "
-                   "honours it.");
-inline const QString kFrameTiming =
-    QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
-inline const QString kFramePacing = QStringLiteral("Phase-correct removes judder from high-refresh/VRR sources; "
-                                                   "Lowest latency shows the newest frame");
-inline const QString kKeyframeInterval = QStringLiteral(
-    "Keyframe interval controls trim accuracy: "
-    "2\xC2\xA0s\xC2\xA0=\xC2\xA0"
-    "default (lower file size, 2-second trim grid) \xC2\xB7 "
-    "1\xC2\xA0s\xC2\xA0=\xC2\xA0"
-    "1-second trim grid \xC2\xB7 "
-    "0.5\xC2\xA0s\xC2\xA0=\xC2\xA0"
-    "finest trim accuracy (slightly larger files). "
-    "Shorter intervals produce more frequent keyframes \xe2\x80\x94 required for precise Quick Trim cuts.");
-inline const QString kEncoderPreset = QStringLiteral(
-    "NVENC speed/quality tradeoff: P1 = fastest / lowest quality \xC2\xB7 P7 = slowest / best quality \xC2\xB7 "
-    "default P4 (balanced). Applies from the next recording.");
+    detail::card(QStringLiteral("<b>Colour range.</b><br>"
+                                "Limited is compatible with every player.<br>"
+                                "Full keeps marginally more tonal detail, but some players (notably VLC) ignore the "
+                                "range flag and expand as Limited, so Full-range recordings look too dark there.<br>"
+                                "Only choose Full if your whole playback chain honours it."));
+inline const QString kFrameTiming = detail::card(QStringLiteral("<b>Frame timing.</b><br>"
+                                                                "CFR = constant frame rate, best for editors.<br>"
+                                                                "VFR = variable frame rate."));
+inline const QString kFramePacing =
+    detail::card(QStringLiteral("<b>Frame pacing.</b><br>"
+                                "Phase-correct removes judder from high-refresh / VRR sources.<br>"
+                                "Lowest latency shows the newest frame."));
+inline const QString kKeyframeInterval =
+    detail::card(QStringLiteral("<b>Keyframe interval.</b><br>"
+                                "Controls trim accuracy:<br>"
+                                "2\xC2\xA0s = default (smaller files, 2-second trim grid).<br>"
+                                "1\xC2\xA0s = 1-second trim grid.<br>"
+                                "0.5\xC2\xA0s = finest accuracy (slightly larger files).<br>"
+                                "Shorter intervals give more frequent keyframes \xE2\x80\x94 needed for precise Quick "
+                                "Trim cuts."));
+inline const QString kEncoderPreset =
+    detail::card(QStringLiteral("<b>NVENC preset.</b><br>"
+                                "Speed/quality tradeoff: P1 = fastest, lowest quality \xC2\xB7 P7 = slowest, best "
+                                "quality.<br>"
+                                "Default P4 (balanced). Applies from the next recording."));
 inline const QString kVideoHdrMode =
-    QStringLiteral("HDR-capable displays are detected automatically. Tone-map to SDR (default) is safest everywhere; "
-                   "Record native HDR10 keeps the original PQ/BT.2020 signal but needs HEVC or AV1. "
-                   "Has no effect when the display is not HDR.");
+    detail::card(QStringLiteral("<b>HDR handling.</b><br>"
+                                "HDR-capable displays are detected automatically.<br>"
+                                "Tone-map to SDR (default) is safest everywhere.<br>"
+                                "Record native HDR10 keeps the original PQ/BT.2020 signal but needs HEVC or AV1.<br>"
+                                "No effect when the display is not HDR."));
 
 // ---- Skipped (control does not exist in current UI) ----
 // kPerTrackGain          — per-track gain (0.6 wave)
