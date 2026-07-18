@@ -376,11 +376,11 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_state = VisualWebcamState::Active,
      .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
      .webcam_pip_enabled = true,
-     // Flush against the bottom-right video edge (sanitize clamps 0.78+0.28 to
-     // end exactly at 1.0): pins true WYSIWYG — the PiP renders unsquished and
-     // unclipped underneath the stats-row OSD, right up to the record edge.
-     .webcam_x = 0.78f,
-     .webcam_y = 0.78f,
+     // Flush against the bottom-right video edge (x + w and y + h end exactly at
+     // 1.0): pins true WYSIWYG — the PiP renders unsquished and unclipped
+     // underneath the stats-row OSD, right up to the record edge.
+     .webcam_x = 0.72f,
+     .webcam_y = 0.72f,
      .webcam_w = 0.28f,
      .webcam_h = 0.28f},
     {.id = QStringLiteral("record-webcam-mirrored"),
