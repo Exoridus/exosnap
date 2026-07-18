@@ -70,6 +70,10 @@ produced during recording.
 
 The default theme is **dark mode**.
 
+The frameless main window carries a **subtle native 1px border** in the active theme's line colour
+(it follows Windows 11's rounded window corners and updates on a theme switch). On Windows versions
+without per-window border colours the default system frame is kept — never an error.
+
 ---
 
 ## 3. Recording defaults and profiles
