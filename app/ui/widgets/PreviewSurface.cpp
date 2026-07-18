@@ -14,11 +14,11 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPen>
 #include <QRadialGradient>
 #include <QResizeEvent>
 #include <QSvgRenderer>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -198,10 +198,24 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
 
     top_meta_full_ = top_meta_label_->text();
     bottom_right_full_ = bottom_right_label_->text();
+
+    // Live DXGI source dimensions change on the render thread (captured window
+    // resized, display mode change) with no notification to the UI; poll them at a
+    // low cadence while the DXGI preview runs so the content-fit box follows.
+    aspect_poll_timer_ = new QTimer(this);
+    aspect_poll_timer_->setInterval(500);
+    connect(aspect_poll_timer_, &QTimer::timeout, this, [this]() { notifyAspectRatioMaybeChanged(); });
 }
 
 PreviewSurface::~PreviewSurface() {
-    stopDxgiPreview();
+    // Inline teardown instead of stopDxgiPreview(): that helper emits
+    // contentAspectRatioChanged, and no signal may fire from a destructor.
+    dxgi_active_ = false;
+    if (dxgi_renderer_) {
+        dxgi_renderer_->StopCapture();
+        dxgi_renderer_->Shutdown();
+        dxgi_renderer_.reset();
+    }
 }
 
 bool PreviewSurface::hasHeightForWidth() const {
@@ -231,6 +245,7 @@ void PreviewSurface::setRecording(bool recording) {
 
 void PreviewSurface::setLiveFrame(QImage frame) {
     current_frame_ = std::move(frame);
+    notifyAspectRatioMaybeChanged();
     update();
 }
 
@@ -271,7 +286,14 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     // Fires on the render thread; hop to the GUI thread bound to `this` so a
     // callback racing surface teardown is dropped by Qt instead of delivered.
     dxgi_renderer_->SetFirstFramePresentedCallback([this]() {
-        QMetaObject::invokeMethod(this, [this]() { emit dxgiFirstFrameRendered(); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                // The source dimensions are known once the first frame rendered.
+                notifyAspectRatioMaybeChanged();
+                emit dxgiFirstFrameRendered();
+            },
+            Qt::QueuedConnection);
     });
 
     // Pass the crop box (if any) so the renderer crops the monitor frame to the
@@ -290,6 +312,10 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     // The native child HWND occludes Qt painting, so push the current overlay
     // (video + placement + chrome) to the renderer to composite it WYSIWYG.
     syncWebcamOverlayToDxgi();
+    // The meta/stats rows are occluded too — push them as OSD sprites.
+    syncOsdToDxgi();
+    aspect_poll_timer_->start();
+    notifyAspectRatioMaybeChanged();
     update();
     return true;
 }
@@ -324,7 +350,14 @@ bool PreviewSurface::tryStartDxgiPushedPreview(const recorder_core::CaptureTarge
     // Fires on the render thread; hop to the GUI thread bound to `this` so a
     // callback racing surface teardown is dropped by Qt instead of delivered.
     dxgi_renderer_->SetFirstFramePresentedCallback([this]() {
-        QMetaObject::invokeMethod(this, [this]() { emit dxgiFirstFrameRendered(); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                // The source dimensions are known once the first frame rendered.
+                notifyAspectRatioMaybeChanged();
+                emit dxgiFirstFrameRendered();
+            },
+            Qt::QueuedConnection);
     });
 
     if (!dxgi_renderer_->StartPushedOnly(target, frame_rate_num, frame_rate_den)) {
@@ -339,17 +372,23 @@ bool PreviewSurface::tryStartDxgiPushedPreview(const recorder_core::CaptureTarge
     dxgi_active_ = true;
     current_frame_ = QImage{};
     syncWebcamOverlayToDxgi();
+    syncOsdToDxgi();
+    aspect_poll_timer_->start();
+    notifyAspectRatioMaybeChanged();
     update();
     return true;
 }
 
 void PreviewSurface::stopDxgiPreview() {
     dxgi_active_ = false;
+    if (aspect_poll_timer_)
+        aspect_poll_timer_->stop();
     if (dxgi_renderer_) {
         dxgi_renderer_->StopCapture();
         dxgi_renderer_->Shutdown();
         dxgi_renderer_.reset();
     }
+    notifyAspectRatioMaybeChanged();
 }
 
 bool PreviewSurface::isDxgiPreviewActive() const noexcept {
@@ -412,6 +451,28 @@ QRectF PreviewSurface::displayedFrameRectForSource(int srcW, int srcH) const {
     return {dx, dy, dw, dh};
 }
 
+double PreviewSurface::contentAspectRatio() const {
+    if (dxgi_active_ && dxgi_renderer_) {
+        uint32_t sw = 0;
+        uint32_t sh = 0;
+        dxgi_renderer_->GetSourceSize(sw, sh);
+        if (sw > 0 && sh > 0)
+            return static_cast<double>(sw) / static_cast<double>(sh);
+        return 0.0; // DXGI running but no frame yet — dimensions unknown.
+    }
+    if (!current_frame_.isNull() && current_frame_.width() > 0 && current_frame_.height() > 0)
+        return static_cast<double>(current_frame_.width()) / static_cast<double>(current_frame_.height());
+    return 0.0;
+}
+
+void PreviewSurface::notifyAspectRatioMaybeChanged() {
+    const double ar = contentAspectRatio();
+    if (std::abs(ar - last_notified_aspect_) < 1e-6)
+        return;
+    last_notified_aspect_ = ar;
+    emit contentAspectRatioChanged(ar);
+}
+
 void PreviewSurface::setTopMetaText(const QString& text) {
     top_meta_full_ = text;
     applyOverlayTextElision();
@@ -463,6 +524,10 @@ void PreviewSurface::applyOverlayTextElision() {
         top_meta_label_->fontMetrics().elidedText(top_meta_full_, Qt::ElideRight, std::max(0, meta_avail));
     top_meta_label_->setText(meta);
     top_meta_label_->setVisible(rows_usable && !meta.isEmpty());
+
+    // Text or visibility changed — refresh the OSD sprites the live DXGI preview
+    // composites in place of the (occluded) Qt-painted rows.
+    syncOsdToDxgi();
 }
 
 void PreviewSurface::setFrameTone(FrameTone tone) {
@@ -528,12 +593,14 @@ void PreviewSurface::setWebcamOverlayEnabled(bool enabled) {
     }
     setMouseTracking(webcamEditingAllowed());
     syncWebcamOverlayToDxgi();
+    applyHoverCursor();
     update();
 }
 
 void PreviewSurface::setWebcamOverlayRect(QRectF rect_norm) {
     webcam_rect_norm_ = sanitizeOverlayRect(rect_norm);
     syncWebcamOverlayToDxgi();
+    applyHoverCursor();
     update();
 }
 
@@ -598,6 +665,7 @@ void PreviewSurface::setWebcamEditLocked(bool locked) {
     }
     setMouseTracking(webcamEditingAllowed());
     syncWebcamOverlayToDxgi();
+    applyHoverCursor();
     update();
 }
 
@@ -609,6 +677,9 @@ void PreviewSurface::setWebcamSelected(bool selected) {
         emit webcamSelectionChanged(webcam_selected_);
     }
     syncWebcamOverlayToDxgi();
+    // Selection toggles the corner handles' hit zones — refresh the cursor for a
+    // pointer already resting on one.
+    applyHoverCursor();
     update();
 }
 
@@ -621,6 +692,7 @@ void PreviewSurface::cancelWebcamInteraction() {
         }
     }
     syncWebcamOverlayToDxgi();
+    applyHoverCursor();
     update();
 }
 
@@ -662,25 +734,13 @@ void PreviewSurface::syncWebcamOverlayToDxgi() {
     chroma.softness = webcam_chroma_.softness;
     chroma.spill_reduction = webcam_chroma_.spill_reduction;
 
-    // Preview-only clip: keep the composited PiP off the stats footer + frame border
-    // in the live DXGI preview, matching the Qt paint path. The recording compositor
-    // consumes the un-clipped webcam_rect_norm_, so WYSIWYG for the FILE is preserved;
-    // only the on-screen preview geometry is trimmed. Intersect the placement
-    // with the content rect expressed in the same normalised (source-relative) space.
-    QRectF preview_rect_norm = webcam_rect_norm_;
-    const QRectF fr = displayedFrameRect();
-    if (fr.width() > 1.0 && fr.height() > 1.0) {
-        const QRectF content = previewContentRect();
-        const QRectF content_norm((content.left() - fr.left()) / fr.width(), (content.top() - fr.top()) / fr.height(),
-                                  content.width() / fr.width(), content.height() / fr.height());
-        const QRectF clipped = webcam_rect_norm_.intersected(content_norm);
-        if (clipped.width() > 0.0 && clipped.height() > 0.0)
-            preview_rect_norm = clipped;
-    }
-
+    // True WYSIWYG: the renderer composites the SAME normalised placement the
+    // recording compositor consumes — never trimmed, squished or clipped. The
+    // meta/stats rows are OSD sprites drawn above the PiP (syncOsdToDxgi), so no
+    // preview-only geometry adjustment is needed to keep them readable.
     dxgi_renderer_->SetWebcamOverlayState(
-        show, selected, static_cast<float>(preview_rect_norm.x()), static_cast<float>(preview_rect_norm.y()),
-        static_cast<float>(preview_rect_norm.width()), static_cast<float>(preview_rect_norm.height()), webcam_mirror_,
+        show, selected, static_cast<float>(webcam_rect_norm_.x()), static_cast<float>(webcam_rect_norm_.y()),
+        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_,
         webcam_opacity_, chroma);
     if (show && !webcam_frame_.isNull()) {
         const QImage& img = webcam_frame_;
@@ -730,23 +790,36 @@ QRectF PreviewSurface::defaultWebcamOverlayRect(double camera_aspect_w_over_h) c
     return sanitizeOverlayRect(QRectF(x_norm, y_norm, w_norm, h_norm));
 }
 
-QRectF PreviewSurface::previewContentRect() const {
-    // Start inside the 1px rounded frame border (the tone glow paints ~2px, so a 2px
-    // inset keeps the PiP clear of the frame edge too).
-    QRectF r = QRectF(rect()).adjusted(2.0, 2.0, -2.0, -2.0);
-    // Reserve the bottom stats-footer strip so the PiP never overpaints it. bottom_row_
-    // is laid out at (height - pad_bottom - bottom_height); keep a small gap above it.
-    if (bottom_row_ != nullptr) {
-        constexpr qreal kFooterGap = 4.0;
-        const qreal footer_top = static_cast<qreal>(bottom_row_->geometry().top()) - kFooterGap;
-        if (footer_top < r.bottom())
-            r.setBottom(footer_top);
-    }
-    if (r.width() < 0.0)
-        r.setWidth(0.0);
-    if (r.height() < 0.0)
-        r.setHeight(0.0);
-    return r;
+// Rasterize one meta row into a transparent image and hand it to the renderer.
+// slot 0 = top meta row, slot 1 = bottom stats row. Rows whose labels are all
+// hidden (elision below the minimum width) clear their sprite.
+void PreviewSurface::syncOsdToDxgi() {
+    if (!dxgi_active_ || !dxgi_renderer_)
+        return;
+
+    const qreal dpr = devicePixelRatioF();
+    const auto push_row = [&](int slot, QWidget* row, bool has_visible_text) {
+        if (row == nullptr || !has_visible_text || row->width() <= 0 || row->height() <= 0) {
+            dxgi_renderer_->SetOsdSprite(slot, nullptr, 0, 0, 0, 0, 0);
+            return;
+        }
+        QImage img(row->size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        img.setDevicePixelRatio(dpr);
+        img.fill(Qt::transparent);
+        row->render(&img, QPoint(), QRegion(), QWidget::DrawChildren);
+        // The renderer blends with straight source alpha (same state as the PiP),
+        // so convert out of premultiplied before upload.
+        img = img.convertToFormat(QImage::Format_ARGB32);
+        dxgi_renderer_->SetOsdSprite(slot, img.constBits(), img.width(), img.height(),
+                                     static_cast<int>(img.bytesPerLine()), qRound(row->x() * dpr),
+                                     qRound(row->y() * dpr));
+    };
+
+    const bool top_visible = top_meta_label_ != nullptr && top_meta_label_->isVisibleTo(top_row_);
+    const bool bottom_visible = (bottom_left_label_ != nullptr && bottom_left_label_->isVisibleTo(bottom_row_)) ||
+                                (bottom_right_label_ != nullptr && bottom_right_label_->isVisibleTo(bottom_row_));
+    push_row(0, top_row_, top_visible);
+    push_row(1, bottom_row_, bottom_visible);
 }
 
 // Returns the webcam overlay rect in widget pixel coordinates.
@@ -778,6 +851,38 @@ QRectF PreviewSurface::displayedFrameRect() const {
         return rect();
 
     return displayedFrameRectForSource(current_frame_.width(), current_frame_.height());
+}
+
+// Root-cause fix for the intermittently missing resize cursor: the cursor used to
+// be recomputed ONLY in mouseMoveEvent, so any state change that alters the hit
+// map under a stationary pointer (selection gained/lost — corner handles only hit
+// while selected —, lock toggles, programmatic placement updates, a drag ending)
+// left a stale cursor until the pointer left and re-entered the surface. Every
+// such transition now re-evaluates the cursor from the last known pointer
+// position.
+void PreviewSurface::applyHoverCursor() {
+    if (drag_mode_ != DragMode::None)
+        return; // the in-flight interaction keeps the cursor it started with
+    if (!webcamEditingAllowed() || !hover_pos_valid_) {
+        unsetCursor();
+        return;
+    }
+    switch (hitTestWebcam(hover_pos_)) {
+    case DragMode::ResizeTL:
+    case DragMode::ResizeBR:
+        setCursor(Qt::SizeFDiagCursor);
+        break;
+    case DragMode::ResizeTR:
+    case DragMode::ResizeBL:
+        setCursor(Qt::SizeBDiagCursor);
+        break;
+    case DragMode::Move:
+        setCursor(Qt::SizeAllCursor);
+        break;
+    default:
+        unsetCursor();
+        break;
+    }
 }
 
 PreviewSurface::DragMode PreviewSurface::hitTestWebcam(QPointF pos) const {
@@ -969,6 +1074,8 @@ void PreviewSurface::applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers mod
 }
 
 void PreviewSurface::mousePressEvent(QMouseEvent* event) {
+    hover_pos_ = event->position();
+    hover_pos_valid_ = true;
     if (!webcamEditingAllowed()) {
         QWidget::mousePressEvent(event);
         return;
@@ -998,6 +1105,7 @@ void PreviewSurface::mousePressEvent(QMouseEvent* event) {
             webcam_selected_ = false;
             emit webcamSelectionChanged(false);
             syncWebcamOverlayToDxgi();
+            applyHoverCursor();
             update();
         }
         QWidget::mousePressEvent(event);
@@ -1005,6 +1113,8 @@ void PreviewSurface::mousePressEvent(QMouseEvent* event) {
 }
 
 void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
+    hover_pos_ = event->position();
+    hover_pos_valid_ = true;
     if (!webcamEditingAllowed()) {
         QWidget::mouseMoveEvent(event);
         return;
@@ -1016,23 +1126,7 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
             drag_modifier_toggle_held_ = false;
             update();
         }
-        const DragMode hit = hitTestWebcam(pos);
-        switch (hit) {
-        case DragMode::ResizeTL:
-        case DragMode::ResizeBR:
-            setCursor(Qt::SizeFDiagCursor);
-            break;
-        case DragMode::ResizeTR:
-        case DragMode::ResizeBL:
-            setCursor(Qt::SizeBDiagCursor);
-            break;
-        case DragMode::Move:
-            setCursor(Qt::SizeAllCursor);
-            break;
-        default:
-            setCursor(Qt::ArrowCursor);
-            break;
-        }
+        applyHoverCursor();
         QWidget::mouseMoveEvent(event);
         return;
     }
@@ -1043,6 +1137,8 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void PreviewSurface::mouseReleaseEvent(QMouseEvent* event) {
+    hover_pos_ = event->position();
+    hover_pos_valid_ = true;
     if (drag_mode_ != DragMode::None) {
         drag_mode_ = DragMode::None;
         if (drag_modifier_toggle_held_) {
@@ -1055,6 +1151,9 @@ void PreviewSurface::mouseReleaseEvent(QMouseEvent* event) {
         // Confirm the new placement (RecordPage persists it).
         emit webcamOverlayMoved(webcam_rect_norm_);
         syncWebcamOverlayToDxgi();
+        // The drag is over — the cursor must reflect what is now under the
+        // stationary pointer (e.g. a corner handle after a move-select).
+        applyHoverCursor();
         event->accept();
     } else {
         QWidget::mouseReleaseEvent(event);
@@ -1072,6 +1171,7 @@ void PreviewSurface::keyPressEvent(QKeyEvent* event) {
                 releaseKeyboard();
             }
             syncWebcamOverlayToDxgi();
+            applyHoverCursor();
             update();
             event->accept();
             return;
@@ -1081,6 +1181,7 @@ void PreviewSurface::keyPressEvent(QKeyEvent* event) {
             webcam_selected_ = false;
             emit webcamSelectionChanged(false);
             syncWebcamOverlayToDxgi();
+            applyHoverCursor();
             update();
             event->accept();
             return;
@@ -1126,6 +1227,19 @@ void PreviewSurface::keyReleaseEvent(QKeyEvent* event) {
     QWidget::keyReleaseEvent(event);
 }
 
+void PreviewSurface::enterEvent(QEnterEvent* event) {
+    hover_pos_ = event->position();
+    hover_pos_valid_ = true;
+    applyHoverCursor();
+    QWidget::enterEvent(event);
+}
+
+void PreviewSurface::leaveEvent(QEvent* event) {
+    hover_pos_valid_ = false;
+    applyHoverCursor();
+    QWidget::leaveEvent(event);
+}
+
 // ---------------------------------------------------------------------------
 // paintEvent
 // ---------------------------------------------------------------------------
@@ -1169,40 +1283,32 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const QRectF frame_rect = rect().adjusted(0.5, 0.5, -0.5, -0.5);
-    // PREVIEW-PANEL: the host (recordPreviewSurfaceHost) is the single rounded panel
-    // (bg + state-coloured 1px border + radius-md=10). The surface fills it and draws
-    // ONLY content (no own border) clipped to the host's inner radius (10 − 1px ≈ 9),
-    // so there is no nested-panel seam.
-    constexpr qreal kPanelRadius = 9.0;
+    const QRectF frame_rect = rect();
+    // PREVIEW-PANEL: the host (recordPreviewSurfaceHost) is a borderless SQUARE box
+    // sized to the source aspect ratio — the box edge IS the record edge, so the
+    // surface fills it corner to corner with no rounding and no inner clipping. The
+    // recording/warn/blocked status tone is the host's own square 1px border (QSS
+    // recordState variants), which also stays visible while the DXGI child HWND
+    // covers this widget; no glow is drawn here.
 
     if (dxgi_active_) {
-        painter.setBrush(QColor(0, 0, 0));
-        painter.setPen(Qt::NoPen);
-        painter.drawRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
+        painter.fillRect(frame_rect, QColor(0, 0, 0));
     } else {
         // DESIGN-FIDELITY: suite-record.jsx:23 PreviewEmpty — a quiet near-black radial
         // vignette (NOT a flat fill, and no warm/amber cast):
         //   radial-gradient(120% 130% at 50% 40%, #131316 0%, #0C0C0E 58%, #08080A 100%).
-        // Border stays neutral HT.line ≈ rgba(255,255,255,0.07).
         QRadialGradient empty_bg(QPointF(0.5, 0.4), 1.2, QPointF(0.5, 0.4));
         empty_bg.setCoordinateMode(QGradient::ObjectBoundingMode);
         empty_bg.setColorAt(0.0, QColor(0x13, 0x13, 0x16));
         empty_bg.setColorAt(0.58, QColor(0x0C, 0x0C, 0x0E));
         empty_bg.setColorAt(1.0, QColor(0x08, 0x08, 0x0A));
-        painter.setBrush(empty_bg);
-        painter.setPen(Qt::NoPen); // the host draws the single panel border
-        painter.drawRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
+        painter.fillRect(frame_rect, QBrush(empty_bg));
 
         if (!current_frame_.isNull()) {
-            painter.save();
-            QPainterPath clipPath;
-            clipPath.addRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
-            painter.setClipPath(clipPath);
-
             // Draw through the same contain-fit rect used for PiP hit-testing and
             // placement (displayedFrameRect) so the main image and the overlay share
             // exactly one content rectangle (no sub-pixel divergence).
+            painter.save();
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             painter.drawImage(displayedFrameRectForSource(current_frame_.width(), current_frame_.height()),
                               current_frame_);
@@ -1210,37 +1316,11 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         } else {
             // No live frame and no DXGI preview (no source / source unavailable):
             // show the branded capture-safe placeholder instead of a blank panel.
-            painter.save();
-            QPainterPath clip;
-            clip.addRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
-            painter.setClipPath(clip);
             paintBrandPlaceholder(painter, frame_rect);
-            painter.restore();
         }
     }
 
     const bool tone_recording = (frame_tone_ == FrameTone::Recording);
-    const bool tone_warn = (frame_tone_ == FrameTone::Warn);
-    const bool tone_blocked = (frame_tone_ == FrameTone::Blocked);
-
-    QColor tone_color("#45423d");
-    if (tone_recording) {
-        tone_color = QColor("#f05b54");
-    } else if (tone_warn) {
-        tone_color = QColor("#d7a744");
-    } else if (tone_blocked) {
-        tone_color = QColor("#f05b54");
-    }
-
-    if (tone_recording || tone_warn || tone_blocked) {
-        painter.save();
-        QColor glow = tone_color;
-        glow.setAlpha(tone_recording ? 68 : 44);
-        painter.setPen(QPen(glow, tone_recording ? 2.0 : 1.5));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(frame_rect.adjusted(0.8, 0.8, -0.8, -0.8), kPanelRadius, kPanelRadius);
-        painter.restore();
-    }
 
     if (tone_recording) {
         painter.save();
@@ -1256,12 +1336,12 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     // (syncWebcamOverlayToDxgi). This path drives the QImage preview and all
     // deterministic visual-test scenarios (which run with DXGI stopped).
     if (webcam_enabled_) {
-        // Clip the PiP to the content rect so it never overpaints the stats footer or
-        // the frame border in the preview. Preview-only: the recording compositor
-        // draws the PiP un-clipped from the same normalised placement, so the file is
-        // unchanged. The whole block (image, placeholder, edit chrome) is clipped.
+        // True WYSIWYG: the PiP renders exactly as the recording compositor writes
+        // it — placeable anywhere within the displayed video area, never trimmed or
+        // clipped. The meta/stats rows are child widgets and therefore paint ABOVE
+        // this (Qt paints children after the parent), matching the DXGI path where
+        // they are OSD sprites drawn last.
         painter.save();
-        painter.setClipRect(previewContentRect());
         const QRectF cam_rect = webcamPixelRect();
         const bool show_chrome = webcam_selected_ && webcamEditingAllowed();
         if (!webcam_frame_.isNull()) {
@@ -1317,7 +1397,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             }
             painter.restore();
         }
-        painter.restore(); // release the preview content-rect clip
+        painter.restore();
     }
 
     // SUITE-PHASE-F: In-window countdown ring.
@@ -1361,9 +1441,9 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.restore();
     }
 
-    // DESIGN-FIDELITY: corner brackets removed. The design-system preview is a plain
-    // rounded frame (border-radius 18, 1px border) — no corner brackets. The tone color
-    // is still expressed via the frame glow above (recording/warn/blocked).
+    // The recording/warn/blocked tone is carried by the host's square 1px border
+    // (QSS recordState variants) so it shows identically over the DXGI child HWND
+    // and in this Qt paint path; the surface itself draws no frame chrome.
 }
 
 void PreviewSurface::resizeEvent(QResizeEvent* event) {

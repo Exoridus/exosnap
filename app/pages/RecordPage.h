@@ -469,6 +469,9 @@ class RecordPage : public QWidget {
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 
     QWidget* preview_column_ = nullptr;
+    // Stretch cell the column lays out; the host is positioned manually inside it
+    // (content-fit to the source aspect ratio — see updatePreviewHeightClamp()).
+    QWidget* preview_box_area_ = nullptr;
     QWidget* preview_surface_host_ = nullptr;
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
     QWidget* source_row_ = nullptr;

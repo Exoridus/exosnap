@@ -365,16 +365,20 @@ QWidget#recordSourceRow[sourceLocked="true"] {
     background: transparent;
 }
 
+/* CONTENT-FIT PREVIEW BOX: the box is sized to the source aspect ratio, so its
+   edge IS the record edge. Borderless + square in the neutral state (no panel
+   chrome competing with the rectangular native swap-chain child); the 1px border
+   exists only as the recording/warn/blocked status tone drawn directly on the
+   video edge. The border stays 1px in EVERY state (transparent when neutral) so
+   toggling states never shifts the box geometry. */
 QWidget#recordPreviewSurfaceHost {
     background: ${preview-well};
-    border: 1px solid ${line2};
-    /* Square corners: the live preview is a rectangular native swap-chain child
-       window that would cover any rounded corner unevenly. */
+    border: 1px solid transparent;
     border-radius: 0px;
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="ready"] {
-    border-color: ${line2};
+    border-color: transparent;
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="recording"] {

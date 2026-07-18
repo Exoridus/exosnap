@@ -76,6 +76,19 @@ class DxgiPreviewRenderer {
     // bgra: tightly indexable BGRA pixels (stride bytes per row). nullptr clears it.
     void SetWebcamOverlayFrame(const uint8_t* bgra, int width, int height, int stride);
 
+    // --- On-screen-display sprites (preview-only chrome above everything) ---
+    // The Record preview's meta/stats text rows are Qt child widgets, which the
+    // native child HWND occludes; the surface rasterizes them and hands them here
+    // to be composited LAST — above the frame, the webcam PiP and the cursor —
+    // so the footer-above-PiP z-order matches the Qt paint path. Never part of
+    // the snapshot readback (that re-blits the raw source), so OSD chrome never
+    // leaks into screenshots or "what the encoder sees".
+    // slot: 0..kOsdSpriteSlots-1. bgra: straight-alpha BGRA (stride bytes/row);
+    // nullptr clears the slot. destX/destY: top-left in swap-chain pixels.
+    // Thread-safe: called from the UI thread; drawn on the render thread.
+    static constexpr int kOsdSpriteSlots = 2;
+    void SetOsdSprite(int slot, const uint8_t* bgra, int width, int height, int stride, int destX, int destY);
+
     void Shutdown();
 
     // --- Pushed source mode (WYSIWYG preview during recording) ---
@@ -163,6 +176,9 @@ class DxgiPreviewRenderer {
     void EnsureChromeTexture();
     // Draw the PiP video + (optional) edit chrome into the content rectangle.
     void RenderWebcamOverlay(int contentX, int contentY, int contentW, int contentH);
+    // Draw the OSD sprites (meta/stats rows) last, above frame + PiP + cursor.
+    // Render-thread only; takes overlayMutex_ itself.
+    void RenderOsdSprites();
     // Draw the live mouse cursor over a RAW pushed background (an idle DXGI-hub
     // frame — Output Duplication composites no cursor). Queries the Win32 cursor,
     // maps it from the captured monitor into the content rectangle with the same
@@ -270,6 +286,21 @@ class DxgiPreviewRenderer {
     int overlayTexH_ = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> chromeTex_; // 1x1 amber for edit chrome
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> chromeSRV_;
+
+    // --- OSD sprite state (guarded by overlayMutex_; textures render-thread) ---
+    struct OsdSprite {
+        std::vector<uint8_t> bgra; // straight-alpha BGRA, tightly packed
+        int w = 0;
+        int h = 0;
+        int x = 0; // top-left in swap-chain pixels
+        int y = 0;
+        bool dirty = false;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+        int texW = 0;
+        int texH = 0;
+    };
+    OsdSprite osdSprites_[kOsdSpriteSlots];
 
     // --- Pushed source mode state ---
     // Handoff from any thread (BeginPushedSource) to the render thread. The render

@@ -375,6 +375,20 @@ resumes when frames come back. It never goes empty and never goes black. A tile 
 produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
 picker releases every capture it opened.
 
+**Record preview box (content-fit).** The Record-page preview box follows the **current source's
+aspect ratio** — width-driven and vertically centered in the available space (height-clamped and
+horizontally centered for sources taller than the area) — so **the edge of the box is the edge of
+the recording**: there are no letterbox/pillarbox fill bars inside the box, and genuinely black
+recorded content is distinguishable from padding. The box is borderless and square-cornered in the
+neutral state; the recording / paused / warning / blocked status tone renders as a **square 1px
+line directly on the video edge** (plus the existing recording scanline treatment). The box follows
+aspect changes live: switching targets, changing a region, or the captured source changing its own
+dimensions re-fits the box. With no source selected (or before the source's dimensions are known)
+the box keeps its default full-area size. The preview's meta/stats text rows (top target line,
+bottom stats/format line) are **on-screen indicators drawn over the video — and over the webcam
+PiP — in both the live (DXGI) and static preview paths**; they are never part of the recording or
+of frame screenshots.
+
 **Idle live preview.** Before recording, the Record-page preview of a **display** is fed by the same
 DXGI Output Duplication backend the recording uses, owned by a shared capture hub: the preview is
 VRR- and HDR-true, shows no OS capture indicator, draws the live cursor, and **holds its last frame
@@ -427,9 +441,11 @@ live setup preview; the camera opens only while it is on (opening Settings → W
 camera on by itself). The webcam is never recorded without a selected device (the first available
 camera is pre-selected when one exists). By default the picture-in-picture starts in the
 bottom-right corner of the preview with a small margin from both edges (it is not flush to the
-corner); it can then be moved and resized anywhere. In the Record preview the picture-in-picture is
-kept clear of the stats footer and the frame border so those are never hidden behind it — a
-preview-only presentation detail; the recorded file composites the camera from the same placement.
+corner); it can then be moved and resized anywhere **within the displayed video area, right up to
+every edge**, and the preview renders it **exactly as it will appear in the file — never squished,
+trimmed or clipped**. The preview's meta/stats text rows draw above the picture-in-picture as
+on-screen indicators (they are not part of the recording), so a bottom-edge placement is shown in
+full underneath them.
 With **no camera attached** the Record dock's webcam
 control is unavailable and says so; attaching one makes it available again. Unplugging the last
 camera never loses the stored choice — it returns when the device does. When the toggle is on but the

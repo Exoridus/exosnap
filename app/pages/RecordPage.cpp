@@ -642,6 +642,11 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
     if (watched == source_name_label_ && event->type() == QEvent::Resize) {
         applySourceNameElision();
     }
+    // The preview box area is laid out by the column; the host inside it is
+    // positioned manually (content-fit). Re-fit whenever the area's size settles.
+    if (watched == preview_box_area_ && event->type() == QEvent::Resize) {
+        updatePreviewHeightClamp();
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -738,14 +743,35 @@ void RecordPage::setEditOverlayActive(bool active) {
 }
 
 void RecordPage::updatePreviewHeightClamp() {
-    if (!preview_surface_ || !preview_surface_host_) {
+    if (!preview_surface_ || !preview_surface_host_ || !preview_box_area_) {
         return;
     }
 
-    // PREVIEW-PANEL: the surface fills the host (single full-area panel, canon
-    // suite-record.jsx:209) — no 16:9 widget clamp. Live content letterboxes INSIDE
-    // the surface via the DXGI child-HWND placement / displayedFrameRect. Only keep
-    // the active DXGI child rect in sync when the host resizes.
+    // CONTENT-FIT PREVIEW BOX: the host follows the current source aspect ratio —
+    // width-driven, vertically centered in the available area — so the edge of the
+    // box IS the edge of the recording and there are no letterbox fill bars (a game
+    // with genuinely black content must be distinguishable from padding). A source
+    // taller than the area is height-clamped and horizontally centered instead.
+    // With no source (or unknown dimensions) the box keeps the full default area.
+    const QSize area = preview_box_area_->size();
+    QRect box(QPoint(0, 0), area);
+    const double ar = preview_surface_->contentAspectRatio();
+    if (ar > 0.0 && area.width() > 2 && area.height() > 2) {
+        // The host carries a 1px border on each side (its layout margins), so the
+        // VIDEO area is (box - 2px) — fit that to the source aspect exactly.
+        int w = area.width();
+        int h = qRound(static_cast<double>(w - 2) / ar) + 2;
+        if (h > area.height()) {
+            h = area.height();
+            w = qMin(area.width(), qRound(static_cast<double>(h - 2) * ar) + 2);
+        }
+        box = QRect((area.width() - w) / 2, (area.height() - h) / 2, w, h);
+    }
+    if (preview_surface_host_->geometry() != box) {
+        preview_surface_host_->setGeometry(box);
+    }
+
+    // Keep the active DXGI child rect in sync with the (possibly moved) surface.
     if (preview_surface_->isDxgiPreviewActive()) {
         preview_surface_->repositionDxgiPreview();
     }
@@ -848,8 +874,22 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
     preview_column_layout->addWidget(source_row_);
 
-    preview_surface_host_ = new QWidget(preview_column_);
+    // CONTENT-FIT PREVIEW BOX: the column lays out a plain stretch area; the host
+    // (the visible box) is positioned manually inside it so it can follow the
+    // source aspect ratio — width-driven, vertically centered — making the box
+    // edge the record edge (no letterbox fill). See updatePreviewHeightClamp().
+    preview_box_area_ = new QWidget(preview_column_);
+    preview_box_area_->setObjectName("recordPreviewBoxArea");
+    // Propagate the surface's minimum through the manually-managed level (the old
+    // layout chain did this implicitly): surface min 320x200 + 1px border each side.
+    preview_box_area_->setMinimumSize(322, 202);
+    preview_box_area_->installEventFilter(this);
+
+    preview_surface_host_ = new QWidget(preview_box_area_);
     preview_surface_host_->setObjectName("recordPreviewSurfaceHost");
+    // Plain QWidget: needs WA_StyledBackground to reliably paint the QSS
+    // background + the 1px recordState tone border (the box edge = record edge).
+    preview_surface_host_->setAttribute(Qt::WA_StyledBackground, true);
     setStyledStringProperty(preview_surface_host_, "recordState", "ready");
     auto* preview_surface_host_layout = new QHBoxLayout(preview_surface_host_);
     preview_surface_host_layout->setContentsMargins(1, 1, 1, 1);
@@ -861,11 +901,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // dock gate the moment the preview presents its first one.
     connect(preview_surface_, &ui::widgets::PreviewSurface::dxgiFirstFrameRendered, this,
             [this]() { updateTransportDock(); });
-    // PREVIEW-PANEL (canon suite-record.jsx:209): the surface fills the host so the
-    // host is the single rounded panel. No 16:9 widget clamp / centering stretches —
-    // live content letterboxes INSIDE the surface; the placeholder fills the panel.
+    // Follow the source aspect live: target switches, region changes and DXGI
+    // source-dimension changes all re-fit the box.
+    connect(preview_surface_, &ui::widgets::PreviewSurface::contentAspectRatioChanged, this,
+            [this](double) { updatePreviewHeightClamp(); });
     preview_surface_host_layout->addWidget(preview_surface_, 1);
-    preview_column_layout->addWidget(preview_surface_host_, 1);
+    preview_column_layout->addWidget(preview_box_area_, 1);
 
     transport_dock_ = new ui::widgets::TransportDock(this);
 
