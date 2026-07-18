@@ -366,6 +366,11 @@ class MainWindow : public QMainWindow {
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
     void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
     void applyVisualEditExportScenario(const visual::VisualScenario& scenario);
+    // notifications-open: embed the NotificationHubPanel as a child overlay of the
+    // window (top-right, under the bell) with a fixture set of advisories, so its
+    // scrollable list is composited into MainWindow::grab(). Harness-only host —
+    // the production hub is a separate top-level Qt::Popup outside the screenshot.
+    void applyVisualNotificationsScenario(const visual::VisualScenario& scenario);
     // EDIT-VIDEO-PLAYER Task 9: lazily builds a harness-only EditPlayerSurface
     // host layered over the EditExport overlay. EditPlayerSurface is not wired
     // into EditExportPage yet (a later task's job) -- this proves its paint

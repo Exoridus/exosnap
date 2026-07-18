@@ -1946,6 +1946,19 @@ const QVector<VisualScenario> kAudioDegradedNotificationScenarios = {
      .audio_degraded_notification_count = 1},
 };
 
+// Notification hub open (PS-PHASE-B follow-up). The live hub is a top-level
+// Qt::Popup anchored under the bell, so it never appears in MainWindow::grab().
+// This scenario asks the harness to embed the panel as a child overlay of the
+// window (MainWindow::applyVisualScenario, harness-only) pre-populated with a
+// fixture set spanning info / success / error, so the scrollable advisory list —
+// and its per-entry padding — can finally be judged on rendered pixels.
+const QVector<VisualScenario> kNotificationHubScenarios = {
+    {.id = QStringLiteral("notifications-open"),
+     .title = QStringLiteral("Notifications / Hub open"),
+     .page = VisualPage::Record,
+     .notifications_open = true},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1962,6 +1975,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kUpdatesScenarios);
         merged.append(kDevicePageScenarios);
         merged.append(kAudioDegradedNotificationScenarios);
+        merged.append(kNotificationHubScenarios);
     }
     return merged;
 }

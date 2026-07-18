@@ -16,6 +16,10 @@ namespace exosnap::ui::widgets {
 using namespace exosnap::ui::theme;
 
 AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
+    // A bare QWidget does not paint its QSS background unless it opts in; without
+    // this the [advisoryUnread="true"] rule silently never renders (VG-6).
+    setAttribute(Qt::WA_StyledBackground, true);
+
     // -- Status icon label (fixed 30x30) --
     // Background/border are set per-severity in updateStatusIcon() (VG-8).
     status_icon_label_ = new QLabel(this);
@@ -24,6 +28,7 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
 
     // -- Title label --
     title_label_ = new QLabel(this);
+    title_label_->setObjectName(QStringLiteral("advisoryTitle"));
     {
         QFont f = title_label_->font();
         f.setPixelSize(13);
@@ -33,6 +38,7 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
 
     // -- Body label --
     body_label_ = new QLabel(this);
+    body_label_->setObjectName(QStringLiteral("advisoryBody"));
     body_label_->setWordWrap(true);
     {
         QFont f = body_label_->font();
@@ -51,17 +57,23 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
     }
 
     // -- Unread dot (6x6) --
+    // Kept permanently in the layout (its colour, not its visibility, tracks the
+    // unread state) so its slot never collapses. A leading dot used to sit before
+    // the title and shift it right only on unread rows, leaving the title ragged
+    // against its own body and against read rows; anchoring it as a trailing,
+    // always-reserved slot keeps every title and timestamp on a consistent edge.
     unread_dot_ = new QWidget(this);
     unread_dot_->setFixedSize(6, 6);
-    unread_dot_->setVisible(false);
 
-    // -- Title row: [dot] [title] [time] inline (VG-5) --
+    // -- Title row: [title] [time] [unread dot] inline (VG-5) --
+    // Title takes the stretch so its left edge always aligns with the body below;
+    // the timestamp and the reserved unread-dot slot trail on the right.
     auto* title_row = new QHBoxLayout;
     title_row->setContentsMargins(0, 0, 0, 0);
     title_row->setSpacing(8);
-    title_row->addWidget(unread_dot_, 0, Qt::AlignVCenter);
     title_row->addWidget(title_label_, 1);
     title_row->addWidget(time_label_, 0, Qt::AlignVCenter);
+    title_row->addWidget(unread_dot_, 0, Qt::AlignVCenter);
 
     // -- Text VBox (title row + body) --
     auto* text_box = new QVBoxLayout;
@@ -205,6 +217,12 @@ void AdvisoryItem::updateStatusIcon() {
 }
 
 void AdvisoryItem::updateUnreadDot() {
+    // The dot keeps its layout slot in every state (see the title-row comment);
+    // read rows simply paint it transparent so nothing shifts between states.
+    if (!unread_) {
+        unread_dot_->setStyleSheet(QStringLiteral("background: transparent; border-radius: 3px;"));
+        return;
+    }
     // Dot color follows status color
     QString dot_color;
     if (status_ == QStringLiteral("success")) {
@@ -218,7 +236,6 @@ void AdvisoryItem::updateUnreadDot() {
     }
     unread_dot_->setStyleSheet(QString::fromLatin1("background: ") + dot_color +
                                QStringLiteral("; border-radius: 3px;"));
-    unread_dot_->setVisible(unread_);
 }
 
 } // namespace exosnap::ui::widgets
