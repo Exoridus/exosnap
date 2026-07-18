@@ -2278,7 +2278,8 @@ QToolTip {
     background: ${bg2};
     color: ${text0};
     border: 1px solid ${line2};
-    padding: ${space-xs}px ${space-sm}px;
+    border-radius: ${radius-sm}px;
+    padding: ${space-sm}px ${space-md}px;
 }
 
 /* Detail page header — back affordance for sub-pages (Webcam, Advanced) */

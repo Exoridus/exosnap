@@ -333,27 +333,29 @@ void CompareHint::rebuildRows() {
     for (const auto& opt : d->options) {
         const bool selected = (opt.value == current_value_);
 
-        // Each row is a QToolButton for full hover/click without style hacks.
-        auto* row = new QToolButton(rowsContainer);
-        row->setAutoRaise(true);
-        row->setFocusPolicy(Qt::TabFocus);
-        row->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        // Explainer row (not a picker): a plain, non-interactive QWidget. No hover
+        // affordance and no click — the popover explains the options; the value is
+        // changed with the real combo box next to the glyph, not here. The currently
+        // selected option keeps an accent tint + 2px left edge so the popover still
+        // shows which value is active. WA_StyledBackground lets the bare QWidget paint
+        // the tint/border its stylesheet declares.
+        auto* row = new QWidget(rowsContainer);
+        row->setObjectName(QStringLiteral("compareOptionRow"));
+        row->setAttribute(Qt::WA_StyledBackground, true);
         row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
-        // Row background styling
+        // Row background styling (selected state only; no :hover rule). The #id
+        // selector scopes the tint/left-edge to the row itself so it never cascades
+        // into the child content widgets.
         QString rowBg = selected ? exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.ac)), 0.14)
                                  : QStringLiteral("transparent");
         QString rowBorderLeft = selected ? QString::fromUtf8(t.ac) : QStringLiteral("transparent");
-        QString hoverBg =
-            selected ? exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.ac)), 0.14) : QString::fromUtf8(t.line);
-        row->setStyleSheet(QStringLiteral("QToolButton { background: %1;"
+        row->setStyleSheet(QStringLiteral("QWidget#compareOptionRow { background: %1;"
                                           " border: none;"
                                           " border-left: 2px solid %2;"
                                           " border-radius: 0;"
-                                          " padding: 0;"
-                                          " text-align: left; }"
-                                          "QToolButton:hover { background: %3; }")
-                               .arg(rowBg, rowBorderLeft, hoverBg));
+                                          " padding: 0; }")
+                               .arg(rowBg, rowBorderLeft));
 
         // Inner layout: marker | content block
         auto* rowLayout = new QHBoxLayout(row);
@@ -434,16 +436,6 @@ void CompareHint::rebuildRows() {
         contentLayout->addWidget(effectLabel);
 
         rowLayout->addWidget(contentWidget, 1);
-        row->setLayout(rowLayout);
-
-        // Capture the value by value for the lambda
-        const QString optValue = opt.value;
-        connect(row, &QToolButton::clicked, this, [this, optValue]() {
-            setCurrentValue(optValue);
-            emit optionSelected(optValue);
-            popover_pinned_ = false;
-            hidePopover();
-        });
 
         rowsLayout->addWidget(row);
     }

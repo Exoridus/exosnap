@@ -9,11 +9,15 @@ namespace exosnap::ui::widgets {
 // Settings-Redesign D6: CompareHint — the multi-option sibling of InfoHintIcon.
 //
 // Renders the same Lucide "info" glyph (18×18, kText3 → kAccent on hover/open).
-// Clicking or hovering opens a frameless QFrame popover (~312px wide) that lists
+// Hovering or focusing the glyph opens a frameless popover (~312px wide) that lists
 // every option for the bound setting: name, optional "recommended" / version tag,
 // and a qualitative effect line. The currently-selected option is accent-tinted
-// with a 2px left edge. Clicking an option emits optionSelected(value) and closes
-// the panel — the widget doubles as both explainer and picker.
+// with a 2px left edge so the popover shows which value is active.
+//
+// The popover is an explainer only — the option rows are non-interactive (no hover
+// affordance, no click). The value is changed with the real control (combo box) next
+// to the glyph; the popover does not duplicate that picker. The glyph itself keeps
+// hover/focus-to-open and click-to-pin.
 //
 // Content comes from SettingsCompareData::compareData(key). If the key is unknown
 // the widget renders only the glyph with no popover (safe, no crash).
@@ -21,7 +25,6 @@ namespace exosnap::ui::widgets {
 // Usage:
 //   auto* hint = new CompareHint(QStringLiteral("container"),
 //                                QStringLiteral("MKV"), parent);
-//   connect(hint, &CompareHint::optionSelected, this, &MyWidget::onContainerChanged);
 //
 // Integration note: call setCurrentValue() whenever the external control changes
 // so the marker stays in sync. The integration pass wires this; this widget does
@@ -36,10 +39,6 @@ class CompareHint : public QToolButton {
 
     [[nodiscard]] const QString& compareKey() const;
     [[nodiscard]] const QString& currentValue() const;
-
-  signals:
-    // Emitted when the user clicks an option row in the popover.
-    void optionSelected(const QString& value);
 
   protected:
     void enterEvent(QEnterEvent* event) override;

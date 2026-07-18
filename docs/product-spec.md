@@ -853,7 +853,12 @@ conflict specifically, because that conflict is fixable in place (switch Bit dep
 Settings offers inline info hints (hover
 popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
 only rows with a genuine A/B tradeoff carry the icon (plain boolean rows do not), and per-option
-helper text lives inside the popover rather than as a separate line under the control. Roadmap-only
+helper text lives inside the popover rather than as a separate line under the control. The
+multi-option compare popovers are **explanatory only**: they list each option with its qualitative
+tradeoff and mark the currently active value, but the setting itself is always changed with the
+row's own control (the combo box next to the glyph), never by clicking inside the popover — the
+popover carries no second, reduced picker. Single-line info hints render as calm tooltips; longer
+ones use a short bold lead line with the explanation beneath. Roadmap-only
 controls may appear as honest, disabled "planned" rows to communicate direction without enabling
 unimplemented behavior.
 

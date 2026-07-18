@@ -2040,71 +2040,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     combo_wheel_filter->installOn(frame_rate_combo_);
     combo_wheel_filter->installOn(mic_device_combo_);
 
-    // D6: CompareHint → format change connections.
-    connect(container_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
-        if (v == QLatin1String("MKV"))
-            onContainerChanged(static_cast<int>(capability::Container::Matroska));
-        else if (v == QLatin1String("WebM"))
-            onContainerChanged(static_cast<int>(capability::Container::WebM));
-        else if (v == QLatin1String("MP4"))
-            onContainerChanged(static_cast<int>(capability::Container::Mp4));
-    });
-    connect(video_codec_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
-        if (v == QLatin1String("AV1")) {
-            const QSignalBlocker b(video_codec_combo_);
-            const int idx = video_codec_combo_->findData(VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
-            if (idx >= 0) {
-                video_codec_combo_->setCurrentIndex(idx);
-                onVideoCodecChanged(idx);
-            }
-        } else if (v == QLatin1String("H.264")) {
-            const QSignalBlocker b(video_codec_combo_);
-            const int idx = video_codec_combo_->findData(VideoCodecToInt(capability::VideoCodec::H264Nvenc));
-            if (idx >= 0) {
-                video_codec_combo_->setCurrentIndex(idx);
-                onVideoCodecChanged(idx);
-            }
-        }
-        // HEVC → no-op
-    });
-    connect(audio_codec_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
-        if (v == QLatin1String("Opus")) {
-            const QSignalBlocker b(audio_codec_combo_);
-            const int idx = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::Opus));
-            if (idx >= 0) {
-                audio_codec_combo_->setCurrentIndex(idx);
-                onAudioCodecChanged(idx);
-            }
-        } else if (v == QLatin1String("AAC")) {
-            const QSignalBlocker b(audio_codec_combo_);
-            const int idx = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::AacMf));
-            if (idx >= 0) {
-                audio_codec_combo_->setCurrentIndex(idx);
-                onAudioCodecChanged(idx);
-            }
-        }
-        // PCM/FLAC → no-op
-    });
-    connect(timing_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
-        if (v == QLatin1String("CFR"))
-            onTimingSelected(1);
-        else if (v == QLatin1String("VFR"))
-            onTimingSelected(0);
-    });
-    // D6 Task C: resolution CompareHint → output resolution selection.
-    // Options: "Native" (Native), "1080p" (FHD1080), "720p" (HD720), "Custom" (Custom).
-    // 4K and 1440p are intentionally not in the compare data; they fall through as no-op.
-    connect(resolution_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
-        if (v == QLatin1String("Native"))
-            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::Native));
-        else if (v == QLatin1String("1080p"))
-            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::FHD1080));
-        else if (v == QLatin1String("720p"))
-            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::HD720));
-        else if (v == QLatin1String("Custom"))
-            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::Custom));
-        // 4K / 1440p: no-op (not in compare data)
-    });
+    // The compare-hint popovers are explainer-only (they no longer emit
+    // optionSelected): the value is changed with each row's real combo box, so there
+    // is nothing to wire here. The glyph keeps hover/focus-to-open and click-to-pin.
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 
