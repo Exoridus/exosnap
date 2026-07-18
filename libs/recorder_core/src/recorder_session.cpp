@@ -44,10 +44,12 @@ std::filesystem::path DeriveTransientMkvPath(const std::filesystem::path& mp4_ou
 // DeriveSegmentPath
 // ---------------------------------------------------------------------------
 
-std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index) {
-    // Segment 0 keeps the base path verbatim (no rename of the first file).
+SegmentPathResult DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index,
+                                    const SegmentPathExistsProbe& exists_probe) {
+    // Segment 0 keeps the base path verbatim (no rename of the first file, no
+    // existence probe -- this mirrors the pre-existing contract exactly).
     if (index == 0) {
-        return base;
+        return SegmentPathResult::Ok(base);
     }
 
     const std::filesystem::path parent = base.parent_path();
@@ -71,16 +73,35 @@ std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::
         return parent.empty() ? std::filesystem::path(name) : (parent / name);
     };
 
-    std::filesystem::path candidate = compose(0);
-    // Collision-safe: append "_N" until a free path is found. Bounded scan.
-    for (unsigned d = 1; d < 10000u; ++d) {
+    const SegmentPathExistsProbe default_probe = [](const std::filesystem::path& p, std::error_code& ec) {
+        return std::filesystem::exists(p, ec);
+    };
+    const SegmentPathExistsProbe& probe = exists_probe ? exists_probe : default_probe;
+
+    // Collision-safe: probe up to kMaxDisambiguator candidates ("_part-NNN",
+    // then "_part-NNN_1", "_part-NNN_2", ...). Only a candidate CONFIRMED free
+    // (probe returned false with an empty error_code) is ever returned as
+    // success. A real filesystem error while probing (permissions, unreadable
+    // path, ...) is propagated immediately -- it must never be treated the
+    // same as "path is free". Exhausting the bound without finding a free
+    // candidate is a defined failure, not a silent return of the last
+    // (still-colliding) candidate.
+    constexpr unsigned kMaxDisambiguator = 10000u;
+    for (unsigned d = 0; d < kMaxDisambiguator; ++d) {
+        const std::filesystem::path candidate = compose(d);
         std::error_code ec;
-        if (!std::filesystem::exists(candidate, ec)) {
-            return candidate;
+        const bool candidate_exists = probe(candidate, ec);
+        if (ec) {
+            return SegmentPathResult::Fail(ec, "failed to probe segment path for collision: " + candidate.string() +
+                                                   ": " + ec.message());
         }
-        candidate = compose(d);
+        if (!candidate_exists) {
+            return SegmentPathResult::Ok(candidate);
+        }
     }
-    return candidate;
+    return SegmentPathResult::Fail(std::error_code(static_cast<int>(ERROR_ALREADY_EXISTS), std::system_category()),
+                                   "segment path collision limit (" + std::to_string(kMaxDisambiguator) +
+                                       " candidates) exhausted for base: " + base.string());
 }
 
 // ---------------------------------------------------------------------------

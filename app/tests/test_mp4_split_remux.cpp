@@ -264,16 +264,24 @@ TEST_F(Mp4SplitRemuxTest, DeriveSegmentPath_MkvTmpConvention) {
     const std::filesystem::path transient = DeriveTransientMkvPath(mp4);
 
     // Segment 0 keeps the base path.
-    EXPECT_EQ(DeriveSegmentPath(transient, 0), transient);
+    const auto seg0_result = DeriveSegmentPath(transient, 0);
+    ASSERT_TRUE(seg0_result.success);
+    EXPECT_EQ(seg0_result.path, transient);
 
     // Segment 1 differs from base and has same extension (.tmp).
-    const std::filesystem::path seg1 = DeriveSegmentPath(transient, 1);
+    const auto seg1_result = DeriveSegmentPath(transient, 1);
+    ASSERT_TRUE(seg1_result.success) << seg1_result.message;
+    const std::filesystem::path seg1 = seg1_result.path;
     EXPECT_NE(seg1, transient);
     EXPECT_EQ(seg1.extension(), transient.extension());
 
     // Corresponding MP4 segment 0 is the base path; segment 1 has .mp4.
-    const std::filesystem::path mp4_seg0 = DeriveSegmentPath(mp4, 0);
-    const std::filesystem::path mp4_seg1 = DeriveSegmentPath(mp4, 1);
+    const auto mp4_seg0_result = DeriveSegmentPath(mp4, 0);
+    const auto mp4_seg1_result = DeriveSegmentPath(mp4, 1);
+    ASSERT_TRUE(mp4_seg0_result.success);
+    ASSERT_TRUE(mp4_seg1_result.success) << mp4_seg1_result.message;
+    const std::filesystem::path mp4_seg0 = mp4_seg0_result.path;
+    const std::filesystem::path mp4_seg1 = mp4_seg1_result.path;
     EXPECT_EQ(mp4_seg0, mp4);
     EXPECT_EQ(mp4_seg1.extension(), std::filesystem::path(L".mp4"));
     EXPECT_NE(mp4_seg1, mp4);
