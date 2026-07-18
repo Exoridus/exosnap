@@ -166,6 +166,12 @@ void CompareHint::leaveEvent(QEvent* event) {
 
 void CompareHint::focusInEvent(QFocusEvent* event) {
     QToolButton::focusInEvent(event);
+    // PopupFocusReason is the bookkeeping echo of our own popover closing (Qt sends
+    // FocusIn to the focus widget when the last popup goes away) — not the user
+    // arriving here. Re-showing on it recurses: show → popup-open FocusOut → hide →
+    // popup-close FocusIn → show → … until the stack overflows.
+    if (event->reason() == Qt::PopupFocusReason)
+        return;
     updateIcon(true);
     if (ui::compare::compareData(compare_key_))
         showPopover();
@@ -173,6 +179,12 @@ void CompareHint::focusInEvent(QFocusEvent* event) {
 
 void CompareHint::focusOutEvent(QFocusEvent* event) {
     QToolButton::focusOutEvent(event);
+    // Opening our own popover sends this FocusOut (PopupFocusReason) while the button
+    // is still the logical focus widget — hiding on it is the other half of the
+    // recursion described in focusInEvent. Keyboard focus keeps the popover open;
+    // only a real focus move closes it.
+    if (event->reason() == Qt::PopupFocusReason)
+        return;
     updateIcon(false);
     if (!popover_pinned_)
         hidePopover();

@@ -5,6 +5,8 @@
 #include <QObject>
 #include <QString>
 #include <QToolButton>
+#include <QVBoxLayout>
+#include <QWidget>
 #include <vector>
 
 #include "models/SettingsCompareData.h"
@@ -185,6 +187,34 @@ TEST_F(CompareHintTest, Widget_OptionSelected_SetCurrentValueUpdatesInternally) 
     ASSERT_EQ(sink.count(), 1);
     EXPECT_EQ(sink.last(), QStringLiteral("MP4"));
     EXPECT_EQ(hint.currentValue(), QStringLiteral("MP4"));
+}
+
+// Regression: Tab-focusing a CompareHint with compare data crashed the app with a
+// stack overflow. focusInEvent showed the Qt::Popup popover; opening the first
+// popup makes Qt send FocusOut(PopupFocusReason) to the focused button, whose
+// handler hid the popover again; closing the last popup sends the symmetric
+// FocusIn(PopupFocusReason) — an unbounded synchronous show/hide recursion.
+TEST_F(CompareHintTest, Widget_KeyboardFocus_OpensPopoverWithoutRecursing) {
+    QWidget window;
+    auto* layout = new QVBoxLayout(&window);
+    auto* hint = new ui::widgets::CompareHint(QStringLiteral("container"), QStringLiteral("MKV"), &window);
+    layout->addWidget(hint);
+    window.show();
+    window.activateWindow();
+    QCoreApplication::processEvents();
+    if (!window.isActiveWindow())
+        GTEST_SKIP() << "window activation unavailable in this environment";
+
+    hint->setFocus(Qt::TabFocusReason); // pre-fix: unbounded recursion crashed here
+    QCoreApplication::processEvents();
+
+    EXPECT_TRUE(hint->hasFocus()) << "keyboard focus must stay on the hint";
+    EXPECT_NE(QApplication::activePopupWidget(), nullptr) << "popover must be open while the hint has focus";
+
+    // Losing focus for a real reason must close the popover — and not recurse either.
+    hint->clearFocus();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(QApplication::activePopupWidget(), nullptr) << "popover must close when focus leaves the hint";
 }
 
 TEST_F(CompareHintTest, Widget_AccessibleName_ContainsTitle) {
