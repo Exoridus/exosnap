@@ -11,6 +11,8 @@
 
 class QComboBox;
 class QPushButton;
+class QSlider;
+class QLabel;
 class QTimer;
 
 namespace exosnap::ui::widgets {
@@ -59,8 +61,10 @@ class WebcamSetupPanel : public QWidget {
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Deterministic visual-test state: suppresses real capture and injects a
     // synthetic frame (available) or an honest unavailable placeholder, plus the
-    // mirror toggle/preview state. Never compiled into Release builds.
-    void applyVisualState(bool available, bool mirror);
+    // mirror toggle/preview state and the chroma-key group (enabled + key colour
+    // mode "green"/"blue"/"magenta"/"custom"). Never compiled into Release builds.
+    void applyVisualState(bool available, bool mirror, bool chroma_enabled = false,
+                          const QString& chroma_color_mode = QString());
 #endif
 
   signals:
@@ -80,6 +84,12 @@ class WebcamSetupPanel : public QWidget {
     void onDeviceChanged(int index);
     void onResolutionChanged(int index);
     void onMirrorToggled(bool mirror);
+    void onOpacityChanged(int value);
+    void onChromaEnableToggled(bool enabled);
+    void onColorModeChanged(WebcamChromaKeyColorMode mode);
+    void onToleranceChanged(int value);
+    void onSoftnessChanged(int value);
+    void onSpillReductionChanged(int value);
     void onRescan();
     void onPreviewFrame(QImage frame);
 
@@ -91,6 +101,8 @@ class WebcamSetupPanel : public QWidget {
     void refreshFormats();
     void startPreview();
     void stopPreview();
+    void updateChromaColorButtons();
+    void updateChromaSwatch();
     WebcamSettings collectSettings() const;
 
     std::vector<WebcamDeviceInfo> devices_;
@@ -108,6 +120,25 @@ class WebcamSetupPanel : public QWidget {
     ExoToggle* mirror_toggle_ = nullptr;
     QPushButton* rescan_btn_ = nullptr;
     QTimer* watchdog_ = nullptr;
+
+    // Overlay opacity (live-editable, same lock class as Mirror).
+    QSlider* opacity_slider_ = nullptr;
+    QLabel* opacity_value_label_ = nullptr;
+
+    // Chroma-key group (collapsed while disabled; live-editable when shown).
+    ExoToggle* chroma_toggle_ = nullptr;
+    QWidget* chroma_body_ = nullptr;
+    QPushButton* chroma_swatch_ = nullptr;
+    QPushButton* chroma_green_btn_ = nullptr;
+    QPushButton* chroma_blue_btn_ = nullptr;
+    QPushButton* chroma_magenta_btn_ = nullptr;
+    QPushButton* chroma_custom_btn_ = nullptr;
+    QSlider* tolerance_slider_ = nullptr;
+    QLabel* tolerance_value_label_ = nullptr;
+    QSlider* softness_slider_ = nullptr;
+    QLabel* softness_value_label_ = nullptr;
+    QSlider* spill_slider_ = nullptr;
+    QLabel* spill_value_label_ = nullptr;
 };
 
 } // namespace exosnap::ui::widgets
