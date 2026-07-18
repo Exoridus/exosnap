@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPoint>
 #include <QToolButton>
 
 class QTimer;
@@ -16,19 +17,19 @@ namespace exosnap::ui::widgets {
 //
 // The tooltip is shown/hidden explicitly (QToolTip::showText/hideText) rather
 // than left to Qt's automatic per-motion QEvent::ToolTip dispatch:
-//   - Multi-monitor: both trigger paths anchor defensively instead of trusting
-//     a single widget-derived point, which can be computed against a stale
-//     per-window DPI/screen association right after the window is dragged to
-//     a differently-scaled monitor, landing the tooltip on the wrong display.
-//     Hover (enterEvent) anchors on QCursor::pos() — the OS-reported cursor
-//     position, always correct regardless of screen. Keyboard focus
-//     (focusInEvent) has no cursor position to fall back on, so it resolves
-//     the widget's own screen() explicitly and clamps mapToGlobal(rect().
-//     center()) into that screen's available geometry if it ever lands
-//     outside it — the same defensive pattern CompareHint::repositionPopover()
-//     uses for its popover. Only one of the two paths can be the actual
-//     source of a given multi-monitor report; both are hardened because
-//     static analysis could not pin down which.
+//   - Stable anchor: both trigger paths (hover and keyboard focus) anchor the
+//     tooltip to a fixed point just below the icon rect via hintAnchor(), NOT to
+//     the live cursor. A cursor-anchored tip materialised under the pointer, so it
+//     landed in a different spot for every approach direction, jittered as the
+//     cursor covered the last pixels onto the glyph, and could be torn down by the
+//     very next move of the entering motion — which read to users as "the tooltip
+//     only opens when the cursor comes from below". An icon-anchored point removes
+//     both the direction dependence and the jitter.
+//   - Multi-monitor: hintAnchor() resolves the widget's own screen() explicitly and
+//     clamps the point into that screen's available geometry, so a stale per-window
+//     DPI/screen association right after the window is dragged to a differently
+//     scaled monitor cannot land the tooltip on the wrong display — the same
+//     defensive pattern CompareHint::repositionPopover() uses for its popover.
 //   - Flicker: a poll timer (mirrors TransportDock::openChevronMenu /
 //     CompareHint's hover_timer_) closes the tooltip only once the cursor has
 //     settled truly outside a small hysteresis band around the icon, instead
@@ -59,6 +60,9 @@ class InfoHintIcon : public QToolButton {
   private:
     void updateIcon(bool highlighted);
     void hideHintTooltip();
+    // Fixed global point just below the icon that both trigger paths anchor the
+    // tooltip to; resolves and clamps against the widget's own screen.
+    [[nodiscard]] QPoint hintAnchor() const;
 
     QString hint_text_;
     QTimer* hover_timer_ = nullptr; // polls the cursor while the tooltip is open; see class comment
