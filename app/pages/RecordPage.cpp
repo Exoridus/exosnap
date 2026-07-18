@@ -2018,6 +2018,27 @@ QImage MakeVisualTestWebcamFrame() {
     }
     return frame;
 }
+
+// Deterministic synthetic display frame for the Record preview fixture. Reuses the
+// webcam frame's red/blue split so the capture target is clearly recognizable
+// instead of a near-black slate, and pins the original top-left with a marker.
+// Never produced in Release (whole file region is guarded).
+QImage MakeVisualTestDisplayFrame() {
+    QImage frame(1280, 720, QImage::Format_RGB32);
+    for (int y = 0; y < frame.height(); ++y) {
+        auto* row = reinterpret_cast<QRgb*>(frame.scanLine(y));
+        for (int x = 0; x < frame.width(); ++x) {
+            const bool left = x < frame.width() / 2;
+            row[x] = left ? qRgb(196, 84, 74) : qRgb(74, 128, 196);
+        }
+    }
+    for (int y = 24; y < 72; ++y) {
+        auto* row = reinterpret_cast<QRgb*>(frame.scanLine(y));
+        for (int x = 24; x < 72; ++x)
+            row[x] = qRgb(245, 245, 245);
+    }
+    return frame;
+}
 } // namespace
 
 void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
@@ -2047,9 +2068,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     stopHubFeed();
     if (preview_surface_) {
         preview_surface_->stopDxgiPreview();
-        QImage test_frame(1280, 720, QImage::Format_RGB32);
-        test_frame.fill(QColor(28, 37, 46));
-        preview_surface_->setLiveFrame(test_frame);
+        preview_surface_->setLiveFrame(MakeVisualTestDisplayFrame());
         preview_surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
         preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
         preview_surface_->setBottomRightText(QString());
@@ -2110,7 +2129,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     view_model_.ResetStats();
     view_model_.capability_status_text = L"Visual test fixture: diagnostic blockers clear.";
     view_model_.output_path_display = L"C:\\Users\\User\\Videos\\ExoSnap";
-    active_profile_name_ = L"Visual Test WebM AV1 Opus";
+    active_profile_name_ = L"Visual Test MKV AV1 Opus";
     current_container_ = scenario.container;
     current_video_codec_ = scenario.video_codec;
     current_audio_codec_ = scenario.audio_codec;
@@ -2354,6 +2373,13 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     // Only rendered while the toggle is on (refresh() gates it on enabled).
     webcam_open_failed_ = scenario.webcam_open_failed;
     webcam_open_fail_reason_ = scenario.webcam_open_fail_reason;
+
+    // A visible PiP implies a present camera, so the dock's webcam toggle must read
+    // "on" and interactive. Without a device-discovery snapshot in these fixtures
+    // webcam_device_present_ stays false, greying the toggle even though the PiP is
+    // shown — set it from the enable state so the toggle matches the preview.
+    if (scenario.webcam_pip_enabled)
+        webcam_device_present_ = true;
 
     refresh();
 

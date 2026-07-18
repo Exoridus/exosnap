@@ -2693,6 +2693,17 @@ void MainWindow::onHotkeyServiceBindingChanged(HotkeyAction /*action*/, QKeySequ
     refreshDiagnosticsData();
 }
 
+namespace {
+// Visual-test only: pin a deterministic GPU adapter name matching the Device
+// page's fixture, so Diagnostics never renders the real machine adapter. Both
+// fields are overridden because the Encoder tile reads gpu_adapter_name while the
+// expert capability summary prefers runtime.nvidia.adapter_name.
+void ApplyVisualGpuFixture(capability::CapabilitySet& caps) {
+    caps.gpu_adapter_name = "GeForce RTX 4070";
+    caps.runtime.nvidia.adapter_name = "GeForce RTX 4070";
+}
+} // namespace
+
 void MainWindow::refreshDiagnosticsData() {
     if (!diagnostics_page_ || !runtime_caps_ready_)
         return;
@@ -2715,7 +2726,12 @@ void MainWindow::refreshDiagnosticsData() {
         hotkeys_summary = "None configured";
 
     const std::string preset_name = preset_registry_.SelectedPreset().name;
-    diagnostics_page_->setDiagnosticData(runtime_caps_, output_settings_, video_settings_, live_audio_, preset_name,
+    // Visual-test: re-apply the sticky GPU fixture — the async caps-ready path
+    // re-assigned runtime_caps_ from the real probe after the scenario was applied.
+    capability::CapabilitySet diag_caps = runtime_caps_;
+    if (visual_diagnostics_gpu_override_)
+        ApplyVisualGpuFixture(diag_caps);
+    diagnostics_page_->setDiagnosticData(diag_caps, output_settings_, video_settings_, live_audio_, preset_name,
                                          hotkeys_summary, settings_store_.SettingsFilePath().toStdString(),
                                          hotkeys_registered_);
     std::optional<recorder_core::CaptureTarget> selected_target;
@@ -3112,7 +3128,7 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
         return;
 
     OutputSettingsModel output;
-    output.container = capability::Container::WebM;
+    output.container = capability::Container::Matroska; // shipped default (MKV + AV1 + Opus)
     output.video_codec = capability::VideoCodec::Av1Nvenc;
     output.audio_codec = capability::AudioCodec::Opus;
     output.output_folder = std::filesystem::path(L"C:\\Users\\User\\Videos\\ExoSnap");
@@ -3132,6 +3148,13 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     video.frame_rate_den = scenario.frame_rate_den;
     video.cfr = scenario.cfr;
     config_page_->setOutputSettings(output);
+    // Invalid custom-resolution fixture: setOutputSettings() sanitized the unusable
+    // size back to Native, so re-assert the honest invalid Custom state (fields +
+    // indicator). Keyed on Custom mode with a zeroed effective size.
+    if (scenario.output_resolution_mode == OutputResolutionMode::Custom && scenario.effective_width == 0 &&
+        scenario.effective_height == 0) {
+        config_page_->applyVisualCustomResolutionInvalid(scenario.requested_width, scenario.requested_height);
+    }
     config_page_->setVideoSettings(video);
     config_page_->setAudioUiState(VisualAudioStateForSettings(scenario.settings_target));
     config_page_->setReadinessStatus(QStringLiteral("READY"));
@@ -3475,10 +3498,17 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
     if (!diagnostics_page_)
         return;
 
+    // Unify the fixture GPU across surfaces: Diagnostics otherwise shows the real
+    // probed adapter (machine-dependent) while the Device page injects a fixed fake.
+    // The pin is sticky (refreshDiagnosticsData re-applies it) because the async
+    // caps-ready path re-assigns runtime_caps_ wholesale after this scenario runs.
+    visual_diagnostics_gpu_override_ = true;
+
     // Prefer the real probed caps when ready so this render matches the async
     // caps-ready refreshDiagnosticsData() and does not flicker the card set.
     capability::CapabilitySet caps =
         runtime_caps_ready_ ? runtime_caps_ : capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    ApplyVisualGpuFixture(caps);
     // Read the scenario's container / codecs so lifecycle scenarios can drive a
     // Tier-1 blocker (e.g. MP4 + FLAC → rec.009). Defaults are the canon WebM/AV1/Opus.
     // These are written into the app's real settings so the async caps-ready

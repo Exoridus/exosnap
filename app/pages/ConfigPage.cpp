@@ -5761,6 +5761,44 @@ void ConfigPage::applyVisualMicPostProcessingExpanded(bool expanded) {
     if (mic_post_disclosure_btn_)
         mic_post_disclosure_btn_->setChecked(expanded);
 }
+
+void ConfigPage::applyVisualCustomResolutionInvalid(int width, int height) {
+    // Pin an honest invalid Custom-resolution state. setOutputSettings() ran
+    // SanitizeOutputResolution(), which resets any unusable size back to Native;
+    // this seam re-asserts Custom with the raw (out-of-range) dimensions so the
+    // custom fields AND the invalid indicator both render.
+    format_settings_.resolution.mode = OutputResolutionMode::Custom;
+    format_settings_.resolution.custom_width = static_cast<uint32_t>((std::max)(0, width));
+    format_settings_.resolution.custom_height = static_cast<uint32_t>((std::max)(0, height));
+
+    if (output_res_combo_) {
+        const QSignalBlocker b(output_res_combo_);
+        const int idx = output_res_combo_->findData(static_cast<int>(OutputResolutionMode::Custom));
+        if (idx >= 0)
+            output_res_combo_->setCurrentIndex(idx);
+    }
+    if (resolution_compare_hint_)
+        resolution_compare_hint_->setCurrentValue(QStringLiteral("Custom"));
+
+    if (custom_resolution_widget_)
+        custom_resolution_widget_->setVisible(true);
+
+    // Widen the spin ranges (real min is 320/180) so the intentionally invalid
+    // value displays verbatim instead of being clamped. Harness-only.
+    if (custom_width_spin_) {
+        const QSignalBlocker b(custom_width_spin_);
+        custom_width_spin_->setRange(1, 7680);
+        custom_width_spin_->setValue(static_cast<int>(format_settings_.resolution.custom_width));
+    }
+    if (custom_height_spin_) {
+        const QSignalBlocker b(custom_height_spin_);
+        custom_height_spin_->setRange(1, 7680);
+        custom_height_spin_->setValue(static_cast<int>(format_settings_.resolution.custom_height));
+    }
+
+    // The invalid indicator reads format_settings_.resolution directly.
+    updateCustomResolutionValidation();
+}
 #endif
 
 void ConfigPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {

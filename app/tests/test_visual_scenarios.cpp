@@ -190,6 +190,35 @@ TEST(VisualScenarioTest, SettingsWebcamScenariosRouteToSettings) {
     EXPECT_EQ(unavailable->webcam_state, VisualWebcamState::Unavailable);
 }
 
+// Chroma-key scenarios route to the Settings page's embedded webcam card (the
+// standalone WebcamPage is slated for removal) and carry deterministic chroma
+// enable/color-mode state for the manifest.
+TEST(VisualScenarioTest, SettingsWebcamChromaScenariosRouteToSettings) {
+    const struct {
+        const char* id;
+        bool enabled;
+        const char* mode;
+    } cases[] = {
+        {"settings-webcam-chroma-disabled", false, "green"},
+        {"settings-webcam-chroma-green", true, "green"},
+        {"settings-webcam-chroma-blue", true, "blue"},
+        {"settings-webcam-chroma-custom", true, "custom"},
+    };
+    for (const auto& c : cases) {
+        const VisualScenario* s = FindVisualScenario(QString::fromLatin1(c.id));
+        ASSERT_NE(s, nullptr) << c.id;
+        EXPECT_EQ(s->page, VisualPage::Settings) << c.id;
+        EXPECT_EQ(s->webcam_state, VisualWebcamState::Active) << c.id;
+        EXPECT_EQ(s->webcam_chroma_enabled, c.enabled) << c.id;
+        EXPECT_EQ(s->webcam_chroma_color_mode, QString::fromLatin1(c.mode)) << c.id;
+    }
+}
+
+// The dead record-completed-details scenario (v10 has no details panel) is gone.
+TEST(VisualScenarioTest, RemovedScenariosAreNotRegistered) {
+    EXPECT_EQ(FindVisualScenario(QStringLiteral("record-completed-details")), nullptr);
+}
+
 TEST(VisualScenarioTest, RecordStatesRouteToRecordPage) {
     for (const QString& id :
          {QStringLiteral("record-ready"), QStringLiteral("record-countdown-3"), QStringLiteral("record-recording"),
