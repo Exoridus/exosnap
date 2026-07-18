@@ -282,9 +282,10 @@ class ConfigPage : public QWidget {
     void onFrameRateChanged(int index);
     void onTimingSelected(int timing_id);
     void onOutputResolutionSelected(int mode_id);
+    void onSplitToggled(bool on);
     void onSplitModeChanged(int index);
     void updateSplitSelection();
-    void onSplitSizeModeChanged(int index);
+    void onSplitSizeToggled(bool on);
     void updateSplitSizeSelection();
     void onCursorChanged();
     void updateQualitySegmentSelection();
@@ -462,12 +463,17 @@ class ConfigPage : public QWidget {
     QComboBox* output_res_combo_ = nullptr;
 
     // Split recording widgets (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1).
+    // On/off is an ExoToggle (mode == Off ⟺ toggle off); the interval combo + custom
+    // minutes only appear while the toggle is on.
+    ui::widgets::ExoToggle* split_toggle_ = nullptr;
     QComboBox* split_mode_combo_ = nullptr;
     QSpinBox* split_custom_minutes_spin_ = nullptr;
     QWidget* split_custom_widget_ = nullptr;
+    QWidget* split_interval_row_ = nullptr; // combo + custom minutes; shown only when split is on
     QLabel* split_summary_label_ = nullptr;
-    // Size-split controls (SPLIT-BY-SIZE-R1).
-    QComboBox* split_size_mode_combo_ = nullptr;
+    // Size-split controls (SPLIT-BY-SIZE-R1). Toggle on ⟺ size_mode == Custom; the
+    // custom size spin only appears while the toggle is on.
+    ui::widgets::ExoToggle* split_size_toggle_ = nullptr;
     QSpinBox* split_custom_size_spin_ = nullptr;
     QWidget* split_size_custom_widget_ = nullptr;
 
@@ -488,15 +494,15 @@ class ConfigPage : public QWidget {
     QLabel* readiness_detail_label_ = nullptr;
     QPushButton* view_details_btn_ = nullptr;
 
-    // Preset card widgets.
+    // Preset card widgets. "Save as new…" is the only standalone action button; Reset,
+    // Delete, Rename, Export and Import all live in the overflow ("…") menu.
     QLabel* profile_status_label_ = nullptr;
     QPushButton* preset_save_as_btn_ = nullptr;
-    QPushButton* preset_reset_btn_ = nullptr;
-    QPushButton* preset_delete_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
     // Preset management actions in the overflow menu.
-    QAction* save_preset_as_action_ = nullptr;
     QAction* rename_preset_action_ = nullptr;
+    QAction* reset_preset_action_ = nullptr;
+    QAction* delete_preset_action_ = nullptr;
     QAction* export_preset_action_ = nullptr;
     QAction* import_presets_action_ = nullptr;
 
@@ -509,8 +515,7 @@ class ConfigPage : public QWidget {
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
-    QLabel* expert_mode_label_ = nullptr;   // "Expert mode" label (mut -> accent when on)
-    QWidget* expert_warn_banner_ = nullptr; // amber banner above grid, visible only in expert mode
+    QLabel* expert_mode_label_ = nullptr; // "Expert mode" label (mut -> accent when on)
     bool expert_mode_enabled_ = false;
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
     // Lazily built on first expert-enable (see buildSplitExpertSection).
