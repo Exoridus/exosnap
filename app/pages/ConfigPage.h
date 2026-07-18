@@ -177,6 +177,11 @@ class ConfigPage : public QWidget {
     // before the (lazily built) Developer card exists -- the value is remembered and
     // applied once the combo is constructed. No signal emitted.
     void setDeveloperLogLevel(const QString& level);
+    // Seeds the "Send crash reports automatically" toggle (Developer/Advanced
+    // card) from persisted settings. Safe to call before the lazily built
+    // Developer card exists -- the value is remembered and applied once the
+    // card is constructed. No signal emitted.
+    void setAutoSendCrashReports(bool on);
 
     // Drives the visible Updates card (ADR 0034 Phase A). state is one of
     // "checking" | "uptodate" | "available" | "error". When "available",
@@ -241,6 +246,11 @@ class ConfigPage : public QWidget {
     // ADR 0033: emitted when the user toggles the present-diagnostics opt-in.
     void presentDiagnosticsOptInToggled(bool enabled);
     void themeIdChanged(const QString& theme_id);
+    // Crash-report auto-send consent toggle (Developer/Advanced card). ON
+    // grants silent auto-send consent immediately; OFF revokes it so the next
+    // crash shows the consent dialog again. MainWindow persists the value and
+    // calls crash_capture::GiveUserConsent()/RevokeUserConsent().
+    void autoSendCrashReportsToggled(bool enabled);
 
     // ---- Preset management signals ----
     void savePresetAsRequested(const QString& name);
@@ -548,6 +558,12 @@ class ConfigPage : public QWidget {
     // the combo on build (lazy) or immediately if already built (setDeveloperLogLevel).
     QComboBox* developer_log_level_combo_ = nullptr;
     QString developer_log_level_ = QStringLiteral("Debug");
+    // Crash-report auto-send consent toggle (Developer/Advanced card).
+    // auto_send_crash_reports_ is the pending/current value; applied to the
+    // toggle on build (lazy) or immediately if already built
+    // (setAutoSendCrashReports).
+    ui::widgets::ExoToggle* crash_reports_auto_send_check_ = nullptr;
+    bool auto_send_crash_reports_ = false;
 
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;

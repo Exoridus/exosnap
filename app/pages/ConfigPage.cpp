@@ -4721,6 +4721,28 @@ void ConfigPage::buildDeveloperCard() {
             dev_layout->addWidget(row);
         }
 
+        // Crash-report auto-send consent -- mirrors the crash dialog's "Send reports
+        // automatically next time" opt-in (CrashReportPanel::autoSendChecked). Placed
+        // here so a consent choice made from the crash dialog can be revisited later
+        // without waiting for another crash. MainWindow wires
+        // autoSendCrashReportsToggled to crash_capture::GiveUserConsent() /
+        // RevokeUserConsent(): turning this off revokes consent so the next crash
+        // shows the consent dialog again; turning it on grants silent auto-send
+        // immediately.
+        {
+            crash_reports_auto_send_check_ = new ui::widgets::ExoToggle(developer_card_);
+            crash_reports_auto_send_check_->setObjectName(QStringLiteral("crashReportsAutoSendToggle"));
+            crash_reports_auto_send_check_->setOn(auto_send_crash_reports_);
+            dev_layout->addWidget(
+                makeSettingsRow(developer_card_, QStringLiteral("Send crash reports automatically"),
+                                new ui::widgets::InfoHintIcon(ui::hints::kCrashReporting, developer_card_), QString(),
+                                crash_reports_auto_send_check_));
+            connect(crash_reports_auto_send_check_, &ui::widgets::ExoToggle::toggled, this, [this](bool checked) {
+                auto_send_crash_reports_ = checked;
+                emit autoSendCrashReportsToggled(checked);
+            });
+        }
+
         developer_card_->setVisible(expert_mode_enabled_);
     }
     if (auto* left_layout = qobject_cast<QVBoxLayout*>(left_col_->layout())) {
@@ -5566,6 +5588,14 @@ void ConfigPage::setDeveloperLogLevel(const QString& level) {
         return;
     const QSignalBlocker blocker(developer_log_level_combo_);
     developer_log_level_combo_->setCurrentIndex(idx);
+}
+
+void ConfigPage::setAutoSendCrashReports(bool on) {
+    auto_send_crash_reports_ = on;
+    if (!crash_reports_auto_send_check_)
+        return; // Developer card not built yet (lazy) -- applied on buildDeveloperCard().
+    const QSignalBlocker blocker(crash_reports_auto_send_check_);
+    crash_reports_auto_send_check_->setOn(on);
 }
 
 void ConfigPage::setThemeId(const QString& theme_id) {
