@@ -598,6 +598,23 @@ TEST(VisualScenarioTest, OtherScenarios_DoNotDriveAudioDegradedNotification) {
     }
 }
 
+// Notification hub open scenario (PS-PHASE-B follow-up) carries the harness flag
+// that embeds the advisory list into the window grab, and no other scenario does.
+TEST(VisualScenarioTest, NotificationsOpenScenarioCarriesDeterministicState) {
+    const VisualScenario* s = FindVisualScenario(QStringLiteral("notifications-open"));
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->page, VisualPage::Record);
+    EXPECT_TRUE(s->notifications_open);
+}
+
+TEST(VisualScenarioTest, OtherScenarios_DoNotOpenNotificationHub) {
+    for (const VisualScenario& s : VisualScenarioRegistry()) {
+        if (s.id == QStringLiteral("notifications-open"))
+            continue;
+        EXPECT_FALSE(s.notifications_open) << s.id.toStdString();
+    }
+}
+
 // EditPlayerSurface scenarios (EDIT-VIDEO-PLAYER Task 9) carry deterministic
 // mode strings and route to the EditExport page.
 TEST(VisualScenarioTest, EditPlayerSurfaceScenariosCarryDeterministicState) {

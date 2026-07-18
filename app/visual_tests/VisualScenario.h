@@ -348,6 +348,17 @@ struct VisualScenario {
     // scenario pins the real first-run placement instead of a hand-set rect.
     // Trailing field so existing positional initializers stay valid.
     bool webcam_default_placement = false;
+
+    // --- Notification hub open (notifications-open) ---
+    // When true, the harness embeds the NotificationHubPanel as a child overlay
+    // of the main window (top-right, under the bell) pre-populated with a fixture
+    // set of advisories spanning info / success / error, so the hub's scrollable
+    // list is composited into MainWindow::grab(). The live hub is a top-level
+    // Qt::Popup outside the pixel screenshot; this harness-only host mirrors the
+    // EditPlayerSurface/FinalizingOverlay approach of layering the surface over the
+    // window purely so it can be judged on rendered pixels. Trailing field so
+    // existing positional initializers stay valid.
+    bool notifications_open = false;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

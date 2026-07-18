@@ -205,5 +205,64 @@ TEST_F(NotificationHubPanelTest, ClearAdvisories_ResetsUnreadCount) {
     EXPECT_EQ(panel.unreadCount(), 0);
 }
 
+// --- AdvisoryItem entry padding / alignment (Slice B) ---------------------------
+// The unread dot used to sit before the title and consume title-row space only on
+// unread rows, shoving the title right against its own body and against read rows.
+// These tests pin the trailing-dot layout: every title left edge lines up with the
+// body beneath it, regardless of the unread state.
+
+namespace {
+ui::widgets::AdvisoryItem* buildLaidOutItem(const QString& status, bool unread) {
+    auto* item = new ui::widgets::AdvisoryItem();
+    item->setStatus(status);
+    item->setTitle(QStringLiteral("A concise advisory title"));
+    item->setBody(QStringLiteral("Body copy that describes what happened in a sentence."));
+    item->setUnread(unread);
+    item->resize(360, 120);
+    item->show();
+    QCoreApplication::processEvents();
+    return item;
+}
+
+int leftEdgeIn(const ui::widgets::AdvisoryItem* item, const QString& childName) {
+    const auto* child = item->findChild<QLabel*>(childName);
+    return child ? child->mapTo(item, QPoint(0, 0)).x() : -1;
+}
+} // namespace
+
+TEST_F(NotificationHubPanelTest, AdvisoryItem_Unread_TitleAlignsWithBody) {
+    auto* item = buildLaidOutItem(QStringLiteral("info"), /*unread=*/true);
+    const int title_x = leftEdgeIn(item, QStringLiteral("advisoryTitle"));
+    const int body_x = leftEdgeIn(item, QStringLiteral("advisoryBody"));
+    ASSERT_GE(title_x, 0);
+    ASSERT_GE(body_x, 0);
+    // Trailing dot: the unread indicator no longer indents the title.
+    EXPECT_EQ(title_x, body_x);
+    delete item;
+}
+
+TEST_F(NotificationHubPanelTest, AdvisoryItem_Read_TitleAlignsWithBody) {
+    auto* item = buildLaidOutItem(QStringLiteral("success"), /*unread=*/false);
+    const int title_x = leftEdgeIn(item, QStringLiteral("advisoryTitle"));
+    const int body_x = leftEdgeIn(item, QStringLiteral("advisoryBody"));
+    ASSERT_GE(title_x, 0);
+    ASSERT_GE(body_x, 0);
+    EXPECT_EQ(title_x, body_x);
+    delete item;
+}
+
+TEST_F(NotificationHubPanelTest, AdvisoryItem_ReadAndUnread_TitlesShareLeftEdge) {
+    auto* read_item = buildLaidOutItem(QStringLiteral("success"), /*unread=*/false);
+    auto* unread_item = buildLaidOutItem(QStringLiteral("error"), /*unread=*/true);
+    const int read_title_x = leftEdgeIn(read_item, QStringLiteral("advisoryTitle"));
+    const int unread_title_x = leftEdgeIn(unread_item, QStringLiteral("advisoryTitle"));
+    ASSERT_GE(read_title_x, 0);
+    ASSERT_GE(unread_title_x, 0);
+    // A read row and an unread row present the same title indentation.
+    EXPECT_EQ(read_title_x, unread_title_x);
+    delete read_item;
+    delete unread_item;
+}
+
 } // namespace
 } // namespace exosnap

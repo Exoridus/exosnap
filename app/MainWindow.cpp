@@ -3077,6 +3077,9 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     if (scenario.source_picker_tab != visual::VisualSourcePickerTab::None)
         applyVisualSourcePickerScenario(scenario);
 
+    if (scenario.notifications_open)
+        applyVisualNotificationsScenario(scenario);
+
     // Device-discovery state is applied last so it can override audio/webcam
     // state set by the page-specific helpers above.
     applyVisualDeviceDiscoveryScenario(scenario);
@@ -3094,6 +3097,57 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     installVisualReadyMarker(scenario.id);
     QTimer::singleShot(0, this, [this, scenario_id = scenario.id]() { installVisualReadyMarker(scenario_id); });
     setWindowTitle(QStringLiteral("ExoSnap [visual-test:%1]").arg(scenario.id));
+}
+
+void MainWindow::applyVisualNotificationsScenario(const visual::VisualScenario& scenario) {
+    Q_UNUSED(scenario);
+    auto* host = centralWidget();
+    if (host == nullptr)
+        return;
+
+    // Harness-only host: a fresh NotificationHubPanel embedded as a child of the
+    // window so it renders into MainWindow::grab(). Constructing with a parent
+    // still yields a top-level popup (Qt::Popup is a window type), so clear the
+    // window flags to Qt::Widget to fold it into the window's compositing.
+    auto* hub = host->findChild<ui::chrome::NotificationHubPanel*>(QStringLiteral("visualHubHost"));
+    if (hub == nullptr) {
+        hub = new ui::chrome::NotificationHubPanel(host);
+        hub->setObjectName(QStringLiteral("visualHubHost"));
+        hub->setWindowFlags(Qt::Widget);
+        hub->setAttribute(Qt::WA_TranslucentBackground, false);
+    }
+
+    // Fixture advisories spanning the three canon severities (info / success /
+    // error), oldest first so the newest — the standing error — lands last.
+    hub->clearAdvisories();
+    hub->addAdvisory(QStringLiteral("update-available"), QStringLiteral("info"),
+                     QStringLiteral("Update available — 0.9.0"),
+                     QStringLiteral("Signature verified. Installs after your next recording."), QStringLiteral("2m"),
+                     /*unread=*/true, QStringLiteral("update-view"), QStringLiteral("View in About"),
+                     /*is_deep_link=*/false);
+    hub->addAdvisory(QStringLiteral("recording-saved"), QStringLiteral("success"), QStringLiteral("Recording saved"),
+                     QStringLiteral("clip-2026-07-16-142032.mkv — 128 MB, 2:03."), QStringLiteral("just now"),
+                     /*unread=*/false, QStringLiteral("reveal"), QStringLiteral("Open folder"),
+                     /*is_deep_link=*/false);
+    hub->addAdvisory(
+        QStringLiteral("recording-stopped"), QStringLiteral("error"), QStringLiteral("Recording stopped unexpectedly"),
+        QStringLiteral("The encoder lost the capture device. The partial file was kept."), QStringLiteral("just now"),
+        /*unread=*/true, QStringLiteral("reveal"), QStringLiteral("Show file"),
+        /*is_deep_link=*/false);
+
+    // Anchor top-right under where the titlebar bell sits. The scenario is applied
+    // before the first show(), so centralWidget() is not laid out yet and its width
+    // reads stale here — position now for the immediate case and again on a
+    // singleShot(0) once the pending layout pass has given the host its real width
+    // (the screenshot grab fires at 120ms, well after this reflows).
+    const auto place = [host, hub]() {
+        hub->resize(hub->width(), 400);
+        hub->move(host->width() - hub->width() - 12, 12);
+        hub->show();
+        hub->raise();
+    };
+    place();
+    QTimer::singleShot(0, hub, place);
 }
 
 void MainWindow::installVisualReadyMarker(const QString& scenario_id) {
