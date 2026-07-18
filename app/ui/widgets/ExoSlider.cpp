@@ -1,5 +1,6 @@
 #include "ExoSlider.h"
 
+#include <QMouseEvent>
 #include <QPainter>
 #include <QStyle>
 #include <QStyleOptionSlider>
@@ -69,6 +70,49 @@ void ExoSlider::paintEvent(QPaintEvent* event) {
         p.setPen(QPen(is_default ? default_color : tick_color, is_default ? 2 : 1));
         p.drawLine(x, tick_top, x, tick_top + (is_default ? kDefaultTickHeight : kTickHeight));
     }
+}
+
+int ExoSlider::xToValue(const QRect& groove_rect, int x) const noexcept {
+    const int min_val = minimum();
+    const int max_val = maximum();
+    if (max_val == min_val)
+        return min_val;
+    // Clamp x to groove bounds
+    const int clamped_x = std::max(groove_rect.left(), std::min(x, groove_rect.right()));
+    const double ratio =
+        static_cast<double>(clamped_x - groove_rect.left()) / static_cast<double>(groove_rect.width() - 1);
+    return min_val + static_cast<int>(std::round(ratio * static_cast<double>(max_val - min_val)));
+}
+
+void ExoSlider::mousePressEvent(QMouseEvent* event) {
+    // Handle click-to-jump on the groove: if the user clicks on the track/groove
+    // (not on the handle itself), jump the value to that position.
+    if (orientation() != Qt::Horizontal || event->button() != Qt::LeftButton) {
+        QSlider::mousePressEvent(event);
+        return;
+    }
+
+    QStyleOptionSlider opt;
+    initStyleOption(&opt);
+    const QRect groove_rect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
+    const QRect handle_rect = style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
+
+    // If the click is within the handle rect, let the base class handle the drag.
+    if (handle_rect.contains(event->pos())) {
+        QSlider::mousePressEvent(event);
+        return;
+    }
+
+    // If the click is within the groove but not on the handle, jump to that position.
+    if (groove_rect.contains(event->pos())) {
+        const int new_value = xToValue(groove_rect, event->pos().x());
+        setValue(new_value);
+        event->accept();
+        return;
+    }
+
+    // Fall back to default behavior for clicks outside the groove.
+    QSlider::mousePressEvent(event);
 }
 
 } // namespace exosnap::ui::widgets

@@ -37,6 +37,7 @@ class ExoSlider : public QSlider {
 
   protected:
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 
   private:
     int default_value_ = 0;
@@ -44,6 +45,9 @@ class ExoSlider : public QSlider {
 
     // Map a slider value to an x-coordinate within the groove rect.
     [[nodiscard]] double valueToX(const QRect& groove_rect, int value) const noexcept;
+
+    // Map an x-coordinate within the groove rect to a slider value.
+    [[nodiscard]] int xToValue(const QRect& groove_rect, int x) const noexcept;
 };
 
 } // namespace exosnap::ui::widgets

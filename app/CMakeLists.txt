@@ -1104,6 +1104,17 @@ target_include_directories(exo_spin_box_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 set_target_properties(exo_spin_box_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME exo_slider_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_exo_slider.cpp
+        ui/widgets/ExoSlider.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(exo_slider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(exo_slider_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME notification_bell_tests
     TEST_PREFIX suite.
     SOURCES
