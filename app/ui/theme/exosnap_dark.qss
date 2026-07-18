@@ -2309,8 +2309,12 @@ QLabel[labelRole="detailBreadcrumb"] {
 QFrame#recordTransportDock {
     background: ${bg1};
     border: 1px solid ${line1};
-    /* DESIGN-FIDELITY: State-Spec "Dock-Container" border-radius = 18px (not radius-lg/14). */
-    border-radius: 18px;
+    /* Full pill: the bar is 72px tall (min-height set in C++), so a radius of exactly
+       half its height rounds both ends into true semicircles. Qt QSS silently drops a
+       radius larger than height/2 (renders square), so this is the literal 72/2 value,
+       not an arbitrary large number. The dock's inner left/right padding is widened to
+       match so the outer controls clear the deeper corner arcs. */
+    border-radius: 36px;
 }
 
 /* Center duration — monospace, tabular, always centered. */
