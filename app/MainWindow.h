@@ -94,11 +94,9 @@ class ConfigPage;
 class DevicePage;
 class DiagnosticsPage;
 class EditExportPage;
-class HotkeysPage;
 class LogsPage;
 class RecordPage;
 class UpdateService;
-class WebcamPage;
 
 namespace pages {
 class AboutPage;
@@ -211,8 +209,6 @@ class MainWindow : public QMainWindow {
     // then reveal it in the file manager. Shared by the Logs and Diagnostics entry
     // points (one code path).
     void createSupportBundle();
-    // Builds HotkeysPage, replacing the cheap placeholder reserved at kHotkeysPageIndex.
-    void buildHotkeysPage();
     // Builds DiagnosticsPage, replacing the cheap placeholder reserved at kDiagnosticsPageIndex.
     // Wires fix-action signals and the critical record_page_→diagnostics_page_ direct connect,
     // then ends with refreshDiagnosticsData() to deliver current data to the freshly-built page.
@@ -233,9 +229,6 @@ class MainWindow : public QMainWindow {
     // as buildEditExportOverlay()). Lazy: built on first use — normally the first
     // recording's Stopping transition, well before first paint would ever matter.
     void buildFinalizingOverlay();
-    // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
-    // Ends with applySettings(live_webcam_) to replay preset-applied state.
-    void buildWebcamPage();
     // Builds ConfigPage (Settings), replacing the cheap placeholder reserved at kSettingsPageIndex.
     // Ends with applyPresetConfig() + refreshPresetUi() + chrome-state replay so the freshly-built
     // page has correct settings, preset list, and readiness/lock status on first open.
@@ -364,7 +357,6 @@ class MainWindow : public QMainWindow {
     // Apply device-discovery visual state (audio mic list, webcam availability).
     // Guarded; non-persistent: no writes to AppSettingsStore or RecordingPresetStore.
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
-    void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
     void applyVisualEditExportScenario(const visual::VisualScenario& scenario);
     // notifications-open: embed the NotificationHubPanel as a child overlay of the
     // window (top-right, under the bell) with a fixture set of advisories, so its
@@ -429,10 +421,6 @@ class MainWindow : public QMainWindow {
     QWidget* diagnostics_placeholder_ = nullptr; // cheap slot-reservation until buildDiagnosticsPage()
     LogsPage* logs_page_ = nullptr;
     QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
-    WebcamPage* webcam_page_ = nullptr;
-    QWidget* webcam_placeholder_ = nullptr; // cheap slot-reservation until buildWebcamPage()
-    HotkeysPage* hotkeys_page_ = nullptr;
-    QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
     pages::AboutPage* about_page_ = nullptr;
     QWidget* about_placeholder_ = nullptr; // cheap slot-reservation until buildAboutPage()
     DevicePage* device_page_ = nullptr;

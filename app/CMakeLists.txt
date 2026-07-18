@@ -210,10 +210,6 @@ qt_add_executable(exosnap WIN32
     pages/RecordPage.cpp
     pages/ConfigPage.h
     pages/ConfigPage.cpp
-    pages/HotkeysPage.h
-    pages/HotkeysPage.cpp
-    pages/WebcamPage.h
-    pages/WebcamPage.cpp
     pages/DiagnosticsPage.h
     pages/DiagnosticsPage.cpp
     pages/LogsPage.h
@@ -557,7 +553,6 @@ target_link_libraries(exosnap_device_service_test_support PUBLIC
 
 exosnap_add_app_test_support(exosnap_pages_test_support
     pages/ConfigPage.cpp
-    pages/WebcamPage.cpp
     viewmodels/PresentationStateBuilder.cpp
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/CameraPreview.cpp
@@ -577,7 +572,6 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     # PS-PHASE-C: HotkeysSettingsPanel embedded in ConfigPage.
     ui/widgets/HotkeysSettingsPanel.cpp
     ui/widgets/KeycapChip.cpp
-    pages/HotkeysPage.cpp
     services/GlobalHotkeyService.cpp
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/PlaceholderRow.cpp
@@ -1266,17 +1260,6 @@ target_compile_definitions(source_picker_refresh_tests PRIVATE NOMINMAX)
 set_target_properties(source_picker_refresh_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
-    NAME webcam_page_tests
-    TEST_PREFIX webcam.
-    SOURCES
-        tests/test_webcam_page.cpp
-    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(webcam_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
-
-exosnap_add_gtest(
     NAME webcam_setup_panel_tests
     TEST_PREFIX webcam.
     SOURCES
@@ -1288,18 +1271,18 @@ set_target_properties(webcam_setup_panel_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(webcam_setup_panel_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 exosnap_add_gtest(
-    NAME hotkeys_page_tests
+    NAME hotkeys_settings_panel_tests
     TEST_PREFIX hotkey.
     SOURCES
-        tests/test_hotkeys_page.cpp
-        pages/HotkeysPage.cpp
+        tests/test_hotkeys_settings_panel.cpp
+        ui/widgets/HotkeysSettingsPanel.cpp
         services/GlobalHotkeyService.cpp
-        ui/widgets/SectionRuleHeader.cpp
         ui/widgets/KeycapChip.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
-target_include_directories(hotkeys_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(hotkeys_page_tests PROPERTIES AUTOMOC ON)
+target_include_directories(hotkeys_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(hotkeys_settings_panel_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
+set_target_properties(hotkeys_settings_panel_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME hotkey_service_tests

@@ -24,7 +24,7 @@ class PreviewService {
 
     // Legacy registration: frames are delivered on the main thread but bound to
     // the application's lifetime, so the callback must own no receiver it cannot
-    // outlive (see WebcamPage, which captures a QPointer guard only).
+    // outlive (a consumer should capture a QPointer guard only).
     void SetFrameCallback(FrameCallback cb);
 
     // Preferred registration: binds queued frame delivery to `receiver`'s

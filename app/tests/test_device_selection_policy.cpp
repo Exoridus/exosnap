@@ -22,10 +22,10 @@
 #include "models/VideoSettingsModel.h"
 #include "models/WebcamSettings.h"
 #include "pages/ConfigPage.h"
-#include "pages/WebcamPage.h"
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
 #include "services/WebcamDeviceNotifier.h"
+#include "ui/widgets/WebcamSetupPanel.h"
 #include "viewmodels/RecordViewModel.h"
 
 namespace exosnap {
@@ -251,19 +251,22 @@ TEST_F(DeviceSelectionPolicyTest, SemanticDefault_StaysNulloptAcrossDefaultChang
 // ---------------------------------------------------------------------------
 
 TEST_F(DeviceSelectionPolicyTest, WebcamMissing_IdUnchangedNoEmit) {
-    WebcamPage page;
+    // The embedded Settings webcam card is the shipped surface (the standalone
+    // WebcamPage was removed); it owns the same no-emit device-loss policy.
+    ui::widgets::WebcamSetupPanel panel;
 
     // Apply a setting with an explicit device.
     WebcamSettings ws;
     ws.device_id = "cam-abc-001";
     ws.enabled = true;
-    page.applySettings(ws);
+    panel.applySettings(ws);
 
     int sig_count = 0;
-    QObject::connect(&page, &WebcamPage::settingsChanged, [&](const WebcamSettings&) { ++sig_count; });
+    QObject::connect(&panel, &ui::widgets::WebcamSetupPanel::settingsChanged,
+                     [&](const WebcamSettings&) { ++sig_count; });
 
     // Snapshot without the configured webcam.
-    page.onWebcamDevicesChanged(SnapNoWebcams());
+    panel.onWebcamDevicesChanged(SnapNoWebcams());
 
     EXPECT_EQ(sig_count, 0) << "Missing webcam must not emit settingsChanged";
 }

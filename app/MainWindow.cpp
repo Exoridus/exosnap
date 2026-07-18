@@ -13,10 +13,8 @@
 #include "pages/DevicePage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/EditExportPage.h"
-#include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
 #include "pages/RecordPage.h"
-#include "pages/WebcamPage.h"
 #include "services/CrashIssueReport.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/GlobalHotkeyService.h"
@@ -201,15 +199,13 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 6> kPageDescriptors = {{
     {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
     {"Device", "Encoder adapters and per-GPU capability matrix.", "", true, SidebarIcon::Device},
     {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
-    {"Hotkeys", "Global command access for recording operations.", "GLOBAL SHORTCUTS", true, SidebarIcon::Hotkeys},
     {"Diagnostics", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST", true,
      SidebarIcon::Diagnostics},
     {"Logs", "Runtime events and recording diagnostics.", "SESSION EVENTS", true, SidebarIcon::Logs},
-    {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
     {"About", "Application identity, build metadata, and links.", "", true, SidebarIcon::About},
 }};
 
@@ -222,17 +218,13 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
 }
 constexpr int kRecordPageIndex = pageIndexForIcon(SidebarIcon::Record);
 constexpr int kSettingsPageIndex = pageIndexForIcon(SidebarIcon::Setup);
-constexpr int kHotkeysPageIndex = pageIndexForIcon(SidebarIcon::Hotkeys);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
-constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
 constexpr int kAboutPageIndex = pageIndexForIcon(SidebarIcon::About);
 constexpr int kDevicePageIndex = pageIndexForIcon(SidebarIcon::Device);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
 static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
-static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
-static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 static_assert(kAboutPageIndex >= 0, "About page must exist in kPageDescriptors.");
 static_assert(kDevicePageIndex >= 0, "Device page must exist in kPageDescriptors.");
@@ -612,13 +604,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // all subsequent pages get the correct indices without any re-numbering.
     device_placeholder_ = new QWidget(stack_);
     // Deferred: config_page_ is built by buildConfigPage() after show().
-    // A cheap placeholder holds index kSettingsPageIndex so hotkeys_placeholder_ and
+    // A cheap placeholder holds index kSettingsPageIndex so the diagnostics slot and
     // all subsequent pages get the correct indices without any re-numbering.
     config_placeholder_ = new QWidget(stack_);
-    // Deferred: hotkeys_page_ is built by buildHotkeysPage() after show().
-    // A cheap placeholder holds index kHotkeysPageIndex so the diagnostics slot and
-    // subsequent pages get the correct indices without any re-numbering.
-    hotkeys_placeholder_ = new QWidget(stack_);
     // Deferred: diagnostics_page_ is built by buildDiagnosticsPage() after show().
     // A cheap placeholder holds index kDiagnosticsPageIndex so logs_page_ etc. get
     // the correct subsequent indices without any re-numbering.
@@ -626,18 +614,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(record_page_);
     stack_->addWidget(device_placeholder_); // device page is deferred
     stack_->addWidget(config_placeholder_); // config page is deferred
-    stack_->addWidget(hotkeys_placeholder_);
     stack_->addWidget(diagnostics_placeholder_);
     // Deferred: logs_page_ is built by buildLogsPage() after show().
-    // A cheap placeholder holds index kLogsPageIndex so webcam_page_ etc. get
+    // A cheap placeholder holds index kLogsPageIndex so about_page_ etc. get
     // the correct subsequent indices without any re-numbering.
     logs_placeholder_ = new QWidget(stack_);
     stack_->addWidget(logs_placeholder_);
-    // Deferred: webcam_page_ is built by buildWebcamPage() after show().
-    // A cheap placeholder holds index kWebcamPageIndex so about_page_ etc. get
-    // the correct subsequent indices without any re-numbering.
-    webcam_placeholder_ = new QWidget(stack_);
-    stack_->addWidget(webcam_placeholder_);
     // Deferred: about_page_ is built by buildAboutPage() after show().
     // A cheap placeholder holds index kAboutPageIndex (the last stack slot —
     // EDIT-OVERLAY-R1 removed the former EditExportPage tail slot).
@@ -725,8 +707,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     connect(title_bar_, &ui::chrome::OperationalTitleBar::bellClicked, this, &MainWindow::toggleNotificationHub);
 
-    // PS-PHASE-B: Hotkeys removed from primary nav (6→5 items); HotkeysPage stays in
-    // the stack at kHotkeysPageIndex and remains reachable via programmatic navigation.
+    // PS-PHASE-B: Hotkeys live as an embedded card inside Settings (no standalone page).
     // About is now a real embedded nav page (no overlay).
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
@@ -793,7 +774,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         refreshDiagnosticsData();
     });
 
-    // NOTE: webcam_page_ settingsChanged is wired in buildWebcamPage() after deferred construction.
     // NOTE: config_page_ webcamSettingsChanged connect is wired in buildConfigPage().
 
     // ---- PiP placement confirmed in the Record preview ----
@@ -803,8 +783,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         live_webcam_ = settings;
         if (config_page_)
             config_page_->setWebcamSettings(settings);
-        if (webcam_page_)
-            webcam_page_->applySettings(settings);
         onLiveConfigChanged();
     });
 
@@ -836,11 +814,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             update_service_->SetRecordingCoordinator(record_page_->recordingCoordinator());
     });
 
-    // NOTE: config_page_ diagnosticsRequested + webcamDetailsRequested connects wired in buildConfigPage().
+    // NOTE: config_page_ diagnosticsRequested connect wired in buildConfigPage().
     // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
     // are wired in buildDiagnosticsPage() after deferred construction.
-    // NOTE: webcam_page_ backToSettingsRequested is wired in buildWebcamPage()
-    // after deferred construction.
 
     // ---- Countdown overlay (COUNTDOWN-OVERLAY-R1) ----
     // Top-level (no Qt parent) like the other overlays; centered on the recorded monitor.
@@ -951,13 +927,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Reactive device discovery wiring ----
     // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
     connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
-    // Webcam: forward to ConfigPage (which forwards to WebcamSetupPanel), WebcamPage, and RecordPage.
+    // Webcam: forward to ConfigPage (which forwards to WebcamSetupPanel) and RecordPage.
     connect(&webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, this, &MainWindow::onWebcamDevicesChanged);
     // Display: replaces the old QGuiApplication::screenAdded/Removed lambdas.
     // DisplayDeviceNotifier covers add/remove AND geometry/DPI changes.
     connect(&display_notifier_, &DisplayDeviceNotifier::snapshotChanged, this, &MainWindow::onDisplaysChanged);
 
-    // NOTE: webcam_page_ rescanRequested is wired in buildWebcamPage() after deferred construction.
     // NOTE: config_page_ audioRescanRequested, update-card setters/connects, presentDiagnosticsOptIn,
     // and WebcamSetupPanel rescanRequested are all wired in buildConfigPage().
 
@@ -1159,13 +1134,10 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
     startDeviceNotifiers();
 
     // S4: Gate webcam UI when MF is absent (Windows-N without the Media Feature Pack).
-    // WebcamPage is lazily built; if it already exists apply now; if not, buildWebcamPage()
-    // and buildConfigPage() will apply the gate when each page is first constructed.
+    // The embedded WebcamSetupPanel (Settings) applies the gate in buildConfigPage().
     if (!runtime_caps_.mf_webcam_available) {
         diagnostics::AppLog::warning(QStringLiteral("window"),
                                      QStringLiteral("mfplat.dll absent — webcam UI disabled (Windows-N)"));
-        if (webcam_page_)
-            webcam_page_->setMfUnavailable(true);
         // config_page_ / WebcamSetupPanel: gate is applied in buildConfigPage().
     }
 }
@@ -1957,8 +1929,6 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
                              upper == QStringLiteral("STOPPING") || upper == QStringLiteral("CHECKING") ||
                              upper == QStringLiteral("STARTING") || upper == QStringLiteral("COUNTDOWN"));
         config_page_->setRecordingControlsLocked(locked);
-        if (webcam_page_)
-            webcam_page_->setRecordingControlsLocked(locked);
 
         // PS-PHASE-E: pause update checks (disable the Check button + show the
         // paused banner) while capturing or finalizing. Panel is now in About overlay.
@@ -1981,15 +1951,14 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         tray_presence_->setRecordingBlocked(blocked && tray_state == ui::tray::TrayIconState::Idle);
     }
 
-    // Lock hotkeys page editing while recording / countdown / stopping.
-    if (hotkeys_page_) {
+    // Lock hotkey editing (the embedded Settings hotkeys panel) while recording /
+    // countdown / stopping.
+    if (config_page_) {
         const bool hk_locked =
             (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED") ||
              record_status_label_ == QStringLiteral("STOPPING") || record_status_label_ == QStringLiteral("COUNTDOWN"));
-        hotkeys_page_->setEditingLocked(hk_locked);
-        // PS-PHASE-C: also lock/unlock the embedded hotkeys panel in Settings.
-        if (config_page_)
-            config_page_->setHotkeyEditingLocked(hk_locked);
+        // PS-PHASE-C: lock/unlock the embedded hotkeys panel in Settings.
+        config_page_->setHotkeyEditingLocked(hk_locked);
     }
 
     if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && isVisible() && !isMinimized() &&
@@ -2529,10 +2498,8 @@ void MainWindow::applyRestoredGeometry() {
 }
 
 int MainWindow::navHighlightIndexFor(int index) const {
-    // Webcam is a sub-page reached from Settings; keep the Settings tab lit while
-    // it is shown (no dedicated top-nav tab for it).
-    if (index == kWebcamPageIndex)
-        return kSettingsPageIndex;
+    // Every stack page now has its own top-nav tab, so the highlighted tab is the
+    // page index itself. (Kept as a seam in case future sub-pages need remapping.)
     return index;
 }
 
@@ -2570,14 +2537,10 @@ void MainWindow::setCurrentPage(int index) {
         buildDevicePage();
     if (index == kSettingsPageIndex && !config_page_)
         buildConfigPage();
-    if (index == kHotkeysPageIndex && !hotkeys_page_)
-        buildHotkeysPage();
     if (index == kDiagnosticsPageIndex && !diagnostics_page_)
         buildDiagnosticsPage();
     if (index == kLogsPageIndex && !logs_page_)
         buildLogsPage();
-    if (index == kWebcamPageIndex && !webcam_page_)
-        buildWebcamPage();
     if (index == kAboutPageIndex && !about_page_)
         buildAboutPage();
 
@@ -2641,9 +2604,6 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
         config_page_->setWebcamSettings(cfg2.webcam);
         config_page_->setOutputFolder(cfg2.output.output_folder);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
-    }
-    if (webcam_page_) {
-        webcam_page_->applySettings(cfg2.webcam);
     }
 
     applying_preset_ = false;
@@ -3009,35 +2969,6 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     case visual::VisualPage::Settings:
         applyVisualSettingsScenario(scenario);
         break;
-    case visual::VisualPage::Webcam:
-        if (!webcam_page_)
-            buildWebcamPage(); // ensure page exists before applying visual state
-        if (webcam_page_) {
-            webcam_page_->applyVisualState(scenario.webcam_state);
-            if (!scenario.webcam_chroma_color_mode.isEmpty()) {
-                const auto colorModeFromStr = [](const QString& s) -> WebcamChromaKeyColorMode {
-                    if (s == QStringLiteral("blue"))
-                        return WebcamChromaKeyColorMode::Blue;
-                    if (s == QStringLiteral("magenta"))
-                        return WebcamChromaKeyColorMode::Magenta;
-                    if (s == QStringLiteral("custom"))
-                        return WebcamChromaKeyColorMode::Custom;
-                    return WebcamChromaKeyColorMode::Green;
-                };
-                WebcamSettings ws;
-                ws.enabled = scenario.webcam_state == visual::VisualWebcamState::Active;
-                ws.chroma_key.enabled = scenario.webcam_chroma_enabled;
-                ws.chroma_key.color_mode = colorModeFromStr(scenario.webcam_chroma_color_mode);
-                webcam_page_->applySettings(ws);
-            }
-            webcam_page_->setRecordingControlsLocked(scenario.controls_locked);
-        }
-        setCurrentPage(kWebcamPageIndex);
-        break;
-    case visual::VisualPage::Hotkeys:
-        setCurrentPage(kHotkeysPageIndex);
-        applyVisualHotkeysScenario(scenario);
-        break;
     case visual::VisualPage::Diagnostics:
         if (!diagnostics_page_)
             buildDiagnosticsPage();
@@ -3286,6 +3217,17 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     if (scenario.webcam_state != visual::VisualWebcamState::None) {
         config_page_->applyVisualWebcamState(scenario.webcam_state == visual::VisualWebcamState::Active,
                                              scenario.webcam_mirror);
+    }
+
+    // Hotkeys-card scenarios (default / custom / conflict / capture) drive the
+    // embedded HotkeysSettingsPanel deterministically — no live service, so no
+    // Win32 hotkey registration happens during a render.
+    if (scenario.hk_capture_active || scenario.hk_conflict_shown || scenario.hk_editing_locked ||
+        !scenario.hk_custom_binding_0.isEmpty() || !scenario.hk_custom_binding_1.isEmpty()) {
+        config_page_->applyVisualHotkeysState(scenario.hk_custom_binding_0, scenario.hk_custom_binding_1,
+                                              scenario.hk_capture_active ? scenario.hk_capture_action : -1,
+                                              scenario.hk_conflict_shown ? scenario.hk_conflict_action : -1,
+                                              scenario.hk_conflict_message, scenario.hk_editing_locked);
     }
 
     // Preset card — inject synthetic ProfileOption data when preset_count > 0 or
@@ -3626,40 +3568,6 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
     }
 }
 
-void MainWindow::applyVisualHotkeysScenario(const visual::VisualScenario& scenario) {
-    if (!hotkeys_page_)
-        buildHotkeysPage();
-
-    // Apply custom bindings (non-persistent: bypass service to avoid Win32 registration).
-    if (!scenario.hk_custom_binding_0.isEmpty() || !scenario.hk_custom_binding_1.isEmpty()) {
-        const QKeySequence b0 =
-            scenario.hk_custom_binding_0.isEmpty()
-                ? GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording)
-                : QKeySequence::fromString(scenario.hk_custom_binding_0, QKeySequence::PortableText);
-        const QKeySequence b1 =
-            scenario.hk_custom_binding_1.isEmpty()
-                ? GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause)
-                : QKeySequence::fromString(scenario.hk_custom_binding_1, QKeySequence::PortableText);
-        hotkeys_page_->setBindings({b0, b1});
-    }
-
-    hotkeys_page_->setEditingLocked(scenario.hk_editing_locked);
-
-    // Simulate conflict message on a specific row (visual-only, no Win32 state).
-    if (scenario.hk_conflict_shown && scenario.hk_conflict_action >= 0) {
-        const QString msg = scenario.hk_conflict_message.isEmpty() ? QStringLiteral("This shortcut is already in use.")
-                                                                   : scenario.hk_conflict_message;
-        // Use public slots to drive the error display.
-        // We call a test-only helper on HotkeysPage via objectName lookup.
-        auto* row =
-            hotkeys_page_->findChild<QLabel*>(QStringLiteral("hotkeyError_%1").arg(scenario.hk_conflict_action));
-        if (row) {
-            row->setText(msg);
-            row->show();
-        }
-    }
-}
-
 void MainWindow::applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario) {
     // Only engage when at least one device-discovery field is set.
     const bool has_audio = scenario.dd_audio_input_count >= 0;
@@ -3755,12 +3663,10 @@ void MainWindow::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap,
 
 void MainWindow::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap,
                                         exosnap::DiscoveryReason /*reason*/) {
-    // Forward to all three consumers.  None of these should emit webcamSettingsChanged
-    // so live_webcam_ and the preset dirty state remain unchanged.
+    // Forward to both consumers.  Neither should emit webcamSettingsChanged so
+    // live_webcam_ and the preset dirty state remain unchanged.
     if (config_page_)
         config_page_->onWebcamDevicesChanged(snap);
-    if (webcam_page_)
-        webcam_page_->onWebcamDevicesChanged(snap);
     if (record_page_)
         record_page_->onWebcamDevicesChanged(snap);
 }
@@ -4647,11 +4553,10 @@ void MainWindow::hydrateSecondaryPages() {
     // Register one deferred page builder per event-loop tick so the UI can paint
     // and respond between constructors. Order: ConfigPage first — it is the
     // heaviest and the most commonly visited item; then DevicePage (construction
-    // only — the adapter scan runs async on its first showEvent), HotkeysPage,
+    // only — the adapter scan runs async on its first showEvent),
     // DiagnosticsPage, LogsPage, AboutPage, EditExportOverlay (not a stack page —
-    // see EDIT-OVERLAY-R1), WebcamPage.
-    // Webcam comes last because its fan-out replay depends on stable live_webcam_,
-    // settled before the ctor exits.
+    // see EDIT-OVERLAY-R1). Hotkeys and webcam configuration are embedded cards in
+    // ConfigPage, so they hydrate with it and need no separate step.
     //
     // PageHydrationController owns the singleShot(0) staging and the "perf"
     // AppLog milestone bracketing (same "<name> <elapsed> ms" convention as
@@ -4660,12 +4565,10 @@ void MainWindow::hydrateSecondaryPages() {
     std::vector<PageHydrationController::Step> steps;
     steps.push_back({QStringLiteral("config"), [this] { buildConfigPage(); }});
     steps.push_back({QStringLiteral("device"), [this] { buildDevicePage(); }});
-    steps.push_back({QStringLiteral("hotkeys"), [this] { buildHotkeysPage(); }});
     steps.push_back({QStringLiteral("diagnostics"), [this] { buildDiagnosticsPage(); }});
     steps.push_back({QStringLiteral("logs"), [this] { buildLogsPage(); }});
     steps.push_back({QStringLiteral("about"), [this] { buildAboutPage(); }});
     steps.push_back({QStringLiteral("edit-export"), [this] { buildEditExportOverlay(); }});
-    steps.push_back({QStringLiteral("webcam"), [this] { buildWebcamPage(); }});
 
     page_hydration_controller_ = new PageHydrationController(std::move(steps), this);
     page_hydration_controller_->start();
@@ -4678,7 +4581,7 @@ void MainWindow::buildConfigPage() {
     config_page_->setHotkeyService(hotkey_service_);
     if (config_placeholder_) {
         // Replace the placeholder in-place so kSettingsPageIndex stays valid for all
-        // widgets already past it in the stack (hotkeys=2, diagnostics=3, logs=4, …).
+        // widgets already past it in the stack (diagnostics=3, logs=4, about=5).
         const int idx = stack_->indexOf(config_placeholder_);
         stack_->insertWidget(idx, config_page_);
         config_placeholder_->deleteLater();
@@ -4754,8 +4657,6 @@ void MainWindow::buildConfigPage() {
             return;
         live_webcam_ = settings;
         record_page_->setWebcamSettings(settings);
-        if (webcam_page_)
-            webcam_page_->applySettings(settings);
         onLiveConfigChanged();
     });
 
@@ -4792,7 +4693,6 @@ void MainWindow::buildConfigPage() {
         refreshDiagnosticsData();
         navigateToPage(kDiagnosticsPageIndex);
     });
-    connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
 
     // ---- Overlay / tray / quick-controls / theme setters + connects ----
     config_page_->setShowOverlay(persisted_settings_.show_recording_overlay);
@@ -4951,11 +4851,9 @@ void MainWindow::buildConfigPage() {
                              status == QStringLiteral("STOPPING") || status == QStringLiteral("CHECKING") ||
                              status == QStringLiteral("STARTING") || status == QStringLiteral("COUNTDOWN"));
         config_page_->setRecordingControlsLocked(locked);
-        if (hotkeys_page_) {
-            const bool hk_locked = (status == QStringLiteral("REC") || status == QStringLiteral("PAUSED") ||
-                                    status == QStringLiteral("STOPPING") || status == QStringLiteral("COUNTDOWN"));
-            config_page_->setHotkeyEditingLocked(hk_locked);
-        }
+        const bool hk_locked = (status == QStringLiteral("REC") || status == QStringLiteral("PAUSED") ||
+                                status == QStringLiteral("STOPPING") || status == QStringLiteral("COUNTDOWN"));
+        config_page_->setHotkeyEditingLocked(hk_locked);
     }
 }
 
@@ -4966,7 +4864,7 @@ void MainWindow::buildLogsPage() {
     connect(logs_page_, &LogsPage::createSupportBundleRequested, this, &MainWindow::createSupportBundle);
     if (logs_placeholder_) {
         // Replace the placeholder in-place so kLogsPageIndex stays valid for all
-        // widgets already past it in the stack (webcam=5, output=6, about=7).
+        // widgets already past it in the stack (about=5).
         const int idx = stack_->indexOf(logs_placeholder_);
         stack_->insertWidget(idx, logs_page_);
         logs_placeholder_->deleteLater();
@@ -5070,23 +4968,6 @@ void MainWindow::createSupportBundle() {
     // not the running ExoSnap instance.
     QProcess::startDetached(QStringLiteral("explorer.exe"),
                             {QStringLiteral("/select,") + QDir::toNativeSeparators(path)});
-}
-
-void MainWindow::buildHotkeysPage() {
-    if (hotkeys_page_)
-        return; // already built (e.g. by an early navigation)
-    hotkeys_page_ = new HotkeysPage(stack_);
-    hotkeys_page_->setService(hotkey_service_);
-    if (hotkeys_placeholder_) {
-        // Replace the placeholder in-place so kHotkeysPageIndex stays valid for all
-        // widgets already past it in the stack (diagnostics=3, logs=4, webcam=5, …).
-        const int idx = stack_->indexOf(hotkeys_placeholder_);
-        stack_->insertWidget(idx, hotkeys_page_);
-        hotkeys_placeholder_->deleteLater();
-        hotkeys_placeholder_ = nullptr;
-    } else {
-        stack_->addWidget(hotkeys_page_);
-    }
 }
 
 void MainWindow::buildDiagnosticsPage() {
@@ -5322,43 +5203,6 @@ void MainWindow::buildFinalizingOverlay() {
     // never a child stacked directly inside RecordPage/PreviewSurface.
     finalizing_overlay_ = new ui::dialogs::FinalizingOverlay(centralWidget());
     finalizing_overlay_->hide();
-}
-
-void MainWindow::buildWebcamPage() {
-    if (webcam_page_)
-        return; // already built (e.g. by an early navigation or visual harness)
-    webcam_page_ = new WebcamPage(stack_);
-    if (webcam_placeholder_) {
-        // Replace the placeholder in-place so kWebcamPageIndex stays valid for
-        // about_page_ which lives at a higher index.
-        const int idx = stack_->indexOf(webcam_placeholder_);
-        stack_->insertWidget(idx, webcam_page_);
-        webcam_placeholder_->deleteLater();
-        webcam_placeholder_ = nullptr;
-    } else {
-        stack_->addWidget(webcam_page_);
-    }
-    // Wire signals that were previously connected in the ctor but require a live pointer.
-    connect(webcam_page_, &WebcamPage::settingsChanged, this, [this](const WebcamSettings& settings) {
-        if (applying_preset_)
-            return;
-        live_webcam_ = settings;
-        record_page_->setWebcamSettings(settings);
-        if (config_page_)
-            config_page_->setWebcamSettings(settings);
-        onLiveConfigChanged();
-    });
-    connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
-    connect(webcam_page_, &WebcamPage::rescanRequested, &webcam_notifier_, &WebcamDeviceNotifier::rescan);
-    // Fan-out replay: live_webcam_ already holds the preset-applied webcam config
-    // because applyPresetConfig() (called in the ctor at line ~1210) sets live_webcam_
-    // from cfg2.webcam *before* the if(webcam_page_) guard — so live_webcam_ is the
-    // correct, settled value at this point regardless of when buildWebcamPage() runs.
-    webcam_page_->applySettings(live_webcam_);
-
-    // S4: Apply MF-absent gate if the capability probe already resolved.
-    if (runtime_caps_ready_ && !runtime_caps_.mf_webcam_available)
-        webcam_page_->setMfUnavailable(true);
 }
 
 } // namespace exosnap

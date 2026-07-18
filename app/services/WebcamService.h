@@ -115,8 +115,8 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
 
     // Set callback invoked on main thread with each new QImage frame.
     // Legacy registration: delivery is bound to the application's lifetime, so the
-    // callback must own no receiver it cannot outlive (see WebcamPage, which
-    // captures a QPointer guard only).
+    // callback must own no receiver it cannot outlive (a consumer should capture a
+    // QPointer guard only).
     void SetFrameCallback(FrameCallback cb);
 
     // Preferred registration: binds queued frame delivery to `receiver`'s
