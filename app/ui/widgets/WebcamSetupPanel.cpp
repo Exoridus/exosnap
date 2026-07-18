@@ -264,14 +264,16 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
             [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Blue); });
     connect(chroma_magenta_btn_, &QPushButton::clicked, this,
             [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Magenta); });
-    connect(chroma_custom_btn_, &QPushButton::clicked, this, [this]() {
+    // The swatch and the "Custom…" chip open the same colour picker (the obvious
+    // expectation for a clickable colour swatch).
+    const auto pick_custom_color = [this]() {
         const auto& ck = current_settings_.chroma_key;
         const QColor initial = (ck.color_mode == WebcamChromaKeyColorMode::Custom)
                                    ? QColor(ck.custom_r, ck.custom_g, ck.custom_b)
                                    : QColor(ck.active_color().r, ck.active_color().g, ck.active_color().b);
         const QColor picked = QColorDialog::getColor(initial, this, QStringLiteral("Pick chroma key colour"));
         if (!picked.isValid()) {
-            // Restore the checked state to the still-active mode (the button was
+            // Restore the checked state to the still-active mode (the chip was
             // clicked, flipping its checked flag before the dialog was cancelled).
             updateChromaColorButtons();
             return;
@@ -280,7 +282,9 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
         current_settings_.chroma_key.custom_g = static_cast<uint8_t>(picked.green());
         current_settings_.chroma_key.custom_b = static_cast<uint8_t>(picked.blue());
         onColorModeChanged(WebcamChromaKeyColorMode::Custom);
-    });
+    };
+    connect(chroma_custom_btn_, &QPushButton::clicked, this, pick_custom_color);
+    connect(chroma_swatch_, &QPushButton::clicked, this, pick_custom_color);
     connect(tolerance_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onToleranceChanged);
     connect(softness_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onSoftnessChanged);
     connect(spill_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onSpillReductionChanged);

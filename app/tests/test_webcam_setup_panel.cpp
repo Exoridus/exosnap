@@ -262,6 +262,31 @@ TEST_F(WebcamSetupPanelTest, RecordingLock_KeepsOpacityAndChromaEditable) {
     EXPECT_TRUE(chroma->isEnabled()) << "Chroma is live-editable and must stay editable while locked";
 }
 
+// Pins the widget→emit direction for the three chroma parameter sliders: moving
+// each one emits the matching chroma_key.* value through the settings path.
+TEST_F(WebcamSetupPanelTest, ChromaSliders_EmitParameterValues) {
+    ui::widgets::WebcamSetupPanel panel;
+
+    WebcamSettings last;
+    QObject::connect(&panel, &ui::widgets::WebcamSetupPanel::settingsChanged,
+                     [&](const WebcamSettings& s) { last = s; });
+
+    auto* tol = panel.findChild<QSlider*>(QStringLiteral("webcamPanelChromaToleranceSlider"));
+    ASSERT_NE(tol, nullptr);
+    tol->setValue(65);
+    EXPECT_FLOAT_EQ(last.chroma_key.tolerance, 0.65f);
+
+    auto* soft = panel.findChild<QSlider*>(QStringLiteral("webcamPanelChromaSoftnessSlider"));
+    ASSERT_NE(soft, nullptr);
+    soft->setValue(25);
+    EXPECT_FLOAT_EQ(last.chroma_key.softness, 0.25f);
+
+    auto* spill = panel.findChild<QSlider*>(QStringLiteral("webcamPanelChromaSpillSlider"));
+    ASSERT_NE(spill, nullptr);
+    spill->setValue(45);
+    EXPECT_FLOAT_EQ(last.chroma_key.spill_reduction, 0.45f);
+}
+
 // The MF-absent gate covers the new controls too.
 TEST_F(WebcamSetupPanelTest, MfUnavailable_DisablesOpacityAndChroma) {
     ui::widgets::WebcamSetupPanel panel;
