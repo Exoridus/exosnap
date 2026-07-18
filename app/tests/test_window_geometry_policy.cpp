@@ -59,5 +59,38 @@ TEST(WindowGeometryPolicy, TitleStripStaysReachable) {
     EXPECT_LE(out.top(), avail.bottom() - 40);
 }
 
+// ---------------------------------------------------------------------------
+// ClampWindowToWorkArea (B3: first-show taskbar clamp)
+//
+// Unlike ClampRestoredWindowGeometry (which only guarantees a reachable title
+// strip so a user-dragged position surviving a monitor swap isn't yanked back
+// on screen), this is a full containment clamp applied once on first show:
+// position AND size are corrected so the window never has any edge — in
+// particular the bottom edge — resting under the taskbar / outside the work
+// area.
+// ---------------------------------------------------------------------------
+
+TEST(ClampWindowToWorkAreaTest, BottomOverhangIsPulledFullyInside) {
+    // Window bottom edge hangs 80 px below the work area (taskbar covers it).
+    const QRect avail(0, 0, 1920, 1040);
+    const QRect window(100, 520, 800, 600); // bottom = 1120, 80 px past avail.bottom()+1 (1040)
+    const QRect out = ClampWindowToWorkArea(window, avail);
+    EXPECT_TRUE(avail.contains(out));
+}
+
+TEST(ClampWindowToWorkAreaTest, LargerThanWorkAreaIsShrunkToFit) {
+    const QRect avail(0, 0, 1920, 1040);
+    const QRect window(0, 0, 2000, 1200);
+    const QRect out = ClampWindowToWorkArea(window, avail);
+    EXPECT_EQ(out, avail);
+}
+
+TEST(ClampWindowToWorkAreaTest, WindowAlreadyInsideIsUnchanged) {
+    const QRect avail(0, 0, 1920, 1040);
+    const QRect window(100, 100, 800, 600);
+    const QRect out = ClampWindowToWorkArea(window, avail);
+    EXPECT_EQ(out, window);
+}
+
 } // namespace
 } // namespace exosnap::ui

@@ -2468,32 +2468,47 @@ void MainWindow::saveWindowGeometryToSettings() {
 
 void MainWindow::applyRestoredGeometry() {
     const auto& geo = persisted_settings_.window_geometry;
-    if (geo.width <= 0 || geo.height <= 0)
-        return;
+    if (geo.width > 0 && geo.height > 0) {
+        // The title bar region that must remain accessible so the user can move the window.
+        const QRect title_strip(geo.x, geo.y, std::min(geo.width, 200), 40);
 
-    // The title bar region that must remain accessible so the user can move the window.
-    const QRect title_strip(geo.x, geo.y, std::min(geo.width, 200), 40);
+        QScreen* screen = nullptr;
+        for (QScreen* s : QGuiApplication::screens()) {
+            if (s->availableGeometry().intersects(title_strip)) {
+                screen = s;
+                break;
+            }
+        }
 
-    QScreen* screen = nullptr;
-    for (QScreen* s : QGuiApplication::screens()) {
-        if (s->availableGeometry().intersects(title_strip)) {
-            screen = s;
-            break;
+        // Saved position lands on no connected monitor: center on primary.
+        const bool center_on_primary = screen == nullptr;
+        if (center_on_primary)
+            screen = QGuiApplication::primaryScreen();
+        if (screen != nullptr) {
+            const QRect saved(geo.x, geo.y, geo.width, geo.height);
+            setGeometry(ui::ClampRestoredWindowGeometry(saved, screen->availableGeometry(),
+                                                        QSize(minimumWidth(), minimumHeight()), center_on_primary));
+        }
+
+        if (geo.maximized) {
+            // showMaximized() fills the work area itself; no further clamp needed.
+            QTimer::singleShot(0, this, &MainWindow::showMaximized);
+            return;
         }
     }
 
-    // Saved position lands on no connected monitor: center on primary.
-    const bool center_on_primary = screen == nullptr;
-    if (center_on_primary)
-        screen = QGuiApplication::primaryScreen();
-    if (screen == nullptr)
-        return;
-    const QRect saved(geo.x, geo.y, geo.width, geo.height);
-    setGeometry(ui::ClampRestoredWindowGeometry(saved, screen->availableGeometry(),
-                                                QSize(minimumWidth(), minimumHeight()), center_on_primary));
-
-    if (geo.maximized)
-        QTimer::singleShot(0, this, &MainWindow::showMaximized);
+    // B3: whatever geometry we now have — restored-and-partially-clamped above (which
+    // only guarantees a reachable title strip, so a bottom overhang under the taskbar
+    // can still slip through), or Qt's own first-launch default placement when there is
+    // no persisted geometry at all — pull it fully inside the work area of whichever
+    // screen it ended up on. Runs once, here on first show; never re-applied while the
+    // window is live, so a user who deliberately drags the window under the taskbar
+    // afterwards is free to do so.
+    QScreen* target_screen = this->screen();
+    if (target_screen == nullptr)
+        target_screen = QGuiApplication::primaryScreen();
+    if (target_screen != nullptr)
+        setGeometry(ui::ClampWindowToWorkArea(geometry(), target_screen->availableGeometry()));
 }
 
 int MainWindow::navHighlightIndexFor(int index) const {

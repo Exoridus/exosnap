@@ -22,4 +22,14 @@ QRect ClampRestoredWindowGeometry(const QRect& saved, const QRect& available, co
     return {x, y, w, h};
 }
 
+QRect ClampWindowToWorkArea(const QRect& window, const QRect& available) {
+    const int w = std::min(window.width(), available.width());
+    const int h = std::min(window.height(), available.height());
+    // available.right()/bottom() are inclusive (x+width-1); the max origin that
+    // still keeps the shrunk rect fully inside is available.left()+available.width()-w.
+    const int x = std::clamp(window.x(), available.left(), available.left() + available.width() - w);
+    const int y = std::clamp(window.y(), available.top(), available.top() + available.height() - h);
+    return {x, y, w, h};
+}
+
 } // namespace exosnap::ui
