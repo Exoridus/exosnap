@@ -40,7 +40,6 @@ app/
 │   ├── RecordPage.h / .cpp         Full UI: target picker, start/stop, stats, result
 │   ├── VideoPage.h / .cpp          Stub
 │   ├── AudioPage.h / .cpp          Stub
-│   ├── HotkeysPage.h / .cpp        Stub
 │   ├── DiagnosticsPage.h / .cpp    Stub
 │   ├── LogsPage.h / .cpp           Stub
 │   └── AdvancedPage.h / .cpp       Stub

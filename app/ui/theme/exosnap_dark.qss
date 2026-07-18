@@ -267,7 +267,7 @@ QPushButton[qualitySegment="true"][qualitySegmentSelected="true"]:disabled {
     color: ${text3};
 }
 
-/* Hotkeys page — keycap chips + table rows (HYBRID-PORT-R6) */
+/* Hotkeys — keycap chips + table rows for the embedded Settings hotkeys card. */
 QLabel[labelRole="keycap"] {
     font-family: ${font-mono};
     font-size: 12px;
@@ -298,11 +298,6 @@ QLabel[labelRole="keycapPlus"] {
 QLabel[labelRole="hotkeyAction"] {
     font-size: 14px;
     color: ${text0};
-}
-
-QLabel[labelRole="hotkeyActionPlanned"] {
-    font-size: 14px;
-    color: ${text2};
 }
 
 /* v10 Hotkeys state-slot chips (single self-contained chip per row). */
@@ -527,14 +522,6 @@ QLabel#compatOkLabel {
 QLabel[labelRole="settingsRowLabel"] {
     font-size: 13px;
     color: ${text1};
-}
-
-/* Webcam page — key/value row label (videoKvKey reused by WebcamPage) */
-QLabel[labelRole="videoKvKey"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text2};
-    letter-spacing: 0.04em;
 }
 
 /* Audio page */

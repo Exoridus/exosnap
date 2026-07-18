@@ -32,7 +32,7 @@ The 200 ms debounce window coalesces rapid OS bursts (e.g. multi-monitor mode-se
 
 ### Selection policy
 
-When a snapshot arrives at a UI page (`ConfigPage::onAudioDevicesChanged`, `WebcamPage::onWebcamDevicesChanged`, `RecordPage::onDisplaysChanged`):
+When a snapshot arrives at a UI page (`ConfigPage::onAudioDevicesChanged`, `WebcamSetupPanel::onWebcamDevicesChanged`, `RecordPage::onDisplaysChanged`):
 
 1. Read the current configured stable ID (may be `nullopt` for semantic Default mic).
 2. If the ID is present in the new snapshot → restore selection to that entry.
@@ -46,7 +46,7 @@ This ensures availability changes never dirty the recording preset.
 The reactive handlers are explicitly non-persistent:
 
 - `ConfigPage::onAudioDevicesChanged` → does NOT emit `audioSettingsChanged`; does NOT call `RecordingPresetStore::Save()`.
-- `WebcamPage::onWebcamDevicesChanged` → does NOT emit `settingsChanged`.
+- `WebcamSetupPanel::onWebcamDevicesChanged` → does NOT emit `settingsChanged`.
 - `RecordPage::onDisplaysChanged` → does NOT emit `recordingConfigChanged`.
 
 Only explicit user gestures (combo selection, Enable toggle, explicit Rescan → then user confirms) produce emissions that propagate to the preset system.
@@ -137,4 +137,4 @@ An explicit stop-and-restart is required to switch to a different device. This m
 
 ### Audio and webcam page handlers re-enumerate on snapshot trigger
 
-`ConfigPage::onAudioDevicesChanged` and `WebcamPage::onWebcamDevicesChanged` re-run their full combo-population logic when a snapshot arrives (rather than consuming the snapshot vector directly). This keeps the snapshot-forwarding path through MainWindow minimal at MVP complexity, but means the page performs a lightweight enumeration call in addition to processing the snapshot. At the scale of USB device events (< 1 per second typical) this is not a performance concern.
+`ConfigPage::onAudioDevicesChanged` and `WebcamSetupPanel::onWebcamDevicesChanged` re-run their full combo-population logic when a snapshot arrives (rather than consuming the snapshot vector directly). This keeps the snapshot-forwarding path through MainWindow minimal at MVP complexity, but means the page performs a lightweight enumeration call in addition to processing the snapshot. At the scale of USB device events (< 1 per second typical) this is not a performance concern.

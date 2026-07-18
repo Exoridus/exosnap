@@ -124,6 +124,11 @@ class ConfigPage : public QWidget {
     // Drive the embedded Webcam card deterministically for visual-test scenarios.
     void applyVisualWebcamState(bool available, bool mirror);
 
+    // Visual-harness only: drive the embedded hotkeys card into a representative
+    // state (custom bindings / capture / conflict / lock) without a live service.
+    void applyVisualHotkeysState(const QString& custom_binding_0, const QString& custom_binding_1, int capture_row,
+                                 int conflict_row, const QString& conflict_message, bool locked);
+
     // Drive the inline preset save-error affordance for visual-test scenarios.
     // Passing true shows a deterministic error label (name-conflict copy);
     // passing false hides it.  No real save is performed.
@@ -197,7 +202,6 @@ class ConfigPage : public QWidget {
     // Relayed from the embedded webcam panel: it wants the shared capture to run/stop.
     void webcamPreviewActiveRequested(bool active);
     void diagnosticsRequested();
-    void webcamDetailsRequested();
 
     // SETTINGS-TIERS-R1: emitted when Expert mode changes via the toggle button.
     void expertModeChanged(bool enabled);

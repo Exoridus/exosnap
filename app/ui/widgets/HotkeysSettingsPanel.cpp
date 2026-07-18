@@ -105,6 +105,43 @@ void HotkeysSettingsPanel::setEditingLocked(bool locked) {
         reset_all_btn_->setEnabled(!locked);
 }
 
+void HotkeysSettingsPanel::applyVisualState(const QString& custom_binding_0, const QString& custom_binding_1,
+                                            int capture_row, int conflict_row, const QString& conflict_message,
+                                            bool locked) {
+    // Bypass the live service (no Win32 registration) — write the row display state
+    // directly, then repaint the affected slots.
+    const auto setRowBinding = [this](int idx, const QString& portable) {
+        if (portable.isEmpty() || idx < 0 || idx >= kActiveActionCount)
+            return;
+        rows_[static_cast<std::size_t>(idx)].current_binding =
+            QKeySequence::fromString(portable, QKeySequence::PortableText);
+        clearRowConflict(idx);
+        updateSlot(idx);
+        refreshRowButtons(idx);
+    };
+    setRowBinding(0, custom_binding_0);
+    setRowBinding(1, custom_binding_1);
+
+    if (capture_row >= 0 && capture_row < kActiveActionCount) {
+        // Enter capture visually without routing through the service.
+        capturing_row_ = capture_row;
+        clearRowConflict(capture_row);
+        updateSlot(capture_row);
+        refreshRowButtons(capture_row);
+    }
+
+    if (conflict_row >= 0 && conflict_row < kActiveActionCount) {
+        // The attempted (colliding) chord is ToggleRecording's default — the chip
+        // reads "⚠ <chord>" and carries the conflict message as its tooltip.
+        const QKeySequence attempted = GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording);
+        const QString msg =
+            conflict_message.isEmpty() ? QStringLiteral("This shortcut is already in use.") : conflict_message;
+        showRowConflict(conflict_row, attempted, msg);
+    }
+
+    setEditingLocked(locked);
+}
+
 void HotkeysSettingsPanel::buildRow(int index, const QString& action, const QKeySequence& default_binding,
                                     QVBoxLayout* parent_layout, QWidget* parent_widget) {
     auto& r = rows_[static_cast<std::size_t>(index)];

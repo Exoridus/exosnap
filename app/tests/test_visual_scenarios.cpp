@@ -41,8 +41,6 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("source-region-preset-16x9"),
         QStringLiteral("source-region-preset-9x16"),
         QStringLiteral("source-region-invalid"),
-        QStringLiteral("webcam-active"),
-        QStringLiteral("webcam-unavailable"),
         QStringLiteral("record-webcam-disabled"),
         QStringLiteral("record-webcam-default-pip"),
         QStringLiteral("record-webcam-selected"),
@@ -64,7 +62,10 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("diagnostics-recording-disk-pressure"),
         QStringLiteral("diagnostics-paused"),
         QStringLiteral("diagnostics-split-pending"),
-        QStringLiteral("hotkeys"),
+        QStringLiteral("settings-hotkeys-default"),
+        QStringLiteral("settings-hotkeys-capture"),
+        QStringLiteral("settings-hotkeys-conflict"),
+        QStringLiteral("settings-hotkeys-custom-bindings"),
         QStringLiteral("logs"),
         QStringLiteral("logs-empty"),
         QStringLiteral("logs-all-levels"),
@@ -191,7 +192,7 @@ TEST(VisualScenarioTest, SettingsWebcamScenariosRouteToSettings) {
 }
 
 // Chroma-key scenarios route to the Settings page's embedded webcam card (the
-// standalone WebcamPage is slated for removal) and carry deterministic chroma
+// standalone WebcamPage has been removed) and carry deterministic chroma
 // enable/color-mode state for the manifest.
 TEST(VisualScenarioTest, SettingsWebcamChromaScenariosRouteToSettings) {
     const struct {

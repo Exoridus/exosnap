@@ -5718,6 +5718,14 @@ void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
         webcam_setup_panel_->applyVisualState(available, mirror);
 }
 
+void ConfigPage::applyVisualHotkeysState(const QString& custom_binding_0, const QString& custom_binding_1,
+                                         int capture_row, int conflict_row, const QString& conflict_message,
+                                         bool locked) {
+    if (hotkeys_settings_panel_)
+        hotkeys_settings_panel_->applyVisualState(custom_binding_0, custom_binding_1, capture_row, conflict_row,
+                                                  conflict_message, locked);
+}
+
 void ConfigPage::applyVisualPresetSaveError(bool show) {
     if (show && !visual_preset_error_label_) {
         // The warning must land on its own row *below* the slim toolbar, not

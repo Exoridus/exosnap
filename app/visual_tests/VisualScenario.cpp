@@ -261,17 +261,6 @@ const QVector<VisualScenario> kScenarios = {
      100,
      32,
      32},
-    {QStringLiteral("webcam-active"),
-     QStringLiteral("Webcam / Active"),
-     VisualPage::Webcam,
-     VisualRecordState::None,
-     VisualSettingsTarget::None,
-     VisualSourcePickerTab::None,
-     VisualWebcamState::Active,
-     {{QStringLiteral("webcamCameraPreview"), QStringLiteral("synthetic test camera frame")}}},
-    {QStringLiteral("webcam-unavailable"), QStringLiteral("Webcam / Unavailable"), VisualPage::Webcam,
-     VisualRecordState::None, VisualSettingsTarget::None, VisualSourcePickerTab::None, VisualWebcamState::Unavailable},
-
     // --- Webcam PiP placement + mirror (WEBCAM-PIP-MIRROR-R1) -------------------
     // Record-page PiP scenarios run with a deterministic synthetic preview + camera
     // frame (DXGI stopped), so the Qt paint path is exercised reproducibly.
@@ -455,9 +444,10 @@ const QVector<VisualScenario> kScenarios = {
      .record_state = VisualRecordState::None,
      .webcam_state = VisualWebcamState::Unavailable},
     // Webcam chroma-key scenarios route to the Settings page's embedded webcam
-    // card (the product-decreed home for webcam config; the standalone WebcamPage
-    // is slated for removal). Enable toggle + resolution/FPS render on the card;
-    // the chroma enable/color-mode is carried in the manifest (webcam.chroma).
+    // card — the sole home for webcam config now that the standalone WebcamPage is
+    // gone. Enable toggle + resolution/FPS render on the card; the chroma
+    // enable/color-mode is carried in the manifest (webcam.chroma). NOTE: the card
+    // exposes no chroma control, so these four render pixel-identically today.
     {.id = QStringLiteral("settings-webcam-chroma-disabled"),
      .title = QStringLiteral("Settings / Webcam / Chroma Disabled"),
      .page = VisualPage::Settings,
@@ -482,24 +472,6 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_state = VisualWebcamState::Active,
      .webcam_chroma_enabled = true,
      .webcam_chroma_color_mode = QStringLiteral("custom")},
-
-    // --- Live chroma key during recording/paused (WEBCAM-EFFECTS-R1) -----------
-    {.id = QStringLiteral("record-webcam-chroma-active"),
-     .title = QStringLiteral("Webcam / Chroma Active (Recording)"),
-     .page = VisualPage::Webcam,
-     .record_state = VisualRecordState::Recording,
-     .webcam_state = VisualWebcamState::Active,
-     .controls_locked = true,
-     .webcam_chroma_enabled = true,
-     .webcam_chroma_color_mode = QStringLiteral("green")},
-    {.id = QStringLiteral("paused-webcam-chroma-active"),
-     .title = QStringLiteral("Webcam / Chroma Active (Paused)"),
-     .page = VisualPage::Webcam,
-     .record_state = VisualRecordState::Paused,
-     .webcam_state = VisualWebcamState::Active,
-     .controls_locked = true,
-     .webcam_chroma_enabled = true,
-     .webcam_chroma_color_mode = QStringLiteral("green")},
 
     {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), VisualPage::Diagnostics},
     {.id = QStringLiteral("diagnostics-expert"),
@@ -568,26 +540,33 @@ const QVector<VisualScenario> kScenarios = {
      .title = QStringLiteral("Diagnostics — elevation (Tier-4 unlock)"),
      .page = VisualPage::Diagnostics,
      .settings_expert_mode = true},
-    {QStringLiteral("hotkeys"), QStringLiteral("Hotkeys"), VisualPage::Hotkeys},
-    {.id = QStringLiteral("hotkeys-default"),
-     .title = QStringLiteral("Hotkeys / Default Bindings"),
-     .page = VisualPage::Hotkeys},
-    {.id = QStringLiteral("hotkeys-capture"),
-     .title = QStringLiteral("Hotkeys / Capture Mode"),
-     .page = VisualPage::Hotkeys,
+    // Hotkeys now live as an embedded card inside Settings (PS-PHASE-C). These
+    // scenarios drive the embedded HotkeysSettingsPanel and scroll it into view,
+    // replacing the former standalone-page hotkeys-* scenarios with equal coverage
+    // (default / capture / conflict / custom bindings).
+    {.id = QStringLiteral("settings-hotkeys-default"),
+     .title = QStringLiteral("Settings / Hotkeys / Default Bindings"),
+     .page = VisualPage::Settings,
+     .scroll_target = QStringLiteral("settings/hotkeys")},
+    {.id = QStringLiteral("settings-hotkeys-capture"),
+     .title = QStringLiteral("Settings / Hotkeys / Capture Mode"),
+     .page = VisualPage::Settings,
      .hk_capture_active = true,
-     .hk_capture_action = 1},
-    {.id = QStringLiteral("hotkeys-conflict"),
-     .title = QStringLiteral("Hotkeys / Conflict Message"),
-     .page = VisualPage::Hotkeys,
+     .hk_capture_action = 1,
+     .scroll_target = QStringLiteral("settings/hotkeys")},
+    {.id = QStringLiteral("settings-hotkeys-conflict"),
+     .title = QStringLiteral("Settings / Hotkeys / Conflict Message"),
+     .page = VisualPage::Settings,
      .hk_conflict_shown = true,
      .hk_conflict_action = 1,
-     .hk_conflict_message = QStringLiteral("Alt+F9 is already assigned to Start / Stop recording.")},
-    {.id = QStringLiteral("hotkeys-custom-bindings"),
-     .title = QStringLiteral("Hotkeys / Custom Bindings"),
-     .page = VisualPage::Hotkeys,
+     .hk_conflict_message = QStringLiteral("Alt+F9 is already assigned to Start / Stop recording."),
+     .scroll_target = QStringLiteral("settings/hotkeys")},
+    {.id = QStringLiteral("settings-hotkeys-custom-bindings"),
+     .title = QStringLiteral("Settings / Hotkeys / Custom Bindings"),
+     .page = VisualPage::Settings,
      .hk_custom_binding_0 = QStringLiteral("Ctrl+Shift+R"),
-     .hk_custom_binding_1 = QStringLiteral("Alt+F10")},
+     .hk_custom_binding_1 = QStringLiteral("Alt+F10"),
+     .scroll_target = QStringLiteral("settings/hotkeys")},
     {QStringLiteral("logs"), QStringLiteral("Logs"), VisualPage::Logs},
     {.id = QStringLiteral("logs-empty"),
      .title = QStringLiteral("Logs / Empty"),
@@ -2085,10 +2064,6 @@ QString ToString(VisualPage page) {
         return QStringLiteral("record");
     case VisualPage::Settings:
         return QStringLiteral("settings");
-    case VisualPage::Webcam:
-        return QStringLiteral("webcam");
-    case VisualPage::Hotkeys:
-        return QStringLiteral("hotkeys");
     case VisualPage::Diagnostics:
         return QStringLiteral("diagnostics");
     case VisualPage::Logs:

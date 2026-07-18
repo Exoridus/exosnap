@@ -13,8 +13,6 @@ namespace exosnap::visual {
 enum class VisualPage {
     Record,
     Settings,
-    Webcam,
-    Hotkeys,
     Diagnostics,
     Logs,
     About,
@@ -201,7 +199,7 @@ struct VisualScenario {
     bool capture_frame_success = false; // last capture succeeded
     QString capture_frame_last_saved;   // filename of last saved PNG
 
-    // --- Hotkeys visual state (hotkeys-* scenarios) ---
+    // --- Hotkeys visual state (settings-hotkeys-* scenarios; embedded Settings card) ---
     // hk_capture_action == -1 means "not in capture mode".
     bool hk_capture_active = false; // show one active row in capture mode
     int hk_capture_action = -1;     // 0=ToggleRecording, 1=TogglePause
@@ -226,7 +224,7 @@ struct VisualScenario {
     QString marker_latest_type; // "general" / "cut" / "highlight"
     QString marker_sidecar_file;
     QString marker_recording_state; // "Recording" / "Paused"
-    bool hk_marker_active = false;  // hotkey action active on HotkeysPage
+    bool hk_marker_active = false;  // marker hotkey action active (Record-page marker HUD)
 
     // --- Split recording scenarios (SPLIT-RECORDING-R1) ---
     bool split_action_visible = false;
