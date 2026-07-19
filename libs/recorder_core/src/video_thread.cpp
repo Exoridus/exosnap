@@ -2568,7 +2568,7 @@ void VideoThread::Run() {
                         }
                         cfrLastPresentQpc = presentQpc;
                     }
-                    if (!usePhaseCorrect) {
+                    if (!usePhaseCorrect && acquireKind == OdAcquireKind::DesktopPresent) {
                         if (odCapturedTexValid) {
                             ++droppedFrames;
                             if (diag_recording)
