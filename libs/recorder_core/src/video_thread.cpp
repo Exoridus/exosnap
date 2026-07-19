@@ -909,6 +909,8 @@ void VideoThread::Run() {
     std::vector<uint8_t> wgcCursorUploadBgra;
 
     VisualGenerations visualGenerations{};
+    VisualFrameKey lastCompositedKey{};
+    bool haveLastCompositedKey = false;
     bool lastCursorCaptureEnabled = m_state.config.capture_cursor;
     uint64_t lastWebcamFrameGeneration = 0;
     bool haveWebcamFrameGeneration = false;
@@ -2792,8 +2794,14 @@ void VideoThread::Run() {
                 // Reopen() succeeds. Re-compositing is forbidden there — it touches
                 // display-tied GPU resources while the captured output is gone.
                 ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
-                if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding,
-                                                m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable,
+                const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
+                const bool dynamicOverlayChanged =
+                    m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable &&
+                    (!haveLastCompositedKey ||
+                     currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation ||
+                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
+                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation);
+                if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
                     rawSourceTex = heldScreenTex;
                 }
@@ -2837,6 +2845,8 @@ void VideoThread::Run() {
                     }
                     performSnapshotIfRequested(slot);
                     frameWritten = true;
+                    lastCompositedKey = currentVisualKey;
+                    haveLastCompositedKey = true;
                 } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
@@ -2901,6 +2911,8 @@ void VideoThread::Run() {
                             // Capture frame snapshot on real (non-duplicate) frames.
                             performSnapshotIfRequested(slot);
                             frameWritten = true;
+                            lastCompositedKey = currentVisualKey;
+                            haveLastCompositedKey = true;
                         }
                     }
                 } else if (refNv12Valid) {
