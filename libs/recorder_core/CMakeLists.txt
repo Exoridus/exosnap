@@ -1309,6 +1309,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_visual_generations PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Retained-frame plan: separates DXGI cursor-only acquires from real desktop
+# presents (CV-CURSOR-001) — pure logic, no D3D/NVENC.
+exosnap_add_gtest(
+    NAME test_od_acquire_classify
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_od_acquire_classify.cpp
+)
+target_include_directories(test_od_acquire_classify PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # Capture-card live wiring (0.8.0): pure stage-health resolver (no D3D/NVENC/Qt).
 exosnap_add_gtest(
     NAME pipeline_health_tests
