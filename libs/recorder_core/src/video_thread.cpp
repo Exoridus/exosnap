@@ -18,9 +18,11 @@
 #include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/gpu_timestamp_profiler.h>
 #include <recorder_core/hdr_native.h>
+#include <recorder_core/od_acquire_classify.h>
 #include <recorder_core/preview_shared_texture.h>
 #include <recorder_core/preview_tap.h>
 #include <recorder_core/util/com_apartment.h>
+#include <recorder_core/visual_generations.h>
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -906,6 +908,11 @@ void VideoThread::Run() {
     Win32CursorBitmap wgcCursorBitmap;
     std::vector<uint8_t> wgcCursorUploadBgra;
 
+    VisualGenerations visualGenerations{};
+    bool lastCursorCaptureEnabled = m_state.config.capture_cursor;
+    uint64_t lastWebcamFrameGeneration = 0;
+    bool haveWebcamFrameGeneration = false;
+
     // Validate an acquired OD frame; on the FIRST frame, negotiate the session
     // capture format and create odCapturedTex to match it. Cheap on the
     // steady-state path (one CPU-side GetDesc + compare per acquire).
@@ -1150,12 +1157,18 @@ void VideoThread::Run() {
         // engine's side; the upload of camBgra to the GPU is part of the composite
         // pass measured by compositeGpuTimer.
         const auto cam_t0 = std::chrono::steady_clock::now();
-        uint64_t camGeneration = 0; // wired into VisualGenerations::webcam in Task 4
+        uint64_t camGeneration = 0;
         const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra, camGeneration);
         const auto cam_t1 = std::chrono::steady_clock::now();
         if (gotCam) {
             m_state.diagnostics.OnWebcamConvert(cam_t1,
                                                 std::chrono::duration<double, std::milli>(cam_t1 - cam_t0).count());
+        }
+        if (gotCam && (!haveWebcamFrameGeneration || camGeneration != lastWebcamFrameGeneration)) {
+            haveWebcamFrameGeneration = true;
+            lastWebcamFrameGeneration = camGeneration;
+            ++visualGenerations.webcam;
+            m_state.diagnostics.OnWebcamGenerationChanged();
         }
         if (!gotCam) {
             return true;
@@ -2480,43 +2493,66 @@ void VideoThread::Run() {
                     // Only count capture/coalesce while actively recording — frames the
                     // backend produces during pause are intentionally discarded, not drops.
                     const bool diag_recording = !m_state.pause_requested.load();
-                    if (usePhaseCorrect) {
-                        // Round-robin write into the ring keyed by source present-QPC.
-                        CaptureRingEntry& entry = captureRing[ringHead];
-                        // Evicting a fresh, never-emitted frame is a genuine drop.
-                        if (entry.presentQpc != 0 && entry.presentQpc > lastEmittedPresentQpc) {
-                            ++droppedFrames;
-                            if (diag_recording)
-                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                    const OdAcquireKind acquireKind =
+                        ClassifyOdAcquire(info.LastPresentTime.QuadPart != 0, info.LastMouseUpdateTime.QuadPart != 0,
+                                          m_state.config.capture_cursor);
+                    if (acquireKind == OdAcquireKind::Ignorable) {
+                        rawTex->Release();
+                        odSrc.ReleaseFrame();
+                        if (diag_recording)
+                            m_state.diagnostics.OnCursorOnlyCaptureEventIgnored();
+                        continue;
+                    }
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
+                        if (usePhaseCorrect) {
+                            // Round-robin write into the ring keyed by source present-QPC.
+                            CaptureRingEntry& entry = captureRing[ringHead];
+                            // Evicting a fresh, never-emitted frame is a genuine drop.
+                            if (entry.presentQpc != 0 && entry.presentQpc > lastEmittedPresentQpc) {
+                                ++droppedFrames;
+                                if (diag_recording)
+                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                            }
+                            d3dContext->CopyResource(entry.tex.get(), rawTex);
+                            entry.presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                            ringHead = (ringHead + 1) % captureRing.size();
+                            phaseRingHasFrame = true;
+                        } else {
+                            d3dContext->CopyResource(odCapturedTex.get(), rawTex);
                         }
-                        d3dContext->CopyResource(entry.tex.get(), rawTex);
-                        uint64_t entryPresentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
-                        if (entryPresentQpc == 0) {
-                            // No source present timestamp this acquire; stamp with the
-                            // current QPC (same clock domain) so the frame stays
-                            // selectable and monotonic and is never lost.
-                            LARGE_INTEGER nowQpc;
-                            QueryPerformanceCounter(&nowQpc);
-                            entryPresentQpc = static_cast<uint64_t>(nowQpc.QuadPart);
-                        }
-                        entry.presentQpc = entryPresentQpc;
-                        ringHead = (ringHead + 1) % captureRing.size();
-                        phaseRingHasFrame = true;
+                        ++visualGenerations.screen;
+                        if (diag_recording)
+                            m_state.diagnostics.OnScreenGenerationChanged();
                     } else {
-                        d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                        // CursorOnly: no desktop texture copy, no ring entry — the held
+                        // frame (screen unchanged) gets recomposited with the new cursor
+                        // by ShouldRecompositeHeldScreen instead (Task 6).
+                        if (diag_recording)
+                            m_state.diagnostics.OnPhaseRingCursorOnlyEventIgnored();
                     }
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
-                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap)) {
                             odCursorShapeValid = true;
+                            ++visualGenerations.cursor; // shape/bitmap changed
+                        }
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        const bool visibilityChanged = odCursorVisible != (info.PointerPosition.Visible != FALSE);
+                        const bool positionChanged = odCursorPosX != info.PointerPosition.Position.x ||
+                                                     odCursorPosY != info.PointerPosition.Position.y;
                         odCursorVisible = info.PointerPosition.Visible != FALSE;
                         odCursorPosX = info.PointerPosition.Position.x;
                         odCursorPosY = info.PointerPosition.Position.y;
+                        if (visibilityChanged || positionChanged)
+                            ++visualGenerations.cursor;
+                    }
+                    if (m_state.config.capture_cursor != lastCursorCaptureEnabled) {
+                        lastCursorCaptureEnabled = m_state.config.capture_cursor;
+                        ++visualGenerations.cursor;
                     }
                     odSrc.ReleaseFrame();
-                    if (diag_recording)
+                    if (diag_recording && acquireKind == OdAcquireKind::DesktopPresent)
                         m_state.diagnostics.OnFrameCaptured();
                     // Present-cadence tap (VRR/CFR judder correlation). DXGI OD exposes the
                     // source's last present timestamp (QPC) plus the coalesced-update count.
