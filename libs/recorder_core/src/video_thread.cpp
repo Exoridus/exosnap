@@ -2325,6 +2325,7 @@ void VideoThread::Run() {
         // Reference encode texture for frame duplication (NV12 8-bit / P010 10-bit)
         winrt::com_ptr<ID3D11Texture2D> refNv12;
         bool refNv12Valid = false;
+        VisualFrameKey refNv12Key{}; // what refNv12 currently contains, once refNv12Valid
 
         {
             D3D11_TEXTURE2D_DESC refDesc{};
@@ -2842,11 +2843,13 @@ void VideoThread::Run() {
                     if (refNv12 != nullptr) {
                         d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                         refNv12Valid = true;
+                        refNv12Key = currentVisualKey; // from Task 6, computed earlier this tick
                     }
                     performSnapshotIfRequested(slot);
                     frameWritten = true;
                     lastCompositedKey = currentVisualKey;
                     haveLastCompositedKey = true;
+                    m_state.diagnostics.OnFullComposition();
                 } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
@@ -2907,20 +2910,25 @@ void VideoThread::Run() {
                             if (refNv12 != nullptr) {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
+                                refNv12Key = currentVisualKey; // from Task 6, computed earlier this tick
                             }
                             // Capture frame snapshot on real (non-duplicate) frames.
                             performSnapshotIfRequested(slot);
                             frameWritten = true;
                             lastCompositedKey = currentVisualKey;
                             haveLastCompositedKey = true;
+                            m_state.diagnostics.OnFullComposition();
                         }
                     }
                 } else if (refNv12Valid) {
-                    // Duplicate: copy the reference encode surface into this slot
+                    // Duplicate: copy the reference encode surface into this slot.
+                    // refNv12Key == currentVisualKey by construction here — nothing
+                    // fresh arrived this tick, so no generation could have advanced.
                     d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
                     frameWritten = true;
                     ++duplicatedFrames;
                     m_state.diagnostics.OnFrameDuplicated();
+                    m_state.diagnostics.OnReusedYuvFrame();
                 }
 
                 if (!frameWritten) {
