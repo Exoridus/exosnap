@@ -259,8 +259,7 @@ void MuxThread::Run() {
         return true;
     };
 
-    // Finalize the current segment, report it via the segment callback, and
-    // (optionally) quarantine the file on failure.
+    // Finalize the current segment and report it via the segment callback.
     const auto finalize_segment = [&]() {
         if (!seg.writer)
             return;
@@ -278,7 +277,10 @@ void MuxThread::Run() {
         // overstate its duration; use the audio PTS span as-is.
         const uint64_t tail_ns = (seg.max_local_pts_ns > 0 && seg.epoch_set) ? frame_dur_ns : 0;
         const uint64_t local_duration_ns = seg.max_local_pts_ns + tail_ns;
-        const uint64_t file_bytes = ok ? QueryFileSizeBytes(seg.path) : 0;
+        // Query the real on-disk size regardless of `ok`: a failed Finalize()
+        // still leaves the file on disk (see below), and any clusters flushed
+        // before the failure are genuine bytes, not zero.
+        const uint64_t file_bytes = QueryFileSizeBytes(seg.path);
 
         CompletedSegment info;
         info.path = seg.path;
@@ -291,14 +293,18 @@ void MuxThread::Run() {
         if (!ok) {
             write_error = true;
             m_state.diagnostics.OnMuxFailure();
-            // Quarantine the incomplete current segment file; prior finalized
-            // segments are already closed and untouched.
-            std::error_code ec;
-            std::filesystem::remove(seg.path, ec);
-            info.file_size_bytes = 0;
+            // Deliberately NOT deleting seg.path here. RecordingCoordinator
+            // keeps this segment's recovery-manifest entry precisely because
+            // the engine failed (see RecordingCoordinator::FinishRecording,
+            // "Engine failed → leave the entry so recovery UI can offer
+            // repair" / ADR-0014's RemuxToMkv salvage path) — deleting the
+            // file here would silently destroy the footage that flow exists
+            // to save. Every cluster flushed before the failure (typically
+            // all of them; Finalize() only fails writing the trailer) is
+            // still valid Matroska data on disk.
             logging::LogField fields[] = {
                 {"segment_index", std::to_string(seg.index)}, {"path", seg.path.string()}, {"error", err}};
-            logging::log(logging::LogLevel::Error, "mux_thread", "segment finalize failed; file quarantined",
+            logging::log(logging::LogLevel::Error, "mux_thread", "segment finalize failed; left on disk for recovery",
                          std::span<const logging::LogField>(fields, std::size(fields)));
         } else {
             logging::LogField fields[] = {{"segment_index", std::to_string(seg.index)},
