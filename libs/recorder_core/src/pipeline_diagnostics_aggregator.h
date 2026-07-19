@@ -345,6 +345,15 @@ class PipelineDiagnosticsAggregator {
     // A CFR duplicate output frame was emitted (the last real frame re-submitted
     // to fill a scheduled output slot that produced no new source frame).
     void OnFrameDuplicated() noexcept;
+    // Retained-frame reuse (CV-RETAIN-001..004, CV-CURSOR-001..003, CV-PACING-001).
+    void OnScreenGenerationChanged() noexcept;
+    void OnWebcamGenerationChanged() noexcept;
+    void OnCursorOnlyCaptureEventIgnored() noexcept;   // Ignorable-classified OD acquire
+    void OnPhaseRingCursorOnlyEventIgnored() noexcept; // CursorOnly-classified: no ring entry made
+    void OnFullComposition() noexcept;                 // a real composite+convert ran
+    void OnReusedYuvFrame() noexcept;                  // CFR duplicate reused the cached YUV frame
+    void OnYuvSlotCopy() noexcept;                     // duplicate path actually copied into the slot
+    void OnYuvSlotCopySkipped() noexcept;              // duplicate path found the slot already current
     // Encoder (VideoThread)
     void OnEncodeSubmitted() noexcept;
     // True submit -> bitstream-available latency for one frame (from
@@ -466,6 +475,17 @@ class PipelineDiagnosticsAggregator {
     uint64_t forced_keyframes_ = 0;
     uint64_t slot_stalls_ = 0;
     uint64_t frames_duplicated_ = 0;
+
+    // Retained-frame reuse counters
+    uint64_t screen_generation_changes_ = 0;
+    uint64_t webcam_generation_changes_ = 0;
+    uint64_t cursor_only_capture_events_ignored_ = 0;
+    uint64_t phase_ring_cursor_only_events_ignored_ = 0;
+    uint64_t full_compositions_ = 0;
+    uint64_t reused_yuv_frames_ = 0;
+    uint64_t yuv_slot_copies_ = 0;
+    uint64_t yuv_slot_copies_skipped_ = 0;
+
     RollingTimeWindow encode_window_{256, std::chrono::milliseconds(2000)};
     RollingTimeWindow submit_window_{256, std::chrono::milliseconds(2000)};
     RollingTimeWindow tick_window_{256, std::chrono::milliseconds(2000)};
