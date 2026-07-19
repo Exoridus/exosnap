@@ -3040,28 +3040,53 @@ void VideoThread::Run() {
                             continue;  // Skip: try the next frame
                         }
                     }
-                    d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    const bool diag_recording = !m_state.pause_requested.load();
+                    const OdAcquireKind acquireKind =
+                        ClassifyOdAcquire(info.LastPresentTime.QuadPart != 0, info.LastMouseUpdateTime.QuadPart != 0,
+                                          m_state.config.capture_cursor);
+                    if (acquireKind == OdAcquireKind::Ignorable) {
+                        rawTex->Release();
+                        odSrc.ReleaseFrame();
+                        if (diag_recording)
+                            m_state.diagnostics.OnCursorOnlyCaptureEventIgnored();
+                        continue;
+                    }
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
+                        d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                        ++visualGenerations.screen;
+                        if (diag_recording)
+                            m_state.diagnostics.OnScreenGenerationChanged();
+                    }
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
-                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap)) {
                             odCursorShapeValid = true;
+                            ++visualGenerations.cursor;
+                        }
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        const bool visibilityChanged = odCursorVisible != (info.PointerPosition.Visible != FALSE);
+                        const bool positionChanged = odCursorPosX != info.PointerPosition.Position.x ||
+                                                     odCursorPosY != info.PointerPosition.Position.y;
                         odCursorVisible = info.PointerPosition.Visible != FALSE;
                         odCursorPosX = info.PointerPosition.Position.x;
                         odCursorPosY = info.PointerPosition.Position.y;
+                        if (visibilityChanged || positionChanged)
+                            ++visualGenerations.cursor;
                     }
-                    // Convert DXGI LastPresentTime (QPC ticks) to 100ns units
-                    if (info.LastPresentTime.QuadPart != 0) {
+                    if (m_state.config.capture_cursor != lastCursorCaptureEnabled) {
+                        lastCursorCaptureEnabled = m_state.config.capture_cursor;
+                        ++visualGenerations.cursor;
+                    }
+                    // Convert DXGI LastPresentTime (QPC ticks) to 100ns units — only
+                    // meaningful for a real desktop present.
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
                         const auto lpt = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
                         latestFrameTicks100ns =
                             static_cast<int64_t>(lpt / qpcFreq * 10000000ULL + lpt % qpcFreq * 10000000ULL / qpcFreq);
                     }
                     odSrc.ReleaseFrame();
-                    // Only count capture/coalesce while actively recording — frames the
-                    // backend produces during pause are intentionally discarded, not drops.
-                    const bool diag_recording = !m_state.pause_requested.load();
-                    if (diag_recording)
+                    if (diag_recording && acquireKind == OdAcquireKind::DesktopPresent)
                         m_state.diagnostics.OnFrameCaptured();
                     // Present-cadence tap (VRR/CFR judder correlation), mirroring the CFR path.
                     if (diag_recording && info.LastPresentTime.QuadPart != 0 && qpcFreq != 0) {
@@ -3074,12 +3099,14 @@ void VideoThread::Run() {
                         }
                         vfrLastPresentQpc = presentQpc;
                     }
-                    if (odCapturedTexValid) {
-                        ++droppedFrames;
-                        if (diag_recording)
-                            m_state.diagnostics.OnFrameDroppedCoalesced();
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
+                        if (odCapturedTexValid) {
+                            ++droppedFrames;
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        odCapturedTexValid = true;
                     }
-                    odCapturedTexValid = true;
                 }
                 if (odCapturedTexValid) {
                     latestTex = odCapturedTex; // borrow — not released in loop
