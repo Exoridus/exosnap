@@ -1301,6 +1301,14 @@ exosnap_add_gtest(
 )
 target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Retained-frame plan: VisualFrameKey/VisualGenerations — pure value types, no D3D/NVENC.
+exosnap_add_gtest(
+    NAME test_visual_generations
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_visual_generations.cpp
+)
+target_include_directories(test_visual_generations PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 # Capture-card live wiring (0.8.0): pure stage-health resolver (no D3D/NVENC/Qt).
 exosnap_add_gtest(
     NAME pipeline_health_tests
