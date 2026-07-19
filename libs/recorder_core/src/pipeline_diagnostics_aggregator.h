@@ -167,41 +167,120 @@ struct DiagnosticsStaticConfig {
 };
 
 // ---- Perf measurement records (log-only; engine-internal) -----------------
+// One consistent set of live-window statistics for a single measured stage. Every
+// stage — CPU-submission timing and true GPU-execution timing alike — is reported
+// through this same shape so the perf log and the analysis script treat them
+// uniformly. All values are milliseconds; `samples` is the count still inside the
+// rolling horizon. Empty window == all zeros.
+struct StageWindowStats {
+    double mean_ms = 0.0;
+    double p50_ms = 0.0;
+    double p95_ms = 0.0;
+    double p99_ms = 0.0;
+    double max_ms = 0.0;
+    std::size_t samples = 0;
+};
+
+// Derive the uniform live-window stats for one stage from its rolling window.
+// Pure: percentiles are computed only when the window is non-empty.
+[[nodiscard]] inline StageWindowStats SampleStage(const RollingTimeWindow& w,
+                                                  RollingTimeWindow::time_point now) noexcept {
+    const RollingTimeWindow::Aggregate a = w.Compute(now);
+    StageWindowStats s;
+    s.mean_ms = a.average;
+    s.max_ms = a.peak;
+    s.samples = a.count;
+    if (a.count > 0) {
+        s.p50_ms = w.Percentile(now, 0.50);
+        s.p95_ms = w.Percentile(now, 0.95);
+        s.p99_ms = w.Percentile(now, 0.99);
+    }
+    return s;
+}
+
+// Whole-session distribution for one stage: the mergeable bucket histogram (the
+// authoritative gate data) plus a count and convenience percentiles recomputed
+// from it.
+struct StageHistogramSummary {
+    std::array<uint64_t, LatencyHistogram::kBucketCount> buckets{};
+    uint64_t count = 0;
+    double p50_ms = 0.0;
+    double p95_ms = 0.0;
+    double p99_ms = 0.0;
+};
+
+// Fold one whole-session histogram into its summary shape.
+[[nodiscard]] inline StageHistogramSummary SummarizeStage(const LatencyHistogram& h) noexcept {
+    StageHistogramSummary s;
+    s.buckets = h.BucketCounts();
+    s.count = h.count();
+    s.p50_ms = h.Quantile(0.50);
+    s.p95_ms = h.Quantile(0.95);
+    s.p99_ms = h.Quantile(0.99);
+    return s;
+}
+
 // Rolling-window (≈2 s) sample emitted periodically to the engine log so a
-// recording produces a time series of encode/frame-time percentiles.
+// recording produces a time series of per-stage percentiles. CPU-submission
+// timing (how long the CPU spent recording/issuing the commands) and true
+// GPU-execution timing (how long the GPU spent running them) are kept as
+// separate, explicitly named stages so the two are never conflated.
 struct PerfWindowSample {
-    double encode_p50_ms = 0.0;
-    double encode_p95_ms = 0.0;
-    double encode_p99_ms = 0.0;
-    double encode_peak_ms = 0.0;
-    double tick_p50_ms = 0.0;
-    double tick_p95_ms = 0.0;
-    double tick_p99_ms = 0.0;
-    double tick_peak_ms = 0.0;
-    double submit_p50_ms = 0.0;
-    double submit_p99_ms = 0.0;
-    std::size_t encode_samples = 0;
-    std::size_t tick_samples = 0;
-    uint64_t dropped_backpressure = 0; // cumulative this session
-    uint64_t slot_stalls = 0;          // cumulative this session (subset of backpressure)
+    // Capture
+    StageWindowStats acquire; // acquire + copy (CPU)
+    // Composition / colour conversion
+    StageWindowStats composition_cpu; // GpuCompositor submit (CPU)
+    StageWindowStats composition_gpu; // composite pass execution (GPU)
+    StageWindowStats hdr_tonemap_gpu; // scRGB->SDR tone-map pass execution (GPU)
+    StageWindowStats rgb_to_yuv_cpu;  // VideoProcessorBlt submit (CPU)
+    StageWindowStats rgb_to_yuv_gpu;  // VideoProcessorBlt execution (GPU)
+    // Encode
+    StageWindowStats encode_submit;  // EncodeFrame call cost (CPU)
+    StageWindowStats encode_latency; // submit -> bitstream-available
+    StageWindowStats tick;           // whole video-thread tick
+    // Webcam overlay
+    StageWindowStats webcam_convert;    // source -> BGRA conversion (CPU)
+    StageWindowStats webcam_upload_gpu; // overlay texture upload (GPU)
+    // Preview
+    StageWindowStats preview_copy; // WYSIWYG preview tap copy (CPU)
+    // Mux / disk
+    StageWindowStats mux_process;     // drain-loop work (CPU)
+    StageWindowStats mux_queue_delay; // enqueue -> dequeue wait in the mux queue
+
+    // Cumulative counters this session.
+    uint64_t dropped_coalesced = 0;
+    uint64_t dropped_cfr = 0;
+    uint64_t dropped_backpressure = 0;
+    uint64_t duplicated_frames = 0;       // CFR duplicate output frames
+    uint64_t slot_stalls = 0;             // subset of backpressure
+    uint64_t queue_saturation_events = 0; // rising-edge crossings of a queue's critical threshold
 };
 
 // Whole-session distribution captured once at session end. The bucket arrays are
 // the authoritative gate data (the live windows are noisy over ~2 s); the script
 // recomputes percentiles from them. Percentiles here are provided for convenience.
 struct PerfSessionSummary {
-    std::array<uint64_t, LatencyHistogram::kBucketCount> encode_buckets{};
-    std::array<uint64_t, LatencyHistogram::kBucketCount> tick_buckets{};
-    std::array<uint64_t, LatencyHistogram::kBucketCount> submit_buckets{};
-    uint64_t encode_count = 0;
-    uint64_t tick_count = 0;
-    uint64_t submit_count = 0;
-    double encode_p50_ms = 0.0;
-    double encode_p99_ms = 0.0;
-    double tick_p50_ms = 0.0;
-    double tick_p99_ms = 0.0;
+    StageHistogramSummary acquire;
+    StageHistogramSummary composition_cpu;
+    StageHistogramSummary composition_gpu;
+    StageHistogramSummary hdr_tonemap_gpu;
+    StageHistogramSummary rgb_to_yuv_cpu;
+    StageHistogramSummary rgb_to_yuv_gpu;
+    StageHistogramSummary encode_submit;
+    StageHistogramSummary encode_latency;
+    StageHistogramSummary tick;
+    StageHistogramSummary webcam_convert;
+    StageHistogramSummary webcam_upload_gpu;
+    StageHistogramSummary preview_copy;
+    StageHistogramSummary mux_process;
+    StageHistogramSummary mux_queue_delay;
+
+    uint64_t dropped_coalesced = 0;
+    uint64_t dropped_cfr = 0;
     uint64_t dropped_backpressure = 0;
+    uint64_t duplicated_frames = 0;
     uint64_t slot_stalls = 0;
+    uint64_t queue_saturation_events = 0;
     EncoderInitInfo encoder_init;
 };
 
@@ -241,8 +320,31 @@ class PipelineDiagnosticsAggregator {
     void OnCompositorSubmit(time_point now, double ms, bool pass_ran) noexcept;
     // Capture-card live wiring (0.8.0): cheap CPU-timing brackets (steady_clock).
     void OnAcquireLatency(time_point now, double ms) noexcept; // acquire+copy (Source Capture)
-    void OnVpbltSubmit(time_point now, double ms) noexcept;    // VideoProcessorBlt (Compositor)
+    void OnVpbltSubmit(time_point now, double ms) noexcept;    // VideoProcessorBlt submit (CPU)
     void OnMuxLatency(time_point now, double ms) noexcept;     // mux drain loop (Muxer)
+
+    // ---- GPU-execution-time inputs (real GPU work, not CPU submission) ------
+    // Fed from resolved D3D11 timestamp-query spans (see gpu_timestamp_profiler.h).
+    // Each is a distinct pass so composition, tone mapping and the RGB->YUV blit
+    // never collapse into one number, and each is explicitly named *_gpu so it is
+    // never confused with the CPU-submission window of the same pass. Callers pass
+    // only resolved, non-disjoint spans; a not-ready or disjoint frame is simply
+    // dropped upstream and never reaches these.
+    void OnCompositionGpuTime(time_point now, double ms) noexcept;
+    void OnHdrTonemapGpuTime(time_point now, double ms) noexcept;
+    void OnRgbToYuvGpuTime(time_point now, double ms) noexcept;
+    void OnWebcamUploadGpuTime(time_point now, double ms) noexcept;
+
+    // ---- Additional CPU-timed stages ---------------------------------------
+    void OnWebcamConvert(time_point now, double ms) noexcept; // source -> BGRA conversion
+    void OnPreviewCopy(time_point now, double ms) noexcept;   // WYSIWYG preview tap copy
+    // Time a packet actually waited in the post-encode mux queue between being
+    // enqueued and being dequeued by the drain loop (distinct from OnMuxLatency,
+    // which times the drain loop's own work once it holds the packet).
+    void OnMuxQueueDelay(time_point now, double ms) noexcept;
+    // A CFR duplicate output frame was emitted (the last real frame re-submitted
+    // to fill a scheduled output slot that produced no new source frame).
+    void OnFrameDuplicated() noexcept;
     // Encoder (VideoThread)
     void OnEncodeSubmitted() noexcept;
     // True submit -> bitstream-available latency for one frame (from
@@ -331,18 +433,39 @@ class PipelineDiagnosticsAggregator {
     // Capture-card live wiring (0.8.0). Each is a steady_clock CPU-timing window.
     bool acquire_observed_ = false;
     RollingTimeWindow acquire_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram acquire_hist_;
 
     // Compositor
     RollingTimeWindow compositor_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram compositor_hist_;
     uint64_t frames_composed_ = 0;
     bool compositor_active_ = false;
     bool vpblt_observed_ = false;
     RollingTimeWindow vpblt_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram vpblt_hist_;
+
+    // GPU-execution-time windows/histograms (real GPU work, distinct from the
+    // CPU-submission windows above). Fed from resolved D3D11 timestamp spans.
+    RollingTimeWindow composition_gpu_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram composition_gpu_hist_;
+    RollingTimeWindow hdr_tonemap_gpu_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram hdr_tonemap_gpu_hist_;
+    RollingTimeWindow rgb_to_yuv_gpu_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram rgb_to_yuv_gpu_hist_;
+    RollingTimeWindow webcam_upload_gpu_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram webcam_upload_gpu_hist_;
+
+    // Webcam CPU conversion + preview tap copy (CPU-timing windows).
+    RollingTimeWindow webcam_convert_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram webcam_convert_hist_;
+    RollingTimeWindow preview_copy_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram preview_copy_hist_;
 
     // Encoder
     uint64_t frames_submitted_ = 0;
     uint64_t forced_keyframes_ = 0;
     uint64_t slot_stalls_ = 0;
+    uint64_t frames_duplicated_ = 0;
     RollingTimeWindow encode_window_{256, std::chrono::milliseconds(2000)};
     RollingTimeWindow submit_window_{256, std::chrono::milliseconds(2000)};
     RollingTimeWindow tick_window_{256, std::chrono::milliseconds(2000)};
@@ -367,6 +490,13 @@ class PipelineDiagnosticsAggregator {
     uint32_t video_queue_peak_ = 0;
     uint32_t audio_premux_depth_ = 0;
     uint32_t audio_premux_peak_ = 0;
+    // Queue-saturation event counter: cumulative rising-edge crossings of a
+    // monitored queue over its critical threshold. Edge-triggered (a queue that
+    // sits saturated counts once, not every publish), tracked per queue so the
+    // video mux queue and the bounded audio premux queue are independent.
+    uint64_t queue_saturation_events_ = 0;
+    bool video_queue_saturated_ = false;
+    bool audio_premux_saturated_ = false;
 
     // Mux / Disk
     uint64_t mux_packets_ = 0;
@@ -374,6 +504,9 @@ class PipelineDiagnosticsAggregator {
     RollingTimeWindow write_window_{256, std::chrono::milliseconds(2000)};
     bool mux_process_observed_ = false;
     RollingTimeWindow mux_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram mux_hist_;
+    RollingTimeWindow mux_queue_delay_window_{256, std::chrono::milliseconds(2000)};
+    LatencyHistogram mux_queue_delay_hist_;
     uint32_t segment_index_ = 0;
     uint32_t segment_count_ = 0;
     uint64_t finalizations_ = 0;

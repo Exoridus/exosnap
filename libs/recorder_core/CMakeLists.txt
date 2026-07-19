@@ -277,6 +277,9 @@ add_library(recorder_core STATIC
     include/recorder_core/cursor_sprite.h
     src/gpu_hdr_tonemap.cpp
     include/recorder_core/gpu_hdr_tonemap.h
+    src/gpu_timestamp_profiler.cpp
+    include/recorder_core/gpu_timestamp_profiler.h
+    include/recorder_core/gpu_timestamp_math.h
     src/gpu_rgb_to_ayuv.cpp
     src/gpu_rgb_to_ayuv.h
     src/gpu_hdr_pq.cpp
@@ -1153,6 +1156,15 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_pipeline_diagnostics PRIVATE src)
+
+# Pure GPU-timestamp resolution math (tick->ms, disjoint / wrap / uncalibrated
+# handling) behind the real-GPU-time pipeline stages. No D3D11 dependency.
+exosnap_add_gtest(
+    NAME test_gpu_timestamp
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_timestamp.cpp
+    LIBRARIES recorder_core
+)
 
 # A/V clock-drift estimation: the pure device-position/QPC math behind the
 # honest av_drift_ms metric (audio device clock vs the QPC video timeline).

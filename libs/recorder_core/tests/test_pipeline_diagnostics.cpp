@@ -430,11 +430,11 @@ TEST(PipelineDiagnostics, PerfWindowSampleSeparatesLatencyFromSubmitCost) {
         agg.OnVideoTickTime(At(i), 12.0);
     }
     const auto p = agg.SamplePerfWindow(At(20));
-    EXPECT_NEAR(p.encode_p50_ms, 8.0, 1e-9);
-    EXPECT_NEAR(p.submit_p50_ms, 0.5, 1e-9);
-    EXPECT_NEAR(p.tick_p50_ms, 12.0, 1e-9);
-    EXPECT_EQ(p.encode_samples, 20u);
-    EXPECT_EQ(p.tick_samples, 20u);
+    EXPECT_NEAR(p.encode_latency.p50_ms, 8.0, 1e-9);
+    EXPECT_NEAR(p.encode_submit.p50_ms, 0.5, 1e-9);
+    EXPECT_NEAR(p.tick.p50_ms, 12.0, 1e-9);
+    EXPECT_EQ(p.encode_latency.samples, 20u);
+    EXPECT_EQ(p.tick.samples, 20u);
 }
 
 TEST(PipelineDiagnostics, PerfSessionSummaryHistogramsAndReset) {
@@ -446,20 +446,20 @@ TEST(PipelineDiagnostics, PerfSessionSummaryHistogramsAndReset) {
         agg.OnEncodeSubmitCost(At(i), 1.0);
     }
     const auto sum = agg.BuildPerfSummary();
-    EXPECT_EQ(sum.encode_count, 30u);
-    EXPECT_EQ(sum.tick_count, 30u);
-    EXPECT_EQ(sum.submit_count, 30u);
+    EXPECT_EQ(sum.encode_latency.count, 30u);
+    EXPECT_EQ(sum.tick.count, 30u);
+    EXPECT_EQ(sum.encode_submit.count, 30u);
     // The whole-session encode p50 must land in the 5 ms bucket range.
     const std::size_t b5 = recorder_core::LatencyHistogram::BucketIndex(5.0);
-    EXPECT_EQ(sum.encode_buckets[b5], 30u);
-    EXPECT_GE(sum.encode_p50_ms, recorder_core::LatencyHistogram::BucketLowEdge(b5));
-    EXPECT_LE(sum.encode_p50_ms, recorder_core::LatencyHistogram::BucketHighEdge(b5));
+    EXPECT_EQ(sum.encode_latency.buckets[b5], 30u);
+    EXPECT_GE(sum.encode_latency.p50_ms, recorder_core::LatencyHistogram::BucketLowEdge(b5));
+    EXPECT_LE(sum.encode_latency.p50_ms, recorder_core::LatencyHistogram::BucketHighEdge(b5));
 
     // Reset clears the whole-session histograms too.
     agg.Reset(2, MakeConfig());
     const auto empty = agg.BuildPerfSummary();
-    EXPECT_EQ(empty.encode_count, 0u);
-    EXPECT_EQ(empty.tick_count, 0u);
+    EXPECT_EQ(empty.encode_latency.count, 0u);
+    EXPECT_EQ(empty.tick.count, 0u);
 }
 
 TEST(PipelineDiagnostics, ForcedKeyframeCounterIncrementsOnSplitArm) {
@@ -1057,6 +1057,180 @@ TEST(EncoderInit, InvalidUntilSetThenCarriedOnSnapshots) {
     agg.Reset(2, MakeConfig());
     s = agg.BuildSnapshot(At(300), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
     EXPECT_FALSE(s.encoder_init.valid);
+}
+
+// ---------------------------------------------------------------------------
+// Per-stage full percentile exposure (mean/p50/p95/p99/max) via SampleStage
+// ---------------------------------------------------------------------------
+
+TEST(StageStats, SampleStageEmptyWindowIsAllZero) {
+    RollingTimeWindow w(64, milliseconds(2000));
+    const StageWindowStats s = SampleStage(w, At(0));
+    EXPECT_EQ(s.samples, 0u);
+    EXPECT_DOUBLE_EQ(s.mean_ms, 0.0);
+    EXPECT_DOUBLE_EQ(s.p50_ms, 0.0);
+    EXPECT_DOUBLE_EQ(s.p95_ms, 0.0);
+    EXPECT_DOUBLE_EQ(s.p99_ms, 0.0);
+    EXPECT_DOUBLE_EQ(s.max_ms, 0.0);
+}
+
+TEST(StageStats, SampleStageComputesMeanPercentilesMax) {
+    RollingTimeWindow w(256, milliseconds(100000));
+    for (int i = 1; i <= 100; ++i) {
+        w.Add(At(i), static_cast<double>(i));
+    }
+    const StageWindowStats s = SampleStage(w, At(100));
+    EXPECT_EQ(s.samples, 100u);
+    EXPECT_NEAR(s.mean_ms, 50.5, 1e-9);
+    EXPECT_DOUBLE_EQ(s.max_ms, 100.0);
+    // Nearest-rank on a 0-based sorted index of 100 elements:
+    // p50 -> round(0.50*99)=50 -> 51; p95 -> round(0.95*99)=94 -> 95;
+    // p99 -> round(0.99*99)=98 -> 99.
+    EXPECT_DOUBLE_EQ(s.p50_ms, 51.0);
+    EXPECT_DOUBLE_EQ(s.p95_ms, 95.0);
+    EXPECT_DOUBLE_EQ(s.p99_ms, 99.0);
+}
+
+TEST(StageStats, SummarizeStageEmptyHistogram) {
+    LatencyHistogram h;
+    const StageHistogramSummary s = SummarizeStage(h);
+    EXPECT_EQ(s.count, 0u);
+    EXPECT_DOUBLE_EQ(s.p50_ms, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// GPU-execution-time stages (kept distinct from CPU-submission windows)
+// ---------------------------------------------------------------------------
+
+TEST(GpuStageTiming, CompositionGpuIsDistinctFromCompositionCpu) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 20; ++i) {
+        agg.OnCompositorSubmit(At(i), 0.3, true); // cheap CPU submit
+        agg.OnCompositionGpuTime(At(i), 4.0);     // real GPU work is more expensive
+    }
+    const auto p = agg.SamplePerfWindow(At(20));
+    EXPECT_NEAR(p.composition_cpu.p50_ms, 0.3, 1e-9);
+    EXPECT_NEAR(p.composition_gpu.p50_ms, 4.0, 1e-9);
+    EXPECT_EQ(p.composition_cpu.samples, 20u);
+    EXPECT_EQ(p.composition_gpu.samples, 20u);
+}
+
+TEST(GpuStageTiming, TonemapVpbltAndUploadGpuWindowsFeedIndependently) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 10; ++i) {
+        agg.OnHdrTonemapGpuTime(At(i), 2.0);
+        agg.OnVpbltSubmit(At(i), 0.5);     // CPU submit for RGB->YUV
+        agg.OnRgbToYuvGpuTime(At(i), 1.5); // GPU exec for RGB->YUV
+        agg.OnWebcamUploadGpuTime(At(i), 0.7);
+    }
+    const auto p = agg.SamplePerfWindow(At(10));
+    EXPECT_NEAR(p.hdr_tonemap_gpu.mean_ms, 2.0, 1e-9);
+    EXPECT_NEAR(p.rgb_to_yuv_cpu.mean_ms, 0.5, 1e-9);
+    EXPECT_NEAR(p.rgb_to_yuv_gpu.mean_ms, 1.5, 1e-9);
+    EXPECT_NEAR(p.webcam_upload_gpu.mean_ms, 0.7, 1e-9);
+}
+
+TEST(GpuStageTiming, WholeSessionHistogramsAccumulateAndReset) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 15; ++i) {
+        agg.OnCompositionGpuTime(At(i), 3.0);
+        agg.OnHdrTonemapGpuTime(At(i), 2.0);
+        agg.OnRgbToYuvGpuTime(At(i), 1.0);
+        agg.OnAcquireLatency(At(i), 0.4);
+        agg.OnMuxLatency(At(i), 0.2);
+    }
+    auto sum = agg.BuildPerfSummary();
+    EXPECT_EQ(sum.composition_gpu.count, 15u);
+    EXPECT_EQ(sum.hdr_tonemap_gpu.count, 15u);
+    EXPECT_EQ(sum.rgb_to_yuv_gpu.count, 15u);
+    EXPECT_EQ(sum.acquire.count, 15u);
+    EXPECT_EQ(sum.mux_process.count, 15u);
+    const std::size_t b3 = recorder_core::LatencyHistogram::BucketIndex(3.0);
+    EXPECT_EQ(sum.composition_gpu.buckets[b3], 15u);
+
+    agg.Reset(2, MakeConfig());
+    sum = agg.BuildPerfSummary();
+    EXPECT_EQ(sum.composition_gpu.count, 0u);
+    EXPECT_EQ(sum.acquire.count, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// New CPU-timed stages: webcam convert, preview copy, mux queue delay
+// ---------------------------------------------------------------------------
+
+TEST(NewCpuStages, WebcamConvertPreviewCopyAndMuxQueueDelay) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 8; ++i) {
+        agg.OnWebcamConvert(At(i), 1.2);
+        agg.OnPreviewCopy(At(i), 0.6);
+        agg.OnMuxQueueDelay(At(i), 5.0);
+    }
+    const auto p = agg.SamplePerfWindow(At(8));
+    EXPECT_NEAR(p.webcam_convert.p50_ms, 1.2, 1e-9);
+    EXPECT_NEAR(p.preview_copy.p50_ms, 0.6, 1e-9);
+    EXPECT_NEAR(p.mux_queue_delay.p50_ms, 5.0, 1e-9);
+    const auto sum = agg.BuildPerfSummary();
+    EXPECT_EQ(sum.webcam_convert.count, 8u);
+    EXPECT_EQ(sum.preview_copy.count, 8u);
+    EXPECT_EQ(sum.mux_queue_delay.count, 8u);
+}
+
+// ---------------------------------------------------------------------------
+// CFR duplicate-frame counter
+// ---------------------------------------------------------------------------
+
+TEST(DuplicateFrames, CounterAccumulatesAndResets) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDuplicated();
+    agg.OnFrameDuplicated();
+    agg.OnFrameDuplicated();
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).duplicated_frames, 3u);
+    EXPECT_EQ(agg.BuildPerfSummary().duplicated_frames, 3u);
+    agg.Reset(2, MakeConfig());
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).duplicated_frames, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Queue saturation event counter (rising-edge crossings)
+// ---------------------------------------------------------------------------
+
+TEST(QueueSaturation, VideoQueueCountsRisingEdgeOnly) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // Default mux_queue_warn == 8.
+    agg.OnVideoQueueDepth(2);  // below
+    agg.OnVideoQueueDepth(10); // rising edge -> +1
+    agg.OnVideoQueueDepth(12); // stays saturated -> no new event
+    agg.OnVideoQueueDepth(3);  // drops below -> reset edge
+    agg.OnVideoQueueDepth(9);  // rising edge again -> +1
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 2u);
+}
+
+TEST(QueueSaturation, AudioPremuxUsesCriticalRatioOfCapacity) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());  // audio capacity 600, critical ratio 0.9 -> >= 540
+    agg.OnAudioPremuxDepth(100); // below
+    agg.OnAudioPremuxDepth(540); // exactly at threshold -> +1
+    agg.OnAudioPremuxDepth(560); // still saturated -> no new event
+    agg.OnAudioPremuxDepth(10);  // drop
+    agg.OnAudioPremuxDepth(600); // rising edge -> +1
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 2u);
+}
+
+TEST(QueueSaturation, ResetClearsCounterAndEdgeState) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnVideoQueueDepth(20); // +1, and leaves the edge latched high
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 1u);
+    agg.Reset(2, MakeConfig());
+    // After reset the latch is cleared, so the next high depth is a fresh edge.
+    agg.OnVideoQueueDepth(20); // +1
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 1u);
 }
 
 } // namespace
