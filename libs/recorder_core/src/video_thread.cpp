@@ -42,6 +42,7 @@
 #include <dwmapi.h>
 #include <dxgi.h>
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -2327,6 +2328,15 @@ void VideoThread::Run() {
         bool refNv12Valid = false;
         VisualFrameKey refNv12Key{}; // what refNv12 currently contains, once refNv12Valid
 
+        // Per-slot content tracking: what generation each NVENC ring slot
+        // currently holds, so a duplicate tick can skip the CopyResource
+        // entirely when the slot already contains refNv12Key (CV-RETAIN-004).
+        // Sized to match the hardcoded NVENC ring size (nvenc_encoder.h,
+        // NvencEncoder::m_slots) and this file's own nv12Textures array;
+        // making that size dynamic is CV-PERF-007, out of scope here.
+        std::array<VisualFrameKey, 8> slotContainedKey{};
+        std::array<bool, 8> slotContainedValid{};
+
         {
             D3D11_TEXTURE2D_DESC refDesc{};
             refDesc.Width = encodeWidth;
@@ -2845,6 +2855,10 @@ void VideoThread::Run() {
                         refNv12Valid = true;
                         refNv12Key = currentVisualKey; // from Task 6, computed earlier this tick
                     }
+                    if (slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size()) {
+                        slotContainedKey[slot] = currentVisualKey;
+                        slotContainedValid[slot] = true;
+                    }
                     performSnapshotIfRequested(slot);
                     frameWritten = true;
                     lastCompositedKey = currentVisualKey;
@@ -2912,6 +2926,10 @@ void VideoThread::Run() {
                                 refNv12Valid = true;
                                 refNv12Key = currentVisualKey; // from Task 6, computed earlier this tick
                             }
+                            if (slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size()) {
+                                slotContainedKey[slot] = currentVisualKey;
+                                slotContainedValid[slot] = true;
+                            }
                             // Capture frame snapshot on real (non-duplicate) frames.
                             performSnapshotIfRequested(slot);
                             frameWritten = true;
@@ -2921,10 +2939,23 @@ void VideoThread::Run() {
                         }
                     }
                 } else if (refNv12Valid) {
-                    // Duplicate: copy the reference encode surface into this slot.
-                    // refNv12Key == currentVisualKey by construction here — nothing
-                    // fresh arrived this tick, so no generation could have advanced.
-                    d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
+                    // Duplicate: the slot may already hold exactly what refNv12
+                    // holds (from a previous real composite or a previous
+                    // duplicate copy) — if so, skip the redundant GPU copy and
+                    // just re-submit the slot's existing content.
+                    const bool slotAlreadyCurrent = slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size() &&
+                                                    slotContainedValid[static_cast<size_t>(slot)] &&
+                                                    slotContainedKey[static_cast<size_t>(slot)] == refNv12Key;
+                    if (!slotAlreadyCurrent) {
+                        d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
+                        if (slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size()) {
+                            slotContainedKey[static_cast<size_t>(slot)] = refNv12Key;
+                            slotContainedValid[static_cast<size_t>(slot)] = true;
+                        }
+                        m_state.diagnostics.OnYuvSlotCopy();
+                    } else {
+                        m_state.diagnostics.OnYuvSlotCopySkipped();
+                    }
                     frameWritten = true;
                     ++duplicatedFrames;
                     m_state.diagnostics.OnFrameDuplicated();
