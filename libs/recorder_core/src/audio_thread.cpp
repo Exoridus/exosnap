@@ -96,7 +96,21 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         setup.empty_codec_private_error = "FLAC codec private is empty after Init";
         break;
     }
-    default: {
+    case AudioCodec::AacMf: {
+        // TODO(ADR 0052): cut this case over to FfmpegAacEncoder (FFmpeg's native
+        // AAC-LC encoder) once exosnap-ffmpeg-build ships an encoder-enabled
+        // release (r5+, adding --enable-encoder=aac) and cmake/VendorFFmpeg.cmake
+        // is repinned to it. FfmpegAacEncoder is fully implemented and unit-tested
+        // (ffmpeg_aac_encoder.{h,cpp}) but avcodec_find_encoder(AV_CODEC_ID_AAC)
+        // returns null against the currently pinned r4 DLL (decoder/mux-only, zero
+        // encoders), so swapping now would break AAC recording for every user
+        // until the new FFmpeg release lands. FdkAacEncoder stays the active path
+        // until then; the swap is: replace the two lines below with
+        //     auto enc = std::make_unique<FfmpegAacEncoder>();
+        //     enc->SetBitrateKbps(config.audio_bitrate_kbps);
+        // (both expose the same SetBitrateKbps / IAudioEncoder contract), then
+        // retire FdkAacEncoder + its third_party fetch. See ADR 0052 (supersedes
+        // ADR 0043) for the migration rationale and sequencing.
         auto enc = std::make_unique<FdkAacEncoder>();
         enc->SetBitrateKbps(config.audio_bitrate_kbps);
         setup.encoder = std::move(enc);
@@ -104,6 +118,15 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         setup.empty_codec_private_error = "FDK-AAC codec private is empty after Init";
         break;
     }
+        // Deliberately no default: label (CV-BUG-004). This switch must stay
+        // exhaustive over every named AudioCodec enumerator so /W4 (and
+        // -Wswitch on Clang/GCC) flags a future enumerator added here without a
+        // matching case, instead of silently routing it into whichever branch
+        // happened to be last. A value outside the known enumerators (e.g. an
+        // out-of-range int cast from a corrupted config) simply falls through
+        // with setup.encoder left null; AudioThread::Run() below turns a null
+        // encoder into a visible RecordFailure instead of building an AAC
+        // encoder for an unrecognized codec.
     }
     return setup;
 }
@@ -219,6 +242,16 @@ void AudioThread::Run() {
 
     // --- Encoder init (the only codec-specific part of this worker) ---
     EncoderSetup setup = MakeEncoderSetup(m_state.config);
+    if (!setup.encoder) {
+        // config.audio_codec held a value outside the known AudioCodec
+        // enumerators (CV-BUG-004) — surface it the same way every other
+        // pre-encode failure in this function is surfaced, rather than
+        // dereferencing a null encoder or silently falling back to AAC.
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::AudioEncode, "Unrecognized audio codec");
+        source_->Shutdown();
+        uninitCom();
+        return;
+    }
     IAudioEncoder& encoder = *setup.encoder;
     {
         std::string err;

@@ -515,6 +515,30 @@ TEST_F(StreamWriterTest, Flac_MalformedCodecPrivate_Rejected) {
     EXPECT_TRUE(w.failed());
 }
 
+// 2e. Open() uses exclusive creation, not truncate-on-exists: a file already
+// present at output_path (e.g. a segment writer racing DeriveSegmentPath's
+// probe, or a stale leftover) must make Open() fail rather than silently
+// overwrite it. This closes the TOCTOU gap between a probe confirming a path
+// is free and this Open() call actually creating the file
+// (see DeriveSegmentPathTest.ProbeConfirmsFreeButAnotherWriterCreatesItBeforeOpen
+// in test_split_segments.cpp for the paired end-to-end scenario).
+TEST_F(StreamWriterTest, Open_PreexistingFile_FailsInsteadOfTruncating) {
+    const std::string sentinel_content = "not-mine";
+    {
+        std::ofstream victim(tmp_);
+        victim << sentinel_content;
+    }
+
+    MatroskaStreamWriter w;
+    EXPECT_FALSE(w.Open(MakeConfig(tmp_, /*h264=*/true, /*opus=*/false)));
+    EXPECT_TRUE(w.failed());
+
+    std::ifstream check(tmp_);
+    std::string content;
+    std::getline(check, content);
+    EXPECT_EQ(content, sentinel_content) << "a pre-existing file at output_path must survive Open() untouched";
+}
+
 // 3. Incomplete Opus CodecPrivate is rejected at Open().
 TEST_F(StreamWriterTest, ShortOpusCodecPrivate_Rejected) {
     auto cfg = MakeConfig(tmp_, /*h264=*/false, /*opus=*/true);

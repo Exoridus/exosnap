@@ -19,6 +19,7 @@
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/preview_shared_texture.h>
 #include <recorder_core/preview_tap.h>
+#include <recorder_core/util/com_apartment.h>
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -183,9 +184,12 @@ void VideoThread::Run() {
     const uint64_t qpcFreq = static_cast<uint64_t>(qpcFreqRaw.QuadPart);
 
     // --- COM init (apartment-threaded for WinRT) ---
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    bool com_inited = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    if (!com_inited) {
+    // ComApartment's destructor calls CoUninitialize() exactly when this call
+    // owned the reference (S_OK/S_FALSE) at every exit path below -- never on
+    // RPC_E_CHANGED_MODE, where this call acquired no reference to release.
+    recorder_core::ComApartment comApartment(COINIT_APARTMENTTHREADED);
+    HRESULT hr = comApartment.result();
+    if (!comApartment.usable()) {
         char buf[80];
         snprintf(buf, sizeof(buf), "CoInitializeEx failed 0x%08lX", static_cast<unsigned long>(hr));
         m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
@@ -246,8 +250,6 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "D3D11CreateDevice failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
 
@@ -256,8 +258,6 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "QI ID3D11VideoDevice failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
 
@@ -266,8 +266,6 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "QI ID3D11VideoContext failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
         // Optional — present on all Windows 10+; failure is non-fatal (legacy path).
@@ -292,8 +290,6 @@ void VideoThread::Run() {
             oss << "Window target handle invalid before WGC init: native_id=0x" << std::hex << target.native_id
                 << std::dec;
             m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, oss.str());
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
 
@@ -343,8 +339,6 @@ void VideoThread::Run() {
         std::string odErr;
         if (!odSrc.Open(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), odErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "DXGI OD open: " + odErr);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
         hdrPeakScale = HdrPeakScale(odSrc.HdrActive(), odSrc.MaxLuminanceNits());
@@ -361,8 +355,6 @@ void VideoThread::Run() {
             char buf[96];
             snprintf(buf, sizeof(buf), "WGC CreateForWindow failed 0x%08X", static_cast<unsigned int>(e.code().value));
             m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
 
@@ -437,8 +429,6 @@ void VideoThread::Run() {
         err << "capture source size invalid (<=0): " << sourceWidthSigned << "x" << sourceHeightSigned << "; preInit={"
             << diag.str() << "}";
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
         return;
     }
 
@@ -495,8 +485,6 @@ void VideoThread::Run() {
         err << "requested Region is outside the selected monitor or too small after clamping; preInit={" << diag.str()
             << "}";
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
         return;
     }
 
@@ -521,8 +509,6 @@ void VideoThread::Run() {
         err << "source " << sourceWidth << "x" << sourceHeight << " rounds to " << encodeWidth << "x" << encodeHeight
             << " — too small for NV12; preInit={" << diag.str() << "}";
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
         return;
     }
 
@@ -533,8 +519,6 @@ void VideoThread::Run() {
         err << "output geometry invalid for source " << sourceContentWidth << "x" << sourceContentHeight
             << " and output " << encodeWidth << "x" << encodeHeight << "; preInit={" << diag.str() << "}";
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
-        if (com_inited && hr != RPC_E_CHANGED_MODE)
-            CoUninitialize();
         return;
     }
     const ContentRect contentRect = outputGeometry->content;
@@ -580,16 +564,12 @@ void VideoThread::Run() {
         std::string err;
         if (!nvenc.Open(d3dDevice.get(), err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC open: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
         if (!nvenc.Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
                              err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
                                   "NVENC configure: " + err + "; preInit={" + diag.str() + "}");
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
 
@@ -650,8 +630,6 @@ void VideoThread::Run() {
         std::string ayuvErr;
         if (!rgbToAyuv.Init(d3dDevice.get(), d3dContext.get(), encodeWidth, encodeHeight, fullRange, ayuvErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "RGB->AYUV shader init: " + ayuvErr);
-            if (com_inited)
-                CoUninitialize();
             return;
         }
     }
@@ -673,8 +651,6 @@ void VideoThread::Run() {
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
                               "native HDR10 output requires 10-bit (P010) but the session bit depth is 8-bit; "
                               "pin 10-bit bit depth for HDR10 capture");
-        if (com_inited)
-            CoUninitialize();
         return;
     }
 
@@ -698,8 +674,6 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateVideoProcessorEnumerator failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited)
-                CoUninitialize();
             return;
         }
 
@@ -708,8 +682,6 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateVideoProcessor failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited)
-                CoUninitialize();
             return;
         }
 
@@ -737,8 +709,6 @@ void VideoThread::Run() {
                          chroma444 ? "AYUV" : (tenBit ? "P010" : "NV12"), static_cast<int>(i),
                          static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-                if (com_inited)
-                    CoUninitialize();
                 return;
             }
 
@@ -755,8 +725,6 @@ void VideoThread::Run() {
                     snprintf(buf, sizeof(buf), "CreateTexture2D(vpRgb[%d]) failed 0x%08lX", static_cast<int>(i),
                              static_cast<unsigned long>(hr));
                     m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-                    if (com_inited)
-                        CoUninitialize();
                     return;
                 }
                 vpOutTex = vpRgbTextures[i].get();
@@ -773,16 +741,12 @@ void VideoThread::Run() {
                 snprintf(buf, sizeof(buf), "CreateVideoProcessorOutputView[%d] failed 0x%08lX", static_cast<int>(i),
                          static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-                if (com_inited)
-                    CoUninitialize();
                 return;
             }
 
             std::string err;
             if (!nvenc.RegisterSlotTexture(i, nv12Textures[i].get(), err)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC register slot: " + err);
-                if (com_inited)
-                    CoUninitialize();
                 return;
             }
         }
@@ -1486,8 +1450,6 @@ void VideoThread::Run() {
             char buf[96];
             snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X", static_cast<unsigned int>(e.code().value));
             m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
-            if (com_inited)
-                CoUninitialize();
             return;
         }
     } // end if (!useOdCapture) — WGC session init
@@ -1556,8 +1518,6 @@ void VideoThread::Run() {
                     m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture,
                                           "DXGI OD: timeout waiting for first frame (5 s)");
                 }
-                if (com_inited)
-                    CoUninitialize();
                 return;
             }
             if (waitAction == FirstFrameWaitAction::HoldStep) {
@@ -1580,8 +1540,6 @@ void VideoThread::Run() {
                     m_state.RecordFailure(DXGI_ERROR_ACCESS_LOST, ErrorPhase::VideoCapture,
                                           "DXGI OD: display did not return within 15 s of an access loss at start "
                                           "(a fullscreen or display-mode change was likely in progress).");
-                    if (com_inited)
-                        CoUninitialize();
                     return;
                 }
                 Sleep(10); // keep stop-request latency low while holding
@@ -1594,8 +1552,6 @@ void VideoThread::Run() {
                     captureSession.Close();
                 if (framePool != nullptr)
                     framePool.Close();
-                if (com_inited)
-                    CoUninitialize();
                 return;
             }
 
@@ -1612,8 +1568,6 @@ void VideoThread::Run() {
                     if (check == OdFrameCheck::Fatal) {
                         rawTex->Release();
                         odSrc.ReleaseFrame();
-                        if (com_inited)
-                            CoUninitialize();
                         return;
                     }
                     if (check == OdFrameCheck::Skip) {
@@ -1733,8 +1687,6 @@ void VideoThread::Run() {
                 if (framePool != nullptr)
                     framePool.Close();
             }
-            if (com_inited)
-                CoUninitialize();
             return;
         }
         if (!hdrToneMapper.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale,
@@ -1746,8 +1698,6 @@ void VideoThread::Run() {
                 if (framePool != nullptr)
                     framePool.Close();
             }
-            if (com_inited)
-                CoUninitialize();
             return;
         }
     }
@@ -1779,8 +1729,6 @@ void VideoThread::Run() {
                 if (framePool != nullptr)
                     framePool.Close();
             }
-            if (com_inited)
-                CoUninitialize();
             return;
         }
         // Webcam PiP + cursor are composited in linear scRGB FP16 before the PQ
@@ -1836,8 +1784,6 @@ void VideoThread::Run() {
                 if (framePool != nullptr)
                     framePool.Close();
             }
-            if (com_inited)
-                CoUninitialize();
             return;
         }
         gpuCompositorReady = true;
@@ -3418,9 +3364,6 @@ end_encode_loop:
     videoDevice = nullptr;
     d3dContext = nullptr;
     d3dDevice = nullptr;
-
-    if (com_inited && hr != RPC_E_CHANGED_MODE)
-        CoUninitialize();
 }
 
 } // namespace recorder_core

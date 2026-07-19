@@ -17,6 +17,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace recorder_core {
@@ -514,12 +515,74 @@ struct RecorderConfig {
     return chroma_snapped;
 }
 
+// Result of DeriveSegmentPath: the derived candidate path on success, or an
+// error describing why no candidate could be CONFIRMED free.
+//
+// Mirrors this codebase's existing domain-specific result-struct convention
+// (see RemuxResult in mp4_remuxer.h) rather than std::expected: this project
+// targets C++20 (CMAKE_CXX_STANDARD 20), and <expected> is a C++23-only
+// library feature even on the exact MSVC toolset this repo builds with today
+// (verified: MSVC STL emits "STL4038: The contents of <expected> are
+// available only with C++23 or later" under /std:c++20) — so introducing
+// std::expected here would require bumping the whole project's language
+// standard, which is out of scope for this fix.
+struct SegmentPathResult {
+    bool success = false;
+    std::filesystem::path path;
+    // Set only on failure. On this platform, filesystem probe errors surface
+    // through std::system_category (Win32 error values), so callers that
+    // report failures as HRESULT can convert via
+    // HRESULT_FROM_WIN32(static_cast<DWORD>(error.value())).
+    std::error_code error;
+    std::string message;
+
+    static SegmentPathResult Ok(std::filesystem::path p) {
+        SegmentPathResult r;
+        r.success = true;
+        r.path = std::move(p);
+        return r;
+    }
+    static SegmentPathResult Fail(std::error_code ec, std::string msg) {
+        SegmentPathResult r;
+        r.success = false;
+        r.error = ec;
+        r.message = std::move(msg);
+        return r;
+    }
+};
+
+// Probe used to test whether a candidate segment path already exists.
+// Production callers must never pass this argument — the default (nullptr)
+// resolves to std::filesystem::exists. It exists solely so tests can simulate
+// a genuine filesystem probe error (permission denied, unreadable path, ...)
+// deterministically: std::filesystem::exists on this toolchain silently
+// downgrades most real OS errors (access-denied, invalid path, ...) to "not
+// found" (empty error_code), so such an error cannot be reproduced organically
+// in a test (verified empirically: ACL-denied directories, invalid
+// characters, and very long paths all still yield an empty error_code here).
+using SegmentPathExistsProbe = std::function<bool(const std::filesystem::path&, std::error_code&)>;
+
 // Derive the on-disk path for segment `index` (0-based) from a base output path.
-// Segment 0 keeps the base name; later segments insert a "_part-NNN" suffix
-// before the extension (recording.mkv -> recording_part-002.mkv). If the derived
-// path already exists, a "_N" disambiguator is appended before the extension
-// (recording_part-002_2.mkv). Locale-independent, Windows-safe, deterministic.
-std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index);
+// Segment 0 keeps the base name verbatim (no existence probe, no rename of the
+// first file) and always succeeds. Later segments insert a "_part-NNN" suffix
+// before the extension (recording.mkv -> recording_part-002.mkv); if that
+// candidate already exists, a "_N" disambiguator is appended before the
+// extension (recording_part-002_2.mkv) and probed again.
+//
+// Collision-safety contract:
+//   - Only a candidate CONFIRMED free (exists() returned false with an empty
+//     error_code) is ever returned as success.
+//   - A real filesystem error while probing a candidate (nonzero error_code)
+//     is propagated immediately as a failure -- it is never treated the same
+//     as "path is free".
+//   - Exhausting the bounded collision scan (10000 candidates) without
+//     finding a free one is a defined failure, never a silent return of the
+//     last (still-colliding) candidate.
+//
+// Locale-independent, Windows-safe, deterministic (given a fixed filesystem
+// state).
+SegmentPathResult DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index,
+                                    const SegmentPathExistsProbe& exists_probe = nullptr);
 
 // Derive the transient MKV path used when recording with Container::Mp4
 // (ADR-0014: remux-on-stop architecture). The engine records to this MKV file;
