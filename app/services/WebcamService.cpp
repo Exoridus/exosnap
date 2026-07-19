@@ -578,13 +578,15 @@ bool WebcamService::IsRunning() const noexcept {
     return running_.load();
 }
 
-bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) {
+bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
+                                uint64_t& out_generation) {
     std::lock_guard lk(frame_mutex_);
     if (!has_frame_)
         return false;
     out_width = frame_width_;
     out_height = frame_height_;
     out_bgra = latest_bgra_;
+    out_generation = frame_generation_;
     return true;
 }
 
@@ -733,6 +735,7 @@ void WebcamService::StoreFrame(int w, int h, std::vector<uint8_t> bgra) {
     frame_height_ = h;
     latest_bgra_ = std::move(bgra);
     has_frame_ = true;
+    ++frame_generation_;
 }
 
 void WebcamService::PostFrame(QImage img) {

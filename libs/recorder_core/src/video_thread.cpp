@@ -1150,7 +1150,8 @@ void VideoThread::Run() {
         // engine's side; the upload of camBgra to the GPU is part of the composite
         // pass measured by compositeGpuTimer.
         const auto cam_t0 = std::chrono::steady_clock::now();
-        const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra);
+        uint64_t camGeneration = 0; // wired into VisualGenerations::webcam in Task 4
+        const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra, camGeneration);
         const auto cam_t1 = std::chrono::steady_clock::now();
         if (gotCam) {
             m_state.diagnostics.OnWebcamConvert(cam_t1,

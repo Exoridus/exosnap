@@ -40,7 +40,11 @@ struct WebcamFrameProvider {
     // (ADR 0013) and industry practice. The provider recovers live if the device
     // returns. Returns false only before the first frame is captured (nothing to
     // show yet) or after the provider is stopped.
-    virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) = 0;
+    // out_generation is bumped once per newly captured sample (StoreFrame call),
+    // regardless of whether the pixels changed — callers use it to skip redundant
+    // recomposition when the webcam has not produced a new sample since last tick.
+    virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
+                             uint64_t& out_generation) = 0;
     virtual ~WebcamFrameProvider() = default;
 };
 
