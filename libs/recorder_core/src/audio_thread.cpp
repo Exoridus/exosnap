@@ -97,6 +97,20 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         break;
     }
     case AudioCodec::AacMf: {
+        // TODO(ADR 0052): cut this case over to FfmpegAacEncoder (FFmpeg's native
+        // AAC-LC encoder) once exosnap-ffmpeg-build ships an encoder-enabled
+        // release (r5+, adding --enable-encoder=aac) and cmake/VendorFFmpeg.cmake
+        // is repinned to it. FfmpegAacEncoder is fully implemented and unit-tested
+        // (ffmpeg_aac_encoder.{h,cpp}) but avcodec_find_encoder(AV_CODEC_ID_AAC)
+        // returns null against the currently pinned r4 DLL (decoder/mux-only, zero
+        // encoders), so swapping now would break AAC recording for every user
+        // until the new FFmpeg release lands. FdkAacEncoder stays the active path
+        // until then; the swap is: replace the two lines below with
+        //     auto enc = std::make_unique<FfmpegAacEncoder>();
+        //     enc->SetBitrateKbps(config.audio_bitrate_kbps);
+        // (both expose the same SetBitrateKbps / IAudioEncoder contract), then
+        // retire FdkAacEncoder + its third_party fetch. See ADR 0052 (supersedes
+        // ADR 0043) for the migration rationale and sequencing.
         auto enc = std::make_unique<FdkAacEncoder>();
         enc->SetBitrateKbps(config.audio_bitrate_kbps);
         setup.encoder = std::move(enc);

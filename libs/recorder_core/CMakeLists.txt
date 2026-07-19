@@ -271,6 +271,7 @@ add_library(recorder_core STATIC
     include/recorder_core/hdr_bitstream_metadata.h
     src/hdr_bitstream_metadata.cpp
     src/fdk_aac_encoder.cpp
+    src/ffmpeg_aac_encoder.cpp
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/cursor_sprite.cpp
@@ -552,6 +553,19 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_fdk_aac_encoder PRIVATE src)
+
+# FfmpegAacEncoder (ADR 0052): native FFmpeg AAC-LC encoder. Links recorder_core
+# (which carries the encoder + FFmpeg::mux/swresample transitively); the FFmpeg
+# DLLs are staged next to the test binary by exosnap_add_gtest. NOTE: against the
+# currently pinned r4 FFmpeg DLL (no encoders) the encode-path cases GTEST_SKIP;
+# only the graceful-missing-encoder case runs for real. See the test file header.
+exosnap_add_gtest(
+    NAME test_ffmpeg_aac_encoder
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_ffmpeg_aac_encoder.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_ffmpeg_aac_encoder PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_nvenc_video_encoder_interface
