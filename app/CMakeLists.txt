@@ -5,11 +5,34 @@ if(NOT Qt6_DIR)
     list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.0/msvc2022_64")
 endif()
 
+# Whether to build the ExoSnap Qt application at all. Defaulted ON; flip OFF for
+# configurations that only need the core engine libraries and tests (headless
+# CI, contributors without Qt installed). Kept as an explicit option rather than
+# leaving "should we build the app" implied by Qt's presence alone.
+option(EXOSNAP_BUILD_APP "Build the ExoSnap Qt application" ON)
+
+# Always probe for Qt6, even when EXOSNAP_BUILD_APP is OFF: this also caches
+# Qt6_DIR, which apps/updater/CMakeLists.txt relies on to find Qt6 in its own
+# (sibling, not nested) directory scope without repeating the CMAKE_PREFIX_PATH
+# hint above. Skipping this call when the app build is disabled would silently
+# break Qt detection for the updater even on a machine where Qt is installed.
 find_package(Qt6 QUIET COMPONENTS Core Gui Widgets Svg)
 
-if(NOT Qt6_FOUND)
-    add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: Qt6 not found")
-    message(WARNING "Qt6 not found — exosnap app will not be built. Install Qt 6 and set Qt6_DIR or CMAKE_PREFIX_PATH.")
+# A stand-in `exosnap` custom target is created in every branch below other than
+# the real build, so add_subdirectory(app) always leaves a target named `exosnap`
+# behind for anything downstream that references it defensively (see
+# apps/updater/CMakeLists.txt and tests/CMakeLists.txt). Nothing must call
+# target_link_libraries()/target_compile_definitions() on this stand-in — those
+# only ever run below, after the real qt_add_executable(exosnap ...) target
+# exists.
+if(NOT EXOSNAP_BUILD_APP OR NOT Qt6_FOUND)
+    if(EXOSNAP_BUILD_APP)
+        add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: Qt6 not found")
+        message(WARNING "Qt6 not found — exosnap app will not be built. Install Qt 6 and set Qt6_DIR or CMAKE_PREFIX_PATH.")
+    else()
+        add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: EXOSNAP_BUILD_APP is OFF")
+        message(STATUS "EXOSNAP_BUILD_APP is OFF — exosnap app will not be built.")
+    endif()
     return()
 endif()
 
@@ -404,6 +427,18 @@ target_link_libraries(exosnap PRIVATE
     # OpenProcessToken/GetTokenInformation (Advapi32).
     Shell32.lib Advapi32.lib
 )
+
+# ADR 0033: present & tearing diagnostics (PresentMon ETW). EXOSNAP_WITH_PRESENTMON
+# and the PresentMon::consumer target are declared at the root level (the option
+# before add_subdirectory(third_party), the target inside it), so both are already
+# visible by the time this subdirectory runs. Linked here — after the real Qt
+# executable target exists — rather than at the root after add_subdirectory(app),
+# so it never runs against the custom-target stand-in used when Qt6 is not found
+# or EXOSNAP_BUILD_APP is OFF.
+if(EXOSNAP_WITH_PRESENTMON)
+    target_link_libraries(exosnap PRIVATE PresentMon::consumer)
+    target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON=1)
+endif()
 
 # S4: Delay-load Media Foundation DLLs so the app runs on Windows-N without the
 # Media Feature Pack. /DELAYLOAD converts the static import-table entry to a
