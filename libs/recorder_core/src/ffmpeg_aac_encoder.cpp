@@ -32,7 +32,7 @@ std::string AvErr(int ret) {
 }
 
 void LogWarn(const std::string& msg) {
-    logging::log(logging::LogLevel::Warn, kLogComponent, msg.c_str());
+    logging::log(logging::LogLevel::Warn, kLogComponent, msg);
 }
 } // namespace
 
