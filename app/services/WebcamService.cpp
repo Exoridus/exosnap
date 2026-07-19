@@ -10,6 +10,9 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 
+#include <recorder_core/util/com_apartment.h>
+#include <recorder_core/util/mf_session.h>
+
 #include <windows.h>
 #include <winrt/base.h>
 
@@ -591,8 +594,23 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         running_.store(false);
         return;
     }
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
+    // Both guards release in reverse declaration order at every exit path of
+    // this function (return via the outer while loop finishing): mfSession's
+    // destructor only calls MFShutdown() if MFStartup() actually succeeded,
+    // and comApartment's destructor only calls CoUninitialize() if this call
+    // owned the reference (S_OK/S_FALSE) -- never on RPC_E_CHANGED_MODE.
+    recorder_core::ComApartment comApartment(COINIT_MULTITHREADED);
+    if (!comApartment.usable()) {
+        diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.com_init_failed");
+        running_.store(false);
+        return;
+    }
+    recorder_core::MfSession mfSession;
+    if (!mfSession.usable()) {
+        diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.mf_startup_failed");
+        running_.store(false);
+        return;
+    }
 
     // How long to wait before re-opening the reader after a device loss (or a
     // failed initial open). The retry is UNBOUNDED: a webcam unplugged mid-recording
@@ -707,8 +725,6 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     }
 
     running_.store(false);
-    MFShutdown();
-    CoUninitialize();
 }
 
 void WebcamService::StoreFrame(int w, int h, std::vector<uint8_t> bgra) {

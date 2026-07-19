@@ -60,6 +60,17 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
 
+    # CV-BUG-001 / CV-BUG-005: ComApartment RAII guard (COM apartment
+    # lifetime). Header-only, no recorder_core link needed -- just ole32 for
+    # the real CoInitializeEx/CoUninitialize calls.
+    exosnap_add_gtest(
+        NAME test_com_apartment
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_com_apartment.cpp
+        LIBRARIES ole32.lib
+    )
+    target_include_directories(test_com_apartment PRIVATE include)
+
     exosnap_add_gtest(
         NAME test_codec_private_readiness
         TEST_PREFIX recorder_core.
@@ -393,6 +404,17 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_track_resolver.cpp
     LIBRARIES recorder_core
 )
+
+# CV-BUG-001 / CV-BUG-005: ComApartment RAII guard (COM apartment lifetime).
+# Header-only, no recorder_core link needed -- just ole32 for the real
+# CoInitializeEx/CoUninitialize calls.
+exosnap_add_gtest(
+    NAME test_com_apartment
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_com_apartment.cpp
+    LIBRARIES ole32.lib
+)
+target_include_directories(test_com_apartment PRIVATE include)
 
 # Structured-log schema: base fields (launch session id) stamped onto every JSONL
 # record, per-call fields winning on collision, and size-based file rotation.

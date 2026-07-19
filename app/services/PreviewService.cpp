@@ -5,6 +5,8 @@
 
 #include <windows.h>
 
+#include <recorder_core/util/com_apartment.h>
+
 #include <d3d11.h>
 
 #include <windows.graphics.capture.interop.h>
@@ -74,9 +76,12 @@ void PreviewService::PostFrame(QImage frame) {
 }
 
 void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_token stop_token) {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool com_inited = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    if (!com_inited)
+    // comApartment's destructor calls CoUninitialize() exactly when this call
+    // owned the reference (S_OK/S_FALSE) at every exit path below -- never on
+    // RPC_E_CHANGED_MODE, where this call acquired no reference to release.
+    recorder_core::ComApartment comApartment(COINIT_APARTMENTTHREADED);
+    HRESULT hr = comApartment.result();
+    if (!comApartment.usable())
         return;
 
     winrt::com_ptr<ID3D11Device> d3dDevice;
@@ -87,8 +92,6 @@ void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_t
                                static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, d3dDevice.put(), nullptr,
                                d3dContext.put());
         if (FAILED(hr) || !d3dDevice) {
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
             return;
         }
     }
@@ -107,15 +110,11 @@ void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_t
                 winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
         }
     } catch (...) {
-        if (com_inited)
-            CoUninitialize();
         return;
     }
 
     const auto capSz = item.Size();
     if (capSz.Width <= 0 || capSz.Height <= 0) {
-        if (com_inited)
-            CoUninitialize();
         return;
     }
 
@@ -135,8 +134,6 @@ void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_t
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         hr = d3dDevice->CreateTexture2D(&desc, nullptr, stagingTex.put());
         if (FAILED(hr)) {
-            if (com_inited)
-                CoUninitialize();
             return;
         }
     }
@@ -160,8 +157,6 @@ void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_t
 
         item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
     } catch (...) {
-        if (com_inited)
-            CoUninitialize();
         return;
     }
 
@@ -224,8 +219,6 @@ void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_t
         captureSession.Close();
     if (framePool != nullptr)
         framePool.Close();
-    if (com_inited)
-        CoUninitialize();
 }
 
 } // namespace exosnap
