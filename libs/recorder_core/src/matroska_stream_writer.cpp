@@ -28,6 +28,7 @@
 #endif
 
 #include <recorder_core/logging/logging.h>
+#include <recorder_core/portable_file_io.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -118,7 +119,10 @@ class DurableFileIo final : public libebml::IOCallback {
     }
 
     void setFilePointer(int64 offset, libebml::seek_mode mode = libebml::seek_beginning) override {
-        if (std::fseek(m_file, static_cast<long>(offset), static_cast<int>(mode)) != 0) {
+        // Fseek64 (_fseeki64), not std::fseek: fseek's offset is a 32-bit `long`
+        // on Windows and silently truncates an offset >= 2 GiB instead of
+        // failing loudly. A long recording routinely crosses that boundary.
+        if (Fseek64(m_file, offset, static_cast<int>(mode)) != 0) {
             throw std::runtime_error("Failed to seek matroska output file");
         }
     }
@@ -128,7 +132,11 @@ class DurableFileIo final : public libebml::IOCallback {
     }
 
     uint64 getFilePointer() override {
-        const long pos = std::ftell(m_file);
+        // Ftell64 (_ftelli64), not std::ftell: ftell returns a 32-bit `long`
+        // on Windows and fails once the file position reaches 2 GiB, aborting
+        // the in-progress Matroska trailer write for every recording past
+        // that size.
+        const int64_t pos = Ftell64(m_file);
         if (pos < 0) {
             throw std::runtime_error("Can't tell the current matroska output file position");
         }
