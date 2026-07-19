@@ -12,8 +12,7 @@ namespace {
 
 class TempFile {
   public:
-    TempFile() {
-        path_ = std::filesystem::temp_directory_path() / "exosnap_portable_file_io_test.bin";
+    TempFile() : path_(std::filesystem::temp_directory_path() / "exosnap_portable_file_io_test.bin") {
         std::error_code ec;
         std::filesystem::remove(path_, ec); // clean up a leftover from a prior crashed run
         fopen_s(&file_, path_.string().c_str(), "wb+");
