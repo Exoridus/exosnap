@@ -79,16 +79,33 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
 
     acquire_observed_ = false;
     acquire_window_.Clear();
+    acquire_hist_.Clear();
 
     compositor_window_.Clear();
+    compositor_hist_.Clear();
     frames_composed_ = 0;
     compositor_active_ = false;
     vpblt_observed_ = false;
     vpblt_window_.Clear();
+    vpblt_hist_.Clear();
+
+    composition_gpu_window_.Clear();
+    composition_gpu_hist_.Clear();
+    hdr_tonemap_gpu_window_.Clear();
+    hdr_tonemap_gpu_hist_.Clear();
+    rgb_to_yuv_gpu_window_.Clear();
+    rgb_to_yuv_gpu_hist_.Clear();
+    webcam_upload_gpu_window_.Clear();
+    webcam_upload_gpu_hist_.Clear();
+    webcam_convert_window_.Clear();
+    webcam_convert_hist_.Clear();
+    preview_copy_window_.Clear();
+    preview_copy_hist_.Clear();
 
     frames_submitted_ = 0;
     forced_keyframes_ = 0;
     slot_stalls_ = 0;
+    frames_duplicated_ = 0;
     encode_window_.Clear();
     submit_window_.Clear();
     tick_window_.Clear();
@@ -108,12 +125,18 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     video_queue_peak_ = 0;
     audio_premux_depth_ = 0;
     audio_premux_peak_ = 0;
+    queue_saturation_events_ = 0;
+    video_queue_saturated_ = false;
+    audio_premux_saturated_ = false;
 
     mux_packets_ = 0;
     disk_bytes_written_ = 0;
     write_window_.Clear();
     mux_process_observed_ = false;
     mux_window_.Clear();
+    mux_hist_.Clear();
+    mux_queue_delay_window_.Clear();
+    mux_queue_delay_hist_.Clear();
     segment_index_ = 0;
     segment_count_ = 0;
     finalizations_ = 0;
@@ -212,6 +235,7 @@ void PipelineDiagnosticsAggregator::OnCompositorSubmit(time_point now, double ms
     if (pass_ran) {
         ++frames_composed_;
         compositor_window_.Add(now, ms);
+        compositor_hist_.Add(ms);
     }
 }
 
@@ -219,18 +243,68 @@ void PipelineDiagnosticsAggregator::OnAcquireLatency(time_point now, double ms) 
     std::lock_guard lk(mutex_);
     acquire_observed_ = true;
     acquire_window_.Add(now, ms);
+    acquire_hist_.Add(ms);
 }
 
 void PipelineDiagnosticsAggregator::OnVpbltSubmit(time_point now, double ms) noexcept {
     std::lock_guard lk(mutex_);
     vpblt_observed_ = true;
     vpblt_window_.Add(now, ms);
+    vpblt_hist_.Add(ms);
 }
 
 void PipelineDiagnosticsAggregator::OnMuxLatency(time_point now, double ms) noexcept {
     std::lock_guard lk(mutex_);
     mux_process_observed_ = true;
     mux_window_.Add(now, ms);
+    mux_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnCompositionGpuTime(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    composition_gpu_window_.Add(now, ms);
+    composition_gpu_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnHdrTonemapGpuTime(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    hdr_tonemap_gpu_window_.Add(now, ms);
+    hdr_tonemap_gpu_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnRgbToYuvGpuTime(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    rgb_to_yuv_gpu_window_.Add(now, ms);
+    rgb_to_yuv_gpu_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnWebcamUploadGpuTime(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    webcam_upload_gpu_window_.Add(now, ms);
+    webcam_upload_gpu_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnWebcamConvert(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    webcam_convert_window_.Add(now, ms);
+    webcam_convert_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnPreviewCopy(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    preview_copy_window_.Add(now, ms);
+    preview_copy_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnMuxQueueDelay(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    mux_queue_delay_window_.Add(now, ms);
+    mux_queue_delay_hist_.Add(ms);
+}
+
+void PipelineDiagnosticsAggregator::OnFrameDuplicated() noexcept {
+    std::lock_guard lk(mutex_);
+    ++frames_duplicated_;
 }
 
 void PipelineDiagnosticsAggregator::OnEncodeSubmitted() noexcept {
@@ -300,6 +374,15 @@ void PipelineDiagnosticsAggregator::OnVideoQueueDepth(uint32_t depth) noexcept {
     if (depth > video_queue_peak_) {
         video_queue_peak_ = depth;
     }
+    // The post-encode mux queue is unbounded by design, so there is no ratio to
+    // cross; its saturation is the same absolute depth the classifier warns on
+    // (mux_queue_warn). Count only the rising edge so a queue that stays backed
+    // up is one event, not one per publish.
+    const bool saturated = depth >= thresholds_.mux_queue_warn;
+    if (saturated && !video_queue_saturated_) {
+        ++queue_saturation_events_;
+    }
+    video_queue_saturated_ = saturated;
 }
 
 void PipelineDiagnosticsAggregator::OnAudioPremuxDepth(uint32_t depth) noexcept {
@@ -308,6 +391,17 @@ void PipelineDiagnosticsAggregator::OnAudioPremuxDepth(uint32_t depth) noexcept 
     if (depth > audio_premux_peak_) {
         audio_premux_peak_ = depth;
     }
+    // The premux queue is bounded, so saturation is a fraction of its capacity
+    // (queue_critical_ratio). Count only the rising edge.
+    bool saturated = false;
+    if (cfg_.audio_queue_capacity > 0) {
+        saturated = static_cast<double>(depth) >=
+                    static_cast<double>(cfg_.audio_queue_capacity) * thresholds_.queue_critical_ratio;
+    }
+    if (saturated && !audio_premux_saturated_) {
+        ++queue_saturation_events_;
+    }
+    audio_premux_saturated_ = saturated;
 }
 
 void PipelineDiagnosticsAggregator::OnMuxPacket(uint64_t bytes) noexcept {
@@ -702,41 +796,54 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
 PerfWindowSample PipelineDiagnosticsAggregator::SamplePerfWindow(time_point now) const {
     std::lock_guard lk(mutex_);
     PerfWindowSample p;
-    const RollingTimeWindow::Aggregate enc = encode_window_.Compute(now);
-    const RollingTimeWindow::Aggregate tk = tick_window_.Compute(now);
-    const RollingTimeWindow::Aggregate sub = submit_window_.Compute(now);
-    p.encode_p50_ms = encode_window_.Percentile(now, 0.50);
-    p.encode_p95_ms = encode_window_.Percentile(now, 0.95);
-    p.encode_p99_ms = encode_window_.Percentile(now, 0.99);
-    p.encode_peak_ms = enc.peak;
-    p.tick_p50_ms = tick_window_.Percentile(now, 0.50);
-    p.tick_p95_ms = tick_window_.Percentile(now, 0.95);
-    p.tick_p99_ms = tick_window_.Percentile(now, 0.99);
-    p.tick_peak_ms = tk.peak;
-    p.submit_p50_ms = submit_window_.Percentile(now, 0.50);
-    p.submit_p99_ms = submit_window_.Percentile(now, 0.99);
-    p.encode_samples = enc.count;
-    p.tick_samples = tk.count;
+    p.acquire = SampleStage(acquire_window_, now);
+    p.composition_cpu = SampleStage(compositor_window_, now);
+    p.composition_gpu = SampleStage(composition_gpu_window_, now);
+    p.hdr_tonemap_gpu = SampleStage(hdr_tonemap_gpu_window_, now);
+    p.rgb_to_yuv_cpu = SampleStage(vpblt_window_, now);
+    p.rgb_to_yuv_gpu = SampleStage(rgb_to_yuv_gpu_window_, now);
+    p.encode_submit = SampleStage(submit_window_, now);
+    p.encode_latency = SampleStage(encode_window_, now);
+    p.tick = SampleStage(tick_window_, now);
+    p.webcam_convert = SampleStage(webcam_convert_window_, now);
+    p.webcam_upload_gpu = SampleStage(webcam_upload_gpu_window_, now);
+    p.preview_copy = SampleStage(preview_copy_window_, now);
+    p.mux_process = SampleStage(mux_window_, now);
+    p.mux_queue_delay = SampleStage(mux_queue_delay_window_, now);
+
+    p.dropped_coalesced = dropped_coalesced_;
+    p.dropped_cfr = dropped_cfr_;
     p.dropped_backpressure = dropped_backpressure_;
+    p.duplicated_frames = frames_duplicated_;
     p.slot_stalls = slot_stalls_;
+    p.queue_saturation_events = queue_saturation_events_;
     return p;
 }
 
 PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
     std::lock_guard lk(mutex_);
     PerfSessionSummary s;
-    s.encode_buckets = encode_hist_.BucketCounts();
-    s.tick_buckets = tick_hist_.BucketCounts();
-    s.submit_buckets = submit_hist_.BucketCounts();
-    s.encode_count = encode_hist_.count();
-    s.tick_count = tick_hist_.count();
-    s.submit_count = submit_hist_.count();
-    s.encode_p50_ms = encode_hist_.Quantile(0.50);
-    s.encode_p99_ms = encode_hist_.Quantile(0.99);
-    s.tick_p50_ms = tick_hist_.Quantile(0.50);
-    s.tick_p99_ms = tick_hist_.Quantile(0.99);
+    s.acquire = SummarizeStage(acquire_hist_);
+    s.composition_cpu = SummarizeStage(compositor_hist_);
+    s.composition_gpu = SummarizeStage(composition_gpu_hist_);
+    s.hdr_tonemap_gpu = SummarizeStage(hdr_tonemap_gpu_hist_);
+    s.rgb_to_yuv_cpu = SummarizeStage(vpblt_hist_);
+    s.rgb_to_yuv_gpu = SummarizeStage(rgb_to_yuv_gpu_hist_);
+    s.encode_submit = SummarizeStage(submit_hist_);
+    s.encode_latency = SummarizeStage(encode_hist_);
+    s.tick = SummarizeStage(tick_hist_);
+    s.webcam_convert = SummarizeStage(webcam_convert_hist_);
+    s.webcam_upload_gpu = SummarizeStage(webcam_upload_gpu_hist_);
+    s.preview_copy = SummarizeStage(preview_copy_hist_);
+    s.mux_process = SummarizeStage(mux_hist_);
+    s.mux_queue_delay = SummarizeStage(mux_queue_delay_hist_);
+
+    s.dropped_coalesced = dropped_coalesced_;
+    s.dropped_cfr = dropped_cfr_;
     s.dropped_backpressure = dropped_backpressure_;
+    s.duplicated_frames = frames_duplicated_;
     s.slot_stalls = slot_stalls_;
+    s.queue_saturation_events = queue_saturation_events_;
     s.encoder_init = encoder_init_;
     return s;
 }

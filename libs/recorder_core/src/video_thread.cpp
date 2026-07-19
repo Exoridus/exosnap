@@ -16,6 +16,7 @@
 #include "yuv_to_bgra.h"
 #include <recorder_core/cursor_sprite.h>
 #include <recorder_core/gpu_hdr_tonemap.h>
+#include <recorder_core/gpu_timestamp_profiler.h>
 #include <recorder_core/hdr_native.h>
 #include <recorder_core/preview_shared_texture.h>
 #include <recorder_core/preview_tap.h>
@@ -219,6 +220,16 @@ void VideoThread::Run() {
     winrt::com_ptr<ID3D11Device> d3dDevice;
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
     winrt::com_ptr<ID3D11VideoDevice> videoDevice;
+
+    // Real GPU-execution-time profilers for the three GPU passes on the immediate
+    // context (composite, scRGB->SDR tone-map, RGB->YUV blit). Strictly additive
+    // and non-blocking: they only bracket the passes and harvest earlier frames'
+    // results with DONOTFLUSH, never stalling the hot path. Init lazily once the
+    // device exists (guarded below), staying inert if timestamp queries are
+    // unsupported. Distinct from the existing CPU-submission windows.
+    GpuStageTimer compositeGpuTimer;
+    GpuStageTimer tonemapGpuTimer;
+    GpuStageTimer vpbltGpuTimer;
     winrt::com_ptr<ID3D11VideoContext> videoContext;
     // Optional newer interface: VideoProcessorSet{Stream,Output}ColorSpace1 takes
     // explicit DXGI_COLOR_SPACE_TYPE enums, which drivers honour for the YUV
@@ -1170,7 +1181,18 @@ void VideoThread::Run() {
 
         int camW = 0;
         int camH = 0;
-        if (!m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra)) {
+        // The provider delivers a converted BGRA frame (source pixel format ->
+        // BGRA, e.g. NV12/MJPEG decode). Time that CPU conversion+copy from the
+        // engine's side; the upload of camBgra to the GPU is part of the composite
+        // pass measured by compositeGpuTimer.
+        const auto cam_t0 = std::chrono::steady_clock::now();
+        const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra);
+        const auto cam_t1 = std::chrono::steady_clock::now();
+        if (gotCam) {
+            m_state.diagnostics.OnWebcamConvert(cam_t1,
+                                                std::chrono::duration<double, std::milli>(cam_t1 - cam_t0).count());
+        }
+        if (!gotCam) {
             return true;
         }
         const size_t required = (camW > 0 && camH > 0) ? static_cast<size_t>(camW) * camH * 4 : 0;
@@ -1318,12 +1340,25 @@ void VideoThread::Run() {
     // replacing the FP16 capture texture with an SDR BGRA8 surface before
     // compositing/VideoProcessor. A no-op (returns source unchanged) on SDR
     // desktops. Returns nullptr and records the failure if the pass fails.
+    // Bring up the GPU-execution-time profilers now the device exists. Inert (and
+    // silently skipped at every call site) if the adapter cannot create timestamp
+    // queries — measurement is best-effort and never a hard dependency.
+    compositeGpuTimer.Init(d3dDevice.get());
+    tonemapGpuTimer.Init(d3dDevice.get());
+    vpbltGpuTimer.Init(d3dDevice.get());
+
     auto toneMapIfHdr = [&](ID3D11Texture2D* source) -> ID3D11Texture2D* {
         if (!hdrToneMapActive || source == nullptr) {
             return source;
         }
         std::string tmErr;
-        if (!hdrToneMapper.Convert(source, hdrSdrTex.get(), tmErr)) {
+        tonemapGpuTimer.Begin(d3dContext.get());
+        const bool ok = hdrToneMapper.Convert(source, hdrSdrTex.get(), tmErr);
+        tonemapGpuTimer.End(d3dContext.get());
+        if (const auto gpu_ms = tonemapGpuTimer.Poll(d3dContext.get())) {
+            m_state.diagnostics.OnHdrTonemapGpuTime(std::chrono::steady_clock::now(), *gpu_ms);
+        }
+        if (!ok) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "HDR tone-map: " + tmErr);
             return nullptr;
         }
@@ -1356,19 +1391,34 @@ void VideoThread::Run() {
         }
 
         std::string compErr;
+        // Bracket the whole composite pass for real GPU-execution time. End() is
+        // issued on every return path so a failed draw never leaves the query pair
+        // (and thus the disjoint query) unbalanced.
+        compositeGpuTimer.Begin(d3dContext.get());
+        auto endCompositeTimer = [&]() {
+            compositeGpuTimer.End(d3dContext.get());
+            if (const auto gpu_ms = compositeGpuTimer.Poll(d3dContext.get())) {
+                m_state.diagnostics.OnCompositionGpuTime(std::chrono::steady_clock::now(), *gpu_ms);
+            }
+        };
         if (!gpuCompositor.BeginFrame(source, compErr)) {
+            endCompositeTimer();
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU compositor begin: " + compErr);
             return nullptr;
         }
         if (!drawWebcamGpu(overlay)) {
+            endCompositeTimer();
             return nullptr;
         }
         if (!drawCursorGpu()) {
+            endCompositeTimer();
             return nullptr;
         }
         if (!drawWin32CursorGpu()) {
+            endCompositeTimer();
             return nullptr;
         }
+        endCompositeTimer();
         return gpuCompositor.Result();
     };
 
@@ -2267,7 +2317,13 @@ void VideoThread::Run() {
 
         // Non-blocking publish of the composited frame (observation-only; the encode
         // path continues regardless of whether the preview picked up this frame).
+        // Time the CPU submission cost of the copy; the display present itself runs
+        // on the consumer's (UI) render thread, outside this engine path.
+        const auto prev_t0 = std::chrono::steady_clock::now();
         previewSharedTex.TryPublish(d3dContext.get(), vpInput);
+        const auto prev_t1 = std::chrono::steady_clock::now();
+        m_state.diagnostics.OnPreviewCopy(prev_t1,
+                                          std::chrono::duration<double, std::milli>(prev_t1 - prev_t0).count());
     };
 
     // Cache the VideoProcessor input view across ticks. The encode input handed to
@@ -2836,11 +2892,16 @@ void VideoThread::Run() {
                         stream.pInputSurface = inputView;
 
                         const auto vp_t0 = std::chrono::steady_clock::now();
+                        vpbltGpuTimer.Begin(d3dContext.get());
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
                                                              &stream);
+                        vpbltGpuTimer.End(d3dContext.get());
                         const auto vp_t1 = std::chrono::steady_clock::now();
                         m_state.diagnostics.OnVpbltSubmit(
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
+                        if (const auto vp_gpu_ms = vpbltGpuTimer.Poll(d3dContext.get())) {
+                            m_state.diagnostics.OnRgbToYuvGpuTime(vp_t1, *vp_gpu_ms);
+                        }
 
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
@@ -2864,6 +2925,7 @@ void VideoThread::Run() {
                     d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
                     frameWritten = true;
                     ++duplicatedFrames;
+                    m_state.diagnostics.OnFrameDuplicated();
                 }
 
                 if (!frameWritten) {
@@ -3218,11 +3280,16 @@ void VideoThread::Run() {
                         stream.pInputSurface = inputView;
 
                         const auto vp_t0 = std::chrono::steady_clock::now();
+                        vpbltGpuTimer.Begin(d3dContext.get());
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
                                                              &stream);
+                        vpbltGpuTimer.End(d3dContext.get());
                         const auto vp_t1 = std::chrono::steady_clock::now();
                         m_state.diagnostics.OnVpbltSubmit(
                             vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
+                        if (const auto vp_gpu_ms = vpbltGpuTimer.Poll(d3dContext.get())) {
+                            m_state.diagnostics.OnRgbToYuvGpuTime(vp_t1, *vp_gpu_ms);
+                        }
 
                         latestTex = nullptr;
 

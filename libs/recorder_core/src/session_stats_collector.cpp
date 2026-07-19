@@ -83,6 +83,27 @@ std::string Buckets(const std::array<uint64_t, LatencyHistogram::kBucketCount>& 
     return out;
 }
 
+// Append one measured stage's live-window statistics as `<prefix>_{mean,p50,p95,
+// p99,max}_ms` so every stage reads uniformly in the perf log.
+void AddStageWindow(std::vector<logging::LogField>& fields, const std::string& prefix, const StageWindowStats& s) {
+    fields.push_back({prefix + "_mean_ms", Num(s.mean_ms)});
+    fields.push_back({prefix + "_p50_ms", Num(s.p50_ms)});
+    fields.push_back({prefix + "_p95_ms", Num(s.p95_ms)});
+    fields.push_back({prefix + "_p99_ms", Num(s.p99_ms)});
+    fields.push_back({prefix + "_max_ms", Num(s.max_ms)});
+}
+
+// Append one stage's whole-session distribution: count, p50/p95/p99 and the
+// authoritative bucket array.
+void AddStageSummary(std::vector<logging::LogField>& fields, const std::string& prefix,
+                     const StageHistogramSummary& s) {
+    fields.push_back({prefix + "_count", U64(s.count)});
+    fields.push_back({prefix + "_p50_ms", Num(s.p50_ms)});
+    fields.push_back({prefix + "_p95_ms", Num(s.p95_ms)});
+    fields.push_back({prefix + "_p99_ms", Num(s.p99_ms)});
+    fields.push_back({prefix + "_hist", Buckets(s.buckets)});
+}
+
 } // namespace
 
 SessionStatsCollector::SessionStatsCollector(SessionState& state) : m_state(state) {
@@ -168,28 +189,38 @@ void SessionStatsCollector::Run() {
                     std::to_string(stats_copy.frame_rate_den > 0 ? stats_copy.frame_rate_num / stats_copy.frame_rate_den
                                                                  : stats_copy.frame_rate_num);
 
-                const std::vector<logging::LogField> fields = {
-                    {"perf_schema", "1"},
+                std::vector<logging::LogField> fields = {
+                    {"perf_schema", "2"},
                     {"elapsed_s", Num(elapsed)},
-                    {"encode_p50_ms", Num(p.encode_p50_ms)},
-                    {"encode_p95_ms", Num(p.encode_p95_ms)},
-                    {"encode_p99_ms", Num(p.encode_p99_ms)},
-                    {"encode_peak_ms", Num(p.encode_peak_ms)},
-                    {"submit_p50_ms", Num(p.submit_p50_ms)},
-                    {"submit_p99_ms", Num(p.submit_p99_ms)},
-                    {"tick_p50_ms", Num(p.tick_p50_ms)},
-                    {"tick_p95_ms", Num(p.tick_p95_ms)},
-                    {"tick_p99_ms", Num(p.tick_p99_ms)},
-                    {"tick_peak_ms", Num(p.tick_peak_ms)},
                     {"tick_budget_ms", Num(vt.budget_ms)},
                     {"output_fps", Num(enc.output_fps)},
                     {"backlog", U64(enc.backlog)},
-                    {"dropped_backpressure", U64(p.dropped_backpressure)},
-                    {"slot_stalls", U64(p.slot_stalls)},
-                    {"preset", PresetToken(init.preset)},
-                    {"codec", CodecToken(stats_copy.video_codec)},
-                    {"resolution", res},
                 };
+                // Every measured stage, mean/p50/p95/p99/max, CPU-submission and
+                // real GPU-execution kept distinct by name.
+                AddStageWindow(fields, "acquire", p.acquire);
+                AddStageWindow(fields, "composition_cpu", p.composition_cpu);
+                AddStageWindow(fields, "composition_gpu", p.composition_gpu);
+                AddStageWindow(fields, "hdr_tonemap_gpu", p.hdr_tonemap_gpu);
+                AddStageWindow(fields, "rgb_to_yuv_cpu", p.rgb_to_yuv_cpu);
+                AddStageWindow(fields, "rgb_to_yuv_gpu", p.rgb_to_yuv_gpu);
+                AddStageWindow(fields, "encode_submit", p.encode_submit);
+                AddStageWindow(fields, "encode_latency", p.encode_latency);
+                AddStageWindow(fields, "tick", p.tick);
+                AddStageWindow(fields, "webcam_convert", p.webcam_convert);
+                AddStageWindow(fields, "webcam_upload_gpu", p.webcam_upload_gpu);
+                AddStageWindow(fields, "preview_copy", p.preview_copy);
+                AddStageWindow(fields, "mux_process", p.mux_process);
+                AddStageWindow(fields, "mux_queue_delay", p.mux_queue_delay);
+                fields.push_back({"dropped_coalesced", U64(p.dropped_coalesced)});
+                fields.push_back({"dropped_cfr", U64(p.dropped_cfr)});
+                fields.push_back({"dropped_backpressure", U64(p.dropped_backpressure)});
+                fields.push_back({"duplicated_frames", U64(p.duplicated_frames)});
+                fields.push_back({"slot_stalls", U64(p.slot_stalls)});
+                fields.push_back({"queue_saturation_events", U64(p.queue_saturation_events)});
+                fields.push_back({"preset", PresetToken(init.preset)});
+                fields.push_back({"codec", CodecToken(stats_copy.video_codec)});
+                fields.push_back({"resolution", res});
                 logging::log(logging::LogLevel::Info, "perf", "video-pipeline-window",
                              std::span<const logging::LogField>(fields.data(), fields.size()));
             }
@@ -228,7 +259,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     // this point (EOS drain) are not represented — documented and irrelevant to
     // the steady-state question this measures.
     const PerfSessionSummary sum = m_state.diagnostics.BuildPerfSummary();
-    if (sum.encode_count == 0 && sum.tick_count == 0) {
+    if (sum.encode_latency.count == 0 && sum.tick.count == 0) {
         return; // never recorded (e.g. an aborted / no-frame session)
     }
 
@@ -249,34 +280,43 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
         std::to_string(stats_copy.frame_rate_den > 0 ? stats_copy.frame_rate_num / stats_copy.frame_rate_den
                                                      : stats_copy.frame_rate_num);
 
-    const std::vector<logging::LogField> fields = {
-        {"perf_schema", "1"},
+    std::vector<logging::LogField> fields = {
+        {"perf_schema", "2"},
         {"hist_lo_ms", Num(LatencyHistogram::kLoMs)},
         {"hist_hi_ms", Num(LatencyHistogram::kHiMs)},
         {"hist_buckets", std::to_string(LatencyHistogram::kBucketCount)},
-        {"encode_count", U64(sum.encode_count)},
-        {"encode_p50_ms", Num(sum.encode_p50_ms)},
-        {"encode_p99_ms", Num(sum.encode_p99_ms)},
-        {"encode_hist", Buckets(sum.encode_buckets)},
-        {"submit_count", U64(sum.submit_count)},
-        {"submit_hist", Buckets(sum.submit_buckets)},
-        {"tick_count", U64(sum.tick_count)},
-        {"tick_p50_ms", Num(sum.tick_p50_ms)},
-        {"tick_p99_ms", Num(sum.tick_p99_ms)},
-        {"tick_hist", Buckets(sum.tick_buckets)},
-        {"frames_emitted", U64(stats_copy.video_frames_captured)},
-        {"frames_encoded", U64(stats_copy.encoded_video_packets)},
-        {"frames_duplicated", U64(stats_copy.duplicated_video_frames)},
-        {"frames_dropped_or_skipped", U64(stats_copy.dropped_or_skipped_video_frames)},
-        {"dropped_backpressure", U64(sum.dropped_backpressure)},
-        {"slot_stalls", U64(sum.slot_stalls)},
-        {"duration_skew_ms", Num(duration_skew_ms)},
-        {"preset", PresetToken(sum.encoder_init.preset)},
-        {"rc_mode", RateControlToken(sum.encoder_init.rc_mode)},
-        {"gop_length", U64(sum.encoder_init.gop_length)},
-        {"codec", CodecToken(stats_copy.video_codec)},
-        {"resolution", res},
     };
+    // Every measured stage's whole-session distribution (the authoritative gate
+    // data). CPU-submission and real GPU-execution stages are named distinctly.
+    AddStageSummary(fields, "acquire", sum.acquire);
+    AddStageSummary(fields, "composition_cpu", sum.composition_cpu);
+    AddStageSummary(fields, "composition_gpu", sum.composition_gpu);
+    AddStageSummary(fields, "hdr_tonemap_gpu", sum.hdr_tonemap_gpu);
+    AddStageSummary(fields, "rgb_to_yuv_cpu", sum.rgb_to_yuv_cpu);
+    AddStageSummary(fields, "rgb_to_yuv_gpu", sum.rgb_to_yuv_gpu);
+    AddStageSummary(fields, "encode_submit", sum.encode_submit);
+    AddStageSummary(fields, "encode_latency", sum.encode_latency);
+    AddStageSummary(fields, "tick", sum.tick);
+    AddStageSummary(fields, "webcam_convert", sum.webcam_convert);
+    AddStageSummary(fields, "webcam_upload_gpu", sum.webcam_upload_gpu);
+    AddStageSummary(fields, "preview_copy", sum.preview_copy);
+    AddStageSummary(fields, "mux_process", sum.mux_process);
+    AddStageSummary(fields, "mux_queue_delay", sum.mux_queue_delay);
+    fields.push_back({"frames_emitted", U64(stats_copy.video_frames_captured)});
+    fields.push_back({"frames_encoded", U64(stats_copy.encoded_video_packets)});
+    fields.push_back({"frames_duplicated", U64(sum.duplicated_frames)});
+    fields.push_back({"frames_dropped_or_skipped", U64(stats_copy.dropped_or_skipped_video_frames)});
+    fields.push_back({"dropped_coalesced", U64(sum.dropped_coalesced)});
+    fields.push_back({"dropped_cfr", U64(sum.dropped_cfr)});
+    fields.push_back({"dropped_backpressure", U64(sum.dropped_backpressure)});
+    fields.push_back({"slot_stalls", U64(sum.slot_stalls)});
+    fields.push_back({"queue_saturation_events", U64(sum.queue_saturation_events)});
+    fields.push_back({"duration_skew_ms", Num(duration_skew_ms)});
+    fields.push_back({"preset", PresetToken(sum.encoder_init.preset)});
+    fields.push_back({"rc_mode", RateControlToken(sum.encoder_init.rc_mode)});
+    fields.push_back({"gop_length", U64(sum.encoder_init.gop_length)});
+    fields.push_back({"codec", CodecToken(stats_copy.video_codec)});
+    fields.push_back({"resolution", res});
     logging::log(logging::LogLevel::Info, "perf", "session-perf-summary",
                  std::span<const logging::LogField>(fields.data(), fields.size()));
 }
