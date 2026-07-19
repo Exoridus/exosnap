@@ -261,6 +261,16 @@ TEST_F(SettingsTiersTest, ConfigPage_ExpertModeChanged_Signal) {
     EXPECT_TRUE(page.expertModeEnabled());
 }
 
+// The amber expert-mode warning banner was removed for good; it must not reappear in
+// either mode.
+TEST_F(SettingsTiersTest, ConfigPage_ExpertWarnBanner_IsGone) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("expertWarnBanner")), nullptr);
+    page.setExpertModeEnabled(true);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("expertWarnBanner")), nullptr)
+        << "the expert warning banner must stay removed even in expert mode";
+}
+
 // Wave 2: output_split_expander_ dissolved; split controls are now expert-gated.
 // Tests updated to reflect the new structure.
 

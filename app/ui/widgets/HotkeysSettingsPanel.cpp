@@ -177,12 +177,16 @@ void HotkeysSettingsPanel::buildRow(int index, const QString& action, const QKey
 
     // Right control cluster: quiet × (clear) + bordered primary (Set/Change), with
     // a full-width Cancel that replaces both while capturing. Stacked in one fixed
-    // footprint so the row never reflows.
+    // footprint so the row never reflows. A leading stretch keeps the primary flush to
+    // the cluster's right edge whether or not the × is present, so every row's Set /
+    // Change button shares the same right edge as the header "Reset all" button. The
+    // fixed width budgets both inter-item gaps (stretch↔× and ×↔Set) so nothing overflows.
     r.controls = new QWidget(row_frame);
-    r.controls->setFixedWidth(kClearWidth + kClusterSpacing + kPrimaryWidth);
+    r.controls->setFixedWidth(kClearWidth + 2 * kClusterSpacing + kPrimaryWidth);
     auto* controls_layout = new QHBoxLayout(r.controls);
     controls_layout->setContentsMargins(0, 0, 0, 0);
     controls_layout->setSpacing(kClusterSpacing);
+    controls_layout->addStretch(1);
 
     // Borderless quiet × — minor "clear" affordance.
     r.unset_btn = new QPushButton(QStringLiteral("\xc3\x97"), r.controls); // ×
@@ -203,12 +207,13 @@ void HotkeysSettingsPanel::buildRow(int index, const QString& action, const QKey
     r.cancel_btn = new QPushButton(QStringLiteral("Cancel"), r.controls);
     r.cancel_btn->setObjectName(QStringLiteral("settingsHkCancelBtn_%1").arg(index));
     r.cancel_btn->setProperty("role", "utility");
+    r.cancel_btn->setFixedWidth(kClearWidth + kClusterSpacing + kPrimaryWidth);
     r.cancel_btn->setCursor(Qt::PointingHandCursor);
     r.cancel_btn->hide();
 
     controls_layout->addWidget(r.unset_btn, 0, Qt::AlignVCenter);
     controls_layout->addWidget(r.set_btn, 0, Qt::AlignVCenter);
-    controls_layout->addWidget(r.cancel_btn, 1, Qt::AlignVCenter);
+    controls_layout->addWidget(r.cancel_btn, 0, Qt::AlignVCenter);
     row_layout->addWidget(r.controls, 0, Qt::AlignVCenter);
 
     // Hidden capture edit drives the OS key capture (single key).

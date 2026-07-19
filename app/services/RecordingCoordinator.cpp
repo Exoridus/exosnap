@@ -66,6 +66,28 @@ static std::wstring ToWide(const std::string& s) {
     return w;
 }
 
+// Wraps recorder_core::DeriveSegmentPath for the app layer. A derivation
+// failure (a genuine filesystem probe error, or the bounded collision scan
+// exhausted -- see recorder_session.h) is logged loudly via AppLog::error
+// rather than silently reused; the caller gets std::nullopt back and is
+// expected to treat it exactly like an unavailable/failed segment (the
+// `segment.succeeded` / `final_seg.succeeded` guards already used throughout
+// this file for the same purpose: skip the affected piece of work without
+// aborting the whole recording/remux session).
+static std::optional<std::filesystem::path> DeriveSegmentPathLogged(const std::filesystem::path& base, uint32_t index,
+                                                                    const char* context) {
+    const recorder_core::SegmentPathResult result = recorder_core::DeriveSegmentPath(base, index);
+    if (!result.success) {
+        diagnostics::AppLog::error(QStringLiteral("split"),
+                                   QStringLiteral("DeriveSegmentPath failed (%1) base=\"%2\" index=%3: %4")
+                                       .arg(QString::fromUtf8(context), QString::fromStdWString(base.wstring()))
+                                       .arg(index)
+                                       .arg(QString::fromStdString(result.message)));
+        return std::nullopt;
+    }
+    return result.path;
+}
+
 static std::string TrimAscii(const std::string& value) {
     std::size_t first = 0;
     while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
@@ -1414,7 +1436,8 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
         // segment.path is a .mkv.tmp (or _part-NNN.mkv.tmp) file; derive the .mp4 side.
         // The base output path is current_output_path_ (the .mp4 path requested by the user).
         // Use DeriveSegmentPath on the MP4 base to get the corresponding MP4 segment path.
-        const std::filesystem::path mp4_segment = recorder_core::DeriveSegmentPath(current_output_path_, segment.index);
+        const std::optional<std::filesystem::path> mp4_segment =
+            DeriveSegmentPathLogged(current_output_path_, segment.index, "intermediate segment remux target");
 
         // Capture the manifest ID for this segment before mutating current_manifest_id_.
         QString this_segment_manifest_id;
@@ -1438,39 +1461,52 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
 
             // Create a recovery manifest entry for the NEXT segment (now recording).
             if (recovery_manifest_store_ != nullptr) {
-                const std::filesystem::path next_mkv =
-                    recorder_core::DeriveSegmentPath(session_transient_mkv_, segment.index + 1);
-                RecoveryManifestEntry next_entry;
-                next_entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                next_entry.artefact_path = QString::fromStdWString(next_mkv.wstring());
-                next_entry.intended_container = QStringLiteral("mp4");
-                next_entry.final_output_path = QString::fromStdWString(
-                    recorder_core::DeriveSegmentPath(current_output_path_, segment.index + 1).wstring());
-                next_entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-                next_entry.finalized = false;
-                recovery_manifest_store_->Add(next_entry);
-                next_segment_manifest_id = next_entry.id;
+                const std::optional<std::filesystem::path> next_mkv = DeriveSegmentPathLogged(
+                    session_transient_mkv_, segment.index + 1, "next segment transient MKV (manifest)");
+                const std::optional<std::filesystem::path> next_final = DeriveSegmentPathLogged(
+                    current_output_path_, segment.index + 1, "next segment final MP4 (manifest)");
+                // Only record a recovery entry when BOTH paths for the next segment were
+                // derived successfully -- a half-populated manifest entry (e.g. a valid
+                // artefact_path but an empty/stale final_output_path) would be worse than
+                // no entry at all for crash recovery.
+                if (next_mkv.has_value() && next_final.has_value()) {
+                    RecoveryManifestEntry next_entry;
+                    next_entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                    next_entry.artefact_path = QString::fromStdWString(next_mkv->wstring());
+                    next_entry.intended_container = QStringLiteral("mp4");
+                    next_entry.final_output_path = QString::fromStdWString(next_final->wstring());
+                    next_entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+                    next_entry.finalized = false;
+                    recovery_manifest_store_->Add(next_entry);
+                    next_segment_manifest_id = next_entry.id;
+                }
             }
 
             // Update current_manifest_id_ so the recording thread sees the next segment's ID.
             current_manifest_id_ = next_segment_manifest_id;
             pending_segment_manifest_id_ = next_segment_manifest_id;
 
-            // Schedule the background remux for THIS segment.
-            auto job = std::make_unique<SegmentRemuxJob>();
-            job->transient_mkv = segment.path;
-            job->output_mp4 = mp4_segment;
-            job->manifest_id = this_segment_manifest_id;
-            StartSegmentRemuxThread(*job);
-            segment_remux_jobs_.push_back(std::move(job));
+            // Schedule the background remux for THIS segment. Skipped (logged above) if
+            // the MP4 target path could not be derived -- the segment stays as an
+            // un-remuxed transient MKV rather than being written to a wrong/guessed path.
+            if (mp4_segment.has_value()) {
+                auto job = std::make_unique<SegmentRemuxJob>();
+                job->transient_mkv = segment.path;
+                job->output_mp4 = *mp4_segment;
+                job->manifest_id = this_segment_manifest_id;
+                StartSegmentRemuxThread(*job);
+                segment_remux_jobs_.push_back(std::move(job));
+            }
         }
 
-        diagnostics::AppLog::info(
-            QStringLiteral("remux"),
-            QStringLiteral("split segment remux scheduled index=%1 transient=\"%2\" output=\"%3\"")
-                .arg(segment.index)
-                .arg(QString::fromStdWString(segment.path.filename().wstring()),
-                     QString::fromStdWString(mp4_segment.filename().wstring())));
+        if (mp4_segment.has_value()) {
+            diagnostics::AppLog::info(
+                QStringLiteral("remux"),
+                QStringLiteral("split segment remux scheduled index=%1 transient=\"%2\" output=\"%3\"")
+                    .arg(segment.index)
+                    .arg(QString::fromStdWString(segment.path.filename().wstring()),
+                         QString::fromStdWString(mp4_segment->filename().wstring())));
+        }
     }
 
     // Feedback names the segment that just *started* (the one after the boundary).
@@ -1718,17 +1754,24 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
 
         // Schedule the final segment remux (same as intermediate segments).
         if (final_seg.succeeded && !final_seg.path.empty()) {
-            const std::filesystem::path mp4_final = recorder_core::DeriveSegmentPath(output_path, final_seg.index);
-            {
-                std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-                auto job = std::make_unique<SegmentRemuxJob>();
-                job->transient_mkv = final_seg.path;
-                job->output_mp4 = mp4_final;
-                job->manifest_id = current_manifest_id_;
-                StartSegmentRemuxThread(*job);
-                segment_remux_jobs_.push_back(std::move(job));
+            const std::optional<std::filesystem::path> mp4_final =
+                DeriveSegmentPathLogged(output_path, final_seg.index, "final segment remux target");
+            if (mp4_final.has_value()) {
+                {
+                    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+                    auto job = std::make_unique<SegmentRemuxJob>();
+                    job->transient_mkv = final_seg.path;
+                    job->output_mp4 = *mp4_final;
+                    job->manifest_id = current_manifest_id_;
+                    StartSegmentRemuxThread(*job);
+                    segment_remux_jobs_.push_back(std::move(job));
+                }
+                current_manifest_id_.clear(); // now owned by the job
+            } else {
+                // Could not derive the final segment's MP4 target path — keep the
+                // manifest entry for recovery, same as an engine-side segment failure.
+                current_manifest_id_.clear();
             }
-            current_manifest_id_.clear(); // now owned by the job
         } else {
             // Final segment failed — keep the manifest entry for recovery.
             current_manifest_id_.clear();
@@ -1746,11 +1789,17 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
             // and accumulate the total output bytes across all segments.
             uint64_t total_bytes = 0;
             for (auto& seg : ui_result.segments) {
-                const std::filesystem::path seg_mp4 =
-                    recorder_core::DeriveSegmentPath(output_path, static_cast<uint32_t>(seg.index));
-                seg.file_path = QString::fromStdWString(seg_mp4.wstring());
+                const std::optional<std::filesystem::path> seg_mp4 = DeriveSegmentPathLogged(
+                    output_path, static_cast<uint32_t>(seg.index), "final result segment path rewrite");
+                if (!seg_mp4.has_value()) {
+                    // Leave this segment's file_path/size as-is (still the transient
+                    // MKV path set earlier) rather than guess at a possibly-wrong MP4
+                    // path; the failure is already logged.
+                    continue;
+                }
+                seg.file_path = QString::fromStdWString(seg_mp4->wstring());
                 std::error_code sz_ec;
-                const auto sz = std::filesystem::file_size(seg_mp4, sz_ec);
+                const auto sz = std::filesystem::file_size(*seg_mp4, sz_ec);
                 if (!sz_ec)
                     total_bytes += static_cast<uint64_t>(sz);
             }

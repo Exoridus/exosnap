@@ -352,25 +352,47 @@ void ensureWin32ResizableStyle(HWND hwnd) {
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
-void applyDwmBorderSuppression(HWND hwnd, const char* reason) {
+// Resolve the active theme's subtle line colour to an opaque COLORREF for the
+// native DWM window border. The theme's line tokens are semi-transparent white
+// (dark) / ink (light) overlays, so composite them over the theme background —
+// DWMWA_BORDER_COLOR takes no alpha.
+COLORREF themedDwmBorderColorref() {
+    const auto& theme = exosnap::ui::theme::ActiveTheme();
+    QColor bg = exosnap::ui::theme::ParseThemeColor(theme.bg);
+    if (!bg.isValid())
+        bg = QColor(0x0E, 0x0E, 0x10);
+    const QColor line = exosnap::ui::theme::ParseThemeColor(theme.line2);
+    QColor resolved = bg;
+    if (line.isValid()) {
+        const double a = line.alphaF();
+        resolved =
+            QColor(qRound(line.red() * a + bg.red() * (1.0 - a)), qRound(line.green() * a + bg.green() * (1.0 - a)),
+                   qRound(line.blue() * a + bg.blue() * (1.0 - a)));
+    }
+    return RGB(resolved.red(), resolved.green(), resolved.blue());
+}
+
+// Paint the frameless window's native 1px contour in a subtle themed line colour
+// (it follows the Win11 rounded corners, which no QSS border can). Failures stay
+// silent apart from a one-time log line: DWMWA_BORDER_COLOR does not exist before
+// Windows 11 build 22000, and those systems simply keep the default frame.
+void applyDwmThemedBorder(HWND hwnd, const char* reason) {
     if (hwnd == nullptr)
         return;
 
 #if !defined(DWMWA_BORDER_COLOR)
 #define DWMWA_BORDER_COLOR 34
 #endif
-#if !defined(DWMWA_COLOR_NONE)
-#define DWMWA_COLOR_NONE 0xFFFFFFFE
-#endif
 
-    const COLORREF border_color = DWMWA_COLOR_NONE;
+    const COLORREF border_color = themedDwmBorderColorref();
     const HRESULT hr =
         DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border_color, static_cast<DWORD>(sizeof(border_color)));
 
     if (kTraceFrameActivation) {
-        const QString line = QStringLiteral("%1 [FrameDbg] DwmSetWindowAttribute(DWMWA_BORDER_COLOR=NONE) reason=%2 "
-                                            "hwnd=0x%3 hr=0x%4")
+        const QString line = QStringLiteral("%1 [FrameDbg] DwmSetWindowAttribute(DWMWA_BORDER_COLOR=0x%2) reason=%3 "
+                                            "hwnd=0x%4 hr=0x%5")
                                  .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
+                                 .arg(QString::number(static_cast<quint32>(border_color), 16))
                                  .arg(QString::fromLatin1(reason != nullptr ? reason : "null"))
                                  .arg(QString::number(reinterpret_cast<quintptr>(hwnd), 16))
                                  .arg(QString::number(static_cast<quint32>(hr), 16));
@@ -388,8 +410,8 @@ void applyDwmBorderSuppression(HWND hwnd, const char* reason) {
     }
 }
 
-void applyDwmBorderSuppression(HWND hwnd) {
-    applyDwmBorderSuppression(hwnd, "unspecified");
+void applyDwmThemedBorder(HWND hwnd) {
+    applyDwmThemedBorder(hwnd, "unspecified");
 }
 
 void traceFrameMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
@@ -446,6 +468,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     setWindowTitle("ExoSnap");
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::WindowMinMaxButtonsHint | Qt::WindowSystemMenuHint);
+
+#if defined(Q_OS_WIN)
+    // Keep the native 1px DWM contour in the active theme's line colour across
+    // theme switches. The initial application happens with the rest of the Win32
+    // frame setup (resizable_style_applied_) once the native window exists; this
+    // subscriber only refreshes an already-applied border, so it must not force
+    // native-window creation during construction.
+    ui::theme::OnThemeChanged(this, [this]() {
+        if (!resizable_style_applied_)
+            return;
+        if (HWND hwnd = reinterpret_cast<HWND>(effectiveWinId()))
+            applyDwmThemedBorder(hwnd, "theme-change");
+    });
+#endif
 
     if (!QApplication::windowIcon().isNull()) {
         setWindowIcon(QApplication::windowIcon());
@@ -1695,7 +1731,7 @@ void MainWindow::showEvent(QShowEvent* event) {
     if (!resizable_style_applied_) {
         HWND hwnd = reinterpret_cast<HWND>(winId());
         ensureWin32ResizableStyle(hwnd);
-        applyDwmBorderSuppression(hwnd);
+        applyDwmThemedBorder(hwnd);
         resizable_style_applied_ = true;
     }
     if (!hotkeys_registered_) {
@@ -2062,7 +2098,7 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                     reason = "WM_ACTIVATE";
                 else if (msg->message == WM_SETFOCUS)
                     reason = "WM_SETFOCUS";
-                applyDwmBorderSuppression(msg->hwnd, reason);
+                applyDwmThemedBorder(msg->hwnd, reason);
             }
 
             if (msg->hwnd == main_hwnd && msg->message == WM_NCACTIVATE) {
@@ -2080,9 +2116,9 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 if (title_bar_ != nullptr)
                     title_bar_->setMaximizedState(effectiveMaximizedState());
 
-                // Re-apply DWM border suppression after any size transition to prevent
-                // the OS-drawn accent border from reappearing after restore/resize.
-                applyDwmBorderSuppression(msg->hwnd, "WM_SIZE");
+                // Re-apply the themed DWM border after any size transition so the
+                // OS-drawn accent border cannot reappear after restore/resize.
+                applyDwmThemedBorder(msg->hwnd, "WM_SIZE");
             }
 
             if (msg->hwnd == main_hwnd && msg->message == WM_GETMINMAXINFO) {
@@ -2261,14 +2297,14 @@ void MainWindow::changeEvent(QEvent* event) {
         const bool restored_from_maximized = was_maximized && !isMaximized();
 
         // On restore from maximized, force the NC area to be recalculated and
-        // re-apply the DWM border suppression so the accent frame cannot reappear.
+        // re-apply the themed DWM border so the accent frame cannot reappear.
         HWND hwnd = reinterpret_cast<HWND>(winId());
         if (hwnd != nullptr) {
             if (restored_from_maximized) {
                 SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
-            applyDwmBorderSuppression(hwnd, "changeEvent/WindowStateChange");
+            applyDwmThemedBorder(hwnd, "changeEvent/WindowStateChange");
         }
 #endif
     }
@@ -4132,6 +4168,25 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
     }
 }
 
+void MainWindow::onAutoSendCrashReportsToggled(bool enabled) {
+    persisted_settings_.auto_send_crash_reports = enabled;
+    settings_store_.Save(persisted_settings_);
+
+    if (enabled) {
+        // Matches the crash dialog's silent-consent path (checkAndShowCrashReportOverlay):
+        // grant consent immediately rather than waiting for the next crash.
+        crash_capture::GiveUserConsent();
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Auto-send enabled from Settings — consent granted"));
+    } else {
+        // Revoke so the next crash shows the consent dialog again instead of
+        // silently auto-sending.
+        crash_capture::RevokeUserConsent();
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Auto-send disabled from Settings — consent revoked"));
+    }
+}
+
 void MainWindow::dispatchNotificationAction(const notifications::NotificationEvent& event,
                                             notifications::NotificationAction action) {
     using notifications::NotificationAction;
@@ -4799,6 +4854,8 @@ void MainWindow::buildConfigPage() {
     config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
     connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
             &MainWindow::onPresentDiagnosticsOptInToggled);
+    config_page_->setAutoSendCrashReports(persisted_settings_.auto_send_crash_reports);
+    connect(config_page_, &ConfigPage::autoSendCrashReportsToggled, this, &MainWindow::onAutoSendCrashReportsToggled);
     // Route Settings webcam panel Rescan through the webcam notifier.
     // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
     auto* setup_panel =

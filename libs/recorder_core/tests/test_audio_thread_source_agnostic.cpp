@@ -224,6 +224,92 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_SourceInitFailureRecordsFailure)
     EXPECT_FALSE(foundEos);
 }
 
+// ---------------------------------------------------------------------------
+// CV-BUG-004: MakeEncoderSetup's audio_codec switch must not fall back to AAC
+// for an unrecognized codec value, and named codecs must keep working after
+// the default: branch became an explicit case AudioCodec::AacMf.
+// ---------------------------------------------------------------------------
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_UnrecognizedAudioCodec_FailsInsteadOfDefaultingToAac) {
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    // Not a real member of enum class AudioCodec (Opus, AacMf, Pcm, Flac). This
+    // stands in for a corrupted/out-of-range config value that a normal
+    // exhaustive switch over named enumerators can never receive via
+    // ordinary construction.
+    state.config.audio_codec = static_cast<AudioCodec>(99);
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 3);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 1);
+
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
+
+    EXPECT_TRUE(state.HasFailure());
+    {
+        std::lock_guard lk(state.failure_mutex);
+        EXPECT_TRUE(state.failure_recorded);
+        EXPECT_EQ(state.failure.error_phase, ErrorPhase::AudioEncode);
+        EXPECT_NE(state.failure.error_detail.find("Unrecognized audio codec"), std::string::npos);
+    }
+
+    // The failure must be raised before any encoder (in particular the AAC
+    // encoder the old `default:` branch built) gets to run: the track was
+    // never published as ready, and no packets or EOS sentinel were queued.
+    {
+        std::lock_guard lk(state.premux_mutex);
+        EXPECT_FALSE(state.codec_private.audio_track_ready[1]);
+    }
+    EXPECT_TRUE(GatherQueuedAudioPackets(state).empty());
+    bool foundEos = false;
+    {
+        std::lock_guard lk(state.mux_mutex);
+        for (const auto& item : state.mux_queue) {
+            if (std::get_if<AudioEosSentinel>(&item.payload) != nullptr) {
+                foundEos = true;
+            }
+        }
+    }
+    EXPECT_FALSE(foundEos);
+}
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_PcmCodec_EncodesSuccessfully) {
+    // Regression guard: Pcm must keep working unchanged now that AacMf has its
+    // own explicit case instead of being the switch's default: branch.
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.config.audio_codec = AudioCodec::Pcm;
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 3);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
+
+    EXPECT_FALSE(state.HasFailure());
+    EXPECT_FALSE(GatherQueuedAudioPackets(state).empty());
+}
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_FlacCodec_EncodesSuccessfully) {
+    // Regression guard: Flac must keep working unchanged now that AacMf has its
+    // own explicit case instead of being the switch's default: branch.
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.config.audio_codec = AudioCodec::Flac;
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, 3);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
+
+    EXPECT_FALSE(state.HasFailure());
+    EXPECT_FALSE(GatherQueuedAudioPackets(state).empty());
+}
+
 // Mock source that delivers kFramesPerPacket-sample chunks and signals stop after all packets.
 // Used to verify PTS step size with sub-Opus-frame delivery (like a 10 ms WASAPI period).
 class SmallChunkMockSource : public IAudioCaptureSource {

@@ -49,6 +49,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("record-webcam-resize-bottom-right"),
         QStringLiteral("record-webcam-min-size"),
         QStringLiteral("record-webcam-max-size"),
+        QStringLiteral("record-webcam-bottom-edge"),
         QStringLiteral("record-webcam-mirrored"),
         QStringLiteral("record-webcam-countdown-locked"),
         QStringLiteral("record-webcam-recording-locked"),

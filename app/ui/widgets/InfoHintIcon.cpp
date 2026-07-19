@@ -5,9 +5,12 @@
 #include <QCursor>
 #include <QEnterEvent>
 #include <QFocusEvent>
+#include <QPoint>
 #include <QRect>
 #include <QScreen>
 #include <QSize>
+#include <QTextDocument>
+#include <QTextDocumentFragment>
 #include <QTimer>
 #include <QToolTip>
 
@@ -20,6 +23,16 @@ namespace {
 constexpr int kIconSize = 15;             // logical px — matches the design's 15×15 info glyph
 constexpr int kHoverPollIntervalMs = 120; // matches CompareHint::hover_timer_ / TransportDock's chevron poll cadence
 constexpr int kHysteresisMarginPx = 6;    // px the cursor may sit outside the icon before the tooltip closes
+constexpr int kTooltipGapPx = 4;          // px gap between the icon's bottom edge and the tooltip's top
+
+// The hint may be rich text (bold lead line + <br> breaks, see SettingsHintText.h).
+// Screen readers must not hear markup, so the accessible name uses a flattened
+// plain-text form: <br> becomes a line break, tags are dropped.
+QString plainForAccessibility(const QString& text) {
+    if (!Qt::mightBeRichText(text))
+        return text;
+    return QTextDocumentFragment::fromHtml(text).toPlainText();
+}
 } // namespace
 
 InfoHintIcon::InfoHintIcon(const QString& hint_text, QWidget* parent) : QToolButton(parent), hint_text_(hint_text) {
@@ -29,8 +42,9 @@ InfoHintIcon::InfoHintIcon(const QString& hint_text, QWidget* parent) : QToolBut
     setFocusPolicy(Qt::TabFocus);
 
     // Accessible: the button announces itself as "More information: <hint>" for
-    // screen readers and satisfies the keyboard-reachable requirement.
-    setAccessibleName(QStringLiteral("More information: ") + hint_text_);
+    // screen readers and satisfies the keyboard-reachable requirement. The hint may
+    // carry rich-text markup; flatten it so no tags are read aloud.
+    setAccessibleName(QStringLiteral("More information: ") + plainForAccessibility(hint_text_));
 
     // setToolTip() still carries the string for tooling that reads the property
     // directly (e.g. accessibility inspectors); actual display is driven explicitly
@@ -77,16 +91,15 @@ void InfoHintIcon::enterEvent(QEnterEvent* event) {
     QToolButton::enterEvent(event);
     hovered_ = true;
     updateIcon(true);
-    // Anchor on the real OS cursor position rather than a widget-derived point
-    // (mapToGlobal(rect().center())): QCursor::pos() is always correct regardless
-    // of screen, whereas mapToGlobal() can be computed against a stale per-window
-    // DPI/screen association right after the window is dragged to a differently
-    // scaled monitor — the previous explicit call here used mapToGlobal and could,
-    // on a multi-monitor / mixed-DPI desktop, resolve to the wrong screen and pop
-    // the tooltip up on the edge of the primary display instead of under the icon.
-    // (See focusInEvent below for the keyboard-triggered path, which has no cursor
-    // position to use and is hardened differently.)
-    QToolTip::showText(QCursor::pos(), hint_text_, this);
+    // Anchor to the icon (just below its rect), NOT to QCursor::pos(). A
+    // cursor-anchored tip materialised directly under the pointer: it landed in a
+    // different spot for every approach direction, jittered as the cursor moved the
+    // last pixels onto the glyph, and — depending on approach — Qt tore the freshly
+    // shown tip down on the very next move of the same entering motion, so it
+    // appeared to "only open when the cursor came from below". A fixed icon-anchored
+    // point removes the direction dependence and the jitter; hintAnchor() resolves
+    // the widget's own screen and clamps into it for the multi-monitor case.
+    QToolTip::showText(hintAnchor(), hint_text_, this);
     hover_timer_->start();
 }
 
@@ -102,25 +115,28 @@ void InfoHintIcon::leaveEvent(QEvent* event) {
 void InfoHintIcon::focusInEvent(QFocusEvent* event) {
     QToolButton::focusInEvent(event);
     updateIcon(true);
-    // No cursor position to anchor on for a keyboard-only trigger (unlike enterEvent
-    // above), so mapToGlobal(rect().center()) is the only available point — but it is
-    // subject to the same staleness risk: right after the window is dragged to a
-    // differently scaled monitor, mapToGlobal() can be computed against a stale
-    // per-window DPI/screen association before Qt/Windows updates it. Rather than
-    // trust that point outright, resolve the widget's own screen explicitly and clamp
-    // the point into its available geometry if it ever lands outside — the same
-    // defensive pattern CompareHint::repositionPopover() already uses (screen() first,
-    // clamp into availableGeometry()) for its popover.
-    QPoint anchor = mapToGlobal(rect().center());
+    // Keyboard trigger has no cursor to anchor on; use the same icon-anchored point
+    // as the hover path so the tip appears in an identical, stable place either way.
+    QToolTip::showText(hintAnchor(), hint_text_, this);
+    hover_timer_->start();
+}
+
+QPoint InfoHintIcon::hintAnchor() const {
+    // A fixed point just below the icon's bottom-left corner. Independent of the
+    // cursor, so the tooltip appears in the same place from every approach direction
+    // and never shifts with small cursor movements.
+    QPoint anchor = mapToGlobal(QPoint(0, height() + kTooltipGapPx));
+    // Multi-monitor hardening (mirrors CompareHint::repositionPopover): resolve the
+    // widget's own screen and clamp the point into its available geometry. mapToGlobal
+    // can be computed against a stale per-window DPI/screen association right after the
+    // window is dragged to a differently scaled monitor; the clamp keeps the tip on the
+    // icon's screen instead of the primary display's edge.
     if (QScreen* widget_screen = this->screen()) {
         const QRect avail = widget_screen->availableGeometry();
-        if (!avail.contains(anchor)) {
-            anchor.setX(std::clamp(anchor.x(), avail.left(), avail.right()));
-            anchor.setY(std::clamp(anchor.y(), avail.top(), avail.bottom()));
-        }
+        anchor.setX(std::clamp(anchor.x(), avail.left(), avail.right()));
+        anchor.setY(std::clamp(anchor.y(), avail.top(), avail.bottom()));
     }
-    QToolTip::showText(anchor, hint_text_, this);
-    hover_timer_->start();
+    return anchor;
 }
 
 void InfoHintIcon::focusOutEvent(QFocusEvent* event) {

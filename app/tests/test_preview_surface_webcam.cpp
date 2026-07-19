@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdlib>
 
 #include <QApplication>
@@ -341,6 +342,118 @@ TEST(PreviewSurfaceSnapshotReady, NotReadyWithoutDxgiPreview) {
     EnsureApplication();
     PreviewSurface surface;
     EXPECT_FALSE(surface.isDxgiSnapshotReady());
+}
+
+// ---- True WYSIWYG PiP (no preview-only trims) ------------------------------
+
+// Regression: the preview used to reserve the bottom stats strip and clip the PiP
+// out of it, so a bottom-edge placement rendered trimmed while the file got the
+// full camera. The PiP must now paint all the way to the video edge.
+TEST_F(PreviewSurfaceWebcamTest, PipDrawsFlushToBottomEdgeUnclipped) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOpacity(1.0f);
+    // Flush bottom-right quarter: (0.75,0.75)-(1.0,1.0) → pixels 600..800 x 337..450.
+    surface_->setWebcamOverlayRect(QRectF(0.75, 0.75, 0.25, 0.25));
+
+    const QImage img = surface_->grab().toImage();
+    // Below the old footer clip (~y=410) and below the stats-row labels (rows end
+    // at y=438): this pixel used to show the background frame, never the camera.
+    const QColor cam(200, 120, 90); // fixture camera fill (SetUp)
+    const QColor got = img.pixelColor(QPoint(700, 444));
+    EXPECT_LE(std::abs(got.red() - cam.red()), 8);
+    EXPECT_LE(std::abs(got.green() - cam.green()), 8);
+    EXPECT_LE(std::abs(got.blue() - cam.blue()), 8);
+}
+
+// ---- Hover cursor refresh (stationary-pointer bug) -------------------------
+
+// Regression: the resize/move cursor was recomputed ONLY on mouse moves, so any
+// hit-map change under a stationary pointer (selection toggles the corner-handle
+// zones, disabling removes them) kept a stale cursor until the pointer left and
+// re-entered the surface.
+TEST_F(PreviewSurfaceWebcamTest, HoverCursorRefreshesOnSelectionChange) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+
+    // Hover the bottom-right corner: unselected → plain move (no handles yet).
+    const QPointF corner(519.0, 291.0); // rect spans 320..520 x 180..292.5
+    sendMouse(QEvent::MouseMove, corner, Qt::NoButton, Qt::NoButton);
+    EXPECT_EQ(surface_->cursor().shape(), Qt::SizeAllCursor);
+
+    // Selecting adds the corner handles — the cursor must flip WITHOUT any
+    // further mouse movement.
+    surface_->setWebcamSelected(true);
+    EXPECT_EQ(surface_->cursor().shape(), Qt::SizeFDiagCursor);
+
+    // Deselecting removes them again — still without a mouse move.
+    surface_->setWebcamSelected(false);
+    EXPECT_EQ(surface_->cursor().shape(), Qt::SizeAllCursor);
+}
+
+TEST_F(PreviewSurfaceWebcamTest, HoverCursorClearsWhenEditingDisabled) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    ASSERT_EQ(surface_->cursor().shape(), Qt::SizeAllCursor);
+
+    surface_->setWebcamOverlayEnabled(false);
+    EXPECT_EQ(surface_->cursor().shape(), Qt::ArrowCursor);
+}
+
+TEST_F(PreviewSurfaceWebcamTest, HoverCursorRefreshesAfterDragEnds) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    surface_->setWebcamSelected(true);
+
+    // Grab the bottom-right handle and drag so the pointer ends INSIDE the PiP
+    // body (the rect grows past the pointer's release position).
+    const QPointF corner(519.0, 291.0);
+    sendMouse(QEvent::MouseMove, corner, Qt::NoButton, Qt::NoButton);
+    ASSERT_EQ(surface_->cursor().shape(), Qt::SizeFDiagCursor);
+    sendMouse(QEvent::MouseButtonPress, corner, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, corner + QPointF(120, 70), Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, corner + QPointF(120, 70), Qt::LeftButton, Qt::NoButton);
+
+    // The release position sits on the grown rect's bottom-right corner handle;
+    // the cursor must reflect the post-drag hit map immediately.
+    const QRectF n = surface_->webcamOverlayRect();
+    const QPointF br((n.x() + n.width()) * 800.0, (n.y() + n.height()) * 450.0);
+    const QPointF released = corner + QPointF(120, 70);
+    const bool on_handle = std::abs(released.x() - br.x()) < 10.0 && std::abs(released.y() - br.y()) < 10.0;
+    EXPECT_EQ(surface_->cursor().shape(), on_handle ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
+}
+
+// ---- Content aspect ratio (drives the Record page's content-fit box) -------
+
+TEST_F(PreviewSurfaceWebcamTest, ContentAspectRatioTracksLiveFrame) {
+    // Fixture SetUp installed a 1600x900 frame.
+    EXPECT_NEAR(surface_->contentAspectRatio(), 16.0 / 9.0, 1e-9);
+
+    int change_count = 0;
+    double last_ar = -1.0;
+    QObject::connect(surface_.get(), &PreviewSurface::contentAspectRatioChanged, [&](double ar) {
+        ++change_count;
+        last_ar = ar;
+    });
+
+    QImage square(1000, 1000, QImage::Format_RGB32);
+    square.fill(QColor(10, 10, 10));
+    surface_->setLiveFrame(square);
+    EXPECT_EQ(change_count, 1);
+    EXPECT_NEAR(last_ar, 1.0, 1e-9);
+    EXPECT_NEAR(surface_->contentAspectRatio(), 1.0, 1e-9);
+
+    // Same dimensions again → no redundant notification.
+    QImage square2(1000, 1000, QImage::Format_RGB32);
+    square2.fill(QColor(30, 30, 30));
+    surface_->setLiveFrame(square2);
+    EXPECT_EQ(change_count, 1);
+
+    // Source gone → unknown (0.0), notified once.
+    surface_->setLiveFrame(QImage());
+    EXPECT_EQ(change_count, 2);
+    EXPECT_NEAR(last_ar, 0.0, 1e-9);
+    EXPECT_NEAR(surface_->contentAspectRatio(), 0.0, 1e-9);
 }
 
 } // namespace

@@ -37,6 +37,9 @@ is subject to the following guarantees:
 
 - **Opt-in and consent-gated.** Nothing is transmitted without your explicit consent. Upload is
   off by default. A crash-report dialog shows you exactly what would be sent before you decide.
+- **Revisitable at any time.** Consent granted from the crash dialog is not permanent: **Settings →
+  Advanced → "Send crash reports automatically"** reflects and controls the same choice. Turning it
+  off revokes consent immediately, so the next crash asks again instead of auto-sending.
 - **Self-builds never upload.** Official builds compile in the Sentry ingest key
   (`EXOSNAP_OFFICIAL_BUILD`); self-built binaries do not include it and never phone home.
 - **What is sent (allowlist).** If you choose to send a report, only the structured tag keys

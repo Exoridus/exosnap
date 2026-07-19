@@ -365,16 +365,20 @@ QWidget#recordSourceRow[sourceLocked="true"] {
     background: transparent;
 }
 
+/* CONTENT-FIT PREVIEW BOX: the box is sized to the source aspect ratio, so its
+   edge IS the record edge. Borderless + square in the neutral state (no panel
+   chrome competing with the rectangular native swap-chain child); the 1px border
+   exists only as the recording/warn/blocked status tone drawn directly on the
+   video edge. The border stays 1px in EVERY state (transparent when neutral) so
+   toggling states never shifts the box geometry. */
 QWidget#recordPreviewSurfaceHost {
     background: ${preview-well};
-    border: 1px solid ${line2};
-    /* Square corners: the live preview is a rectangular native swap-chain child
-       window that would cover any rounded corner unevenly. */
+    border: 1px solid transparent;
     border-radius: 0px;
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="ready"] {
-    border-color: ${line2};
+    border-color: transparent;
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="recording"] {
@@ -1111,22 +1115,6 @@ QLabel#cardGlyphChip {
 /* v10 P3: "Expert mode" header label tints to accent while expert mode is on. */
 QLabel#expertModeLabel[expertOn="true"] {
     color: ${accent};
-}
-
-/* v10 P2: amber warning banner above the Settings card grid (expert mode only). */
-/* Padding lives in the layout's contentsMargins: Qt does not apply stylesheet
-   padding to a plain QWidget's child layout, only to its background/border box. */
-QWidget#expertWarnBanner {
-    background: ${warn-dim};
-    border: 1px solid ${warn-b};
-    border-left: 3px solid ${warn};
-    border-radius: 11px;
-}
-
-QLabel#expertWarnBannerText {
-    color: ${warn};
-    font-size: 12.5px;
-    font-weight: 500;
 }
 
 QLabel[labelRole="fieldLabel"] {
@@ -2274,7 +2262,8 @@ QToolTip {
     background: ${bg2};
     color: ${text0};
     border: 1px solid ${line2};
-    padding: ${space-xs}px ${space-sm}px;
+    border-radius: ${radius-sm}px;
+    padding: ${space-sm}px ${space-md}px;
 }
 
 /* Detail page header — back affordance for sub-pages (Webcam, Advanced) */

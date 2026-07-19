@@ -39,7 +39,10 @@
 #include <stdexcept>
 #include <string>
 
+#include <fcntl.h>
 #include <io.h>
+#include <share.h>
+#include <sys/stat.h>
 #include <windows.h>
 
 namespace recorder_core {
@@ -68,14 +71,30 @@ void LogDurabilityFlushFailure(const char* message, const std::string& reason) {
 // class's FILE* member is private with no accessor, so there is no way to reach
 // the CRT stdio buffer (for fflush) or the underlying OS HANDLE (for
 // FlushFileBuffers) through it. Read/write/seek semantics below mirror
-// StdIOCallback exactly (same fopen mode, same exception-on-failure contract)
-// — this is plumbing for durability, not a behavior change.
+// StdIOCallback exactly -- this is plumbing for durability, not a behavior
+// change.
+//
+// The initial open is exclusive-create (_O_CREAT | _O_EXCL), NOT the
+// truncate-on-exists "wb+" fopen mode StdIOCallback would use. DeriveSegmentPath
+// only ever hands back a path it just confirmed does not exist; opening in
+// truncate mode here would silently overwrite a file some other writer (or a
+// leftover from a previous run) created in the gap between that probe and this
+// open (the TOCTOU window). Exclusive creation makes that race fail loudly
+// (EEXIST) through the normal Open()-failure path instead.
 class DurableFileIo final : public libebml::IOCallback {
   public:
     explicit DurableFileIo(const std::string& path) {
-        m_file = std::fopen(path.c_str(), "wb+");
+        int fd = -1;
+        const errno_t open_err =
+            _sopen_s(&fd, path.c_str(), _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+        if (open_err != 0 || fd < 0) {
+            throw std::runtime_error("Can't exclusively create file \"" + path +
+                                     "\" in mode \"wb+\": " + std::strerror(open_err));
+        }
+        m_file = _fdopen(fd, "wb+");
         if (m_file == nullptr) {
-            throw std::runtime_error("Can't open stdio file \"" + path + "\" in mode \"wb+\"");
+            _close(fd);
+            throw std::runtime_error("Can't associate a stream with file \"" + path + "\"");
         }
     }
 

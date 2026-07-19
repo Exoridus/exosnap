@@ -369,6 +369,20 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_y = 0.05f,
      .webcam_w = 0.90f,
      .webcam_h = 0.90f},
+    {.id = QStringLiteral("record-webcam-bottom-edge"),
+     .title = QStringLiteral("Record / Webcam PiP At Bottom Edge"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     // Flush against the bottom-right video edge (x + w and y + h end exactly at
+     // 1.0): pins true WYSIWYG — the PiP renders unsquished and unclipped
+     // underneath the stats-row OSD, right up to the record edge.
+     .webcam_x = 0.72f,
+     .webcam_y = 0.72f,
+     .webcam_w = 0.28f,
+     .webcam_h = 0.28f},
     {.id = QStringLiteral("record-webcam-mirrored"),
      .title = QStringLiteral("Record / Webcam Mirrored"),
      .page = VisualPage::Record,

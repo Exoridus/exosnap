@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QObject>
+#include <QMetaObject>
 #include <QString>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <vector>
 
 #include "models/SettingsCompareData.h"
 #include "ui/widgets/CompareHint.h"
@@ -32,24 +32,6 @@ class CompareHintTest : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
         EnsureApplication();
-    }
-};
-
-// Manual signal recorder — avoids Qt6::Test / QSignalSpy dependency
-// (same pattern as test_audio_device_notifier.cpp).
-struct OptionSelectedSink {
-    std::vector<QString> calls;
-
-    void connect(ui::widgets::CompareHint* hint) {
-        QObject::connect(hint, &ui::widgets::CompareHint::optionSelected,
-                         [this](const QString& value) { calls.push_back(value); });
-    }
-
-    int count() const {
-        return static_cast<int>(calls.size());
-    }
-    const QString& last() const {
-        return calls.back();
     }
 };
 
@@ -163,32 +145,6 @@ TEST_F(CompareHintTest, Widget_HasIcon_AtConstruction) {
     EXPECT_FALSE(hint.icon().isNull()) << "CompareHint must have an icon at construction";
 }
 
-TEST_F(CompareHintTest, Widget_OptionSelected_EmittedViaSignalSink) {
-    ui::widgets::CompareHint hint(QStringLiteral("container"), QStringLiteral("MKV"));
-    OptionSelectedSink sink;
-    sink.connect(&hint);
-
-    // Emit directly to verify the signal is wired correctly.
-    emit hint.optionSelected(QStringLiteral("WebM"));
-    ASSERT_EQ(sink.count(), 1);
-    EXPECT_EQ(sink.last(), QStringLiteral("WebM"));
-}
-
-TEST_F(CompareHintTest, Widget_OptionSelected_SetCurrentValueUpdatesInternally) {
-    ui::widgets::CompareHint hint(QStringLiteral("container"), QStringLiteral("MKV"));
-    OptionSelectedSink sink;
-    sink.connect(&hint);
-
-    // Simulate the internal path that the option row click triggers:
-    // setCurrentValue + emit optionSelected.
-    hint.setCurrentValue(QStringLiteral("MP4"));
-    emit hint.optionSelected(QStringLiteral("MP4"));
-
-    ASSERT_EQ(sink.count(), 1);
-    EXPECT_EQ(sink.last(), QStringLiteral("MP4"));
-    EXPECT_EQ(hint.currentValue(), QStringLiteral("MP4"));
-}
-
 // Regression: Tab-focusing a CompareHint with compare data crashed the app with a
 // stack overflow. focusInEvent showed the Qt::Popup popover; opening the first
 // popup makes Qt send FocusOut(PopupFocusReason) to the focused button, whose
@@ -222,6 +178,32 @@ TEST_F(CompareHintTest, Widget_AccessibleName_ContainsTitle) {
     const auto* d = ui::compare::compareData(QStringLiteral("container"));
     ASSERT_NE(d, nullptr);
     EXPECT_TRUE(hint.accessibleName().contains(d->title)) << "Accessible name must include the compare data title";
+}
+
+// The popover is an explainer only: its option rows must be plain, non-interactive
+// widgets — never buttons — so they carry no click/hover-to-pick affordance. This
+// guards the removal of the redundant second picker (optionSelected).
+TEST_F(CompareHintTest, Widget_PopoverRows_AreNonInteractiveExplainers) {
+    ui::widgets::CompareHint hint(QStringLiteral("container"), QStringLiteral("MKV"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&hint, "showPopover"));
+
+    QWidget* popover = nullptr;
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+        if (top->findChild<QWidget*>(QStringLiteral("compareHintRows")) != nullptr) {
+            popover = top;
+            break;
+        }
+    }
+    ASSERT_NE(popover, nullptr) << "hover/focus popover must open";
+
+    const auto rows = popover->findChildren<QWidget*>(QStringLiteral("compareOptionRow"));
+    EXPECT_EQ(rows.size(), 3) << "container has three option rows";
+    for (QWidget* row : rows) {
+        EXPECT_EQ(qobject_cast<QAbstractButton*>(row), nullptr)
+            << "explainer rows must not be buttons (no click affordance)";
+    }
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&hint, "hidePopover"));
 }
 
 } // namespace

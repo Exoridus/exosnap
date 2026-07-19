@@ -70,6 +70,10 @@ produced during recording.
 
 The default theme is **dark mode**.
 
+The frameless main window carries a **subtle native 1px border** in the active theme's line colour
+(it follows Windows 11's rounded window corners and updates on a theme switch). On Windows versions
+without per-window border colours the default system frame is kept — never an error.
+
 ---
 
 ## 3. Recording defaults and profiles
@@ -117,10 +121,11 @@ sanctioned exception.
 
 Settings hosts the preset dropdown directly — there is no separate preset manager surface. Built-in
 presets carry a small **Built-in** badge inside their dropdown option row, so the marker never sits
-beside the dropdown and shifts the toolbar. Next to the dropdown a `…` overflow menu holds
-**Save as new…**, **Rename…** (disabled for a built-in), **Export…**, and **Import…**. While the preset is `(changed)`, contextual **Save as new…** and **Reset** buttons
-appear; **Delete** appears whenever a user preset is selected, independent of the changed state, and
-never for a built-in. The Output page carries the same row. Switching presets applies immediately and
+beside the dropdown and shifts the toolbar. The toolbar carries a single visible action button,
+**Save as new…**, which appears while the preset is `(changed)`. Every other action lives in a `…`
+overflow menu next to the dropdown: **Rename…** (disabled for a built-in), **Reset** (enabled only
+while `(changed)`), **Delete** (enabled whenever a user preset is selected, never for a built-in),
+**Export…**, and **Import…**. The Output page carries the same row. Switching presets applies immediately and
 records a notification-hub entry offering **Undo**, which restores both the previous live
 configuration and the previous selection. No toast appears — the combo box that performed the switch
 already offers the way back.
@@ -375,6 +380,20 @@ resumes when frames come back. It never goes empty and never goes black. A tile 
 produced a frame still reports "Preview unavailable", because there is nothing to hold. Closing the
 picker releases every capture it opened.
 
+**Record preview box (content-fit).** The Record-page preview box follows the **current source's
+aspect ratio** — width-driven and vertically centered in the available space (height-clamped and
+horizontally centered for sources taller than the area) — so **the edge of the box is the edge of
+the recording**: there are no letterbox/pillarbox fill bars inside the box, and genuinely black
+recorded content is distinguishable from padding. The box is borderless and square-cornered in the
+neutral state; the recording / paused / warning / blocked status tone renders as a **square 1px
+line directly on the video edge** (plus the existing recording scanline treatment). The box follows
+aspect changes live: switching targets, changing a region, or the captured source changing its own
+dimensions re-fits the box. With no source selected (or before the source's dimensions are known)
+the box keeps its default full-area size. The preview's meta/stats text rows (top target line,
+bottom stats/format line) are **on-screen indicators drawn over the video — and over the webcam
+PiP — in both the live (DXGI) and static preview paths**; they are never part of the recording or
+of frame screenshots.
+
 **Idle live preview.** Before recording, the Record-page preview of a **display** is fed by the same
 DXGI Output Duplication backend the recording uses, owned by a shared capture hub: the preview is
 VRR- and HDR-true, shows no OS capture indicator, draws the live cursor, and **holds its last frame
@@ -427,9 +446,11 @@ live setup preview; the camera opens only while it is on (opening Settings → W
 camera on by itself). The webcam is never recorded without a selected device (the first available
 camera is pre-selected when one exists). By default the picture-in-picture starts in the
 bottom-right corner of the preview with a small margin from both edges (it is not flush to the
-corner); it can then be moved and resized anywhere. In the Record preview the picture-in-picture is
-kept clear of the stats footer and the frame border so those are never hidden behind it — a
-preview-only presentation detail; the recorded file composites the camera from the same placement.
+corner); it can then be moved and resized anywhere **within the displayed video area, right up to
+every edge**, and the preview renders it **exactly as it will appear in the file — never squished,
+trimmed or clipped**. The preview's meta/stats text rows draw above the picture-in-picture as
+on-screen indicators (they are not part of the recording), so a bottom-edge placement is shown in
+full underneath them.
 With **no camera attached** the Record dock's webcam
 control is unavailable and says so; attaching one makes it available again. Unplugging the last
 camera never loses the stored choice — it returns when the device does. When the toggle is on but the
@@ -580,7 +601,10 @@ boundaries stay keyframe-safe; counters reset per segment. Split is supported fo
 For MP4, each completed segment is remuxed to progressive MP4 in the background while recording
 continues; "Saved" is reported only once all segment remuxes finish. Manual split is independent of
 automatic split. Under Expert mode the split controls are laid out inline within the Output card
-(time and size sub-sections), not tucked behind a popover.
+(time and size sub-sections), not tucked behind a popover. Each sub-section leads with an on/off
+**toggle**; the interval selector (Split recording) and the segment-size field (Split by size) appear
+only while their toggle is on. Toggling off is exactly the "off" state — it changes no persisted value
+beyond the split mode itself, so presets and exported TOML round-trip identically.
 
 **Low-disk guard.** A configurable soft **warning threshold** (default around 2 GB free) shows a
 Diagnostics notice but still allows recording; a lower **hard-stop threshold** (default around
@@ -833,7 +857,12 @@ conflict specifically, because that conflict is fixable in place (switch Bit dep
 Settings offers inline info hints (hover
 popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
 only rows with a genuine A/B tradeoff carry the icon (plain boolean rows do not), and per-option
-helper text lives inside the popover rather than as a separate line under the control. Roadmap-only
+helper text lives inside the popover rather than as a separate line under the control. The
+multi-option compare popovers are **explanatory only**: they list each option with its qualitative
+tradeoff and mark the currently active value, but the setting itself is always changed with the
+row's own control (the combo box next to the glyph), never by clicking inside the popover — the
+popover carries no second, reduced picker. Single-line info hints render as calm tooltips; longer
+ones use a short bold lead line with the explanation beneath. Roadmap-only
 controls may appear as honest, disabled "planned" rows to communicate direction without enabling
 unimplemented behavior.
 
@@ -919,6 +948,11 @@ unimplemented behavior.
   automated upload to **Sentry with EU data residency**, compiled in only for official builds — so
   self-built binaries never upload.
 - Reports are privacy-scrubbed (see Privacy).
+- **Consent is revisitable from Settings.** The crash dialog's "Send reports automatically next
+  time" opt-in is not a one-way choice: **Settings → Advanced → "Send crash reports
+  automatically"** shows and controls the same consent state. Turning it on grants silent
+  auto-send immediately (no need to wait for the next crash); turning it off revokes consent, so
+  the next crash shows the consent dialog again instead of auto-sending.
 
 **Signing status.** Builds are **not yet code-signed** (portable ZIP and MSI); Windows SmartScreen
 may warn on first launch. ExoSnap participates in the SignPath Foundation free code-signing program;

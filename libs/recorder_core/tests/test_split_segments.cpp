@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "test_unique_temp.h"
@@ -32,6 +33,18 @@ using recorder_core::DeriveSegmentPath;
 using recorder_core::MatroskaStreamConfig;
 using recorder_core::MatroskaStreamWriter;
 using recorder_core::MuxPacket;
+using recorder_core::SegmentPathExistsProbe;
+using recorder_core::SegmentPathResult;
+
+// Convenience: most call sites in these tests only care about the derived
+// path in the success case (naming/collision-policy assertions). Fails loudly
+// (via a gtest fatal assertion) if the derivation did not succeed, so a
+// regression that turns success into failure cannot silently pass a test that
+// only inspects the (then default-constructed, empty) path.
+std::filesystem::path DerivedOrFail(const SegmentPathResult& result) {
+    EXPECT_TRUE(result.success) << "DeriveSegmentPath unexpectedly failed: " << result.message;
+    return result.path;
+}
 
 // --- Minimal EBML walker (shared shape with test_matroska_stream_writer.cpp) ---
 
@@ -223,26 +236,28 @@ void FeedSegmentLocal(MatroskaStreamWriter& w, double seconds, int gop) {
 
 TEST(DeriveSegmentPathTest, FirstSegmentKeepsBaseNameVerbatim) {
     const std::filesystem::path base = "C:/videos/recording.mkv";
-    EXPECT_EQ(DeriveSegmentPath(base, 0), base);
+    const auto result = DeriveSegmentPath(base, 0);
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(result.path, base);
 }
 
 TEST(DeriveSegmentPathTest, LaterSegmentsGetPartSuffixBeforeExtension) {
     const std::filesystem::path base = "C:/videos/recording.mkv";
     // index is 0-based; part number is index+1, so index 1 -> _part-002.
-    EXPECT_EQ(DeriveSegmentPath(base, 1), std::filesystem::path("C:/videos/recording_part-002.mkv"));
-    EXPECT_EQ(DeriveSegmentPath(base, 2), std::filesystem::path("C:/videos/recording_part-003.mkv"));
+    EXPECT_EQ(DerivedOrFail(DeriveSegmentPath(base, 1)), std::filesystem::path("C:/videos/recording_part-002.mkv"));
+    EXPECT_EQ(DerivedOrFail(DeriveSegmentPath(base, 2)), std::filesystem::path("C:/videos/recording_part-003.mkv"));
 }
 
 TEST(DeriveSegmentPathTest, PartNumberIsZeroPaddedThreeDigits) {
     const std::filesystem::path base = "C:/videos/clip.webm";
-    EXPECT_EQ(DeriveSegmentPath(base, 8).filename().string(), "clip_part-009.webm");
-    EXPECT_EQ(DeriveSegmentPath(base, 98).filename().string(), "clip_part-099.webm");
-    EXPECT_EQ(DeriveSegmentPath(base, 99).filename().string(), "clip_part-100.webm");
+    EXPECT_EQ(DerivedOrFail(DeriveSegmentPath(base, 8)).filename().string(), "clip_part-009.webm");
+    EXPECT_EQ(DerivedOrFail(DeriveSegmentPath(base, 98)).filename().string(), "clip_part-099.webm");
+    EXPECT_EQ(DerivedOrFail(DeriveSegmentPath(base, 99)).filename().string(), "clip_part-100.webm");
 }
 
 TEST(DeriveSegmentPathTest, PreservesExtensionAndStemWithDots) {
     const std::filesystem::path base = "C:/videos/my.recording.v2.mkv";
-    EXPECT_EQ(DeriveSegmentPath(base, 1).filename().string(), "my.recording.v2_part-002.mkv");
+    EXPECT_EQ(DerivedOrFail(DeriveSegmentPath(base, 1)).filename().string(), "my.recording.v2_part-002.mkv");
 }
 
 TEST(DeriveSegmentPathTest, CollisionAppendsDisambiguator) {
@@ -258,9 +273,140 @@ TEST(DeriveSegmentPathTest, CollisionAppendsDisambiguator) {
         std::ofstream(natural) << "x";
     }
 
-    const fs::path got = DeriveSegmentPath(base, 1);
-    EXPECT_EQ(got.filename().string(), "rec_part-002_1.mkv");
-    EXPECT_FALSE(fs::exists(got));
+    const auto result = DeriveSegmentPath(base, 1);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_EQ(result.path.filename().string(), "rec_part-002_1.mkv");
+    EXPECT_FALSE(fs::exists(result.path));
+
+    fs::remove_all(dir);
+}
+
+TEST(DeriveSegmentPathTest, ManyCollisionsSkipPastAllOfThem) {
+    namespace fs = std::filesystem;
+    const fs::path dir = exosnap_test::UniqueTempPath("splitdir");
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path base = dir / "rec.mkv";
+
+    // Pre-create the natural candidate plus disambiguators _1 through _5, so
+    // the deriver must skip past all six before finding a free one.
+    {
+        std::ofstream(dir / "rec_part-002.mkv") << "x";
+        for (unsigned n = 1; n <= 5; ++n) {
+            std::ofstream(dir / ("rec_part-002_" + std::to_string(n) + ".mkv")) << "x";
+        }
+    }
+
+    const auto result = DeriveSegmentPath(base, 1);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_EQ(result.path.filename().string(), "rec_part-002_6.mkv");
+    EXPECT_FALSE(fs::exists(result.path));
+
+    fs::remove_all(dir);
+}
+
+TEST(DeriveSegmentPathTest, CollisionLimitExhaustedReturnsErrorNotAStaleCandidate) {
+    // A probe that reports every candidate as colliding, forever. This
+    // exercises the bounded-scan exhaustion path without actually creating
+    // 10000 files on disk.
+    const SegmentPathExistsProbe always_exists = [](const std::filesystem::path&, std::error_code& ec) {
+        ec.clear();
+        return true;
+    };
+
+    const std::filesystem::path base = "C:/videos/recording.mkv";
+    const auto result = DeriveSegmentPath(base, 1, always_exists);
+
+    EXPECT_FALSE(result.success);
+    // The old buggy behavior silently returned the last (still-colliding)
+    // candidate; the fixed contract must never do that -- path stays empty.
+    EXPECT_TRUE(result.path.empty());
+    EXPECT_TRUE(static_cast<bool>(result.error));
+    EXPECT_FALSE(result.message.empty());
+}
+
+TEST(DeriveSegmentPathTest, FilesystemProbeErrorPropagatesImmediatelyWithoutContinuingTheScan) {
+    // Simulates a genuine filesystem error (e.g. permission denied) on the
+    // very first probe. std::filesystem::exists on this toolchain silently
+    // downgrades most real OS errors to "not found" (verified empirically:
+    // ACL-denied directories, invalid characters, and very long paths all
+    // still yield an empty error_code), so a real permission error cannot be
+    // reproduced organically here -- the injectable probe exists specifically
+    // to make this path testable.
+    int call_count = 0;
+    const SegmentPathExistsProbe denied = [&](const std::filesystem::path&, std::error_code& ec) {
+        ++call_count;
+        ec = std::make_error_code(std::errc::permission_denied);
+        return false; // value is irrelevant once ec is set -- must not be trusted
+    };
+
+    const std::filesystem::path base = "C:/videos/recording.mkv";
+    const auto result = DeriveSegmentPath(base, 1, denied);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.path.empty());
+    EXPECT_TRUE(static_cast<bool>(result.error));
+    EXPECT_EQ(result.error, std::make_error_code(std::errc::permission_denied));
+    // Must abort on the FIRST error, never mask it by trying more candidates.
+    EXPECT_EQ(call_count, 1);
+}
+
+TEST(DeriveSegmentPathTest, NonexistentParentDirectoryStillSucceeds) {
+    // DeriveSegmentPath only resolves NAME collisions; it is not responsible
+    // for validating that the parent directory exists (that is
+    // RecorderSession::Validate's job at recording start, and the segment
+    // writer's Open() surfaces a real directory-missing failure per-segment --
+    // see SplitSegmentTest.FailureOnLaterSegmentLeavesEarlierIntact below).
+    // A candidate under a directory that does not exist on disk simply
+    // "does not exist" like any other free candidate.
+    const std::filesystem::path base = exosnap_test::UniqueTempPath("does_not_exist_dir") / "sub" / "recording.mkv";
+    const auto result = DeriveSegmentPath(base, 1);
+    EXPECT_TRUE(result.success) << result.message;
+    EXPECT_EQ(result.path.filename().string(), "recording_part-002.mkv");
+}
+
+TEST(DeriveSegmentPathTest, ProbeConfirmsFreeButAnotherWriterCreatesItBeforeOpen) {
+    // The TOCTOU race this whole fix is about: DeriveSegmentPath confirms a
+    // candidate is free, but before the caller opens it for writing, some
+    // other writer (or a leftover from a previous run) creates a file at that
+    // exact path. The derivation itself cannot detect this (it already
+    // returned); closing this gap is MatroskaStreamWriter's job (exclusive
+    // create instead of truncate-on-exists -- see matroska_stream_writer.cpp).
+    // This test proves the two pieces fit together: Open() must fail (not
+    // silently truncate) when the race is hit.
+    namespace fs = std::filesystem;
+    const fs::path dir = exosnap_test::UniqueTempPath("splitdir");
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const fs::path base = dir / "rec.mkv";
+
+    const auto result = DeriveSegmentPath(base, 1);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_FALSE(fs::exists(result.path));
+
+    // Simulate the race: another process creates the file with real content
+    // AFTER DeriveSegmentPath confirmed it free, but BEFORE this caller opens it.
+    const std::string sentinel_content = "not-mine";
+    {
+        std::ofstream victim(result.path);
+        victim << sentinel_content;
+    }
+
+    MatroskaStreamConfig cfg = MakeConfig(result.path.string());
+    MatroskaStreamWriter w;
+    EXPECT_FALSE(w.Open(cfg)) << "Open() must fail (exclusive create) instead of truncating the raced file";
+    EXPECT_TRUE(w.failed());
+
+    // The other writer's file must survive untouched -- the whole point of
+    // exclusive creation is that this writer never got to truncate it.
+    std::string content;
+    {
+        // Scoped so the handle is closed before remove_all() below -- on
+        // Windows an open handle blocks directory removal (unlike POSIX).
+        std::ifstream check(result.path);
+        std::getline(check, content);
+    }
+    EXPECT_EQ(content, sentinel_content);
 
     fs::remove_all(dir);
 }
@@ -279,7 +425,7 @@ TEST(SplitSegmentTest, ThreeSegmentsEachIndependentlyValid) {
     // mux thread does on a SplitSentinel.
     const double seg_seconds[3] = {3.0, 4.0, 2.0};
     for (uint32_t i = 0; i < 3; ++i) {
-        const fs::path seg_path = DeriveSegmentPath(base, i);
+        const fs::path seg_path = DerivedOrFail(DeriveSegmentPath(base, i));
         MatroskaStreamWriter w;
         ASSERT_TRUE(w.Open(MakeConfig(seg_path.string()))) << w.error();
         FeedSegmentLocal(w, seg_seconds[i], 60);
@@ -312,7 +458,7 @@ TEST(SplitSegmentTest, FailureOnLaterSegmentLeavesEarlierIntact) {
     const fs::path base = dir / "session.mkv";
 
     // Segment 0 finalizes cleanly.
-    const fs::path seg0 = DeriveSegmentPath(base, 0);
+    const fs::path seg0 = DerivedOrFail(DeriveSegmentPath(base, 0));
     {
         MatroskaStreamWriter w;
         ASSERT_TRUE(w.Open(MakeConfig(seg0.string())));

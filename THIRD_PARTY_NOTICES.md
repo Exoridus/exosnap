@@ -61,6 +61,12 @@ directory alongside the ExoSnap binary.
   independently from the copyright license. This notice does not provide patent
   rights. Patent licensing is the user's responsibility. Most device
   manufacturers already license the relevant AAC patents.
+- **Scheduled for removal (ADR 0052, supersedes ADR 0043):** ExoSnap is
+  migrating its AAC-LC path to FFmpeg's native (LGPL) AAC encoder. FDK-AAC is
+  still statically linked and shipped as of this notice, so it remains listed
+  here. Once the cutover completes — an encoder-enabled `exosnap-ffmpeg-build`
+  release is pinned and `audio_thread.cpp` constructs `FfmpegAacEncoder` — this
+  dependency and its bundled license (`licenses/fdk-aac.txt`) will be removed.
 
 ### FLAC
 

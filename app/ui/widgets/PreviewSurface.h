@@ -20,6 +20,7 @@
 #include <recorder_core/recorder_session.h>
 
 class QLabel;
+class QTimer;
 
 namespace exosnap {
 class DxgiPreviewRenderer;
@@ -157,6 +158,12 @@ class PreviewSurface : public QWidget {
     // changes so no transient capture or stale interaction survives.
     void cancelWebcamInteraction();
 
+    // Aspect ratio (width / height) of the source currently displayed in the
+    // preview: the live DXGI source dimensions while the DXGI preview runs,
+    // otherwise the current QImage frame. Returns 0.0 when no source is known
+    // (empty state). Drives the Record page's content-fit preview box.
+    [[nodiscard]] double contentAspectRatio() const;
+
     // --- Visual-harness / test accessors (no side effects) ---
     // Pixel rect of the PiP within the widget, mapped through the same content rect
     // used for hit-testing and DXGI rendering.
@@ -170,6 +177,9 @@ class PreviewSurface : public QWidget {
     // Emitted once per DXGI preview run when the renderer presents its first real
     // frame — the moment isDxgiSnapshotReady() flips true. Marshaled to this thread.
     void dxgiFirstFrameRendered();
+    // Emitted whenever contentAspectRatio() changes (target switch, region change,
+    // live DXGI source resize, or the source going away — then 0.0).
+    void contentAspectRatioChanged(double aspect_w_over_h);
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -179,6 +189,8 @@ class PreviewSurface : public QWidget {
     void mouseReleaseEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
   private:
     enum class DragMode { None, Move, ResizeTL, ResizeTR, ResizeBL, ResizeBR };
@@ -186,11 +198,6 @@ class PreviewSurface : public QWidget {
     QRectF webcamPixelRect() const;
     QRectF displayedFrameRect() const;
     QRectF displayedFrameRectForSource(int srcW, int srcH) const;
-    // Preview-only clip region for the webcam PiP: inside the frame border and clear
-    // of the bottom stats footer, so the PiP never overpaints that chrome on screen.
-    // WYSIWYG: the recording compositor has no such chrome, so this clip is applied
-    // ONLY in the preview (Qt paint + DXGI overlay geometry), never to the file.
-    QRectF previewContentRect() const;
     DragMode hitTestWebcam(QPointF pos) const;
     void applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers modifiers);
     void snapOverlayRectToCurrentAspect();
@@ -200,6 +207,21 @@ class PreviewSurface : public QWidget {
     // Push current overlay video + placement + chrome state to the DXGI renderer so
     // the live preview composites the PiP itself (the native child HWND occludes Qt).
     void syncWebcamOverlayToDxgi();
+    // Rasterize the meta/stats rows (top_row_ / bottom_row_) and push them to the
+    // DXGI renderer as OSD sprites drawn ON TOP of the frame and the PiP — the
+    // native child HWND occludes the Qt-painted labels, so during a live preview
+    // the renderer composites them itself. Keeps the footer-above-PiP z-order
+    // identical in the Qt paint path (child widgets paint above paintEvent) and
+    // the DXGI path (OSD sprites drawn last).
+    void syncOsdToDxgi();
+    // Re-evaluate the hover cursor for the last known pointer position. Called on
+    // every event that can change the hit map under a stationary pointer
+    // (selection/lock/enable changes, placement updates, drag end), not just on
+    // mouse moves — a stale resize/move cursor otherwise persists until the
+    // pointer leaves and re-enters the surface.
+    void applyHoverCursor();
+    // Emit contentAspectRatioChanged if the displayed source aspect changed.
+    void notifyAspectRatioMaybeChanged();
     // Branded capture-safe fallback drawn in the preview when there is no live
     // frame and no DXGI preview (no source / source unavailable). Mirrors the
     // title-bar lockup: aperture mark + two-tone "exosnap".
@@ -224,6 +246,18 @@ class PreviewSurface : public QWidget {
     // Geometry captured at drag start so Escape can roll back to it.
     QRectF pre_interaction_rect_;
     bool drag_modifier_toggle_held_ = false;
+
+    // Last pointer position over the surface (widget coordinates), tracked so
+    // applyHoverCursor() can refresh the cursor without a fresh mouse move.
+    QPointF hover_pos_;
+    bool hover_pos_valid_ = false;
+
+    // Last aspect ratio reported through contentAspectRatioChanged.
+    double last_notified_aspect_ = 0.0;
+    // Polls the live DXGI source dimensions (they change asynchronously on the
+    // render thread, e.g. when a captured window is resized). Runs only while
+    // the DXGI preview is active.
+    QTimer* aspect_poll_timer_ = nullptr;
 
     QLabel* top_meta_label_ = nullptr;
     QLabel* bottom_left_label_ = nullptr;

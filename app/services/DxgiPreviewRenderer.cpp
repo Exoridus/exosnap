@@ -268,6 +268,34 @@ void DxgiPreviewRenderer::SetWebcamOverlayFrame(const uint8_t* bgra, int width, 
     overlayDirty_ = true;
 }
 
+void DxgiPreviewRenderer::SetOsdSprite(int slot, const uint8_t* bgra, int width, int height, int stride, int destX,
+                                       int destY) {
+    if (slot < 0 || slot >= kOsdSpriteSlots)
+        return;
+    std::lock_guard lock(overlayMutex_);
+    OsdSprite& sprite = osdSprites_[slot];
+    if (bgra == nullptr || width <= 0 || height <= 0) {
+        sprite.bgra.clear();
+        sprite.w = 0;
+        sprite.h = 0;
+        sprite.dirty = true;
+        return;
+    }
+    if (stride <= 0)
+        stride = width * 4;
+    const int rowBytes = width * 4;
+    sprite.bgra.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(height));
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(sprite.bgra.data() + static_cast<size_t>(y) * rowBytes,
+                    bgra + static_cast<size_t>(y) * static_cast<size_t>(stride), static_cast<size_t>(rowBytes));
+    }
+    sprite.w = width;
+    sprite.h = height;
+    sprite.x = destX;
+    sprite.y = destY;
+    sprite.dirty = true;
+}
+
 void DxgiPreviewRenderer::Shutdown() {
     EndPushedSource();
     StopCapture();
@@ -793,6 +821,13 @@ void DxgiPreviewRenderer::CleanupCapture() {
         overlayDirty_ = true; // force re-upload if a new capture starts
         chromeTex_.Reset();
         chromeSRV_.Reset();
+        for (OsdSprite& sprite : osdSprites_) {
+            sprite.tex.Reset();
+            sprite.srv.Reset();
+            sprite.texW = 0;
+            sprite.texH = 0;
+            sprite.dirty = true; // pixels are kept; re-upload on a new device
+        }
     }
     // Pushed-source resources live on this device; release before the device.
     ReleasePushedResources();
@@ -1182,6 +1217,93 @@ void DxgiPreviewRenderer::RenderCursorSprite(int contentX, int contentY, int con
     d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
 }
 
+void DxgiPreviewRenderer::RenderOsdSprites() {
+    std::lock_guard lock(overlayMutex_);
+
+    bool anyVisible = false;
+    for (OsdSprite& sprite : osdSprites_) {
+        if (sprite.dirty) {
+            // (Re)upload. A cleared sprite drops its texture entirely.
+            if (sprite.bgra.empty() || sprite.w <= 0 || sprite.h <= 0) {
+                sprite.tex.Reset();
+                sprite.srv.Reset();
+                sprite.texW = 0;
+                sprite.texH = 0;
+            } else {
+                if (!sprite.tex || sprite.texW != sprite.w || sprite.texH != sprite.h) {
+                    sprite.tex.Reset();
+                    sprite.srv.Reset();
+                    D3D11_TEXTURE2D_DESC d{};
+                    d.Width = static_cast<UINT>(sprite.w);
+                    d.Height = static_cast<UINT>(sprite.h);
+                    d.MipLevels = 1;
+                    d.ArraySize = 1;
+                    d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                    d.SampleDesc.Count = 1;
+                    d.Usage = D3D11_USAGE_DEFAULT;
+                    d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                    if (FAILED(d3dDevice_->CreateTexture2D(&d, nullptr, sprite.tex.GetAddressOf()))) {
+                        sprite.tex.Reset();
+                        continue;
+                    }
+                    D3D11_SHADER_RESOURCE_VIEW_DESC s{};
+                    s.Format = d.Format;
+                    s.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                    s.Texture2D.MipLevels = 1;
+                    if (FAILED(d3dDevice_->CreateShaderResourceView(sprite.tex.Get(), &s, sprite.srv.GetAddressOf()))) {
+                        sprite.tex.Reset();
+                        sprite.srv.Reset();
+                        continue;
+                    }
+                    sprite.texW = sprite.w;
+                    sprite.texH = sprite.h;
+                }
+                d3dContext_->UpdateSubresource(sprite.tex.Get(), 0, nullptr, sprite.bgra.data(),
+                                               static_cast<UINT>(sprite.w) * 4u, 0);
+            }
+            sprite.dirty = false;
+        }
+        if (sprite.srv)
+            anyVisible = true;
+    }
+    if (!anyVisible)
+        return;
+
+    // Draw through the shared overlay shader with source alpha preserved (same
+    // constants as the cursor sprite): text pixels keep their anti-aliased edges,
+    // transparent row background stays transparent.
+    const float blendFactor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    d3dContext_->OMSetBlendState(overlayBlendState_.Get(), blendFactor, 0xffffffff);
+    const recorder_core::OverlayPixelConstants pc = recorder_core::MakeOverlayPixelConstants(
+        recorder_core::ChromaKeyParams{}, /*mirror=*/false, /*force_opaque=*/false, /*opacity=*/1.0f, kPreviewHdrLinear,
+        kPreviewRefWhiteScale);
+    d3dContext_->UpdateSubresource(constantBuffer_.Get(), 0, nullptr, &pc, 0, 0);
+
+    d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+    d3dContext_->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
+    d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    for (OsdSprite& sprite : osdSprites_) {
+        if (!sprite.srv)
+            continue;
+        D3D11_VIEWPORT vp{};
+        vp.TopLeftX = static_cast<float>(sprite.x);
+        vp.TopLeftY = static_cast<float>(sprite.y);
+        vp.Width = static_cast<float>(sprite.w);
+        vp.Height = static_cast<float>(sprite.h);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+        d3dContext_->RSSetViewports(1, &vp);
+        ID3D11ShaderResourceView* srv = sprite.srv.Get();
+        d3dContext_->PSSetShaderResources(0, 1, &srv);
+        d3dContext_->Draw(3, 0);
+    }
+
+    d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+}
+
 void DxgiPreviewRenderer::RenderFrame() {
     if (!swapChain_ || !d3dContext_)
         return;
@@ -1287,6 +1409,12 @@ void DxgiPreviewRenderer::RenderFrame() {
         RenderCursorSprite(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
                            static_cast<int>(contentH));
     }
+
+    // Preview-only OSD chrome (the meta/stats rows) draws LAST — above the frame,
+    // the PiP and the cursor — mirroring the Qt path where the row widgets paint
+    // above paintEvent. Deliberately not part of PerformSnapshotIfRequested's
+    // readback, which re-blits the raw source: screenshots never carry UI chrome.
+    RenderOsdSprites();
 
     if (drawnSrv != nullptr && drawnW != 0 && drawnH != 0 && !framePresented_.load(std::memory_order_relaxed)) {
         framePresented_.store(true, std::memory_order_release);

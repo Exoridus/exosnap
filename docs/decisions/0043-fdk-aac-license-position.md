@@ -2,6 +2,13 @@
 
 ## Status
 
+**Superseded by [ADR 0052](0052-native-ffmpeg-aac-encoder-supersedes-0043.md) — 2026-07-19.**
+The maintainer reversed this decision: rather than keep FDK-AAC via the
+`fdk-aac-free` fork, ExoSnap is migrating the AAC path to FFmpeg's native
+(LGPL) AAC-LC encoder — ADR 0043's reserved option (c)-style exit. The decision
+below is retained as the historical record; the migration and its deferred
+cutover are governed by ADR 0052.
+
 **Accepted — 2026-07-11.** The maintainer chose **option (b): switch to `fdk-aac-free`**
 (the LC-only stripped fork), combined with option (a)'s corrected-comment change. The build
 now fetches Wim Taymans's stripped fork

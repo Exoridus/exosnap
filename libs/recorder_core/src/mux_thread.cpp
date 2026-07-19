@@ -217,7 +217,19 @@ void MuxThread::Run() {
     }
 
     const auto open_segment = [&](uint32_t index, uint64_t epoch_session_pts_ns, bool epoch_set) -> bool {
-        seg.path = DeriveSegmentPath(base_output_path, index);
+        const SegmentPathResult path_result = DeriveSegmentPath(base_output_path, index);
+        if (!path_result.success) {
+            // A real filesystem error while probing for a free segment path, or the
+            // bounded collision scan was exhausted -- either way this must abort the
+            // segment (never silently reuse the last colliding candidate).
+            const int32_t hr =
+                path_result.error ? HRESULT_FROM_WIN32(static_cast<DWORD>(path_result.error.value())) : E_FAIL;
+            m_state.RecordFailure(hr, ErrorPhase::Mux,
+                                  "failed to derive segment path (segment " + std::to_string(index) +
+                                      "): " + path_result.message);
+            return false;
+        }
+        seg.path = path_result.path;
         seg.index = index;
         seg.epoch_session_pts_ns = epoch_session_pts_ns;
         seg.epoch_set = epoch_set;
