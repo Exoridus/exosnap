@@ -344,6 +344,8 @@ add_library(recorder_core STATIC
     src/audio_thread.cpp
     src/mux_thread.cpp
     src/matroska_stream_writer.cpp
+    src/portable_file_io.cpp
+    include/recorder_core/portable_file_io.h
     src/annexb_to_avcc.cpp
     src/annexb_to_hvcc.cpp
     src/audio_track_model.cpp
@@ -1176,6 +1178,17 @@ exosnap_add_gtest(
     LIBRARIES recorder_core EBML::ebml Matroska::matroska
 )
 target_include_directories(test_matroska_stream_writer PRIVATE src)
+
+# 64-bit-safe file position (fixes: recordings past 2 GiB lost their Matroska
+# trailer because std::ftell/fseek use a 32-bit `long` on Windows). Pure CRT
+# wrapper, no EBML/Matroska/D3D dependency.
+exosnap_add_gtest(
+    NAME test_portable_file_io
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_portable_file_io.cpp
+            src/portable_file_io.cpp
+)
+target_include_directories(test_portable_file_io PRIVATE include)
 
 exosnap_add_gtest(
     NAME test_split_segments
