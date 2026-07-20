@@ -823,10 +823,22 @@ void PreviewSurface::syncEnlargedWebcamToDxgi() {
                            normal.y() + (target.y() - normal.y()) * magnify_progress_,
                            normal.width() + (target.width() - normal.width()) * magnify_progress_,
                            normal.height() + (target.height() - normal.height()) * magnify_progress_);
-    const float nx = static_cast<float>((draw_rect.x() - frame_rect.x()) / frame_rect.width());
-    const float ny = static_cast<float>((draw_rect.y() - frame_rect.y()) / frame_rect.height());
-    const float nw = static_cast<float>(draw_rect.width() / frame_rect.width());
-    const float nh = static_cast<float>(draw_rect.height() / frame_rect.height());
+
+    // The enlarged view always shows the camera's true aspect ratio, even if the
+    // normal (non-enlarged) PiP is itself stretched off-aspect (aspect lock can be
+    // disabled for that placement) -- matching paintEvent's enlarged branch, which
+    // unconditionally fitAspectIntoRect()s the image into draw_rect rather than
+    // stretching it. Unlike RenderWebcamOverlay(), which always stretches its frame
+    // to fill whatever rect it's given, so the fit must happen here before the rect
+    // is normalized and handed to it.
+    const double frame_ar =
+        webcam_frame_.height() > 0 ? static_cast<double>(webcam_frame_.width()) / webcam_frame_.height() : 0.0;
+    const QRectF img_rect = fitAspectIntoRect(draw_rect, frame_ar);
+
+    const float nx = static_cast<float>((img_rect.x() - frame_rect.x()) / frame_rect.width());
+    const float ny = static_cast<float>((img_rect.y() - frame_rect.y()) / frame_rect.height());
+    const float nw = static_cast<float>(img_rect.width() / frame_rect.width());
+    const float nh = static_cast<float>(img_rect.height() / frame_rect.height());
 
     const WebcamChromaKeySettings::ActiveRgb key = webcam_chroma_.active_color();
     recorder_core::ChromaKeyParams chroma;
