@@ -18,6 +18,10 @@
 #include "ui/widgets/PreviewSurface.h"
 #include "viewmodels/RecordViewModel.h"
 
+#include <recorder_core/recorder_session.h>
+
+#include <windows.h>
+
 namespace exosnap::ui::widgets {
 namespace {
 
@@ -397,6 +401,32 @@ TEST_F(PreviewSurfaceWebcamTest, DisablingWebcamHardResetsMagnifierState) {
     EXPECT_FALSE(surface_->isWebcamHovered());
 }
 
+// Task 2 regression guard: the animated/interpolated rect fed to
+// syncEnlargedWebcamToDxgi() during a magnify cycle must never leak back into
+// the confirmed, persisted placement (webcam_rect_norm_). dxgi_active_ is
+// false in this fixture, so every valueChanged tick during the pumps below
+// also exercises syncEnlargedWebcamToDxgi()'s guarded early-return without a
+// live renderer -- if that guard were missing or wrong, this would crash on
+// a null dxgi_renderer_ dereference instead of just passing.
+TEST_F(PreviewSurfaceWebcamTest, EnlargeCollapseCycleNeverMutatesConfirmedRect) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    const QRectF before = surface_->webcamOverlayRect();
+
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }));
+    EXPECT_EQ(surface_->webcamOverlayRect(), before);
+
+    sendMouse(QEvent::MouseButtonPress, QPointF(5, 5), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, QPointF(5, 5), Qt::LeftButton, Qt::NoButton);
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() <= 0.0; }));
+    EXPECT_EQ(surface_->webcamOverlayRect(), before);
+}
+
 // Out-of-bounds placement is sanitized to a valid in-frame rect.
 TEST_F(PreviewSurfaceWebcamTest, OverlayRectIsSanitized) {
     surface_->setWebcamOverlayEnabled(true);
@@ -663,6 +693,113 @@ TEST_F(PreviewSurfaceWebcamTest, ContentAspectRatioTracksLiveFrame) {
     EXPECT_EQ(change_count, 2);
     EXPECT_NEAR(last_ar, 0.0, 1e-9);
     EXPECT_NEAR(surface_->contentAspectRatio(), 0.0, 1e-9);
+}
+
+// ---- DXGI-active magnifier compositing (live-hardware) --------------------
+//
+// Task 2 made syncEnlargedWebcamToDxgi() push the scrim + interpolated webcam
+// overlay rect to a REAL DxgiPreviewRenderer while dxgi_active_ is true. Every
+// test above exercises the guarded early-return only (dxgi_active_ is always
+// false in PreviewSurfaceWebcamTest) -- that proves the guard itself is safe,
+// but not that the renderer-calling code path (image format, OSD slot index,
+// SetWebcamOverlayState argument order/normalization) is actually correct
+// against a live renderer. This fixture starts a real (pushed-only, no frames
+// ever published -- we only need dxgi_active_/dxgi_renderer_ to be live, not
+// an actual decoded frame) DxgiPreviewRenderer the same way
+// tryStartDxgiPushedPreview does in production, so the full magnifier
+// click-to-enlarge/collapse cycle below runs against real renderer code. Same
+// live-hardware precedent as test_dxgi_preview_pushed_source.cpp
+// (DxgiPreviewRenderer::InitD3D11() hardcodes D3D_DRIVER_TYPE_HARDWARE);
+// GTEST_SKIP covers headless/GPU-less runners.
+//
+// What this does NOT prove: that the composited swap-chain PIXELS actually
+// show a dimmed scrim / a correctly placed enlarged PiP. DxgiPreviewRenderer
+// has no production API to read back OSD-sprite/webcam-overlay state -- the
+// one readback path, RequestSnapshot, deliberately excludes overlay/OSD
+// content (see syncOsdToDxgi()'s comment on the snapshot gate) -- and adding
+// one purely for this test is out of scope. That remains a manual /
+// --visual-test-driven verification gap (see this task's report).
+class PreviewSurfaceWebcamDxgiLiveTest : public PreviewSurfaceWebcamTest {
+  protected:
+    void SetUp() override {
+        PreviewSurfaceWebcamTest::SetUp();
+
+        // A real DXGI swap chain needs a genuinely realized top-level window, not
+        // merely a native HWND -- show() (as HideShowCycleIsSafeAndPreservesState
+        // above already does for hide/show coverage) so the child HWND is a
+        // proper on-screen window before the renderer creates its swap chain
+        // against it. WA_DontShowOnScreen keeps it off the visible desktop (same
+        // trick overlay_visual_proof.cpp uses) while still going through the real
+        // show-event path that realizes the native window.
+        surface_->setAttribute(Qt::WA_DontShowOnScreen, true);
+        surface_->show();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+        const HMONITOR monitor = MonitorFromWindow(reinterpret_cast<HWND>(surface_->winId()), MONITOR_DEFAULTTOPRIMARY);
+        recorder_core::CaptureTarget target{};
+        target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+        target.native_id = reinterpret_cast<uintptr_t>(monitor);
+
+        if (!surface_->tryStartDxgiPushedPreview(target, 60, 1)) {
+            GTEST_SKIP() << "No hardware D3D11 adapter in this environment (headless CI runner).";
+        }
+        ASSERT_TRUE(surface_->isDxgiPreviewActive());
+    }
+
+    void TearDown() override {
+        if (surface_)
+            surface_->stopDxgiPreview();
+        PreviewSurfaceWebcamTest::TearDown();
+    }
+};
+
+TEST_F(PreviewSurfaceWebcamDxgiLiveTest, ClickingHotspotEnlargesAgainstLiveDxgiRenderer) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    const QRectF before = surface_->webcamOverlayRect();
+
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+
+    ASSERT_FALSE(surface_->isWebcamEnlarged());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    EXPECT_TRUE(surface_->isWebcamEnlarged());
+
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }))
+        << "enlarge animation never settled while driving a live DXGI renderer";
+    EXPECT_TRUE(surface_->isWebcamEnlarged());
+    // Confirms this actually ran the dxgi_active_ branch, not a silent fallback.
+    ASSERT_TRUE(surface_->isDxgiPreviewActive());
+    // The hard invariant this whole feature must not break: the confirmed,
+    // persisted placement is untouched by the animated/enlarged compositing,
+    // even while it is actively being pushed to a real renderer.
+    EXPECT_EQ(surface_->webcamOverlayRect(), before);
+}
+
+TEST_F(PreviewSurfaceWebcamDxgiLiveTest, ClickingOutsideCollapsesAgainstLiveDxgiRenderer) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    const QRectF before = surface_->webcamOverlayRect();
+
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }));
+    ASSERT_TRUE(surface_->isWebcamEnlarged());
+
+    sendMouse(QEvent::MouseButtonPress, QPointF(5, 5), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, QPointF(5, 5), Qt::LeftButton, Qt::NoButton);
+    EXPECT_FALSE(surface_->isWebcamEnlarged());
+
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() <= 0.0; }))
+        << "collapse animation never settled while driving a live DXGI renderer";
+    EXPECT_EQ(surface_->webcamMagnifyProgress(), 0.0);
+    ASSERT_TRUE(surface_->isDxgiPreviewActive());
+    EXPECT_EQ(surface_->webcamOverlayRect(), before);
 }
 
 } // namespace

@@ -105,7 +105,10 @@ class DxgiPreviewRenderer {
     // slot: 0..kOsdSpriteSlots-1. bgra: straight-alpha BGRA (stride bytes/row);
     // nullptr clears the slot. destX/destY: top-left in swap-chain pixels.
     // Thread-safe: called from the UI thread; drawn on the render thread.
-    static constexpr int kOsdSpriteSlots = 2;
+    // Slot 0/1: preview meta/stats text rows (PreviewSurface::syncOsdToDxgi).
+    // Slot 2: webcam-magnifier dim scrim, full-panel, shown only while enlarging/
+    // enlarged (PreviewSurface::syncEnlargedWebcamToDxgi).
+    static constexpr int kOsdSpriteSlots = 3;
     void SetOsdSprite(int slot, const uint8_t* bgra, int width, int height, int stride, int destX, int destY);
 
     void Shutdown();

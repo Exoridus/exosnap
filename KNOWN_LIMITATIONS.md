@@ -359,21 +359,6 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   multiplane-overlay and fullscreen-optimisation paths on some systems,
   degrading a game running on the previewed monitor. Closing the preview (or
   leaving the Record page) closes the duplication.
-- **The webcam PiP magnifier (hover-to-enlarge) does not yet render during the
-  live DXGI-composited preview.** Hovering the webcam picture-in-picture shows a
-  small magnifier icon; clicking it animates the PiP into a larger floating view
-  (click again, click outside it, or press Escape to collapse). This is
-  implemented in `PreviewSurface`'s Qt-paint layer and covered by widget tests
-  (hover, click-to-enlarge, click-outside/Escape-to-collapse, disable-reset), but
-  it is genuinely **not pixel-verifiable via the `--visual-test` harness for the
-  Record page**: selecting any capture target — including in the harness's own
-  `record-webcam-*` scenarios — starts the same live DXGI-composited preview
-  production does, and that native child window occludes ordinary Qt painting
-  (this already limited those scenarios' pre-existing selection chrome the same
-  way, confirmed while investigating this feature; it is not new). The magnifier
-  will only be visible once the DXGI renderer is extended to composite it itself,
-  tracked as follow-up work — until then it renders correctly in code but has no
-  reachable on-screen surface in the live app.
 
 ## Crash reporting and updates (0.6.0)
 

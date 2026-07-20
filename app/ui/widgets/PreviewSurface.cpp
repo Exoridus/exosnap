@@ -318,6 +318,9 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     syncWebcamOverlayToDxgi();
     // The meta/stats rows are occluded too — push them as OSD sprites.
     syncOsdToDxgi();
+    // Ensures the magnifier scrim slot starts definitely cleared on a fresh
+    // preview (no-op unless a stale mid-animation state somehow survived).
+    syncEnlargedWebcamToDxgi();
     aspect_poll_timer_->start();
     notifyAspectRatioMaybeChanged();
     update();
@@ -377,6 +380,9 @@ bool PreviewSurface::tryStartDxgiPushedPreview(const recorder_core::CaptureTarge
     current_frame_ = QImage{};
     syncWebcamOverlayToDxgi();
     syncOsdToDxgi();
+    // Ensures the magnifier scrim slot starts definitely cleared on a fresh
+    // preview (no-op unless a stale mid-animation state somehow survived).
+    syncEnlargedWebcamToDxgi();
     aspect_poll_timer_->start();
     notifyAspectRatioMaybeChanged();
     update();
@@ -601,6 +607,7 @@ void PreviewSurface::setWebcamOverlayEnabled(bool enabled) {
         magnify_progress_ = 0.0;
         if (magnify_animation_ != nullptr)
             magnify_animation_->stop();
+        syncEnlargedWebcamToDxgi(); // clears the DXGI-side scrim (slot 2) too
     }
     // Mouse tracking drives BOTH the drag/resize hover cursor (editing-gated) and the
     // magnifier hover affordance (available whenever the PiP is visible at all, even
@@ -715,6 +722,7 @@ void PreviewSurface::cancelWebcamInteraction() {
         magnify_progress_ = 0.0;
         if (magnify_animation_ != nullptr)
             magnify_animation_->stop();
+        syncEnlargedWebcamToDxgi(); // clears the DXGI-side scrim (slot 2) too
     }
     syncWebcamOverlayToDxgi();
     applyHoverCursor();
@@ -768,6 +776,68 @@ void PreviewSurface::syncWebcamOverlayToDxgi() {
         static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_,
         webcam_opacity_, chroma);
     if (show && !webcam_frame_.isNull()) {
+        const QImage& img = webcam_frame_;
+        dxgi_renderer_->SetWebcamOverlayFrame(img.constBits(), img.width(), img.height(),
+                                              static_cast<int>(img.bytesPerLine()));
+    } else {
+        dxgi_renderer_->SetWebcamOverlayFrame(nullptr, 0, 0, 0);
+    }
+}
+
+// Drives the DXGI-composited counterpart of paintEvent's "floating enlarged
+// view" block: same dim scrim, same lerped rect. Never writes
+// webcam_rect_norm_ -- only what's pushed to the renderer for THIS preview
+// frame changes.
+void PreviewSurface::syncEnlargedWebcamToDxgi() {
+    if (!dxgi_active_ || !dxgi_renderer_)
+        return;
+
+    if (magnify_progress_ <= 0.0) {
+        dxgi_renderer_->SetOsdSprite(2, nullptr, 0, 0, 0, 0, 0);
+        syncWebcamOverlayToDxgi(); // restore the normal (confirmed) placement
+        return;
+    }
+
+    const QRectF frame_rect = displayedFrameRect();
+    if (frame_rect.width() < 1.0 || frame_rect.height() < 1.0)
+        return;
+
+    // Scrim: a solid, panel-sized, alpha-animated rect, rasterized the same way
+    // syncOsdToDxgi() rasterizes the meta/stats rows -- an OSD sprite drawn at
+    // native size at (frame_rect.x, frame_rect.y) in swap-chain pixels.
+    const qreal dpr = devicePixelRatioF();
+    const QSize scrim_size = (frame_rect.size() * dpr).toSize().expandedTo(QSize(1, 1));
+    QImage scrim(scrim_size, QImage::Format_ARGB32);
+    scrim.fill(QColor(6, 6, 8, qRound(150 * magnify_progress_)));
+    dxgi_renderer_->SetOsdSprite(2, scrim.constBits(), scrim.width(), scrim.height(),
+                                 static_cast<int>(scrim.bytesPerLine()), qRound(frame_rect.x() * dpr),
+                                 qRound(frame_rect.y() * dpr));
+
+    // Interpolated placement, normalized the same way webcam_rect_norm_ is
+    // (fraction of frame_rect), matching paintEvent's lerp exactly.
+    const QRectF normal = webcamPixelRect();
+    const QRectF target = webcamEnlargedTargetRect();
+    const QRectF draw_rect(normal.x() + (target.x() - normal.x()) * magnify_progress_,
+                           normal.y() + (target.y() - normal.y()) * magnify_progress_,
+                           normal.width() + (target.width() - normal.width()) * magnify_progress_,
+                           normal.height() + (target.height() - normal.height()) * magnify_progress_);
+    const float nx = static_cast<float>((draw_rect.x() - frame_rect.x()) / frame_rect.width());
+    const float ny = static_cast<float>((draw_rect.y() - frame_rect.y()) / frame_rect.height());
+    const float nw = static_cast<float>(draw_rect.width() / frame_rect.width());
+    const float nh = static_cast<float>(draw_rect.height() / frame_rect.height());
+
+    const WebcamChromaKeySettings::ActiveRgb key = webcam_chroma_.active_color();
+    recorder_core::ChromaKeyParams chroma;
+    chroma.enabled = webcam_chroma_.enabled;
+    chroma.r = key.r;
+    chroma.g = key.g;
+    chroma.b = key.b;
+    chroma.tolerance = webcam_chroma_.tolerance;
+    chroma.softness = webcam_chroma_.softness;
+    chroma.spill_reduction = webcam_chroma_.spill_reduction;
+    dxgi_renderer_->SetWebcamOverlayState(/*show=*/true, /*selected=*/false, nx, ny, nw, nh, webcam_mirror_,
+                                          webcam_opacity_, chroma);
+    if (!webcam_frame_.isNull()) {
         const QImage& img = webcam_frame_;
         dxgi_renderer_->SetWebcamOverlayFrame(img.constBits(), img.width(), img.height(),
                                               static_cast<int>(img.bytesPerLine()));
@@ -997,6 +1067,7 @@ void PreviewSurface::ensureMagnifyAnimation() {
     connect(magnify_animation_, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
         magnify_progress_ = value.toDouble();
         update();
+        syncEnlargedWebcamToDxgi();
     });
 }
 
@@ -1214,9 +1285,11 @@ void PreviewSurface::mousePressEvent(QMouseEvent* event) {
     const QPointF pos = event->position();
 
     // Magnifier click handling: hover/click hit-testing is backend-independent (a
-    // cursor/hotspot check has no "which preview backend is active" concept). Only
-    // the *painting* of the enlarged view's content remains DXGI-dependent (see
-    // paintEvent and the class-level note on syncWebcamOverlayToDxgi()).
+    // cursor/hotspot check has no "which preview backend is active" concept). The
+    // *painting* of the enlarged view's content differs by backend only in WHERE
+    // it happens: paintEvent draws it directly in the QImage fallback, while the
+    // animation tick's syncEnlargedWebcamToDxgi() composites the same scrim +
+    // lerped rect into the live DXGI preview.
     if (webcam_enabled_ &&
         (magnify_animation_ == nullptr || magnify_animation_->state() != QAbstractAnimation::Running)) {
         if (webcam_enlarged_) {
@@ -1561,9 +1634,11 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     // (syncWebcamOverlayToDxgi). This path drives the QImage preview and all
     // deterministic visual-test scenarios (which run with DXGI stopped). The
     // magnifier's hover/click handling is backend-independent (see
-    // mousePressEvent/mouseMoveEvent) -- only the enlarged view's floating content
-    // painted below is Qt-paint-layer-only, for the same reason as the rest of this
-    // block (Task 2 composites that content into DXGI separately).
+    // mousePressEvent/mouseMoveEvent), and so is the enlarged view itself --
+    // syncEnlargedWebcamToDxgi() composites the same scrim + lerped rect into the
+    // live DXGI preview (driven by the animation tick), since the block painted
+    // below is Qt-paint-layer-only and occluded the same way as the rest of this
+    // function while DXGI is active.
     if (webcam_enabled_ && magnify_progress_ > 0.0) {
         // Floating enlarged view: dim scrim over the whole panel, and the PiP lerped
         // from its normal placement to the centred enlarged target.
