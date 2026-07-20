@@ -20,7 +20,9 @@
 #include <recorder_core/recorder_session.h>
 
 class QLabel;
+class QPainter;
 class QTimer;
+class QVariantAnimation;
 
 namespace exosnap {
 class DxgiPreviewRenderer;
@@ -164,12 +166,35 @@ class PreviewSurface : public QWidget {
     // (empty state). Drives the Record page's content-fit preview box.
     [[nodiscard]] double contentAspectRatio() const;
 
+    // --- Webcam magnifier (hover-to-enlarge) ---
+    // A small icon appears on hover over the PiP; clicking it animates the PiP into
+    // a larger floating view centred in the preview (scale/fade, ~180ms). Clicking
+    // the icon again (now a restore glyph) or clicking outside the floating view
+    // animates it back down. Preview-only affordance: it never changes
+    // webcam_rect_norm_ (the confirmed, WYSIWYG placement) or persists across
+    // restarts — purely a transient "peek at it bigger" convenience.
+    [[nodiscard]] bool isWebcamEnlarged() const noexcept {
+        return webcam_enlarged_;
+    }
+
     // --- Visual-harness / test accessors (no side effects) ---
     // Pixel rect of the PiP within the widget, mapped through the same content rect
     // used for hit-testing and DXGI rendering.
     [[nodiscard]] QRect webcamMappedPreviewRect() const;
     // Active handle/drag descriptor: "none" | "move" | "tl" | "tr" | "bl" | "br".
     [[nodiscard]] QString webcamActiveHandle() const;
+    // True while the pointer hovers the (non-enlarged) PiP — drives the magnifier
+    // icon's visibility.
+    [[nodiscard]] bool isWebcamHovered() const noexcept {
+        return webcam_hovered_;
+    }
+    // Current 0 (normal) .. 1 (fully enlarged) animation progress.
+    [[nodiscard]] double webcamMagnifyProgress() const noexcept {
+        return magnify_progress_;
+    }
+    // Pixel rect of the magnifier/restore icon badge for the current state, mapped
+    // to widget coordinates. Empty when the icon is not currently shown.
+    [[nodiscard]] QRect webcamMagnifierIconMappedRect() const;
 
   signals:
     void webcamOverlayMoved(QRectF rect_norm);
@@ -205,6 +230,19 @@ class PreviewSurface : public QWidget {
     QRectF displayedFrameRect() const;
     QRectF displayedFrameRectForSource(int srcW, int srcH) const;
     DragMode hitTestWebcam(QPointF pos) const;
+    // Target rect (widget pixels) the PiP animates into when enlarged: centred in
+    // the preview panel, sized to a comfortable fraction of it, aspect-preserving.
+    QRectF webcamEnlargedTargetRect() const;
+    // Badge rect for the magnifier/restore icon, anchored to the top-right corner of
+    // `pip_rect` (either the normal PiP or the current lerped/enlarged rect). Empty
+    // if `pip_rect` is too small to host the badge without dominating it.
+    QRectF magnifierIconRect(const QRectF& pip_rect) const;
+    void paintMagnifierIcon(QPainter& painter, const QRectF& icon_rect, bool enlarged) const;
+    void ensureMagnifyAnimation();
+    // Starts (or reverses) the enlarge/restore animation toward `enlarged`. No-op if
+    // already at that target. Entering enlarged mode cancels any in-progress
+    // drag/selection first.
+    void setWebcamEnlarged(bool enlarged);
     void applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers modifiers);
     void snapOverlayRectToCurrentAspect();
     void applyDxgiPreviewResize();
@@ -245,6 +283,12 @@ class PreviewSurface : public QWidget {
     bool webcam_edit_locked_ = false;
     double webcam_aspect_ratio_ = 16.0 / 9.0;
     QRectF webcam_rect_norm_{0.0, 0.0, 0.25, 0.25};
+
+    // --- Webcam magnifier (hover-to-enlarge) ---
+    bool webcam_hovered_ = false;  // pointer over the (non-enlarged) PiP
+    bool webcam_enlarged_ = false; // logical target state (animation may still be mid-flight)
+    QVariantAnimation* magnify_animation_ = nullptr;
+    double magnify_progress_ = 0.0; // 0 = normal placement, 1 = fully enlarged
 
     DragMode drag_mode_ = DragMode::None;
     QPointF drag_origin_;

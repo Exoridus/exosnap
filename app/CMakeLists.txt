@@ -1561,6 +1561,9 @@ exosnap_add_gtest(
         diagnostics/AppLog.cpp
         # THEME-SLICE-2C: StatusPill now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
+        # Webcam magnifier: PreviewSurface::paintMagnifierIcon() renders the
+        # search/x glyph via lucidePixmap().
+        ui/theme/LucideIcon.cpp
     LIBRARIES
         Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
         d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
@@ -1568,6 +1571,28 @@ exosnap_add_gtest(
 target_include_directories(preview_surface_webcam_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(preview_surface_webcam_tests PRIVATE NOMINMAX)
 set_target_properties(preview_surface_webcam_tests PROPERTIES AUTOMOC ON)
+
+# Regression coverage for the webcam-PiP handle/box desync bug: DxgiPreviewRenderer::
+# GetSourceSize() must track whatever the render thread is CURRENTLY drawing as the
+# pushed-source background, not a stale value from before the current source was
+# adopted. Exercises the real BeginPushedSource/keyed-mutex handoff against a live
+# hardware D3D11 device (InitD3D11() hardcodes D3D_DRIVER_TYPE_HARDWARE), so it is
+# GPU-live like capability_adapter_enum_tests; GTEST_SKIP covers headless runners.
+exosnap_add_gtest(
+    NAME dxgi_preview_pushed_source_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_dxgi_preview_pushed_source.cpp
+        services/DxgiPreviewRenderer.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core recorder_core
+        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
+    LABELS live
+)
+target_include_directories(dxgi_preview_pushed_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(dxgi_preview_pushed_source_tests PRIVATE NOMINMAX)
+set_target_properties(dxgi_preview_pushed_source_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME transport_dock_tests

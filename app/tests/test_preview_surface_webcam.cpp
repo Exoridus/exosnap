@@ -2,9 +2,12 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <utility>
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
@@ -63,6 +66,20 @@ class PreviewSurfaceWebcamTest : public ::testing::Test {
         const QRectF n = surface_->webcamOverlayRect();
         // content rect is (0,0,800,450)
         return QPointF((n.x() + n.width() / 2.0) * 800.0, (n.y() + n.height() / 2.0) * 450.0);
+    }
+
+    // Pumps the Qt event loop (so the magnifier's QVariantAnimation timer can
+    // advance) until `predicate` is true or `timeout_ms` elapses. Returns whether
+    // it settled in time.
+    template <typename Predicate> bool pumpUntil(Predicate&& predicate, int timeout_ms = 2000) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate()) {
+            if (timer.hasExpired(timeout_ms))
+                return false;
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        }
+        return true;
     }
 
     std::unique_ptr<PreviewSurface> surface_;
@@ -257,6 +274,117 @@ TEST_F(PreviewSurfaceWebcamTest, DefaultPlacementBottomRight) {
     EXPECT_GT(def.y(), 0.5);
     EXPECT_LE(def.x() + def.width(), 1.0 + 1e-4);
     EXPECT_LE(def.y() + def.height(), 1.0 + 1e-4);
+}
+
+// ---- Webcam magnifier (hover-to-enlarge) -----------------------------------
+
+// Hovering the (unselected) PiP reveals the magnifier icon inside its bounds;
+// leaving hides it again. No DXGI preview runs in this fixture, so the Qt-paint
+// magnifier path is fully exercised (see PreviewSurface's dxgi_active_ gating).
+TEST_F(PreviewSurfaceWebcamTest, HoverShowsMagnifierIconAndLeavingHidesIt) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    EXPECT_FALSE(surface_->isWebcamHovered());
+    EXPECT_TRUE(surface_->webcamMagnifierIconMappedRect().isEmpty());
+
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    EXPECT_TRUE(surface_->isWebcamHovered());
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+    EXPECT_TRUE(surface_->webcamMappedPreviewRect().contains(icon.center()));
+
+    sendMouse(QEvent::MouseMove, QPointF(5, 5), Qt::NoButton, Qt::NoButton);
+    EXPECT_FALSE(surface_->isWebcamHovered());
+    EXPECT_TRUE(surface_->webcamMagnifierIconMappedRect().isEmpty());
+}
+
+// The magnifier icon is suppressed while the PiP is selected (avoids clashing
+// with the resize-handle chrome occupying the same corners).
+TEST_F(PreviewSurfaceWebcamTest, MagnifierIconHiddenWhileSelected) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    surface_->setWebcamSelected(true);
+
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    EXPECT_TRUE(surface_->isWebcamHovered());
+    EXPECT_TRUE(surface_->webcamMagnifierIconMappedRect().isEmpty());
+}
+
+// Clicking the magnifier icon starts the enlarge animation: the logical target
+// state flips synchronously, and progress reaches 1.0 once the ~180ms animation
+// settles.
+TEST_F(PreviewSurfaceWebcamTest, ClickingMagnifierIconEnlargesThePip) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+
+    ASSERT_FALSE(surface_->isWebcamEnlarged());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    EXPECT_TRUE(surface_->isWebcamEnlarged());
+
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }))
+        << "enlarge animation never settled";
+    EXPECT_TRUE(surface_->isWebcamEnlarged());
+}
+
+// Clicking outside the floating enlarged view collapses it back down.
+TEST_F(PreviewSurfaceWebcamTest, ClickingOutsideEnlargedViewCollapsesIt) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }));
+    ASSERT_TRUE(surface_->isWebcamEnlarged());
+
+    // Near the widget's top-left corner: outside the centred enlarged view
+    // regardless of its exact fitted size.
+    sendMouse(QEvent::MouseButtonPress, QPointF(5, 5), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, QPointF(5, 5), Qt::LeftButton, Qt::NoButton);
+    EXPECT_FALSE(surface_->isWebcamEnlarged());
+
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() <= 0.0; }))
+        << "collapse animation never settled";
+    EXPECT_EQ(surface_->webcamMagnifyProgress(), 0.0);
+}
+
+// Escape collapses the enlarged view, same as clicking outside it.
+TEST_F(PreviewSurfaceWebcamTest, EscapeCollapsesEnlargedView) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }));
+    ASSERT_TRUE(surface_->isWebcamEnlarged());
+
+    sendKey(Qt::Key_Escape);
+    EXPECT_FALSE(surface_->isWebcamEnlarged());
+}
+
+// Disabling the webcam hard-resets the magnifier (no lingering floating view, no
+// animation left running) synchronously -- no pump needed.
+TEST_F(PreviewSurfaceWebcamTest, DisablingWebcamHardResetsMagnifierState) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+    sendMouse(QEvent::MouseButtonPress, icon.center(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, icon.center(), Qt::LeftButton, Qt::NoButton);
+    ASSERT_TRUE(surface_->isWebcamEnlarged());
+
+    surface_->setWebcamOverlayEnabled(false);
+    EXPECT_FALSE(surface_->isWebcamEnlarged());
+    EXPECT_EQ(surface_->webcamMagnifyProgress(), 0.0);
+    EXPECT_FALSE(surface_->isWebcamHovered());
 }
 
 // Out-of-bounds placement is sanitized to a valid in-frame rect.

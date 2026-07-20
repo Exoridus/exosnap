@@ -586,6 +586,26 @@ void DxgiPreviewRenderer::ConsumePushedFrame() {
                     QStringLiteral("pushed tone-map failed: %1").arg(QString::fromStdString(tmErr)));
             }
         }
+        // BUG FIX: GetSourceSize() (frameMutex_-guarded, safe to call from the UI
+        // thread) is what PreviewSurface::displayedFrameRect() uses to compute the
+        // Qt-side hit-test rect for the webcam PiP handles. Before this fix it only
+        // ever reported srcWidth_/srcHeight_ from the preview's own WGC capture,
+        // which stops being polled the moment a pushed source is active
+        // (PushedSourceState::PollsWgc() == false) — so on a fresh pushed source
+        // (recording start, capture-target switch, idle-hub handoff) GetSourceSize()
+        // kept reporting a stale/unrelated size forever, while RenderFrame() below
+        // correctly contain-fits against the LIVE pushedWidth_/pushedHeight_. Any
+        // aspect-ratio difference between the two decoupled the drag/resize handle
+        // box from the actually-rendered PiP. Updating srcWidth_/srcHeight_ here,
+        // exactly when OnFrameConsumed() flips DrawsPushedBackground() to true,
+        // keeps GetSourceSize() in lockstep with whatever RenderFrame() is about to
+        // draw as the background on the very next iteration (ConsumePushedFrame()
+        // and RenderFrame() run back-to-back in the same render-thread loop tick).
+        {
+            std::lock_guard lock(frameMutex_);
+            srcWidth_ = pushedWidth_;
+            srcHeight_ = pushedHeight_;
+        }
         pushed_.OnFrameConsumed();
     }
 }

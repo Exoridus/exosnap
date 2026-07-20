@@ -61,6 +61,13 @@ class DxgiPreviewRenderer {
     void Resize(uint32_t hwndWidth, uint32_t hwndHeight, uint32_t swapWidth, uint32_t swapHeight);
 
     [[nodiscard]] bool IsActive() const noexcept;
+    // Dimensions of whatever the render thread is CURRENTLY drawing as the frame
+    // background (the preview's own WGC capture, or a pushed source once its
+    // first frame has been consumed) — never a stale value from a source that is
+    // no longer being drawn. PreviewSurface::displayedFrameRect() contain-fits
+    // against this, so it must always agree with the content rect RenderFrame()
+    // itself computes, or the webcam PiP hit-test/handle box decouples from the
+    // actually-rendered PiP. Thread-safe (frameMutex_-guarded).
     void GetSourceSize(uint32_t& outWidth, uint32_t& outHeight) const noexcept;
 
     // Toggle the OS-level visibility of the native child window without touching
