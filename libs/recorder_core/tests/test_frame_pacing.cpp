@@ -146,7 +146,7 @@ using recorder_core::ShouldRecompositeHeldScreen;
 
 TEST(HeldScreenRecomposite, StillDesktopWithLiveWebcamRecomposites) {
     EXPECT_TRUE(ShouldRecompositeHeldScreen(/*has_fresh_source=*/false, /*od_holding=*/false,
-                                            /*webcam_overlay_active=*/true, /*has_held_screen=*/true));
+                                            /*dynamic_overlay_changed=*/true, /*has_held_screen=*/true));
 }
 
 TEST(HeldScreenRecomposite, FreshFrameCompositesThatInstead) {
@@ -154,7 +154,7 @@ TEST(HeldScreenRecomposite, FreshFrameCompositesThatInstead) {
 }
 
 TEST(HeldScreenRecomposite, NoWebcamKeepsCheapDuplicate) {
-    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, false, /*webcam_overlay_active=*/false, true));
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, false, /*dynamic_overlay_changed=*/false, true));
 }
 
 // Mid-reopen the capture's display-tied resources are gone; touching them is a crash.

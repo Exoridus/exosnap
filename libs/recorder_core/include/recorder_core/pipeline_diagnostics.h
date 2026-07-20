@@ -306,6 +306,16 @@ struct RecordingDiagnosticsSnapshot {
     DiskDiagnostics disk;
     SplitDiagnostics split;
 
+    // Retained-frame reuse counters (spec section 13)
+    uint64_t screen_generation_changes = 0;
+    uint64_t webcam_generation_changes = 0;
+    uint64_t cursor_only_capture_events_ignored = 0;
+    uint64_t phase_ring_cursor_only_events_ignored = 0;
+    uint64_t full_compositions = 0;
+    uint64_t reused_yuv_frames = 0;
+    uint64_t yuv_slot_copies = 0;
+    uint64_t yuv_slot_copies_skipped = 0;
+
     // A/V synchronization drift as it actually lands in the file — the RESIDUAL
     // after clock slaving. The audio device clock (WASAPI device-position/QPC
     // pairs) is measured against the QPC timeline video frames are paced on

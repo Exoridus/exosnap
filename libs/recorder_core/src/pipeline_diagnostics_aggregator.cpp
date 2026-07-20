@@ -106,6 +106,17 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     forced_keyframes_ = 0;
     slot_stalls_ = 0;
     frames_duplicated_ = 0;
+
+    // Retained-frame reuse counters
+    screen_generation_changes_ = 0;
+    webcam_generation_changes_ = 0;
+    cursor_only_capture_events_ignored_ = 0;
+    phase_ring_cursor_only_events_ignored_ = 0;
+    full_compositions_ = 0;
+    reused_yuv_frames_ = 0;
+    yuv_slot_copies_ = 0;
+    yuv_slot_copies_skipped_ = 0;
+
     encode_window_.Clear();
     submit_window_.Clear();
     tick_window_.Clear();
@@ -305,6 +316,46 @@ void PipelineDiagnosticsAggregator::OnMuxQueueDelay(time_point now, double ms) n
 void PipelineDiagnosticsAggregator::OnFrameDuplicated() noexcept {
     std::lock_guard lk(mutex_);
     ++frames_duplicated_;
+}
+
+void PipelineDiagnosticsAggregator::OnScreenGenerationChanged() noexcept {
+    std::lock_guard lk(mutex_);
+    ++screen_generation_changes_;
+}
+
+void PipelineDiagnosticsAggregator::OnWebcamGenerationChanged() noexcept {
+    std::lock_guard lk(mutex_);
+    ++webcam_generation_changes_;
+}
+
+void PipelineDiagnosticsAggregator::OnCursorOnlyCaptureEventIgnored() noexcept {
+    std::lock_guard lk(mutex_);
+    ++cursor_only_capture_events_ignored_;
+}
+
+void PipelineDiagnosticsAggregator::OnPhaseRingCursorOnlyEventIgnored() noexcept {
+    std::lock_guard lk(mutex_);
+    ++phase_ring_cursor_only_events_ignored_;
+}
+
+void PipelineDiagnosticsAggregator::OnFullComposition() noexcept {
+    std::lock_guard lk(mutex_);
+    ++full_compositions_;
+}
+
+void PipelineDiagnosticsAggregator::OnReusedYuvFrame() noexcept {
+    std::lock_guard lk(mutex_);
+    ++reused_yuv_frames_;
+}
+
+void PipelineDiagnosticsAggregator::OnYuvSlotCopy() noexcept {
+    std::lock_guard lk(mutex_);
+    ++yuv_slot_copies_;
+}
+
+void PipelineDiagnosticsAggregator::OnYuvSlotCopySkipped() noexcept {
+    std::lock_guard lk(mutex_);
+    ++yuv_slot_copies_skipped_;
 }
 
 void PipelineDiagnosticsAggregator::OnEncodeSubmitted() noexcept {
@@ -775,6 +826,16 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     } else {
         s.disk_fill_eta_seconds = -1.0;
     }
+
+    // ---- Retained-frame reuse counters (spec section 13) ----
+    s.screen_generation_changes = screen_generation_changes_;
+    s.webcam_generation_changes = webcam_generation_changes_;
+    s.cursor_only_capture_events_ignored = cursor_only_capture_events_ignored_;
+    s.phase_ring_cursor_only_events_ignored = phase_ring_cursor_only_events_ignored_;
+    s.full_compositions = full_compositions_;
+    s.reused_yuv_frames = reused_yuv_frames_;
+    s.yuv_slot_copies = yuv_slot_copies_;
+    s.yuv_slot_copies_skipped = yuv_slot_copies_skipped_;
 
     // ---- Classification ----
     std::string reason;

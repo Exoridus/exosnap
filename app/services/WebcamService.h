@@ -145,7 +145,8 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     [[nodiscard]] bool IsRunning() const noexcept;
 
     // WebcamFrameProvider — called by VideoThread (thread-safe).
-    bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) override;
+    bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra,
+                     uint64_t& out_generation) override;
 
   protected:
     // Marshals `img` to the callback on the main thread. Protected (not private)
@@ -190,6 +191,7 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     int frame_width_ = 0;
     int frame_height_ = 0;
     bool has_frame_ = false;
+    uint64_t frame_generation_ = 0;
 };
 
 } // namespace exosnap

@@ -18,9 +18,11 @@
 #include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/gpu_timestamp_profiler.h>
 #include <recorder_core/hdr_native.h>
+#include <recorder_core/od_acquire_classify.h>
 #include <recorder_core/preview_shared_texture.h>
 #include <recorder_core/preview_tap.h>
 #include <recorder_core/util/com_apartment.h>
+#include <recorder_core/visual_generations.h>
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -40,6 +42,7 @@
 #include <dwmapi.h>
 #include <dxgi.h>
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -906,6 +909,13 @@ void VideoThread::Run() {
     Win32CursorBitmap wgcCursorBitmap;
     std::vector<uint8_t> wgcCursorUploadBgra;
 
+    VisualGenerations visualGenerations{};
+    VisualFrameKey lastCompositedKey{};
+    bool haveLastCompositedKey = false;
+    bool lastCursorCaptureEnabled = m_state.config.capture_cursor;
+    uint64_t lastWebcamFrameGeneration = 0;
+    bool haveWebcamFrameGeneration = false;
+
     // Validate an acquired OD frame; on the FIRST frame, negotiate the session
     // capture format and create odCapturedTex to match it. Cheap on the
     // steady-state path (one CPU-side GetDesc + compare per acquire).
@@ -1150,11 +1160,18 @@ void VideoThread::Run() {
         // engine's side; the upload of camBgra to the GPU is part of the composite
         // pass measured by compositeGpuTimer.
         const auto cam_t0 = std::chrono::steady_clock::now();
-        const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra);
+        uint64_t camGeneration = 0;
+        const bool gotCam = m_state.config.webcam.frame_provider->TryGetFrame(camW, camH, camBgra, camGeneration);
         const auto cam_t1 = std::chrono::steady_clock::now();
         if (gotCam) {
             m_state.diagnostics.OnWebcamConvert(cam_t1,
                                                 std::chrono::duration<double, std::milli>(cam_t1 - cam_t0).count());
+        }
+        if (gotCam && (!haveWebcamFrameGeneration || camGeneration != lastWebcamFrameGeneration)) {
+            haveWebcamFrameGeneration = true;
+            lastWebcamFrameGeneration = camGeneration;
+            ++visualGenerations.webcam;
+            m_state.diagnostics.OnWebcamGenerationChanged();
         }
         if (!gotCam) {
             return true;
@@ -2309,6 +2326,16 @@ void VideoThread::Run() {
         // Reference encode texture for frame duplication (NV12 8-bit / P010 10-bit)
         winrt::com_ptr<ID3D11Texture2D> refNv12;
         bool refNv12Valid = false;
+        VisualFrameKey refNv12Key{}; // what refNv12 currently contains, once refNv12Valid
+
+        // Per-slot content tracking: what generation each NVENC ring slot
+        // currently holds, so a duplicate tick can skip the CopyResource
+        // entirely when the slot already contains refNv12Key (CV-RETAIN-004).
+        // Sized to match the hardcoded NVENC ring size (nvenc_encoder.h,
+        // NvencEncoder::m_slots) and this file's own nv12Textures array;
+        // making that size dynamic is CV-PERF-007, out of scope here.
+        std::array<VisualFrameKey, 8> slotContainedKey{};
+        std::array<bool, 8> slotContainedValid{};
 
         {
             D3D11_TEXTURE2D_DESC refDesc{};
@@ -2479,43 +2506,66 @@ void VideoThread::Run() {
                     // Only count capture/coalesce while actively recording — frames the
                     // backend produces during pause are intentionally discarded, not drops.
                     const bool diag_recording = !m_state.pause_requested.load();
-                    if (usePhaseCorrect) {
-                        // Round-robin write into the ring keyed by source present-QPC.
-                        CaptureRingEntry& entry = captureRing[ringHead];
-                        // Evicting a fresh, never-emitted frame is a genuine drop.
-                        if (entry.presentQpc != 0 && entry.presentQpc > lastEmittedPresentQpc) {
-                            ++droppedFrames;
-                            if (diag_recording)
-                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                    const OdAcquireKind acquireKind =
+                        ClassifyOdAcquire(info.LastPresentTime.QuadPart != 0, info.LastMouseUpdateTime.QuadPart != 0,
+                                          m_state.config.capture_cursor);
+                    if (acquireKind == OdAcquireKind::Ignorable) {
+                        rawTex->Release();
+                        odSrc.ReleaseFrame();
+                        if (diag_recording)
+                            m_state.diagnostics.OnCursorOnlyCaptureEventIgnored();
+                        continue;
+                    }
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
+                        if (usePhaseCorrect) {
+                            // Round-robin write into the ring keyed by source present-QPC.
+                            CaptureRingEntry& entry = captureRing[ringHead];
+                            // Evicting a fresh, never-emitted frame is a genuine drop.
+                            if (entry.presentQpc != 0 && entry.presentQpc > lastEmittedPresentQpc) {
+                                ++droppedFrames;
+                                if (diag_recording)
+                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                            }
+                            d3dContext->CopyResource(entry.tex.get(), rawTex);
+                            entry.presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                            ringHead = (ringHead + 1) % captureRing.size();
+                            phaseRingHasFrame = true;
+                        } else {
+                            d3dContext->CopyResource(odCapturedTex.get(), rawTex);
                         }
-                        d3dContext->CopyResource(entry.tex.get(), rawTex);
-                        uint64_t entryPresentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
-                        if (entryPresentQpc == 0) {
-                            // No source present timestamp this acquire; stamp with the
-                            // current QPC (same clock domain) so the frame stays
-                            // selectable and monotonic and is never lost.
-                            LARGE_INTEGER nowQpc;
-                            QueryPerformanceCounter(&nowQpc);
-                            entryPresentQpc = static_cast<uint64_t>(nowQpc.QuadPart);
-                        }
-                        entry.presentQpc = entryPresentQpc;
-                        ringHead = (ringHead + 1) % captureRing.size();
-                        phaseRingHasFrame = true;
+                        ++visualGenerations.screen;
+                        if (diag_recording)
+                            m_state.diagnostics.OnScreenGenerationChanged();
                     } else {
-                        d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                        // CursorOnly: no desktop texture copy, no ring entry — the held
+                        // frame (screen unchanged) gets recomposited with the new cursor
+                        // by ShouldRecompositeHeldScreen instead (Task 6).
+                        if (diag_recording)
+                            m_state.diagnostics.OnPhaseRingCursorOnlyEventIgnored();
                     }
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
-                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap)) {
                             odCursorShapeValid = true;
+                            ++visualGenerations.cursor; // shape/bitmap changed
+                        }
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        const bool visibilityChanged = odCursorVisible != (info.PointerPosition.Visible != FALSE);
+                        const bool positionChanged = odCursorPosX != info.PointerPosition.Position.x ||
+                                                     odCursorPosY != info.PointerPosition.Position.y;
                         odCursorVisible = info.PointerPosition.Visible != FALSE;
                         odCursorPosX = info.PointerPosition.Position.x;
                         odCursorPosY = info.PointerPosition.Position.y;
+                        if (visibilityChanged || positionChanged)
+                            ++visualGenerations.cursor;
+                    }
+                    if (m_state.config.capture_cursor != lastCursorCaptureEnabled) {
+                        lastCursorCaptureEnabled = m_state.config.capture_cursor;
+                        ++visualGenerations.cursor;
                     }
                     odSrc.ReleaseFrame();
-                    if (diag_recording)
+                    if (diag_recording && acquireKind == OdAcquireKind::DesktopPresent)
                         m_state.diagnostics.OnFrameCaptured();
                     // Present-cadence tap (VRR/CFR judder correlation). DXGI OD exposes the
                     // source's last present timestamp (QPC) plus the coalesced-update count.
@@ -2531,7 +2581,7 @@ void VideoThread::Run() {
                         }
                         cfrLastPresentQpc = presentQpc;
                     }
-                    if (!usePhaseCorrect) {
+                    if (!usePhaseCorrect && acquireKind == OdAcquireKind::DesktopPresent) {
                         if (odCapturedTexValid) {
                             ++droppedFrames;
                             if (diag_recording)
@@ -2755,8 +2805,16 @@ void VideoThread::Run() {
                 // Reopen() succeeds. Re-compositing is forbidden there — it touches
                 // display-tied GPU resources while the captured output is gone.
                 ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
-                if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding,
-                                                m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable,
+                const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
+                const bool cursorOverlayMoved =
+                    !haveLastCompositedKey ||
+                    currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
+                    currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
+                const bool webcamMoved = m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable &&
+                                         (!haveLastCompositedKey ||
+                                          currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
+                const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
+                if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
                     rawSourceTex = heldScreenTex;
                 }
@@ -2797,9 +2855,17 @@ void VideoThread::Run() {
                     if (refNv12 != nullptr) {
                         d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                         refNv12Valid = true;
+                        refNv12Key = currentVisualKey; // from Task 6, computed earlier this tick
+                    }
+                    if (slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size()) {
+                        slotContainedKey[slot] = currentVisualKey;
+                        slotContainedValid[slot] = true;
                     }
                     performSnapshotIfRequested(slot);
                     frameWritten = true;
+                    lastCompositedKey = currentVisualKey;
+                    haveLastCompositedKey = true;
+                    m_state.diagnostics.OnFullComposition();
                 } else if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
                     const auto comp_t0 = std::chrono::steady_clock::now();
@@ -2860,18 +2926,42 @@ void VideoThread::Run() {
                             if (refNv12 != nullptr) {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
+                                refNv12Key = currentVisualKey; // from Task 6, computed earlier this tick
+                            }
+                            if (slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size()) {
+                                slotContainedKey[slot] = currentVisualKey;
+                                slotContainedValid[slot] = true;
                             }
                             // Capture frame snapshot on real (non-duplicate) frames.
                             performSnapshotIfRequested(slot);
                             frameWritten = true;
+                            lastCompositedKey = currentVisualKey;
+                            haveLastCompositedKey = true;
+                            m_state.diagnostics.OnFullComposition();
                         }
                     }
                 } else if (refNv12Valid) {
-                    // Duplicate: copy the reference encode surface into this slot
-                    d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
+                    // Duplicate: the slot may already hold exactly what refNv12
+                    // holds (from a previous real composite or a previous
+                    // duplicate copy) — if so, skip the redundant GPU copy and
+                    // just re-submit the slot's existing content.
+                    const bool slotAlreadyCurrent = slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size() &&
+                                                    slotContainedValid[static_cast<size_t>(slot)] &&
+                                                    slotContainedKey[static_cast<size_t>(slot)] == refNv12Key;
+                    if (!slotAlreadyCurrent) {
+                        d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
+                        if (slot >= 0 && static_cast<size_t>(slot) < slotContainedKey.size()) {
+                            slotContainedKey[static_cast<size_t>(slot)] = refNv12Key;
+                            slotContainedValid[static_cast<size_t>(slot)] = true;
+                        }
+                        m_state.diagnostics.OnYuvSlotCopy();
+                    } else {
+                        m_state.diagnostics.OnYuvSlotCopySkipped();
+                    }
                     frameWritten = true;
                     ++duplicatedFrames;
                     m_state.diagnostics.OnFrameDuplicated();
+                    m_state.diagnostics.OnReusedYuvFrame();
                 }
 
                 if (!frameWritten) {
@@ -3003,28 +3093,53 @@ void VideoThread::Run() {
                             continue;  // Skip: try the next frame
                         }
                     }
-                    d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    const bool diag_recording = !m_state.pause_requested.load();
+                    const OdAcquireKind acquireKind =
+                        ClassifyOdAcquire(info.LastPresentTime.QuadPart != 0, info.LastMouseUpdateTime.QuadPart != 0,
+                                          m_state.config.capture_cursor);
+                    if (acquireKind == OdAcquireKind::Ignorable) {
+                        rawTex->Release();
+                        odSrc.ReleaseFrame();
+                        if (diag_recording)
+                            m_state.diagnostics.OnCursorOnlyCaptureEventIgnored();
+                        continue;
+                    }
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
+                        d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                        ++visualGenerations.screen;
+                        if (diag_recording)
+                            m_state.diagnostics.OnScreenGenerationChanged();
+                    }
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
-                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap)) {
                             odCursorShapeValid = true;
+                            ++visualGenerations.cursor;
+                        }
                     }
                     if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        const bool visibilityChanged = odCursorVisible != (info.PointerPosition.Visible != FALSE);
+                        const bool positionChanged = odCursorPosX != info.PointerPosition.Position.x ||
+                                                     odCursorPosY != info.PointerPosition.Position.y;
                         odCursorVisible = info.PointerPosition.Visible != FALSE;
                         odCursorPosX = info.PointerPosition.Position.x;
                         odCursorPosY = info.PointerPosition.Position.y;
+                        if (visibilityChanged || positionChanged)
+                            ++visualGenerations.cursor;
                     }
-                    // Convert DXGI LastPresentTime (QPC ticks) to 100ns units
-                    if (info.LastPresentTime.QuadPart != 0) {
+                    if (m_state.config.capture_cursor != lastCursorCaptureEnabled) {
+                        lastCursorCaptureEnabled = m_state.config.capture_cursor;
+                        ++visualGenerations.cursor;
+                    }
+                    // Convert DXGI LastPresentTime (QPC ticks) to 100ns units — only
+                    // meaningful for a real desktop present.
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
                         const auto lpt = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
                         latestFrameTicks100ns =
                             static_cast<int64_t>(lpt / qpcFreq * 10000000ULL + lpt % qpcFreq * 10000000ULL / qpcFreq);
                     }
                     odSrc.ReleaseFrame();
-                    // Only count capture/coalesce while actively recording — frames the
-                    // backend produces during pause are intentionally discarded, not drops.
-                    const bool diag_recording = !m_state.pause_requested.load();
-                    if (diag_recording)
+                    if (diag_recording && acquireKind == OdAcquireKind::DesktopPresent)
                         m_state.diagnostics.OnFrameCaptured();
                     // Present-cadence tap (VRR/CFR judder correlation), mirroring the CFR path.
                     if (diag_recording && info.LastPresentTime.QuadPart != 0 && qpcFreq != 0) {
@@ -3037,12 +3152,14 @@ void VideoThread::Run() {
                         }
                         vfrLastPresentQpc = presentQpc;
                     }
-                    if (odCapturedTexValid) {
-                        ++droppedFrames;
-                        if (diag_recording)
-                            m_state.diagnostics.OnFrameDroppedCoalesced();
+                    if (acquireKind == OdAcquireKind::DesktopPresent) {
+                        if (odCapturedTexValid) {
+                            ++droppedFrames;
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        odCapturedTexValid = true;
                     }
-                    odCapturedTexValid = true;
                 }
                 if (odCapturedTexValid) {
                     latestTex = odCapturedTex; // borrow — not released in loop

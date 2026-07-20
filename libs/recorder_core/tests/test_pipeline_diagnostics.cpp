@@ -1233,4 +1233,37 @@ TEST(QueueSaturation, ResetClearsCounterAndEdgeState) {
     EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 1u);
 }
 
+// ---------------------------------------------------------------------------
+// Retained-frame reuse counters
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnosticsAggregator, RetainedFrameCountersRoundTrip) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+
+    agg.OnScreenGenerationChanged();
+    agg.OnScreenGenerationChanged();
+    agg.OnWebcamGenerationChanged();
+    agg.OnCursorOnlyCaptureEventIgnored();
+    agg.OnPhaseRingCursorOnlyEventIgnored();
+    agg.OnFullComposition();
+    agg.OnReusedYuvFrame();
+    agg.OnReusedYuvFrame();
+    agg.OnYuvSlotCopy();
+    agg.OnYuvSlotCopySkipped();
+    agg.OnYuvSlotCopySkipped();
+    agg.OnYuvSlotCopySkipped();
+
+    const auto snap = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+
+    EXPECT_EQ(snap.screen_generation_changes, 2u);
+    EXPECT_EQ(snap.webcam_generation_changes, 1u);
+    EXPECT_EQ(snap.cursor_only_capture_events_ignored, 1u);
+    EXPECT_EQ(snap.phase_ring_cursor_only_events_ignored, 1u);
+    EXPECT_EQ(snap.full_compositions, 1u);
+    EXPECT_EQ(snap.reused_yuv_frames, 2u);
+    EXPECT_EQ(snap.yuv_slot_copies, 1u);
+    EXPECT_EQ(snap.yuv_slot_copies_skipped, 3u);
+}
+
 } // namespace
