@@ -161,9 +161,13 @@ void AdvisoryItem::addAction(const QString& id, const QString& label, bool isDee
             emit deepLinkRequested();
     });
 
-    // Insert before the trailing stretch
-    const int stretch_idx = actions_layout_->count() - 1;
-    actions_layout_->insertWidget(stretch_idx, btn);
+    // The constructor seeds actions_layout_ with a single LEADING stretch
+    // (addStretch() before any buttons exist), so every button appended after
+    // it lands to the right of that stretch — the buttons hug the row's right
+    // edge, consistent with trailing-action alignment elsewhere in the app.
+    // (Previously this inserted each button just before the stretch, which
+    // left the stretch trailing and left-aligned the buttons instead.)
+    actions_layout_->addWidget(btn);
     actions_container_->setVisible(true);
 }
 

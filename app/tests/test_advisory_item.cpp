@@ -1,6 +1,8 @@
 #include "ui/widgets/AdvisoryItem.h"
 #include <QApplication>
 #include <QCoreApplication>
+#include <QPushButton>
+#include <algorithm>
 #include <gtest/gtest.h>
 
 namespace exosnap {
@@ -80,6 +82,58 @@ TEST_F(AdvisoryItemTest, AddAction_EmitsSignal) {
 TEST_F(AdvisoryItemTest, AddDeepLinkAction_DoesNotCrash) {
     ui::widgets::AdvisoryItem item;
     item.addAction(QStringLiteral("open"), QStringLiteral("Open"), true);
+}
+
+// Regression test: addAction() used to insert each button just before the
+// actions row's stretch, which left the stretch trailing and left-aligned the
+// buttons instead of hugging the row's right edge (the app-wide convention for
+// trailing actions). The stretch is seeded FIRST (leading), so buttons appended
+// after it must land on the right.
+TEST_F(AdvisoryItemTest, AddAction_ButtonIsRightAligned) {
+    ui::widgets::AdvisoryItem item;
+    item.setTitle(QStringLiteral("Title"));
+    item.addAction(QStringLiteral("fix"), QStringLiteral("Fix now"));
+    item.resize(400, item.sizeHint().height());
+    item.show();
+    QCoreApplication::processEvents();
+
+    auto* btn = item.findChild<QPushButton*>();
+    ASSERT_NE(btn, nullptr);
+    auto* row = qobject_cast<QWidget*>(btn->parent());
+    ASSERT_NE(row, nullptr);
+
+    // The button's right edge must sit at (or very near) the actions row's
+    // right edge -- a left-aligned button would instead leave most of the row
+    // empty to its right.
+    const int gap_to_right_edge = row->width() - (btn->x() + btn->width());
+    EXPECT_LE(gap_to_right_edge, 2) << "Action button must hug the row's right edge (button right="
+                                    << (btn->x() + btn->width()) << ", row width=" << row->width() << ")";
+    item.hide();
+}
+
+// With two actions, both must stay flush against the right edge as a group --
+// the rightmost button's right edge trailing the row, not floating mid-row.
+TEST_F(AdvisoryItemTest, AddAction_TwoButtons_BothRightAligned) {
+    ui::widgets::AdvisoryItem item;
+    item.setTitle(QStringLiteral("Title"));
+    item.addAction(QStringLiteral("dismiss"), QStringLiteral("Dismiss"));
+    item.addAction(QStringLiteral("fix"), QStringLiteral("Fix now"));
+    item.resize(400, item.sizeHint().height());
+    item.show();
+    QCoreApplication::processEvents();
+
+    const auto buttons = item.findChildren<QPushButton*>();
+    ASSERT_EQ(buttons.size(), 2);
+    auto* row = qobject_cast<QWidget*>(buttons.first()->parent());
+    ASSERT_NE(row, nullptr);
+
+    int rightmost_edge = 0;
+    for (auto* btn : buttons)
+        rightmost_edge = std::max(rightmost_edge, btn->x() + btn->width());
+
+    const int gap_to_right_edge = row->width() - rightmost_edge;
+    EXPECT_LE(gap_to_right_edge, 2) << "The rightmost action button must hug the row's right edge";
+    item.hide();
 }
 
 } // namespace
