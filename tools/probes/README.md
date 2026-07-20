@@ -28,10 +28,10 @@ Individual probe targets are placed under `build/<preset>/tools/probes/`.
 ## probe_mf_aac_encode — Legacy/Transitional Note
 
 Media Foundation AAC encoding is a transitional path. It is not the preferred
-future encoder architecture for ExoSnap (which uses FDK-AAC for better
-portability and control). This probe remains only for current compatibility
-validation and debugging. Remove it when the Media Foundation AAC path is
-retired from the production pipeline.
+future encoder architecture for ExoSnap (which uses FFmpeg's native AAC-LC
+encoder for cross-platform portability — see ADR 0052). This probe remains
+only for current compatibility validation and debugging. Remove it when the
+Media Foundation AAC path is retired from the production pipeline.
 
 ## Maintenance Value
 
