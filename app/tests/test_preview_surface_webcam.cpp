@@ -278,10 +278,12 @@ TEST_F(PreviewSurfaceWebcamTest, DefaultPlacementBottomRight) {
 
 // ---- Webcam magnifier (hover-to-enlarge) -----------------------------------
 
-// Hovering the (unselected) PiP reveals the magnifier icon inside its bounds;
-// leaving hides it again. No DXGI preview runs in this fixture, so the Qt-paint
-// magnifier path is fully exercised (see PreviewSurface's dxgi_active_ gating).
-TEST_F(PreviewSurfaceWebcamTest, HoverShowsMagnifierIconAndLeavingHidesIt) {
+// Hovering the (unselected) PiP reveals the magnifier cursor hotspot inside its
+// bounds (a pointing-hand cursor, no painted badge); leaving restores the normal
+// cursor. This hover/click handling is backend-independent (identical whether or
+// not a live DXGI preview is active) -- see PreviewSurface's mousePressEvent and
+// mouseMoveEvent -- but no DXGI preview runs in this fixture either way.
+TEST_F(PreviewSurfaceWebcamTest, HoverShowsMagnifierCursorAndLeavingRestoresIt) {
     surface_->setWebcamOverlayEnabled(true);
     surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
     EXPECT_FALSE(surface_->isWebcamHovered());
@@ -289,18 +291,26 @@ TEST_F(PreviewSurfaceWebcamTest, HoverShowsMagnifierIconAndLeavingHidesIt) {
 
     sendMouse(QEvent::MouseMove, pipCenter(), Qt::NoButton, Qt::NoButton);
     EXPECT_TRUE(surface_->isWebcamHovered());
-    const QRect icon = surface_->webcamMagnifierIconMappedRect();
-    ASSERT_FALSE(icon.isEmpty());
-    EXPECT_TRUE(surface_->webcamMappedPreviewRect().contains(icon.center()));
+    const QRect hotspot = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(hotspot.isEmpty());
+    EXPECT_TRUE(surface_->webcamMappedPreviewRect().contains(hotspot.center()));
+    // The pointing-hand cursor is scoped to the hotspot rect itself, not the whole
+    // PiP -- the pointer is still over the (non-hotspot) PiP body here, so the
+    // regular move cursor applies instead.
+    EXPECT_NE(surface_->cursor().shape(), Qt::PointingHandCursor);
+
+    sendMouse(QEvent::MouseMove, hotspot.center(), Qt::NoButton, Qt::NoButton);
+    EXPECT_EQ(surface_->cursor().shape(), Qt::PointingHandCursor);
 
     sendMouse(QEvent::MouseMove, QPointF(5, 5), Qt::NoButton, Qt::NoButton);
     EXPECT_FALSE(surface_->isWebcamHovered());
     EXPECT_TRUE(surface_->webcamMagnifierIconMappedRect().isEmpty());
+    EXPECT_NE(surface_->cursor().shape(), Qt::PointingHandCursor);
 }
 
-// The magnifier icon is suppressed while the PiP is selected (avoids clashing
+// The magnifier hotspot is suppressed while the PiP is selected (avoids clashing
 // with the resize-handle chrome occupying the same corners).
-TEST_F(PreviewSurfaceWebcamTest, MagnifierIconHiddenWhileSelected) {
+TEST_F(PreviewSurfaceWebcamTest, MagnifierHotspotHiddenWhileSelected) {
     surface_->setWebcamOverlayEnabled(true);
     surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
     surface_->setWebcamSelected(true);
@@ -310,7 +320,7 @@ TEST_F(PreviewSurfaceWebcamTest, MagnifierIconHiddenWhileSelected) {
     EXPECT_TRUE(surface_->webcamMagnifierIconMappedRect().isEmpty());
 }
 
-// Clicking the magnifier icon starts the enlarge animation: the logical target
+// Clicking the magnifier hotspot starts the enlarge animation: the logical target
 // state flips synchronously, and progress reaches 1.0 once the ~180ms animation
 // settles.
 TEST_F(PreviewSurfaceWebcamTest, ClickingMagnifierIconEnlargesThePip) {

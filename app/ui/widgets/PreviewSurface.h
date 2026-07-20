@@ -183,8 +183,8 @@ class PreviewSurface : public QWidget {
     [[nodiscard]] QRect webcamMappedPreviewRect() const;
     // Active handle/drag descriptor: "none" | "move" | "tl" | "tr" | "bl" | "br".
     [[nodiscard]] QString webcamActiveHandle() const;
-    // True while the pointer hovers the (non-enlarged) PiP — drives the magnifier
-    // icon's visibility.
+    // True while the pointer hovers the (non-enlarged) PiP — gates whether the
+    // magnifier hotspot can be active at all.
     [[nodiscard]] bool isWebcamHovered() const noexcept {
         return webcam_hovered_;
     }
@@ -192,8 +192,8 @@ class PreviewSurface : public QWidget {
     [[nodiscard]] double webcamMagnifyProgress() const noexcept {
         return magnify_progress_;
     }
-    // Pixel rect of the magnifier/restore icon badge for the current state, mapped
-    // to widget coordinates. Empty when the icon is not currently shown.
+    // Pixel rect of the magnifier/restore cursor hotspot for the current state,
+    // mapped to widget coordinates. Empty when there is no active hotspot.
     [[nodiscard]] QRect webcamMagnifierIconMappedRect() const;
 
   signals:
@@ -233,11 +233,10 @@ class PreviewSurface : public QWidget {
     // Target rect (widget pixels) the PiP animates into when enlarged: centred in
     // the preview panel, sized to a comfortable fraction of it, aspect-preserving.
     QRectF webcamEnlargedTargetRect() const;
-    // Badge rect for the magnifier/restore icon, anchored to the top-right corner of
+    // Magnifier/restore cursor hotspot rect, anchored to the top-right corner of
     // `pip_rect` (either the normal PiP or the current lerped/enlarged rect). Empty
-    // if `pip_rect` is too small to host the badge without dominating it.
+    // if `pip_rect` is too small to host the hotspot without dominating it.
     QRectF magnifierIconRect(const QRectF& pip_rect) const;
-    void paintMagnifierIcon(QPainter& painter, const QRectF& icon_rect, bool enlarged) const;
     void ensureMagnifyAnimation();
     // Starts (or reverses) the enlarge/restore animation toward `enlarged`. No-op if
     // already at that target. Entering enlarged mode cancels any in-progress

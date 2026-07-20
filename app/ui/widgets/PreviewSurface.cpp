@@ -3,7 +3,6 @@
 #include "../../diagnostics/AppLog.h"
 #include "../../services/DxgiPreviewRenderer.h"
 #include "../theme/ExoSnapTheme.h"
-#include "../theme/LucideIcon.h"
 
 #include <QAbstractAnimation>
 #include <QApplication>
@@ -889,6 +888,17 @@ QRectF PreviewSurface::displayedFrameRect() const {
 void PreviewSurface::applyHoverCursor() {
     if (drag_mode_ != DragMode::None)
         return; // the in-flight interaction keeps the cursor it started with
+    // The magnifier hotspot is clickable regardless of the edit-lock gate below --
+    // peeking at a bigger view still works while drag/resize editing is locked
+    // (e.g. during a live recording) -- so it takes priority over the resize/move
+    // cursors hitTestWebcam() would otherwise pick.
+    if (hover_pos_valid_) {
+        const QRect icon = webcamMagnifierIconMappedRect();
+        if (!icon.isEmpty() && icon.contains(hover_pos_.toPoint())) {
+            setCursor(Qt::PointingHandCursor);
+            return;
+        }
+    }
     if (!webcamEditingAllowed() || !hover_pos_valid_) {
         unsetCursor();
         return;
@@ -978,31 +988,6 @@ QRectF PreviewSurface::magnifierIconRect(const QRectF& pip_rect) const {
     return QRectF(pip_rect.right() - kMargin - kDiameter, pip_rect.top() + kMargin, kDiameter, kDiameter);
 }
 
-void PreviewSurface::paintMagnifierIcon(QPainter& painter, const QRectF& icon_rect, bool enlarged) const {
-    if (icon_rect.isEmpty())
-        return;
-    const auto& t = theme::ActiveTheme();
-    const QColor accent(QString::fromUtf8(t.ac));
-
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(10, 10, 12, 214));
-    painter.drawEllipse(icon_rect);
-    painter.setPen(QPen(accent, 1.2));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(icon_rect.adjusted(0.5, 0.5, -0.5, -0.5));
-
-    const int glyph_size = std::max(8, qRound(icon_rect.width() * 0.6));
-    const qreal dpr = devicePixelRatioF();
-    const QPixmap glyph = theme::lucidePixmap(enlarged ? QStringLiteral("x") : QStringLiteral("search"),
-                                              QString::fromUtf8(t.ac), glyph_size, dpr);
-    const QPointF glyph_origin(icon_rect.center().x() - (glyph.width() / dpr) / 2.0,
-                               icon_rect.center().y() - (glyph.height() / dpr) / 2.0);
-    painter.drawPixmap(glyph_origin, glyph);
-    painter.restore();
-}
-
 void PreviewSurface::ensureMagnifyAnimation() {
     if (magnify_animation_ != nullptr)
         return;
@@ -1040,8 +1025,9 @@ QRect PreviewSurface::webcamMagnifierIconMappedRect() const {
     if (!webcam_enabled_)
         return {};
     if (magnify_progress_ > 0.0) {
-        // Restore icon: drawn throughout the enlarge/collapse animation and while
-        // settled-enlarged, tracking the same lerped rect paintEvent draws.
+        // Restore hotspot: active throughout the enlarge/collapse animation and
+        // while settled-enlarged, tracking the same lerped rect paintEvent draws
+        // the PiP content at.
         const QRectF normal = webcamPixelRect();
         const QRectF target = webcamEnlargedTargetRect();
         const QRectF draw_rect(normal.x() + (target.x() - normal.x()) * magnify_progress_,
@@ -1227,20 +1213,19 @@ void PreviewSurface::mousePressEvent(QMouseEvent* event) {
     hover_pos_valid_ = true;
     const QPointF pos = event->position();
 
-    // Magnifier click handling: a Qt-paint-layer feature only. The DXGI-active live
-    // preview does not (yet) render the icon or the floating view -- see paintEvent
-    // and the class-level note on syncWebcamOverlayToDxgi() -- so this block leaves
-    // normal hit-testing completely untouched whenever dxgi_active_ is true.
-    if (!dxgi_active_ && webcam_enabled_ &&
+    // Magnifier click handling: hover/click hit-testing is backend-independent (a
+    // cursor/hotspot check has no "which preview backend is active" concept). Only
+    // the *painting* of the enlarged view's content remains DXGI-dependent (see
+    // paintEvent and the class-level note on syncWebcamOverlayToDxgi()).
+    if (webcam_enabled_ &&
         (magnify_animation_ == nullptr || magnify_animation_->state() != QAbstractAnimation::Running)) {
         if (webcam_enlarged_) {
             // Settled + enlarged (the "Running" guard above rules out mid-animation):
-            // the PiP is drawn exactly at its enlarged target rect. Clicking the
-            // restore icon, or anywhere OUTSIDE that rect, collapses back down;
-            // clicking inside it is absorbed (no drag/resize while enlarged).
+            // the PiP is drawn exactly at its enlarged target rect. Clicking anywhere
+            // OUTSIDE that rect collapses back down; clicking inside it is absorbed
+            // (no drag/resize while enlarged).
             const QRectF target = webcamEnlargedTargetRect();
-            const QRectF icon = magnifierIconRect(target);
-            if (icon.contains(pos) || !target.contains(pos))
+            if (!target.contains(pos))
                 setWebcamEnlarged(false);
             event->accept();
             return;
@@ -1295,13 +1280,13 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
     hover_pos_valid_ = true;
     const QPointF pos = event->position();
 
-    // Magnifier hover tracking: Qt-paint-layer feature only (see mousePressEvent).
+    // Magnifier hover tracking: backend-independent (see mousePressEvent).
     // Independent of the edit-lock gate below -- peeking at a bigger view still
     // works while drag/resize editing is locked (e.g. during a live recording).
     // Uses webcamPixelRect() alone (not intersected with previewContentRect()),
-    // matching hitTestWebcam()'s own hit area exactly -- the magnifier icon is a
+    // matching hitTestWebcam()'s own hit area exactly -- the magnifier hotspot is a
     // click target and must agree with what a click there actually hits.
-    if (!dxgi_active_ && webcam_enabled_ && magnify_progress_ <= 0.0) {
+    if (webcam_enabled_ && magnify_progress_ <= 0.0) {
         const bool now_hovered = webcamPixelRect().contains(pos);
         if (now_hovered != webcam_hovered_) {
             webcam_hovered_ = now_hovered;
@@ -1310,7 +1295,9 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
     }
 
     if (webcam_enlarged_ || magnify_progress_ > 0.0) {
-        // Enlarged / mid-transition: the normal placement geometry does not apply.
+        // Enlarged / mid-transition: the normal placement geometry does not apply,
+        // but the enlarged view's own restore hotspot still needs its cursor hint.
+        applyHoverCursor();
         QWidget::mouseMoveEvent(event);
         return;
     }
@@ -1360,7 +1347,7 @@ void PreviewSurface::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void PreviewSurface::keyPressEvent(QKeyEvent* event) {
-    if (!dxgi_active_ && webcam_enlarged_ && event->key() == Qt::Key_Escape) {
+    if (webcam_enlarged_ && event->key() == Qt::Key_Escape) {
         setWebcamEnlarged(false);
         event->accept();
         return;
@@ -1573,11 +1560,13 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     // child HWND occludes this, and the renderer composites the PiP itself
     // (syncWebcamOverlayToDxgi). This path drives the QImage preview and all
     // deterministic visual-test scenarios (which run with DXGI stopped). The
-    // magnifier (hover icon + enlarge/restore) is a Qt-paint-layer-only affordance
-    // for the same reason -- see mousePressEvent/mouseMoveEvent.
+    // magnifier's hover/click handling is backend-independent (see
+    // mousePressEvent/mouseMoveEvent) -- only the enlarged view's floating content
+    // painted below is Qt-paint-layer-only, for the same reason as the rest of this
+    // block (Task 2 composites that content into DXGI separately).
     if (webcam_enabled_ && magnify_progress_ > 0.0) {
-        // Floating enlarged view: dim scrim over the whole panel, the PiP lerped from
-        // its normal placement to the centred enlarged target, and a restore icon.
+        // Floating enlarged view: dim scrim over the whole panel, and the PiP lerped
+        // from its normal placement to the centred enlarged target.
         // Preview-only and fully transient: never touches webcam_rect_norm_ (the
         // confirmed WYSIWYG placement) or anything persisted.
         painter.save();
@@ -1621,7 +1610,6 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             painter.restore();
         }
 
-        paintMagnifierIcon(painter, magnifierIconRect(draw_rect), /*enlarged=*/true);
         painter.restore();
     } else if (webcam_enabled_) {
         // Clip the PiP to the content rect so it never overpaints the stats footer or
@@ -1685,12 +1673,6 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             painter.restore();
         }
 
-        // Magnifier hover affordance -- only when not selected (avoids visually
-        // clashing with the resize-handle chrome at the same corners) and not while
-        // dragging (drag_mode_ != None implies a handle is already engaged there).
-        if (webcam_hovered_ && !show_chrome && drag_mode_ == DragMode::None) {
-            paintMagnifierIcon(painter, magnifierIconRect(cam_rect), /*enlarged=*/false);
-        }
         painter.restore(); // release the preview content-rect clip
     }
 
