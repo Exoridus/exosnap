@@ -2806,12 +2806,14 @@ void VideoThread::Run() {
                 // display-tied GPU resources while the captured output is gone.
                 ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
                 const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
-                const bool dynamicOverlayChanged =
-                    m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable &&
-                    (!haveLastCompositedKey ||
-                     currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation ||
-                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
-                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation);
+                const bool cursorOverlayMoved =
+                    !haveLastCompositedKey ||
+                    currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
+                    currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
+                const bool webcamMoved = m_state.SnapshotWebcamOverlay().enabled && webcamProviderAvailable &&
+                                         (!haveLastCompositedKey ||
+                                          currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
+                const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
                     rawSourceTex = heldScreenTex;
