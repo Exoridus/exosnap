@@ -60,11 +60,18 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     // ── Left column: compact live preview ────────────────────────────────────
     camera_preview_ = new CameraPreview(this);
-    // Override the standalone-page size: compact 280×175 (≈16:10) for Settings embed.
-    camera_preview_->setFixedHeight(175);
+    // Override the standalone-page WIDTH only: compact 180-300px for the Settings
+    // embed. Height is intentionally left Expanding (not a hardcoded Fixed value)
+    // so the preview grows to match the right column's control stack. A previous
+    // hardcoded setFixedHeight(175) + Qt::AlignTop matched the control column back
+    // when it only held Enable/Camera/Resolution/Mirror; once Overlay opacity and
+    // the Chroma key group were added the right column grew taller than 175px,
+    // leaving a dead gap below the pinned-height preview.
+    camera_preview_->setMinimumHeight(175);
+    camera_preview_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     camera_preview_->setMaximumWidth(300);
     camera_preview_->setMinimumWidth(180);
-    root->addWidget(camera_preview_, 0, Qt::AlignTop);
+    root->addWidget(camera_preview_, 0);
 
     // ── Right column: controls ────────────────────────────────────────────────
     auto* right_col = new QWidget(this);

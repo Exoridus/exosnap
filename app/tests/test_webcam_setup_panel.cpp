@@ -287,6 +287,53 @@ TEST_F(WebcamSetupPanelTest, ChromaSliders_EmitParameterValues) {
     EXPECT_FLOAT_EQ(last.chroma_key.spill_reduction, 0.45f);
 }
 
+// ---------------------------------------------------------------------------
+// Layout regression: the camera preview must not reserve a stale fixed height.
+// ---------------------------------------------------------------------------
+
+// Regression test: the embedded preview used to be pinned to a hardcoded
+// setFixedHeight(175) + Qt::AlignTop, sized for the control column back when it
+// only held Enable/Camera/Resolution/Mirror. Once Overlay opacity + Chroma key
+// rows were added, the control column grew taller than 175px, leaving a dead
+// gap below the preview (the Fixed vertical policy refuses to grow beyond its
+// pinned height regardless of how tall its sibling column is). The preview must
+// have a vertical policy that lets it grow to match, not Fixed.
+TEST_F(WebcamSetupPanelTest, CameraPreview_VerticalPolicyIsNotFixed) {
+    ui::widgets::WebcamSetupPanel panel;
+
+    auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+    EXPECT_NE(preview->sizePolicy().verticalPolicy(), QSizePolicy::Fixed)
+        << "Camera preview must not be vertically Fixed, or it leaves a dead gap "
+           "below itself whenever the control column (opacity + chroma rows) grows "
+           "taller than the hardcoded height.";
+}
+
+// Laid out at a representative Settings width, the preview's bottom edge must
+// reach down to (at least) the control column's bottom edge -- i.e. no dead
+// space between the preview's bottom and the last visible control row.
+TEST_F(WebcamSetupPanelTest, CameraPreview_HeightMatchesControlColumn) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.resize(640, panel.sizeHint().height());
+    panel.show();
+    QCoreApplication::processEvents();
+
+    auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+
+    // Mirror toggle sits near the bottom of the always-visible control rows
+    // (chroma body is collapsed by default, so it must not count towards the
+    // "content" height).
+    auto* mirror = panel.findChild<ui::widgets::ExoToggle*>(QStringLiteral("webcamPanelMirrorToggle"));
+    ASSERT_NE(mirror, nullptr);
+
+    const int preview_bottom = preview->mapTo(&panel, QPoint(0, preview->height())).y();
+    const int mirror_bottom = mirror->mapTo(&panel, QPoint(0, mirror->height())).y();
+    EXPECT_GE(preview_bottom, mirror_bottom) << "Preview must grow tall enough to reach the visible control rows -- "
+                                                "no dead gap left below it.";
+    panel.hide();
+}
+
 // The MF-absent gate covers the new controls too.
 TEST_F(WebcamSetupPanelTest, MfUnavailable_DisablesOpacityAndChroma) {
     ui::widgets::WebcamSetupPanel panel;
