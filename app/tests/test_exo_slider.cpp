@@ -202,9 +202,20 @@ TEST_F(ExoSliderTest, VerticalSlider_ClicksAreIgnored) {
     slider.setMinimumHeight(200);
     slider.show();
 
-    // Simulate a click on the slider (not on handle specifically).
-    QMouseEvent press_event(QEvent::MouseButtonPress, QPoint(50, 100), QPoint(50, 100), Qt::LeftButton, Qt::LeftButton,
-                            Qt::NoModifier);
+    const QRect groove_rect = GrooveRectFor(slider);
+    if (groove_rect.isEmpty()) {
+        GTEST_SKIP() << "Groove rect is empty; skipping (may occur in headless/offscreen rendering).";
+    }
+
+    // Value is 0 (minimum), which for a non-inverted vertical QSlider sits at the
+    // BOTTOM of the groove. Click near the TOP of the groove -- well above the
+    // handle -- so Qt's default groove-click delivers a single page-step-add,
+    // not a page-step-subtract (which would leave value at 0, indistinguishable
+    // from "nothing happened").
+    const int click_x = groove_rect.center().x();
+    const int click_y = groove_rect.top() + 5;
+    QMouseEvent press_event(QEvent::MouseButtonPress, QPoint(click_x, click_y), QPoint(click_x, click_y),
+                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&slider, &press_event);
 
     // For vertical sliders, our click-to-jump override does not run (delegates to
