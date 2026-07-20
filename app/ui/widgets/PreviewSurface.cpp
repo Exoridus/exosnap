@@ -318,7 +318,7 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     syncWebcamOverlayToDxgi();
     // The meta/stats rows are occluded too — push them as OSD sprites.
     syncOsdToDxgi();
-    // Ensures the magnifier scrim slot starts definitely cleared on a fresh
+    // Ensures the magnifier dim scrim starts definitely cleared on a fresh
     // preview (no-op unless a stale mid-animation state somehow survived).
     syncEnlargedWebcamToDxgi();
     aspect_poll_timer_->start();
@@ -380,7 +380,7 @@ bool PreviewSurface::tryStartDxgiPushedPreview(const recorder_core::CaptureTarge
     current_frame_ = QImage{};
     syncWebcamOverlayToDxgi();
     syncOsdToDxgi();
-    // Ensures the magnifier scrim slot starts definitely cleared on a fresh
+    // Ensures the magnifier dim scrim starts definitely cleared on a fresh
     // preview (no-op unless a stale mid-animation state somehow survived).
     syncEnlargedWebcamToDxgi();
     aspect_poll_timer_->start();
