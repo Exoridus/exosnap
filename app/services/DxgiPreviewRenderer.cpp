@@ -1532,19 +1532,24 @@ void DxgiPreviewRenderer::RenderFrame() {
         }
     }
 
-    // Webcam-magnifier dim scrim: composited AFTER the base frame but BEFORE the
-    // webcam PiP, so it dims the background behind an enlarged/animating PiP
-    // without darkening the PiP itself — matching the Qt paint path's z-order
-    // (scrim fillRect first, enlarged PiP drawImage on top). Unlike the OSD
-    // sprites (drawn LAST, above everything), this scrim MUST sit under the PiP.
-    // No-ops cheaply when the scrim is cleared (no magnifier active).
-    RenderWebcamDimScrim();
-
-    // Composite the webcam PiP (+ chrome) over the main frame's content rect — but
-    // NOT when drawing a pushed engine frame, which already has the PiP baked in
-    // (drawing it again would double the overlay). A RAW pushed frame (idle
-    // DXGI-hub source) carries no PiP, so the renderer keeps drawing its own.
+    // Webcam-magnifier dim scrim + PiP: both are gated on the SAME condition. The
+    // scrim is composited AFTER the base frame but BEFORE the webcam PiP, so it
+    // dims the background behind an enlarged/animating PiP without darkening the
+    // PiP itself — matching the Qt paint path's z-order (scrim fillRect first,
+    // enlarged PiP drawImage on top). Unlike the OSD sprites (drawn LAST, above
+    // everything), this scrim MUST sit under the PiP.
+    //
+    // Neither is drawn when a pushed engine frame is being shown, EXCEPT a RAW
+    // pushed frame (idle DXGI-hub source): a non-raw pushed frame already has the
+    // PiP baked in at its confirmed size (drawing the overlay again would double
+    // it — and the renderer fundamentally cannot un-bake or enlarge that PiP), so
+    // dimming the preview while the PiP could not visibly enlarge would just make
+    // the view go dark with no bigger webcam view. Skipping the scrim there keeps
+    // the magnifier click a silent no-op during an actual recording, matching
+    // WYSIWYG with what's being recorded. The scrim also no-ops cheaply (nothing
+    // to draw) when cleared, i.e. when no magnifier is active.
     if (!drawPushed || pushed_.raw_source) {
+        RenderWebcamDimScrim();
         RenderWebcamOverlay(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
                             static_cast<int>(contentH));
     }

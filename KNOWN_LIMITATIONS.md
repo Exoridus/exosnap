@@ -248,6 +248,11 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   different adapters the shared frame cannot be opened, so the preview never
   switches sources and simply keeps running its own live WGC capture (recording
   is unaffected).
+  - The webcam PiP "click to enlarge" magnifier is a no-op while a recording is
+    running: the preview is showing the engine's composited frame, which already
+    has the PiP baked in at its confirmed placement, and that cannot be enlarged
+    after the fact without diverging from what is actually being recorded. The
+    magnifier works normally on the idle preview before recording starts.
 - **In-app updates are implemented** (official build only): a manual "Check now" and a toggleable
   automatic check both look at GitHub Releases; a found update can be downloaded, signature- and
   hash-verified, and installed in place via a dedicated updater process, with rollback on failure.

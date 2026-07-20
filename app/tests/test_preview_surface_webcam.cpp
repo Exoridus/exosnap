@@ -18,9 +18,21 @@
 #include "ui/widgets/PreviewSurface.h"
 #include "viewmodels/RecordViewModel.h"
 
+#include <recorder_core/preview_shared_texture.h>
+#include <recorder_core/preview_tap.h>
 #include <recorder_core/recorder_session.h>
 
 #include <windows.h>
+
+#include <d3d11.h>
+
+#include <wrl/client.h>
+
+#include <chrono>
+#include <cstdint>
+#include <iterator>
+#include <string>
+#include <thread>
 
 namespace exosnap::ui::widgets {
 namespace {
@@ -800,6 +812,156 @@ TEST_F(PreviewSurfaceWebcamDxgiLiveTest, ClickingOutsideCollapsesAgainstLiveDxgi
     EXPECT_EQ(surface_->webcamMagnifyProgress(), 0.0);
     ASSERT_TRUE(surface_->isDxgiPreviewActive());
     EXPECT_EQ(surface_->webcamOverlayRect(), before);
+}
+
+// ---- Magnifier during an actively-recording pushed frame (live-hardware) ----
+//
+// Regression guard for the dim-scrim double-gating fix. During an actual
+// recording the engine feeds the preview via beginPushedSource(...,
+// raw_source_frames=false), so RenderFrame()'s `drawPushed` becomes true while
+// `pushed_.raw_source` is false: the pushed frame already has the webcam PiP
+// baked in at its confirmed size, and the renderer cannot un-bake or enlarge it.
+// The webcam magnifier is DELIBERATELY still clickable in that state (peeking at
+// a bigger view stays available while drag/resize editing is locked). Before the
+// fix, RenderWebcamOverlay() was gated off for that pushed-non-raw case but
+// RenderWebcamDimScrim() was NOT -- so clicking the magnifier dimmed the whole
+// preview to ~59% black with no PiP ever visibly enlarging (it stays baked at its
+// normal size). The fix gates the scrim on the exact same condition as the
+// overlay, restoring a silent no-op there.
+//
+// This test stands the pushed-non-raw path up against a REAL renderer: it
+// publishes a shared source texture at a deliberately non-16:9 aspect ratio and
+// waits for the renderer to actually CONSUME a frame -- observable through
+// contentAspectRatio() (backed by GetSourceSize()), which is updated to the
+// pushed dimensions at exactly the tick OnFrameConsumed() flips drawPushed to
+// true. From then on the render thread composites with drawPushed == true /
+// raw_source == false, i.e. the branch the scrim is now gated out of, while the
+// magnifier enlarge/collapse cycle is driven below.
+//
+// What this can and cannot prove: it proves the full click-to-enlarge/collapse
+// cycle does not crash the live renderer in this state and that the UI-side
+// magnifier state machine (isWebcamEnlarged()/webcamMagnifyProgress()) plus the
+// confirmed placement (webcamOverlayRect()) all behave exactly as when no pushed
+// source is active -- the fix touches only the renderer's draw order, not any of
+// that state. It does NOT prove the composited swap-chain PIXELS omit the scrim:
+// DxgiPreviewRenderer still exposes no readback API for overlay/OSD content (the
+// one readback path, RequestSnapshot, deliberately excludes it), so "the scrim
+// did not visibly draw" remains a manual / --visual-test verification gap.
+class PreviewSurfaceWebcamDxgiPushedTest : public PreviewSurfaceWebcamDxgiLiveTest {
+  protected:
+    void SetUp() override {
+        PreviewSurfaceWebcamDxgiLiveTest::SetUp();
+        if (::testing::Test::IsSkipped())
+            return;
+
+        // The producer must resolve to the same real adapter as the renderer to
+        // open its shared handle -- both use D3D_DRIVER_TYPE_HARDWARE on the
+        // default adapter (see test_dxgi_preview_pushed_source.cpp).
+        D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+        const HRESULT hr =
+            D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels,
+                              static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, producer_device_.GetAddressOf(),
+                              nullptr, producer_context_.GetAddressOf());
+        if (FAILED(hr) || !producer_device_)
+            GTEST_SKIP() << "No hardware D3D11 producer device in this environment (headless CI runner).";
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> makeSourceTexture(uint32_t w, uint32_t h) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = w;
+        desc.Height = h;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+        producer_device_->CreateTexture2D(&desc, nullptr, tex.GetAddressOf());
+        return tex;
+    }
+
+    // Hands the live renderer a NON-RAW pushed source (the actual-recording feed
+    // shape) at w x h, then republishes into it while pumping the Qt loop until
+    // the renderer has consumed a frame -- observable via contentAspectRatio()
+    // converging to w/h, which the renderer only reports once drawPushed flips
+    // true. Returns whether it converged within the timeout.
+    bool beginPushedNonRawAndAwaitDraw(uint32_t w, uint32_t h) {
+        std::string err;
+        HANDLE handle = nullptr;
+        if (!shared_.Create(producer_device_.Get(), w, h, DXGI_FORMAT_B8G8R8A8_UNORM, &handle, err))
+            return false;
+        src_ = makeSourceTexture(w, h);
+        if (!src_)
+            return false;
+
+        recorder_core::PreviewTapDesc tap{};
+        // raw_source_frames = false: the engine's recording feed already has the
+        // PiP baked in -- exactly the state the scrim gating targets.
+        surface_->beginPushedSource(handle, w, h, tap, /*raw_source_frames=*/false);
+
+        const double want_ar = static_cast<double>(w) / static_cast<double>(h);
+        QElapsedTimer timer;
+        timer.start();
+        while (!timer.hasExpired(4000)) {
+            shared_.TryPublish(producer_context_.Get(), src_.Get());
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            if (std::abs(surface_->contentAspectRatio() - want_ar) < 1e-3)
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        }
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Device> producer_device_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> producer_context_;
+    recorder_core::PreviewSharedTexture shared_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> src_;
+};
+
+TEST_F(PreviewSurfaceWebcamDxgiPushedTest, MagnifierClickDuringPushedNonRawFrameIsSafeNoOp) {
+    // 8:3 -- deliberately non-16:9 so contentAspectRatio() convergence proves the
+    // renderer switched to (and consumed a frame from) the pushed source.
+    constexpr uint32_t kW = 1280;
+    constexpr uint32_t kH = 480;
+    ASSERT_TRUE(beginPushedNonRawAndAwaitDraw(kW, kH))
+        << "renderer never consumed the pushed non-raw frame (drawPushed stayed false), so this "
+           "test would not have exercised the gated scrim path";
+
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    const QRectF before = surface_->webcamOverlayRect();
+
+    // Hover the PiP body via the surface's own mapped preview rect (contain-fit
+    // against the now-letterboxed 8:3 source) -- the base fixture's pipCenter()
+    // assumes a full-widget 16:9 content rect, which no longer holds here.
+    const QRect pip = surface_->webcamMappedPreviewRect();
+    ASSERT_FALSE(pip.isEmpty());
+    sendMouse(QEvent::MouseMove, QPointF(pip.center()), Qt::NoButton, Qt::NoButton);
+    const QRect icon = surface_->webcamMagnifierIconMappedRect();
+    ASSERT_FALSE(icon.isEmpty());
+
+    // Enlarge: the UI state machine must flip and settle exactly as it does
+    // without a pushed source -- the fix changed only the renderer's draw order.
+    ASSERT_FALSE(surface_->isWebcamEnlarged());
+    sendMouse(QEvent::MouseButtonPress, QPointF(icon.center()), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, QPointF(icon.center()), Qt::LeftButton, Qt::NoButton);
+    EXPECT_TRUE(surface_->isWebcamEnlarged());
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() >= 1.0; }))
+        << "enlarge animation never settled while a pushed non-raw frame was live";
+    EXPECT_TRUE(surface_->isWebcamEnlarged());
+    ASSERT_TRUE(surface_->isDxgiPreviewActive());
+    EXPECT_EQ(surface_->webcamOverlayRect(), before); // confirmed placement untouched
+
+    // Collapse back down.
+    sendMouse(QEvent::MouseButtonPress, QPointF(5, 5), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, QPointF(5, 5), Qt::LeftButton, Qt::NoButton);
+    EXPECT_FALSE(surface_->isWebcamEnlarged());
+    ASSERT_TRUE(pumpUntil([&] { return surface_->webcamMagnifyProgress() <= 0.0; }))
+        << "collapse animation never settled while a pushed non-raw frame was live";
+    EXPECT_EQ(surface_->webcamMagnifyProgress(), 0.0);
+    ASSERT_TRUE(surface_->isDxgiPreviewActive());
+    EXPECT_EQ(surface_->webcamOverlayRect(), before); // still untouched after a full cycle
 }
 
 } // namespace
