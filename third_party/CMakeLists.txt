@@ -86,33 +86,6 @@ FetchContent_MakeAvailable(libopus)
 _exosnap_install_license("Opus v1.5.2"
     "${libopus_SOURCE_DIR}/COPYING" "opus.txt")
 
-# --- fdk-aac-free (FDK-AAC 2.0.2, LC-only fork) — ADR 0043 ---
-# Third-Party Modified Version of the Fraunhofer FDK AAC Codec Library for
-# Android, with the patent-encumbered HE/HEv2 (SBR/PS) code paths removed by
-# Wim Taymans — the same source lineage Fedora ships as `fdk-aac-free`,
-# approved by Fedora Legal for distribution alongside GPL code
-# (https://bugzilla.redhat.com/show_bug.cgi?id=1501522). The FDK license text
-# itself is unchanged (per the FSF: free, but GPL-incompatible in general);
-# the LC-only subset is the specific combination with that distro-legal
-# precedent. ExoSnap only ever encodes AAC-LC (AOT_AAC_LC is hardcoded), which
-# this fork fully covers, afterburner included. See ADR 0043.
-# Pin note: `stripped4` == the fdk-aac-free 2.0.2 Fedora ships. The newer
-# `stripped5` branch (2.0.3 base) has a stale CMake source list (references
-# decoder files its USAC-removal deleted; Fedora builds it with autotools),
-# so it does not configure — re-evaluate when upstream fixes it.
-FetchContent_Declare(
-  fdk-aac
-  GIT_REPOSITORY https://gitlab.freedesktop.org/wtaymans/fdk-aac-stripped.git
-  GIT_TAG        529b87452cd33d45e1d0a5066d20b64f10b38845 # branch stripped4 (fdk-aac 2.0.2 base)
-)
-set(_exosnap_saved_bsl ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(fdk-aac)
-_exosnap_install_license("fdk-aac-free (FDK-AAC 2.0.2, LC-only)"
-    "${fdk-aac_SOURCE_DIR}/NOTICE" "fdk-aac.txt")
-set(BUILD_SHARED_LIBS ${_exosnap_saved_bsl} CACHE BOOL "" FORCE)
-unset(_exosnap_saved_bsl)
-
 # --- libFLAC 1.4.3 (BSD-3-Clause) ---
 # Lossless audio codec (xiph/flac). We build only the C library (libFLAC); the
 # C++ wrapper (libFLAC++), tools, examples, docs and Ogg support are disabled.

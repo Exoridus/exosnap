@@ -3,7 +3,7 @@
 //   - PTS correctness at 10 ms frame size
 //   - Opus bitrate clamping
 //   - SetEncodingParams round-trip through Init
-//   - FDK-AAC bitrate clamping helpers
+//   - FFmpeg AAC bitrate clamping helpers
 //   - FrameSizeSamples accessor
 
 #include <gtest/gtest.h>
@@ -11,7 +11,7 @@
 #include "opus_audio_encoder.h"
 
 #if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
-#include "fdk_aac_encoder.h"
+#include "ffmpeg_aac_encoder.h"
 #endif
 
 #include <recorder_core/recorder_session.h>
@@ -28,7 +28,7 @@ using recorder_core::OpusFrameDuration;
 using recorder_core::OpusFrameSizeSamples;
 
 #if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
-using recorder_core::FdkAacEncoder;
+using recorder_core::FfmpegAacEncoder;
 #endif
 
 // ---------------------------------------------------------------------------
@@ -131,30 +131,30 @@ TEST(AudioEncodingParamsTest, OpusBitrateClamp_AboveMax_ClampsTo510) {
 }
 
 // ---------------------------------------------------------------------------
-// Bitrate clamping — FDK-AAC (full build only)
+// Bitrate clamping — FFmpeg AAC (full build only)
 // ResolveBitrateKbps: 0 → 192 (default), below min → 64, above max → 320
 // ---------------------------------------------------------------------------
 
 #if EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC
 
-TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_Zero_IsDefault192) {
-    EXPECT_EQ(FdkAacEncoder::ResolveBitrateKbps(0u), 192u);
+TEST(AudioEncodingParamsTest, FfmpegAacBitrateResolve_Zero_IsDefault192) {
+    EXPECT_EQ(FfmpegAacEncoder::ResolveBitrateKbps(0u), 192u);
 }
 
-TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_BelowMin_ClampsTo64) {
-    EXPECT_EQ(FdkAacEncoder::ResolveBitrateKbps(10u), 64u);
+TEST(AudioEncodingParamsTest, FfmpegAacBitrateResolve_BelowMin_ClampsTo64) {
+    EXPECT_EQ(FfmpegAacEncoder::ResolveBitrateKbps(10u), 64u);
 }
 
-TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_Valid_IsPassedThrough) {
-    EXPECT_EQ(FdkAacEncoder::ResolveBitrateKbps(192u), 192u);
+TEST(AudioEncodingParamsTest, FfmpegAacBitrateResolve_Valid_IsPassedThrough) {
+    EXPECT_EQ(FfmpegAacEncoder::ResolveBitrateKbps(192u), 192u);
 }
 
-TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_Max_IsPassedThrough) {
-    EXPECT_EQ(FdkAacEncoder::ResolveBitrateKbps(320u), 320u);
+TEST(AudioEncodingParamsTest, FfmpegAacBitrateResolve_Max_IsPassedThrough) {
+    EXPECT_EQ(FfmpegAacEncoder::ResolveBitrateKbps(320u), 320u);
 }
 
-TEST(AudioEncodingParamsTest, FdkAacBitrateResolve_AboveMax_ClampsTo320) {
-    EXPECT_EQ(FdkAacEncoder::ResolveBitrateKbps(999u), 320u);
+TEST(AudioEncodingParamsTest, FfmpegAacBitrateResolve_AboveMax_ClampsTo320) {
+    EXPECT_EQ(FfmpegAacEncoder::ResolveBitrateKbps(999u), 320u);
 }
 
 #endif // EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC

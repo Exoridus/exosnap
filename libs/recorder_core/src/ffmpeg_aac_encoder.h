@@ -4,18 +4,18 @@
 // encoder (avcodec_find_encoder(AV_CODEC_ID_AAC)).
 //
 // This is the migration target for ExoSnap's AAC audio path, replacing the
-// statically-linked FDK-AAC fork (FdkAacEncoder). See ADR 0052, which
-// supersedes ADR 0043: moving to FFmpeg's native encoder sidesteps the
-// fdk-aac-free fork-specific patent-risk argument entirely.
+// previously statically-linked third-party AAC-LC encoder. See ADR 0052,
+// which supersedes ADR 0043: moving to FFmpeg's native encoder sidesteps
+// that prior fork's patent-risk argument entirely.
 //
 // SEQUENCING NOTE: the encoder is only usable at runtime once the pinned
 // exosnap-ffmpeg-build release ships an avcodec DLL compiled with
 // --enable-encoder=aac (r5+). Against the currently pinned r4 DLL (no encoders)
 // Init() fails cleanly with a distinguishable message rather than crashing.
 //
-// Behaviour matches FdkAacEncoder's IAudioEncoder contract:
+// Behaviour matches the retired encoder's IAudioEncoder contract:
 //   * AAC-LC only, 44.1/48 kHz, mono/stereo.
-//   * Configurable bitrate, default 192 kbit/s (identical to FdkAacEncoder).
+//   * Configurable bitrate, default 192 kbit/s (same default as before).
 //   * Raw AAC access units (no ADTS); CodecPrivateBytes() returns the
 //     AudioSpecificConfig from AVCodecContext::extradata, matching what the
 //     Matroska A_AAC writer and the MP4 remux path already expect.
@@ -26,8 +26,7 @@
 #include <string>
 #include <vector>
 
-// Opaque FFmpeg types — kept out of consumers' translation units (matches how
-// fdk_aac_encoder.h forward-declares AACENCODER).
+// Opaque FFmpeg types — kept out of consumers' translation units.
 struct AVCodecContext;
 struct AVFrame;
 struct AVPacket;
@@ -49,7 +48,7 @@ class FfmpegAacEncoder : public IAudioEncoder {
     void SetBitrateKbps(uint32_t bitrate_kbps) noexcept;
 
     // Clamp to the valid range [64, 320] kbps; 0 maps to the 192 kbps default.
-    // Exposed public for unit testing (mirrors FdkAacEncoder::ResolveBitrateKbps).
+    // Exposed public for unit testing.
     static uint32_t ResolveBitrateKbps(uint32_t kbps) noexcept;
 
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error) override;

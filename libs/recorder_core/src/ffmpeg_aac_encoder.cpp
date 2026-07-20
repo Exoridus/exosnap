@@ -37,8 +37,8 @@ void LogWarn(const std::string& msg) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Bitrate resolution (mirrors FdkAacEncoder exactly so recording behaviour is
-// unchanged by the encoder swap: default 192 kbps, clamped to [64, 320]).
+// Bitrate resolution (unchanged by the ADR 0052 encoder swap: default
+// 192 kbps, clamped to [64, 320]).
 // ---------------------------------------------------------------------------
 
 void FfmpegAacEncoder::SetBitrateKbps(uint32_t bitrate_kbps) noexcept {
@@ -179,9 +179,9 @@ void FfmpegAacEncoder::ReceiveAvailable(uint64_t pts_origin_ns, std::vector<Enco
 
         // The native AAC encoder does not reliably round-trip AVFrame::pts through
         // avcodec_receive_packet for every packet (encoder priming/lookahead can
-        // leave early packets at AV_NOPTS_VALUE) -- mirror FdkAacEncoder exactly:
-        // derive pts_ns from our own running output-sample counter instead of
-        // trusting the codec's returned packet pts.
+        // leave early packets at AV_NOPTS_VALUE) -- derive pts_ns from our own
+        // running output-sample counter instead of trusting the codec's
+        // returned packet pts.
         EncodedAudioPacket pkt;
         const uint64_t rate = (m_sample_rate > 0) ? m_sample_rate : 1;
         pkt.pts_ns = pts_origin_ns + m_output_samples * 1000000000ULL / rate;

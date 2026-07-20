@@ -3,7 +3,7 @@
 // synthetic_session — the deterministic, GPU-free session driver.
 //
 // This is the in-test "video feeder" from test_session_e2e_real_file.cpp lifted
-// into a reusable seam. It drives the REAL AudioThread (real libopus/libfdk-aac),
+// into a reusable seam. It drives the REAL AudioThread (real libopus/FFmpeg AAC),
 // the REAL MuxThread + MatroskaStreamWriter + Finalize, and a deterministic
 // in-process feeder that plays VideoThread's SessionState role — writing a real
 // MKV with no GPU, no WGC, no NVENC. Shared by:

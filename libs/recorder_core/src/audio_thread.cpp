@@ -103,7 +103,7 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         enc->SetBitrateKbps(config.audio_bitrate_kbps);
         setup.encoder = std::move(enc);
         setup.init_error_prefix = "FFmpeg AAC encoder init: ";
-        setup.empty_codec_private_error = "FDK-AAC codec private is empty after Init";
+        setup.empty_codec_private_error = "FFmpeg AAC codec private is empty after Init";
         break;
     }
         // Deliberately no default: label (CV-BUG-004). This switch must stay

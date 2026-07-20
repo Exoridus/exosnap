@@ -1,6 +1,6 @@
 #pragma once
 // Platform-agnostic audio encoder interface.
-// Windows implementation: FdkAacEncoder.
+// Windows implementation: FfmpegAacEncoder.
 
 #include <recorder_core/packet_types.h>
 

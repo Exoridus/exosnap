@@ -49,7 +49,7 @@ enable_testing()
 include(cmake/exosnap_warnings.cmake)
 include(cmake/exosnap_testing.cmake)
 
-# libebml/libmatroska/fdk-aac ship cmake_minimum_required() floors below CMake's
+# libebml/libmatroska ship cmake_minimum_required() floors below CMake's
 # current minimum. Setting the policy version minimum lets FetchContent configure
 # them without per-developer command-line flags. Applies to all presets/generators.
 if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
@@ -64,7 +64,6 @@ endif()
 # so the install graph produces the correct tree directly.
 set(_exosnap_suppressed_deps
     libopus-build
-    fdk-aac-build
     ebml-build
     libmatroska-build
 )

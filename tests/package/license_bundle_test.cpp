@@ -51,7 +51,6 @@ const std::vector<std::string> k_expected_licenses = {
     "nlohmann_json.txt",
     "tomlplusplus.txt",
     "opus.txt",
-    "fdk-aac.txt",
     "flac.txt",
     "rnnoise.txt",
     "libebml.txt",
@@ -68,9 +67,9 @@ const std::vector<std::string> k_expected_licenses = {
 };
 
 const std::vector<std::string> k_expected_notices_sections = {
-    "spdlog",        "nlohmann/json", "toml++",        "Opus",       "FDK-AAC",    "FLAC",
-    "RNNoise",       "libebml",       "libmatroska",   "Qt",         "FFmpeg",     "PresentMon",
-    "sentry-native", "Crashpad",      "mini_chromium", "GoogleTest", "Build-only", "System/runtime",
+    "spdlog",   "nlohmann/json", "toml++",     "Opus",       "FLAC",           "RNNoise",
+    "libebml",  "libmatroska",   "Qt",         "FFmpeg",     "PresentMon",     "sentry-native",
+    "Crashpad", "mini_chromium", "GoogleTest", "Build-only", "System/runtime",
 };
 
 } // namespace

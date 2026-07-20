@@ -145,13 +145,19 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
     // (EXOSNAP_OFFICIAL_BUILD=ON) and are intentionally NOT asserted here, since a
     // default-configured install tree never stages them.
     const std::vector<std::string> expected = {
-        "licenses/fdk-aac.txt",       "licenses/flac.txt",
-        "licenses/rnnoise.txt",       "licenses/libebml.txt",
-        "licenses/libmatroska.txt",   "licenses/nlohmann_json.txt",
-        "licenses/opus.txt",          "licenses/qt.txt",
-        "licenses/spdlog.txt",        "licenses/tomlplusplus.txt",
-        "licenses/ibm-plex-mono.txt", "licenses/hanken-grotesk.txt",
-        "licenses/ffmpeg.txt",        "licenses/presentmon.txt",
+        "licenses/flac.txt",
+        "licenses/rnnoise.txt",
+        "licenses/libebml.txt",
+        "licenses/libmatroska.txt",
+        "licenses/nlohmann_json.txt",
+        "licenses/opus.txt",
+        "licenses/qt.txt",
+        "licenses/spdlog.txt",
+        "licenses/tomlplusplus.txt",
+        "licenses/ibm-plex-mono.txt",
+        "licenses/hanken-grotesk.txt",
+        "licenses/ffmpeg.txt",
+        "licenses/presentmon.txt",
     };
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;

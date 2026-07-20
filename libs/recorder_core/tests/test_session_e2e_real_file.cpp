@@ -3,7 +3,7 @@
 // Every other recorder_core test either drives a single component in isolation
 // or hands the Matroska writer packets that were never produced by the real
 // encode/mux pipeline. This test closes that gap: it runs the ACTUAL session
-// worker components — the real AudioThread (real libopus / libfdk-aac encoder),
+// worker components — the real AudioThread (real libopus / FFmpeg AAC encoder),
 // the real MuxThread (codec-private readiness handshake, pre-mux buffering, the
 // bounded mux queue, A/V epoch alignment, the reorder window, per-keyframe Cues,
 // SeekHead, back-patched Duration, Finalize) — and lets them write a real file
