@@ -12,8 +12,8 @@
 # Only the mux-only DLL set (avformat, avcodec, avutil, swresample) is shipped.
 # The remaining DLLs (avfilter, swscale, avdevice) are NOT deployed.
 #
-# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r4 (upstream n8.1.1)
-# Release tag:  r4
+# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r5 (upstream n8.1.1)
+# Release tag:  r5
 # License:      LGPL-2.1-or-later (compatible with ExoSnap GPL-3.0-or-later)
 #
 # r1 -> r2: added --enable-muxer=mp4. mp4 and mov share the movenc backend
@@ -25,21 +25,23 @@
 # r3 -> r4: added --enable-decoder=h264,hevc,av1,opus,aac,flac,pcm_s16le,pcm_s24le,
 # pcm_s32le,pcm_f32le. Previous releases were mux/demux-only (zero decoders); the
 # Edit-page video player needs real decode.
+# r4 -> r5: added --enable-encoder=aac. Enables FfmpegAacEncoder (ADR 0052) to
+# actually produce output; r1-r4 had zero encoders (mux/demux/decode only).
 #
 # The archive is ~2.3 MB (minimal LGPL-only component set), eliminating the
 # ~88 MB BtbN download that previously added significant CI re-download cost.
 
 include(FetchContent)
 
-set(EXOSNAP_FFMPEG_VERSION "r4-n8.1.1"
+set(EXOSNAP_FFMPEG_VERSION "r5-n8.1.1"
     CACHE STRING "Pinned exosnap-ffmpeg-build release version (informational)")
 
 # IMPORTANT: pin an immutable release tag (r1, r2, …), never a rolling tag.
 # Assets under a versioned release tag are immutable; the SHA256 pin is stable.
 FetchContent_Declare(
     ffmpeg_prebuilt
-    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r4/ffmpeg-win64-lgpl-shared.zip"
-    URL_HASH "SHA256=580DEC5F22E213465D613F49A4903FE98C943B46480E9ED5F8BBAF8A6E1F4206"
+    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r5/ffmpeg-win64-lgpl-shared.zip"
+    URL_HASH "SHA256=D40D2B3D14CD6065B57AB7735E977B01FED447AC534A4E19B74C490E1C3BBEED"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(ffmpeg_prebuilt)
