@@ -223,6 +223,17 @@ bool DxgiPreviewRenderer::IsActive() const noexcept {
     return active_.load();
 }
 
+void DxgiPreviewRenderer::SetChildWindowVisible(bool visible) noexcept {
+    if (!childHwnd_)
+        return;
+    // OS-level visibility only — the render thread keeps running and presenting
+    // at its normal cadence either way (Present() on a hidden window is cheap and
+    // simply never reaches the screen), so this never blocks the calling thread
+    // the way StopCapture()/Shutdown() would. SW_HIDE/SW_SHOWNA never touch
+    // activation or z-order, so this cannot steal focus or reorder siblings.
+    ShowWindow(childHwnd_, visible ? SW_SHOWNA : SW_HIDE);
+}
+
 void DxgiPreviewRenderer::GetSourceSize(uint32_t& outWidth, uint32_t& outHeight) const noexcept {
     std::lock_guard lock(frameMutex_);
     outWidth = srcWidth_;

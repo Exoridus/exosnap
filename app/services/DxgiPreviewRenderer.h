@@ -63,6 +63,18 @@ class DxgiPreviewRenderer {
     [[nodiscard]] bool IsActive() const noexcept;
     void GetSourceSize(uint32_t& outWidth, uint32_t& outHeight) const noexcept;
 
+    // Toggle the OS-level visibility of the native child window without touching
+    // capture/render-thread lifecycle (unlike StopCapture()/Shutdown(), this never
+    // blocks: it is a single ShowWindow call). Used to hide the DXGI child HWND
+    // the instant the owning PreviewSurface is hidden (e.g. navigating away from
+    // the Record page) so it cannot linger composited over whatever page is shown
+    // next for even one frame, instead of relying on Qt's native-window hide
+    // cascade — which, in a custom-chrome/frameless window, is not guaranteed to
+    // reach this manually created WS_CHILD window in the same paint cycle as the
+    // new page's first paint. Safe to call at any time, including before
+    // Initialize() (no-op) and while the render thread is running.
+    void SetChildWindowVisible(bool visible) noexcept;
+
     // --- Webcam PiP overlay (composited into the preview swapchain) ---
     // The native child HWND occludes Qt painting, so the live PiP (and its edit
     // chrome) is drawn here for true WYSIWYG. Placement is normalized to the same

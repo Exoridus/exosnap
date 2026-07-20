@@ -344,6 +344,77 @@ TEST(PreviewSurfaceSnapshotReady, NotReadyWithoutDxgiPreview) {
     EXPECT_FALSE(surface.isDxgiSnapshotReady());
 }
 
+// ---- Chroma key state propagation (systematic-debugging: Bug A/B) ----------
+//
+// Investigation trail for "chroma key has no visible effect" / "webcam
+// disappears when chroma key is enabled": traced the full path — WebcamSetupPanel
+// toggle -> WebcamSettings.chroma_key -> RecordPage::setWebcamSettings ->
+// PreviewSurface::setWebcamChromaKey -> syncWebcamOverlayToDxgi ->
+// DxgiPreviewRenderer::SetWebcamOverlayState -> RenderWebcamOverlay's
+// MakeOverlayPixelConstants(overlayChroma_, ..., force_opaque=true, ...) call ->
+// the shared overlay_shader.h shader. Every hop forwards the struct unchanged
+// (verified by reading + the WebcamSetupPanel emission tests in
+// test_webcam_setup_panel.cpp), SelectOverlayMode() lets an enabled key win over
+// force_opaque (OverlayShaderConstants.ModeFollowsChromaThenForceOpaque), and the
+// shader itself is proven correct on a WARP device with these exact parameters
+// (OverlayShaderWarp.ChromaKeyDropsKeyColorAndKeepsTheRest /
+// KeyedSpriteHonoursOpacityOnTheKeptPixels in test_overlay_shader.cpp). No defect
+// found in this chain. This test closes the one real gap: PreviewSurface itself
+// had no coverage locking down that it forwards chroma settings unchanged.
+TEST_F(PreviewSurfaceWebcamTest, ChromaKeySettingsRoundTripUnchanged) {
+    exosnap::WebcamChromaKeySettings chroma;
+    chroma.enabled = true;
+    chroma.color_mode = exosnap::WebcamChromaKeyColorMode::Custom;
+    chroma.custom_r = 10;
+    chroma.custom_g = 200;
+    chroma.custom_b = 30;
+    chroma.tolerance = 0.33f;
+    chroma.softness = 0.22f;
+    chroma.spill_reduction = 0.11f;
+
+    surface_->setWebcamChromaKey(chroma);
+    EXPECT_TRUE(surface_->webcamChromaKey() == chroma);
+
+    surface_->setWebcamChromaKey(exosnap::WebcamChromaKeySettings{});
+    EXPECT_FALSE(surface_->webcamChromaKey().enabled);
+}
+
+// ---- Page-visibility hide/show (Bug C: flicker navigating away from Record) --
+//
+// Root cause: the DXGI preview's native child HWND (DxgiPreviewRenderer's
+// WS_CHILD window) is a manually created Win32 window, not a QWidget — nothing
+// previously hid it explicitly when PreviewSurface (and its ancestor Record page)
+// was hidden by the top-nav QStackedWidget switch. It relied entirely on Qt's
+// native-window hide cascade reaching it in the same paint cycle as the next
+// page's first paint, which is not guaranteed in this app's frameless/
+// custom-chrome window. Fix: PreviewSurface::hideEvent/showEvent now toggle the
+// child window's OS-level visibility explicitly and synchronously via the new
+// DxgiPreviewRenderer::SetChildWindowVisible (a plain ShowWindow call — it never
+// touches capture/render-thread lifecycle, so it cannot block or introduce jank).
+// No live DXGI renderer exists in this widget-test fixture (real DXGI capture
+// needs actual hardware), so this locks down the safe no-op path and confirms no
+// webcam/overlay state is disturbed by a hide/show cycle.
+TEST_F(PreviewSurfaceWebcamTest, HideShowCycleIsSafeAndPreservesState) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    surface_->setWebcamMirror(true);
+    surface_->setWebcamOpacity(0.75f);
+    exosnap::WebcamChromaKeySettings chroma;
+    chroma.enabled = true;
+    chroma.tolerance = 0.5f;
+    surface_->setWebcamChromaKey(chroma);
+
+    surface_->hide();
+    surface_->show();
+
+    EXPECT_TRUE(surface_->isWebcamOverlayEnabled());
+    EXPECT_EQ(surface_->webcamOverlayRect(), QRectF(0.40, 0.40, 0.25, 0.25));
+    EXPECT_TRUE(surface_->webcamMirror());
+    EXPECT_FLOAT_EQ(surface_->webcamOpacity(), 0.75f);
+    EXPECT_TRUE(surface_->webcamChromaKey().enabled);
+    EXPECT_FLOAT_EQ(surface_->webcamChromaKey().tolerance, 0.5f);
+}
+
 // ---- True WYSIWYG PiP (no preview-only trims) ------------------------------
 
 // Regression: the preview used to reserve the bottom stats strip and clip the PiP

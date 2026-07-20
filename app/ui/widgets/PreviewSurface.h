@@ -191,6 +191,12 @@ class PreviewSurface : public QWidget {
     void keyReleaseEvent(QKeyEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    // BUG-C: proactively toggle the DXGI child HWND's OS-level visibility in
+    // lockstep with this widget's own show/hide, instead of relying on Qt's
+    // native-window hide cascade (see PreviewSurface.cpp for why that cascade is
+    // not trustworthy timing-wise in this app's frameless/custom-chrome window).
+    void hideEvent(QHideEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
   private:
     enum class DragMode { None, Move, ResizeTL, ResizeTR, ResizeBL, ResizeBR };

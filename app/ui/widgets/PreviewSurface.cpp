@@ -1240,6 +1240,36 @@ void PreviewSurface::leaveEvent(QEvent* event) {
     QWidget::leaveEvent(event);
 }
 
+void PreviewSurface::hideEvent(QHideEvent* event) {
+    // BUG-C: the DXGI child HWND is a manually created WS_CHILD window (see
+    // DxgiPreviewRenderer::Initialize), not a QWidget — Qt's own hide cascade for
+    // WA_NativeWindow descendants is what would normally take it off-screen when
+    // this surface (and its ancestor Record page) is hidden, but this app's
+    // frameless/custom-chrome window is not the ordinary case that cascade was
+    // designed for, and the render thread keeps calling Present() regardless of
+    // OS-level visibility. Hide the child window explicitly and synchronously,
+    // as the very first thing that happens on the way out, so it cannot still be
+    // composited for even one frame while the next page (e.g. Settings) does its
+    // first paint underneath — the reported "brief flicker on navigating away
+    // from Record". This does not stop capture or the render thread (that stays
+    // fast and stateful for an instant resume in showEvent below); it only
+    // toggles OS-level window visibility, which is cheap and never blocks.
+    if (dxgi_renderer_)
+        dxgi_renderer_->SetChildWindowVisible(false);
+    QWidget::hideEvent(event);
+}
+
+void PreviewSurface::showEvent(QShowEvent* event) {
+    // Inverse of hideEvent: restore the child window's OS-level visibility as
+    // soon as this surface is shown again. No-op if no DXGI preview is running
+    // (dxgi_renderer_ is null) or if it never went through hideEvent (e.g. first
+    // show on app startup) — ShowWindow(SW_SHOWNA) on an already-visible window
+    // is harmless.
+    if (dxgi_renderer_)
+        dxgi_renderer_->SetChildWindowVisible(true);
+    QWidget::showEvent(event);
+}
+
 // ---------------------------------------------------------------------------
 // paintEvent
 // ---------------------------------------------------------------------------
