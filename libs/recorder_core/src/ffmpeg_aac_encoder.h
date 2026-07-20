@@ -85,6 +85,7 @@ class FfmpegAacEncoder : public IAudioEncoder {
     int m_frame_size = kFrameSizeSamples; // AVCodecContext::frame_size after open
 
     uint64_t m_input_samples = 0;  // per-channel samples fed to the encoder (frame pts)
+    uint64_t m_output_samples = 0; // per-channel samples represented by packets already emitted (drives pts_ns)
     uint64_t m_pts_origin_ns = 0;  // pts_ns base captured from the first Feed call
     bool m_pts_origin_set = false; // whether m_pts_origin_ns has been captured
 

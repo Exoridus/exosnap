@@ -153,6 +153,7 @@ bool FfmpegAacEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string
     m_sample_rate = sample_rate;
     m_channels = channels;
     m_input_samples = 0;
+    m_output_samples = 0;
     m_pts_origin_ns = 0;
     m_pts_origin_set = false;
     return true;
@@ -176,14 +177,15 @@ void FfmpegAacEncoder::ReceiveAvailable(uint64_t pts_origin_ns, std::vector<Enco
             break;
         }
 
-        int64_t pts = (m_pkt->pts != AV_NOPTS_VALUE) ? m_pkt->pts : 0;
-        if (pts < 0) {
-            pts = 0;
-        }
-
+        // The native AAC encoder does not reliably round-trip AVFrame::pts through
+        // avcodec_receive_packet for every packet (encoder priming/lookahead can
+        // leave early packets at AV_NOPTS_VALUE) -- mirror FdkAacEncoder exactly:
+        // derive pts_ns from our own running output-sample counter instead of
+        // trusting the codec's returned packet pts.
         EncodedAudioPacket pkt;
         const uint64_t rate = (m_sample_rate > 0) ? m_sample_rate : 1;
-        pkt.pts_ns = pts_origin_ns + static_cast<uint64_t>(pts) * 1000000000ULL / rate;
+        pkt.pts_ns = pts_origin_ns + m_output_samples * 1000000000ULL / rate;
+        m_output_samples += static_cast<uint64_t>(kFrameSizeSamples);
         pkt.bytes.assign(m_pkt->data, m_pkt->data + m_pkt->size);
         out_packets.push_back(std::move(pkt));
 
@@ -324,6 +326,7 @@ void FfmpegAacEncoder::Shutdown() {
     m_channels = 0;
     m_frame_size = kFrameSizeSamples;
     m_input_samples = 0;
+    m_output_samples = 0;
     m_pts_origin_ns = 0;
     m_pts_origin_set = false;
     m_codec_private.clear();
