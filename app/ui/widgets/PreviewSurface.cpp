@@ -607,7 +607,7 @@ void PreviewSurface::setWebcamOverlayEnabled(bool enabled) {
         magnify_progress_ = 0.0;
         if (magnify_animation_ != nullptr)
             magnify_animation_->stop();
-        syncEnlargedWebcamToDxgi(); // clears the DXGI-side scrim (slot 2) too
+        syncEnlargedWebcamToDxgi(); // clears the DXGI-side dim scrim too
     }
     // Mouse tracking drives BOTH the drag/resize hover cursor (editing-gated) and the
     // magnifier hover affordance (available whenever the PiP is visible at all, even
@@ -722,7 +722,7 @@ void PreviewSurface::cancelWebcamInteraction() {
         magnify_progress_ = 0.0;
         if (magnify_animation_ != nullptr)
             magnify_animation_->stop();
-        syncEnlargedWebcamToDxgi(); // clears the DXGI-side scrim (slot 2) too
+        syncEnlargedWebcamToDxgi(); // clears the DXGI-side dim scrim too
     }
     syncWebcamOverlayToDxgi();
     applyHoverCursor();
@@ -793,7 +793,7 @@ void PreviewSurface::syncEnlargedWebcamToDxgi() {
         return;
 
     if (magnify_progress_ <= 0.0) {
-        dxgi_renderer_->SetOsdSprite(2, nullptr, 0, 0, 0, 0, 0);
+        dxgi_renderer_->SetWebcamDimScrim(nullptr, 0, 0, 0, 0, 0);
         syncWebcamOverlayToDxgi(); // restore the normal (confirmed) placement
         return;
     }
@@ -803,15 +803,17 @@ void PreviewSurface::syncEnlargedWebcamToDxgi() {
         return;
 
     // Scrim: a solid, panel-sized, alpha-animated rect, rasterized the same way
-    // syncOsdToDxgi() rasterizes the meta/stats rows -- an OSD sprite drawn at
-    // native size at (frame_rect.x, frame_rect.y) in swap-chain pixels.
+    // syncOsdToDxgi() rasterizes the meta/stats rows, but pushed through the
+    // dedicated dim-scrim channel -- which composites BELOW the webcam PiP (not
+    // above everything like OSD sprites), so it dims the background without
+    // darkening the enlarged PiP, matching paintEvent's scrim-then-PiP z-order.
     const qreal dpr = devicePixelRatioF();
     const QSize scrim_size = (frame_rect.size() * dpr).toSize().expandedTo(QSize(1, 1));
     QImage scrim(scrim_size, QImage::Format_ARGB32);
     scrim.fill(QColor(6, 6, 8, qRound(150 * magnify_progress_)));
-    dxgi_renderer_->SetOsdSprite(2, scrim.constBits(), scrim.width(), scrim.height(),
-                                 static_cast<int>(scrim.bytesPerLine()), qRound(frame_rect.x() * dpr),
-                                 qRound(frame_rect.y() * dpr));
+    dxgi_renderer_->SetWebcamDimScrim(scrim.constBits(), scrim.width(), scrim.height(),
+                                      static_cast<int>(scrim.bytesPerLine()), qRound(frame_rect.x() * dpr),
+                                      qRound(frame_rect.y() * dpr));
 
     // Interpolated placement, normalized the same way webcam_rect_norm_ is
     // (fraction of frame_rect), matching paintEvent's lerp exactly.

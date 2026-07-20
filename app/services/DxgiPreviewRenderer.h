@@ -106,10 +106,21 @@ class DxgiPreviewRenderer {
     // nullptr clears the slot. destX/destY: top-left in swap-chain pixels.
     // Thread-safe: called from the UI thread; drawn on the render thread.
     // Slot 0/1: preview meta/stats text rows (PreviewSurface::syncOsdToDxgi).
-    // Slot 2: webcam-magnifier dim scrim, full-panel, shown only while enlarging/
-    // enlarged (PreviewSurface::syncEnlargedWebcamToDxgi).
-    static constexpr int kOsdSpriteSlots = 3;
+    static constexpr int kOsdSpriteSlots = 2;
     void SetOsdSprite(int slot, const uint8_t* bgra, int width, int height, int stride, int destX, int destY);
+
+    // --- Webcam-magnifier dim scrim (composited BELOW the webcam PiP) ---
+    // Unlike OSD sprites, which are composited LAST (above everything, including
+    // the webcam PiP), this single scrim draws BETWEEN the base frame and the
+    // webcam-overlay layer -- so it can dim the background behind an enlarged or
+    // animating webcam PiP without darkening the PiP itself, matching the Qt
+    // paint path's z-order (scrim fillRect first, enlarged PiP drawImage on top).
+    // bgra: straight-alpha BGRA (stride bytes/row); nullptr, or a non-positive
+    // width or height, clears it. destX/destY: top-left in swap-chain pixels.
+    // Used exclusively by PreviewSurface::syncEnlargedWebcamToDxgi() for the
+    // magnifier's dim scrim during its enlarge/collapse animation.
+    // Thread-safe: called from the UI thread; drawn on the render thread.
+    void SetWebcamDimScrim(const uint8_t* bgra, int width, int height, int stride, int destX, int destY);
 
     void Shutdown();
 
@@ -201,6 +212,10 @@ class DxgiPreviewRenderer {
     // Draw the OSD sprites (meta/stats rows) last, above frame + PiP + cursor.
     // Render-thread only; takes overlayMutex_ itself.
     void RenderOsdSprites();
+    // Draw the webcam-magnifier dim scrim between the base frame and the webcam
+    // PiP (so the scrim dims the background, not the enlarged PiP). No-ops cheaply
+    // when the scrim is cleared. Render-thread only; takes overlayMutex_ itself.
+    void RenderWebcamDimScrim();
     // Draw the live mouse cursor over a RAW pushed background (an idle DXGI-hub
     // frame — Output Duplication composites no cursor). Queries the Win32 cursor,
     // maps it from the captured monitor into the content rectangle with the same
@@ -323,6 +338,10 @@ class DxgiPreviewRenderer {
         int texH = 0;
     };
     OsdSprite osdSprites_[kOsdSpriteSlots];
+    // Webcam-magnifier dim scrim. Reuses OsdSprite (a generic texture+rect holder)
+    // but is composited between the base frame and the webcam PiP, not with the OSD
+    // sprites above everything. Guarded by overlayMutex_, like osdSprites_.
+    OsdSprite webcamDimScrim_;
 
     // --- Pushed source mode state ---
     // Handoff from any thread (BeginPushedSource) to the render thread. The render

@@ -307,6 +307,32 @@ void DxgiPreviewRenderer::SetOsdSprite(int slot, const uint8_t* bgra, int width,
     sprite.dirty = true;
 }
 
+void DxgiPreviewRenderer::SetWebcamDimScrim(const uint8_t* bgra, int width, int height, int stride, int destX,
+                                            int destY) {
+    std::lock_guard lock(overlayMutex_);
+    OsdSprite& sprite = webcamDimScrim_;
+    if (bgra == nullptr || width <= 0 || height <= 0) {
+        sprite.bgra.clear();
+        sprite.w = 0;
+        sprite.h = 0;
+        sprite.dirty = true;
+        return;
+    }
+    if (stride <= 0)
+        stride = width * 4;
+    const int rowBytes = width * 4;
+    sprite.bgra.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(height));
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(sprite.bgra.data() + static_cast<size_t>(y) * rowBytes,
+                    bgra + static_cast<size_t>(y) * static_cast<size_t>(stride), static_cast<size_t>(rowBytes));
+    }
+    sprite.w = width;
+    sprite.h = height;
+    sprite.x = destX;
+    sprite.y = destY;
+    sprite.dirty = true;
+}
+
 void DxgiPreviewRenderer::Shutdown() {
     EndPushedSource();
     StopCapture();
@@ -1335,6 +1361,88 @@ void DxgiPreviewRenderer::RenderOsdSprites() {
     d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
 }
 
+void DxgiPreviewRenderer::RenderWebcamDimScrim() {
+    std::lock_guard lock(overlayMutex_);
+
+    OsdSprite& sprite = webcamDimScrim_;
+    if (sprite.dirty) {
+        // (Re)upload. A cleared scrim drops its texture entirely. Same logic as
+        // RenderOsdSprites()'s per-sprite (re)creation block.
+        if (sprite.bgra.empty() || sprite.w <= 0 || sprite.h <= 0) {
+            sprite.tex.Reset();
+            sprite.srv.Reset();
+            sprite.texW = 0;
+            sprite.texH = 0;
+        } else {
+            if (!sprite.tex || sprite.texW != sprite.w || sprite.texH != sprite.h) {
+                sprite.tex.Reset();
+                sprite.srv.Reset();
+                D3D11_TEXTURE2D_DESC d{};
+                d.Width = static_cast<UINT>(sprite.w);
+                d.Height = static_cast<UINT>(sprite.h);
+                d.MipLevels = 1;
+                d.ArraySize = 1;
+                d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                d.SampleDesc.Count = 1;
+                d.Usage = D3D11_USAGE_DEFAULT;
+                d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                if (FAILED(d3dDevice_->CreateTexture2D(&d, nullptr, sprite.tex.GetAddressOf()))) {
+                    sprite.tex.Reset();
+                    sprite.dirty = false;
+                    return;
+                }
+                D3D11_SHADER_RESOURCE_VIEW_DESC s{};
+                s.Format = d.Format;
+                s.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                s.Texture2D.MipLevels = 1;
+                if (FAILED(d3dDevice_->CreateShaderResourceView(sprite.tex.Get(), &s, sprite.srv.GetAddressOf()))) {
+                    sprite.tex.Reset();
+                    sprite.srv.Reset();
+                    sprite.dirty = false;
+                    return;
+                }
+                sprite.texW = sprite.w;
+                sprite.texH = sprite.h;
+            }
+            d3dContext_->UpdateSubresource(sprite.tex.Get(), 0, nullptr, sprite.bgra.data(),
+                                           static_cast<UINT>(sprite.w) * 4u, 0);
+        }
+        sprite.dirty = false;
+    }
+    if (!sprite.srv)
+        return;
+
+    // Draw through the shared overlay shader with source alpha preserved (same
+    // constants as the OSD sprites): the scrim's animated alpha dims what is
+    // behind it while its own texels blend correctly.
+    const float blendFactor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    d3dContext_->OMSetBlendState(overlayBlendState_.Get(), blendFactor, 0xffffffff);
+    const recorder_core::OverlayPixelConstants pc = recorder_core::MakeOverlayPixelConstants(
+        recorder_core::ChromaKeyParams{}, /*mirror=*/false, /*force_opaque=*/false, /*opacity=*/1.0f, kPreviewHdrLinear,
+        kPreviewRefWhiteScale);
+    d3dContext_->UpdateSubresource(constantBuffer_.Get(), 0, nullptr, &pc, 0, 0);
+
+    d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+    d3dContext_->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
+    d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    D3D11_VIEWPORT vp{};
+    vp.TopLeftX = static_cast<float>(sprite.x);
+    vp.TopLeftY = static_cast<float>(sprite.y);
+    vp.Width = static_cast<float>(sprite.w);
+    vp.Height = static_cast<float>(sprite.h);
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    d3dContext_->RSSetViewports(1, &vp);
+    ID3D11ShaderResourceView* srv = sprite.srv.Get();
+    d3dContext_->PSSetShaderResources(0, 1, &srv);
+    d3dContext_->Draw(3, 0);
+
+    d3dContext_->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+}
+
 void DxgiPreviewRenderer::RenderFrame() {
     if (!swapChain_ || !d3dContext_)
         return;
@@ -1423,6 +1531,14 @@ void DxgiPreviewRenderer::RenderFrame() {
             drawSource(drawnSrv, drawnW, drawnH);
         }
     }
+
+    // Webcam-magnifier dim scrim: composited AFTER the base frame but BEFORE the
+    // webcam PiP, so it dims the background behind an enlarged/animating PiP
+    // without darkening the PiP itself — matching the Qt paint path's z-order
+    // (scrim fillRect first, enlarged PiP drawImage on top). Unlike the OSD
+    // sprites (drawn LAST, above everything), this scrim MUST sit under the PiP.
+    // No-ops cheaply when the scrim is cleared (no magnifier active).
+    RenderWebcamDimScrim();
 
     // Composite the webcam PiP (+ chrome) over the main frame's content rect — but
     // NOT when drawing a pushed engine frame, which already has the PiP baked in

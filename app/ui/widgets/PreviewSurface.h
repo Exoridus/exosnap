@@ -257,11 +257,12 @@ class PreviewSurface : public QWidget {
     // identical in the Qt paint path (child widgets paint above paintEvent) and
     // the DXGI path (OSD sprites drawn last).
     void syncOsdToDxgi();
-    // While magnify_progress_ > 0: pushes a full-panel dim scrim (OSD sprite slot
-    // 2, alpha scaled by magnify_progress_) and re-points the DXGI webcam overlay
-    // at the interpolated (normal -> enlarged) rect instead of webcam_rect_norm_ --
-    // preview-only, never persisted. At progress == 0, clears the scrim and
-    // restores the normal placement via syncWebcamOverlayToDxgi().
+    // While magnify_progress_ > 0: pushes a full-panel dim scrim (via the dedicated
+    // SetWebcamDimScrim channel, which composites BELOW the webcam PiP; alpha scaled
+    // by magnify_progress_) and re-points the DXGI webcam overlay at the interpolated
+    // (normal -> enlarged) rect instead of webcam_rect_norm_ -- preview-only, never
+    // persisted. At progress == 0, clears the scrim and restores the normal
+    // placement via syncWebcamOverlayToDxgi().
     void syncEnlargedWebcamToDxgi();
     // Re-evaluate the hover cursor for the last known pointer position. Called on
     // every event that can change the hit map under a stationary pointer
