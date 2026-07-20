@@ -107,6 +107,169 @@ git commit -m "Repin vendored FFmpeg to exosnap-ffmpeg-build r5 (adds AAC encode
 
 ---
 
+### Task 1.5: Fix FfmpegAacEncoder's packet PTS computation (discovered by Task 1's repin)
+
+**Files:**
+- Modify: `libs/recorder_core/src/ffmpeg_aac_encoder.h:87` (add a new counter member)
+- Modify: `libs/recorder_core/src/ffmpeg_aac_encoder.cpp:165-189` (`ReceiveAvailable`), `:150-159` (`Init`'s reset block), `:322-330` (`Shutdown`'s reset block)
+- Test: `libs/recorder_core/tests/test_ffmpeg_aac_encoder.cpp` (existing file, no code changes needed — this task's acceptance signal is `FeedFullFrames_ProducesMonotonicPts` flipping from FAIL to PASS)
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: `EncodedAudioPacket::pts_ns` values that strictly increase packet-to-packet, matching `FdkAacEncoder`'s existing (proven-correct, about-to-be-deleted-in-Task-3) approach exactly.
+
+**Root cause (diagnosed by the Task 1 implementer, confirmed by re-reading the code):** `ReceiveAvailable` currently computes each packet's `pts_ns` by reading `m_pkt->pts` back out of the FFmpeg encode round-trip (`libs/recorder_core/src/ffmpeg_aac_encoder.cpp:179`, `int64_t pts = (m_pkt->pts != AV_NOPTS_VALUE) ? m_pkt->pts : 0;`). Against the real native AAC encoder (only reachable since Task 1's repin — every prior test run against r4 skipped this code path entirely because `Init()` always failed first), the first packets come back with `m_pkt->pts == AV_NOPTS_VALUE` — almost certainly because AAC-LC has encoder priming/lookahead delay and `AVFrame::time_base` is never set on `m_frame` before `avcodec_send_frame`, so avcodec's internal pts bookkeeping can't establish an output pts for the earliest packets. The code's `: 0` fallback silently maps every one of those to `pts_ns == 0`, so packet 0 and packet 1 both report `pts_ns == 0` — not strictly increasing, failing the test.
+
+`FdkAacEncoder` (`libs/recorder_core/src/fdk_aac_encoder.cpp`) never had this problem because it never reads a codec-provided pts at all: it tracks its own running per-channel output-sample counter (`m_accumulated_frames`), incremented by the fixed AAC-LC frame size (1024 samples) every time a packet is emitted, and computes `pkt.pts_ns` purely from that counter (`m_accumulated_frames * 1000000000ULL / m_sample_rate`). This is deterministic, has no dependency on what the codec round-trips back, and is exactly the pattern to port into `FfmpegAacEncoder`.
+
+- [ ] **Step 1: Add a new counter member**
+
+In `libs/recorder_core/src/ffmpeg_aac_encoder.h`, add immediately after the existing `uint64_t m_input_samples = 0;` line (currently line 87):
+
+```cpp
+    uint64_t m_output_samples = 0; // per-channel samples represented by packets already emitted (drives pts_ns)
+```
+
+(Named distinctly from `m_input_samples` — which tracks samples fed *into* the encoder for `AVFrame::pts` — and distinctly from the `accumulated_frames` out-parameter on `FeedFloat32`'s signature, which is a separate `IAudioEncoder`-interface concept this class already updates independently. `m_output_samples` tracks samples represented by packets already *emitted*, mirroring `FdkAacEncoder::m_accumulated_frames`.)
+
+- [ ] **Step 2: Replace the pts computation in ReceiveAvailable**
+
+In `libs/recorder_core/src/ffmpeg_aac_encoder.cpp`, replace the body of `ReceiveAvailable` (currently lines 165-189):
+
+```cpp
+void FfmpegAacEncoder::ReceiveAvailable(uint64_t pts_origin_ns, std::vector<EncodedAudioPacket>& out_packets) {
+    if (m_ctx == nullptr || m_pkt == nullptr) {
+        return;
+    }
+    for (;;) {
+        int ret = avcodec_receive_packet(m_ctx, m_pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            break;
+        }
+        if (ret < 0) {
+            LogWarn("avcodec_receive_packet failed: " + AvErr(ret));
+            break;
+        }
+
+        int64_t pts = (m_pkt->pts != AV_NOPTS_VALUE) ? m_pkt->pts : 0;
+        if (pts < 0) {
+            pts = 0;
+        }
+
+        EncodedAudioPacket pkt;
+        const uint64_t rate = (m_sample_rate > 0) ? m_sample_rate : 1;
+        pkt.pts_ns = pts_origin_ns + static_cast<uint64_t>(pts) * 1000000000ULL / rate;
+        pkt.bytes.assign(m_pkt->data, m_pkt->data + m_pkt->size);
+        out_packets.push_back(std::move(pkt));
+
+        av_packet_unref(m_pkt);
+    }
+}
+```
+
+with:
+
+```cpp
+void FfmpegAacEncoder::ReceiveAvailable(uint64_t pts_origin_ns, std::vector<EncodedAudioPacket>& out_packets) {
+    if (m_ctx == nullptr || m_pkt == nullptr) {
+        return;
+    }
+    for (;;) {
+        int ret = avcodec_receive_packet(m_ctx, m_pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            break;
+        }
+        if (ret < 0) {
+            LogWarn("avcodec_receive_packet failed: " + AvErr(ret));
+            break;
+        }
+
+        // The native AAC encoder does not reliably round-trip AVFrame::pts through
+        // avcodec_receive_packet for every packet (encoder priming/lookahead can
+        // leave early packets at AV_NOPTS_VALUE) -- mirror FdkAacEncoder exactly:
+        // derive pts_ns from our own running output-sample counter instead of
+        // trusting the codec's returned packet pts.
+        EncodedAudioPacket pkt;
+        const uint64_t rate = (m_sample_rate > 0) ? m_sample_rate : 1;
+        pkt.pts_ns = pts_origin_ns + m_output_samples * 1000000000ULL / rate;
+        m_output_samples += static_cast<uint64_t>(kFrameSizeSamples);
+        pkt.bytes.assign(m_pkt->data, m_pkt->data + m_pkt->size);
+        out_packets.push_back(std::move(pkt));
+
+        av_packet_unref(m_pkt);
+    }
+}
+```
+
+- [ ] **Step 3: Reset the new counter alongside the existing ones**
+
+In `libs/recorder_core/src/ffmpeg_aac_encoder.cpp`, in `Init`'s reset block (currently lines 152-157):
+
+```cpp
+    m_sample_rate = sample_rate;
+    m_channels = channels;
+    m_input_samples = 0;
+    m_pts_origin_ns = 0;
+    m_pts_origin_set = false;
+    return true;
+```
+
+add `m_output_samples = 0;` alongside `m_input_samples = 0;`:
+
+```cpp
+    m_sample_rate = sample_rate;
+    m_channels = channels;
+    m_input_samples = 0;
+    m_output_samples = 0;
+    m_pts_origin_ns = 0;
+    m_pts_origin_set = false;
+    return true;
+```
+
+And in `Shutdown`'s reset block (currently around lines 323-329):
+
+```cpp
+    m_sample_rate = 0;
+    m_channels = 0;
+    m_frame_size = kFrameSizeSamples;
+    m_input_samples = 0;
+    m_pts_origin_ns = 0;
+    m_pts_origin_set = false;
+    m_codec_private.clear();
+```
+
+add `m_output_samples = 0;` alongside `m_input_samples = 0;`:
+
+```cpp
+    m_sample_rate = 0;
+    m_channels = 0;
+    m_frame_size = kFrameSizeSamples;
+    m_input_samples = 0;
+    m_output_samples = 0;
+    m_pts_origin_ns = 0;
+    m_pts_origin_set = false;
+    m_codec_private.clear();
+```
+
+- [ ] **Step 4: Full build**
+
+- [ ] **Step 5: Run the FFmpeg AAC encoder tests and confirm ALL cases pass (not just the target one)**
+
+Run: `ctest --test-dir <build-dir> -R test_ffmpeg_aac_encoder -V`
+
+Expected: 21 tests run, 21 PASS or SKIP (only the two self-adapting `GTEST_SKIP()` cases — `Init_MissingEncoder_FailsGracefullyNotCrash`, `FeedAndFlushAfterFailedInit_AreNoOps` — may legitimately skip; every other case, including all 4 parameterizations of `FeedFullFrames_ProducesMonotonicPts`, must PASS). Zero FAIL. If anything unexpected still fails, do not paper over it — report BLOCKED with the exact failure.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add libs/recorder_core/src/ffmpeg_aac_encoder.h libs/recorder_core/src/ffmpeg_aac_encoder.cpp
+git commit -m "Fix FfmpegAacEncoder packet PTS: derive from output-sample counter, not codec round-trip"
+```
+
+- [ ] **Step 7: Merge directly to main and push** (per Global Constraints — PR skipped by explicit authorization). This can merge independently of Task 1 having merged first or not — if Task 1's commit (`cmake/VendorFFmpeg.cmake` repin) is not yet on `main`, merge it first (it has no conflicts with this task's files), then this one on top.
+
+---
+
 ### Task 2: Cut AAC recording over to FfmpegAacEncoder
 
 **Files:**
