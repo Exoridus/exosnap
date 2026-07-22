@@ -1165,7 +1165,7 @@ exosnap_add_gtest(
     NAME test_matroska_stream_writer
     TEST_PREFIX recorder_core.
     SOURCES tests/test_matroska_stream_writer.cpp
-    LIBRARIES recorder_core EBML::ebml Matroska::matroska
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
 )
 target_include_directories(test_matroska_stream_writer PRIVATE src)
 

@@ -19,7 +19,7 @@ enum class VideoCodec {
 enum class AudioCodec {
     AacMf, // Media Foundation AAC-LC — valid for Matroska
     Opus,  // libopus — valid for WebM and Matroska
-    Pcm,   // uncompressed S16LE — valid for Matroska only (A_PCM/INT_LIT)
+    Pcm,   // uncompressed S16LE — valid for Matroska only (A_PCM/INT/LIT)
     Flac,  // libFLAC lossless — valid for Matroska only (A_FLAC)
 };
 

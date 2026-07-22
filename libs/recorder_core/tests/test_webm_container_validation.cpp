@@ -114,7 +114,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsWebMH264) {
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
-// --- PCM (0.6.0 Audio v2): Matroska-only A_PCM/INT_LIT ---
+// --- PCM (0.6.0 Audio v2): Matroska-only A_PCM/INT/LIT ---
 
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv1Pcm) {
     RecorderSession session;

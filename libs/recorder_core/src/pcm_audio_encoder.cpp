@@ -160,7 +160,7 @@ void PcmAudioEncoder::Flush(std::vector<EncodedAudioPacket>& out_packets) {
 }
 
 std::vector<uint8_t> PcmAudioEncoder::CodecPrivateBytes() const {
-    return {}; // A_PCM/INT_LIT has no CodecPrivate.
+    return {}; // A_PCM/INT/LIT has no CodecPrivate.
 }
 
 void PcmAudioEncoder::Shutdown() {
