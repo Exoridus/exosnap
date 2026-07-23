@@ -47,7 +47,9 @@ Top-level navigation is **six items**, in order:
 - **Device** — encoder adapter selection plus the per-GPU capability matrix. One card per DXGI
   adapter (iGPU/dGPU); a per-adapter matrix shows codec support and provenance for the selected
   adapter, including per-codec 8-bit 4:4:4 (YUV444) encode support probed on that specific GPU
-  (H.264 / HEVC — AV1 is 4:2:0 only). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
+  (H.264 / HEVC — AV1 is 4:2:0 only), plus per-codec NVENC advanced-encode facts — B-frames
+  (max count), Lookahead, and Temporal AQ — probed the same way (informational only; no Expert
+  control reads these facts yet). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
   x264/SVT-AV1) appear as honest greyed-out "planned" rows — never fabricated probes.
 - **Settings** — unified recording configuration, hosting six embedded sections:
   **Video · Audio · Output · Webcam · Hotkeys · Advanced**. Advanced is expert-only and collapsible.

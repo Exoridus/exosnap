@@ -47,7 +47,7 @@ optimistic-baseline-that-gets-downgraded pattern.
 | `libs/capability/src/capability_set.cpp` | Accessor implementations |
 | `libs/capability/include/capability/capability_builder.h` | `ApplyNvencAdvancedEncodeSupport` declaration |
 | `libs/capability/src/capability_builder.cpp` | Fail-closed static baseline + the upgrade-on-probe refinement function |
-| `libs/capability/include/capability/adapter_capability.h` | 6 new `AdapterEncoderCapability` fields (per-adapter probe result for the Device tab) |
+| `libs/capability/include/capability/adapter_capability.h` | 9 new `AdapterEncoderCapability` fields (per-adapter probe result for the Device tab) |
 | `libs/capability/src/adapter_capability.cpp` | `ProbeNvencGuidsOnDevice` extended to query the same 4 caps per adapter |
 | `app/pages/DevicePage.cpp` | 3 new quiet fact rows (B-frames max / Lookahead / Temporal-AQ), one row per feature with per-codec chips |
 | Tests: `libs/capability/tests/test_runtime_merge.cpp`, `test_adapter_capability.cpp`, `test_capability_cache_key.cpp`, `app/tests/test_capability_cache_store.cpp`, `app/tests/test_device_page.cpp` | Existing files, extended in place — no new test targets/CMake changes needed |
@@ -543,7 +543,7 @@ git commit -m "feat(capability): resolve advanced-encode facts into fail-closed 
 
 **Interfaces:**
 - Consumes: nothing from Task 1/2 — this is a separate, parallel per-adapter probe path (same NVENC-session technique, targeted at one specific adapter by LUID instead of "the first NVIDIA adapter DXGI enumerates").
-- Produces: 6 new `AdapterEncoderCapability` fields: `int max_bframes_h264/_hevc/_av1`, `bool lookahead_h264/_hevc/_av1` — Task 4 (DevicePage) consumes these directly. (Two-value pairs per codec — `bframe_ref_mode` and `temporal_aq` are omitted from the per-adapter struct; see Step 3 rationale below for why the Device tab only needs 3 of the 4 facts per codec.)
+- Produces: 9 new `AdapterEncoderCapability` fields: `int max_bframes_h264/_hevc/_av1`, `bool lookahead_h264/_hevc/_av1`, `bool temporal_aq_h264/_hevc/_av1` — Task 4 (DevicePage) consumes these directly. (Only `bframe_ref_mode` is omitted from the per-adapter struct; see Step 3 rationale below for why the Device tab doesn't need the raw SDK ref-mode bit.)
 
 - [ ] **Step 1: Write the failing test**
 
