@@ -53,4 +53,15 @@ void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts
 // left untouched. Called by BuildEffectiveCapabilities. Exposed for unit testing.
 void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& facts);
 
+// Pure refinement: when a real per-GPU NVENC probe ran (facts.nvenc_codec_probed),
+// upgrade per-codec B-frame/Lookahead/Temporal-AQ support FROM the fail-closed
+// NotImplemented/0 baseline TO whatever the GPU+driver actually advertised
+// (NvidiaRuntimeFacts::nvenc_adv_h264/_hevc/_av1). Unlike ApplyNvencYuv444Support,
+// which downgrades an optimistic baseline, this upgrades a pessimistic one — these
+// are generation-dependent NVENC features (see D1: never an architecture/name
+// heuristic), so an unprobed or unadvertised codec must never claim them. When the
+// probe did not run, or a codec was not advertised at all, the baseline is left
+// untouched. Called by BuildEffectiveCapabilities. Exposed for unit testing.
+void ApplyNvencAdvancedEncodeSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts);
+
 } // namespace exosnap::capability

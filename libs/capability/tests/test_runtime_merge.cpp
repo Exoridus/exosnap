@@ -491,6 +491,78 @@ TEST(NvencYuv444SupportTest, BuildEffective_NoYuv444_Blocks444KeepsCs420) {
                                              ChromaSubsampling::Cs420, BitDepth::Bit8)));
 }
 
+// Advanced-encode (B-frames/Lookahead/Temporal-AQ) baseline is fail-closed:
+// with no probe, every codec reports NotImplemented/0 — the inverse of the
+// chroma444 baseline, because these are generation-dependent features that
+// must never be assumed available.
+TEST(NvencAdvancedEncodeSupportTest, StaticBaselineIsNotImplementedForEveryCodec) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::H264Nvenc).annotation));
+    EXPECT_EQ(caps.QueryBFrames(VideoCodec::H264Nvenc).max_bframes, 0);
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Av1Nvenc).annotation));
+    EXPECT_FALSE(IsSelectable(caps.QueryLookahead(VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryTemporalAq(VideoCodec::HevcNvenc)));
+}
+
+// A real probe that advertises H.264 with 2 max B-frames and lookahead, but
+// AV1 with zero of everything, upgrades exactly the codecs/features the GPU
+// actually reported — AV1 stays at the fail-closed baseline even though the
+// GPU advertised the codec at all (nvenc_av1 = true), because max_bframes = 0.
+TEST(NvencAdvancedEncodeSupportTest, ProbedFacts_UpgradeOnlyWhatGpuAdvertised) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_codec_probed = true;
+    facts.nvenc_h264 = true;
+    facts.nvenc_av1 = true;
+    facts.nvenc_adv_h264 = {2, 1, true, true};
+    facts.nvenc_adv_av1 = {0, 0, false, false};
+
+    ApplyNvencAdvancedEncodeSupport(caps, facts);
+
+    const auto h264 = caps.QueryBFrames(VideoCodec::H264Nvenc);
+    EXPECT_TRUE(IsSelectable(h264.annotation));
+    EXPECT_EQ(h264.max_bframes, 2);
+    EXPECT_EQ(h264.bframe_ref_mode, 1);
+    EXPECT_TRUE(IsSelectable(caps.QueryLookahead(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryTemporalAq(VideoCodec::H264Nvenc)));
+
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Av1Nvenc).annotation));
+    EXPECT_EQ(caps.QueryBFrames(VideoCodec::Av1Nvenc).max_bframes, 0);
+}
+
+// A codec the GPU never advertised at all (HEVC absent here) is left at the
+// fail-closed baseline even though the probe ran — mirrors
+// ApplyNvencYuv444Support's "not advertised -> untouched" rule.
+TEST(NvencAdvancedEncodeSupportTest, CodecNotAdvertised_StaysAtBaseline) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_codec_probed = true;
+    facts.nvenc_hevc = false;                  // this GPU does not advertise HEVC at all
+    facts.nvenc_adv_hevc = {4, 2, true, true}; // must be ignored
+
+    ApplyNvencAdvancedEncodeSupport(caps, facts);
+
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::HevcNvenc).annotation));
+    EXPECT_EQ(caps.QueryBFrames(VideoCodec::HevcNvenc).max_bframes, 0);
+}
+
+// Probe did not run -> the fail-closed baseline stands untouched.
+TEST(NvencAdvancedEncodeSupportTest, NotProbed_KeepsFailClosedBaseline) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_codec_probed = false;
+    facts.nvenc_h264 = true;
+    facts.nvenc_adv_h264 = {2, 1, true, true}; // must be ignored, probe did not run
+
+    ApplyNvencAdvancedEncodeSupport(caps, facts);
+
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::H264Nvenc).annotation));
+}
+
 // BuildEffectiveCapabilities wires the probe through end-to-end: a favorable
 // snapshot that additionally reports AV1-unsupported via a real probe must yield
 // AV1 NotImplemented while the M3.2 prerequisites otherwise hold.
