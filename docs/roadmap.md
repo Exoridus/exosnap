@@ -82,7 +82,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.8.0`  | Diagnostics as a feature           | First-class diagnostics engine (ADR 0033): `FixAction` model, pre-flight readiness gate, low-cost live monitoring (drops/drift/disk-ETA, encoder-vs-capture-vs-disk-bound classification), root-cause correlation (e.g. VRR-vs-CFR judder), incident→check catalog. Post-flight kept minimal (report card; full integrity review handed to 0.9.0). `PresentProvider` interface with PresentMon (tearing/game-present) as an opt-in, elevation-gated provider. The same in-process ETW consumer also powers a **DPC/ISR-latency check** (LatencyMon-style: names the offending kernel driver behind "smooth game, stuttery/crackling recording") — high-value, near-free once the ETW session exists. **Phase-correct CFR frame pacing** (ADR 0035): GPU-only, present-time-aware frame *selection* (not blending) so uncapped VRR / high-refresh sources record to smooth, judder-free 60 fps — pulled forward from 0.10.0; the engine-side fix for the judder that 0.8.0 *diagnoses* (a select control + a `FixAction`; default Smooth; no elevation). |
 | `0.9.0`  | Edit / Output / Save               | Quick Trim (stream copy), marker display, chapter export; Edit/Output/Save surface (ADR 0022) as interactive shell; the "Review" step consumes the post-flight diagnostic report from 0.8.0. |
 | `0.10.0` | Reliability hardening (vendor-independent) | Long-recording soak, A/V-sync drift validation, recovery drills, updater/installer/signing/SmartScreen reputation, privacy review, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0). The vendor-independent half of the former `0.12.x`. The developer harness for the first three (headless `exosnap-soak` tool, the `av-sync-check.py` drift analyzer, and the recovery drill matrix) landed early and is documented in [`docs/dev/soak-and-recovery-drills.md`](dev/soak-and-recovery-drills.md); its thresholds are advisory, not a release gate. |
-| `0.11.0` | Software encoding                  | x264, optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. Universal fallback + GPU-less CI enabler. |
+| `0.11.0` | Software encoding (SVT-AV1 only)   | Optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. x264/HEVC software encoding is **not** bundled by ExoSnap (see ADR 0007, revised 2026-07-23: patent-licensing risk without legal budget to clear it) — if offered at all, it is a post-`1.0`, opt-in detection of a user-supplied FFmpeg install, never built/hosted by ExoSnap. |
 | `0.12.0` | AMD hardware                       | Native AMF, hardware test matrix, diagnostics provider, fallback behavior. |
 | `0.13.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics provider, fallback behavior. |
 | `1.0.0`  | First stable release (cross-vendor RC gate) | Cross-vendor matrix + quality-validation matrix (SSIM/VMAF, A/V-sync, long recordings across all vendors) — the vendor-dependent half of RC stabilization. Ships only once these promises are genuinely validated. |
@@ -175,6 +175,39 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
   upgrade/downgrade, settings preservation, portable vs installed.
 - **Quality validation matrix** — beyond "it builds": SSIM/VMAF preset comparison, A/V-sync drift,
   long recordings, vendor matrix, HDR metadata, player/NLE + Apple compatibility.
+- **Video-encoder backend/codec decoupling** — `IVideoEncoder`/`VideoEncoderFactory` (ADR 0006)
+  currently model one backend class per vendor+codec pair. Generalizing the hierarchy so a backend
+  declares the codec(s) it supports, instead of one class per pair, is a prerequisite the AMD AMF
+  (0.12.0) and Intel QSV (0.13.0) waves need regardless of the x264/HEVC software-encoding
+  question (which ADR 0007, revised 2026-07-23, took off ExoSnap's own build entirely — see
+  `0.11.0` above). Can start ahead of both AMD/Intel waves.
+
+---
+
+## Specced, implementation paused
+
+18 implementation-ready specs (Fable-authored, adversarially cross-model reviewed) from the
+2026-07-11 spec wave live in `docs/superpowers/specs/2026-07-11-*-spec.md`, with the recommended
+build order and rationale in `docs/superpowers/plans/spec-wave-2026-07-11-plan.md`. **Paused on
+explicit user directive since 2026-07-11** — nothing here starts without a fresh go-ahead, and
+each spec ends with its own "Offene Fragen" (open product questions) to resolve first.
+
+Recommended order, once resumed:
+1. **Foundation:** log-schema/session-report (`diagnostics-support-bundle-spec.md`), perf
+   measurement infra (`nvenc-async-pipeline-spec.md`, stage 1 only — measure, no async rewrite
+   yet), SignPath application (external lead time), `record-start-preparing-state-spec.md` (M-9).
+2. **`0.10.0` hardening:** `reliability-soak-spec.md` + recovery drills, `av-clock-slaving-spec.md`,
+   `exclusive-fullscreen-capture-spec.md`, `display-identity-stability-spec.md`,
+   `device-hotswap-policy-spec.md`, `privacy-review-spec.md`, `code-signing-spec.md`,
+   `diagnostics-support-bundle-spec.md` (troubleshooting.md half).
+3. **Perf & quality (data-gated):** NVENC async only if the measurement gate trips;
+   `encoder-quality-features-spec.md` (SSIM/VMAF harness) before B-frames/lookahead.
+4. **Product:** `editor-video-preview-spec.md`, `hlg-und-hdr-achsen-spec.md`.
+5. **Reach:** `software-encoding-spec.md` (**x264 half superseded by ADR 0007's 2026-07-23
+   revision** — SVT-AV1 half still valid) → `amd-amf-encoder-spec.md` (0.12.0) →
+   `intel-qsv-encoder-spec.md` (0.13.0).
+6. **Cross-cutting:** `localization-de-spec.md`, `multichannel-audio-spec.md` (spec itself
+   recommends mostly post-`1.0`).
 
 ---
 

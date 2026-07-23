@@ -1,6 +1,6 @@
 # VendorFFmpeg.cmake
 #
-# Downloads the pinned Exoridus/exosnap-ffmpeg-build gpl-shared prebuilt via
+# Downloads the pinned Exoridus/exosnap-ffmpeg-build lgpl-shared prebuilt via
 # FetchContent and exposes four imported SHARED targets:
 #
 #   FFmpeg::avformat   FFmpeg::avcodec   FFmpeg::avutil   FFmpeg::swresample
@@ -12,9 +12,9 @@
 # Only the mux-only DLL set (avformat, avcodec, avutil, swresample) is shipped.
 # The remaining DLLs (avfilter, swscale, avdevice) are NOT deployed.
 #
-# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r6 (upstream n8.1.1)
-# Release tag:  r6
-# License:      GPL-2.0-or-later (compatible with ExoSnap GPL-3.0-or-later)
+# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r5 (upstream n8.1.1)
+# Release tag:  r5
+# License:      LGPL-2.1-or-later (compatible with ExoSnap GPL-3.0-or-later)
 #
 # r1 -> r2: added --enable-muxer=mp4. mp4 and mov share the movenc backend
 # but FFmpeg registers them as separate muxers. r1 only enabled mov, so
@@ -27,37 +27,35 @@
 # Edit-page video player needs real decode.
 # r4 -> r5: added --enable-encoder=aac. Enables FfmpegAacEncoder (ADR 0052) to
 # actually produce output; r1-r4 had zero encoders (mux/demux/decode only).
-# r5 -> r6: added --enable-gpl, libx264, libx265 (cross-compiled, static,
-# 8-bit-only for x265). License changes from LGPL-2.1-or-later to
-# GPL-2.0-or-later as of this release (ExoSnap is GPL-3.0-or-later,
-# compatible). Neither encoder is wired into an ExoSnap encoder backend yet
-# (ADR 0007 covers x264's eventual X264VideoEncoder; that remains separate,
-# future work) -- this only makes avcodec_find_encoder_by_name("libx264"/
-# "libx265") return a real encoder, proven by
-# test_ffmpeg_build_capabilities.cpp.
 #
-# The archive is ~5.9 MB compressed (avcodec.dll alone is ~14.5 MB
-# uncompressed with x264/x265 statically linked in, up from a few MB before
-# r6), still eliminating the ~88 MB BtbN download that this repo replaced.
+# r6 briefly added --enable-gpl, libx264, libx265 (cross-compiled, static)
+# to prove the build pipeline could produce a software H.264/HEVC encoder.
+# Reverted back to r5 (LGPL-only, no libx264/libx265): shipping a compiled
+# software encoder in ExoSnap's own binary makes ExoSnap the patent-pool
+# "product manufacturer" of record for that encoder, with no upstream vendor
+# license to lean on (unlike NVENC/AMF/QSV, which call vendor-owned hardware).
+# See ADR 0007 -- ExoSnap's own build stays hardware-only; x264/x265 software
+# encoding, if ever offered, is a user-supplied FFmpeg install detected at
+# runtime, never bundled here.
 
 include(FetchContent)
 
-set(EXOSNAP_FFMPEG_VERSION "r6-n8.1.1"
+set(EXOSNAP_FFMPEG_VERSION "r5-n8.1.1"
     CACHE STRING "Pinned exosnap-ffmpeg-build release version (informational)")
 
 # IMPORTANT: pin an immutable release tag (r1, r2, …), never a rolling tag.
 # Assets under a versioned release tag are immutable; the SHA256 pin is stable.
 FetchContent_Declare(
     ffmpeg_prebuilt
-    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r6/ffmpeg-win64-gpl-shared.zip"
-    URL_HASH "SHA256=87E1318DAB01578E5C9823EAF261FCCC1A0DE804EFA097C08C02F4224F886EAD"
+    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r5/ffmpeg-win64-lgpl-shared.zip"
+    URL_HASH "SHA256=D40D2B3D14CD6065B57AB7735E977B01FED447AC534A4E19B74C490E1C3BBEED"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(ffmpeg_prebuilt)
 FetchContent_GetProperties(ffmpeg_prebuilt SOURCE_DIR _ffmpeg_src)
 
 # CMake's FetchContent URL download strips the single top-level directory that
-# is present in the archive (ffmpeg-...-win64-gpl-shared/).
+# is present in the archive (ffmpeg-...-win64-lgpl-shared/).
 # The content lands directly in ffmpeg_prebuilt-src/ so the root IS _ffmpeg_src.
 set(_ffmpeg_root "${_ffmpeg_src}")
 
@@ -82,7 +80,7 @@ function(_exosnap_ffmpeg_target lib_name dll_name)
     target_compile_definitions(${_tgt} INTERFACE _CRT_SECURE_NO_WARNINGS)
 endfunction()
 
-# The versioned DLL names shipped in the exosnap-ffmpeg-build win64-gpl-shared archive:
+# The versioned DLL names shipped in the exosnap-ffmpeg-build win64-lgpl-shared archive:
 #   avformat-62.dll  avcodec-62.dll  avutil-60.dll  swresample-6.dll
 _exosnap_ffmpeg_target(avformat   avformat-62)
 _exosnap_ffmpeg_target(avcodec    avcodec-62)
@@ -147,27 +145,8 @@ if(EXISTS "${_ffmpeg_license}")
     configure_file("${_ffmpeg_license}"
                    "${_exosnap_license_stage}/ffmpeg.txt"
                    COPYONLY)
-    message(STATUS "License: FFmpeg gpl-shared -> licenses/ffmpeg.txt")
+    message(STATUS "License: FFmpeg lgpl-shared -> licenses/ffmpeg.txt")
 else()
     message(WARNING "FFmpeg license file not found at ${_ffmpeg_root}/LICENSE.md or LICENSE.txt — "
                     "license staging skipped; re-run after FetchContent download completes.")
 endif()
-
-# r6 adds libx264/libx265 statically linked into avcodec; stage their own
-# license texts alongside FFmpeg's. Destination names use .txt (not the
-# source archive's .md) because the install(DIRECTORY ... FILES_MATCHING
-# PATTERN "*.txt") rule in third_party/CMakeLists.txt only picks up .txt
-# files from this staging directory -- a .md destination would be silently
-# excluded from the shipped package.
-set(_extra_license_sources LICENSE-x264.md LICENSE-x265.md)
-set(_extra_license_dests ffmpeg-x264.txt ffmpeg-x265.txt)
-foreach(_extra_license_idx RANGE 1)
-    list(GET _extra_license_sources ${_extra_license_idx} _extra_license_src)
-    list(GET _extra_license_dests ${_extra_license_idx} _extra_license_dst)
-    set(_extra_license_path "${_ffmpeg_root}/${_extra_license_src}")
-    if(EXISTS "${_extra_license_path}")
-        configure_file("${_extra_license_path}"
-                       "${_exosnap_license_stage}/${_extra_license_dst}"
-                       COPYONLY)
-    endif()
-endforeach()
