@@ -58,6 +58,19 @@ TEST(AdapterEncoderCapability, DefaultConstructionHasNoYuv444Support) {
     EXPECT_FALSE(cap.yuv444_hevc);
 }
 
+TEST(AdapterEncoderCapability, DefaultConstructionHasNoAdvancedEncodeSupport) {
+    AdapterEncoderCapability cap;
+    EXPECT_EQ(cap.max_bframes_h264, 0);
+    EXPECT_EQ(cap.max_bframes_hevc, 0);
+    EXPECT_EQ(cap.max_bframes_av1, 0);
+    EXPECT_FALSE(cap.lookahead_h264);
+    EXPECT_FALSE(cap.lookahead_hevc);
+    EXPECT_FALSE(cap.lookahead_av1);
+    EXPECT_FALSE(cap.temporal_aq_h264);
+    EXPECT_FALSE(cap.temporal_aq_hevc);
+    EXPECT_FALSE(cap.temporal_aq_av1);
+}
+
 TEST(ProbeAdapterEncoderCapability, IntelAdapterIsHonestlyUnprobed) {
     AdapterInfo adapter;
     adapter.name = "Synthetic UHD Graphics 999";

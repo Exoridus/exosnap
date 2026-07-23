@@ -35,6 +35,22 @@ struct AdapterEncoderCapability {
     // purpose — NVENC AV1 is 4:2:0 Main only.
     bool yuv444_h264 = false;
     bool yuv444_hevc = false;
+
+    // Per-codec NVENC advanced-encode capability, same semantics as the
+    // system-wide NvencAdvancedEncodeFacts (runtime_snapshot.h) but scoped to
+    // THIS adapter. bframe_ref_mode is intentionally omitted here — the Device
+    // tab shows a max-B-frames number and on/off chips, not the raw SDK
+    // ref-mode bit (that detail belongs to the Expert-setting resolver in a
+    // later spec step, not this informational matrix).
+    int max_bframes_h264 = 0;
+    int max_bframes_hevc = 0;
+    int max_bframes_av1 = 0;
+    bool lookahead_h264 = false;
+    bool lookahead_hevc = false;
+    bool lookahead_av1 = false;
+    bool temporal_aq_h264 = false;
+    bool temporal_aq_hevc = false;
+    bool temporal_aq_av1 = false;
 };
 
 // Vendor -> backend label, pure (no probing). NVIDIA => "NVENC"; AMD, Intel,
