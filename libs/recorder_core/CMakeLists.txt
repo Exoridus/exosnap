@@ -638,6 +638,16 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_gop_aq_config PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_split_sentinel_policy: pure unit tests for ShouldEmitSplitSentinel (S9,
+# the split-boundary routing condition hardened for async submit-ahead — no
+# GPU needed).
+exosnap_add_gtest(
+    NAME test_split_sentinel_policy
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_split_sentinel_policy.cpp
+)
+target_include_directories(test_split_sentinel_policy PRIVATE src)
+
 # test_nvenc_output_ring: pure unit tests for the async output-ring free-slot
 # scan (S8, FindFreeOutputSlot) backing the async submit path's output-buffer
 # allocation (no GPU needed).

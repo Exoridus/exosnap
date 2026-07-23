@@ -13,6 +13,7 @@
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
 #include "session_internal.h"
+#include "split_sentinel_policy.h"
 #include "yuv_to_bgra.h"
 #include <recorder_core/cursor_sprite.h>
 #include <recorder_core/gpu_hdr_tonemap.h>
@@ -1884,6 +1885,13 @@ void VideoThread::Run() {
     uint64_t segment_start_session_pts_ns = 0;
     uint64_t split_last_seq = m_state.split_request_seq.load();
     bool split_armed = false;
+    // S9: the PTS of the specific frame whose submission consumes the forced-
+    // IDR request — set by maybeArmSplit, consumed by ShouldEmitSplitSentinel
+    // in routePacket. Binds the sentinel to that exact frame instead of
+    // whichever keyframe happens to route next, which is required once
+    // ReapCompleted can surface earlier, already-in-flight packets in the same
+    // iteration (see split_sentinel_policy.h).
+    uint64_t split_forced_pts_ns = 0;
     SplitTriggerSource split_armed_trigger = SplitTriggerSource::ManualButton;
     // Whether an additional trigger arriving while `split_armed` is already
     // pending has been logged for the current boundary (see maybeArmSplit).
@@ -1940,6 +1948,7 @@ void VideoThread::Run() {
             return;
         split_last_seq = seq; // consume manual requests up to here (coalesced)
         split_armed = true;
+        split_forced_pts_ns = pts_ns; // this call's frame is the one that will carry FORCEIDR
         split_armed_secondary_logged = false;
         split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
                                      : SplitTriggerSource::AutomaticDuration;
@@ -2053,7 +2062,7 @@ void VideoThread::Run() {
                                           "cannot keep up with the recording");
                     return false;
                 }
-                if (split_armed && pkt.keyframe) {
+                if (ShouldEmitSplitSentinel(split_armed, split_forced_pts_ns, pkt.keyframe, pkt.pts_ns)) {
                     ++current_segment_index;
                     segment_start_session_pts_ns = pkt.pts_ns;
                     if (split_auto_enabled) {
