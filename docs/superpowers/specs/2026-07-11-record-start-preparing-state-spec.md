@@ -1,7 +1,14 @@
 # M-9: StartRecording-Gerätearbeit off-thread (Preparing-State)
 
-> Spec-Status: umsetzungsreif, adversarial gehärtet. Read-only erhoben gegen `main` @ #192 (Branch
-> `fix/video-timeline-honesty`). Jede Ist-Zustands-Aussage trägt eine Datei:Zeile-Referenz.
+> **SHIPPED (2026-07-12, PR #198).** Einen Tag nach dieser Spec umgesetzt und gemergt — thin-gate-
+> fat-worker, `PrepareContext`-Snapshot, Webcam-Ownership-Fix, Hotkey-Cancel, kein dedizierter
+> Cancel-Button, Re-Entrancy-Guard, `output.PreparingStateTest.*` +
+> `viewmodel.RecordViewModelPreparingTest.*`, `Record / Preparing`-Visual-Szenario,
+> `docs/product-spec.md` §"Preparing" und ADR 0041 aktualisiert — alles wie unten spezifiziert.
+> Diese Spec bleibt als historischer Entwurf/Referenz stehen; nichts hier ist mehr offen.
+>
+> Spec-Status (Original): umsetzungsreif, adversarial gehärtet. Read-only erhoben gegen `main` @ #192
+> (Branch `fix/video-timeline-honesty`). Jede Ist-Zustands-Aussage trägt eine Datei:Zeile-Referenz.
 > Umsetzung später durch Opus/Sonnet allein anhand dieser Spec. Ein adversarialer Review-Durchgang
 > (9 Einwände) ist eingearbeitet — s. Abschnitt „Adversarialer Review — Ergebnis" am Ende.
 
