@@ -1,5 +1,11 @@
 # Reliability-Härtung 0.10: Soak-Infrastruktur, A/V-Sync-Validierung, Recovery-Drills
 
+> **SHIPPED (PR #193, 2026-07-12).** Verifiziert 2026-07-23: `tools/soak/` (Harness,
+> `SoakAbortPolicy`, `SoakMetricsAggregator`, `av-sync-check.py`, Recovery-Drills) vorhanden — deckt
+> den kompletten Buildable-Scope dieser Spec ab. Einzig offen: der tatsächliche mehrstündige Soak-Lauf
+> selbst ist ein User-Live-Verify, kein Implementierungs-Task (Schwellen sind laut Roadmap ohnehin
+> "advisory, not a release gate").
+
 > Spec-Autor-Deliverable (read-only erhoben aus main @ #192). Umsetzung später durch
 > andere Agenten NUR anhand dieser Spec. Sprache Deutsch, Code-Bezeichner original.
 > Thema aus `docs/roadmap.md` Zeile 84 (0.10.0 „Reliability hardening (vendor-independent)")

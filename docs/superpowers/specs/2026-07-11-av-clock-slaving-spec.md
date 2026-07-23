@@ -1,5 +1,8 @@
 # A/V-Clock-Slaving (H-3 Stufe 3) — sanfte swresample-Drift-Kompensation Richtung QPC
 
+> **SHIPPED (PR #202, 2026-07-12).** Verifiziert 2026-07-23 gegen aktuellen Code: `clock_slaving.h`,
+> `audio_clock_drift.h`, `test_clock_slaving.cpp` vorhanden. Nichts hier ist mehr offen.
+
 **Status:** Spec, umsetzungsreif (adversarialer Review eingearbeitet, Ergebnis am Ende) ·
 **Stand des Ist-Zustands:** main @ #192 (2026-07-11)
 **Vorarbeiten:** Stufe 1 (Discontinuity-Gap-Fill, #183) und Stufe 2 (ehrliche Drift-Metrik, #191)

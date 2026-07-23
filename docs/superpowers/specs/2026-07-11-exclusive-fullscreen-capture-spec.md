@@ -1,5 +1,9 @@
 # Exclusive-Fullscreen/Borderless-Capture-Matrix
 
+> **SHIPPED (PR #204 + #209, 2026-07-12).** Verifiziert 2026-07-23: `KNOWN_LIMITATIONS.md` dokumentiert
+> die Exclusive-Fullscreen-Erkennung (`rec.capture.exclusive_window`) als geschippt; die
+> Roadmap-Selbstwidersprüche, die diese Spec anmahnte, sind ebenfalls behoben. Nichts hier ist mehr offen.
+
 **Slice-Ziel:** Die Matrix *Anzeigemodus (Windowed / Borderless / Exclusive-Fullscreen) ×
 Capture-Ziel (Monitor / Window / Region)* systematisch behandeln: was heute funktioniert, was wie
 scheitert, wie ExoSnap das **erkennt** und **ehrlich meldet** — plus die bewusste Entscheidung,

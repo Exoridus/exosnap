@@ -184,33 +184,32 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ---
 
-## Specced, implementation paused
+## Remaining work from the 2026-07-11 spec wave
 
-18 implementation-ready specs (Fable-authored, adversarially cross-model reviewed) from the
-2026-07-11 spec wave live in `docs/superpowers/specs/2026-07-11-*-spec.md`, with the recommended
-build order and rationale in `docs/superpowers/plans/spec-wave-2026-07-11-plan.md`. **Paused on
-explicit user directive since 2026-07-11** — nothing here starts without a fresh go-ahead, and
-each spec ends with its own "Offene Fragen" (open product questions) to resolve first.
+A wave of 18 implementation-ready specs was written 2026-07-11; 9 shipped within a day (device
+hotswap resilience, display identity, A/V clock slaving, exclusive-fullscreen detection, the
+diagnostics support bundle, the reliability-soak harness, the real Edit-page video preview, the
+privacy-review process, and the Preparing-state UI fix) and their specs now live under
+`docs/superpowers/specs/2026-07-11-*-spec.md` as shipped-feature records. What's left, roughly by
+usefulness:
 
-**`record-start-preparing-state-spec.md` (M-9) is done** — shipped 2026-07-12 as PR #198, the day
-after the spec was written (see the spec's own SHIPPED banner). 17 of the 18 specs remain open.
+- **Worth doing soon:** an SSIM/VMAF quality-comparison harness (the gate for any future encoder
+  change — dev tooling only), German localization (`tr()` sweep + Qt Linguist, decided for `1.0`),
+  and HLG output + tidying the HDR color-metadata path (HDR10 already ships; the transfer-function
+  enum value already exists, just unused).
+- **Conditional:** an async NVENC pipeline (only if the already-shipped perf-measurement stage
+  shows it's needed) and NVENC B-frames/lookahead/temporal-AQ (needs the SSIM/VMAF harness first
+  to prove the gain — AV1, the shipped default codec, doesn't support B-frames on most hardware).
+  PCM/FLAC-in-MP4 remains a known gap (ADR 0030); 5.1/7.1 audio was deliberately declined, not
+  merely deferred.
+- **Reach, no urgency:** AMD AMF (`0.12.0`) and Intel QSV (`0.13.0`) widen hardware support without
+  closing a gap for existing users. Authenticode code-signing would reduce SmartScreen friction but
+  is explicitly deferred (cost, no current budget).
+- **Superseded:** x264/HEVC software encoding, per ADR 0007's 2026-07-23 revision (patent-licensing
+  risk, no legal budget) — SVT-AV1 stays a live but unprioritized option.
 
-Recommended order, once resumed:
-1. **Foundation:** log-schema/session-report (`diagnostics-support-bundle-spec.md`), perf
-   measurement infra (`nvenc-async-pipeline-spec.md`, stage 1 only — measure, no async rewrite
-   yet), SignPath application (external lead time).
-2. **`0.10.0` hardening:** `reliability-soak-spec.md` + recovery drills, `av-clock-slaving-spec.md`,
-   `exclusive-fullscreen-capture-spec.md`, `display-identity-stability-spec.md`,
-   `device-hotswap-policy-spec.md`, `privacy-review-spec.md`, `code-signing-spec.md`,
-   `diagnostics-support-bundle-spec.md` (troubleshooting.md half).
-3. **Perf & quality (data-gated):** NVENC async only if the measurement gate trips;
-   `encoder-quality-features-spec.md` (SSIM/VMAF harness) before B-frames/lookahead.
-4. **Product:** `editor-video-preview-spec.md`, `hlg-und-hdr-achsen-spec.md`.
-5. **Reach:** `software-encoding-spec.md` (**x264 half superseded by ADR 0007's 2026-07-23
-   revision** — SVT-AV1 half still valid) → `amd-amf-encoder-spec.md` (0.12.0) →
-   `intel-qsv-encoder-spec.md` (0.13.0).
-6. **Cross-cutting:** `localization-de-spec.md`, `multichannel-audio-spec.md` (spec itself
-   recommends mostly post-`1.0`).
+The still-open specs live in `.workspace/plans/` (untracked working notes, not part of this repo's
+history) until they're picked up.
 
 ---
 
