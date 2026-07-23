@@ -135,23 +135,45 @@ directory alongside the ExoSnap binary.
 
 ### FFmpeg
 
-- **Version:** exosnap-ffmpeg-build release `r3` (upstream FFmpeg `n8.1.1`)
+- **Version:** exosnap-ffmpeg-build release `r6` (upstream FFmpeg `n8.1.1`)
 - **Project:** https://github.com/Exoridus/exosnap-ffmpeg-build (build/packaging
   repository) / https://ffmpeg.org (upstream FFmpeg source)
-- **License:** LGPL-2.1-or-later (mux-only DLL set; no GPL codecs included)
-- **Linkage:** dynamic (shared DLLs deployed alongside the ExoSnap binary)
-- **Bundled license:** `licenses/ffmpeg.txt`
+- **License:** GPL-2.0-or-later as of r6 (`--enable-gpl` for libx264/libx265; r1-r5 were
+  LGPL-2.1-or-later only, no GPL code)
+- **Linkage:** dynamic (shared DLLs deployed alongside the ExoSnap binary); libx264/libx265
+  are statically linked into the `avcodec` DLL
+- **Bundled license:** `licenses/ffmpeg.txt`, `licenses/ffmpeg-LICENSE-x264.md`,
+  `licenses/ffmpeg-LICENSE-x265.md`
 - **DLLs deployed:** `avformat-62.dll`, `avcodec-62.dll`, `avutil-60.dll`,
-  `swresample-6.dll` (~2.3 MB compressed archive; avfilter/swscale/avdevice are not
+  `swresample-6.dll` (~5.9 MB compressed archive; avfilter/swscale/avdevice are not
   built by this component set and are excluded from the portable ZIP)
-- **Role:** Post-recording stream-copy remux of MKV → progressive MP4 (`+faststart`).
-  No audio/video decoding or re-encoding is performed; the DLLs are used for
-  container-level operations only.
-- **Note:** ExoSnap is licensed GPL-3.0-or-later, which is compatible with LGPL-2.1.
-  No additional obligations arise from adding these LGPL libraries. Users may replace
-  the DLLs with compatible versions to exercise their LGPL rights. The
-  exosnap-ffmpeg-build repository builds this exact mux-only component set from
-  unmodified upstream FFmpeg `n8.1.1` sources — it does not fork or patch FFmpeg.
+- **Role:** Post-recording stream-copy remux of MKV → progressive MP4 (`+faststart`), plus the
+  native AAC-LC encoder (ADR 0052). `libx264`/`libx265` are compiled into this build but are
+  **not yet used by any ExoSnap encoder** — no `X264VideoEncoder`/HEVC equivalent exists yet
+  (see ADR 0007); their presence is a build-capability enablement, tracked so the FFmpeg build
+  pipeline does not need to be touched again when that feature work happens.
+- **Note:** ExoSnap is licensed GPL-3.0-or-later, which is compatible with GPL-2.0-or-later.
+  No additional distribution obligations arise beyond what ExoSnap already carries as a GPL
+  project. Users may replace the DLLs with compatible versions. The exosnap-ffmpeg-build
+  repository builds this exact component set from unmodified upstream FFmpeg `n8.1.1`, x264,
+  and x265 sources — it does not fork or patch any of them.
+
+### libx264 (bundled in FFmpeg's `avcodec` DLL)
+
+- **License:** GPL-2.0-or-later
+- **Project:** https://code.videolan.org/videolan/x264
+- **Linkage:** static, into `avcodec-62.dll` (built by exosnap-ffmpeg-build, see FFmpeg entry above)
+- **Role:** compiled in as `avcodec_find_encoder_by_name("libx264")`'s backing encoder. Not
+  currently used by any ExoSnap encoder backend (ADR 0007 covers the eventual feature work).
+
+### libx265 (bundled in FFmpeg's `avcodec` DLL)
+
+- **License:** GPL-2.0-or-later
+- **Project:** https://github.com/videolan/x265
+- **Linkage:** static, into `avcodec-62.dll` (built by exosnap-ffmpeg-build, see FFmpeg entry above)
+- **Role:** compiled in as `avcodec_find_encoder_by_name("libx265")`'s backing encoder. Not
+  currently used by any ExoSnap encoder backend; no ADR exists yet for shipping software HEVC
+  as a feature — this is build-capability only.
 
 ## Official-release-build-only dependencies (crash capture)
 
