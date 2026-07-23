@@ -1,5 +1,8 @@
 # Diagnostics-Ausbau: Log-Schema, Session-Report, Support-Bundle, Troubleshooting
 
+> **SHIPPED (PR #194, 2026-07-12).** Verifiziert 2026-07-23 gegen aktuellen Code:
+> `app/diagnostics/SupportBundle.cpp`, `test_support_bundle.cpp` vorhanden. Nichts hier ist mehr offen.
+
 > Spec-Welle 2026-07-11, Thema 10 (Review §6). Autor read-only; Umsetzung später durch
 > Opus/Sonnet **nur** anhand dieser Spec. Ist-Zustand frisch aus dem Code auf `main` @ #192
 > erhoben (Zeilennummern aus dem Review NICHT übernommen).

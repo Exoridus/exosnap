@@ -1,5 +1,9 @@
 # Edit-Overlay: echtes Video-Preview / Playback
 
+> **SHIPPED (PR #220, 2026-07-14/15).** Verifiziert 2026-07-23 gegen aktuellen Code:
+> `EditExportPage` fährt einen echten `player_session_`-Decoder statt des Platzhalters. Nichts
+> hier ist mehr offen.
+
 ## Problem
 
 Das Edit/Output/Save-Overlay (`EditExportPage`, gehostet in `EditExportOverlay`, ADR 0022)

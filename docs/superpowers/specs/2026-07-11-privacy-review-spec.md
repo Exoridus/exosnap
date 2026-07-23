@@ -1,5 +1,9 @@
 # Privacy-Review als wiederholbarer Release-Schritt
 
+> **SHIPPED (PR #197, 2026-07-12).** Verifiziert 2026-07-23: `scripts/validate-privacy-allowlist.ps1`
+> und `scripts/validate-network-egress.ps1` vorhanden; PR-Titel "close two privacy documentation
+> gaps" deckt sich mit den beiden Drift-Stellen aus dem Problem-Abschnitt. Nichts hier ist mehr offen.
+
 > Spec-Welle 2026-07-11, Thema 20 (Roadmap 0.10 „Reliability hardening … privacy review").
 > Autor read-only bzgl. Code/Docs; Umsetzung später **nur** anhand dieser Spec. Ist-Zustand
 > frisch aus dem Code auf `main` @ #192 erhoben (Datei:Zeile-Referenzen unten; keine Zeilen aus

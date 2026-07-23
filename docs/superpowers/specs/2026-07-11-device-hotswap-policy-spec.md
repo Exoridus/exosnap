@@ -1,5 +1,11 @@
 # Geräte-Hot-Swap mid-recording: kohärente Policy pro Gerätetyp
 
+> **SHIPPED (PR #199, #200, #206, 2026-07-12).** Verifiziert 2026-07-23: Audio-Endpoint-Verlust
+> degradiert nur noch die betroffene Quelle statt die ganze Aufnahme zu beenden (#199), Monitor-Targets
+> überleben Unplug/Replug (#200), stehende Benachrichtigung bei stummgeschalteter Quelle (#206,
+> "Closes the standing-notification gap deferred from the device-loss policy work"). Nichts hier
+> ist mehr offen.
+
 ## Problem
 
 ExoSnap behandelt den Verlust eines Capture-Geräts *während* einer Aufnahme heute

@@ -1,5 +1,9 @@
 # Stabile Display-Identität statt GDI-Gerätename
 
+> **SHIPPED (PR #200, 2026-07-12).** Verifiziert 2026-07-23 gegen aktuellen Code:
+> `DisplayIdentityResolver`, `DisplayIdentityEnumerator`, `DisplayDeviceNotifier`, `StableDisplayId`
+> vorhanden. Nichts hier ist mehr offen.
+
 ## Problem
 
 Ein gespeichertes Display- oder Region-Capture-Target hängt an einer instabilen
