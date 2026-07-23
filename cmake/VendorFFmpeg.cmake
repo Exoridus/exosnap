@@ -1,6 +1,6 @@
 # VendorFFmpeg.cmake
 #
-# Downloads the pinned Exoridus/exosnap-ffmpeg-build lgpl-shared prebuilt via
+# Downloads the pinned Exoridus/exosnap-ffmpeg-build gpl-shared prebuilt via
 # FetchContent and exposes four imported SHARED targets:
 #
 #   FFmpeg::avformat   FFmpeg::avcodec   FFmpeg::avutil   FFmpeg::swresample
@@ -57,7 +57,7 @@ FetchContent_MakeAvailable(ffmpeg_prebuilt)
 FetchContent_GetProperties(ffmpeg_prebuilt SOURCE_DIR _ffmpeg_src)
 
 # CMake's FetchContent URL download strips the single top-level directory that
-# is present in the archive (ffmpeg-...-win64-lgpl-shared/).
+# is present in the archive (ffmpeg-...-win64-gpl-shared/).
 # The content lands directly in ffmpeg_prebuilt-src/ so the root IS _ffmpeg_src.
 set(_ffmpeg_root "${_ffmpeg_src}")
 
@@ -82,7 +82,7 @@ function(_exosnap_ffmpeg_target lib_name dll_name)
     target_compile_definitions(${_tgt} INTERFACE _CRT_SECURE_NO_WARNINGS)
 endfunction()
 
-# The versioned DLL names shipped in the exosnap-ffmpeg-build win64-lgpl-shared archive:
+# The versioned DLL names shipped in the exosnap-ffmpeg-build win64-gpl-shared archive:
 #   avformat-62.dll  avcodec-62.dll  avutil-60.dll  swresample-6.dll
 _exosnap_ffmpeg_target(avformat   avformat-62)
 _exosnap_ffmpeg_target(avcodec    avcodec-62)
