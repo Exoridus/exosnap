@@ -98,6 +98,18 @@ QJsonObject SnapshotToJson(const RuntimeCapabilitySnapshot& s) {
     nvidia[QStringLiteral("nvenc_yuv444_h264")] = s.nvidia.nvenc_yuv444_h264;
     nvidia[QStringLiteral("nvenc_yuv444_hevc")] = s.nvidia.nvenc_yuv444_hevc;
 
+    auto adv_to_json = [](const capability::NvencAdvancedEncodeFacts& adv) {
+        QJsonObject obj;
+        obj[QStringLiteral("max_bframes")] = adv.max_bframes;
+        obj[QStringLiteral("bframe_ref_mode")] = adv.bframe_ref_mode;
+        obj[QStringLiteral("lookahead")] = adv.lookahead;
+        obj[QStringLiteral("temporal_aq")] = adv.temporal_aq;
+        return obj;
+    };
+    nvidia[QStringLiteral("nvenc_adv_h264")] = adv_to_json(s.nvidia.nvenc_adv_h264);
+    nvidia[QStringLiteral("nvenc_adv_hevc")] = adv_to_json(s.nvidia.nvenc_adv_hevc);
+    nvidia[QStringLiteral("nvenc_adv_av1")] = adv_to_json(s.nvidia.nvenc_adv_av1);
+
     QJsonObject mf_aac;
     mf_aac[QStringLiteral("mftenum_found")] = s.mf_aac.mftenum_found;
     mf_aac[QStringLiteral("clsid_instantiable")] = s.mf_aac.clsid_instantiable;
@@ -145,6 +157,19 @@ bool SnapshotFromJson(const QJsonObject& obj, RuntimeCapabilitySnapshot& out) {
     out.nvidia.nvenc_h264 = nvidia.value(QStringLiteral("nvenc_h264")).toBool(false);
     out.nvidia.nvenc_yuv444_h264 = nvidia.value(QStringLiteral("nvenc_yuv444_h264")).toBool(false);
     out.nvidia.nvenc_yuv444_hevc = nvidia.value(QStringLiteral("nvenc_yuv444_hevc")).toBool(false);
+
+    auto adv_from_json = [](const QJsonObject& parent, const char* key) {
+        capability::NvencAdvancedEncodeFacts adv;
+        const QJsonObject obj = parent.value(QLatin1String(key)).toObject();
+        adv.max_bframes = obj.value(QStringLiteral("max_bframes")).toInt(0);
+        adv.bframe_ref_mode = obj.value(QStringLiteral("bframe_ref_mode")).toInt(0);
+        adv.lookahead = obj.value(QStringLiteral("lookahead")).toBool(false);
+        adv.temporal_aq = obj.value(QStringLiteral("temporal_aq")).toBool(false);
+        return adv;
+    };
+    out.nvidia.nvenc_adv_h264 = adv_from_json(nvidia, "nvenc_adv_h264");
+    out.nvidia.nvenc_adv_hevc = adv_from_json(nvidia, "nvenc_adv_hevc");
+    out.nvidia.nvenc_adv_av1 = adv_from_json(nvidia, "nvenc_adv_av1");
 
     const QJsonObject mf_aac = obj.value(QStringLiteral("mf_aac")).toObject();
     out.mf_aac.mftenum_found = mf_aac.value(QStringLiteral("mftenum_found")).toBool(false);

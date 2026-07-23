@@ -12,7 +12,7 @@ namespace exosnap::capability {
 // different schema_version is always treated as a mismatch — no migration
 // (pre-v1.0 policy): the cache is discarded and silently rewritten by the next
 // real probe.
-inline constexpr int kCapabilityCacheSchemaVersion = 1;
+inline constexpr int kCapabilityCacheSchemaVersion = 2;
 
 // Identifies whether a persisted RuntimeCapabilitySnapshot cache entry is
 // still valid for the CURRENT adapter/driver/app build. A mismatch on any
