@@ -638,6 +638,18 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_gop_aq_config PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_output_ring: pure unit tests for the async output-ring free-slot
+# scan (S8, FindFreeOutputSlot) backing the async submit path's output-buffer
+# allocation (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_output_ring
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_output_ring.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_output_ring PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 # test_hdr_bitstream_metadata: byte-exact unit tests for the in-band HDR10
 # metadata payload builders (HEVC SEI 137/144, AV1 MDCV/CLL OBU payloads). Pure
 # functions — no GPU/NVENC.

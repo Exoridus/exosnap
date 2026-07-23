@@ -313,6 +313,35 @@ FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, do
     }
 }
 
+EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept {
+    switch (wait_result) {
+    case WAIT_OBJECT_0:
+        return EventDrainStep::Consume;
+    case WAIT_TIMEOUT:
+        // Event not signalled yet: keep polling until the budget runs out, then
+        // give up so a lost/hung device (event never fires) can never wedge.
+        return elapsed_ms < budget_ms ? EventDrainStep::Retry : EventDrainStep::AbortTimeout;
+    default:
+        return EventDrainStep::AbortError;
+    }
+}
+
+FreeOutputSlotResult FindFreeOutputSlot(const bool* in_flight, int32_t count, int32_t cursor) noexcept {
+    FreeOutputSlotResult result;
+    result.next_cursor = cursor;
+    if (count <= 0)
+        return result;
+    for (int32_t i = 0; i < count; ++i) {
+        const int32_t idx = (cursor + i) % count;
+        if (!in_flight[idx]) {
+            result.slot_idx = idx;
+            result.next_cursor = (idx + 1) % count;
+            return result;
+        }
+    }
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // Destructor
 // ---------------------------------------------------------------------------

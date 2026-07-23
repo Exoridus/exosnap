@@ -44,6 +44,41 @@ enum class FlushDrainStep {
 FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept;
 
 // ---------------------------------------------------------------------------
+// Bounded event-drain policy — pure, testable (S8). Same shape as
+// FlushDrainStep/NextFlushDrainStep, generalised from an NVENCSTATUS lock
+// result to a Win32 WaitForSingleObject result: the async-mode submit path
+// (waiting for a free output slot's completion event) and the async-mode
+// flush drain (waiting for the remaining pending frames' completion events)
+// both consult this after every wait. Same anti-wedge guarantee as the sync
+// flush drain: a device that never signals (Device-Lost) must not hang
+// forever — past the budget the wait aborts and the caller proceeds. No
+// GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+enum class EventDrainStep {
+    Consume,      // WAIT_OBJECT_0: the event fired — a packet is ready, take it.
+    Retry,        // WAIT_TIMEOUT within budget — brief wait, then poll again.
+    AbortTimeout, // WAIT_TIMEOUT past the budget — device not signalling: stop.
+    AbortError,   // Any other result (WAIT_FAILED, WAIT_ABANDONED, ...) — stop.
+};
+EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// FindFreeOutputSlot — pure, testable round-robin scan for a free async
+// output-ring slot (S8). Same round-robin-from-cursor pattern as
+// AcquireFreeSlot (member function, mutates m_slots for the 8-slot input
+// ring), generalised into a pure function over an explicit in-flight array so
+// the output ring's free/in-flight bookkeeping is unit-testable without a
+// live NVENC session. "Oldest in-flight" needs no separate helper: with
+// frameIntervalP=1 (no B-frames/lookahead) output order == submission order,
+// so the oldest is always the PendingFrame FIFO head. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+struct FreeOutputSlotResult {
+    int32_t slot_idx = -1;   // -1 if every slot in [0, count) is in-flight
+    int32_t next_cursor = 0; // cursor to pass on the next call
+};
+FreeOutputSlotResult FindFreeOutputSlot(const bool* in_flight, int32_t count, int32_t cursor) noexcept;
+
+// ---------------------------------------------------------------------------
 // ApplyColorMetadataToNvenc — pure, testable mapping from ColorMetadata to the
 // NVENC bitstream-level color signaling fields (fix for color-range-signaling
 // bug: without this the AV1/H.264/HEVC bitstream itself carries no color

@@ -44,4 +44,36 @@ TEST(NvencFlushDrain, HardErrorAbortsImmediately) {
     EXPECT_EQ(NextFlushDrainStep(NV_ENC_ERR_GENERIC, 0.0, kBudgetMs), FlushDrainStep::AbortError);
 }
 
+// ---------------------------------------------------------------------------
+// NextEventDrainStep (S8) — same policy shape, keyed on a Win32 wait result
+// instead of an NVENCSTATUS lock result.
+// ---------------------------------------------------------------------------
+
+TEST(NvencEventDrain, SignaledEventIsConsumed) {
+    EXPECT_EQ(NextEventDrainStep(WAIT_OBJECT_0, 0.0, kBudgetMs), EventDrainStep::Consume);
+    EXPECT_EQ(NextEventDrainStep(WAIT_OBJECT_0, kBudgetMs + 500.0, kBudgetMs), EventDrainStep::Consume);
+}
+
+TEST(NvencEventDrain, TimeoutWithinBudgetRetries) {
+    EXPECT_EQ(NextEventDrainStep(WAIT_TIMEOUT, 0.0, kBudgetMs), EventDrainStep::Retry);
+    EXPECT_EQ(NextEventDrainStep(WAIT_TIMEOUT, kBudgetMs - 1.0, kBudgetMs), EventDrainStep::Retry);
+}
+
+TEST(NvencEventDrain, TimeoutPastBudgetAbortsInsteadOfWedging) {
+    // Same anti-wedge guarantee as the sync flush drain: Device-Lost means the
+    // event never fires, so past the budget the wait must give up.
+    EXPECT_EQ(NextEventDrainStep(WAIT_TIMEOUT, kBudgetMs, kBudgetMs), EventDrainStep::AbortTimeout);
+    EXPECT_EQ(NextEventDrainStep(WAIT_TIMEOUT, kBudgetMs + 1000.0, kBudgetMs), EventDrainStep::AbortTimeout);
+}
+
+TEST(NvencEventDrain, WaitFailedAbortsImmediately) {
+    EXPECT_EQ(NextEventDrainStep(WAIT_FAILED, 0.0, kBudgetMs), EventDrainStep::AbortError);
+}
+
+TEST(NvencEventDrain, WaitAbandonedAbortsImmediately) {
+    // A handle whose owning thread terminated without signalling — treat like
+    // any other unexpected result, not like a normal timeout.
+    EXPECT_EQ(NextEventDrainStep(WAIT_ABANDONED, 0.0, kBudgetMs), EventDrainStep::AbortError);
+}
+
 } // namespace
