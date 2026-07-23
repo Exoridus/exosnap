@@ -314,8 +314,12 @@ TEST_F(DevicePageTest, MatrixShowsPerAdapterAdvancedEncodeSupportPerCodec) {
     nvcap.max_bframes_h264 = 3;
     nvcap.lookahead_h264 = true;
     nvcap.temporal_aq_h264 = true;
+    nvcap.max_bframes_hevc = 2;
+    nvcap.lookahead_hevc = true;
+    nvcap.temporal_aq_hevc = false;
     nvcap.max_bframes_av1 = 0; // this GPU advertises AV1 but with no B-frame support
     nvcap.lookahead_av1 = false;
+    nvcap.temporal_aq_av1 = false;
     page.setAdaptersForTest(
         {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1),
          MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
@@ -326,9 +330,12 @@ TEST_F(DevicePageTest, MatrixShowsPerAdapterAdvancedEncodeSupportPerCodec) {
     ASSERT_EQ(bframe_chips.size(), 3); // one per advertised codec: h264, hevc, av1
     const auto lookahead_chips = page.findChildren<QFrame*>(QStringLiteral("deviceLookaheadChip"));
     ASSERT_EQ(lookahead_chips.size(), 3);
+    const auto temporal_aq_chips = page.findChildren<QFrame*>(QStringLiteral("deviceTemporalAqChip"));
+    ASSERT_EQ(temporal_aq_chips.size(), 3);
 
-    bool found_h264_available = false;
-    bool found_av1_unavailable = false;
+    // Check B-frames per-codec state
+    bool found_bframes_h264_available = false;
+    bool found_bframes_av1_unavailable = false;
     for (const QFrame* chip : bframe_chips) {
         QString name;
         for (const auto* label : chip->findChildren<QLabel*>()) {
@@ -340,12 +347,52 @@ TEST_F(DevicePageTest, MatrixShowsPerAdapterAdvancedEncodeSupportPerCodec) {
         const QString state = chip->property("chipState").toString();
         // B-frames labels include the count: "H.264 (3)", so check startsWith
         if (name.startsWith(QStringLiteral("H.264")) && state == QStringLiteral("available"))
-            found_h264_available = true;
+            found_bframes_h264_available = true;
         if (name.startsWith(QStringLiteral("AV1")) && state == QStringLiteral("unavailable"))
-            found_av1_unavailable = true;
+            found_bframes_av1_unavailable = true;
     }
-    EXPECT_TRUE(found_h264_available);
-    EXPECT_TRUE(found_av1_unavailable);
+    EXPECT_TRUE(found_bframes_h264_available);
+    EXPECT_TRUE(found_bframes_av1_unavailable);
+
+    // Check Lookahead per-codec state: H.264 available, AV1 unavailable
+    bool found_lookahead_h264_available = false;
+    bool found_lookahead_av1_unavailable = false;
+    for (const QFrame* chip : lookahead_chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        const QString state = chip->property("chipState").toString();
+        if (name == QStringLiteral("H.264") && state == QStringLiteral("available"))
+            found_lookahead_h264_available = true;
+        if (name == QStringLiteral("AV1") && state == QStringLiteral("unavailable"))
+            found_lookahead_av1_unavailable = true;
+    }
+    EXPECT_TRUE(found_lookahead_h264_available);
+    EXPECT_TRUE(found_lookahead_av1_unavailable);
+
+    // Check Temporal AQ per-codec state: H.264 available, AV1 unavailable
+    bool found_temporal_aq_h264_available = false;
+    bool found_temporal_aq_av1_unavailable = false;
+    for (const QFrame* chip : temporal_aq_chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        const QString state = chip->property("chipState").toString();
+        if (name == QStringLiteral("H.264") && state == QStringLiteral("available"))
+            found_temporal_aq_h264_available = true;
+        if (name == QStringLiteral("AV1") && state == QStringLiteral("unavailable"))
+            found_temporal_aq_av1_unavailable = true;
+    }
+    EXPECT_TRUE(found_temporal_aq_h264_available);
+    EXPECT_TRUE(found_temporal_aq_av1_unavailable);
 }
 
 // An unprobed adapter must not fabricate advanced-encode chips either.
@@ -404,6 +451,84 @@ TEST_F(DevicePageTest, UnprobedAdapterShowsNo444Chips) {
     FlushDeferredDeletes();
 
     EXPECT_TRUE(page.findChildren<QFrame*>(QStringLiteral("deviceChroma444Chip")).isEmpty());
+}
+
+// A codec the adapter doesn't advertise at all (HEVC missing on this GPU)
+// must not get B-frames, Lookahead, or Temporal-AQ chips either way — no
+// positive, no negative statement — mirroring the honesty rule the codec
+// chips and 4:4:4 rows already follow. Only the advertised codecs get chips.
+TEST_F(DevicePageTest, MatrixOmitsAdvancedEncodeChipsForUnadvertisedCodec) {
+    DevicePage page;
+    page.setCapabilitySet(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
+
+    auto nvcap = MakeProbedNvencCap(/*h264=*/true, /*hevc=*/false, /*av1=*/true);
+    nvcap.max_bframes_h264 = 3;
+    nvcap.lookahead_h264 = true;
+    nvcap.temporal_aq_h264 = true;
+    nvcap.max_bframes_av1 = 4;
+    nvcap.lookahead_av1 = true;
+    nvcap.temporal_aq_av1 = true;
+    // max_bframes_hevc, lookahead_hevc, temporal_aq_hevc left at their defaults
+    // (irrelevant, since HEVC isn't advertised by this adapter at all).
+    page.setAdaptersForTest(
+        {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1),
+         MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
+        {nvcap, MakeUnwiredCap()});
+    FlushDeferredDeletes();
+
+    // B-frames: should have H.264 and AV1 chips, but no HEVC chip
+    const auto bframe_chips = page.findChildren<QFrame*>(QStringLiteral("deviceBFramesChip"));
+    ASSERT_EQ(bframe_chips.size(), 2); // only advertised codecs: h264 and av1
+    int bframe_codec_count = 0;
+    for (const QFrame* chip : bframe_chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        EXPECT_FALSE(name.startsWith(QStringLiteral("HEVC"))) << "HEVC should not have a B-frames chip";
+        if (name.startsWith(QStringLiteral("H.264")) || name.startsWith(QStringLiteral("AV1")))
+            ++bframe_codec_count;
+    }
+    EXPECT_EQ(bframe_codec_count, 2);
+
+    // Lookahead: should have H.264 and AV1 chips, but no HEVC chip
+    const auto lookahead_chips = page.findChildren<QFrame*>(QStringLiteral("deviceLookaheadChip"));
+    ASSERT_EQ(lookahead_chips.size(), 2); // only advertised codecs: h264 and av1
+    int lookahead_codec_count = 0;
+    for (const QFrame* chip : lookahead_chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        EXPECT_NE(name, QStringLiteral("HEVC")) << "HEVC should not have a Lookahead chip";
+        if (name == QStringLiteral("H.264") || name == QStringLiteral("AV1"))
+            ++lookahead_codec_count;
+    }
+    EXPECT_EQ(lookahead_codec_count, 2);
+
+    // Temporal AQ: should have H.264 and AV1 chips, but no HEVC chip
+    const auto temporal_aq_chips = page.findChildren<QFrame*>(QStringLiteral("deviceTemporalAqChip"));
+    ASSERT_EQ(temporal_aq_chips.size(), 2); // only advertised codecs: h264 and av1
+    int temporal_aq_codec_count = 0;
+    for (const QFrame* chip : temporal_aq_chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        EXPECT_NE(name, QStringLiteral("HEVC")) << "HEVC should not have a Temporal AQ chip";
+        if (name == QStringLiteral("H.264") || name == QStringLiteral("AV1"))
+            ++temporal_aq_codec_count;
+    }
+    EXPECT_EQ(temporal_aq_codec_count, 2);
 }
 
 TEST_F(DevicePageTest, MatrixFeatureRowsAreLabeledSystemWideForProbedAdapter) {
