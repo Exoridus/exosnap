@@ -848,6 +848,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_output_format_audio_src PRIVATE src include)
 
+# Build-artifact capability proof: confirms the vendored FFmpeg has
+# libx264/libx265 encoders registered (see the test file's header comment).
+exosnap_add_gtest(
+    NAME test_ffmpeg_build_capabilities
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_ffmpeg_build_capabilities.cpp
+    LIBRARIES FFmpeg::mux
+)
+
 exosnap_add_gtest(
     NAME mixed_audio_src_tests
     TEST_PREFIX recorder_core.
