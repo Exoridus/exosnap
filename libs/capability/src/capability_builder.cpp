@@ -35,7 +35,7 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                               SupportAnnotation{SupportLevel::Available, "Validated AAC-LC Media Foundation path."});
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
-                                           "Uncompressed S16LE PCM (A_PCM/INT_LIT); Matroska-only (0.6.0 Audio v2)."});
+                                           "Uncompressed S16LE PCM (A_PCM/INT/LIT); Matroska-only (0.6.0 Audio v2)."});
     caps.audio_codecs.emplace(AudioCodec::Flac,
                               SupportAnnotation{SupportLevel::Available,
                                                 "Lossless FLAC (A_FLAC) via libFLAC; Matroska-only (0.6.0 Audio v2)."});

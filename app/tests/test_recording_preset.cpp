@@ -697,7 +697,7 @@ TEST(RecordingPreset, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
 
 TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
     // 0.6.0 Audio v2: MKV + (AV1|H.264) + PCM is Allowed (uncompressed S16LE
-    // A_PCM/INT_LIT), so the reconciler leaves PCM in place — no rewrite to AAC.
+    // A_PCM/INT/LIT), so the reconciler leaves PCM in place — no rewrite to AAC.
     // WebM cannot carry PCM (Prohibited); MP4 + PCM is Experimental (ADR 0030, ipcm).
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;

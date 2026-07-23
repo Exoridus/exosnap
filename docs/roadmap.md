@@ -235,7 +235,7 @@ channel/sample-format model and verification:
   filter** (#95, ADR 0024), **noise gate** (#96, ADR 0025), **AGC** (#97, ADR 0026), and
   **RNNoise** neural suppression (#100, ADR 0029). Every stage defaults OFF, so unaltered capture
   is byte-identical when disabled.
-- **Lossless codecs** — **PCM** (`A_PCM/INT_LIT`, #98, ADR 0027) and **FLAC** (libFLAC, `A_FLAC`,
+- **Lossless codecs** — **PCM** (`A_PCM/INT/LIT`, #98, ADR 0027) and **FLAC** (libFLAC, `A_FLAC`,
   #99, ADR 0028) in MKV.
 - **Channel / sample-format model** (ADR 0030) — first-class `{sample_rate, channels, bit_depth}`:
   vetted 44.1/48/96 kHz, mono/stereo, 16/24/32-bit lossless (FLAC 16/24), plus a configurable

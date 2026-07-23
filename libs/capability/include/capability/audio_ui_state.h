@@ -123,7 +123,7 @@ struct AudioUiState {
     // Ignored for lossy codecs (Opus/AAC). Default 16.
     uint32_t audio_bit_depth = 16;
 
-    // 32-bit float PCM (A_PCM/FLOAT_IEEE) instead of signed-int PCM. Only
+    // 32-bit float PCM (A_PCM/FLOAT/IEEE) instead of signed-int PCM. Only
     // meaningful when audio_codec == Pcm and audio_bit_depth == 32; ignored
     // otherwise. Default false.
     bool audio_pcm_float = false;
