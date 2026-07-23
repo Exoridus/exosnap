@@ -471,8 +471,7 @@ TEST(PipelineDiagnostics, ForcedKeyframeCounterIncrementsOnSplitArm) {
     EXPECT_EQ(s.video_encoder.forced_keyframes, 2u);
 }
 
-// D2/S6 order/keyframe validation counters (nvenc-async-pipeline-spec D2
-// Phase 1 — warn-only, never fatal at this stage).
+// Order/keyframe validation mismatch counters.
 TEST(PipelineDiagnostics, OutputTsMismatchCounterIncrements) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());

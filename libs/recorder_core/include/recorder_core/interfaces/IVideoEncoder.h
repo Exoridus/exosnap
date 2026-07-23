@@ -48,7 +48,7 @@ class IVideoEncoder {
     virtual bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 
     // Drain any packets completed since the last EncodeFrame/ReapCompleted call,
-    // without submitting a new frame. Async encoders (S8) use this to reap
+    // without submitting a new frame. Async encoders use this to reap
     // completions on the encoder's own event without blocking a submission on
     // it; the default no-op keeps today's sync encoders (and future CPU-only
     // encoders, roadmap 0.11) trivially conformant since they always emit their

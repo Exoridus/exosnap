@@ -1,4 +1,4 @@
-// Live-verify probe for the S8 async NVENC path (nvenc-async-pipeline-spec).
+// Live-verify probe for the async NVENC path.
 // Drives the ACTUAL recorder_core NvencVideoEncoder / NvencEncoder classes
 // (not a reimplementation of raw SDK calls, unlike probe_nvenc) through a
 // real D3D11 + NVENC async session, so the exact code shipped in the app is
@@ -12,9 +12,10 @@
 //     drop frames, and does not corrupt ordering.
 //   - ReapCompleted drains what's ready without blocking past its budget.
 //   - Flush's async drain terminates and returns the remaining packets.
-//   - D2 order/keyframe validation never reports a mismatch on this hardware
-//     (output_ts_mismatch / keyframe_prediction_mismatch stay false) — this
-//     is the "outputTimeStamp echo verify" the spec assigns as a live check.
+//   - Order/keyframe validation never reports a mismatch on this hardware
+//     (output_ts_mismatch / keyframe_prediction_mismatch stay false) —
+//     confirms the driver's outputTimeStamp actually echoes what was
+//     submitted, which the fatal-on-mismatch check below depends on.
 //   - Every submitted frame eventually produces exactly one packet, frame 0
 //     is a keyframe, and packets arrive in ascending PTS order.
 
@@ -70,7 +71,7 @@ int main(int argc, char** argv) {
         presetName = "P7";
     }
 
-    printf("[probe] S8 async-NVENC live verify (real NvencVideoEncoder, real D3D11/NVENC session), codec=%s "
+    printf("[probe] async-NVENC live verify (real NvencVideoEncoder, real D3D11/NVENC session), codec=%s "
            "preset=%s\n",
            codecName, presetName);
 

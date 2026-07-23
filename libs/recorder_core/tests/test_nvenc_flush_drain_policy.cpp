@@ -45,7 +45,7 @@ TEST(NvencFlushDrain, HardErrorAbortsImmediately) {
 }
 
 // ---------------------------------------------------------------------------
-// NextEventDrainStep (S8) — same policy shape, keyed on a Win32 wait result
+// NextEventDrainStep — same policy shape, keyed on a Win32 wait result
 // instead of an NVENCSTATUS lock result.
 // ---------------------------------------------------------------------------
 

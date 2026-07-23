@@ -1,5 +1,5 @@
-# probe_nvenc_async — live-verify probe for the S8 async NVENC path
-# (nvenc-async-pipeline-spec). Drives the ACTUAL recorder_core
+# probe_nvenc_async — live-verify probe for the async NVENC path. Drives
+# the ACTUAL recorder_core
 # NvencVideoEncoder/NvencEncoder classes through a real D3D11 + NVENC async
 # session (not a reimplementation of raw SDK calls, unlike probe_nvenc), so
 # the exact shipped code is what gets exercised. Never touches the ExoSnap

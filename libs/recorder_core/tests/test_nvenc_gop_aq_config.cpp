@@ -184,7 +184,7 @@ TEST(NextGopKeyframePhase, ZeroGopLength_OnlyFirstFrameIsKeyframe) {
 }
 
 // ---------------------------------------------------------------------------
-// ResyncGopPhaseFromActual — D2 order/keyframe hardening (S6, warn-first)
+// ResyncGopPhaseFromActual — order/keyframe hardening (warn-first)
 // ---------------------------------------------------------------------------
 
 TEST(ResyncGopPhaseFromActual, ActualIdr_ResetsPhaseToOne) {
@@ -208,20 +208,20 @@ TEST(ResyncGopPhaseFromActual, NonIdr_LeavesZeroUnchanged) {
 }
 
 // ---------------------------------------------------------------------------
-// D2 mismatch warning formatters — pure text, no GPU/NVENC session
+// Order-validation mismatch message formatters — pure text, no GPU/NVENC session
 // ---------------------------------------------------------------------------
 
-TEST(FormatOutputTsMismatchWarning, IncludesBothTimestampValues) {
-    const std::string msg = FormatOutputTsMismatchWarning(/*expected=*/42u, /*actual=*/43u);
+TEST(FormatOutputTsMismatchError, IncludesBothTimestampValues) {
+    const std::string msg = FormatOutputTsMismatchError(/*expected=*/42u, /*actual=*/43u);
     EXPECT_NE(msg.find("42"), std::string::npos);
     EXPECT_NE(msg.find("43"), std::string::npos);
 }
 
-TEST(FormatOutputTsMismatchWarning, DistinguishesExpectedFromActualValue) {
+TEST(FormatOutputTsMismatchError, DistinguishesExpectedFromActualValue) {
     // Regression guard: swapping the arguments must change the rendered text,
     // otherwise a future refactor could silently transpose expected/actual.
-    const std::string a = FormatOutputTsMismatchWarning(1u, 2u);
-    const std::string b = FormatOutputTsMismatchWarning(2u, 1u);
+    const std::string a = FormatOutputTsMismatchError(1u, 2u);
+    const std::string b = FormatOutputTsMismatchError(2u, 1u);
     EXPECT_NE(a, b);
 }
 

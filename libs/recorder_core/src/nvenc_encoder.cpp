@@ -746,18 +746,17 @@ uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noe
     return actual_is_idr ? 1u : frame_in_gop;
 }
 
-std::string FormatOutputTsMismatchWarning(uint64_t expected_output_ts, uint64_t actual_output_ts) {
+std::string FormatOutputTsMismatchError(uint64_t expected_output_ts, uint64_t actual_output_ts) {
     std::ostringstream oss;
     oss << "NVENC outputTimeStamp echo mismatch: expected=" << expected_output_ts << " actual=" << actual_output_ts
-        << " (PTS assignment stays FIFO-based; see nvenc-async-pipeline-spec D2)";
+        << " (PTS assignment can no longer be trusted for this packet)";
     return oss.str();
 }
 
 std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe) {
     std::ostringstream oss;
     oss << "NVENC keyframe prediction mismatch: predicted=" << (predicted_keyframe ? "keyframe" : "non-keyframe")
-        << " actual=" << (actual_keyframe ? "keyframe" : "non-keyframe")
-        << " (GOP phase resynced from actual; see nvenc-async-pipeline-spec D2)";
+        << " actual=" << (actual_keyframe ? "keyframe" : "non-keyframe") << " (GOP phase resynced from actual)";
     return oss.str();
 }
 
@@ -927,7 +926,6 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     // frames — legal but off-cadence). Revisit the prediction if that changes.
     m_gopLength = kGopFrames;
     m_frameInGop = 0;
-    m_loggedOutputTsMismatch = false;
     m_loggedKeyframePredictionMismatch = false;
     BuildHdrBitstreamPayloads();
 
@@ -956,9 +954,9 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
         QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_HEIGHT_MAX, capHeightMax, capsError);
     const bool haveCaps = haveWidthMin && haveWidthMax && haveHeightMin && haveHeightMax;
 
-    // S8 capability gate: async mode only if the hardware/driver advertises
-    // it. Absent/failed query -> m_asyncMode stays false and the sync path
-    // (the Caps-Fallback, D4) runs unchanged — this is not itself an error.
+    // Capability gate: async mode only if the hardware/driver advertises it.
+    // Absent/failed query -> m_asyncMode stays false and the existing sync
+    // path runs unchanged — this is not itself an error.
     int capAsync = 0;
     std::string asyncCapsError;
     m_asyncMode =
@@ -1049,7 +1047,7 @@ bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
 
     // Async mode: kMaxOutputResources bitstream buffers + one auto-reset
     // completion event each, registered with the driver, plus one reserved
-    // EOS event (D4). All kMaxOutputResources are allocated regardless of
+    // EOS event. All kMaxOutputResources are allocated regardless of
     // m_activeDepth — see the m_outputResources member comment.
     for (int32_t i = 0; i < kMaxOutputResources; ++i) {
         NV_ENC_CREATE_BITSTREAM_BUFFER bsp{};
@@ -1101,11 +1099,11 @@ bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
-// DestroyOutputRing (internal, S8)
+// DestroyOutputRing (internal)
 // ---------------------------------------------------------------------------
 
 void NvencEncoder::DestroyOutputRing() noexcept {
-    // Teardown order (D4): unregister + close every event first, then destroy
+    // Teardown order: unregister + close every event first, then destroy
     // every bitstream buffer. Safe on partial state (rollback from a failed
     // CreateBitstreamBuffer) and safe to call more than once.
     for (auto& res : m_outputResources) {
@@ -1263,18 +1261,25 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
         latency_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf.submit_time).count();
 
-        // D2/S6 order validation (warn-only, PTS assignment stays FIFO-based
-        // regardless — see nvenc-async-pipeline-spec D2 Phase 1). The echo
-        // behaviour of outputTimeStamp is unverified on the target hardware, so
-        // a mismatch here does not change ts_ns; it is only counted/logged.
+        // outputTimeStamp is expected to echo the inputTimeStamp of the frame
+        // that produced this bitstream (verified live on real hardware across
+        // all three codecs and both P4/P7 presets, 0 mismatches over 360
+        // frames; FFmpeg's NVENC wrapper also trusts this echo unconditionally,
+        // with no cross-check, across its entire supported hardware range). A
+        // mismatch means PTS assignment can no longer be trusted for this
+        // packet — treated as data corruption, not a recoverable warning. The
+        // slot/pending cleanup above has already happened, so it is safe to
+        // abort here.
         outputTsMismatch = (lockBS.outputTimeStamp != pf.input_ts);
-        if (outputTsMismatch && !m_loggedOutputTsMismatch) {
-            m_loggedOutputTsMismatch = true;
-            logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
-                         FormatOutputTsMismatchWarning(pf.input_ts, lockBS.outputTimeStamp));
+        if (outputTsMismatch) {
+            const std::string mismatchMsg = FormatOutputTsMismatchError(pf.input_ts, lockBS.outputTimeStamp);
+            logging::log(logging::LogLevel::Error, "nvenc.order_validation", mismatchMsg);
+            m_funcs.nvEncUnlockBitstream(m_encoder, bitstreamToLock);
+            out_error = mismatchMsg;
+            return false;
         }
 
-        // D2/S6 keyframe-prediction validation. A real IDR always resyncs the
+        // Keyframe-prediction validation. A real IDR always resyncs the
         // submission-side GOP phase, whether or not it was predicted; a mismatch
         // (predicted != actual) is only logged/counted, never fatal at this
         // stage — the actual pictureType (isKey below) remains authoritative for
@@ -1319,7 +1324,7 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
 }
 
 // ---------------------------------------------------------------------------
-// WaitAndConsumeOneAsync (internal, S8)
+// WaitAndConsumeOneAsync (internal)
 // ---------------------------------------------------------------------------
 
 EventDrainStep NvencEncoder::WaitAndConsumeOneAsync(HANDLE event, double budget_ms, EncodedVideoPacket& out_packet,
@@ -1370,7 +1375,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // side. If the ring (m_activeDepth slots) is full, bounded-wait on the
     // oldest pending frame's completion event and reap it — freeing exactly
     // one slot — before proceeding; that reaped packet is a legitimate output
-    // of THIS call (D4 "Submit"), appended alongside whatever this submission
+    // of this submission call, appended alongside whatever this submission
     // itself produces. Bounded by m_pending shrinking by one per iteration, so
     // this always terminates (each WaitAndConsumeOneAsync call is itself
     // budget-bounded).
@@ -1471,8 +1476,8 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // frame). submit_time stamps the start of the encode so the consuming lock can
     // report the true per-frame latency, independent of preset buffering. input_ts
     // and predicted_keyframe are captured here (submission-side truth) so the
-    // consuming lock can validate them against the driver's actual outputTimeStamp
-    // / pictureType (D2/S6, warn-only). out_idx is -1 in sync mode (unused).
+    // consuming lock can validate them against the driver's actual
+    // outputTimeStamp / pictureType. out_idx is -1 in sync mode (unused).
     m_pending.push(
         PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now(), pic.inputTimeStamp, isKeyframe, out_idx});
 
@@ -1536,7 +1541,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
 }
 
 // ---------------------------------------------------------------------------
-// ReapCompleted (S8)
+// ReapCompleted
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
@@ -1547,9 +1552,9 @@ bool NvencEncoder::ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, s
         return true;
     }
 
-    // D4 "Reap": wait up to wait_head_ms for the oldest pending frame only;
-    // every further packet in the same call is drained without additional
-    // waiting (a zero-timeout poll) — stop as soon as one is not yet ready.
+    // Wait up to wait_head_ms for the oldest pending frame only; every
+    // further packet in the same call is drained without additional waiting
+    // (a zero-timeout poll) — stop as soon as one is not yet ready.
     bool first = true;
     while (!m_pending.empty()) {
         const int32_t headOutIdx = m_pending.front().out_idx;
@@ -1645,7 +1650,7 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
 }
 
 // ---------------------------------------------------------------------------
-// FlushAsync (internal, S8)
+// FlushAsync (internal)
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
@@ -1717,7 +1722,7 @@ void NvencEncoder::UnregisterAllSlots() {
 void NvencEncoder::Destroy() {
     UnregisterAllSlots();
 
-    // D4 "Teardown": events unregistered+closed, then bitstream buffer(s),
+    // Teardown order: events unregistered+closed, then bitstream buffer(s),
     // then the encoder itself. DestroyOutputRing() is a no-op in sync mode
     // (m_outputResources/m_eosEvent were never populated).
     DestroyOutputRing();

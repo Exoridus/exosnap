@@ -1,5 +1,5 @@
 // Pure unit tests for FindFreeOutputSlot — the async output-ring free-slot scan
-// backing the S8 submit path's output-buffer allocation. Same round-robin
+// backing the async submit path's output-buffer allocation. Same round-robin
 // pattern as the existing 8-slot input ring's AcquireFreeSlot, generalised into
 // a pure function over an explicit in-flight array. No GPU/NVENC session.
 
@@ -51,7 +51,7 @@ TEST(FindFreeOutputSlot, AllInFlight_ReturnsNegativeOneAndUnchangedCursor) {
 }
 
 TEST(FindFreeOutputSlot, SingleSlotRing) {
-    // The depth-1 default (M-1 Rev. 3/4): a one-element ring must still behave.
+    // The depth-1 default: a one-element ring must still behave.
     const bool freeSlot[1] = {false};
     const FreeOutputSlotResult free = FindFreeOutputSlot(freeSlot, 1, 0);
     EXPECT_EQ(free.slot_idx, 0);
