@@ -1,12 +1,12 @@
 #pragma once
 
 // Split-sentinel routing policy, factored out of VideoThread so it can be unit
-// tested without a live encode session (nvenc-async-pipeline-spec D4,
-// "Video-Thread-Integration").
+// tested without a live encode session.
 //
-// Background — why order-preservation alone is not enough under Submit-Ahead:
-//   `split_armed && pkt.keyframe` (the pre-S9 condition) is correct only
-//   because arming (maybeArmSplit) and routing happen in the SAME loop
+// Background — why order-preservation alone is not enough once an encoder
+// can submit ahead of completion (async NVENC):
+//   `split_armed && pkt.keyframe` (the previous, sync-only condition) is
+//   correct only because arming (maybeArmSplit) and routing happen in the SAME loop
 //   iteration with no packet in between it — the routed packet IS the forced
 //   frame. Once EncodeFrame/ReapCompleted can return packets from EARLIER,
 //   already-submitted frames in the same iteration (async submit-ahead), that
@@ -29,8 +29,9 @@ namespace recorder_core {
 
 // True if `pkt` is the specific forced-IDR frame (or, defensively, the next
 // keyframe at or after it) that should carry the split sentinel. Equivalent
-// to the pre-S9 `split_armed && pkt.keyframe` in sync mode, where the routed
-// packet is always the just-submitted frame (pkt_pts_ns == forced_pts_ns).
+// to the previous, sync-only `split_armed && pkt.keyframe` condition in sync
+// mode, where the routed packet is always the just-submitted frame
+// (pkt_pts_ns == forced_pts_ns).
 inline bool ShouldEmitSplitSentinel(bool split_armed, uint64_t split_forced_pts_ns, bool pkt_keyframe,
                                     uint64_t pkt_pts_ns) noexcept {
     return split_armed && pkt_keyframe && pkt_pts_ns >= split_forced_pts_ns;

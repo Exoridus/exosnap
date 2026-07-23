@@ -1,4 +1,4 @@
-// Pure unit tests for ShouldEmitSplitSentinel (S9, split_sentinel_policy.h).
+// Pure unit tests for ShouldEmitSplitSentinel (split_sentinel_policy.h).
 // No GPU/NVENC session, no video thread.
 
 #include "split_sentinel_policy.h"
