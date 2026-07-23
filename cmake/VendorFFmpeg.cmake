@@ -154,12 +154,20 @@ else()
 endif()
 
 # r6 adds libx264/libx265 statically linked into avcodec; stage their own
-# license texts alongside FFmpeg's.
-foreach(_extra_license LICENSE-x264.md LICENSE-x265.md)
-    set(_extra_license_path "${_ffmpeg_root}/${_extra_license}")
+# license texts alongside FFmpeg's. Destination names use .txt (not the
+# source archive's .md) because the install(DIRECTORY ... FILES_MATCHING
+# PATTERN "*.txt") rule in third_party/CMakeLists.txt only picks up .txt
+# files from this staging directory -- a .md destination would be silently
+# excluded from the shipped package.
+set(_extra_license_sources LICENSE-x264.md LICENSE-x265.md)
+set(_extra_license_dests ffmpeg-x264.txt ffmpeg-x265.txt)
+foreach(_extra_license_idx RANGE 1)
+    list(GET _extra_license_sources ${_extra_license_idx} _extra_license_src)
+    list(GET _extra_license_dests ${_extra_license_idx} _extra_license_dst)
+    set(_extra_license_path "${_ffmpeg_root}/${_extra_license_src}")
     if(EXISTS "${_extra_license_path}")
         configure_file("${_extra_license_path}"
-                       "${_exosnap_license_stage}/ffmpeg-${_extra_license}"
+                       "${_exosnap_license_stage}/${_extra_license_dst}"
                        COPYONLY)
     endif()
 endforeach()

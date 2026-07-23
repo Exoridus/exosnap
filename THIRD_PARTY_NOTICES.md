@@ -142,8 +142,8 @@ directory alongside the ExoSnap binary.
   LGPL-2.1-or-later only, no GPL code)
 - **Linkage:** dynamic (shared DLLs deployed alongside the ExoSnap binary); libx264/libx265
   are statically linked into the `avcodec` DLL
-- **Bundled license:** `licenses/ffmpeg.txt`, `licenses/ffmpeg-LICENSE-x264.md`,
-  `licenses/ffmpeg-LICENSE-x265.md`
+- **Bundled license:** `licenses/ffmpeg.txt`, `licenses/ffmpeg-x264.txt`,
+  `licenses/ffmpeg-x265.txt`
 - **DLLs deployed:** `avformat-62.dll`, `avcodec-62.dll`, `avutil-60.dll`,
   `swresample-6.dll` (~5.9 MB compressed archive; avfilter/swscale/avdevice are not
   built by this component set and are excluded from the portable ZIP)
@@ -169,7 +169,7 @@ directory alongside the ExoSnap binary.
 ### libx265 (bundled in FFmpeg's `avcodec` DLL)
 
 - **License:** GPL-2.0-or-later
-- **Project:** https://github.com/videolan/x265
+- **Project:** https://code.videolan.org/videolan/x265
 - **Linkage:** static, into `avcodec-62.dll` (built by exosnap-ffmpeg-build, see FFmpeg entry above)
 - **Role:** compiled in as `avcodec_find_encoder_by_name("libx265")`'s backing encoder. Not
   currently used by any ExoSnap encoder backend; no ADR exists yet for shipping software HEVC
