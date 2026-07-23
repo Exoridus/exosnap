@@ -1162,25 +1162,28 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     pic.bufferFmt = mapRes.mappedBufferFmt;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.encodePicFlags = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
-    const bool forcedIdr = m_forceIdrNext;
-    if (forcedIdr) {
-        // Force an IDR at a segment boundary: the first frame of the new segment
-        // must be a self-contained keyframe carrying fresh SPS/PPS so no dependent
-        // frame precedes it. Consume the one-shot request.
-        pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR;
-        m_forceIdrNext = false;
-    }
 
-    // Deterministic keyframe (IDR) detection. With no B-frames and no lookahead
-    // (enforced in FetchPresetConfig), output order == submission order and IDRs
-    // land on submission indices 0, gopLength, 2*gopLength, ...; a forced IDR
-    // resets the GOP phase. Advance the phase and decide before submitting.
-    // NextGopKeyframePhase is the pure form of this cadence (tested with
-    // non-default GOP lengths); it honours the configured m_gopLength, so a
-    // user-selected 1 s / 0.5 s keyframe interval is respected here too.
+    // One-shot segment-boundary request (RequestKeyframe()), consumed now
+    // regardless of the cadence outcome below — it always feeds into this
+    // submission's phase decision via NextGopKeyframePhase's forced_idr param.
+    const bool forcedIdr = m_forceIdrNext;
+    m_forceIdrNext = false;
+
+    // Keyframe cadence is now an ENFORCED fact, not a prediction about NVENC's
+    // internal idrPeriod timer. NextGopKeyframePhase is the pure decision
+    // function (tested with non-default GOP lengths, nvenc_encoder.h); it
+    // honours the configured m_gopLength (a user-selected 1 s / 0.5 s keyframe
+    // interval), and folds in the one-shot forced-IDR request. Whatever it
+    // decides, we drive it here with NV_ENC_PIC_FLAG_FORCEIDR — idrPeriod stays
+    // set as a belt-and-braces backstop, but is no longer the mechanism the
+    // keyframe positions actually depend on.
     const GopKeyframePhase phase = NextGopKeyframePhase(m_frameInGop, m_gopLength, forcedIdr);
     const bool isKeyframe = phase.is_keyframe;
     m_frameInGop = phase.frame_in_gop;
+
+    if (isKeyframe) {
+        pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR;
+    }
 
     // Attach the precomputed in-band HDR10 metadata on every keyframe, so each
     // segment/split file and mid-stream join point carries it. The payload

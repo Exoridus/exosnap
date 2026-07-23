@@ -138,13 +138,17 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
 void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept;
 
 // ---------------------------------------------------------------------------
-// NextGopKeyframePhase — pure, testable IDR predictor. Mirrors the deterministic
-// cadence EncodeFrame relies on: with no B-frames and no lookahead
-// (frameIntervalP=1) output order == submission order, so IDRs land on
-// submission indices 0, gopLength, 2*gopLength, ...; a forced IDR resets the
-// phase. Given the current frame-in-GOP counter, the configured GOP length, and
-// whether an IDR was forced for this frame, returns whether the frame is a
-// keyframe and the counter to carry to the next frame. No GPU/NVENC session.
+// NextGopKeyframePhase — pure, testable IDR cadence decision. EncodeFrame does
+// not merely predict IDR placement from NVENC's idrPeriod timer — it actively
+// sets NV_ENC_PIC_FLAG_FORCEIDR on every submission this function marks as a
+// keyframe, so cadence is an enforced fact rather than an assumption about
+// driver behavior (idrPeriod stays set as a belt-and-braces backstop only).
+// With no B-frames and no lookahead (frameIntervalP=1) output order ==
+// submission order, so IDRs land on submission indices 0, gopLength,
+// 2*gopLength, ...; a forced IDR resets the phase. Given the current
+// frame-in-GOP counter, the configured GOP length, and whether a forced IDR
+// was requested this frame, returns whether this frame is a keyframe and the
+// counter to carry to the next frame. No GPU/NVENC session.
 // ---------------------------------------------------------------------------
 struct GopKeyframePhase {
     bool is_keyframe = false;
