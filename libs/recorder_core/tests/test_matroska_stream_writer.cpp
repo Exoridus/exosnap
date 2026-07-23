@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+#include <libavformat/avformat.h>
+}
+
 // These tests exercise the PRODUCTION streaming writer (MatroskaStreamWriter)
 // directly on synthetic packet streams — no GPU, no live session. They verify
 // both Matroska structural correctness (parity with the batch muxer's
@@ -366,7 +370,7 @@ TEST_F(StreamWriterTest, Av1Opus_ProducesCompleteContainer) {
     EXPECT_TRUE(SegmentSizeIsFinite(d));
 }
 
-// 2b. PCM path: track header carries CodecID "A_PCM/INT_LIT" and BitDepth=16,
+// 2b. PCM path: track header carries CodecID "A_PCM/INT/LIT" and BitDepth=16,
 //     and no CodecPrivate. Verified by scanning the rendered Tracks bytes for the
 //     ASCII CodecID and the BitDepth element (id 0x6264, value 16).
 TEST_F(StreamWriterTest, Pcm_WritesPcmCodecIdAndBitDepth) {
@@ -392,10 +396,10 @@ TEST_F(StreamWriterTest, Pcm_WritesPcmCodecIdAndBitDepth) {
     const auto d = ReadFile(tmp_);
     ASSERT_FALSE(d.empty());
 
-    // CodecID "A_PCM/INT_LIT" present in the rendered container.
-    const std::string kPcmId = "A_PCM/INT_LIT";
+    // CodecID "A_PCM/INT/LIT" present in the rendered container.
+    const std::string kPcmId = "A_PCM/INT/LIT";
     const auto id_it = std::search(d.begin(), d.end(), kPcmId.begin(), kPcmId.end());
-    EXPECT_NE(id_it, d.end()) << "A_PCM/INT_LIT CodecID not found in output";
+    EXPECT_NE(id_it, d.end()) << "A_PCM/INT/LIT CodecID not found in output";
 
     // KaxAudioBitDepth (EBML id 0x6264), 1-byte size 0x81, value 16 (0x10).
     const std::vector<uint8_t> kBitDepth16 = {0x62, 0x64, 0x81, 0x10};
@@ -406,8 +410,8 @@ TEST_F(StreamWriterTest, Pcm_WritesPcmCodecIdAndBitDepth) {
     EXPECT_TRUE(SegmentSizeIsFinite(d));
 }
 
-// 2b-float. Float-PCM path: track header carries CodecID "A_PCM/FLOAT_IEEE"
-//     (not "A_PCM/INT_LIT") and BitDepth=32 when audio_float is set.
+// 2b-float. Float-PCM path: track header carries CodecID "A_PCM/FLOAT/IEEE"
+//     (not "A_PCM/INT/LIT") and BitDepth=32 when audio_float is set.
 TEST_F(StreamWriterTest, PcmFloat_WritesFloatCodecIdAndBitDepth32) {
     MatroskaStreamConfig c;
     c.output_path = tmp_;
@@ -432,17 +436,17 @@ TEST_F(StreamWriterTest, PcmFloat_WritesFloatCodecIdAndBitDepth32) {
     const auto d = ReadFile(tmp_);
     ASSERT_FALSE(d.empty());
 
-    // CodecID "A_PCM/FLOAT_IEEE" present in the rendered container.
-    const std::string kPcmFloatId = "A_PCM/FLOAT_IEEE";
+    // CodecID "A_PCM/FLOAT/IEEE" present in the rendered container.
+    const std::string kPcmFloatId = "A_PCM/FLOAT/IEEE";
     const auto id_it = std::search(d.begin(), d.end(), kPcmFloatId.begin(), kPcmFloatId.end());
-    EXPECT_NE(id_it, d.end()) << "A_PCM/FLOAT_IEEE CodecID not found in output";
+    EXPECT_NE(id_it, d.end()) << "A_PCM/FLOAT/IEEE CodecID not found in output";
 
     // The plain int CodecID must NOT appear as this track's CodecID: search for
-    // the more specific "A_PCM/INT_LIT" string, which is not a substring of
-    // "A_PCM/FLOAT_IEEE" and so must be absent from a float-only track.
-    const std::string kPcmIntId = "A_PCM/INT_LIT";
+    // the more specific "A_PCM/INT/LIT" string, which is not a substring of
+    // "A_PCM/FLOAT/IEEE" and so must be absent from a float-only track.
+    const std::string kPcmIntId = "A_PCM/INT/LIT";
     const auto int_id_it = std::search(d.begin(), d.end(), kPcmIntId.begin(), kPcmIntId.end());
-    EXPECT_EQ(int_id_it, d.end()) << "A_PCM/INT_LIT must not appear for a float-PCM track";
+    EXPECT_EQ(int_id_it, d.end()) << "A_PCM/INT/LIT must not appear for a float-PCM track";
 
     // KaxAudioBitDepth (EBML id 0x6264), 1-byte size 0x81, value 32 (0x20).
     const std::vector<uint8_t> kBitDepth32 = {0x62, 0x64, 0x81, 0x20};
@@ -451,6 +455,91 @@ TEST_F(StreamWriterTest, PcmFloat_WritesFloatCodecIdAndBitDepth32) {
 
     EXPECT_TRUE(HasLevel1(d, kIdTracks));
     EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
+// 2c. The CodecID written for integer PCM must be the exact string FFmpeg's
+//     matroska demuxer (and any other spec-compliant demuxer) recognizes.
+//     A byte-search only proves "we wrote what we intended" -- this proves
+//     "what we intended is actually readable."
+TEST_F(StreamWriterTest, Pcm_CodecIdIsReadableByFfmpegMatroskaDemuxer) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Pcm;
+    c.audio_track_count = 1;
+    c.audio_tracks[0].codec_private = {};
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(c));
+    FeedSeconds(w, 3.0, 30, 32);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    AVFormatContext* fmt_ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&fmt_ctx, tmp_.c_str(), nullptr, nullptr), 0)
+        << "FFmpeg could not open the file MatroskaStreamWriter produced";
+    ASSERT_GE(avformat_find_stream_info(fmt_ctx, nullptr), 0);
+
+    int audio_stream_idx = -1;
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            audio_stream_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    ASSERT_NE(audio_stream_idx, -1) << "No audio stream found by the demuxer";
+    EXPECT_EQ(fmt_ctx->streams[static_cast<unsigned>(audio_stream_idx)]->codecpar->codec_id, AV_CODEC_ID_PCM_S16LE)
+        << "FFmpeg's matroska demuxer did not recognize the PCM CodecID -- the string "
+           "MatroskaStreamWriter wrote does not match FFmpeg's ff_mkv_codec_tags table";
+
+    avformat_close_input(&fmt_ctx);
+}
+
+// 2d-float. Same proof for the float-PCM CodecID.
+TEST_F(StreamWriterTest, PcmFloat_CodecIdIsReadableByFfmpegMatroskaDemuxer) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Pcm;
+    c.audio_track_count = 1;
+    c.audio_tracks[0].codec_private = {};
+    c.audio_bit_depth = 32;
+    c.audio_float = true;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(c)) << w.error();
+    FeedSeconds(w, 3.0, 30, 32);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    AVFormatContext* fmt_ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&fmt_ctx, tmp_.c_str(), nullptr, nullptr), 0)
+        << "FFmpeg could not open the file MatroskaStreamWriter produced";
+    ASSERT_GE(avformat_find_stream_info(fmt_ctx, nullptr), 0);
+
+    int audio_stream_idx = -1;
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            audio_stream_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    ASSERT_NE(audio_stream_idx, -1) << "No audio stream found by the demuxer";
+    EXPECT_EQ(fmt_ctx->streams[static_cast<unsigned>(audio_stream_idx)]->codecpar->codec_id, AV_CODEC_ID_PCM_F32LE)
+        << "FFmpeg's matroska demuxer did not recognize the float-PCM CodecID -- the string "
+           "MatroskaStreamWriter wrote does not match FFmpeg's ff_mkv_codec_tags table";
+
+    avformat_close_input(&fmt_ctx);
 }
 
 // 2c. FLAC path: track header carries CodecID "A_FLAC", the native fLaC header

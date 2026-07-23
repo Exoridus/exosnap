@@ -256,11 +256,11 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                         "AudioCodec::AacMf is not valid for Container::WebM; use AudioCodec::Opus");
         }
     } else if (config.audio_codec == AudioCodec::Pcm) {
-        // PCM (A_PCM/INT_LIT): Matroska only.
+        // PCM (A_PCM/INT/LIT): Matroska only.
         if (config.container != Container::Matroska) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
                         "AudioCodec::Pcm is only valid for Container::Matroska (MKV); "
-                        "WebM and MP4 cannot carry A_PCM/INT_LIT in this build");
+                        "WebM and MP4 cannot carry PCM audio in this build");
         }
     } else if (config.audio_codec == AudioCodec::Flac) {
         // FLAC (A_FLAC): Matroska only.
@@ -310,7 +310,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
     // Lossy codecs (Opus, AAC): bit_depth is not applicable; no validation needed.
 
-    // audio_pcm_float: 32-bit float PCM (A_PCM/FLOAT_IEEE) is Pcm-codec-only
+    // audio_pcm_float: 32-bit float PCM (A_PCM/FLOAT/IEEE) is Pcm-codec-only
     // and requires audio_bit_depth == 32 -- the only depth the mix bus can
     // supply without a lossy int conversion.
     if (config.audio_pcm_float) {

@@ -91,7 +91,7 @@ TEST(PcmAudioEncoder, Init_ZeroChannels_Fails) {
 }
 
 // ---------------------------------------------------------------------------
-// CodecPrivate — A_PCM/INT_LIT carries none
+// CodecPrivate — A_PCM/INT/LIT carries none
 // ---------------------------------------------------------------------------
 
 TEST(PcmAudioEncoder, CodecPrivate_IsEmpty) {
@@ -391,7 +391,7 @@ TEST(PcmAudioEncoder, SetBitDepth_Invalid_KeepsDefault) {
 }
 
 // ---------------------------------------------------------------------------
-// Float-PCM (A_PCM/FLOAT_IEEE): SetFloatFormat + raw Float32 passthrough
+// Float-PCM (A_PCM/FLOAT/IEEE): SetFloatFormat + raw Float32 passthrough
 // ---------------------------------------------------------------------------
 
 TEST(PcmAudioEncoder, DefaultIsNotFloat) {

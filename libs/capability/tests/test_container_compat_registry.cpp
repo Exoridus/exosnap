@@ -30,7 +30,7 @@ TEST(ContainerCompatRegistry, Mkv_Av1_Aac_IsRecommended) {
 }
 
 TEST(ContainerCompatRegistry, Mkv_Av1_Pcm_IsAllowed) {
-    // 0.6.0 Audio v2: uncompressed S16LE PCM (A_PCM/INT_LIT) is Matroska-only and
+    // 0.6.0 Audio v2: uncompressed S16LE PCM (A_PCM/INT/LIT) is Matroska-only and
     // now implemented; MKV + AV1 + PCM is Allowed.
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Allowed);
 }

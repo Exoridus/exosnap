@@ -28,7 +28,7 @@ namespace exosnap {
 // dropped once, and the next save writes the new stable form. Not reported as an
 // error (only a real parse failure is). See ADR 0047.
 //
-// v24: adds audio.pcm_float (bool) -- 32-bit float PCM (A_PCM/FLOAT_IEEE),
+// v24: adds audio.pcm_float (bool) -- 32-bit float PCM (A_PCM/FLOAT/IEEE),
 // opt-in only when audio_codec == Pcm and audio_bit_depth == 32. Older
 // presets simply default to false (no behavior change).
 //

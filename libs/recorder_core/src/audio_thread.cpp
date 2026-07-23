@@ -74,12 +74,12 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         break;
     }
     case AudioCodec::Pcm: {
-        // PCM passthrough "encoder" (MKV-only A_PCM/INT_LIT); no CodecPrivate —
+        // PCM passthrough "encoder" (MKV-only A_PCM/INT/LIT); no CodecPrivate —
         // the track is marked ready with empty bytes so the mux thread's
         // codec-private readiness gate releases the pre-mux buffer.
         auto enc = std::make_unique<PcmAudioEncoder>();
         enc->SetBitDepth(config.audio_bit_depth);    // ADR 0030: configurable depth
-        enc->SetFloatFormat(config.audio_pcm_float); // Float-PCM: A_PCM/FLOAT_IEEE
+        enc->SetFloatFormat(config.audio_pcm_float); // Float-PCM: A_PCM/FLOAT/IEEE
         setup.encoder = std::move(enc);
         setup.init_error_prefix = "PCM encoder init: ";
         break;

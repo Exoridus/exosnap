@@ -134,7 +134,7 @@ Invalid combinations are not offered.
   (libswresample). **Opus is locked to 48 kHz** (libopus accepts only
   8/12/16/24/48 kHz). Bit depth does not apply to the lossy codecs (Opus/AAC).
   Stereo→mono uses an averaging downmix (no clipping). 32-bit float PCM
-  (`A_PCM/FLOAT_IEEE`) is a raw passthrough of the mix bus's native format and is
+  (`A_PCM/FLOAT/IEEE`) is a raw passthrough of the mix bus's native format and is
   PCM-only (FLAC has no float mode). **Deferred:** more than 2 channels (5.1/7.1)
   and non-vetted sample rates.
   - A small tail of audio may be dropped at stop **whenever a resample context is

@@ -7,7 +7,7 @@
 // audio thread and mux path treat it identically, but instead of running a codec
 // it converts the captured interleaved Float32 PCM into interleaved signed
 // little-endian samples at the configured bit depth (16, 24, or 32 bits) and
-// emits one packet per FeedFloat32 call. The Matroska CodecID is A_PCM/INT_LIT
+// emits one packet per FeedFloat32 call. The Matroska CodecID is A_PCM/INT/LIT
 // with KaxAudioBitDepth set to the configured depth; there is no CodecPrivate
 // (the format is fully described by the track header).
 //
@@ -18,7 +18,7 @@
 // interleaved Float32 samples, so this mode does no conversion at all — it is
 // a raw byte copy of the already-in-memory samples. This is the simplest of
 // the PCM paths (no clamp, no round, no scale). The Matroska CodecID becomes
-// A_PCM/FLOAT_IEEE instead of A_PCM/INT_LIT (selected by the mux layer from
+// A_PCM/FLOAT/IEEE instead of A_PCM/INT/LIT (selected by the mux layer from
 // this encoder's format, not by this class). Float mode forces the effective
 // bit depth to 32, since 32-bit IEEE754 is the only float format the mix bus
 // produces.
@@ -67,7 +67,7 @@ class PcmAudioEncoder : public IAudioEncoder {
     // PCM has no buffered state to drain; this is a no-op.
     void Flush(std::vector<EncodedAudioPacket>& out_packets) override;
 
-    // A_PCM/INT_LIT carries no CodecPrivate — bit depth lives in the track header.
+    // A_PCM/INT/LIT carries no CodecPrivate — bit depth lives in the track header.
     std::vector<uint8_t> CodecPrivateBytes() const override;
 
     void Shutdown() override;
