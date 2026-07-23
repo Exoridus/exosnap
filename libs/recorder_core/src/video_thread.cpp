@@ -2979,22 +2979,24 @@ void VideoThread::Run() {
                 // so its forced IDR opens the next segment. Done before encode.
                 maybeArmSplit(pts_ns);
 
-                EncodedVideoPacket pkt;
+                std::vector<EncodedVideoPacket> pkts;
                 std::string encErr;
                 m_state.diagnostics.OnEncodeSubmitted();
                 const auto enc_t0 = std::chrono::steady_clock::now();
-                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkts, encErr);
                 const auto enc_t1 = std::chrono::steady_clock::now();
                 // Call-site CPU cost of the submit; the true submit->ready latency
-                // (P5-P7-correct) travels on the packet and is reported only when set.
+                // (P5-P7-correct) travels on each packet and is reported only when set.
                 m_state.diagnostics.OnEncodeSubmitCost(
                     enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                if (pkt.encode_latency_ms >= 0.0)
-                    m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
-                if (pkt.output_ts_mismatch)
-                    m_state.diagnostics.OnOutputTsMismatch();
-                if (pkt.keyframe_prediction_mismatch)
-                    m_state.diagnostics.OnKeyframePredictionMismatch();
+                for (const EncodedVideoPacket& pkt : pkts) {
+                    if (pkt.encode_latency_ms >= 0.0)
+                        m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                    if (pkt.output_ts_mismatch)
+                        m_state.diagnostics.OnOutputTsMismatch();
+                    if (pkt.keyframe_prediction_mismatch)
+                        m_state.diagnostics.OnKeyframePredictionMismatch();
+                }
 
                 if (!encOk) {
                     m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
@@ -3004,8 +3006,10 @@ void VideoThread::Run() {
                 ++videoFramesCaptured;
                 lastVideoPts = pts_ns;
 
-                if (!routePacket(std::move(pkt)))
-                    goto end_encode_loop;
+                for (EncodedVideoPacket& pkt : pkts) {
+                    if (!routePacket(std::move(pkt)))
+                        goto end_encode_loop;
+                }
 
                 const auto tick_t1 = std::chrono::steady_clock::now();
                 m_state.diagnostics.OnVideoTickTime(
@@ -3292,27 +3296,31 @@ void VideoThread::Run() {
                     performSnapshotIfRequested(slot);
                     maybeArmSplit(framePts_ns);
 
-                    EncodedVideoPacket pkt;
+                    std::vector<EncodedVideoPacket> pkts;
                     std::string encErr;
                     m_state.diagnostics.OnEncodeSubmitted();
                     const auto enc_t0 = std::chrono::steady_clock::now();
-                    bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                    bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
                     const auto enc_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnEncodeSubmitCost(
                         enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                    if (pkt.encode_latency_ms >= 0.0)
-                        m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
-                    if (pkt.output_ts_mismatch)
-                        m_state.diagnostics.OnOutputTsMismatch();
-                    if (pkt.keyframe_prediction_mismatch)
-                        m_state.diagnostics.OnKeyframePredictionMismatch();
+                    for (const EncodedVideoPacket& pkt : pkts) {
+                        if (pkt.encode_latency_ms >= 0.0)
+                            m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                        if (pkt.output_ts_mismatch)
+                            m_state.diagnostics.OnOutputTsMismatch();
+                        if (pkt.keyframe_prediction_mismatch)
+                            m_state.diagnostics.OnKeyframePredictionMismatch();
+                    }
                     if (!encOk) {
                         m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
                         break;
                     }
                     ++videoFramesCaptured;
-                    if (!routePacket(std::move(pkt)))
-                        goto end_encode_loop;
+                    for (EncodedVideoPacket& pkt : pkts) {
+                        if (!routePacket(std::move(pkt)))
+                            goto end_encode_loop;
+                    }
                     const auto tick_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnVideoTickTime(
                         tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
@@ -3377,20 +3385,22 @@ void VideoThread::Run() {
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);
 
-                            EncodedVideoPacket pkt;
+                            std::vector<EncodedVideoPacket> pkts;
                             std::string encErr;
                             m_state.diagnostics.OnEncodeSubmitted();
                             const auto enc_t0 = std::chrono::steady_clock::now();
-                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
                             const auto enc_t1 = std::chrono::steady_clock::now();
                             m_state.diagnostics.OnEncodeSubmitCost(
                                 enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                            if (pkt.encode_latency_ms >= 0.0)
-                                m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
-                            if (pkt.output_ts_mismatch)
-                                m_state.diagnostics.OnOutputTsMismatch();
-                            if (pkt.keyframe_prediction_mismatch)
-                                m_state.diagnostics.OnKeyframePredictionMismatch();
+                            for (const EncodedVideoPacket& pkt : pkts) {
+                                if (pkt.encode_latency_ms >= 0.0)
+                                    m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                                if (pkt.output_ts_mismatch)
+                                    m_state.diagnostics.OnOutputTsMismatch();
+                                if (pkt.keyframe_prediction_mismatch)
+                                    m_state.diagnostics.OnKeyframePredictionMismatch();
+                            }
 
                             if (!encOk) {
                                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
@@ -3399,8 +3409,10 @@ void VideoThread::Run() {
 
                             ++videoFramesCaptured;
 
-                            if (!routePacket(std::move(pkt)))
-                                goto end_encode_loop;
+                            for (EncodedVideoPacket& pkt : pkts) {
+                                if (!routePacket(std::move(pkt)))
+                                    goto end_encode_loop;
+                            }
 
                             const auto tick_t1 = std::chrono::steady_clock::now();
                             m_state.diagnostics.OnVideoTickTime(

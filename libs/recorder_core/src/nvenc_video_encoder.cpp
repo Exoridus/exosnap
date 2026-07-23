@@ -34,8 +34,18 @@ bool NvencVideoEncoder::RegisterSlotTexture(int32_t slot_idx, GpuTextureHandle t
 }
 
 bool NvencVideoEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
-                                    EncodedVideoPacket& out_packet, std::string& out_error) {
-    return m_nvenc.EncodeFrame(slot_idx, pts_ns, width, height, &out_packet, out_error);
+                                    std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
+    // NvencEncoder::EncodeFrame is still the synchronous, single-packet-slot form
+    // (S8 changes that); this is the mechanical S7 adaptation to the new 0..k
+    // interface — a buffered submission (NV_ENC_ERR_NEED_MORE_INPUT) fills pkt
+    // with empty bytes, which now means "append nothing" instead of "append an
+    // empty packet".
+    EncodedVideoPacket pkt;
+    if (!m_nvenc.EncodeFrame(slot_idx, pts_ns, width, height, &pkt, out_error))
+        return false;
+    if (!pkt.bytes.empty())
+        out_packets.push_back(std::move(pkt));
+    return true;
 }
 
 bool NvencVideoEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
