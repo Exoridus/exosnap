@@ -54,6 +54,18 @@ struct DisplayHdrFacts {
     return nullptr;
 }
 
+// Per-codec NVENC advanced-encode capability facts (B-frames, Lookahead,
+// Temporal-AQ) — see docs/superpowers/plans/2026-07-23-encoder-quality-harness-s1-capability-probe.md.
+// Only meaningful when NvidiaRuntimeFacts::nvenc_codec_probed is true AND the
+// specific codec was advertised; every field defaults to "unsupported" so an
+// unprobed or unadvertised codec never claims a generation-dependent feature.
+struct NvencAdvancedEncodeFacts {
+    int max_bframes = 0;
+    int bframe_ref_mode = 0; // NV_ENC_CAPS_SUPPORT_BFRAME_REF_MODE: 0/1/2, SDK semantics
+    bool lookahead = false;
+    bool temporal_aq = false;
+};
+
 struct NvidiaRuntimeFacts {
     bool nvenc_dll_present = false;
     bool nvenc_api_version_valid = false;
@@ -78,6 +90,14 @@ struct NvidiaRuntimeFacts {
     // 4:4:4 beyond the ValidUnvalidated static baseline.
     bool nvenc_yuv444_h264 = false;
     bool nvenc_yuv444_hevc = false;
+
+    // Per-codec advanced-encode facts (B-frames, Lookahead, Temporal-AQ).
+    // Populated only for codecs this GPU actually advertised (nvenc_h264/_hevc/_av1);
+    // unlike nvenc_yuv444_*, AV1 gets a real probe too (NVENC AV1 B-frames use the
+    // same frameIntervalP mechanic as H.264/HEVC, just without a 4:4:4 path).
+    NvencAdvancedEncodeFacts nvenc_adv_h264;
+    NvencAdvancedEncodeFacts nvenc_adv_hevc;
+    NvencAdvancedEncodeFacts nvenc_adv_av1;
 };
 
 struct MfAacRuntimeFacts {

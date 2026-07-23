@@ -26,6 +26,17 @@ struct ComboKeyHash {
     size_t operator()(const ComboKey& key) const noexcept;
 };
 
+// Per-codec NVENC B-frame capability: whether/how many B-frames the GPU and
+// driver support for this codec, plus the B-frame-reference-mode capability
+// bit (0/1/2, SDK semantics). Fail-closed: NotImplemented/0 baseline, upgraded
+// only when a real per-GPU probe confirms support — see D1 of
+// encoder-quality-features-spec.md (never an architecture/name heuristic).
+struct BFrameCapability {
+    SupportAnnotation annotation;
+    int max_bframes = 0;
+    int bframe_ref_mode = 0;
+};
+
 struct CapabilitySet {
     std::string gpu_adapter_name;
     bool nvenc_dll_present = false;
@@ -63,6 +74,15 @@ struct CapabilitySet {
     // the specific GPU cannot do it. Only consulted for the Cs444 chroma mode.
     std::unordered_map<VideoCodec, SupportAnnotation> chroma444;
 
+    // Per-codec NVENC advanced-encode capabilities (B-frames, Lookahead,
+    // Temporal-AQ). Fail-closed baseline (NotImplemented/0 for every codec);
+    // a real probe upgrades exactly the codecs the GPU advertised support for.
+    // Not part of QueryCombo — these are Expert-setting capabilities, not
+    // container/codec/audio/chroma/bitdepth combo dimensions.
+    std::unordered_map<VideoCodec, BFrameCapability> bframe_capability;
+    std::unordered_map<VideoCodec, SupportAnnotation> lookahead;
+    std::unordered_map<VideoCodec, SupportAnnotation> temporal_aq;
+
     std::unordered_map<ComboKey, SupportAnnotation, ComboKeyHash> combo_overrides;
 
     ResolutionConstraint resolution_constraint;
@@ -83,6 +103,17 @@ struct CapabilitySet {
     // the GPU supports it; NotImplemented for AV1. Consulted by QueryCombo for the
     // Cs444 chroma mode and by the expert chroma UI gate.
     SupportAnnotation QueryChroma444(VideoCodec v) const;
+
+    // NVENC B-frame capability for `v`: max B-frames the GPU/driver reports
+    // plus the B-ref-mode capability bit. NotImplemented/0 when unprobed or
+    // when this GPU reported zero max B-frames for the codec (e.g. AV1 on
+    // many current-generation NVENC parts).
+    BFrameCapability QueryBFrames(VideoCodec v) const;
+
+    // NVENC Lookahead / Temporal-AQ capability for `v`. NotImplemented when
+    // unprobed or when the GPU/driver does not report the feature.
+    SupportAnnotation QueryLookahead(VideoCodec v) const;
+    SupportAnnotation QueryTemporalAq(VideoCodec v) const;
 
     // Query support for a canonical rate-control mode (ADR 0009).
     // Returns Available for CQ/VBR/CBR; NotImplemented for Lossless.

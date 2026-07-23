@@ -143,6 +143,29 @@ void ProbeNvencGuidsOnDevice(HMODULE dll, ID3D11Device* device, AdapterEncoderCa
                     out.yuv444_h264 = query_yuv444(NV_ENC_CODEC_H264_GUID);
                 if (out.hevc)
                     out.yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
+
+                auto query_cap = [&funcs, encoder](const GUID& codec, NV_ENC_CAPS cap) -> int {
+                    NV_ENC_CAPS_PARAM capsParam{};
+                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
+                    capsParam.capsToQuery = cap;
+                    int value = 0;
+                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS ? value : 0;
+                };
+                if (out.h264) {
+                    out.max_bframes_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    out.lookahead_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
+                    out.temporal_aq_h264 = query_cap(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
+                }
+                if (out.hevc) {
+                    out.max_bframes_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    out.lookahead_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
+                    out.temporal_aq_hevc = query_cap(NV_ENC_CODEC_HEVC_GUID, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
+                }
+                if (out.av1) {
+                    out.max_bframes_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    out.lookahead_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
+                    out.temporal_aq_av1 = query_cap(NV_ENC_CODEC_AV1_GUID, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
+                }
             }
         }
     }

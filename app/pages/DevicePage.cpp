@@ -164,6 +164,71 @@ QWidget* make444Row(bool h264_advertised, bool h264_ok, bool hevc_advertised, bo
     return row;
 }
 
+// Per-adapter NVENC B-frames-max / Lookahead / Temporal-AQ, shown as one chip
+// per codec the adapter advertises (mirrors make444Row's honesty rule: a
+// codec this adapter never advertised at all gets no chip, positive or
+// negative — the codec-chip row above already states its absence). B-frames
+// shows the max count in the chip label instead of a bare available/unavailable
+// state, since "how many" is the actually useful fact for this feature.
+QWidget* makeBFramesRow(bool h264_advertised, int h264_max, bool hevc_advertised, int hevc_max, bool av1_advertised,
+                        int av1_max, QWidget* parent, bool first_row) {
+    auto* row = new QWidget(parent);
+    row->setObjectName(QStringLiteral("diagTableRow"));
+    row->setProperty("firstRow", first_row);
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
+    row_layout->setSpacing(M::kSpaceMd);
+
+    auto* name_label = new QLabel(QStringLiteral("B-frames (max)"), row);
+    name_label->setProperty("labelRole", "body");
+    name_label->setMinimumWidth(160);
+    row_layout->addWidget(name_label);
+
+    row_layout->addStretch(1);
+    const QString chip = QStringLiteral("deviceBFramesChip");
+    auto add_chip = [&](bool advertised, capability::VideoCodec codec, int max_bframes) {
+        if (!advertised)
+            return;
+        const QString label = QStringLiteral("%1 (%2)").arg(ui::videoCodecLabel(codec)).arg(max_bframes);
+        row_layout->addWidget(makeCodecChip(label, max_bframes > 0, row, chip));
+    };
+    add_chip(h264_advertised, capability::VideoCodec::H264Nvenc, h264_max);
+    add_chip(hevc_advertised, capability::VideoCodec::HevcNvenc, hevc_max);
+    add_chip(av1_advertised, capability::VideoCodec::Av1Nvenc, av1_max);
+
+    return row;
+}
+
+// Shared shape for the Lookahead and Temporal-AQ rows: a plain on/off chip per
+// advertised codec, same honesty rule as makeBFramesRow/make444Row.
+QWidget* makeAdvancedEncodeToggleRow(const QString& label, const QString& object_name, bool h264_advertised,
+                                     bool h264_on, bool hevc_advertised, bool hevc_on, bool av1_advertised, bool av1_on,
+                                     QWidget* parent, bool first_row) {
+    auto* row = new QWidget(parent);
+    row->setObjectName(QStringLiteral("diagTableRow"));
+    row->setProperty("firstRow", first_row);
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
+    row_layout->setSpacing(M::kSpaceMd);
+
+    auto* name_label = new QLabel(label, row);
+    name_label->setProperty("labelRole", "body");
+    name_label->setMinimumWidth(160);
+    row_layout->addWidget(name_label);
+
+    row_layout->addStretch(1);
+    auto add_chip = [&](bool advertised, capability::VideoCodec codec, bool on) {
+        if (!advertised)
+            return;
+        row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(codec), on, row, object_name));
+    };
+    add_chip(h264_advertised, capability::VideoCodec::H264Nvenc, h264_on);
+    add_chip(hevc_advertised, capability::VideoCodec::HevcNvenc, hevc_on);
+    add_chip(av1_advertised, capability::VideoCodec::Av1Nvenc, av1_on);
+
+    return row;
+}
+
 } // namespace
 
 DevicePage::DevicePage(QWidget* parent) : QWidget(parent) {
@@ -683,6 +748,24 @@ void DevicePage::renderCapabilityMatrix() {
         // cap.hevc); NVENC AV1 is 4:2:0 only, so it has no chip here.
         feature_rows_layout_->addWidget(make444Row(cap.h264, cap.yuv444_h264, cap.hevc, cap.yuv444_hevc,
                                                    feature_rows_layout_->parentWidget(), first_row));
+        first_row = false;
+
+        // Per-adapter NVENC advanced-encode capabilities (S1 of
+        // encoder-quality-features-spec.md): informational only, no Expert
+        // control reads these yet (that is a later spec step, gated on the
+        // engine actually applying the features).
+        feature_rows_layout_->addWidget(makeBFramesRow(cap.h264, cap.max_bframes_h264, cap.hevc, cap.max_bframes_hevc,
+                                                       cap.av1, cap.max_bframes_av1,
+                                                       feature_rows_layout_->parentWidget(), first_row));
+        first_row = false;
+        feature_rows_layout_->addWidget(makeAdvancedEncodeToggleRow(
+            QStringLiteral("Lookahead"), QStringLiteral("deviceLookaheadChip"), cap.h264, cap.lookahead_h264, cap.hevc,
+            cap.lookahead_hevc, cap.av1, cap.lookahead_av1, feature_rows_layout_->parentWidget(), first_row));
+        first_row = false;
+        feature_rows_layout_->addWidget(
+            makeAdvancedEncodeToggleRow(QStringLiteral("Temporal AQ"), QStringLiteral("deviceTemporalAqChip"), cap.h264,
+                                        cap.temporal_aq_h264, cap.hevc, cap.temporal_aq_hevc, cap.av1,
+                                        cap.temporal_aq_av1, feature_rows_layout_->parentWidget(), first_row));
         first_row = false;
     } else {
         feature_rows_layout_->addWidget(makeFeatureRow(QStringLiteral("Feature detail"), QStringLiteral("Not probed"),

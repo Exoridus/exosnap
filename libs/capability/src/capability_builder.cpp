@@ -70,6 +70,17 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
         VideoCodec::Av1Nvenc,
         SupportAnnotation{SupportLevel::NotImplemented, "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."});
 
+    for (VideoCodec codec : AllVideoCodecs()) {
+        caps.bframe_capability.emplace(
+            codec, BFrameCapability{SupportAnnotation{SupportLevel::NotImplemented,
+                                                      "B-frame support not yet probed on this hardware."},
+                                    0, 0});
+        caps.lookahead.emplace(codec, SupportAnnotation{SupportLevel::NotImplemented,
+                                                        "Lookahead support not yet probed on this hardware."});
+        caps.temporal_aq.emplace(codec, SupportAnnotation{SupportLevel::NotImplemented,
+                                                          "Temporal-AQ support not yet probed on this hardware."});
+    }
+
     caps.bit_depths.emplace(BitDepth::Bit8, SupportAnnotation{SupportLevel::Available, "Validated bit depth."});
     caps.bit_depths.emplace(BitDepth::Bit10,
                             SupportAnnotation{SupportLevel::ValidUnvalidated,
@@ -188,6 +199,7 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // advertised.
     ApplyNvencCodecSupport(caps, snapshot.nvidia);
     ApplyNvencYuv444Support(caps, snapshot.nvidia);
+    ApplyNvencAdvancedEncodeSupport(caps, snapshot.nvidia);
 
     return caps;
 }
@@ -243,6 +255,34 @@ void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& fact
                              "This GPU does not support HEVC 4:4:4 (YUV444) NVENC encoding.");
     // AV1 is not probed for 4:4:4 — it has no NVENC 4:4:4 path and stays
     // NotImplemented from the baseline.
+}
+
+void ApplyNvencAdvancedEncodeSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {
+    if (!facts.nvenc_codec_probed) {
+        return; // fail-closed baseline stands — no real probe ran
+    }
+    auto apply = [&caps](VideoCodec codec, bool advertised, const NvencAdvancedEncodeFacts& adv) {
+        if (!advertised) {
+            return; // codec not advertised at all -> leave NotImplemented/0 baseline
+        }
+        caps.bframe_capability[codec] = BFrameCapability{
+            SupportAnnotation{adv.max_bframes > 0 ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
+                              adv.max_bframes > 0
+                                  ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
+                                  : "GPU/driver reports 0 max B-frames for this codec."},
+            adv.max_bframes, adv.bframe_ref_mode};
+        caps.lookahead[codec] = SupportAnnotation{
+            adv.lookahead ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
+            adv.lookahead ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
+                          : "GPU/driver does not report lookahead support for this codec."};
+        caps.temporal_aq[codec] = SupportAnnotation{
+            adv.temporal_aq ? SupportLevel::ValidUnvalidated : SupportLevel::NotImplemented,
+            adv.temporal_aq ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
+                            : "GPU/driver does not report Temporal-AQ support for this codec."};
+    };
+    apply(VideoCodec::H264Nvenc, facts.nvenc_h264, facts.nvenc_adv_h264);
+    apply(VideoCodec::HevcNvenc, facts.nvenc_hevc, facts.nvenc_adv_hevc);
+    apply(VideoCodec::Av1Nvenc, facts.nvenc_av1, facts.nvenc_adv_av1);
 }
 
 CapabilitySet CapabilityBuilder::BuildFromHardwareQuery() {

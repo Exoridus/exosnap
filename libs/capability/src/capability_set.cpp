@@ -172,6 +172,23 @@ SupportAnnotation CapabilitySet::QueryChroma444(VideoCodec v) const {
     return LookupAnnotation(chroma444, v, "4:4:4 codec");
 }
 
+BFrameCapability CapabilitySet::QueryBFrames(VideoCodec v) const {
+    const auto it = bframe_capability.find(v);
+    if (it == bframe_capability.end()) {
+        return BFrameCapability{SupportAnnotation{SupportLevel::Invalid, "no B-frame capability data for this codec"},
+                                0, 0};
+    }
+    return it->second;
+}
+
+SupportAnnotation CapabilitySet::QueryLookahead(VideoCodec v) const {
+    return LookupAnnotation(lookahead, v, "lookahead");
+}
+
+SupportAnnotation CapabilitySet::QueryTemporalAq(VideoCodec v) const {
+    return LookupAnnotation(temporal_aq, v, "temporal AQ");
+}
+
 SupportAnnotation CapabilitySet::QueryRateControlMode(recorder_core::RateControlMode mode) const {
     // Static capability declaration for NVENC (ADR 0009).
     // CQ / VBR / CBR are implemented and available.

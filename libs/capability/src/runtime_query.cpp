@@ -231,6 +231,31 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
                 if (nvidia.nvenc_hevc) {
                     nvidia.nvenc_yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
                 }
+
+                auto query_cap = [&funcs, encoder](const GUID& codec, NV_ENC_CAPS cap) -> int {
+                    NV_ENC_CAPS_PARAM capsParam{};
+                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
+                    capsParam.capsToQuery = cap;
+                    int value = 0;
+                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS ? value : 0;
+                };
+                auto query_advanced = [&query_cap](const GUID& codec) -> NvencAdvancedEncodeFacts {
+                    NvencAdvancedEncodeFacts adv;
+                    adv.max_bframes = query_cap(codec, NV_ENC_CAPS_NUM_MAX_BFRAMES);
+                    adv.bframe_ref_mode = query_cap(codec, NV_ENC_CAPS_SUPPORT_BFRAME_REF_MODE);
+                    adv.lookahead = query_cap(codec, NV_ENC_CAPS_SUPPORT_LOOKAHEAD) != 0;
+                    adv.temporal_aq = query_cap(codec, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
+                    return adv;
+                };
+                if (nvidia.nvenc_h264) {
+                    nvidia.nvenc_adv_h264 = query_advanced(NV_ENC_CODEC_H264_GUID);
+                }
+                if (nvidia.nvenc_hevc) {
+                    nvidia.nvenc_adv_hevc = query_advanced(NV_ENC_CODEC_HEVC_GUID);
+                }
+                if (nvidia.nvenc_av1) {
+                    nvidia.nvenc_adv_av1 = query_advanced(NV_ENC_CODEC_AV1_GUID);
+                }
             }
         }
     }

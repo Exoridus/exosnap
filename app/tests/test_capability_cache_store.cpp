@@ -45,6 +45,9 @@ capability::RuntimeCapabilitySnapshot MakeSnapshot() {
     snap.nvidia.nvenc_h264 = true;
     snap.nvidia.nvenc_yuv444_h264 = false;
     snap.nvidia.nvenc_yuv444_hevc = true;
+    snap.nvidia.nvenc_adv_h264 = {2, 1, true, true}; // max_bframes, bframe_ref_mode, lookahead, temporal_aq
+    snap.nvidia.nvenc_adv_hevc = {3, 2, true, false};
+    snap.nvidia.nvenc_adv_av1 = {0, 0, false, false}; // GPU advertises AV1 but with no B-frame/lookahead support
     snap.mf_aac.mftenum_found = true;
     snap.mf_aac.clsid_instantiable = false;
     snap.mf_webcam.available = true;
@@ -96,6 +99,14 @@ TEST(CapabilityCacheStoreTest, RoundtripWithMatchingKey) {
     EXPECT_TRUE(loaded->nvidia.nvenc_av1);
     EXPECT_FALSE(loaded->nvidia.nvenc_yuv444_h264);
     EXPECT_TRUE(loaded->nvidia.nvenc_yuv444_hevc);
+    EXPECT_EQ(loaded->nvidia.nvenc_adv_h264.max_bframes, 2);
+    EXPECT_EQ(loaded->nvidia.nvenc_adv_h264.bframe_ref_mode, 1);
+    EXPECT_TRUE(loaded->nvidia.nvenc_adv_h264.lookahead);
+    EXPECT_TRUE(loaded->nvidia.nvenc_adv_h264.temporal_aq);
+    EXPECT_EQ(loaded->nvidia.nvenc_adv_hevc.max_bframes, 3);
+    EXPECT_FALSE(loaded->nvidia.nvenc_adv_hevc.temporal_aq);
+    EXPECT_EQ(loaded->nvidia.nvenc_adv_av1.max_bframes, 0);
+    EXPECT_FALSE(loaded->nvidia.nvenc_adv_av1.lookahead);
     EXPECT_TRUE(loaded->mf_aac.mftenum_found);
     EXPECT_TRUE(loaded->mf_webcam.available);
     EXPECT_EQ(loaded->os.build_number, snapshot.os.build_number);
