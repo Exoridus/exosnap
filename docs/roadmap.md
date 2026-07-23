@@ -192,10 +192,13 @@ build order and rationale in `docs/superpowers/plans/spec-wave-2026-07-11-plan.m
 explicit user directive since 2026-07-11** — nothing here starts without a fresh go-ahead, and
 each spec ends with its own "Offene Fragen" (open product questions) to resolve first.
 
+**`record-start-preparing-state-spec.md` (M-9) is done** — shipped 2026-07-12 as PR #198, the day
+after the spec was written (see the spec's own SHIPPED banner). 17 of the 18 specs remain open.
+
 Recommended order, once resumed:
 1. **Foundation:** log-schema/session-report (`diagnostics-support-bundle-spec.md`), perf
    measurement infra (`nvenc-async-pipeline-spec.md`, stage 1 only — measure, no async rewrite
-   yet), SignPath application (external lead time), `record-start-preparing-state-spec.md` (M-9).
+   yet), SignPath application (external lead time).
 2. **`0.10.0` hardening:** `reliability-soak-spec.md` + recovery drills, `av-clock-slaving-spec.md`,
    `exclusive-fullscreen-capture-spec.md`, `display-identity-stability-spec.md`,
    `device-hotswap-policy-spec.md`, `privacy-review-spec.md`, `code-signing-spec.md`,
