@@ -306,6 +306,62 @@ TEST_F(DevicePageTest, MatrixShowsPerAdapter444SupportPerCodec) {
     EXPECT_EQ(matched, 2);
 }
 
+TEST_F(DevicePageTest, MatrixShowsPerAdapterAdvancedEncodeSupportPerCodec) {
+    DevicePage page;
+    page.setCapabilitySet(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
+
+    auto nvcap = MakeProbedNvencCap(true, true, true); // h264, hevc, av1 all advertised
+    nvcap.max_bframes_h264 = 3;
+    nvcap.lookahead_h264 = true;
+    nvcap.temporal_aq_h264 = true;
+    nvcap.max_bframes_av1 = 0; // this GPU advertises AV1 but with no B-frame support
+    nvcap.lookahead_av1 = false;
+    page.setAdaptersForTest(
+        {MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 1),
+         MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
+        {nvcap, MakeUnwiredCap()});
+    FlushDeferredDeletes();
+
+    const auto bframe_chips = page.findChildren<QFrame*>(QStringLiteral("deviceBFramesChip"));
+    ASSERT_EQ(bframe_chips.size(), 3); // one per advertised codec: h264, hevc, av1
+    const auto lookahead_chips = page.findChildren<QFrame*>(QStringLiteral("deviceLookaheadChip"));
+    ASSERT_EQ(lookahead_chips.size(), 3);
+
+    bool found_h264_available = false;
+    bool found_av1_unavailable = false;
+    for (const QFrame* chip : bframe_chips) {
+        QString name;
+        for (const auto* label : chip->findChildren<QLabel*>()) {
+            if (!label->text().isEmpty()) {
+                name = label->text();
+                break;
+            }
+        }
+        const QString state = chip->property("chipState").toString();
+        // B-frames labels include the count: "H.264 (3)", so check startsWith
+        if (name.startsWith(QStringLiteral("H.264")) && state == QStringLiteral("available"))
+            found_h264_available = true;
+        if (name.startsWith(QStringLiteral("AV1")) && state == QStringLiteral("unavailable"))
+            found_av1_unavailable = true;
+    }
+    EXPECT_TRUE(found_h264_available);
+    EXPECT_TRUE(found_av1_unavailable);
+}
+
+// An unprobed adapter must not fabricate advanced-encode chips either.
+TEST_F(DevicePageTest, UnprobedAdapterShowsNoAdvancedEncodeChips) {
+    DevicePage page;
+    page.setCapabilitySet(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
+    page.setAdaptersForTest(
+        {MakeAdapter("UHD Graphics 770", capability::AdapterVendor::Intel, capability::AdapterKind::Integrated, 2)},
+        {MakeUnwiredCap()});
+    FlushDeferredDeletes();
+
+    EXPECT_TRUE(page.findChildren<QFrame*>(QStringLiteral("deviceBFramesChip")).isEmpty());
+    EXPECT_TRUE(page.findChildren<QFrame*>(QStringLiteral("deviceLookaheadChip")).isEmpty());
+    EXPECT_TRUE(page.findChildren<QFrame*>(QStringLiteral("deviceTemporalAqChip")).isEmpty());
+}
+
 // A codec the adapter doesn't advertise at all (HEVC missing on this GPU)
 // must not get a 4:4:4 chip either way — no positive, no negative statement —
 // mirroring the honesty rule the codec chips themselves already follow (#6).
