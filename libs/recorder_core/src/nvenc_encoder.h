@@ -153,6 +153,29 @@ struct GopKeyframePhase {
 GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) noexcept;
 
 // ---------------------------------------------------------------------------
+// ResyncGopPhaseFromActual — pure D2 order/keyframe hardening (S6, warn-first).
+// NextGopKeyframePhase predicts IDR placement at submission time; the actual
+// pictureType observed when a bitstream is consumed is the ground truth. A
+// real IDR always restarts the GOP regardless of what was predicted for that
+// submission (self-healing: any drift accumulated under buffered presets is
+// corrected the next time an actual IDR is observed). A non-IDR output leaves
+// the counter untouched — the submission side is already advancing it
+// independently, and a single non-keyframe mismatch is not evidence the whole
+// cadence has shifted. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noexcept;
+
+// ---------------------------------------------------------------------------
+// Pure warning-message formatters for the two D2 order/keyframe validations
+// (nvenc-async-pipeline-spec D2 Phase 1 — warn-only, never fatal at this
+// stage). Kept pure so the exact wording is unit-testable without a GPU/NVENC
+// session; the call sites additionally guard these behind a once-per-session
+// flag so a sustained mismatch does not spam the log.
+// ---------------------------------------------------------------------------
+std::string FormatOutputTsMismatchWarning(uint64_t expected_output_ts, uint64_t actual_output_ts);
+std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe);
+
+// ---------------------------------------------------------------------------
 // InputSlot — one NVENC GPU input resource in the slot ring
 // ---------------------------------------------------------------------------
 
@@ -372,10 +395,24 @@ class NvencEncoder {
         uint64_t pts_ns = 0;
         int32_t slot_idx = -1;
         std::chrono::steady_clock::time_point submit_time{};
+        // D2/S6 order-validation fields: the inputTimeStamp submitted for this
+        // frame (compared against lockBS.outputTimeStamp on consume — warn-only,
+        // PTS assignment stays FIFO-based regardless) and the submission-side
+        // keyframe prediction (compared against the actual lockBS.pictureType).
+        uint64_t input_ts = 0;
+        bool predicted_keyframe = false;
     };
     std::queue<PendingFrame> m_pending;
 
     int m_needMoreInputCount = 0;
+
+    // D2/S6 once-per-session log guards (nvenc-async-pipeline-spec D2 Phase 1 —
+    // warn-only, never fatal at this stage). The cumulative counters themselves
+    // live in the diagnostics aggregator (EncoderDiagnostics::output_ts_mismatches
+    // / keyframe_prediction_mismatches), fed per-packet like encode_latency_ms —
+    // NvencEncoder has no aggregator reference (see D1). Reset in InitEncoder.
+    bool m_loggedOutputTsMismatch = false;
+    bool m_loggedKeyframePredictionMismatch = false;
 
     // Per-instance monotonic frame index for NVENC inputTimeStamp
     uint64_t m_frameIdx = 0;

@@ -2991,6 +2991,10 @@ void VideoThread::Run() {
                     enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
                 if (pkt.encode_latency_ms >= 0.0)
                     m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                if (pkt.output_ts_mismatch)
+                    m_state.diagnostics.OnOutputTsMismatch();
+                if (pkt.keyframe_prediction_mismatch)
+                    m_state.diagnostics.OnKeyframePredictionMismatch();
 
                 if (!encOk) {
                     m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
@@ -3298,6 +3302,10 @@ void VideoThread::Run() {
                         enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
                     if (pkt.encode_latency_ms >= 0.0)
                         m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                    if (pkt.output_ts_mismatch)
+                        m_state.diagnostics.OnOutputTsMismatch();
+                    if (pkt.keyframe_prediction_mismatch)
+                        m_state.diagnostics.OnKeyframePredictionMismatch();
                     if (!encOk) {
                         m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
                         break;
@@ -3379,6 +3387,10 @@ void VideoThread::Run() {
                                 enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
                             if (pkt.encode_latency_ms >= 0.0)
                                 m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                            if (pkt.output_ts_mismatch)
+                                m_state.diagnostics.OnOutputTsMismatch();
+                            if (pkt.keyframe_prediction_mismatch)
+                                m_state.diagnostics.OnKeyframePredictionMismatch();
 
                             if (!encOk) {
                                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);

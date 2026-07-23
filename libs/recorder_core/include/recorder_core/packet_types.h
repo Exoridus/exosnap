@@ -19,6 +19,16 @@ struct EncodedVideoPacket {
     // latency is not available for this packet (e.g. a still-buffered frame, or a
     // non-NVENC producer); such packets are not reported to the aggregator.
     double encode_latency_ms = -1.0;
+
+    // D2/S6 order/keyframe validation results for this packet (nvenc-async-
+    // pipeline-spec D2 Phase 1 — warn-only, never fatal at this stage). True
+    // when the driver's actual outputTimeStamp / pictureType disagreed with the
+    // submission-side FIFO assignment / GOP-phase prediction for this frame.
+    // Filled by the encoder at consume time; the video thread reports these to
+    // the diagnostics aggregator (same per-packet transport as
+    // encode_latency_ms — the encoder itself has no aggregator reference).
+    bool output_ts_mismatch = false;
+    bool keyframe_prediction_mismatch = false;
 };
 
 struct EncodedAudioPacket {

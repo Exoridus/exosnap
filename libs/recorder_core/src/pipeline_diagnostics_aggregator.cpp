@@ -106,6 +106,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     forced_keyframes_ = 0;
     slot_stalls_ = 0;
     frames_duplicated_ = 0;
+    output_ts_mismatches_ = 0;
+    keyframe_prediction_mismatches_ = 0;
 
     // Retained-frame reuse counters
     screen_generation_changes_ = 0;
@@ -391,6 +393,16 @@ void PipelineDiagnosticsAggregator::OnForcedKeyframe() noexcept {
     ++forced_keyframes_;
 }
 
+void PipelineDiagnosticsAggregator::OnOutputTsMismatch() noexcept {
+    std::lock_guard lk(mutex_);
+    ++output_ts_mismatches_;
+}
+
+void PipelineDiagnosticsAggregator::OnKeyframePredictionMismatch() noexcept {
+    std::lock_guard lk(mutex_);
+    ++keyframe_prediction_mismatches_;
+}
+
 void PipelineDiagnosticsAggregator::SetAudioFormat(uint32_t sample_rate, uint32_t channels) noexcept {
     std::lock_guard lk(mutex_);
     audio_sample_rate_ = sample_rate;
@@ -639,6 +651,8 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     enc.backlog =
         (frames_submitted_ > stats.encoded_video_packets) ? (frames_submitted_ - stats.encoded_video_packets) : 0;
     enc.forced_keyframes = forced_keyframes_;
+    enc.output_ts_mismatches = output_ts_mismatches_;
+    enc.keyframe_prediction_mismatches = keyframe_prediction_mismatches_;
     enc.codec = stats.video_codec;
     enc.width = stats.output_size.width;
     enc.height = stats.output_size.height;

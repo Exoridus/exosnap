@@ -1,6 +1,7 @@
 #include "nvenc_encoder.h"
 
 #include <recorder_core/hdr_bitstream_metadata.h>
+#include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
 
 #include <chrono>
@@ -711,6 +712,25 @@ GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length
     return out;
 }
 
+uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noexcept {
+    return actual_is_idr ? 1u : frame_in_gop;
+}
+
+std::string FormatOutputTsMismatchWarning(uint64_t expected_output_ts, uint64_t actual_output_ts) {
+    std::ostringstream oss;
+    oss << "NVENC outputTimeStamp echo mismatch: expected=" << expected_output_ts << " actual=" << actual_output_ts
+        << " (PTS assignment stays FIFO-based; see nvenc-async-pipeline-spec D2)";
+    return oss.str();
+}
+
+std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe) {
+    std::ostringstream oss;
+    oss << "NVENC keyframe prediction mismatch: predicted=" << (predicted_keyframe ? "keyframe" : "non-keyframe")
+        << " actual=" << (actual_keyframe ? "keyframe" : "non-keyframe")
+        << " (GOP phase resynced from actual; see nvenc-async-pipeline-spec D2)";
+    return oss.str();
+}
+
 // ---------------------------------------------------------------------------
 // FetchPresetConfig
 // ---------------------------------------------------------------------------
@@ -877,6 +897,8 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     // frames — legal but off-cadence). Revisit the prediction if that changes.
     m_gopLength = kGopFrames;
     m_frameInGop = 0;
+    m_loggedOutputTsMismatch = false;
+    m_loggedKeyframePredictionMismatch = false;
     BuildHdrBitstreamPayloads();
 
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
@@ -1083,6 +1105,9 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
 
     uint64_t ts_ns = 0;
     double latency_ms = -1.0;
+    bool outputTsMismatch = false;
+    bool keyframePredictionMismatch = false;
+    const bool actualIsIdr = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR);
     if (!m_pending.empty()) {
         const PendingFrame pf = m_pending.front();
         m_pending.pop();
@@ -1093,6 +1118,30 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
         // thread's call-site bracket would attribute it to the wrong frame).
         latency_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf.submit_time).count();
+
+        // D2/S6 order validation (warn-only, PTS assignment stays FIFO-based
+        // regardless — see nvenc-async-pipeline-spec D2 Phase 1). The echo
+        // behaviour of outputTimeStamp is unverified on the target hardware, so
+        // a mismatch here does not change ts_ns; it is only counted/logged.
+        outputTsMismatch = (lockBS.outputTimeStamp != pf.input_ts);
+        if (outputTsMismatch && !m_loggedOutputTsMismatch) {
+            m_loggedOutputTsMismatch = true;
+            logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
+                         FormatOutputTsMismatchWarning(pf.input_ts, lockBS.outputTimeStamp));
+        }
+
+        // D2/S6 keyframe-prediction validation. A real IDR always resyncs the
+        // submission-side GOP phase, whether or not it was predicted; a mismatch
+        // (predicted != actual) is only logged/counted, never fatal at this
+        // stage — the actual pictureType (isKey below) remains authoritative for
+        // muxing regardless of the prediction.
+        keyframePredictionMismatch = (pf.predicted_keyframe != actualIsIdr);
+        if (keyframePredictionMismatch && !m_loggedKeyframePredictionMismatch) {
+            m_loggedKeyframePredictionMismatch = true;
+            logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
+                         FormatKeyframePredictionMismatchWarning(pf.predicted_keyframe, actualIsIdr));
+        }
+        m_frameInGop = ResyncGopPhaseFromActual(actualIsIdr, m_frameInGop);
 
         // Release the associated input slot.
         if (pf.slot_idx >= 0 && pf.slot_idx < 8) {
@@ -1106,11 +1155,13 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
         }
     }
 
-    bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR || lockBS.pictureType == NV_ENC_PIC_TYPE_I);
+    bool isKey = actualIsIdr || (lockBS.pictureType == NV_ENC_PIC_TYPE_I);
 
     out_packet.pts_ns = ts_ns;
     out_packet.keyframe = isKey;
     out_packet.encode_latency_ms = latency_ms;
+    out_packet.output_ts_mismatch = outputTsMismatch;
+    out_packet.keyframe_prediction_mismatch = keyframePredictionMismatch;
     out_packet.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
                             static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
 
@@ -1146,11 +1197,6 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     }
     slot.mappedResource = mapRes.mappedResource;
     slot.mapped = true;
-
-    // Record this submission before the encode call (FIFO: one entry per submitted
-    // frame). submit_time stamps the start of the encode so the consuming lock can
-    // report the true per-frame latency, independent of preset buffering.
-    m_pending.push(PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now()});
 
     NV_ENC_PIC_PARAMS pic{};
     pic.version = NV_ENC_PIC_PARAMS_VER;
@@ -1195,6 +1241,14 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
         }
     }
     pic.inputTimeStamp = m_frameIdx++;
+
+    // Record this submission before the encode call (FIFO: one entry per submitted
+    // frame). submit_time stamps the start of the encode so the consuming lock can
+    // report the true per-frame latency, independent of preset buffering. input_ts
+    // and predicted_keyframe are captured here (submission-side truth) so the
+    // consuming lock can validate them against the driver's actual outputTimeStamp
+    // / pictureType (D2/S6, warn-only).
+    m_pending.push(PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now(), pic.inputTimeStamp, isKeyframe});
 
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);
 

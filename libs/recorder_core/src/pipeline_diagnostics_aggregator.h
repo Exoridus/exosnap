@@ -372,6 +372,13 @@ class PipelineDiagnosticsAggregator {
     // stalls from sustained-lag resync skips).
     void OnSlotStall() noexcept;
     void OnForcedKeyframe() noexcept;
+    // D2/S6 order/keyframe validation mismatches (nvenc-async-pipeline-spec D2
+    // Phase 1 — warn-only, never fatal at this stage). Fed per-packet from
+    // EncodedVideoPacket::output_ts_mismatch / keyframe_prediction_mismatch;
+    // the encoder itself has no aggregator reference (see D1), so these arrive
+    // via the same packet-field transport as OnEncodeLatency.
+    void OnOutputTsMismatch() noexcept;
+    void OnKeyframePredictionMismatch() noexcept;
     // Encoder init parameters, captured once by the encoder at configure time and
     // carried unchanged on every subsequent snapshot.
     void SetEncoderInitInfo(const EncoderInitInfo& info) noexcept;
@@ -475,6 +482,8 @@ class PipelineDiagnosticsAggregator {
     uint64_t forced_keyframes_ = 0;
     uint64_t slot_stalls_ = 0;
     uint64_t frames_duplicated_ = 0;
+    uint64_t output_ts_mismatches_ = 0;
+    uint64_t keyframe_prediction_mismatches_ = 0;
 
     // Retained-frame reuse counters
     uint64_t screen_generation_changes_ = 0;
