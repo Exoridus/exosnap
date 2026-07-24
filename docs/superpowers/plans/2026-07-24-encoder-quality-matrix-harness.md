@@ -841,6 +841,7 @@ add_executable(probe_encode_file
 target_link_libraries(probe_encode_file PRIVATE
     recorder_core
     exosnap::warnings
+    d3d11.lib
 )
 
 target_include_directories(probe_encode_file PRIVATE
@@ -901,9 +902,9 @@ Create `tools/probes/probe_encode_file/src/main.cpp`:
 #include <wrl/client.h>
 
 #include "elementary_stream_writer.h"
+#include "nvenc_video_encoder.h"
 #include "y4m_reader.h"
 #include "yuv_convert.h"
-#include <nvenc_video_encoder.h>
 
 #include <recorder_core/codec_types.h>
 #include <recorder_core/color_metadata.h>
@@ -1515,7 +1516,6 @@ import datetime
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 
@@ -1654,7 +1654,7 @@ def run_matrix(args):
             }
         )
 
-    write_report(args.output, args.vcodec, args.clip, rows)
+    write_report(args.output, args.vcodec, args.clip, rows, args.ffmpeg)
     print(f"Wrote {args.output}.csv and {args.output}.md")
 
 
@@ -1674,7 +1674,7 @@ def _clip_duration_seconds(y4m_path):
     return frame_count / fps
 
 
-def write_report(output_base, vcodec, clip_path, rows):
+def write_report(output_base, vcodec, clip_path, rows, ffmpeg_path):
     csv_path = f"{output_base}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["preset", "rc", "value", "bitrate_kbps", "vmaf", "ssim", "psnr"])
@@ -1683,7 +1683,7 @@ def write_report(output_base, vcodec, clip_path, rows):
 
     md_path = f"{output_base}.md"
     ffmpeg_version = subprocess.run(
-        [shutil.which("ffmpeg") or "ffmpeg", "-version"], capture_output=True, text=True, check=False
+        [ffmpeg_path, "-version"], capture_output=True, text=True, check=False
     ).stdout.splitlines()[0]
 
     with open(md_path, "w", encoding="utf-8") as f:
