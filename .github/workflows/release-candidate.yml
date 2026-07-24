@@ -283,9 +283,16 @@ jobs:
           PUBKEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
           IS_OFFICIAL: ${{ needs.resolve-identity.outputs.is_official }}
         run: |
-          $extraArgs = @()
+          # HASHTABLE splat, not an array: `@('-FailOnInconclusive')` splatted as an
+          # array does NOT re-parse as a named switch -- PowerShell only does
+          # name-based binding for splatted HASHTABLES. An array splat here bound
+          # the string "-FailOnInconclusive" positionally to $Preset (position 0)
+          # instead, which broke $BuildDir ("build/-FailOnInconclusive") and failed
+          # the very first real official-build CI run at the build step. Reproduced
+          # and confirmed the fix locally before pushing.
+          $extraArgs = @{}
           $isOfficialRelease = ($env:IS_OFFICIAL -eq 'true')
-          if ($env:PUBKEY -and $isOfficialRelease) { $extraArgs += '-FailOnInconclusive' }
+          if ($env:PUBKEY -and $isOfficialRelease) { $extraArgs['FailOnInconclusive'] = $true }
           & scripts/build-release-artifacts.ps1 -SkipConfigure @extraArgs
           exit $LASTEXITCODE
 
