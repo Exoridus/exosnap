@@ -634,6 +634,7 @@ TEST(DisplayHdrFactsTest, PrimariesDefaultToZero) {
     EXPECT_FLOAT_EQ(facts.max_luminance_nits, 0.0f);
     EXPECT_FLOAT_EQ(facts.min_luminance_nits, 0.0f);
     EXPECT_FLOAT_EQ(facts.max_full_frame_nits, 0.0f);
+    EXPECT_FALSE(facts.wide_color_enforced);
 }
 
 TEST(DisplayHdrFactsTest, FindDisplayByName_ReturnsMatchingEntryWithFacts) {

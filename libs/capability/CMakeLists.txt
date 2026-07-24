@@ -34,6 +34,7 @@ target_link_libraries(exosnap_capability
     dxgi
     d3d11
     ole32
+    user32
 )
 
 exosnap_add_gtest(

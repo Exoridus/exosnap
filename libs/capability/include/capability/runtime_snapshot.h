@@ -34,6 +34,13 @@ struct DisplayHdrFacts {
     float max_luminance_nits = 0.0f; // reported peak luminance (high ⇒ HDR-capable panel)
     float min_luminance_nits = 0.0f;
     float max_full_frame_nits = 0.0f;
+
+    // Windows "Automatic Color Management" state for this display
+    // (DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO::wideColorEnforced). Distinct from
+    // hdr_active: a live probe (2026-07-24) confirmed this toggles independently of
+    // the HDR on/off switch and is not visible via IDXGIOutput6::GetDesc1 at all.
+    // Not yet consulted by any decision — captured for a future Diagnostics fact.
+    bool wide_color_enforced = false;
 };
 
 // Display↔Capture mapping (pure): resolve the DisplayHdrFacts for a capture

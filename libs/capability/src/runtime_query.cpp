@@ -55,6 +55,7 @@
 
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // NVENC API version function pointer type.
@@ -328,7 +329,54 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
 // -------------------------------------------------------------------------
 // B2. Per-display HDR facts (IDXGIOutput6::GetDesc1)
 // -------------------------------------------------------------------------
+// Windows "Automatic Color Management" state per display, keyed by GDI device name
+// (e.g. "\\.\DISPLAY7", matching DXGI_OUTPUT_DESC1::DeviceName). Mirrors the
+// QueryTargetFactsByGdiName join pattern in DisplayIdentityEnumerator.cpp: walk
+// QueryDisplayConfig's active paths, resolve each path's source GDI name, then
+// read DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO for that path's target.
+std::unordered_map<std::wstring, bool> QueryWideColorEnforcedByGdiName() {
+    std::unordered_map<std::wstring, bool> out;
+
+    UINT32 path_count = 0;
+    UINT32 mode_count = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) {
+        return out;
+    }
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(path_count);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(mode_count);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr) !=
+        ERROR_SUCCESS) {
+        return out;
+    }
+    paths.resize(path_count);
+
+    for (const auto& path : paths) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) {
+            continue;
+        }
+
+        DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO acm{};
+        acm.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+        acm.header.size = sizeof(acm);
+        acm.header.adapterId = path.targetInfo.adapterId;
+        acm.header.id = path.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&acm.header) != ERROR_SUCCESS) {
+            continue;
+        }
+
+        out.emplace(std::wstring(source.viewGdiDeviceName), acm.wideColorEnforced != 0);
+    }
+    return out;
+}
+
 void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
+    const std::unordered_map<std::wstring, bool> wide_color_by_gdi_name = QueryWideColorEnforcedByGdiName();
+
     Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
         return; // non-critical; displays stays empty
@@ -360,6 +408,10 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
                     facts.max_luminance_nits = d.MaxLuminance;
                     facts.min_luminance_nits = d.MinLuminance;
                     facts.max_full_frame_nits = d.MaxFullFrameLuminance;
+                    const auto wide_color_it = wide_color_by_gdi_name.find(d.DeviceName);
+                    if (wide_color_it != wide_color_by_gdi_name.end()) {
+                        facts.wide_color_enforced = wide_color_it->second;
+                    }
                     displays.push_back(std::move(facts));
                 }
             }

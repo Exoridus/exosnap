@@ -2203,6 +2203,22 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 if (title_bar_ != nullptr)
                     title_bar_->resetDragCursor();
             }
+
+            // A live HDR/Advanced-Color toggle on any display re-probes DisplayHdrFacts so
+            // the Diagnostics tab does not keep showing stale facts until the next recording
+            // start (which already re-probes via RecordingCoordinator::RefreshedDisplayFacts()).
+            // Live-verified 2026-07-24: WM_DISPLAYCHANGE fires reliably both for the per-display
+            // HDR on/off switch and the separate "Automatic Color Management" toggle.
+            if (msg->hwnd == main_hwnd && msg->message == WM_DISPLAYCHANGE && runtime_caps_ready_) {
+                auto displays = capability::CapabilityBuilder::QueryDisplayFacts();
+                // An empty result means the query failed (no DXGI factory) — keep what we
+                // had rather than blanking every display to "no facts" (mirrors
+                // RecordingCoordinator::RefreshDisplayFacts()'s same guard).
+                if (!displays.empty()) {
+                    runtime_caps_.runtime.displays = std::move(displays);
+                    refreshDiagnosticsData();
+                }
+            }
         }
     }
 #else
