@@ -80,7 +80,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.6.0`  | Audio v2                           | Per-track gain, mute, brickwall limiter, mic AGC, optional noise gate / high-pass / RNNoise, PCM, FLAC, channel/sample-format model. |
 | `0.7.0`  | HDR and final codec matrix         | Finalize HEVC/AVC/AV1, 8-/10-bit, HDR10, color metadata, P010 compositor path, `hvc1`, MKV/MP4/WebM final matrix, Apple + NLE tests. |
 | `0.8.0`  | Diagnostics as a feature           | First-class diagnostics engine (ADR 0033): `FixAction` model, pre-flight readiness gate, low-cost live monitoring (drops/drift/disk-ETA, encoder-vs-capture-vs-disk-bound classification), root-cause correlation (e.g. VRR-vs-CFR judder), incident→check catalog. Post-flight kept minimal (report card; full integrity review handed to 0.9.0). `PresentProvider` interface with PresentMon (tearing/game-present) as an opt-in, elevation-gated provider. The same in-process ETW consumer also powers a **DPC/ISR-latency check** (LatencyMon-style: names the offending kernel driver behind "smooth game, stuttery/crackling recording") — high-value, near-free once the ETW session exists. **Phase-correct CFR frame pacing** (ADR 0035): GPU-only, present-time-aware frame *selection* (not blending) so uncapped VRR / high-refresh sources record to smooth, judder-free 60 fps — pulled forward from 0.10.0; the engine-side fix for the judder that 0.8.0 *diagnoses* (a select control + a `FixAction`; default Smooth; no elevation). |
-| `0.9.0`  | Edit / Output / Save               | Quick Trim (stream copy, keyframe-exact), marker display, chapter export; Edit/Output/Save surface (ADR 0022) as interactive shell; the "Review" step consumes the post-flight diagnostic report from 0.8.0. |
+| `0.9.0`  | Edit / Output / Save               | Quick Trim (stream copy, keyframe-exact), marker display, marker JSON sidecar export (ADR 0042 — container chapters deliberately not written, not merely deferred); Edit/Output/Save surface (ADR 0022) as interactive shell; the "Review" step consumes the post-flight diagnostic report from 0.8.0. |
 | `0.10.0` | Reliability hardening (vendor-independent) | Long-recording soak, A/V-sync drift validation, recovery drills, updater/installer/signing/SmartScreen reputation, privacy review, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0). The vendor-independent half of the former `0.12.x`. The developer harness for the first three (headless `exosnap-soak` tool, the `av-sync-check.py` drift analyzer, and the recovery drill matrix) landed early and is documented in [`docs/dev/soak-and-recovery-drills.md`](dev/soak-and-recovery-drills.md); its thresholds are advisory, not a release gate. |
 | `0.11.0` | Software encoding (SVT-AV1 only)   | Optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. x264/HEVC software encoding is **not** bundled by ExoSnap (see ADR 0007, revised 2026-07-23: patent-licensing risk without legal budget to clear it) — if offered at all, it is a post-`1.0`, opt-in detection of a user-supplied FFmpeg install, never built/hosted by ExoSnap. |
 | `0.12.0` | AMD hardware                       | Native AMF, hardware test matrix, diagnostics provider, fallback behavior. |
@@ -107,10 +107,12 @@ cross-vendor quality/compat matrix stays at the 1.0 gate by definition.
 
 ---
 
-## Final container / codec / audio matrix
+## Final container / codec / audio matrix (1.0 target)
 
-The UI must only offer **vetted** combinations — never a theoretically-muxable pairing without a
-tested player/editor matrix.
+**This is the target matrix for `1.0`, not the currently-shipped state** — see `KNOWN_LIMITATIONS.md`
+for what a given build actually offers (e.g. MP4 audio today is AAC only; PCM-in-MP4 is deferred,
+ADR 0030). The UI must only offer **vetted** combinations — never a theoretically-muxable pairing
+without a tested player/editor matrix.
 
 | Container       | Video           | Audio                                                |
 |-----------------|-----------------|------------------------------------------------------|
@@ -136,7 +138,9 @@ per-track/channel bitrate. `RESTRICTED_LOWDELAY` and 2.5/5 ms frames are expert-
 ### Chroma / bit depth (capability-gated)
 
 Guaranteed for `1.0`: 4:2:0 8-bit for all final codecs; 4:2:0 10-bit for HEVC/AV1 where supported.
-4:2:2 / 4:4:4 are later expert features pending real hardware tests.
+**4:4:4 (8-bit H.264/HEVC, GPU-gated) has already shipped** as an Expert-mode option — see
+`KNOWN_LIMITATIONS.md`. 4:2:2 remains a later expert feature pending real hardware tests; no NVENC
+generation currently exposes a 4:2:2 encode path.
 
 ### Automatic split (time + size)
 
@@ -333,11 +337,12 @@ title bar) lists them persistently. Architecture: `NotificationHub` singleton; t
 via `INotificationService`; hub entries survive until dismissed. See ADR 0016 for the on-screen
 overlay architecture context.
 
-**Edit / Output / Save surface (0.11 wave, ADR 0022).** A new post-stop surface (`EditExportPage`)
-is an in-window mode (not a tab or a separate dialog): after recording stops the stack switches to
-the Edit/Export view, and Back returns to Record. Three phases (Review → Edit → Output) are stepped;
-the engine implementation (Quick Trim, stream-copy remux, chapter export) is deferred to 0.11. The
-surface ships as a UI shell + placeholder banner in the Production Suite wave.
+**Edit / Output / Save surface (ADR 0022).** A post-stop surface (`EditExportPage`) is an in-window
+mode (not a tab or a separate dialog): after recording stops the stack switches to the Edit/Export
+view, and Back returns to Record. Three phases (Review → Edit → Output) are stepped. The engine
+implementation shipped in 0.9.0: keyframe-accurate lossless Quick Trim, stream-copy remux, real
+decoded preview playback (`EditPlayerSession`), and the marker JSON sidecar (ADR 0042 — container
+chapters are a deliberate non-goal, not a deferral; see that ADR).
 
 **Settings Expert split.** The Quality card gained an Expert section (CQ · VBR · CBR rate control,
 bitrate, frame-timing — ADR 0009 mapping) hidden behind the Expert toggle. Audio likewise has an

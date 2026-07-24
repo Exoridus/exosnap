@@ -176,7 +176,7 @@ class EditExportPage : public QWidget {
     int64_t trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
     double duration_seconds_ = 0.0; // total recording duration; 0 = unknown (inert timeline)
 
-    // Preview playback clock (position only; no decoded frames yet)
+    // Preview playback clock (position source; decoded frames come from player_session_)
     QTimer* preview_timer_ = nullptr;
     QElapsedTimer* preview_elapsed_ = nullptr;
     bool preview_playing_ = false;

@@ -280,10 +280,12 @@ The result is an honest, correctly-timed file with a visible drop count, not one
 of sync.
 
 **Bit depth.** 8-bit for all final codecs; **10-bit (P010)** is available for HEVC Main10 and AV1
-where the GPU supports it (H.264 stays 8-bit only). 10-bit is **SDR-only** — higher precision, no HDR
-transfer curve or wide gamut. The Expert **Bit depth** row itself only appears once the selected codec
-carries 10-bit at all (HEVC/AV1) — for H.264, which has no 10-bit path, the row is not shown rather
-than shown-and-disabled, so the expert view lists only choices that apply to the current codec.
+where the GPU supports it (H.264 stays 8-bit only). The freely-choosable Expert **Bit depth** row is
+**SDR-only** — higher precision, no HDR transfer curve or wide gamut — and only appears once the
+selected codec carries 10-bit at all (HEVC/AV1); for H.264, which has no 10-bit path, the row is not
+shown rather than shown-and-disabled, so the expert view lists only choices that apply to the current
+codec. This is independent of native HDR10, which pins 10-bit unconditionally regardless of this
+setting (§HDR below) — "10-bit" as a concept is not SDR-only, only this particular expert toggle is.
 
 **Chroma.** **4:2:0** is the default and is universal (all codecs, 8- and 10-bit). **4:4:4** is an
 Expert-mode option available for **H.264 and HEVC at 8-bit** (NVENC High 4:4:4 Predictive / HEVC

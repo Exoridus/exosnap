@@ -263,11 +263,13 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   launch. An MSI installer is provided in addition to the portable ZIP.
 - No Replay Buffer.
 - The built-in editor (Review → Edit → Output overlay, opened from a completed recording) supports
-  keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). There is no
-  video preview playback in the overlay yet — the bundled FFmpeg build ships only the mux-only DLL
-  set (avformat/avcodec/avutil/swresample); `avfilter` and `swscale` are not deployed, so decoding
-  frames to a displayable format is not wired up (planned for a later release) — and there is no
-  chapter/container-metadata export (a JSON marker sidecar is written instead; see ADR 0042).
+  keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). It also plays
+  back real decoded video and audio (`EditPlayerSession`/`EditPlayerEngine`, avcodec-based; pixel
+  format conversion is hand-rolled, not `swscale` — the bundled FFmpeg build still ships only the
+  mux-only DLL set) in sync through play/pause/scrub. The one exception: a clip recorded with the
+  Expert 4:4:4 chroma option shows a "Preview unavailable" placeholder instead of a decoded frame
+  (export via stream-copy is unaffected). There is no chapter/container-metadata export (a JSON
+  marker sidecar is written instead; see ADR 0042).
 - **HDR handling covers both monitor and window/game capture** (expert opt-in
   for native HDR10; tone-mapped SDR is the default for HDR desktops). A window on
   an HDR display captures via a scRGB FP16 frame pool and follows the same HDR
