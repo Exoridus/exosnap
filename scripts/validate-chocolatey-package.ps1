@@ -50,10 +50,21 @@
     manifest is found (default location absent, or none was built locally),
     the checksum64-vs-manifest check is skipped with a clear message rather
     than failing — this script cannot invent a MSI hash that was never built.
+
+.PARAMETER RequireManifest
+    Turn the "no manifest found" skip into a hard failure. The default (skip)
+    suits local/dev use where no release build has happened yet; a real
+    Chocolatey submission must never proceed on a checksum64 that was never
+    cross-checked against a built MSI's actual hash. Pass this for the release
+    invocation, per docs/release-checklist.md §7:
+
+        scripts/validate-chocolatey-package.ps1 -Version 0.9.0 `
+            -ManifestPath .workspace/release/0.9.0/artifact-manifest.json -RequireManifest
 #>
 param(
     [string]$Version,
-    [string]$ManifestPath
+    [string]$ManifestPath,
+    [switch]$RequireManifest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -176,6 +187,9 @@ if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     if ($manifestExplicit) {
         Add-Error "Manifest path specified but not found: $ManifestPath"
     }
+    elseif ($RequireManifest) {
+        Add-Error "No release artifact manifest at '$ManifestPath' and -RequireManifest was set — refusing to validate checksum64 without a real built-MSI hash to check it against."
+    }
     else {
         Write-Skip "No release artifact manifest at '$ManifestPath' — checksum64-vs-manifest check skipped."
     }
@@ -186,7 +200,12 @@ else {
         Add-Error "Artifact manifest '$ManifestPath': version '$($manifest.version)' != target version '$Version'"
     }
     elseif (-not $manifest.PSObject.Properties['msiSha256'] -or -not $manifest.msiSha256) {
-        Write-Skip "Artifact manifest '$ManifestPath' has no msiSha256 (MSI build was skipped) — checksum64-vs-manifest check skipped."
+        if ($RequireManifest) {
+            Add-Error "Artifact manifest '$ManifestPath' has no msiSha256 (MSI build was skipped) and -RequireManifest was set."
+        }
+        else {
+            Write-Skip "Artifact manifest '$ManifestPath' has no msiSha256 (MSI build was skipped) — checksum64-vs-manifest check skipped."
+        }
     }
     elseif ($checksum64) {
         $manifestSha = $manifest.msiSha256.ToLowerInvariant()
