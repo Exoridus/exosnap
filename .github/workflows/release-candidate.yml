@@ -103,6 +103,23 @@ jobs:
             exit 1
           fi
           if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
+            # A pushed tag gets the same two guards as rc_tag below (strict shape,
+            # version must match CMakeLists.txt) — it was previously accepted on
+            # nothing more than a "v" prefix, which would have let a mistyped tag
+            # (vfoo), a version-mismatched tag (v0.9.1 while CMake still says
+            # 0.9.0), or an RC-shaped tag pushed directly (v0.9.0-rc1, bypassing
+            # the rc_tag dispatch and its --prerelease marking) all through as a
+            # normal Stable release.
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' is not a final release tag. Expected exactly vX.Y.Z (no prerelease/build suffix) — an RC-shaped tag must be published via the rc_tag workflow_dispatch input, not pushed directly, so it is correctly marked as a GitHub prerelease."
+              exit 1
+            fi
+            cmake_version=$(sed -nE 's/^[[:space:]]*project\([[:space:]]*exosnap[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "$tag_version" != "$cmake_version" ]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' targets version $tag_version, but CMakeLists.txt declares $cmake_version. The artifacts this run builds would be named ExoSnap-$cmake_version-*, not matching the tag. Bump the version first (release-checklist §1) or fix the tag."
+              exit 1
+            fi
             release_tag="$GITHUB_REF_NAME"
           elif [ -n "${RC_TAG:-}" ]; then
             if [[ ! "$RC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
@@ -215,7 +232,21 @@ jobs:
         run: |
           $cfgArgs = @('--preset', 'windows-x64-release')
           $isOfficialRelease = ($env:IS_OFFICIAL -eq 'true')
-          if ($env:PUBKEY) {
+          # resolve-identity's is_official is the sole authority on whether this run
+          # ships a release, so it is the sole authority on whether the build is
+          # OFFICIAL, too -- not merely "the PUBKEY repo variable happens to be set",
+          # which is a repo-wide value with no idea which ref triggered this run. The
+          # previous check-PUBKEY-first order meant a plain release/** branch push
+          # silently built with Crashpad + EXOSNAP_OFFICIAL_BUILD=ON in the main
+          # repo (where PUBKEY is always present) even though resolve-identity called
+          # that same run unofficial and every other gate (-FailOnInconclusive, PDB
+          # hard-fail) treated it as such -- an inconsistent model, not a vulnerability
+          # (release/** never publishes), but worth being exact about.
+          if ($isOfficialRelease) {
+            if (-not $env:PUBKEY) {
+              Write-Error "::error::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable is not set, but this build is releasing under the tag '$($env:RELEASE_TAG)'. A release tag (final or RC) must produce an OFFICIAL artifact (crash capture + embedded update-verification key). Refusing to degrade to an UNOFFICIAL artifact for a release tag. Set the EXOSNAP_UPDATE_PUBLIC_KEY_HEX repository variable and the EXOSNAP_UPDATE_SIGNING_KEY secret, then re-tag (or re-dispatch)."
+              exit 1
+            }
             Write-Host "Official build: crash capture (Sentry DSN) + update checking ENABLED."
             $cfgArgs += @(
               '-DEXOSNAP_ENABLE_CRASH_CAPTURE=ON',
@@ -223,11 +254,8 @@ jobs:
               "-DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=$($env:PUBKEY)",
               '-DFETCHCONTENT_BASE_DIR=C:/es'
             )
-          } elseif ($isOfficialRelease) {
-            Write-Error "::error::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable is not set, but this build is releasing under the tag '$($env:RELEASE_TAG)'. A release tag (final or RC) must produce an OFFICIAL artifact (crash capture + embedded update-verification key). Refusing to degrade to an UNOFFICIAL artifact for a release tag. Set the EXOSNAP_UPDATE_PUBLIC_KEY_HEX repository variable and the EXOSNAP_UPDATE_SIGNING_KEY secret, then re-tag (or re-dispatch)."
-            exit 1
           } else {
-            Write-Host "::warning::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable not set — building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime). Allowed because this build releases nothing."
+            Write-Host "::warning::Building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime) -- this run releases nothing, regardless of whether EXOSNAP_UPDATE_PUBLIC_KEY_HEX happens to be set repo-wide."
           }
           cmake @cfgArgs
 
@@ -467,7 +495,18 @@ jobs:
               echo "::error::Release $TAG already exists and is already published (not a draft). Refusing to re-upload/overwrite a live release's assets. If this tag genuinely needs to be re-released, delete the existing Release first (a deliberate, manual, human decision) and re-run. For an RC, cutting the next candidate (v0.9.0-rc2) is usually the better answer."
               exit 1
             fi
-            echo "Release $TAG already exists as a draft; uploading into it."
+            # A stale draft is a real trap: if a first attempt tagged commit A, then
+            # failed, and the code moved on to commit B before this run, reusing that
+            # draft would upload B's artifacts under a tag that (for an already-existing
+            # tag) still points at A -- a mismatch between what got tested and what the
+            # tag says was released. Verify the tag's target commit matches this run's
+            # before touching the draft at all.
+            tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq '.sha')
+            if [ "$tag_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Release $TAG's tag already exists and points at commit $tag_commit, but this run built commit $GITHUB_SHA. Refusing to upload this run's artifacts into that draft -- they would not match the tag. For an RC, cut the next candidate (a new rc_tag) instead. For a final tag, delete and re-push the tag from the intended commit first (a deliberate, manual decision)."
+              exit 1
+            fi
+            echo "Release $TAG already exists as a draft at the expected commit; uploading into it."
           else
             echo "Creating draft release $TAG (prerelease=$PRERELEASE) at $GITHUB_SHA."
             gh release create "$TAG" \
