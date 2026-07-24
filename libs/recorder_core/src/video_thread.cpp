@@ -1018,16 +1018,30 @@ void VideoThread::Run() {
         const bool nativeHdr = (capMode == OdCaptureMode::HdrNative);
         // The caller committed BT.2020/PQ colour metadata + 10-bit for a native
         // session; if the display instead delivered a surface that resolves to
-        // something else (e.g. an SDR compatibility surface because Advanced-Color
-        // duplication was unavailable), the tags would not match the pixels. Fail
-        // explicitly rather than encode a mislabelled stream.
+        // something else, the tags would not match the pixels. Fail explicitly
+        // rather than encode a mislabelled stream. Two distinct causes reach this
+        // branch: the display never delivered a native-HDR-capable surface (a real
+        // duplication/capability limitation), or the display's own HDR toggle was
+        // switched off after expectNativeHdr was decided at session start (a live
+        // state change, not a capability gap). odSrc.HdrActive() distinguishes
+        // them: Open() AND Reopen() both re-read it live, so by the time the first
+        // frame is finally negotiated (possibly after one or more start-hold
+        // Reopen() retries) it reflects the display's CURRENT HDR state, while
+        // expectNativeHdr stays frozen from the moment the session opened OD.
         if (expectNativeHdr && !nativeHdr) {
             char fmtBuf[32];
             std::ostringstream err;
-            err << "DXGI OD: native HDR10 output was configured but the display delivered a "
-                << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
-                << " surface that cannot carry it (Advanced-Color duplication unavailable). "
-                << "preInit={" << diag.str() << "}";
+            if (!odSrc.HdrActive()) {
+                err << "DXGI OD: HDR was turned off on this display after the recording "
+                    << "started, before the first frame could be captured; the session's "
+                    << "already-committed HDR10 colour metadata no longer matches the "
+                    << "desktop. Stop and restart the recording. preInit={" << diag.str() << "}";
+            } else {
+                err << "DXGI OD: native HDR10 output was configured but the display delivered a "
+                    << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
+                    << " surface that cannot carry it (Advanced-Color duplication unavailable). "
+                    << "preInit={" << diag.str() << "}";
+            }
             m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
             return OdFrameCheck::Fatal;
         }
