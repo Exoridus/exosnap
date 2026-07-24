@@ -203,20 +203,20 @@ TEST_F(UpdaterWindowTest, MsiRebootRequiredHeadlineMentionsRestart) {
     EXPECT_TRUE(mentions_restart);
 }
 
-TEST_F(UpdaterWindowTest, MsiVerifyFailureShowsInstallerRollbackNotRestored) {
+TEST_F(UpdaterWindowTest, MsiVerifyFailureDoesNotClaimAConfirmedRollback) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::VerifyInstallFailedMsi));
 
     QStringList seen;
     for (auto* label : window.findChildren<QLabel*>())
         seen << label->text();
-    bool rolled_back = false;
+    bool could_not_confirm = false;
     bool restored = false;
     for (const QString& text : seen) {
-        rolled_back = rolled_back || text.contains(QStringLiteral("Windows Installer rolled back"));
+        could_not_confirm = could_not_confirm || text.contains(QStringLiteral("could not be confirmed"));
         restored = restored || text.contains(QStringLiteral("was restored"));
     }
-    EXPECT_TRUE(rolled_back);
+    EXPECT_TRUE(could_not_confirm);
     EXPECT_FALSE(restored);
     // Same actions as the portable B3 red card.
     const QStringList buttons = window.footerButtonLabels();

@@ -153,7 +153,6 @@ jobs:
           if ($env:PUBKEY -and $isVersionTag) { $extraArgs += '-FailOnInconclusive' }
           & scripts/build-release-artifacts.ps1 -SkipConfigure @extraArgs
           exit $LASTEXITCODE
-        shell: pwsh
 
       # Archive the Release PDBs for offline symbolication of crash minidumps
       # (ADR 0017 § Symbol pipeline). Keyed by version + run id so a given build's
@@ -316,12 +315,25 @@ jobs:
 
       # Create the Release as a DRAFT so it (and its asset URLs) are invisible to
       # the in-app updater until every check below passes. Idempotent: if a human
-      # pre-created the Release, reuse it rather than erroring.
+      # (or an earlier, still-draft run of this same job) pre-created the Release,
+      # reuse it rather than erroring. But `gh release view` only proves the Release
+      # EXISTS, not that it is still a draft — a workflow rerun (or a second
+      # workflow_dispatch) against a tag whose Release was already published by a
+      # prior successful run would otherwise fall through to the upload step below
+      # and `--clobber` live, publicly-visible assets before they are re-verified,
+      # breaking the "never half-published" guarantee this job exists to provide.
+      # Hard-fail instead: a published Release for this tag is a completed run: there
+      # is nothing left for this job to safely do.
       - name: Create draft GitHub Release (if absent)
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; uploading into it."
+            is_draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft')
+            if [ "$is_draft" != "true" ]; then
+              echo "::error::Release $TAG already exists and is already published (not a draft). Refusing to re-upload/overwrite a live release's assets. If this tag genuinely needs to be re-released, delete the existing Release first (a deliberate, manual, human decision) and re-run."
+              exit 1
+            fi
+            echo "Release $TAG already exists as a draft; uploading into it."
           else
             echo "Creating draft release $TAG."
             gh release create "$TAG" \

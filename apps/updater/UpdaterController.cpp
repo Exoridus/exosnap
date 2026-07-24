@@ -140,10 +140,16 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
         break;
-    case FailureCase::VerifyInstallFailedMsi: // B3-MSI (msiexec managed its own rollback)
+    case FailureCase::VerifyInstallFailedMsi: // B3-MSI (post-install state could not be confirmed)
         state_.variant = TerminalVariant::Red;
+        // Deliberately does not claim a rollback happened: runVerify() only reads the
+        // registry install path and checks the installed version afterward — it never
+        // queries Windows Installer for an actual rollback/repair outcome. msiexec
+        // returned 0 (success), so asserting "rolled back" here would be a guess this
+        // code cannot back up; only "could not confirm" is truthful.
         state_.footer_text = QStringLiteral(
-            "Update verification failed — Windows Installer rolled back to the previous version.");
+            "Update verification failed — the installed version could not be confirmed. "
+            "Windows Installer may have kept or restored the previous version.");
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
         break;

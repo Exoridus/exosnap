@@ -26,12 +26,22 @@ TEST(SemVer, ParseWithVPrefix) {
 }
 
 TEST(SemVer, ParseWithPrereleaseLabel) {
-    // Prerelease suffix is tolerated but ignored in comparison
+    // Deliberately tolerant: release_locator.cpp's Preview channel depends on
+    // parsing real prerelease GitHub tags (e.g. "v0.9.0-rc1") by their numeric
+    // major.minor.patch alone. See semver.cpp's ParseSemVer comment for the
+    // known consequence (a prerelease and its same-numbered final release
+    // compare equal here) and where that would and wouldn't be a problem.
     auto v = ParseSemVer("2.0.0-rc1");
     ASSERT_TRUE(v.has_value());
     EXPECT_EQ(v->major, 2u);
     EXPECT_EQ(v->minor, 0u);
     EXPECT_EQ(v->patch, 0u);
+}
+
+TEST(SemVer, ParseWithBuildMetadata) {
+    auto v = ParseSemVer("1.2.3+build.5");
+    ASSERT_TRUE(v.has_value());
+    EXPECT_EQ(v->patch, 3u);
 }
 
 TEST(SemVer, ParseInvalidEmpty) {

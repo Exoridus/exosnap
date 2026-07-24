@@ -94,16 +94,19 @@ TEST(UpdaterController, VerifyInstallFailedIsRedRestored) {
     EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
 }
 
-TEST(UpdaterController, VerifyInstallFailedMsiSaysInstallerRolledBackNotRestored) {
+TEST(UpdaterController, VerifyInstallFailedMsiDoesNotClaimAConfirmedRollback) {
     UpdaterController c = MakeController();
     c.onFailure(FailureCase::VerifyInstallFailedMsi, QString());
 
     const UpdaterUiState& s = c.state();
     EXPECT_EQ(s.steps[size_t(UpStep::Verify)], StepStatus::Failed);
     EXPECT_EQ(s.variant, TerminalVariant::Red);
-    // MSI has no portable-style backup: the copy must credit msiexec's own
-    // rollback, never the portable "was restored" wording.
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("Windows Installer rolled back")));
+    // MSI has no portable-style backup, so the portable "was restored" wording (which
+    // asserts a specific outcome) must never appear here. But runVerify() never queries
+    // Windows Installer for an actual rollback outcome either -- it only re-reads the
+    // registry install path and re-checks the version -- so the copy must not assert a
+    // rollback happened, only that the post-install state could not be confirmed.
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("could not be confirmed")));
     EXPECT_FALSE(s.footer_text.contains(QStringLiteral("was restored")));
     EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
     EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
