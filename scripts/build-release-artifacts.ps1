@@ -472,7 +472,19 @@ if (-not $SkipBuild) {
     if (-not $SkipConfigure) {
         Invoke-Heartbeat -Name 'cmake configure' -FilePath 'cmake' -Arguments @('--preset', $Preset)
     }
-    Invoke-Heartbeat -Name 'cmake build (Release exosnap)' -FilePath 'cmake' -Arguments @('--build', '--preset', "$Preset-exosnap")
+    # Not `--build --preset "$Preset-exosnap"`: that resolved and ran fine on this
+    # dev machine (both directly and through this same Invoke-Heartbeat/Start-Process
+    # path) but failed on the GitHub Actions windows-2022 runner on the first real
+    # official-build CI run with "CMake Error: Invalid value used with --preset" --
+    # immediate, before any build output, i.e. preset-name resolution itself failed
+    # in that environment for a reason not pinned down (not a missing preset: the
+    # 'cmake configure' call two lines up, also via --preset, succeeds first). $BuildDir
+    # already resolves to the exact same binary directory the preset would (both derive
+    # from build/$Preset), so building it directly sidesteps CMake's build-preset
+    # lookup entirely rather than depending on it working identically across
+    # environments.
+    Invoke-Heartbeat -Name 'cmake build (Release exosnap)' -FilePath 'cmake' `
+        -Arguments @('--build', $BuildDir, '--config', 'Release', '--target', 'exosnap')
 }
 else {
     Write-Step "Skipping configure/build (-SkipBuild)."
