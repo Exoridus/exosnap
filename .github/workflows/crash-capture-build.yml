@@ -67,13 +67,19 @@ jobs:
       # not re-clone and re-build the whole dependency. Keyed on the pinned
       # sentry-native version embedded in VendorSentry.cmake; bump the version
       # there and the cache key rotates automatically.
+      # Key (and restore-keys fallback) is scoped by generator ("ninja", hardcoded
+      # to match the -G Ninja configure below): a cache saved under a differently-
+      # generated build previously caused "CMake Error: generator : Ninja does not
+      # match the generator used previously" on the FetchContent googletest
+      # subbuild, whose own CMakeCache.txt lives under this same C:/es tree and
+      # does not get regenerated just because the outer project reconfigures.
       - name: Cache FetchContent deps (sentry-native + Crashpad)
         uses: actions/cache@v4
         with:
           path: C:/es
-          key: es-fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/VendorSentry.cmake') }}
+          key: es-fetchcontent-${{ runner.os }}-ninja-${{ hashFiles('cmake/VendorSentry.cmake') }}
           restore-keys: |
-            es-fetchcontent-${{ runner.os }}-
+            es-fetchcontent-${{ runner.os }}-ninja-
 
       # Configure with a SHORT FetchContent base (C:/es) per VendorSentry.cmake's
       # MAX_PATH guidance. Ninja + sccache mirror the rest of CI. OFFICIAL_BUILD
