@@ -87,6 +87,8 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.13.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics provider, fallback behavior. |
 | `1.0.0`  | First stable release (cross-vendor RC gate) | Cross-vendor matrix + quality-validation matrix (SSIM/VMAF, A/V-sync, long recordings across all vendors) — the vendor-dependent half of RC stabilization. Ships only once these promises are genuinely validated. |
 
+NVIDIA quality-measurement down payment: see [`docs/development/encoder-quality-matrix.md`](development/encoder-quality-matrix.md).
+
 **Prioritization rationale:** an NVIDIA user benefits immediately from reliable recording, recovery,
 and visible status. Additional vendor support mainly widens the audience; it does not close a
 reliability gap for existing users. So reliability-and-feature work for the existing user — diagnostics
