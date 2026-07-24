@@ -648,6 +648,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_split_sentinel_policy PRIVATE src)
 
+# test_y4m_reader: pure unit tests for the YUV4MPEG2 header/frame parser
+# backing the encoder quality matrix harness's probe (no GPU needed).
+exosnap_add_gtest(
+    NAME test_y4m_reader
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_y4m_reader.cpp src/y4m_reader.cpp
+)
+target_include_directories(test_y4m_reader PRIVATE src)
+
 # test_nvenc_output_ring: pure unit tests for the async output-ring free-slot
 # scan (FindFreeOutputSlot) backing the async submit path's output-buffer
 # allocation (no GPU needed).
