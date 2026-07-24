@@ -17,6 +17,12 @@ import argparse
 import math
 import sys
 
+# Relative (not absolute) pivot-singularity tolerance for _solve_linear_system,
+# expressed as a fraction of the solved matrix's own largest-magnitude entry.
+# See _solve_linear_system's docstring for why this must be relative and how
+# this value was chosen.
+_SINGULAR_REL_TOL = 1e-15
+
 
 def bd_rate(rates_a, metrics_a, rates_b, metrics_b):
     """BD-rate (Bjontegaard-delta rate) between curve A (baseline) and curve B
@@ -78,14 +84,33 @@ def _solve_linear_system(a, b):
     """Solves a*x = b for a square matrix `a` (list of rows) via Gaussian
     elimination with partial pivoting. Stdlib-only 4x4 solver — small and
     fixed-size enough that numerical stability is not a practical concern
-    for this harness's rate-distortion curves.
+    for well-separated rate-distortion sample points.
+
+    The singularity guard compares each pivot to a fraction of the matrix's
+    own largest-magnitude entry rather than to a bare absolute constant.
+    _polyfit3 builds `a` from sums of x^0..x^6 over quality-metric values
+    (e.g. VMAF scores in roughly the 0-100 range), so entries routinely
+    reach 1e6-1e12+ even for perfectly reasonable, well-separated sample
+    points — this harness's own self-test data bottoms out around a
+    relative pivot of ~1e-14. A fixed absolute threshold (previously
+    1e-12) would never fire for matrices at that scale no matter how
+    ill-conditioned they were in relative terms, silently handing back
+    numerically meaningless coefficients for near-duplicate or
+    tightly-clustered metric samples — a real possibility when a
+    preset/RC sweep plateaus in quality. _SINGULAR_REL_TOL was picked
+    empirically to sit comfortably below that ~1e-14 floor (so normal,
+    well-separated inputs are unaffected) while still catching genuinely
+    clustered inputs, whose relative pivots collapse many orders of
+    magnitude further (see the self-test).
     """
     n = len(b)
     m = [row[:] + [b[i]] for i, row in enumerate(a)]
+    scale = max(abs(v) for row in a for v in row)
+    threshold = _SINGULAR_REL_TOL * scale if scale > 0 else _SINGULAR_REL_TOL
 
     for col in range(n):
         pivot = max(range(col, n), key=lambda r: abs(m[r][col]))
-        if abs(m[pivot][col]) < 1e-12:
+        if abs(m[pivot][col]) < threshold:
             raise ValueError("singular matrix in bd_rate curve fit")
         m[col], m[pivot] = m[pivot], m[col]
         for r in range(n):
@@ -118,10 +143,79 @@ def _self_test():
     check(f"half-bitrate curve near -50% (got {half:.2f})", -55.0 < half < -45.0)
 
     # Candidate needs double the bitrate for the same quality -> positive,
-    # roughly symmetric in log-space to the halving case above.
+    # exactly symmetric in log-space to the halving case above. Because
+    # _polyfit3 is OLS with an intercept and rates_double is a uniform
+    # constant-factor (2x) scale of `rates` at the *same* metrics, the fit
+    # only shifts curve B's constant term (c0) — c1/c2/c3 come out
+    # identical to curve A's and cancel exactly in the BD-rate subtraction.
+    # That makes the true BD-rate exactly (2 - 1) * 100 = +100.00%, the
+    # mirror image of half-bitrate's exact -50.00% above (hand-verified;
+    # matches the tight tolerance already used for the halving case).
     rates_double = [r * 2 for r in rates]
     double = bd_rate(rates, metrics, rates_double, metrics)
-    check(f"double-bitrate curve is positive (got {double:.2f})", double > 45.0)
+    check(f"double-bitrate curve near +100% (got {double:.2f})", 95.0 < double < 105.0)
+
+    # Two curves with genuinely different SHAPES (not a uniform rate scale)
+    # and a partial (non-identical) quality-range overlap, to exercise the
+    # fit's curvature terms (c1/c2/c3) and the x^2/x^3/x^4 integration terms
+    # in _polyint3. The three cases above only ever scale curve B's rates by
+    # a constant factor at identical metrics, which — as noted above — only
+    # ever moves c0; c1/c2/c3 are identical between curve A and curve B and
+    # cancel out of the BD-rate subtraction, so a bug in the higher-order
+    # fit or integration terms would go completely undetected by those
+    # cases alone.
+    #
+    # Approach taken: (a) hand-derived exact expected value, not (b) a
+    # coarse discriminating check, because it was workable here. Curve A's
+    # log10(rate) is built from a KNOWN, exactly-linear function of quality
+    # metric x: fA(x) = -2 + 0.05*x. Curve B's is fA(x) plus a KNOWN
+    # quadratic term: fB(x) = fA(x) + 0.001*(x-90)**2 — enough to make c1
+    # and c2 differ from curve A's while staying hand-integrable. Because
+    # each curve has exactly 4 points, _polyfit3's 4x4 normal-equations
+    # solve is an exact interpolation (not a lossy least-squares fit) here,
+    # so the fitted coefficients exactly reproduce fA and fB algebraically.
+    # That makes the BD-rate integral derivable in closed form without
+    # going through the code under test:
+    #   avg[(x-90)^2 over [lo,hi]] = ((hi-90)^3 - (lo-90)^3) / (3*(hi-lo))
+    #   D = 0.001 * avg[(x-90)^2]   (curve B's average log-rate offset from
+    #                                curve A; the average of fA itself
+    #                                cancels exactly in the subtraction)
+    #   bd_rate = (10**D - 1) * 100
+    metrics_shape_a = [80, 85, 90, 95]
+    metrics_shape_b = [81, 84, 91, 94]  # narrower, partially-overlapping range
+
+    def _fa(x):
+        return -2 + 0.05 * x
+
+    rates_shape_a = [10 ** _fa(x) for x in metrics_shape_a]
+    rates_shape_b = [10 ** (_fa(x) + 0.001 * (x - 90) ** 2) for x in metrics_shape_b]
+    shape = bd_rate(rates_shape_a, metrics_shape_a, rates_shape_b, metrics_shape_b)
+    shape_lo, shape_hi = 81.0, 94.0
+    avg_quad = ((shape_hi - 90) ** 3 - (shape_lo - 90) ** 3) / (3 * (shape_hi - shape_lo))
+    expected_shape = (10 ** (0.001 * avg_quad) - 1) * 100.0
+    check(
+        f"differently-shaped partial-overlap curves match hand-derived BD-rate "
+        f"(got {shape:.6f}, expected {expected_shape:.6f})",
+        abs(shape - expected_shape) < 1e-6,
+    )
+
+    # Closely-clustered/tightly-spaced metric values: a preset/RC sweep
+    # that has plateaued in quality can produce samples this close
+    # together. Under the OLD absolute pivot threshold (1e-12) this matrix
+    # silently "solved" despite being severely ill-conditioned — verified
+    # by hand: the fit's residuals at the 4 sample points were ~4e-4
+    # (versus the ~1e-12 expected for an exact 4-point cubic
+    # interpolation), and the fitted c0 came out around -291 for
+    # log10(rate) values that are actually ~2.7. The relative threshold in
+    # _solve_linear_system correctly identifies this matrix as unreliable
+    # and raises instead of silently returning that garbage.
+    metrics_clustered = [90.0000, 90.0001, 90.0002, 90.0003]
+    rates_clustered = [500, 501, 503, 506]
+    try:
+        _polyfit3(metrics_clustered, [math.log10(r) for r in rates_clustered])
+        failures.append("expected ValueError for near-singular clustered metrics")
+    except ValueError:
+        pass
 
     # Fewer than 4 points must raise, not silently misbehave.
     try:
