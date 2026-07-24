@@ -164,12 +164,14 @@ jobs:
 
       # Pinned so the release pipeline can't silently pick up a new WiX major/minor
       # mid-cycle; verified working (4.0.5) as of this pin. Bump deliberately.
+      #
+      # No separate EULA-acceptance step: WiX v4's CLI (build/msi/burn/extension/
+      # convert/format) has no `eula` command at all -- a leftover `wix eula accept
+      # wix7` step here (presumably inherited from a WiX v3-era workflow) hard-failed
+      # with WIX0118 ("Additional argument 'eula' was unexpected") the first time an
+      # official-build CI run actually reached it, on the first real rc_tag dispatch.
       - name: Install WiX Toolset
         run: dotnet tool install --global wix --version 4.0.5
-        shell: pwsh
-
-      - name: Accept WiX EULA
-        run: wix eula accept wix7
         shell: pwsh
 
       - name: Set up MSVC environment
