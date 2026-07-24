@@ -17,11 +17,14 @@ import argparse
 import math
 import sys
 
-# Relative (not absolute) pivot-singularity tolerance for _solve_linear_system,
-# expressed as a fraction of the solved matrix's own largest-magnitude entry.
-# See _solve_linear_system's docstring for why this must be relative and how
-# this value was chosen.
-_SINGULAR_REL_TOL = 1e-15
+# Pivot-singularity tolerance for _solve_linear_system, applied AFTER the
+# matrix has been symmetrically equilibrated to a unit diagonal (see that
+# function's docstring). Because equilibration makes every column's scale
+# comparable (diagonal exactly 1, off-diagonals bounded in [-1, 1] by
+# Cauchy-Schwarz), this single constant is meaningful across all columns
+# regardless of how wildly the *un-equilibrated* matrix's entries vary in
+# magnitude -- unlike a threshold compared against a raw matrix entry.
+_SINGULAR_REL_TOL = 1e-14
 
 
 def bd_rate(rates_a, metrics_a, rates_b, metrics_b):
@@ -86,31 +89,56 @@ def _solve_linear_system(a, b):
     fixed-size enough that numerical stability is not a practical concern
     for well-separated rate-distortion sample points.
 
-    The singularity guard compares each pivot to a fraction of the matrix's
-    own largest-magnitude entry rather than to a bare absolute constant.
-    _polyfit3 builds `a` from sums of x^0..x^6 over quality-metric values
-    (e.g. VMAF scores in roughly the 0-100 range), so entries routinely
-    reach 1e6-1e12+ even for perfectly reasonable, well-separated sample
-    points — this harness's own self-test data bottoms out around a
-    relative pivot of ~1e-14. A fixed absolute threshold (previously
-    1e-12) would never fire for matrices at that scale no matter how
-    ill-conditioned they were in relative terms, silently handing back
-    numerically meaningless coefficients for near-duplicate or
-    tightly-clustered metric samples — a real possibility when a
-    preset/RC sweep plateaus in quality. _SINGULAR_REL_TOL was picked
-    empirically to sit comfortably below that ~1e-14 floor (so normal,
-    well-separated inputs are unaffected) while still catching genuinely
-    clustered inputs, whose relative pivots collapse many orders of
-    magnitude further (see the self-test).
+    `a` is always _polyfit3's normal-equations matrix A^T A (symmetric
+    positive-semidefinite by construction, with a[i][i] = sum(x^(2i)) over
+    the quality-metric sample points). Its raw entries span many orders of
+    magnitude by *design*, not because of ill-conditioning: column 0 holds
+    x^0..x^3 sums (roughly 1-1e6 for VMAF-range x), column 3 holds x^3..x^6
+    sums (roughly 1e6-1e12+) — a spread that exists identically for
+    perfectly well-separated sample points (e.g. metrics=[95, 96, 97, 98],
+    an ordinary quality sweep) and for genuinely near-duplicate ones alike.
+    A threshold compared against any single raw-matrix scale reference
+    (the previous approach used the whole matrix's largest entry) therefore
+    cannot distinguish "this column is small because x^0..x^3 sums are
+    inherently smaller than x^3..x^6 sums" from "this column has
+    genuinely lost its information during elimination" — it produced false
+    positives on realistic, well-conditioned sweep data (see the
+    regression test for the [95, 96, 97, 98] case).
+
+    The fix: symmetrically equilibrate `a` before elimination, i.e. solve
+    (D A D) x' = D b for x' = D^-1 x, where D = diag(1/sqrt(a[i][i])). This
+    is the standard "correlation matrix" transformation for an SPD matrix —
+    it rescales every row and column so the diagonal is exactly 1, and by
+    Cauchy-Schwarz every off-diagonal entry of the equilibrated matrix is
+    bounded to [-1, 1] regardless of the original matrix's scale. Once
+    equilibrated, every column is on the *same* footing (unit diagonal), so
+    a single fixed relative threshold (_SINGULAR_REL_TOL) applied to the
+    equilibrated pivots is finally an apples-to-apples comparison across
+    columns — unlike comparing raw x^0-column pivots against a scale set by
+    the x^6 column. Row swaps during partial pivoting only reorder
+    equations, never unknowns, so D itself needs no bookkeeping through the
+    swaps — only the final x = D x' undo at the end.
     """
     n = len(b)
-    m = [row[:] + [b[i]] for i, row in enumerate(a)]
-    scale = max(abs(v) for row in a for v in row)
-    threshold = _SINGULAR_REL_TOL * scale if scale > 0 else _SINGULAR_REL_TOL
+
+    # D = diag(1/sqrt(a[i][i])): the per-unknown equilibration scale. a[i][i]
+    # is a sum of even powers of the sample points, so it is always > 0
+    # unless that power's column carries no information at all (e.g. every
+    # sample point is exactly 0) — a genuine degenerate/singular case.
+    d = [0.0] * n
+    for i in range(n):
+        diag = a[i][i]
+        if diag <= 0:
+            raise ValueError("singular matrix in bd_rate curve fit")
+        d[i] = 1.0 / math.sqrt(diag)
+
+    # Build the equilibrated augmented matrix once; ordinary Gaussian
+    # elimination with partial pivoting from here on.
+    m = [[a[i][j] * d[i] * d[j] for j in range(n)] + [b[i] * d[i]] for i in range(n)]
 
     for col in range(n):
         pivot = max(range(col, n), key=lambda r: abs(m[r][col]))
-        if abs(m[pivot][col]) < threshold:
+        if abs(m[pivot][col]) < _SINGULAR_REL_TOL:
             raise ValueError("singular matrix in bd_rate curve fit")
         m[col], m[pivot] = m[pivot], m[col]
         for r in range(n):
@@ -120,7 +148,8 @@ def _solve_linear_system(a, b):
             for c in range(col, n + 1):
                 m[r][c] -= factor * m[col][c]
 
-    return [m[i][n] / m[i][i] for i in range(n)]
+    x_prime = [m[i][n] / m[i][i] for i in range(n)]
+    return [x_prime[i] * d[i] for i in range(n)]
 
 
 def _self_test():
@@ -199,6 +228,33 @@ def _self_test():
         abs(shape - expected_shape) < 1e-6,
     )
 
+    # Regression test for a real false positive found in review: an entirely
+    # ordinary, evenly-spaced quality sweep with NO clustering at all
+    # (metrics=[95, 96, 97, 98], step of exactly 1 VMAF point) used to raise
+    # ValueError under a singularity guard that compared pivots to the
+    # whole matrix's single largest entry. _polyfit3's normal-equations
+    # matrix mixes x^0..x^6 sums of these values, so its raw entries span
+    # ~1e6 to ~3e12 by construction — nothing to do with how well-separated
+    # the 4 sample points actually are (they're 1 full VMAF point apart,
+    # about as ordinary as a sweep gets). Same hand-derivation technique as
+    # the "differently shaped" case above: curve A is a KNOWN linear
+    # function of quality, curve B is that function plus a KNOWN quadratic
+    # offset, so the expected BD-rate is derivable in closed form.
+    metrics_narrow_a = [95, 96, 97, 98]
+    metrics_narrow_b = [95, 96, 97, 98]
+    rates_narrow_a = [10 ** _fa(x) for x in metrics_narrow_a]
+    rates_narrow_b = [10 ** (_fa(x) + 0.0005 * (x - 96.5) ** 2) for x in metrics_narrow_b]
+    narrow = bd_rate(rates_narrow_a, metrics_narrow_a, rates_narrow_b, metrics_narrow_b)
+    narrow_lo, narrow_hi = 95.0, 98.0
+    avg_quad_narrow = ((narrow_hi - 96.5) ** 3 - (narrow_lo - 96.5) ** 3) / (3 * (narrow_hi - narrow_lo))
+    expected_narrow = (10 ** (0.0005 * avg_quad_narrow) - 1) * 100.0
+    check(
+        f"realistic narrow-range evenly-spaced metrics (95-98) do not falsely "
+        f"trip the singularity guard and match hand-derived BD-rate "
+        f"(got {narrow:.6f}, expected {expected_narrow:.6f})",
+        abs(narrow - expected_narrow) < 1e-6,
+    )
+
     # Closely-clustered/tightly-spaced metric values: a preset/RC sweep
     # that has plateaued in quality can produce samples this close
     # together. Under the OLD absolute pivot threshold (1e-12) this matrix
@@ -206,9 +262,13 @@ def _self_test():
     # by hand: the fit's residuals at the 4 sample points were ~4e-4
     # (versus the ~1e-12 expected for an exact 4-point cubic
     # interpolation), and the fitted c0 came out around -291 for
-    # log10(rate) values that are actually ~2.7. The relative threshold in
-    # _solve_linear_system correctly identifies this matrix as unreliable
-    # and raises instead of silently returning that garbage.
+    # log10(rate) values that are actually ~2.7. The equilibrated relative
+    # threshold in _solve_linear_system correctly identifies this matrix as
+    # unreliable and raises instead of silently returning that garbage —
+    # while the [95, 96, 97, 98] case just above, despite spanning a
+    # similarly narrow absolute range, is NOT flagged: its 4 sample points
+    # are ~1e14x farther apart relative to floating-point precision than
+    # this case's 1e-4-spaced points are.
     metrics_clustered = [90.0000, 90.0001, 90.0002, 90.0003]
     rates_clustered = [500, 501, 503, 506]
     try:
