@@ -109,6 +109,13 @@ jobs:
     name: advisory-unused-checks
     runs-on: windows-2022
     continue-on-error: true  # NEVER block the PR — informational only
+    # No job here had an explicit timeout, so a hang (observed: some step stalls
+    # indefinitely rather than failing) ran to GitHub's default 6h job ceiling —
+    # eating runner time and, worse, blocking `gh pr merge --auto` the whole time
+    # (an in-progress check blocks auto-merge regardless of continue-on-error,
+    # which only governs how a *completed* failure is treated). 45 min is generous
+    # for a full Qt+Ninja debug build plus the clang-tidy/cppcheck advisory passes.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
