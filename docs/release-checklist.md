@@ -153,21 +153,3 @@ by hand, every release:
       `scoop update` runs against the new GitHub Release — no manual bucket edit needed. Still keep
       this in-repo template's `version`, `architecture.64bit.url`, and `hash` current so a
       first-time copy into the bucket (`packaging/scoop/README.md`) starts from the right values.
-
----
-
-## Known limitations to address before MSI-heavy adoption (0.9.0)
-
-Two MSI-path copy/behavior decisions ship as known limitations in 0.9.0. They are acceptable for the
-portable-first 0.9.0 audience but should be fixed before MSI adoption grows:
-
-1. **MSI verify-failure reuses the portable "previous version was restored" copy — untruthful for
-   MSI.** The post-install verification-failure card (case B3 / red) says the previous version was
-   restored. That is accurate for the portable staged-rename path (which really does restore its
-   backup), but the MSI path has no portable-style backup to restore — `msiexec` manages its own
-   rollback. The copy should be MSI-specific ("Windows Installer rolled back to the previous version")
-   rather than reusing the portable string.
-2. **`msiexec` exit 3010 maps to a C2 failure card — should be a "restart Windows to finish"
-   terminal.** Exit code 3010 (`ERROR_SUCCESS_REBOOT_REQUIRED`) means the upgrade succeeded but needs
-   a reboot to complete; today it is rendered as a generic C2 failure. It should get its own terminal
-   state that tells the user the update installed and Windows needs a restart to finish — not an error.

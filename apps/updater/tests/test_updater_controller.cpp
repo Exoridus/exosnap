@@ -94,6 +94,38 @@ TEST(UpdaterController, VerifyInstallFailedIsRedRestored) {
     EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
 }
 
+TEST(UpdaterController, VerifyInstallFailedMsiSaysInstallerRolledBackNotRestored) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::VerifyInstallFailedMsi, QString());
+
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.steps[size_t(UpStep::Verify)], StepStatus::Failed);
+    EXPECT_EQ(s.variant, TerminalVariant::Red);
+    // MSI has no portable-style backup: the copy must credit msiexec's own
+    // rollback, never the portable "was restored" wording.
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("Windows Installer rolled back")));
+    EXPECT_FALSE(s.footer_text.contains(QStringLiteral("was restored")));
+    EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
+}
+
+TEST(UpdaterController, MsiRebootRequiredIsTerminalSuccessWithRestartCopy) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::MsiRebootRequired, QString());
+
+    const UpdaterUiState& s = c.state();
+    // The upgrade applied: the Install step is Done, not Failed, and this is its
+    // own terminal variant rather than a red failure card.
+    EXPECT_EQ(s.steps[size_t(UpStep::Install)], StepStatus::Done);
+    EXPECT_EQ(s.variant, TerminalVariant::RebootRequired);
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("restart Windows")));
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("installed")));
+    // Not the generic C2 failure wording.
+    EXPECT_FALSE(s.footer_text.contains(QStringLiteral("Installation failed")));
+    EXPECT_EQ(s.primary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(s.secondary_action.isEmpty());
+}
+
 TEST(UpdaterController, LaunchFailedIsGreenSoftSuccess) {
     UpdaterController c = MakeController();
     c.onFailure(FailureCase::LaunchFailed, QString());

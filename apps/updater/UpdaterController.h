@@ -16,17 +16,22 @@
 
 enum class UpStep : int { Download = 0, CloseApp, Install, Verify, Launch, Count };
 enum class StepStatus : uint8_t { Queued, Working, Done, Failed };
-enum class TerminalVariant : uint8_t { None, Success, Amber, Red, Green };
+// RebootRequired is a terminal SUCCESS (the MSI upgrade applied; Windows must be
+// restarted to finish), distinct from the Green soft-success (installed + verified,
+// only the auto-relaunch didn't happen).
+enum class TerminalVariant : uint8_t { None, Success, Amber, Red, Green, RebootRequired };
 
 enum class FailureCase : uint8_t { // failure matrix cases
-    DownloadFailed,                // A1  -> Amber
-    VerifyDownloadFailed,          // A2  -> Red (security stop)
-    AppWontClose,                  // B1  -> Amber
-    InstallFailed,                 // B2  -> Amber
-    VerifyInstallFailed,           // B3  -> Red (restored)
-    LaunchFailed,                  // B4  -> Green (soft success)
-    UacDeclined,                   // C1  -> Amber
-    MsiFailed,                     // C2  -> Red
+    DownloadFailed,                // A1     -> Amber
+    VerifyDownloadFailed,          // A2     -> Red (security stop)
+    AppWontClose,                  // B1     -> Amber
+    InstallFailed,                 // B2     -> Amber
+    VerifyInstallFailed,           // B3     -> Red (portable: previous version restored)
+    VerifyInstallFailedMsi,        // B3-MSI -> Red (msiexec rolled back to the previous version)
+    LaunchFailed,                  // B4     -> Green (soft success)
+    UacDeclined,                   // C1     -> Amber
+    MsiFailed,                     // C2     -> Red
+    MsiRebootRequired,             // C3     -> RebootRequired (terminal success; restart pending)
 };
 
 struct UpdaterUiState {

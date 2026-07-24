@@ -139,10 +139,12 @@ UpStep RetryEntryStep(FailureCase c) {
         return UpStep::Download;
     case FailureCase::AppWontClose: // B1 (download kept)
         return UpStep::CloseApp;
-    case FailureCase::InstallFailed:       // B2 (staging kept)
-    case FailureCase::VerifyInstallFailed: // B3 (previous version restored)
-    case FailureCase::UacDeclined:         // C1 (re-handoff)
-    case FailureCase::MsiFailed:           // C2
+    case FailureCase::InstallFailed:          // B2 (staging kept)
+    case FailureCase::VerifyInstallFailed:    // B3 (portable: previous version restored)
+    case FailureCase::VerifyInstallFailedMsi: // B3-MSI (msiexec rolled back)
+    case FailureCase::UacDeclined:            // C1 (re-handoff)
+    case FailureCase::MsiFailed:              // C2
+    case FailureCase::MsiRebootRequired:      // C3 (terminal success; no Retry offered)
         return UpStep::Install;
     case FailureCase::LaunchFailed: // B4 (soft success; manual start)
         return UpStep::Launch;
@@ -152,6 +154,20 @@ UpStep RetryEntryStep(FailureCase c) {
 
 std::wstring BuildMsiexecParams(const std::wstring& msi_path) {
     return L"/i \"" + msi_path + L"\" /qn /norestart";
+}
+
+MsiExitClass ClassifyMsiExit(unsigned long exit_code) {
+    switch (exit_code) {
+    case 0: // ERROR_SUCCESS
+        return MsiExitClass::Success;
+    case 3010: // ERROR_SUCCESS_REBOOT_REQUIRED -- applied, restart to finish
+        return MsiExitClass::RebootRequired;
+    default:
+        // Everything else (1603 fatal, 1618 another install in progress, 1638
+        // already installed, ...) is a real error. 1641 cannot reach here under
+        // /norestart -- see the header note.
+        return MsiExitClass::Failed;
+    }
 }
 
 void* OpenPackageWriteLock(const std::wstring& path) {
@@ -606,7 +622,16 @@ bool UpdaterWorker::runInstallMsi() {
     DWORD exit_code = 0;
     ::GetExitCodeProcess(sei.hProcess, &exit_code);
     ::CloseHandle(sei.hProcess);
-    if (exit_code != 0) {
+    switch (ClassifyMsiExit(exit_code)) {
+    case MsiExitClass::Success:
+        break;
+    case MsiExitClass::RebootRequired:
+        // 3010: the upgrade applied but Windows must restart to finish. This is a
+        // truthful terminal success, not a C2 failure -- and Verify/Launch can't
+        // run against a half-applied install until the reboot, so stop here.
+        emit failed(FailureCase::MsiRebootRequired, QString()); // C3
+        return false;
+    case MsiExitClass::Failed:
         emit failed(FailureCase::MsiFailed, QString::number(exit_code)); // C2, code in detail
         return false;
     }
@@ -632,13 +657,13 @@ bool UpdaterWorker::runVerify() {
         // MakeSwapPlan normalises it) into the registry post-install.
         const std::wstring install_dir = ReadInstallPath().value_or(args_.install_dir.toStdWString());
         if (install_dir.empty()) {
-            emit failed(FailureCase::VerifyInstallFailed,
-                        QStringLiteral("The installer did not record an install location.")); // B3
+            emit failed(FailureCase::VerifyInstallFailedMsi,
+                        QStringLiteral("The installer did not record an install location.")); // B3-MSI
             return false;
         }
         const exosnap::update::SwapPlan msi_plan = MakeSwapPlan(install_dir, manifest_.version);
         if (!VerifyInstalledVersion(msi_plan)) {
-            emit failed(FailureCase::VerifyInstallFailed, QString()); // B3
+            emit failed(FailureCase::VerifyInstallFailedMsi, QString()); // B3-MSI
             return false;
         }
         launch_dir_ = msi_plan.install_dir;

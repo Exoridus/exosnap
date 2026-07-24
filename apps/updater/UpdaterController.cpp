@@ -44,8 +44,10 @@ UpStep FailedStepFor(FailureCase c) {
     case FailureCase::InstallFailed:
     case FailureCase::UacDeclined:
     case FailureCase::MsiFailed:
+    case FailureCase::MsiRebootRequired: // succeeded at Install; restart pending
         return UpStep::Install;
     case FailureCase::VerifyInstallFailed:
+    case FailureCase::VerifyInstallFailedMsi:
         return UpStep::Verify;
     case FailureCase::LaunchFailed:
         return UpStep::Launch;
@@ -94,7 +96,10 @@ void UpdaterController::onAllDone() {
 }
 
 void UpdaterController::onFailure(FailureCase c, const QString& detail) {
-    state_.steps[size_t(FailedStepFor(c))] = StepStatus::Failed;
+    // MsiRebootRequired is a terminal success: its step (Install) actually
+    // completed, so it is marked Done, not Failed.
+    state_.steps[size_t(FailedStepFor(c))] =
+        c == FailureCase::MsiRebootRequired ? StepStatus::Done : StepStatus::Failed;
     state_.status_line.clear();
 
     // Copy is VERBATIM from the failure matrix; %1 = version string
@@ -128,10 +133,17 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
         break;
-    case FailureCase::VerifyInstallFailed: // B3 (restored)
+    case FailureCase::VerifyInstallFailed: // B3 (portable: staged-rename backup restored)
         state_.variant = TerminalVariant::Red;
         state_.footer_text = QStringLiteral(
             "Update verification failed — your previous version was restored.");
+        state_.primary_action = QStringLiteral("Retry");
+        state_.secondary_action = QStringLiteral("Open current version");
+        break;
+    case FailureCase::VerifyInstallFailedMsi: // B3-MSI (msiexec managed its own rollback)
+        state_.variant = TerminalVariant::Red;
+        state_.footer_text = QStringLiteral(
+            "Update verification failed — Windows Installer rolled back to the previous version.");
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
         break;
@@ -155,6 +167,14 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.footer_text =
             QStringLiteral("Installation failed (code %1). Your previous version is still usable.")
                 .arg(detail);
+        state_.primary_action = QStringLiteral("Close");
+        state_.secondary_action.clear();
+        break;
+    case FailureCase::MsiRebootRequired: // C3 (terminal success; restart pending)
+        state_.variant = TerminalVariant::RebootRequired;
+        state_.footer_text = QStringLiteral(
+            "Update installed — restart Windows to finish. Your current version keeps "
+            "working until you restart.");
         state_.primary_action = QStringLiteral("Close");
         state_.secondary_action.clear();
         break;
