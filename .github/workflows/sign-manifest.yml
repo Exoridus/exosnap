@@ -52,6 +52,11 @@ on:
       portable_url:
         required: true
         type: string
+      attach_to_release:
+        description: 'Upload the signed manifest to the GitHub Release from this job. Set false when the caller (release-candidate.yml publish-release) creates + publishes the Release itself and owns the upload.'
+        required: false
+        type: boolean
+        default: true
     secrets:
       EXOSNAP_UPDATE_SIGNING_KEY:
         required: true
@@ -80,10 +85,17 @@ on:
         description: 'Public URL of the portable ZIP release asset'
         required: true
         type: string
+      attach_to_release:
+        description: 'Attach the signed manifest to the (already-existing) GitHub Release. Leave true for the manual escape hatch.'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   sign-manifest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Install pynacl
         run: pip install pynacl
@@ -137,6 +149,41 @@ jobs:
           print(f"Signature: {sig_hex[:16]}...")
           EOF
 
+      # Fail-closed integrity gate. Two things a release must never get wrong:
+      #   (a) the signing key must be the private half of the public key EMBEDDED in
+      #       the shipped binary (EXOSNAP_UPDATE_PUBLIC_KEY_HEX) — otherwise the app
+      #       rejects every signature and the release is invisible to the updater;
+      #   (b) the detached signature must actually verify over the manifest bytes.
+      # Both are checked here against the embedded public key, not merely against the
+      # key we just signed with, so a mismatched keypair hard-fails in CI.
+      - name: Verify keypair + signature against the embedded public key
+        env:
+          SIGNING_KEY_B64:     ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
+          EXPECTED_PUBKEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          python3 - <<'EOF'
+          import base64, os, sys, nacl.signing, nacl.encoding
+
+          seed = base64.b64decode(os.environ["SIGNING_KEY_B64"])
+          sk = nacl.signing.SigningKey(seed)
+          derived = sk.verify_key.encode(encoder=nacl.encoding.HexEncoder).decode().lower()
+          expected = (os.environ.get("EXPECTED_PUBKEY_HEX") or "").strip().lower()
+
+          if not expected:
+              print("::error::EXOSNAP_UPDATE_PUBLIC_KEY_HEX is not set; cannot prove the signing key matches the embedded public key.")
+              sys.exit(1)
+          if derived != expected:
+              print("::error::Signing keypair mismatch: EXOSNAP_UPDATE_SIGNING_KEY is NOT the private half of the embedded "
+                    f"EXOSNAP_UPDATE_PUBLIC_KEY_HEX (derived {derived[:16]}... != embedded {expected[:16]}...). "
+                    "Clients would reject every signature.")
+              sys.exit(1)
+
+          data = open("update-manifest.json", "rb").read()
+          sig = bytes.fromhex(open("update-manifest.json.sig").read().strip())
+          sk.verify_key.verify(data, sig)  # raises nacl.exceptions.BadSignatureError on failure
+          print("Keypair matches the embedded public key and the detached signature verifies.")
+          EOF
+
       - name: Upload manifest as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -148,9 +195,13 @@ jobs:
 
       # Attach the manifest + its detached signature to the GitHub Release for
       # this tag so release_locator (which requires both assets) can surface the
-      # update. The Release must already exist — created by the release-publish
-      # step for a tag push, or manually before a workflow_dispatch run.
+      # update. Skipped in the automated version-tag path (attach_to_release: false):
+      # there the release-candidate publish-release job creates the draft Release,
+      # uploads every asset, re-verifies, and un-drafts, so the Release is guaranteed
+      # to exist before anything is uploaded. Runs on the standalone workflow_dispatch
+      # path (the manual escape hatch), where the Release is expected to already exist.
       - name: Attach manifest to the release
+        if: ${{ inputs.attach_to_release }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
