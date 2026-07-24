@@ -56,7 +56,7 @@
     suits local/dev use where no release build has happened yet; a real
     Chocolatey submission must never proceed on a checksum64 that was never
     cross-checked against a built MSI's actual hash. Pass this for the release
-    invocation, per docs/release-checklist.md §7:
+    invocation, per docs/release-checklist.md §8:
 
         scripts/validate-chocolatey-package.ps1 -Version 0.9.0 `
             -ManifestPath .workspace/release/0.9.0/artifact-manifest.json -RequireManifest
