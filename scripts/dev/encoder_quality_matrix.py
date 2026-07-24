@@ -370,10 +370,16 @@ def _self_test():
     except ValueError:
         pass
 
-    # Fewer than 4 points must raise, not silently misbehave.
+    # Anything other than exactly 4 points must raise, not silently misbehave.
     try:
         bd_rate([1, 2, 3], [1, 2, 3], rates, metrics)
         failures.append("expected ValueError for <4 points")
+    except ValueError:
+        pass
+
+    try:
+        bd_rate([1000, 2000, 4000, 6000, 8000], [80, 85, 88, 90, 93], rates, metrics)
+        failures.append("expected ValueError for >4 points")
     except ValueError:
         pass
 
