@@ -51,16 +51,27 @@ def bd_rate(rates_a, metrics_a, rates_b, metrics_b):
     (candidate), in percent. Negative means B needs less bitrate than A for
     the same quality (an improvement); positive means B is worse.
 
-    Each curve is >= 4 (rate, metric) points. Rates are log-transformed (the
-    standard BD-rate construction: rate-distortion curves are close to linear
-    in log(rate) vs. quality), fit with a cubic polynomial, then the integral
-    of the fitted log-rate over the metric range common to both curves is
-    compared. This mirrors the piecewise log-interpolation approach used by
-    the reference BD-rate implementations (e.g. the JCT-VC Excel/Matlab
-    tools), reimplemented here with only the Python standard library.
+    Each curve is exactly 4 (rate, metric) points -- matching this tool's own
+    matrix sweep (4 CQ points, 4 VBR points per preset; see default_matrix()).
+    Rates are log-transformed (the standard BD-rate construction: rate-
+    distortion curves are close to linear in log(rate) vs. quality), fit with
+    a cubic polynomial, then the integral of the fitted log-rate over the
+    metric range common to both curves is compared. This mirrors the
+    piecewise log-interpolation approach used by the reference BD-rate
+    implementations (e.g. the JCT-VC Excel/Matlab tools), reimplemented here
+    with only the Python standard library.
+
+    Exactly 4 points is a real constraint, not an arbitrary minimum: with 4
+    points, _polyfit3's cubic fit is an EXACT interpolation (4 points, 4
+    degrees of freedom), which is what makes its fit-residual singularity
+    check meaningful (see _polyfit3's docstring). A 5+-point curve would be a
+    genuine least-squares approximation with an inherent nonzero residual
+    even when well-conditioned, which that check cannot distinguish from
+    actual ill-conditioning -- so 5+ points is deliberately rejected rather
+    than silently mismeasured.
     """
-    if len(rates_a) < 4 or len(rates_b) < 4:
-        raise ValueError("bd_rate needs at least 4 (rate, metric) points per curve")
+    if len(rates_a) != 4 or len(rates_b) != 4:
+        raise ValueError("bd_rate needs exactly 4 (rate, metric) points per curve")
     if len(rates_a) != len(metrics_a) or len(rates_b) != len(metrics_b):
         raise ValueError("rates and metrics must be the same length")
 
@@ -116,8 +127,8 @@ def _polyfit3(x, y):
     if max_residual > _FIT_RESIDUAL_TOL:
         raise ValueError(
             "curve fit is unreliable (max residual "
-            f"{max_residual:.3e} > {_FIT_RESIDUAL_TOL:.0e}) — check for "
-            "near-duplicate or too-few distinct metric values"
+            f"{max_residual:.3e} > {_FIT_RESIDUAL_TOL:.0e} at the sample points) — "
+            "the 4 (metric, rate) points do not interpolate cleanly; check the input data"
         )
 
     return coeffs
