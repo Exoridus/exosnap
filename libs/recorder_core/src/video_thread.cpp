@@ -13,6 +13,7 @@
 #include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
 #include "session_internal.h"
+#include "split_sentinel_policy.h"
 #include "yuv_to_bgra.h"
 #include <recorder_core/cursor_sprite.h>
 #include <recorder_core/gpu_hdr_tonemap.h>
@@ -1884,6 +1885,13 @@ void VideoThread::Run() {
     uint64_t segment_start_session_pts_ns = 0;
     uint64_t split_last_seq = m_state.split_request_seq.load();
     bool split_armed = false;
+    // The PTS of the specific frame whose submission consumes the forced-
+    // IDR request — set by maybeArmSplit, consumed by ShouldEmitSplitSentinel
+    // in routePacket. Binds the sentinel to that exact frame instead of
+    // whichever keyframe happens to route next, which is required once
+    // ReapCompleted can surface earlier, already-in-flight packets in the same
+    // iteration (see split_sentinel_policy.h).
+    uint64_t split_forced_pts_ns = 0;
     SplitTriggerSource split_armed_trigger = SplitTriggerSource::ManualButton;
     // Whether an additional trigger arriving while `split_armed` is already
     // pending has been logged for the current boundary (see maybeArmSplit).
@@ -1940,6 +1948,7 @@ void VideoThread::Run() {
             return;
         split_last_seq = seq; // consume manual requests up to here (coalesced)
         split_armed = true;
+        split_forced_pts_ns = pts_ns; // this call's frame is the one that will carry FORCEIDR
         split_armed_secondary_logged = false;
         split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
                                      : SplitTriggerSource::AutomaticDuration;
@@ -2053,7 +2062,7 @@ void VideoThread::Run() {
                                           "cannot keep up with the recording");
                     return false;
                 }
-                if (split_armed && pkt.keyframe) {
+                if (ShouldEmitSplitSentinel(split_armed, split_forced_pts_ns, pkt.keyframe, pkt.pts_ns)) {
                     ++current_segment_index;
                     segment_start_session_pts_ns = pkt.pts_ns;
                     if (split_auto_enabled) {
@@ -2085,6 +2094,50 @@ void VideoThread::Run() {
         }
         return true;
     };
+
+    // Report per-packet diagnostics (encode latency, order-validation
+    // mismatch counters) — shared between the EncodeFrame submit path and
+    // the ReapCompleted drain path below so both origins account
+    // identically.
+    auto reportPacketDiagnostics = [&](const EncodedVideoPacket& pkt, std::chrono::steady_clock::time_point now) {
+        if (pkt.encode_latency_ms >= 0.0)
+            m_state.diagnostics.OnEncodeLatency(now, pkt.encode_latency_ms);
+        if (pkt.output_ts_mismatch)
+            m_state.diagnostics.OnOutputTsMismatch();
+        if (pkt.keyframe_prediction_mismatch)
+            m_state.diagnostics.OnKeyframePredictionMismatch();
+    };
+
+    // Drain packets completed since the last EncodeFrame/ReapCompleted call:
+    // async encoders may signal completions of earlier submissions here
+    // rather than returning them inline from EncodeFrame. Called once per
+    // outer loop iteration with wait_head_ms=0 (non-blocking) so freed
+    // output/input slots are visible before this iteration's tick-emit, and
+    // again with a bounded wait when AcquireFreeSlot finds no free slot,
+    // before that counts as a backpressure drop. Sync encoders (and the sync
+    // fallback) no-op here — they already returned their packet(s) inline
+    // from EncodeFrame.
+    auto reapAndRoute = [&](uint32_t wait_head_ms) -> bool {
+        std::vector<EncodedVideoPacket> reaped;
+        std::string reapErr;
+        if (!nvenc.ReapCompleted(reaped, reapErr, wait_head_ms)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC async reap: " + reapErr);
+            return false;
+        }
+        const auto reap_t = std::chrono::steady_clock::now();
+        for (EncodedVideoPacket& pkt : reaped) {
+            reportPacketDiagnostics(pkt, reap_t);
+            if (!routePacket(std::move(pkt)))
+                return false;
+        }
+        return true;
+    };
+
+    // Bounded wait for ReapCompleted when a slot acquisition fails before
+    // counting it as a backpressure drop. Kept short: this blocks the outer
+    // loop, and a real encoder stall is better served by the existing
+    // sustained-lag resync than by a longer per-tick wait here.
+    constexpr uint32_t kSlotWaitMs = 4;
 
     // --- Frame snapshot (CaptureFrame) ---
     // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for the
@@ -2688,6 +2741,11 @@ void VideoThread::Run() {
             const uint64_t currentElapsed100ns = Qpc100ns(qpcFreq) - epochQpc100ns;
             bool anyWork = false;
 
+            // Drain any async completions before this iteration's tick-emit
+            // so freed slots are available to the catch-up loop below.
+            if (!reapAndRoute(0))
+                goto end_encode_loop;
+
             // Sustained-encoder-lag resync: keep the media clock honest against the
             // wall clock (see the state declaration above). The lag is how far media
             // time (next_tick) trails the wall clock right now.
@@ -2727,6 +2785,13 @@ void VideoThread::Run() {
                 const uint64_t pts_ns = cfr_frame_idx * frame_interval_ns;
 
                 int32_t slot = nvenc.AcquireFreeSlot();
+                if (slot < 0) {
+                    // No free input slot: give the async encoder a bounded chance to
+                    // reap a completion and free one before counting a drop.
+                    if (!reapAndRoute(kSlotWaitMs))
+                        goto end_encode_loop;
+                    slot = nvenc.AcquireFreeSlot();
+                }
                 if (slot < 0) {
                     ++slotStallCount;
                     m_state.diagnostics.OnSlotStall();
@@ -2979,18 +3044,18 @@ void VideoThread::Run() {
                 // so its forced IDR opens the next segment. Done before encode.
                 maybeArmSplit(pts_ns);
 
-                EncodedVideoPacket pkt;
+                std::vector<EncodedVideoPacket> pkts;
                 std::string encErr;
                 m_state.diagnostics.OnEncodeSubmitted();
                 const auto enc_t0 = std::chrono::steady_clock::now();
-                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkts, encErr);
                 const auto enc_t1 = std::chrono::steady_clock::now();
                 // Call-site CPU cost of the submit; the true submit->ready latency
-                // (P5-P7-correct) travels on the packet and is reported only when set.
+                // (P5-P7-correct) travels on each packet and is reported only when set.
                 m_state.diagnostics.OnEncodeSubmitCost(
                     enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                if (pkt.encode_latency_ms >= 0.0)
-                    m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                for (const EncodedVideoPacket& pkt : pkts)
+                    reportPacketDiagnostics(pkt, enc_t1);
 
                 if (!encOk) {
                     m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
@@ -3000,8 +3065,10 @@ void VideoThread::Run() {
                 ++videoFramesCaptured;
                 lastVideoPts = pts_ns;
 
-                if (!routePacket(std::move(pkt)))
-                    goto end_encode_loop;
+                for (EncodedVideoPacket& pkt : pkts) {
+                    if (!routePacket(std::move(pkt)))
+                        goto end_encode_loop;
+                }
 
                 const auto tick_t1 = std::chrono::steady_clock::now();
                 m_state.diagnostics.OnVideoTickTime(
@@ -3063,6 +3130,11 @@ void VideoThread::Run() {
             }
 
             bool anyWork = false;
+
+            // Drain any async completions before this iteration's tick-emit
+            // so freed slots are available to the encode branches below.
+            if (!reapAndRoute(0))
+                goto end_encode_loop;
 
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
@@ -3252,6 +3324,13 @@ void VideoThread::Run() {
 
                 // Acquire a free input slot
                 int32_t slot = nvenc.AcquireFreeSlot();
+                if (slot < 0) {
+                    // No free input slot: give the async encoder a bounded chance to
+                    // reap a completion and free one before counting a drop.
+                    if (!reapAndRoute(kSlotWaitMs))
+                        goto end_encode_loop;
+                    slot = nvenc.AcquireFreeSlot();
+                }
 
                 if (slot >= 0 && hdrNativeActive) {
                     // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
@@ -3288,23 +3367,25 @@ void VideoThread::Run() {
                     performSnapshotIfRequested(slot);
                     maybeArmSplit(framePts_ns);
 
-                    EncodedVideoPacket pkt;
+                    std::vector<EncodedVideoPacket> pkts;
                     std::string encErr;
                     m_state.diagnostics.OnEncodeSubmitted();
                     const auto enc_t0 = std::chrono::steady_clock::now();
-                    bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                    bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
                     const auto enc_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnEncodeSubmitCost(
                         enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                    if (pkt.encode_latency_ms >= 0.0)
-                        m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                    for (const EncodedVideoPacket& pkt : pkts)
+                        reportPacketDiagnostics(pkt, enc_t1);
                     if (!encOk) {
                         m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
                         break;
                     }
                     ++videoFramesCaptured;
-                    if (!routePacket(std::move(pkt)))
-                        goto end_encode_loop;
+                    for (EncodedVideoPacket& pkt : pkts) {
+                        if (!routePacket(std::move(pkt)))
+                            goto end_encode_loop;
+                    }
                     const auto tick_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnVideoTickTime(
                         tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
@@ -3369,16 +3450,16 @@ void VideoThread::Run() {
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);
 
-                            EncodedVideoPacket pkt;
+                            std::vector<EncodedVideoPacket> pkts;
                             std::string encErr;
                             m_state.diagnostics.OnEncodeSubmitted();
                             const auto enc_t0 = std::chrono::steady_clock::now();
-                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
                             const auto enc_t1 = std::chrono::steady_clock::now();
                             m_state.diagnostics.OnEncodeSubmitCost(
                                 enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                            if (pkt.encode_latency_ms >= 0.0)
-                                m_state.diagnostics.OnEncodeLatency(enc_t1, pkt.encode_latency_ms);
+                            for (const EncodedVideoPacket& pkt : pkts)
+                                reportPacketDiagnostics(pkt, enc_t1);
 
                             if (!encOk) {
                                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
@@ -3387,8 +3468,10 @@ void VideoThread::Run() {
 
                             ++videoFramesCaptured;
 
-                            if (!routePacket(std::move(pkt)))
-                                goto end_encode_loop;
+                            for (EncodedVideoPacket& pkt : pkts) {
+                                if (!routePacket(std::move(pkt)))
+                                    goto end_encode_loop;
+                            }
 
                             const auto tick_t1 = std::chrono::steady_clock::now();
                             m_state.diagnostics.OnVideoTickTime(

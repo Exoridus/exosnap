@@ -471,6 +471,38 @@ TEST(PipelineDiagnostics, ForcedKeyframeCounterIncrementsOnSplitArm) {
     EXPECT_EQ(s.video_encoder.forced_keyframes, 2u);
 }
 
+// Order/keyframe validation mismatch counters.
+TEST(PipelineDiagnostics, OutputTsMismatchCounterIncrements) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnOutputTsMismatch();
+    agg.OnOutputTsMismatch();
+    agg.OnOutputTsMismatch();
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.video_encoder.output_ts_mismatches, 3u);
+}
+
+TEST(PipelineDiagnostics, KeyframePredictionMismatchCounterIncrements) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnKeyframePredictionMismatch();
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.video_encoder.keyframe_prediction_mismatches, 1u);
+}
+
+TEST(PipelineDiagnostics, OrderKeyframeMismatchCountersResetIndependently) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnOutputTsMismatch();
+    agg.OnKeyframePredictionMismatch();
+    agg.OnKeyframePredictionMismatch();
+
+    agg.Reset(2, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.video_encoder.output_ts_mismatches, 0u);
+    EXPECT_EQ(s.video_encoder.keyframe_prediction_mismatches, 0u);
+}
+
 // ---------------------------------------------------------------------------
 // Audio
 // ---------------------------------------------------------------------------

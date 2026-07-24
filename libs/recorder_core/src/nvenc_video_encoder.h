@@ -75,8 +75,10 @@ class NvencVideoEncoder : public IVideoEncoder {
     int32_t AcquireFreeSlot() override {
         return m_nvenc.AcquireFreeSlot();
     }
-    bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height, EncodedVideoPacket& out_packet,
-                     std::string& out_error) override;
+    bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
+                     std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) override;
+    bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
+                       uint32_t wait_head_ms = 0) override;
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) override;
     void RequestKeyframe() override {
         m_nvenc.RequestKeyframe();

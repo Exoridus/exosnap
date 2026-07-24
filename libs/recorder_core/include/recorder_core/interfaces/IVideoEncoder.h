@@ -38,15 +38,29 @@ class IVideoEncoder {
     // Acquire the next free input slot. Returns -1 if no slot is free.
     virtual int32_t AcquireFreeSlot() = 0;
 
-    // Submit one frame for encoding.
-    // Returns true + packet with bytes -> encoded output available.
-    // Returns true + packet with bytes empty -> buffered (need more input).
-    // Returns false -> fatal error (out_error set).
+    // Submit one frame for encoding. Appends 0..k completed packets to
+    // out_packets (0 -> buffered, need more input; today's sync encoders never
+    // append more than 1). Returns false -> fatal error (out_error set).
     virtual bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
-                             EncodedVideoPacket& out_packet, std::string& out_error) = 0;
+                             std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 
     // Flush all buffered frames (EOS). Appends remaining packets.
     virtual bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
+
+    // Drain any packets completed since the last EncodeFrame/ReapCompleted call,
+    // without submitting a new frame. Async encoders use this to reap
+    // completions on the encoder's own event without blocking a submission on
+    // it; the default no-op keeps today's sync encoders (and future CPU-only
+    // encoders, roadmap 0.11) trivially conformant since they always emit their
+    // output inline from EncodeFrame. wait_head_ms bounds how long to wait for
+    // the oldest pending completion (0 = non-blocking poll).
+    virtual bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
+                               uint32_t wait_head_ms = 0) {
+        (void)out_packets;
+        (void)out_error;
+        (void)wait_head_ms;
+        return true;
+    }
 
     // Arm a forced keyframe (IDR) on the next submitted frame. Used at a segment
     // boundary so the first frame of the new segment is self-contained. One-shot.

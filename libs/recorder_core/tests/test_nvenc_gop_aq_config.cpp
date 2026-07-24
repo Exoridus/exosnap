@@ -183,4 +183,52 @@ TEST(NextGopKeyframePhase, ZeroGopLength_OnlyFirstFrameIsKeyframe) {
     EXPECT_EQ(keys, (std::vector<uint32_t>{0u}));
 }
 
+// ---------------------------------------------------------------------------
+// ResyncGopPhaseFromActual — order/keyframe hardening (warn-first)
+// ---------------------------------------------------------------------------
+
+TEST(ResyncGopPhaseFromActual, ActualIdr_ResetsPhaseToOne) {
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/true, /*frame_in_gop=*/0u), 1u);
+}
+
+TEST(ResyncGopPhaseFromActual, ActualIdr_ResetsEvenFromNonZeroPhase) {
+    // Drift from a buffered preset (P5-P7): submission side is already several
+    // frames ahead of the frame whose output we just consumed. An observed real
+    // IDR is still authoritative and resyncs to 1, regardless of how far the
+    // counter had climbed.
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/true, /*frame_in_gop=*/47u), 1u);
+}
+
+TEST(ResyncGopPhaseFromActual, NonIdr_LeavesPhaseUnchanged) {
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/false, /*frame_in_gop=*/13u), 13u);
+}
+
+TEST(ResyncGopPhaseFromActual, NonIdr_LeavesZeroUnchanged) {
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/false, /*frame_in_gop=*/0u), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Order-validation mismatch message formatters — pure text, no GPU/NVENC session
+// ---------------------------------------------------------------------------
+
+TEST(FormatOutputTsMismatchError, IncludesBothTimestampValues) {
+    const std::string msg = FormatOutputTsMismatchError(/*expected=*/42u, /*actual=*/43u);
+    EXPECT_NE(msg.find("42"), std::string::npos);
+    EXPECT_NE(msg.find("43"), std::string::npos);
+}
+
+TEST(FormatOutputTsMismatchError, DistinguishesExpectedFromActualValue) {
+    // Regression guard: swapping the arguments must change the rendered text,
+    // otherwise a future refactor could silently transpose expected/actual.
+    const std::string a = FormatOutputTsMismatchError(1u, 2u);
+    const std::string b = FormatOutputTsMismatchError(2u, 1u);
+    EXPECT_NE(a, b);
+}
+
+TEST(FormatKeyframePredictionMismatchWarning, IncludesBothBooleanValues) {
+    const std::string predictedTrue = FormatKeyframePredictionMismatchWarning(/*predicted=*/true, /*actual=*/false);
+    const std::string predictedFalse = FormatKeyframePredictionMismatchWarning(/*predicted=*/false, /*actual=*/true);
+    EXPECT_NE(predictedTrue, predictedFalse);
+}
+
 } // namespace recorder_core

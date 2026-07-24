@@ -164,6 +164,13 @@ struct EncoderDiagnostics {
     uint64_t frames_encoded = 0;
     uint64_t backlog = 0;          // submitted - encoded (NVENC need-more-input buffering)
     uint64_t forced_keyframes = 0; // split-driven forced IDRs (not periodic GOP)
+    // Order/keyframe validation mismatch counters. Non-zero indicates the
+    // driver's actual outputTimeStamp echo / pictureType diverged from the
+    // submission-side FIFO assignment / GOP-phase prediction at least once.
+    // A keyframe-prediction mismatch is warn-only; an output-timestamp
+    // mismatch is fatal and aborts the encode, so it never exceeds 1.
+    uint64_t output_ts_mismatches = 0;
+    uint64_t keyframe_prediction_mismatches = 0;
     VideoCodec codec = VideoCodec::Av1Nvenc;
     uint32_t width = 0;
     uint32_t height = 0;

@@ -34,8 +34,16 @@ bool NvencVideoEncoder::RegisterSlotTexture(int32_t slot_idx, GpuTextureHandle t
 }
 
 bool NvencVideoEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
-                                    EncodedVideoPacket& out_packet, std::string& out_error) {
-    return m_nvenc.EncodeFrame(slot_idx, pts_ns, width, height, &out_packet, out_error);
+                                    std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
+    // NvencEncoder::EncodeFrame is itself vector-based (0..k packets: 0/1 in
+    // sync mode, submit-only in async mode plus 0..1 side-effect packet from
+    // a bounded output-ring-full wait) — a direct pass-through.
+    return m_nvenc.EncodeFrame(slot_idx, pts_ns, width, height, out_packets, out_error);
+}
+
+bool NvencVideoEncoder::ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
+                                      uint32_t wait_head_ms) {
+    return m_nvenc.ReapCompleted(out_packets, out_error, wait_head_ms);
 }
 
 bool NvencVideoEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {

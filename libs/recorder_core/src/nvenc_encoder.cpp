@@ -1,6 +1,7 @@
 #include "nvenc_encoder.h"
 
 #include <recorder_core/hdr_bitstream_metadata.h>
+#include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
 
 #include <chrono>
@@ -97,6 +98,7 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
         << ", frameRateDen=" << p.frameRateDen
         << ", bufferFormat=" << BufferFormatName(NvencInputFormat(bit_depth, chroma))
         << ", enablePTD=" << static_cast<int>(p.enablePTD)
+        << ", enableEncodeAsync=" << static_cast<int>(p.enableEncodeAsync)
         << ", rateControlMode=" << static_cast<uint32_t>(cfg.rcParams.rateControlMode)
         << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP;
 
@@ -310,6 +312,35 @@ FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, do
     default:
         return FlushDrainStep::AbortError;
     }
+}
+
+EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept {
+    switch (wait_result) {
+    case WAIT_OBJECT_0:
+        return EventDrainStep::Consume;
+    case WAIT_TIMEOUT:
+        // Event not signalled yet: keep polling until the budget runs out, then
+        // give up so a lost/hung device (event never fires) can never wedge.
+        return elapsed_ms < budget_ms ? EventDrainStep::Retry : EventDrainStep::AbortTimeout;
+    default:
+        return EventDrainStep::AbortError;
+    }
+}
+
+FreeOutputSlotResult FindFreeOutputSlot(const bool* in_flight, int32_t count, int32_t cursor) noexcept {
+    FreeOutputSlotResult result;
+    result.next_cursor = cursor;
+    if (count <= 0)
+        return result;
+    for (int32_t i = 0; i < count; ++i) {
+        const int32_t idx = (cursor + i) % count;
+        if (!in_flight[idx]) {
+            result.slot_idx = idx;
+            result.next_cursor = (idx + 1) % count;
+            return result;
+        }
+    }
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +742,24 @@ GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length
     return out;
 }
 
+uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noexcept {
+    return actual_is_idr ? 1u : frame_in_gop;
+}
+
+std::string FormatOutputTsMismatchError(uint64_t expected_output_ts, uint64_t actual_output_ts) {
+    std::ostringstream oss;
+    oss << "NVENC outputTimeStamp echo mismatch: expected=" << expected_output_ts << " actual=" << actual_output_ts
+        << " (PTS assignment can no longer be trusted for this packet)";
+    return oss.str();
+}
+
+std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe) {
+    std::ostringstream oss;
+    oss << "NVENC keyframe prediction mismatch: predicted=" << (predicted_keyframe ? "keyframe" : "non-keyframe")
+        << " actual=" << (actual_keyframe ? "keyframe" : "non-keyframe") << " (GOP phase resynced from actual)";
+    return oss.str();
+}
+
 // ---------------------------------------------------------------------------
 // FetchPresetConfig
 // ---------------------------------------------------------------------------
@@ -877,6 +926,7 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     // frames — legal but off-cadence). Revisit the prediction if that changes.
     m_gopLength = kGopFrames;
     m_frameInGop = 0;
+    m_loggedKeyframePredictionMismatch = false;
     BuildHdrBitstreamPayloads();
 
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
@@ -904,6 +954,15 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
         QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_HEIGHT_MAX, capHeightMax, capsError);
     const bool haveCaps = haveWidthMin && haveWidthMax && haveHeightMin && haveHeightMax;
 
+    // Capability gate: async mode only if the hardware/driver advertises it.
+    // Absent/failed query -> m_asyncMode stays false and the existing sync
+    // path runs unchanged — this is not itself an error.
+    int capAsync = 0;
+    std::string asyncCapsError;
+    m_asyncMode =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT, capAsync, asyncCapsError) &&
+        capAsync != 0;
+
     NV_ENC_INITIALIZE_PARAMS p{};
     p.version = NV_ENC_INITIALIZE_PARAMS_VER;
     p.encodeGUID = codecGuid;
@@ -918,6 +977,7 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     p.frameRateNum = frame_rate_num;
     p.frameRateDen = frame_rate_den;
     p.enablePTD = 1;
+    p.enableEncodeAsync = m_asyncMode ? 1 : 0;
     p.encodeConfig = &m_encodeConfig;
 
     const bool evenWidth = (width % 2u) == 0u;
@@ -973,15 +1033,108 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
-    NV_ENC_CREATE_BITSTREAM_BUFFER bsp{};
-    bsp.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
-    NVENCSTATUS st = m_funcs.nvEncCreateBitstreamBuffer(m_encoder, &bsp);
-    if (st != NV_ENC_SUCCESS) {
-        out_error = std::string("nvEncCreateBitstreamBuffer: ") + NvencStatusName(st);
+    if (!m_asyncMode) {
+        NV_ENC_CREATE_BITSTREAM_BUFFER bsp{};
+        bsp.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
+        NVENCSTATUS st = m_funcs.nvEncCreateBitstreamBuffer(m_encoder, &bsp);
+        if (st != NV_ENC_SUCCESS) {
+            out_error = std::string("nvEncCreateBitstreamBuffer: ") + NvencStatusName(st);
+            return false;
+        }
+        m_bitstreamBuffer = bsp.bitstreamBuffer;
+        return true;
+    }
+
+    // Async mode: kMaxOutputResources bitstream buffers + one auto-reset
+    // completion event each, registered with the driver, plus one reserved
+    // EOS event. All kMaxOutputResources are allocated regardless of
+    // m_activeDepth — see the m_outputResources member comment.
+    for (int32_t i = 0; i < kMaxOutputResources; ++i) {
+        NV_ENC_CREATE_BITSTREAM_BUFFER bsp{};
+        bsp.version = NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
+        NVENCSTATUS st = m_funcs.nvEncCreateBitstreamBuffer(m_encoder, &bsp);
+        if (st != NV_ENC_SUCCESS) {
+            out_error = std::string("nvEncCreateBitstreamBuffer[") + std::to_string(i) + "]: " + NvencStatusName(st);
+            DestroyOutputRing();
+            return false;
+        }
+        m_outputResources[i].bitstream = bsp.bitstreamBuffer;
+
+        HANDLE ev = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (ev == nullptr) {
+            out_error = "CreateEventW failed for output-ring slot " + std::to_string(i);
+            DestroyOutputRing();
+            return false;
+        }
+        NV_ENC_EVENT_PARAMS ep{};
+        ep.version = NV_ENC_EVENT_PARAMS_VER;
+        ep.completionEvent = ev;
+        st = m_funcs.nvEncRegisterAsyncEvent(m_encoder, &ep);
+        if (st != NV_ENC_SUCCESS) {
+            out_error = std::string("nvEncRegisterAsyncEvent[") + std::to_string(i) + "]: " + NvencStatusName(st);
+            ::CloseHandle(ev);
+            DestroyOutputRing();
+            return false;
+        }
+        m_outputResources[i].event = ev;
+    }
+
+    m_eosEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (m_eosEvent == nullptr) {
+        out_error = "CreateEventW failed for the reserved EOS event";
+        DestroyOutputRing();
         return false;
     }
-    m_bitstreamBuffer = bsp.bitstreamBuffer;
+    NV_ENC_EVENT_PARAMS eosEp{};
+    eosEp.version = NV_ENC_EVENT_PARAMS_VER;
+    eosEp.completionEvent = m_eosEvent;
+    const NVENCSTATUS eosSt = m_funcs.nvEncRegisterAsyncEvent(m_encoder, &eosEp);
+    if (eosSt != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncRegisterAsyncEvent[EOS]: ") + NvencStatusName(eosSt);
+        DestroyOutputRing();
+        return false;
+    }
+
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// DestroyOutputRing (internal)
+// ---------------------------------------------------------------------------
+
+void NvencEncoder::DestroyOutputRing() noexcept {
+    // Teardown order: unregister + close every event first, then destroy
+    // every bitstream buffer. Safe on partial state (rollback from a failed
+    // CreateBitstreamBuffer) and safe to call more than once.
+    for (auto& res : m_outputResources) {
+        if (m_encoder && m_funcs.nvEncUnregisterAsyncEvent && res.event) {
+            NV_ENC_EVENT_PARAMS ep{};
+            ep.version = NV_ENC_EVENT_PARAMS_VER;
+            ep.completionEvent = res.event;
+            m_funcs.nvEncUnregisterAsyncEvent(m_encoder, &ep);
+        }
+        if (res.event) {
+            ::CloseHandle(res.event);
+            res.event = nullptr;
+        }
+    }
+    if (m_eosEvent) {
+        if (m_encoder && m_funcs.nvEncUnregisterAsyncEvent) {
+            NV_ENC_EVENT_PARAMS ep{};
+            ep.version = NV_ENC_EVENT_PARAMS_VER;
+            ep.completionEvent = m_eosEvent;
+            m_funcs.nvEncUnregisterAsyncEvent(m_encoder, &ep);
+        }
+        ::CloseHandle(m_eosEvent);
+        m_eosEvent = nullptr;
+    }
+    for (auto& res : m_outputResources) {
+        if (m_encoder && m_funcs.nvEncDestroyBitstreamBuffer && res.bitstream) {
+            m_funcs.nvEncDestroyBitstreamBuffer(m_encoder, res.bitstream);
+            res.bitstream = nullptr;
+        }
+        res.in_flight = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1066,9 +1219,20 @@ void NvencEncoder::ReleaseSlot(int32_t slot_idx) noexcept {
 
 bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking,
                                            NVENCSTATUS* out_lock_status) {
+    // Async mode: the FIFO head names its own output-ring bitstream (chosen at
+    // submission time, see EncodeFrame); sync mode always uses the single
+    // shared buffer. Peeked before locking because which buffer to lock
+    // depends on it.
+    NV_ENC_OUTPUT_PTR bitstreamToLock = m_bitstreamBuffer;
+    if (m_asyncMode && !m_pending.empty()) {
+        const int32_t headOutIdx = m_pending.front().out_idx;
+        if (headOutIdx >= 0 && headOutIdx < kMaxOutputResources)
+            bitstreamToLock = m_outputResources[headOutIdx].bitstream;
+    }
+
     NV_ENC_LOCK_BITSTREAM lockBS{};
     lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
-    lockBS.outputBitstream = m_bitstreamBuffer;
+    lockBS.outputBitstream = bitstreamToLock;
     lockBS.doNotWait = non_blocking ? 1 : 0;
 
     NVENCSTATUS st = m_funcs.nvEncLockBitstream(m_encoder, &lockBS);
@@ -1083,6 +1247,9 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
 
     uint64_t ts_ns = 0;
     double latency_ms = -1.0;
+    bool outputTsMismatch = false;
+    bool keyframePredictionMismatch = false;
+    const bool actualIsIdr = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR);
     if (!m_pending.empty()) {
         const PendingFrame pf = m_pending.front();
         m_pending.pop();
@@ -1094,6 +1261,37 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
         latency_ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pf.submit_time).count();
 
+        // outputTimeStamp is expected to echo the inputTimeStamp of the frame
+        // that produced this bitstream (verified live on real hardware across
+        // all three codecs and both P4/P7 presets, 0 mismatches over 360
+        // frames; FFmpeg's NVENC wrapper also trusts this echo unconditionally,
+        // with no cross-check, across its entire supported hardware range). A
+        // mismatch means PTS assignment can no longer be trusted for this
+        // packet — treated as data corruption, not a recoverable warning. The
+        // slot/pending cleanup above has already happened, so it is safe to
+        // abort here.
+        outputTsMismatch = (lockBS.outputTimeStamp != pf.input_ts);
+        if (outputTsMismatch) {
+            const std::string mismatchMsg = FormatOutputTsMismatchError(pf.input_ts, lockBS.outputTimeStamp);
+            logging::log(logging::LogLevel::Error, "nvenc.order_validation", mismatchMsg);
+            m_funcs.nvEncUnlockBitstream(m_encoder, bitstreamToLock);
+            out_error = mismatchMsg;
+            return false;
+        }
+
+        // Keyframe-prediction validation. A real IDR always resyncs the
+        // submission-side GOP phase, whether or not it was predicted; a mismatch
+        // (predicted != actual) is only logged/counted, never fatal at this
+        // stage — the actual pictureType (isKey below) remains authoritative for
+        // muxing regardless of the prediction.
+        keyframePredictionMismatch = (pf.predicted_keyframe != actualIsIdr);
+        if (keyframePredictionMismatch && !m_loggedKeyframePredictionMismatch) {
+            m_loggedKeyframePredictionMismatch = true;
+            logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
+                         FormatKeyframePredictionMismatchWarning(pf.predicted_keyframe, actualIsIdr));
+        }
+        m_frameInGop = ResyncGopPhaseFromActual(actualIsIdr, m_frameInGop);
+
         // Release the associated input slot.
         if (pf.slot_idx >= 0 && pf.slot_idx < 8) {
             InputSlot& slot = m_slots[pf.slot_idx];
@@ -1104,18 +1302,57 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
             slot.mapped = false;
             slot.in_flight = false;
         }
+
+        // Async mode: this output-ring slot is free again for a future submission.
+        if (m_asyncMode && pf.out_idx >= 0 && pf.out_idx < kMaxOutputResources) {
+            m_outputResources[pf.out_idx].in_flight = false;
+        }
     }
 
-    bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR || lockBS.pictureType == NV_ENC_PIC_TYPE_I);
+    bool isKey = actualIsIdr || (lockBS.pictureType == NV_ENC_PIC_TYPE_I);
 
     out_packet.pts_ns = ts_ns;
     out_packet.keyframe = isKey;
     out_packet.encode_latency_ms = latency_ms;
+    out_packet.output_ts_mismatch = outputTsMismatch;
+    out_packet.keyframe_prediction_mismatch = keyframePredictionMismatch;
     out_packet.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
                             static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
 
-    m_funcs.nvEncUnlockBitstream(m_encoder, m_bitstreamBuffer);
+    m_funcs.nvEncUnlockBitstream(m_encoder, bitstreamToLock);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// WaitAndConsumeOneAsync (internal)
+// ---------------------------------------------------------------------------
+
+EventDrainStep NvencEncoder::WaitAndConsumeOneAsync(HANDLE event, double budget_ms, EncodedVideoPacket& out_packet,
+                                                    std::string& out_error) {
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        const DWORD waitResult = ::WaitForSingleObject(event, 20);
+        const double elapsedMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        const EventDrainStep step = NextEventDrainStep(waitResult, elapsedMs, budget_ms);
+        if (step == EventDrainStep::Consume) {
+            std::string lockErr;
+            if (!LockAndConsumeBitstream(out_packet, lockErr, /*non_blocking=*/true)) {
+                // The event fired but the lock still failed (e.g. device lost
+                // between signal and lock) — surface as an error, not a silent
+                // no-op, since the caller expects one of {Consume, Abort*}.
+                out_error = lockErr;
+                return EventDrainStep::AbortError;
+            }
+            return EventDrainStep::Consume;
+        }
+        if (step == EventDrainStep::Retry)
+            continue;
+        out_error = (step == EventDrainStep::AbortTimeout)
+                        ? "WaitAndConsumeOneAsync: timed out waiting for the completion event"
+                        : "WaitAndConsumeOneAsync: WaitForSingleObject failed";
+        return step;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,7 +1360,7 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
-                               EncodedVideoPacket* out_packet, std::string& out_error) {
+                               std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
     if (slot_idx < 0 || slot_idx >= 8) {
         out_error = "EncodeFrame: slot_idx out of range [0,7]";
         return false;
@@ -1132,6 +1369,43 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     if (slot.mapped) {
         out_error = "EncodeFrame: slot already mapped";
         return false;
+    }
+
+    // Async mode: ensure a free output-ring slot before touching the input
+    // side. If the ring (m_activeDepth slots) is full, bounded-wait on the
+    // oldest pending frame's completion event and reap it — freeing exactly
+    // one slot — before proceeding; that reaped packet is a legitimate output
+    // of this submission call, appended alongside whatever this submission
+    // itself produces. Bounded by m_pending shrinking by one per iteration, so
+    // this always terminates (each WaitAndConsumeOneAsync call is itself
+    // budget-bounded).
+    int32_t out_idx = -1;
+    if (m_asyncMode) {
+        for (;;) {
+            bool inFlight[kMaxOutputResources] = {};
+            for (int32_t i = 0; i < m_activeDepth; ++i)
+                inFlight[i] = m_outputResources[i].in_flight;
+            const FreeOutputSlotResult free = FindFreeOutputSlot(inFlight, m_activeDepth, m_outputCursor);
+            if (free.slot_idx >= 0) {
+                out_idx = free.slot_idx;
+                m_outputCursor = free.next_cursor;
+                break;
+            }
+            if (m_pending.empty()) {
+                out_error = "EncodeFrame (async): output ring full but no pending frame to wait on";
+                return false;
+            }
+            constexpr double kSlotWaitBudgetMs = 2000.0;
+            EncodedVideoPacket drained;
+            std::string waitErr;
+            const HANDLE headEvent = m_outputResources[m_pending.front().out_idx].event;
+            const EventDrainStep step = WaitAndConsumeOneAsync(headEvent, kSlotWaitBudgetMs, drained, waitErr);
+            if (step != EventDrainStep::Consume) {
+                out_error = waitErr;
+                return false;
+            }
+            out_packets.push_back(std::move(drained));
+        }
     }
 
     // Map this slot's registered NV12 resource
@@ -1147,18 +1421,12 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     slot.mappedResource = mapRes.mappedResource;
     slot.mapped = true;
 
-    // Record this submission before the encode call (FIFO: one entry per submitted
-    // frame). submit_time stamps the start of the encode so the consuming lock can
-    // report the true per-frame latency, independent of preset buffering.
-    m_pending.push(PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now()});
-
     NV_ENC_PIC_PARAMS pic{};
     pic.version = NV_ENC_PIC_PARAMS_VER;
     pic.inputWidth = width;
     pic.inputHeight = height;
     pic.inputPitch = 0;
     pic.inputBuffer = mapRes.mappedResource;
-    pic.outputBitstream = m_bitstreamBuffer;
     pic.bufferFmt = mapRes.mappedBufferFmt;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.encodePicFlags = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
@@ -1199,39 +1467,59 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     }
     pic.inputTimeStamp = m_frameIdx++;
 
+    if (m_asyncMode) {
+        pic.outputBitstream = m_outputResources[out_idx].bitstream;
+        pic.completionEvent = m_outputResources[out_idx].event;
+        m_outputResources[out_idx].in_flight = true;
+    } else {
+        pic.outputBitstream = m_bitstreamBuffer;
+    }
+
+    // Record this submission before the encode call (FIFO: one entry per submitted
+    // frame). submit_time stamps the start of the encode so the consuming lock can
+    // report the true per-frame latency, independent of preset buffering. input_ts
+    // and predicted_keyframe are captured here (submission-side truth) so the
+    // consuming lock can validate them against the driver's actual
+    // outputTimeStamp / pictureType. out_idx is -1 in sync mode (unused).
+    m_pending.push(
+        PendingFrame{pts_ns, slot_idx, std::chrono::steady_clock::now(), pic.inputTimeStamp, isKeyframe, out_idx});
+
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);
 
     if (st == NV_ENC_SUCCESS) {
-        // Output available immediately.
-        // LockAndConsumeBitstream pops the earliest pending PTS+slot and
-        // releases that slot (unmap + mark free).
-        if (out_packet) {
-            std::string lockErr;
-            if (!LockAndConsumeBitstream(*out_packet, lockErr)) {
-                // Bitstream lock failed: clean up the current slot.
-                m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
-                slot.mappedResource = nullptr;
-                slot.mapped = false;
-                slot.in_flight = false;
-
-                // Pop our own pending entry; LockAndConsumeBitstream may have
-                // already popped it if it got partway through. Best-effort: drain
-                // one entry if present.
-                if (!m_pending.empty()) {
-                    m_pending.pop();
-                }
-                out_error = lockErr;
-                return false;
-            }
+        if (m_asyncMode) {
+            // Submit-only: this frame's own output arrives later via its
+            // completion event (ReapCompleted, or a future submission's
+            // output-ring-full wait) — nothing to consume synchronously.
+            return true;
         }
+        // Sync mode: output available immediately (unchanged). Lock pops the
+        // earliest pending PTS+slot and releases that slot (unmap + mark free).
+        EncodedVideoPacket pkt;
+        std::string lockErr;
+        if (!LockAndConsumeBitstream(pkt, lockErr)) {
+            // Bitstream lock failed: clean up the current slot.
+            m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
+            slot.mappedResource = nullptr;
+            slot.mapped = false;
+            slot.in_flight = false;
+
+            // Pop our own pending entry; LockAndConsumeBitstream may have
+            // already popped it if it got partway through. Best-effort: drain
+            // one entry if present.
+            if (!m_pending.empty()) {
+                m_pending.pop();
+            }
+            out_error = lockErr;
+            return false;
+        }
+        out_packets.push_back(std::move(pkt));
         return true;
     } else if (st == NV_ENC_ERR_NEED_MORE_INPUT) {
-        // Buffered — PTS and slot are queued; do not unmap.
-        // The slot will be released later when its output is consumed.
+        // Buffered — PTS and slot are queued; do not unmap. Not expected in
+        // async mode (events signal completion instead of this status), but
+        // tolerated exactly like today if the driver still returns it.
         ++m_needMoreInputCount;
-        if (out_packet) {
-            out_packet->bytes.clear();
-        }
         return true;
     } else {
         // Fatal encode error — clean up this slot
@@ -1239,6 +1527,12 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
         slot.mappedResource = nullptr;
         slot.mapped = false;
         slot.in_flight = false;
+
+        // This submission will never complete — free its output-ring slot
+        // back rather than leaving it permanently marked in-flight.
+        if (m_asyncMode && out_idx >= 0 && out_idx < kMaxOutputResources) {
+            m_outputResources[out_idx].in_flight = false;
+        }
 
         // Remove the entry we just pushed (best-effort, front of queue)
         if (!m_pending.empty())
@@ -1250,10 +1544,58 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
 }
 
 // ---------------------------------------------------------------------------
+// ReapCompleted
+// ---------------------------------------------------------------------------
+
+bool NvencEncoder::ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
+                                 uint32_t wait_head_ms) {
+    if (!m_asyncMode) {
+        // Sync mode: output is always consumed inline by EncodeFrame — nothing
+        // to drain here. Matches the IVideoEncoder default no-op.
+        return true;
+    }
+
+    // Wait up to wait_head_ms for the oldest pending frame only; every
+    // further packet in the same call is drained without additional waiting
+    // (a zero-timeout poll) — stop as soon as one is not yet ready.
+    bool first = true;
+    while (!m_pending.empty()) {
+        const int32_t headOutIdx = m_pending.front().out_idx;
+        if (headOutIdx < 0 || headOutIdx >= kMaxOutputResources) {
+            out_error = "ReapCompleted: pending frame has an invalid output-ring index";
+            return false;
+        }
+        const HANDLE event = m_outputResources[headOutIdx].event;
+        const DWORD waitResult = ::WaitForSingleObject(event, first ? static_cast<DWORD>(wait_head_ms) : 0);
+        first = false;
+        if (waitResult != WAIT_OBJECT_0) {
+            if (waitResult == WAIT_FAILED) {
+                out_error = "ReapCompleted: WaitForSingleObject failed";
+                return false;
+            }
+            // WAIT_TIMEOUT (or an unexpected-but-non-fatal result): nothing
+            // more is ready right now — not an error, just stop draining.
+            break;
+        }
+        EncodedVideoPacket pkt;
+        std::string lockErr;
+        if (!LockAndConsumeBitstream(pkt, lockErr, /*non_blocking=*/true)) {
+            out_error = lockErr;
+            return false;
+        }
+        out_packets.push_back(std::move(pkt));
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Flush
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
+    if (m_asyncMode)
+        return FlushAsync(out_packets, out_error);
+
     // Send EOS
     NV_ENC_PIC_PARAMS eos{};
     eos.version = NV_ENC_PIC_PARAMS_VER;
@@ -1311,6 +1653,52 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
 }
 
 // ---------------------------------------------------------------------------
+// FlushAsync (internal)
+// ---------------------------------------------------------------------------
+
+bool NvencEncoder::FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) {
+    NV_ENC_PIC_PARAMS eos{};
+    eos.version = NV_ENC_PIC_PARAMS_VER;
+    eos.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
+    eos.completionEvent = m_eosEvent;
+
+    NVENCSTATUS st = m_funcs.nvEncEncodePicture(m_encoder, &eos);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncEncodePicture(EOS): ") + NvencStatusName(st);
+        return false;
+    }
+
+    // Same anti-wedge guarantee as the sync drain (NextFlushDrainStep): a
+    // healthy device signals each pending frame's event well under the
+    // budget (progress resets the clock); a lost/hung one is abandoned after
+    // the budget so the caller still finalises instead of wedging.
+    constexpr double kFlushDrainBudgetMs = 2000.0;
+    while (!m_pending.empty()) {
+        const int32_t headOutIdx = m_pending.front().out_idx;
+        if (headOutIdx < 0 || headOutIdx >= kMaxOutputResources) {
+            out_error = "FlushAsync: pending frame has an invalid output-ring index";
+            break;
+        }
+        EncodedVideoPacket pkt;
+        std::string waitErr;
+        const EventDrainStep step =
+            WaitAndConsumeOneAsync(m_outputResources[headOutIdx].event, kFlushDrainBudgetMs, pkt, waitErr);
+        if (step == EventDrainStep::Consume) {
+            out_packets.push_back(std::move(pkt));
+            continue;
+        }
+        // AbortTimeout / AbortError: stop draining but do not fail — the
+        // caller still pushes video-EOS and finalises with whatever was
+        // already muxed, instead of wedging (same contract as sync Flush).
+        out_error = waitErr;
+        break;
+    }
+
+    m_needMoreInputCount = 0;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // UnregisterAllSlots
 // ---------------------------------------------------------------------------
 
@@ -1336,6 +1724,11 @@ void NvencEncoder::UnregisterAllSlots() {
 
 void NvencEncoder::Destroy() {
     UnregisterAllSlots();
+
+    // Teardown order: events unregistered+closed, then bitstream buffer(s),
+    // then the encoder itself. DestroyOutputRing() is a no-op in sync mode
+    // (m_outputResources/m_eosEvent were never populated).
+    DestroyOutputRing();
 
     if (m_encoder && m_funcs.nvEncDestroyBitstreamBuffer && m_bitstreamBuffer) {
         m_funcs.nvEncDestroyBitstreamBuffer(m_encoder, m_bitstreamBuffer);

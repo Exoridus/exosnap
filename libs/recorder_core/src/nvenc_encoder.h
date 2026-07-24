@@ -44,6 +44,41 @@ enum class FlushDrainStep {
 FlushDrainStep NextFlushDrainStep(NVENCSTATUS lock_status, double elapsed_ms, double budget_ms) noexcept;
 
 // ---------------------------------------------------------------------------
+// Bounded event-drain policy — pure, testable. Same shape as
+// FlushDrainStep/NextFlushDrainStep, generalised from an NVENCSTATUS lock
+// result to a Win32 WaitForSingleObject result: the async-mode submit path
+// (waiting for a free output slot's completion event) and the async-mode
+// flush drain (waiting for the remaining pending frames' completion events)
+// both consult this after every wait. Same anti-wedge guarantee as the sync
+// flush drain: a device that never signals (Device-Lost) must not hang
+// forever — past the budget the wait aborts and the caller proceeds. No
+// GPU/NVENC session required.
+// ---------------------------------------------------------------------------
+enum class EventDrainStep {
+    Consume,      // WAIT_OBJECT_0: the event fired — a packet is ready, take it.
+    Retry,        // WAIT_TIMEOUT within budget — brief wait, then poll again.
+    AbortTimeout, // WAIT_TIMEOUT past the budget — device not signalling: stop.
+    AbortError,   // Any other result (WAIT_FAILED, WAIT_ABANDONED, ...) — stop.
+};
+EventDrainStep NextEventDrainStep(DWORD wait_result, double elapsed_ms, double budget_ms) noexcept;
+
+// ---------------------------------------------------------------------------
+// FindFreeOutputSlot — pure, testable round-robin scan for a free async
+// output-ring slot. Same round-robin-from-cursor pattern as
+// AcquireFreeSlot (member function, mutates m_slots for the 8-slot input
+// ring), generalised into a pure function over an explicit in-flight array so
+// the output ring's free/in-flight bookkeeping is unit-testable without a
+// live NVENC session. "Oldest in-flight" needs no separate helper: with
+// frameIntervalP=1 (no B-frames/lookahead) output order == submission order,
+// so the oldest is always the PendingFrame FIFO head. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+struct FreeOutputSlotResult {
+    int32_t slot_idx = -1;   // -1 if every slot in [0, count) is in-flight
+    int32_t next_cursor = 0; // cursor to pass on the next call
+};
+FreeOutputSlotResult FindFreeOutputSlot(const bool* in_flight, int32_t count, int32_t cursor) noexcept;
+
+// ---------------------------------------------------------------------------
 // ApplyColorMetadataToNvenc — pure, testable mapping from ColorMetadata to the
 // NVENC bitstream-level color signaling fields (fix for color-range-signaling
 // bug: without this the AV1/H.264/HEVC bitstream itself carries no color
@@ -155,6 +190,35 @@ struct GopKeyframePhase {
     uint32_t frame_in_gop = 0;
 };
 GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) noexcept;
+
+// ---------------------------------------------------------------------------
+// ResyncGopPhaseFromActual — pure order/keyframe hardening (warn-first).
+// NextGopKeyframePhase predicts IDR placement at submission time; the actual
+// pictureType observed when a bitstream is consumed is the ground truth. A
+// real IDR always restarts the GOP regardless of what was predicted for that
+// submission (self-healing: any drift accumulated under buffered presets is
+// corrected the next time an actual IDR is observed). A non-IDR output leaves
+// the counter untouched — the submission side is already advancing it
+// independently, and a single non-keyframe mismatch is not evidence the whole
+// cadence has shifted. No GPU/NVENC session.
+// ---------------------------------------------------------------------------
+uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noexcept;
+
+// ---------------------------------------------------------------------------
+// Pure message formatters for the encoder's two output-order validations.
+// Kept pure so the exact wording is unit-testable without a GPU/NVENC
+// session.
+//
+// FormatOutputTsMismatchError: a timestamp-echo mismatch is fatal — the call
+// site logs it once and aborts the encode, so no once-per-session guard is
+// needed (it cannot recur within a session).
+// FormatKeyframePredictionMismatchWarning stays warn-only (a predicted
+// keyframe landing on a non-IDR frame is legal, just off-cadence SEI/OBU
+// placement); its call site still guards it behind a once-per-session flag
+// so a sustained mismatch does not spam the log.
+// ---------------------------------------------------------------------------
+std::string FormatOutputTsMismatchError(uint64_t expected_output_ts, uint64_t actual_output_ts);
+std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe);
 
 // ---------------------------------------------------------------------------
 // InputSlot — one NVENC GPU input resource in the slot ring
@@ -314,12 +378,22 @@ class NvencEncoder {
     // Submit one NV12 frame for encoding on a specific slot.
     // slot_idx must be a slot previously acquired via AcquireFreeSlot.
     // pts_ns is the capture-time PTS in nanoseconds.
-    // Returns:
-    //   true  + packet populated  -> output available immediately
-    //   true  + packet empty      -> NV_ENC_ERR_NEED_MORE_INPUT (buffered, PTS queued)
-    //   false                     -> fatal encode error (out_error set)
-    bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height, EncodedVideoPacket* out_packet,
-                     std::string& out_error);
+    // Appends 0..k completed packets to out_packets: 0..1 in sync mode. An
+    // async submission always appends 0 of its own output here — that arrives
+    // later via ReapCompleted — but MAY append one older packet as a side
+    // effect of a bounded wait for a free output-ring slot.
+    // Returns false only on a fatal encode error (out_error set).
+    bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
+                     std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    // Drain packets completed since the last EncodeFrame/ReapCompleted call
+    // (async mode only — a no-op returning true in sync mode, since sync
+    // output is always consumed inline by EncodeFrame). Waits up to
+    // wait_head_ms for the oldest pending frame's completion event; once that
+    // one is consumed (or immediately, if wait_head_ms is 0 and nothing is yet
+    // ready), drains any further already-signalled packets without additional
+    // waiting.
+    bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error, uint32_t wait_head_ms = 0);
 
     // Flush all buffered frames (EOS drain).
     // Appends any remaining packets to out_packets.
@@ -337,7 +411,35 @@ class NvencEncoder {
     void* m_encoder = nullptr;
     NV_ENC_PRESET_CONFIG m_presetConfig{};
     NV_ENC_CONFIG m_encodeConfig{};
+    // Sync-mode single output buffer (unchanged — the sync path remains fully
+    // intact as the capability fallback). Unused when m_asyncMode is true.
     NV_ENC_OUTPUT_PTR m_bitstreamBuffer = nullptr;
+
+    // Async-mode output ring. kMaxOutputResources is the allocation ceiling
+    // (covers the observed P6/P7 pipeline depth, plus headroom for a future
+    // higher-depth pipeline once lookahead/B-frames need one);
+    // m_activeDepth (1..kMaxOutputResources) is how many of them are
+    // actually used by Submit/Reap this session. Ship default is 1: a pure
+    // correctness fix with no extra VRAM use vs. sync mode — raising it is a
+    // deliberately deferred follow-up (would need an expert setting + a VRAM
+    // clamp, not part of this step). Events are registered for all
+    // kMaxOutputResources slots regardless of m_activeDepth (cheap; avoids
+    // re-registration if the depth ever becomes configurable at Configure()
+    // time).
+    static constexpr int32_t kMaxOutputResources = 4;
+    struct OutputResource {
+        NV_ENC_OUTPUT_PTR bitstream = nullptr;
+        HANDLE event = nullptr;
+        bool in_flight = false;
+    };
+    std::array<OutputResource, kMaxOutputResources> m_outputResources{};
+    int32_t m_activeDepth = 1;
+    int32_t m_outputCursor = 0;
+    bool m_asyncMode = false;
+    // Async mode only: EOS submissions carry no output buffer, but the SDK's
+    // async contract still requires a valid completionEvent on every
+    // NvEncEncodePicture call — this one is reserved for that purpose.
+    HANDLE m_eosEvent = nullptr;
 
     // Input-slot ring: 8 independent NV12 input resources
     std::array<InputSlot, 8> m_slots;
@@ -376,10 +478,31 @@ class NvencEncoder {
         uint64_t pts_ns = 0;
         int32_t slot_idx = -1;
         std::chrono::steady_clock::time_point submit_time{};
+        // Order-validation fields: the inputTimeStamp submitted for this frame
+        // (compared against lockBS.outputTimeStamp on consume — a mismatch is
+        // fatal, see LockAndConsumeBitstream) and the submission-side keyframe
+        // prediction (compared against the actual lockBS.pictureType, warn-only).
+        uint64_t input_ts = 0;
+        bool predicted_keyframe = false;
+        // Which output-ring slot this submission's bitstream/event lives in
+        // (async mode only; -1/unused in sync mode, which has a single shared
+        // m_bitstreamBuffer and no completion event).
+        int32_t out_idx = -1;
     };
     std::queue<PendingFrame> m_pending;
 
     int m_needMoreInputCount = 0;
+
+    // Once-per-session log guard for the keyframe-prediction mismatch, which
+    // stays warn-only (a predicted keyframe landing on a non-IDR frame is
+    // legal, just off-cadence SEI/OBU placement). The outputTimeStamp mismatch
+    // has no guard: it is fatal, so it can by construction never log more than
+    // once (the encode aborts on the first occurrence). The cumulative
+    // counter for the keyframe case lives in the diagnostics aggregator
+    // (EncoderDiagnostics::keyframe_prediction_mismatches), fed per-packet
+    // like encode_latency_ms — NvencEncoder has no aggregator reference.
+    // Reset in InitEncoder.
+    bool m_loggedKeyframePredictionMismatch = false;
 
     // Per-instance monotonic frame index for NVENC inputTimeStamp
     uint64_t m_frameIdx = 0;
@@ -416,6 +539,27 @@ class NvencEncoder {
     // provided, receives the raw nvEncLockBitstream status for the drain policy.
     bool LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::string& out_error, bool non_blocking = false,
                                  NVENCSTATUS* out_lock_status = nullptr);
+
+    // Async mode only: bounded wait on one specific completion event, then
+    // lock+consume via LockAndConsumeBitstream (non-blocking — the event being
+    // signalled already guarantees the output is ready). Retries on the shared
+    // NextEventDrainStep policy until Consume, or the budget/an error aborts
+    // the wait. Shared by EncodeFrame's output-ring-full wait and Flush's
+    // async drain loop, which both need the same bounded-wait behavior.
+    EventDrainStep WaitAndConsumeOneAsync(HANDLE event, double budget_ms, EncodedVideoPacket& out_packet,
+                                          std::string& out_error);
+
+    // Async-mode Flush: submits EOS on its reserved event, then drains all
+    // remaining PendingFrames on the same bounded NextEventDrainStep policy as
+    // WaitAndConsumeOneAsync (2000 ms budget per progress, matching the
+    // existing sync flush drain's anti-wedge guarantee).
+    bool FlushAsync(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error);
+
+    // Tear down the async output ring — every event unregistered + closed
+    // first, then every bitstream buffer destroyed. Safe to call multiple
+    // times and on partial state (rollback from a failed
+    // CreateBitstreamBuffer, or normal Destroy()).
+    void DestroyOutputRing() noexcept;
 };
 
 } // namespace recorder_core
