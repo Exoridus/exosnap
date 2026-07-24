@@ -8,7 +8,7 @@ namespace exosnap::settings {
 // Optional persistence-root override.
 //
 // When the EXOSNAP_CONFIG_DIR environment variable is set to a non-empty value,
-// all persisted application data — settings.ini, presets.ini,
+// all persisted application data — settings.ini, presets.toml,
 // recording-history.json, and the diagnostics log — resolves under that
 // directory instead of the per-user Windows standard locations.
 //

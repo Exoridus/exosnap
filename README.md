@@ -101,8 +101,9 @@ no telemetry, no account, no cloud.
   mode is the default.
 - Local-first crash capture (out-of-process Crashpad) with a consent-gated, privacy-scrubbed
   next-launch crash dialog.
-- In-app update checks (Stable/Preview channels) against public GitHub Releases — notify-only, off
-  by default for self-built binaries, never a silent auto-install.
+- In-app updates (Stable/Preview channels): a signature- and hash-verified download and in-place
+  install via a dedicated updater process, with rollback on failure. Always off by default for
+  self-built binaries, and every install step is visible to the user — never a silent auto-install.
 
 See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the precise current support boundary and
 [`docs/roadmap.md`](docs/roadmap.md) for where this is headed.
@@ -116,7 +117,7 @@ See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the precise current suppo
 | Video codec | AV1 (NVENC) |
 | Audio codec | Opus |
 | Frame rate | CFR 60 fps |
-| Audio source order | `APP`, `SYS`, `MIC` — all enabled, all separate tracks |
+| Audio source order | `APP`, `SYS`, `MIC` — context-aware defaults (`APP` only exists for a captured application window, enabled there; screen capture defaults `SYS` on, `MIC` off), each enabled source its own track |
 | Navigation pages | `Record`, `Device`, `Settings`, `Diagnostics`, `Logs`, `About` |
 
 ## Install / run

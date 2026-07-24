@@ -191,8 +191,11 @@ back to H.264 or AV1 if issues appear.
 
 ## 5. Audio model
 
-**Source order and defaults.** The default audio source order is **`APP`, `SYS`, `MIC`** — all three
-enabled, each producing its own separate resulting track.
+**Source order and defaults.** The audio source row order is **`APP`, `SYS`, `MIC`**. Defaults are
+**context-aware** (see §3 and "Resolved-decision notes" below): the `APP` row exists only while a
+specific application window is the capture target, and defaults enabled there; for screen capture
+(no `APP` row) the shipped default is `SYS` enabled and `MIC` present but off. Each enabled source
+produces its own separate resulting track.
 
 **Editable source rows → resolved tracks.** The UI presents editable source rows. The engine resolves
 the rows into final tracks; the UI never duplicates track-resolution logic. Per-source **gain** and

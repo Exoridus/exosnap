@@ -21,7 +21,7 @@ EU data residency). Both are detailed below. Everything else stays on your compu
 ExoSnap stores the following on your machine only:
 
 - Application settings — `%LOCALAPPDATA%\ExoSnap\settings.ini`
-- Recording presets — `%LOCALAPPDATA%\ExoSnap\presets.ini`
+- Recording presets — `%LOCALAPPDATA%\ExoSnap\presets.toml`
 - Recording history — `%LOCALAPPDATA%\ExoSnap\recording-history.json`
 - A crash-recovery manifest while a recording is in progress — `%LOCALAPPDATA%\ExoSnap\`
 - Diagnostic / startup logs — local log files

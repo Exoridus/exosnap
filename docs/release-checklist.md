@@ -113,9 +113,14 @@ the automated gates and the updater RC live-check above:
       clip recorded with the Expert 4:4:4 chroma option and confirm it shows the documented
       "Preview unavailable" placeholder instead of a decoded frame (trim/markers/export still work).
       Not automatable (real audio-clock pacing and a real decoder, no mock seam).
-- [ ] **Audio-endpoint loss mid-recording ends cleanly.** During a `SYS`-row recording, remove or
-      switch the playback endpoint device: the recording ends with a visible AudioCapture error
-      rather than silently continuing muted. Not automatable (no device seam in the test harness).
+- [ ] **Audio-endpoint loss mid-recording degrades to silence and keeps recording (ADR 0046).**
+      During a `SYS`-row recording, remove or switch the playback endpoint device: the recording
+      does **not** stop. The affected source falls to honest silence, the engine reactivates the
+      same source identity every 500 ms, and a standing notification plus Diagnostics/post-flight
+      report surface the degraded state until the source returns (or the recording ends). Other
+      sources keep recording normally; in a merged track only the dead source's contribution goes
+      silent. Confirm this end-to-end on real hardware — unit/integration tests already cover the
+      logic with fake sources, but the real endpoint-unplug path has no test-harness device seam.
 - [ ] **Present-mode diagnostics are per-recording, not per-session.** After some normal desktop use
       (window switches, notifications), record one demonstrably stable window, stop, then record a
       second stable window. Neither recording may surface a false "captured source keeps changing

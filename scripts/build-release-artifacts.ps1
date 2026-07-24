@@ -489,7 +489,7 @@ Invoke-Heartbeat -Name 'cmake install' -FilePath 'cmake' `
 # ---------------------------------------------------------------------------
 # 2b. Prune leaked dependency development trees
 #
-# Several vendored static dependencies (libmatroska, libebml, fdk-aac, opus,
+# Several vendored static dependencies (libmatroska, libebml, opus,
 # Crashpad/mini_chromium) carry install(TARGETS)/install(FILES) rules we never
 # consume: they emit import libraries, headers, CMake package configs, and
 # pkg-config files into lib/ and include/. Unlike gtest/spdlog/nlohmann/sentry —
@@ -533,7 +533,7 @@ foreach ($d in @('plugins/platforms', 'licenses')) {
 # script always produces) — kept in sync with THIRD_PARTY_NOTICES.md so the
 # release artifact never ships a component the notices document does not
 # describe, or vice versa.
-$requiredLicenses = @('spdlog.txt', 'nlohmann_json.txt', 'tomlplusplus.txt', 'opus.txt', 'fdk-aac.txt', 'flac.txt', 'rnnoise.txt', 'libebml.txt', 'libmatroska.txt', 'qt.txt', 'ibm-plex-mono.txt', 'hanken-grotesk.txt', 'ffmpeg.txt', 'presentmon.txt')
+$requiredLicenses = @('spdlog.txt', 'nlohmann_json.txt', 'tomlplusplus.txt', 'opus.txt', 'flac.txt', 'rnnoise.txt', 'libebml.txt', 'libmatroska.txt', 'qt.txt', 'ibm-plex-mono.txt', 'hanken-grotesk.txt', 'ffmpeg.txt', 'presentmon.txt')
 foreach ($lic in $requiredLicenses) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot "licenses/$lic") -PathType Leaf)) { Add-Error "Missing third-party license: licenses/$lic" }
 }

@@ -154,7 +154,9 @@ the full mechanics.
 
 - No update-related secret is ever present in the client binary or configuration file.
 - A compromised update server cannot push unsigned packages; the client rejects them.
-- Users on portable builds receive only version notifications, not silent updates.
+- As of the 0.9.0 amendment above, portable builds also receive an in-place staged-rename swap
+  (not just version notifications) — but never silently: the swap only runs after the user clicks
+  Update, and every step (Install/Verify/Restart) is visible.
 - Self-built developer builds have no update mechanism, reducing the attack surface for
   development environments.
 - The 0.4.0 implementation slice must include the signing key infrastructure, manifest format
