@@ -14,8 +14,15 @@ Self-test (no GPU, no ffmpeg needed):
 """
 
 import argparse
+import csv
+import datetime
+import json
 import math
+import os
+import re
+import subprocess
 import sys
+import tempfile
 
 # Minimal backstop against a literal division-by-(near-)zero pivot inside
 # _solve_linear_system. This is NOT the singularity/ill-conditioning
@@ -393,16 +400,222 @@ def _self_test():
     return True
 
 
+# One measurement point: a specific preset/rate-control/value combination.
+class MatrixCell:
+    def __init__(self, preset, rc, value):
+        self.preset = preset  # "p1".."p7"
+        self.rc = rc  # "cq" or "vbr"
+        self.value = value  # CQ int (for cq) or bitrate kbps int (for vbr)
+
+    def label(self):
+        return f"{self.preset}-{self.rc}-{self.value}"
+
+
+def default_matrix():
+    """The baseline sweep from the workflow doc: P4 and P7, each under CQ
+    (the product default) and VBR, at a spread of rate-control points wide
+    enough for a 4-point BD-rate curve fit.
+    """
+    cells = []
+    for preset in ("p4", "p7"):
+        for cq in (19, 24, 30, 36):
+            cells.append(MatrixCell(preset, "cq", cq))
+        for kbps in (3000, 6000, 12000, 24000):
+            cells.append(MatrixCell(preset, "vbr", kbps))
+    return cells
+
+
+def check_ffmpeg_has_libvmaf(ffmpeg_path):
+    result = subprocess.run([ffmpeg_path, "-filters"], capture_output=True, text=True, check=False)
+    if "libvmaf" not in result.stdout:
+        raise SystemExit(
+            f"'{ffmpeg_path} -filters' does not list libvmaf — this ffmpeg build was not compiled with "
+            "--enable-libvmaf. See docs/development/encoder-quality-matrix.md for where to get one."
+        )
+
+
+def probe_encode(probe_path, y4m_path, out_path, vcodec, cell):
+    args = [
+        probe_path,
+        "--y4m",
+        y4m_path,
+        "--out",
+        out_path,
+        "--vcodec",
+        vcodec,
+        "--preset",
+        cell.preset,
+        "--rc",
+        cell.rc,
+    ]
+    if cell.rc == "cq":
+        args += ["--cq", str(cell.value)]
+    else:
+        args += ["--bitrate", str(cell.value)]
+
+    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"probe_encode_file failed for {cell.label()}:\n{result.stdout}\n{result.stderr}")
+    return out_path
+
+
+def measure_quality(ffmpeg_path, distorted_path, reference_path, log_dir, label):
+    """Runs ffmpeg's libvmaf filter (which also reports SSIM/PSNR when asked)
+    comparing `distorted_path` (the probe's encode, decoded) against the
+    original `reference_path` Y4M. Returns a dict with vmaf/ssim/psnr floats.
+
+    Input order matters: libvmaf's `main`/`main2` streams follow the
+    -lavfi/-filter_complex convention of [0:v] as the distorted signal and
+    [1:v] as the reference, so `distorted_path` MUST be given as -i before
+    `reference_path`, matching the order used below.
+
+    log_path is passed as a bare filename, with `cwd` pointed at `log_dir`,
+    rather than a full path -- verified against real ffmpeg 7.1.1 (Windows):
+    the libvmaf filter's own option string splits on ':', which collides
+    with the drive-letter colon in any Windows absolute path (`C:\\...`),
+    and no amount of backslash- or quote-escaping that colon avoids the
+    collision. A relative filename never contains a colon, so this sidesteps
+    the parser ambiguity entirely instead of fighting its escaping rules.
+    """
+    vmaf_log_name = f"{label}.vmaf.json"
+    vmaf_log_path = os.path.join(log_dir, vmaf_log_name)
+    filter_arg = f"libvmaf=log_path={vmaf_log_name}:log_fmt=json:feature=name=psnr|name=float_ssim"
+    args = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-i",
+        distorted_path,
+        "-i",
+        reference_path,
+        "-lavfi",
+        filter_arg,
+        "-f",
+        "null",
+        "-",
+    ]
+    result = subprocess.run(args, capture_output=True, text=True, check=False, cwd=log_dir)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg quality measurement failed for {label}:\n{result.stderr}")
+
+    with open(vmaf_log_path, "r", encoding="utf-8") as f:
+        report = json.load(f)
+    pooled = report["pooled_metrics"]
+    # libvmaf's `feature=name=psnr` reports per-plane psnr_y/psnr_cb/psnr_cr
+    # in pooled_metrics -- there is no combined "psnr" key (verified against
+    # real ffmpeg 7.1.1's libvmaf JSON output). psnr_y (luma PSNR) is the
+    # conventional scalar for encoder quality reporting.
+    return {
+        "vmaf": pooled["vmaf"]["mean"],
+        "ssim": pooled.get("float_ssim", {}).get("mean"),
+        "psnr": pooled.get("psnr_y", {}).get("mean"),
+    }
+
+
+def run_matrix(args):
+    check_ffmpeg_has_libvmaf(args.ffmpeg)
+
+    # The Y4M header is a single ASCII text line, but everything after it is
+    # raw binary frame data -- opening the file in text mode (as originally
+    # written here) makes TextIOWrapper decode a whole internal read buffer
+    # up front rather than stopping at the first '\n', so it throws a
+    # UnicodeDecodeError on the binary payload well past the header
+    # (verified: reproduces on every real Y4M file, not just pathological
+    # ones). Read in binary mode instead and decode only the header line,
+    # matching _clip_duration_seconds below.
+    with open(args.clip, "rb") as f:
+        header_line = f.readline().decode("ascii").strip()
+    print(f"Reference clip: {args.clip}")
+    print(f"Y4M header: {header_line}")
+
+    clip_name = os.path.splitext(os.path.basename(args.clip))[0]
+    work_dir = tempfile.mkdtemp(prefix="exosnap_quality_matrix_")
+    ext = "ivf" if args.vcodec == "av1" else ("h265" if args.vcodec == "hevc" else "h264")
+
+    rows = []
+    for cell in default_matrix():
+        out_path = os.path.join(work_dir, f"{clip_name}-{cell.label()}.{ext}")
+        print(f"encoding {cell.label()} ...")
+        probe_encode(args.probe, args.clip, out_path, args.vcodec, cell)
+        bitrate_kbps = os.path.getsize(out_path) * 8 / 1000 / _clip_duration_seconds(args.clip)
+
+        print(f"measuring {cell.label()} ...")
+        quality = measure_quality(args.ffmpeg, out_path, args.clip, work_dir, cell.label())
+
+        rows.append(
+            {
+                "preset": cell.preset,
+                "rc": cell.rc,
+                "value": cell.value,
+                "bitrate_kbps": bitrate_kbps,
+                **quality,
+            }
+        )
+
+    write_report(args.output, args.vcodec, args.clip, rows, args.ffmpeg)
+    print(f"Wrote {args.output}.csv and {args.output}.md")
+
+
+def _clip_duration_seconds(y4m_path):
+    """Frame count * frame interval, read from the Y4M header + a frame count
+    obtained by dividing the payload size by the per-frame I420 size."""
+    with open(y4m_path, "rb") as f:
+        header_line = f.readline()
+    text = header_line.decode("ascii")
+    width = int(re.search(r"W(\d+)", text).group(1))
+    height = int(re.search(r"H(\d+)", text).group(1))
+    fps_match = re.search(r"F(\d+):(\d+)", text)
+    fps = int(fps_match.group(1)) / int(fps_match.group(2))
+    frame_size = width * height + 2 * ((width // 2) * (height // 2))
+    payload_size = os.path.getsize(y4m_path) - len(header_line)
+    frame_count = payload_size // (frame_size + len(b"FRAME\n"))
+    return frame_count / fps
+
+
+def write_report(output_base, vcodec, clip_path, rows, ffmpeg_path):
+    csv_path = f"{output_base}.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["preset", "rc", "value", "bitrate_kbps", "vmaf", "ssim", "psnr"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    md_path = f"{output_base}.md"
+    ffmpeg_version = subprocess.run(
+        [ffmpeg_path, "-version"], capture_output=True, text=True, check=False
+    ).stdout.splitlines()[0]
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(f"# Encoder quality matrix — {vcodec}\n\n")
+        f.write(f"Clip: `{clip_path}`\n\n")
+        f.write(f"Date: {datetime.date.today().isoformat()}\n\n")
+        f.write(f"ffmpeg: `{ffmpeg_version}`\n\n")
+        f.write("| Preset | RC | Value | Bitrate (kbps) | VMAF | SSIM | PSNR |\n")
+        f.write("|---|---|---|---|---|---|---|\n")
+        for r in rows:
+            f.write(
+                f"| {r['preset']} | {r['rc']} | {r['value']} | {r['bitrate_kbps']:.0f} | "
+                f"{r['vmaf']:.2f} | {r['ssim']:.4f} | {r['psnr']:.2f} |\n"
+            )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--self-test", action="store_true", help="run built-in self-tests and exit")
+    parser.add_argument("--clip", help="reference Y4M clip")
+    parser.add_argument("--vcodec", choices=["av1", "h264", "hevc"], help="codec to sweep")
+    parser.add_argument("--probe", default="build/windows-x64-debug/tools/probes/probe_encode_file/Debug/probe_encode_file.exe",
+                        help="path to the probe_encode_file executable")
+    parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable with libvmaf support")
+    parser.add_argument("--output", default="quality-matrix-result", help="output basename (writes .csv and .md)")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return 0 if _self_test() else 1
 
-    parser.print_help()
-    return 1
+    if not args.clip or not args.vcodec:
+        parser.error("--clip and --vcodec are required unless --self-test is given")
+
+    run_matrix(args)
+    return 0
 
 
 if __name__ == "__main__":
