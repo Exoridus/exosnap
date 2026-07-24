@@ -1,4 +1,4 @@
-# ExoSnap 0.8.1 — Portable Release
+# ExoSnap 0.9.0 — Portable Release
 
 Thanks for trying ExoSnap. This file is the quick-start guide for the portable
 Windows build.
@@ -11,25 +11,16 @@ multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.8.1**, a **pre-v1 Windows preview**. It is not the final
+This is **ExoSnap 0.9.0**, a **pre-v1 Windows preview**. It is not the final
 1.0 release. Settings, presets, and recording-history file formats may change in
 incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
 support boundary.
-
-New in 0.8.1: **diagnostics as a feature** — a typed **`FixAction`** model
-(Auto / Assisted / External) so each detected issue carries its safest remedy; a
-**pre-flight readiness gate** that catches blockers before recording starts;
-**live pipeline monitoring** (frame drops, A/V drift, disk-fill ETA) with
-root-cause correlation such as VRR-vs-CFR judder; a **post-flight report card**;
-an opt-in, elevation-gated **PresentMon** provider; and consent-gated **in-app
-update** checks. Plus settings polish: reliable hover popovers, corner-anchored
-compare hints, and a de-nested Hotkeys card.
 
 ## System requirements
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
 - An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.8.1 requires
+  recommended) and a current NVIDIA display driver. ExoSnap 0.9.0 requires
   NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
   supported in this release.
 - Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
@@ -38,7 +29,7 @@ compare hints, and a de-nested Hotkeys card.
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.8.1-windows-x64-portable` folder from the ZIP to a
+1. Extract the entire `ExoSnap-0.9.0-windows-x64-portable` folder from the ZIP to a
    location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
@@ -102,10 +93,10 @@ are MKV-only.
 ## Verifying your download
 
 A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.8.1-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+`ExoSnap-0.9.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
 
 ```powershell
-Get-FileHash .\ExoSnap-0.8.1-windows-x64-portable.zip -Algorithm SHA256
+Get-FileHash .\ExoSnap-0.9.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 The printed hash must match the value in the `.sha256` file. The checksum

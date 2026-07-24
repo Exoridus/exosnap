@@ -1,12 +1,12 @@
-# ExoSnap 0.8.1 — Known Limitations
+# ExoSnap 0.9.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.8.1**. It is
+This document describes the current support boundary of ExoSnap **0.9.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.8.1 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.9.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.
@@ -400,6 +400,12 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - **Two moments are not fully in-app:** the UAC prompt for MSI installs, and the brief window while
   the app is closed during the file swap. No update runs during an active recording or
   finalization.
+- **Two MSI-path update copy/behavior gaps, acceptable for the portable-first 0.9.0 audience:**
+  the post-install verification-failure card (case B3 / red) says "the previous version was
+  restored" even on the MSI path, which has no portable-style backup to restore (`msiexec`
+  manages its own rollback) — accurate for portable, misleading for MSI. And `msiexec` exit 3010
+  (`ERROR_SUCCESS_REBOOT_REQUIRED`, upgrade succeeded but needs a reboot to finish) renders as a
+  generic failure card instead of a "restart Windows to finish" terminal state.
 
 ## Diagnostics logs and support bundle
 
