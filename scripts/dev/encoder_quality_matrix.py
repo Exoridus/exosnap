@@ -17,14 +17,33 @@ import argparse
 import math
 import sys
 
-# Pivot-singularity tolerance for _solve_linear_system, applied AFTER the
-# matrix has been symmetrically equilibrated to a unit diagonal (see that
-# function's docstring). Because equilibration makes every column's scale
-# comparable (diagonal exactly 1, off-diagonals bounded in [-1, 1] by
-# Cauchy-Schwarz), this single constant is meaningful across all columns
-# regardless of how wildly the *un-equilibrated* matrix's entries vary in
-# magnitude -- unlike a threshold compared against a raw matrix entry.
-_SINGULAR_REL_TOL = 1e-14
+# Minimal backstop against a literal division-by-(near-)zero pivot inside
+# _solve_linear_system. This is NOT the singularity/ill-conditioning
+# detector for _polyfit3's curve fits -- see _FIT_RESIDUAL_TOL below and
+# _polyfit3's docstring for why pivot magnitude (even after equilibration)
+# cannot reliably discriminate a genuinely-degenerate fit from a legitimate
+# one: hand-verification against real VMAF sweep data found that ordinary,
+# well-conditioned, evenly-spaced high-VMAF sweeps (e.g. [97, 97.5, 98,
+# 98.5] or [99.5, 99.6, 99.7, 99.8]) can equilibrate down to pivots in the
+# 6e-16 to 2e-15 range -- overlapping the genuinely-degenerate clustered
+# case's ~2e-16 to 5e-16 floor. No fixed pivot-magnitude threshold sits
+# between those two ranges. This constant only exists so a truly exact (or
+# floating-point-exact) zero pivot -- e.g. duplicate x-values collapsing a
+# column to identically zero -- raises a clear error instead of a
+# ZeroDivisionError; it should essentially never fire on real data.
+_ZERO_PIVOT_TOL = 1e-300
+
+# Singularity/ill-conditioning tolerance for _polyfit3, applied to the
+# fitted cubic's residual at the original sample points (see _polyfit3's
+# docstring for the full rationale). Hand-verified against real matrix
+# data: legitimate sweeps top out around 1.2e-8 max residual (worst
+# observed case, [99, 99.2, 99.4, 99.6]; reviewer independently measured
+# up to ~1.5e-7 across a similar set), while the genuinely-clustered/
+# near-duplicate case measures ~4.3e-4 -- roughly 4-5 orders of magnitude
+# higher. 1e-5 sits in between with a wide margin on both sides (~800x
+# above the worst legitimate residual seen, ~40x below the degenerate
+# case's residual).
+_FIT_RESIDUAL_TOL = 1e-5
 
 
 def bd_rate(rates_a, metrics_a, rates_b, metrics_b):
@@ -66,6 +85,22 @@ def _polyfit3(x, y):
     """Least-squares cubic fit: returns [c0, c1, c2, c3] for
     y = c0 + c1*x + c2*x^2 + c3*x^3. Stdlib-only (solves the 4x4 normal
     equations directly with Gaussian elimination — no numpy).
+
+    With exactly 4 (x, y) sample points (the only size _polyfit3 is ever
+    called with here — see bd_rate), the normal-equations solve is not a
+    lossy least-squares approximation: it is an EXACT interpolation of all
+    4 points, since a cubic has exactly 4 degrees of freedom. That gives a
+    cheap, reliable way to detect whether the solve was numerically
+    trustworthy: after solving, re-evaluate the fitted cubic at the
+    original x_i and compare against y_i. For a well-conditioned system,
+    that residual is near machine precision (~1e-8 or smaller, measured
+    against real sweep data); for an ill-conditioned one (near-duplicate x
+    values), rounding error during elimination blows the residual up to
+    ~1e-4 or worse, even though the solve itself completes without a
+    literal division error. This residual is the discriminator used here —
+    NOT the pivot magnitude inside _solve_linear_system (see
+    _FIT_RESIDUAL_TOL and _ZERO_PIVOT_TOL's module-level comments for why
+    pivot magnitude alone cannot separate the two cases).
     """
     n = len(x)
     powers = [[xi**p for p in range(7)] for xi in x]  # x^0..x^6, needed for the normal equations
@@ -74,7 +109,18 @@ def _polyfit3(x, y):
     ata = [[sum(powers[i][a + b] for i in range(n)) for b in range(4)] for a in range(4)]
     aty = [sum(powers[i][a] * y[i] for i in range(n)) for a in range(4)]
 
-    return _solve_linear_system(ata, aty)
+    coeffs = _solve_linear_system(ata, aty)
+
+    c0, c1, c2, c3 = coeffs
+    max_residual = max(abs((c0 + c1 * xi + c2 * xi**2 + c3 * xi**3) - yi) for xi, yi in zip(x, y))
+    if max_residual > _FIT_RESIDUAL_TOL:
+        raise ValueError(
+            "curve fit is unreliable (max residual "
+            f"{max_residual:.3e} > {_FIT_RESIDUAL_TOL:.0e}) — check for "
+            "near-duplicate or too-few distinct metric values"
+        )
+
+    return coeffs
 
 
 def _polyint3(coeffs, x):
@@ -97,27 +143,30 @@ def _solve_linear_system(a, b):
     sums (roughly 1e6-1e12+) — a spread that exists identically for
     perfectly well-separated sample points (e.g. metrics=[95, 96, 97, 98],
     an ordinary quality sweep) and for genuinely near-duplicate ones alike.
-    A threshold compared against any single raw-matrix scale reference
-    (the previous approach used the whole matrix's largest entry) therefore
-    cannot distinguish "this column is small because x^0..x^3 sums are
-    inherently smaller than x^3..x^6 sums" from "this column has
-    genuinely lost its information during elimination" — it produced false
-    positives on realistic, well-conditioned sweep data (see the
-    regression test for the [95, 96, 97, 98] case).
 
-    The fix: symmetrically equilibrate `a` before elimination, i.e. solve
-    (D A D) x' = D b for x' = D^-1 x, where D = diag(1/sqrt(a[i][i])). This
-    is the standard "correlation matrix" transformation for an SPD matrix —
-    it rescales every row and column so the diagonal is exactly 1, and by
-    Cauchy-Schwarz every off-diagonal entry of the equilibrated matrix is
-    bounded to [-1, 1] regardless of the original matrix's scale. Once
-    equilibrated, every column is on the *same* footing (unit diagonal), so
-    a single fixed relative threshold (_SINGULAR_REL_TOL) applied to the
-    equilibrated pivots is finally an apples-to-apples comparison across
-    columns — unlike comparing raw x^0-column pivots against a scale set by
-    the x^6 column. Row swaps during partial pivoting only reorder
-    equations, never unknowns, so D itself needs no bookkeeping through the
-    swaps — only the final x = D x' undo at the end.
+    This function symmetrically equilibrates `a` before elimination, i.e.
+    solves (D A D) x' = D b for x' = D^-1 x, where D = diag(1/sqrt(a[i][i])).
+    This is the standard "correlation matrix" transformation for an SPD
+    matrix — it rescales every row and column so the diagonal is exactly 1,
+    and by Cauchy-Schwarz every off-diagonal entry of the equilibrated
+    matrix is bounded to [-1, 1] regardless of the original matrix's scale.
+    This is kept purely for the numerical-stability benefit during
+    elimination itself (it measurably reduces rounding error in the
+    fitted coefficients) — NOT as a singularity decision. Two prior fix
+    rounds tried using the (equilibrated) pivot magnitude itself as the
+    singularity/ill-conditioning signal, compared against a fixed
+    threshold; both were proven wrong by hand-verification against real
+    sweep data — see _polyfit3's docstring and the module-level comment on
+    _FIT_RESIDUAL_TOL for why no fixed pivot-magnitude threshold can
+    discriminate a genuinely-degenerate fit from a legitimate one. The
+    singularity decision now lives entirely in _polyfit3's post-fit
+    residual check. The only check left here is _ZERO_PIVOT_TOL, a loose
+    backstop against a literal (near-)zero pivot so elimination raises a
+    clear error instead of crashing on division by zero — it is not
+    expected to fire on any real data. Row swaps during partial pivoting
+    only reorder equations, never unknowns, so D itself needs no
+    bookkeeping through the swaps — only the final x = D x' undo at the
+    end.
     """
     n = len(b)
 
@@ -138,8 +187,8 @@ def _solve_linear_system(a, b):
 
     for col in range(n):
         pivot = max(range(col, n), key=lambda r: abs(m[r][col]))
-        if abs(m[pivot][col]) < _SINGULAR_REL_TOL:
-            raise ValueError("singular matrix in bd_rate curve fit")
+        if abs(m[pivot][col]) < _ZERO_PIVOT_TOL:
+            raise ValueError("singular matrix in bd_rate curve fit (exact zero pivot)")
         m[col], m[pivot] = m[pivot], m[col]
         for r in range(n):
             if r == col:
@@ -255,20 +304,53 @@ def _self_test():
         abs(narrow - expected_narrow) < 1e-6,
     )
 
+    # Third-review-round regression: three more high-VMAF, evenly-spaced,
+    # entirely ordinary sweeps that a PRIOR fix round's pivot-magnitude
+    # guard (after equilibration) still falsely flagged as singular. Hand-
+    # verification proved the equilibrated pivot floor for these sweeps
+    # (~6e-16 to ~2e-15) genuinely overlaps the floor of the real
+    # degenerate/clustered case below (~2e-16 to ~5e-16) — no fixed pivot
+    # threshold can separate them. The actual discriminator is the fit
+    # RESIDUAL (see _FIT_RESIDUAL_TOL and _polyfit3's docstring): these
+    # sweeps interpolate their 4 points to near machine precision (measured
+    # max residual on the order of 1e-8 to 1e-9), 3-4 orders of magnitude
+    # below the residual threshold, so they must not raise. Identical
+    # curves are used (like the very first self-test case above) since the
+    # point here is purely "does the fit succeed", not curve shape — that's
+    # already covered by the "differently shaped" and "narrow-range" cases
+    # above.
+    for name, sweep_metrics in (
+        ("[97, 97.5, 98, 98.5]", [97, 97.5, 98, 98.5]),
+        ("[99, 99.2, 99.4, 99.6]", [99, 99.2, 99.4, 99.6]),
+        ("[99.5, 99.6, 99.7, 99.8]", [99.5, 99.6, 99.7, 99.8]),
+    ):
+        # Rates from the same smooth log-linear model used elsewhere in this
+        # self-test (_fa), i.e. a well-behaved RD curve — not arbitrary
+        # hand-picked integers, which (verified) can be "unsmooth" enough
+        # relative to a 0.1-1 VMAF-unit sweep spacing to genuinely inflate
+        # the residual on their own, independent of x-conditioning.
+        sweep_rates = [10 ** _fa(x) for x in sweep_metrics]
+        try:
+            result = bd_rate(sweep_rates, sweep_metrics, sweep_rates, sweep_metrics)
+            check(
+                f"legitimate high-VMAF sweep {name} does not falsely trip the fit-"
+                f"residual guard (identical curves, got {result:.4f}, want ~0)",
+                abs(result) < 0.01,
+            )
+        except ValueError as exc:
+            failures.append(f"legitimate high-VMAF sweep {name} incorrectly raised: {exc}")
+
     # Closely-clustered/tightly-spaced metric values: a preset/RC sweep
     # that has plateaued in quality can produce samples this close
-    # together. Under the OLD absolute pivot threshold (1e-12) this matrix
-    # silently "solved" despite being severely ill-conditioned — verified
-    # by hand: the fit's residuals at the 4 sample points were ~4e-4
-    # (versus the ~1e-12 expected for an exact 4-point cubic
-    # interpolation), and the fitted c0 came out around -291 for
-    # log10(rate) values that are actually ~2.7. The equilibrated relative
-    # threshold in _solve_linear_system correctly identifies this matrix as
-    # unreliable and raises instead of silently returning that garbage —
-    # while the [95, 96, 97, 98] case just above, despite spanning a
-    # similarly narrow absolute range, is NOT flagged: its 4 sample points
-    # are ~1e14x farther apart relative to floating-point precision than
-    # this case's 1e-4-spaced points are.
+    # together. Verified by hand: the fit's residuals at the 4 sample
+    # points are ~4.3e-4 (versus ~1e-8 or smaller for the legitimate
+    # sweeps above, including the narrow high-VMAF ones just checked) —
+    # roughly 4-5 orders of magnitude larger, well past _FIT_RESIDUAL_TOL.
+    # This is what _polyfit3's post-fit residual check now catches: the
+    # equilibrated-pivot approach previously used here could not
+    # distinguish this case from the legitimate narrow sweeps above (their
+    # pivot floors genuinely overlap), but their residuals do not overlap
+    # at all.
     metrics_clustered = [90.0000, 90.0001, 90.0002, 90.0003]
     rates_clustered = [500, 501, 503, 506]
     try:
