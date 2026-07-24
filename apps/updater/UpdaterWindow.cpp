@@ -306,7 +306,8 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     QColor failColor = caution();
     if (state.variant == TerminalVariant::Red)
         failColor = error();
-    else if (state.variant == TerminalVariant::Green)
+    else if (state.variant == TerminalVariant::Green ||
+             state.variant == TerminalVariant::RebootRequired)
         failColor = success();
     steps_->setFailColor(failColor);
     // Green is a soft-success terminal: a Failed step there is the auto-relaunch
@@ -340,6 +341,11 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
             ico = Ico::Check;
             toneCol = success();
             headline = QStringLiteral("Update complete — version %1 is ready").arg(state.to_version);
+            break;
+        case TerminalVariant::RebootRequired:
+            ico = Ico::Check;
+            toneCol = success();
+            headline = QStringLiteral("Update installed — restart Windows to finish");
             break;
         case TerminalVariant::Success:
             ico = Ico::Check;
@@ -421,7 +427,8 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
     QColor tone = caution();
     if (state.variant == TerminalVariant::Red)
         tone = error();
-    else if (state.variant == TerminalVariant::Green)
+    else if (state.variant == TerminalVariant::Green ||
+             state.variant == TerminalVariant::RebootRequired)
         tone = success();
 
     card->setStyleSheet(QStringLiteral("QWidget#card{background:%1;border:1px solid %2;"

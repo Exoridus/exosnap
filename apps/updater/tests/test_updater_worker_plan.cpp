@@ -129,14 +129,41 @@ TEST(RetryEntryStep, AppWontCloseReentersCloseApp) {
 }
 
 TEST(RetryEntryStep, InstallFailuresReenterInstall) {
-    EXPECT_EQ(RetryEntryStep(FailureCase::InstallFailed), UpStep::Install);       // B2
-    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailed), UpStep::Install); // B3
-    EXPECT_EQ(RetryEntryStep(FailureCase::UacDeclined), UpStep::Install);         // C1 re-handoff
-    EXPECT_EQ(RetryEntryStep(FailureCase::MsiFailed), UpStep::Install);           // C2
+    EXPECT_EQ(RetryEntryStep(FailureCase::InstallFailed), UpStep::Install);          // B2
+    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailed), UpStep::Install);    // B3
+    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailedMsi), UpStep::Install); // B3-MSI
+    EXPECT_EQ(RetryEntryStep(FailureCase::UacDeclined), UpStep::Install);            // C1 re-handoff
+    EXPECT_EQ(RetryEntryStep(FailureCase::MsiFailed), UpStep::Install);              // C2
+    EXPECT_EQ(RetryEntryStep(FailureCase::MsiRebootRequired), UpStep::Install);      // C3
 }
 
 TEST(RetryEntryStep, LaunchFailedReentersLaunch) {
     EXPECT_EQ(RetryEntryStep(FailureCase::LaunchFailed), UpStep::Launch); // B4
+}
+
+// ---------------------------------------------------------------------------
+// ClassifyMsiExit -- msiexec exit-code -> terminal meaning. 3010 is a
+// success-with-restart, not a failure; everything but 0/3010 is a real error.
+// ---------------------------------------------------------------------------
+
+TEST(ClassifyMsiExit, ZeroIsSuccess) {
+    EXPECT_EQ(ClassifyMsiExit(0), MsiExitClass::Success); // ERROR_SUCCESS
+}
+
+TEST(ClassifyMsiExit, RebootRequiredCodeIsItsOwnClass) {
+    // 3010 ERROR_SUCCESS_REBOOT_REQUIRED: the upgrade applied; it must NOT be
+    // folded into the generic failure path.
+    EXPECT_EQ(ClassifyMsiExit(3010), MsiExitClass::RebootRequired);
+}
+
+TEST(ClassifyMsiExit, RealErrorCodesAreFailed) {
+    EXPECT_EQ(ClassifyMsiExit(1603), MsiExitClass::Failed); // fatal error during install
+    EXPECT_EQ(ClassifyMsiExit(1618), MsiExitClass::Failed); // another install in progress
+    EXPECT_EQ(ClassifyMsiExit(1638), MsiExitClass::Failed); // product already installed
+    EXPECT_EQ(ClassifyMsiExit(1625), MsiExitClass::Failed); // install forbidden by policy
+    // 1641 (ERROR_SUCCESS_REBOOT_INITIATED) cannot occur under /norestart; if it
+    // ever did it would land here, which is the documented, deliberate behavior.
+    EXPECT_EQ(ClassifyMsiExit(1641), MsiExitClass::Failed);
 }
 
 // ---------------------------------------------------------------------------

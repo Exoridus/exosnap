@@ -52,6 +52,7 @@ void ProgressRing::paintEvent(QPaintEvent*) {
     case TerminalVariant::Amber: tone = caution(); break;
     case TerminalVariant::Red: tone = error(); break;
     case TerminalVariant::Green: tone = success(); break;
+    case TerminalVariant::RebootRequired: tone = success(); break;
     case TerminalVariant::Success: tone = mint(); break;
     case TerminalVariant::None: tone = mint(); break;
     }

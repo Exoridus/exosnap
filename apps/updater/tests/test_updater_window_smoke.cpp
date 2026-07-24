@@ -180,6 +180,51 @@ TEST_F(UpdaterWindowTest, MsiRedVariantHasSinglePrimaryButton) {
     EXPECT_EQ(buttons[0], QStringLiteral("Close"));
 }
 
+TEST_F(UpdaterWindowTest, MsiRebootRequiredHasSingleCloseButton) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::MsiRebootRequired));
+    const QStringList buttons = window.footerButtonLabels();
+    ASSERT_EQ(buttons.size(), 1);
+    EXPECT_EQ(buttons[0], QStringLiteral("Close"));
+    // Close must be allowed: the install already applied, nothing is mid-flight.
+    EXPECT_TRUE(window.closeEnabled());
+}
+
+TEST_F(UpdaterWindowTest, MsiRebootRequiredHeadlineMentionsRestart) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::MsiRebootRequired));
+
+    QStringList seen;
+    for (auto* label : window.findChildren<QLabel*>())
+        seen << label->text();
+    bool mentions_restart = false;
+    for (const QString& text : seen)
+        mentions_restart = mentions_restart || text.contains(QStringLiteral("restart Windows"));
+    EXPECT_TRUE(mentions_restart);
+}
+
+TEST_F(UpdaterWindowTest, MsiVerifyFailureShowsInstallerRollbackNotRestored) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::VerifyInstallFailedMsi));
+
+    QStringList seen;
+    for (auto* label : window.findChildren<QLabel*>())
+        seen << label->text();
+    bool rolled_back = false;
+    bool restored = false;
+    for (const QString& text : seen) {
+        rolled_back = rolled_back || text.contains(QStringLiteral("Windows Installer rolled back"));
+        restored = restored || text.contains(QStringLiteral("was restored"));
+    }
+    EXPECT_TRUE(rolled_back);
+    EXPECT_FALSE(restored);
+    // Same actions as the portable B3 red card.
+    const QStringList buttons = window.footerButtonLabels();
+    ASSERT_EQ(buttons.size(), 2);
+    EXPECT_EQ(buttons[0], QStringLiteral("Retry"));
+    EXPECT_EQ(buttons[1], QStringLiteral("Open current version"));
+}
+
 TEST_F(UpdaterWindowTest, InProgressStateHasNoFooterButtons) {
     UpdaterWindow window;
     window.render(InstallInFlight());

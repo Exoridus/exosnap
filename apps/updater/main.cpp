@@ -6,9 +6,9 @@
 // controller state after every event. Retry routing per the failure matrix
 // re-enters the worker at RetryEntryStep(case).
 //
-// A dev-only `--preview-state <progress|amber|red|green>` short-circuits all
-// engine work and renders a canned UpdaterUiState so the four canon looks can
-// be inspected (and screenshotted) without a real download/install in flight.
+// A dev-only `--preview-state <progress|amber|red|green|reboot>` short-circuits
+// all engine work and renders a canned UpdaterUiState so the canon looks can be
+// inspected (and screenshotted) without a real download/install in flight.
 
 #include <QApplication>
 #include <QScreen>
@@ -38,7 +38,7 @@ constexpr char kPreviewTo[] = "0.9.0";
 // How long the Success footer ("this window closes automatically") lingers.
 constexpr int kSuccessAutoCloseMs = 1500;
 
-// Build one of the four canned preview states from the real controller so the
+// Build one of the canned preview states from the real controller so the
 // preview stays faithful to the shipping state machine.
 std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     UpdaterController c(QString::fromLatin1(kPreviewFrom), QString::fromLatin1(kPreviewTo));
@@ -64,6 +64,12 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
         c.onStepDone(UpStep::Install);
         c.onStepStarted(UpStep::Verify);
         c.onFailure(FailureCase::VerifyInstallFailed, QString());
+        return c.state();
+    }
+    if (which == QStringLiteral("reboot")) {
+        c.onStepDone(UpStep::Download);
+        c.onStepDone(UpStep::CloseApp);
+        c.onFailure(FailureCase::MsiRebootRequired, QString());
         return c.state();
     }
     if (which == QStringLiteral("green")) {
@@ -126,7 +132,7 @@ int main(int argc, char** argv) {
         if (!state.has_value()) {
             std::fprintf(stderr,
                          "exosnap-updater: invalid --preview-state '%s' "
-                         "(expected progress|amber|red|green)\n",
+                         "(expected progress|amber|red|green|reboot)\n",
                          qPrintable(which));
             return 2;
         }

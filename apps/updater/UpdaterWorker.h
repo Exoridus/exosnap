@@ -47,6 +47,23 @@
 // msiexec parameter string for a silent install: /i "<msi>" /qn /norestart.
 [[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path);
 
+// Terminal meaning of an msiexec process exit code for the silent
+// (/qn /norestart) install this app performs.
+enum class MsiExitClass {
+    Success,        // 0    ERROR_SUCCESS -- upgrade applied, no restart needed
+    RebootRequired, // 3010 ERROR_SUCCESS_REBOOT_REQUIRED -- upgrade applied; a
+                    //      Windows restart is needed to finish (msiexec did NOT
+                    //      reboot, because /norestart was passed)
+    Failed,         // any other code -- a real installer error (code kept for the UI)
+};
+
+// Classify an msiexec exit code. 3010 is a SUCCESS-with-restart, not a failure,
+// so it must not be folded into the generic C2 failure card. 1641
+// (ERROR_SUCCESS_REBOOT_INITIATED -- msiexec itself triggered the reboot) is not
+// given a distinct class on purpose: this app always passes /norestart, so
+// msiexec never initiates a reboot and 1641 cannot occur here.
+[[nodiscard]] MsiExitClass ClassifyMsiExit(unsigned long exit_code);
+
 // Start <install_dir>\exosnap.exe detached (working dir = install_dir).
 // Shared by the pipeline's Launch step and the window's "Open ..." actions.
 [[nodiscard]] bool LaunchExoSnapFrom(const std::wstring& install_dir);
