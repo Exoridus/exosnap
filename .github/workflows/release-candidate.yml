@@ -10,8 +10,22 @@ on:
     branches: ['release/**']
 
 # This workflow produces the canonical release artifacts (portable ZIP + MSI)
-# from a single Release build and install tree. It does NOT create a git tag,
-# a GitHub Release, change repository visibility, or publish to WinGet.
+# from a single Release build and install tree. It does NOT create the git tag
+# (the human pushes that — it is what triggers this workflow), change repository
+# visibility, or publish to WinGet.
+#
+# For an OFFICIAL version-tag build (a `v*` tag with the signing key provisioned)
+# it now DOES own the GitHub Release deterministically: the `publish-release` job
+# creates a DRAFT Release for the tag, uploads every asset plus the signed update
+# manifest, re-downloads and re-hashes them, and only then un-drafts (publishes)
+# the Release. If any validation fails the Release stays a hidden draft, so a
+# release is never visible to users or the in-app updater until every check
+# passed. See docs/release-checklist.md §3.
+#
+# Fail-closed: an official version-tag build with the update key MISSING hard-fails
+# the build job (see "Configure Release tree") rather than silently degrading to an
+# unofficial artifact. Non-tag builds (PRs via release/** branches, forks) keep
+# building working UNOFFICIAL artifacts.
 
 jobs:
   build:
@@ -80,15 +94,22 @@ jobs:
       # Crashpad + the Sentry Stage-1 DSN, gated on EXOSNAP_OFFICIAL_BUILD) and
       # runtime update checking (IsUpdateCheckEnabled() returns true only for
       # official builds). The embedded public key is required by the CMake gate and
-      # used by the (currently dormant) signed-manifest verification. If the variable
-      # is absent the workflow still produces an UNOFFICIAL build (no DSN, update
-      # checking disabled) so the artifact pipeline never hard-fails on a fresh fork.
+      # used by the signed-manifest verification.
+      #
+      # FAIL-CLOSED on version tags: a `v*` tag is a real release. If the update key
+      # is missing on such a build we hard-fail rather than silently shipping an
+      # UNOFFICIAL artifact (no crash key, updater disabled, no embedded verification
+      # key) under a version-tag name — a v0.9.0 tag must never produce an artifact
+      # that lacks the update-verification key. Builds that are NOT a version tag
+      # (release/** test branches, forks, manual dispatch on a branch) keep building
+      # a working UNOFFICIAL artifact so the fork/PR path is never broken.
       - name: Configure Release tree
         shell: pwsh
         env:
           PUBKEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
         run: |
           $cfgArgs = @('--preset', 'windows-x64-release')
+          $isVersionTag = ($env:GITHUB_REF_TYPE -eq 'tag') -and ($env:GITHUB_REF_NAME -like 'v*')
           if ($env:PUBKEY) {
             Write-Host "Official build: crash capture (Sentry DSN) + update checking ENABLED."
             $cfgArgs += @(
@@ -97,8 +118,11 @@ jobs:
               "-DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=$($env:PUBKEY)",
               '-DFETCHCONTENT_BASE_DIR=C:/es'
             )
+          } elseif ($isVersionTag) {
+            Write-Error "::error::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable is not set, but this build was triggered by the version tag '$($env:GITHUB_REF_NAME)'. A v* tag must produce an OFFICIAL artifact (crash capture + embedded update-verification key). Refusing to degrade to an UNOFFICIAL artifact for a release tag. Set the EXOSNAP_UPDATE_PUBLIC_KEY_HEX repository variable and the EXOSNAP_UPDATE_SIGNING_KEY secret, then re-tag."
+            exit 1
           } else {
-            Write-Host "::warning::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable not set — building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime)."
+            Write-Host "::warning::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable not set — building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime). Allowed because this is not a version-tag build."
           }
           cmake @cfgArgs
 
@@ -196,12 +220,24 @@ jobs:
   # the release the asset URLs point at) when the signing key is provisioned
   # (EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable present = official build). Forks
   # without the key skip it rather than hard-failing. The asset URLs are the
-  # canonical GitHub Release download paths for this tag; publish update-manifest.json
-  # as a release asset alongside the ZIP + MSI so the signed URLs resolve.
+  # canonical GitHub Release download paths for this tag.
+  #
+  # This job generates + signs the manifest and verifies (a) the signing key really
+  # is the private half of the embedded public key and (b) the detached signature
+  # verifies, then publishes update-manifest.json + .sig as a build ARTIFACT. It does
+  # NOT attach them to the GitHub Release here (attach_to_release: false) — the
+  # downstream publish-release job owns the Release creation + upload so the ordering
+  # is deterministic (create draft → upload → re-hash → publish) instead of racing a
+  # Release that may not exist yet.
   sign-manifest:
     name: Sign Update Manifest
     needs: build
     if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX != '' }}
+    # Matches the write declared inside sign-manifest.yml (its standalone path uploads
+    # to a Release). In this called path attach_to_release is false, so the write is
+    # declared for consistency but not exercised — publish-release owns the upload.
+    permissions:
+      contents: write
     uses: ./.github/workflows/sign-manifest.yml
     with:
       version: ${{ needs.build.outputs.version }}
@@ -209,4 +245,135 @@ jobs:
       portable_sha256: ${{ needs.build.outputs.portable_sha256 }}
       installer_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64.msi
       portable_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64-portable.zip
+      attach_to_release: false
     secrets: inherit
+
+  # Deterministic release publication (official version-tag builds only). Fixes the
+  # release/signing race: nothing used to create the GitHub Release, yet sign-manifest
+  # assumed it existed and tried to `gh release upload` into it. Order here is:
+  #   1. (done by `build`) build + validate artifacts
+  #   2. create a DRAFT Release for this exact tag (idempotent; reuses one if present)
+  #   3. (done by `sign-manifest`) generate manifest from the artifact SHA-256s, sign,
+  #      verify the keypair + signature against the embedded public key
+  #   4. upload every asset (ZIP, MSI, sidecars, manifest, .sig) to the draft
+  #   5. re-download the published assets and re-hash them; cross-check the manifest's
+  #      embedded SHA-256s against the shipped bytes and re-verify the signature
+  #   6. only then un-draft (publish) the Release
+  # If any check fails the Release stays a hidden draft — fail-closed.
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build, sign-manifest]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.build.outputs.version }}
+      EXPECTED_PORTABLE_SHA: ${{ needs.build.outputs.portable_sha256 }}
+      EXPECTED_MSI_SHA: ${{ needs.build.outputs.msi_sha256 }}
+    steps:
+      - name: Download release artifacts (ZIP + MSI + sidecars)
+        uses: actions/download-artifact@v4
+        with:
+          name: ExoSnap-${{ needs.build.outputs.version }}-windows-x64
+          path: release-assets
+
+      - name: Download signed manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: update-manifest
+          path: release-assets
+
+      # Create the Release as a DRAFT so it (and its asset URLs) are invisible to
+      # the in-app updater until every check below passes. Idempotent: if a human
+      # pre-created the Release, reuse it rather than erroring.
+      - name: Create draft GitHub Release (if absent)
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading into it."
+          else
+            echo "Creating draft release $TAG."
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --title "ExoSnap $VERSION" \
+              --notes "Automated release candidate for $TAG. Artifacts and the signed update manifest are attached and verified by CI. Review release notes, then this draft is published automatically once all checks pass. See docs/release-checklist.md before announcing."
+          fi
+
+      - name: Upload all assets to the release
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            "ExoSnap-$VERSION-windows-x64-portable.zip" \
+            "ExoSnap-$VERSION-windows-x64-portable.sha256" \
+            "ExoSnap-$VERSION-windows-x64.msi" \
+            "ExoSnap-$VERSION-windows-x64.msi.sha256" \
+            update-manifest.json update-manifest.json.sig \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      # Re-download the assets straight from the Release and re-hash them, so what a
+      # user would actually fetch is proven byte-identical to what the gate built and
+      # to what the signed manifest claims.
+      - name: Re-download and verify published assets
+        env:
+          PUBKEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          set -euo pipefail
+          mkdir -p verify
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir verify --clobber \
+            --pattern "ExoSnap-$VERSION-windows-x64-portable.zip" \
+            --pattern "ExoSnap-$VERSION-windows-x64.msi" \
+            --pattern "update-manifest.json" \
+            --pattern "update-manifest.json.sig"
+          portable_actual=$(sha256sum "verify/ExoSnap-$VERSION-windows-x64-portable.zip" | cut -d' ' -f1)
+          msi_actual=$(sha256sum "verify/ExoSnap-$VERSION-windows-x64.msi" | cut -d' ' -f1)
+          echo "portable expected=$EXPECTED_PORTABLE_SHA actual=$portable_actual"
+          echo "msi      expected=$EXPECTED_MSI_SHA actual=$msi_actual"
+          if [ "${portable_actual,,}" != "${EXPECTED_PORTABLE_SHA,,}" ]; then
+            echo "::error::Portable ZIP SHA-256 changed between the build gate and the published Release asset."; exit 1
+          fi
+          if [ -n "$EXPECTED_MSI_SHA" ] && [ "${msi_actual,,}" != "${EXPECTED_MSI_SHA,,}" ]; then
+            echo "::error::MSI SHA-256 changed between the build gate and the published Release asset."; exit 1
+          fi
+          pip install --quiet pynacl
+          python3 - <<'PY'
+          import json, hashlib, os, sys
+          import nacl.signing
+          v = os.environ["VERSION"]
+          m = json.load(open("verify/update-manifest.json"))
+          def sha(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for b in iter(lambda: f.read(1 << 20), b""):
+                      h.update(b)
+              return h.hexdigest()
+          files = {
+              "installer": f"verify/ExoSnap-{v}-windows-x64.msi",
+              "portable":  f"verify/ExoSnap-{v}-windows-x64-portable.zip",
+          }
+          errs = []
+          for pkg in m["packages"]:
+              kind = pkg["kind"]; want = pkg["sha256"].lower()
+              path = files.get(kind)
+              if not path or not os.path.exists(path):
+                  errs.append(f"manifest lists package '{kind}' but its asset is missing"); continue
+              got = sha(path)
+              if got != want:
+                  errs.append(f"{kind}: manifest sha256={want} != shipped asset sha256={got}")
+          if errs:
+              print("::error::" + "; ".join(errs)); sys.exit(1)
+          data = open("verify/update-manifest.json", "rb").read()
+          sig = bytes.fromhex(open("verify/update-manifest.json.sig").read().strip())
+          nacl.signing.VerifyKey(bytes.fromhex(os.environ["PUBKEY_HEX"])).verify(data, sig)
+          print("Published assets match the build gate and the signed manifest; signature verifies against the embedded public key.")
+          PY
+
+      - name: Publish (un-draft) the release
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published release $TAG."

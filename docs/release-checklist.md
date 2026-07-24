@@ -23,18 +23,38 @@ a GPU-less runner.
 
 ## 3. Publish the GitHub release
 
-- [ ] Create the `vX.Y.Z` tag and GitHub Release; upload the portable ZIP, MSI, and their `.sha256`
-      sidecars.
-- [ ] **Publish `update-manifest.json` AND `update-manifest.json.sig` as release assets. MANDATORY
-      for every release from 0.9.0 on.** The signature is detached: the `.sig` asset holds the
-      ed25519 signature over the exact bytes of `update-manifest.json`, and the in-app update
-      checker only surfaces a release that carries **both** assets (the signature is verified
-      against the embedded public key before any manifest field is read); a release published
-      without them is **invisible to in-app updates forever**. `release-candidate.yml` runs
-      `sign-manifest.yml` as a required job on the version-tag push (official builds); the job
-      attaches both files to the GitHub Release for the tag automatically once the Release exists.
-      Verify both assets are on the release page; if the job ran before the Release existed,
-      re-run `sign-manifest.yml` via workflow_dispatch with the final URLs + SHAs.
+For an **official** version tag (`vX.Y.Z` with the `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` repository
+variable and the `EXOSNAP_UPDATE_SIGNING_KEY` secret provisioned), `release-candidate.yml` now owns
+this deterministically — there is no manual asset upload and no `sign-manifest.yml` re-run dance:
+
+- [ ] **Push the `vX.Y.Z` tag** (this is the *only* manual step, and it triggers everything below).
+      Do **not** hand-create the GitHub Release first — the workflow creates it. The build job
+      hard-fails if the update key is missing on a `v*` tag, so a version tag can never produce an
+      unofficial artifact.
+- [ ] **Let the pipeline run and confirm it went green.** On the tag push the workflow, in order:
+  1. builds + validates the portable ZIP, MSI, and their `.sha256` sidecars (packaging gate);
+  2. generates `update-manifest.json`, signs it (detached ed25519 `.sig`), and **verifies in CI**
+     that the signing key is the private half of the embedded public key and that the signature
+     verifies;
+  3. creates a **draft** GitHub Release for the tag;
+  4. uploads the ZIP, MSI, `.sha256` sidecars, `update-manifest.json`, and `update-manifest.json.sig`;
+  5. re-downloads those assets and re-hashes them, cross-checks the manifest's embedded SHA-256s
+     against the shipped bytes, and re-verifies the signature against the embedded public key;
+  6. only then **un-drafts (publishes)** the Release.
+      If any step fails the Release stays a hidden draft, so it is never visible to users or the
+      in-app updater in a half-published state.
+- [ ] **Spot-check the published release page**: both `update-manifest.json` AND
+      `update-manifest.json.sig` are present alongside the ZIP + MSI. The detached `.sig` holds the
+      ed25519 signature over the exact bytes of `update-manifest.json`; the in-app update checker
+      only surfaces a release that carries **both** assets (signature verified against the embedded
+      public key before any manifest field is read), so a release missing either is **invisible to
+      in-app updates forever**. **MANDATORY for every release from 0.9.0 on.**
+- [ ] (Optional) Edit the release notes on GitHub after publication.
+
+> **Manual escape hatch.** `sign-manifest.yml` still exposes a standalone `workflow_dispatch` that
+> attaches a freshly signed manifest to an **already-existing** Release (supply the final URLs +
+> SHAs). It is only needed if the automated `publish-release` job is unavailable (e.g. re-signing an
+> old release); the normal path above requires no re-run.
 
 ## 4. Updater RC live-check (manual, on real hardware)
 
