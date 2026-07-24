@@ -57,6 +57,16 @@ on:
         required: false
         type: boolean
         default: true
+      release_tag:
+        description: >-
+          Tag of the GitHub Release the manifest belongs to. Only used when attach_to_release is
+          true. Pass it explicitly whenever the caller is not running on that tag's ref — e.g. the
+          release-candidate RC path, a workflow_dispatch on a branch that publishes a vX.Y.Z-rcN
+          prerelease, where guessing "v<version>" would name the wrong (final) release. Empty falls
+          back to the current tag ref, else v<version>.
+        required: false
+        type: string
+        default: ''
     secrets:
       EXOSNAP_UPDATE_SIGNING_KEY:
         required: true
@@ -90,6 +100,11 @@ on:
         required: false
         type: boolean
         default: true
+      release_tag:
+        description: 'Tag of the GitHub Release to attach to. Leave empty to use the current tag ref, else v<version>. Set it for a prerelease/RC tag such as v0.9.0-rc1.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   sign-manifest:
@@ -206,7 +221,7 @@ jobs:
         if: ${{ inputs.attach_to_release }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+          RELEASE_TAG: ${{ inputs.release_tag != '' && inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version)) }}
         run: |
           gh release upload "$RELEASE_TAG" \
             update-manifest.json update-manifest.json.sig \

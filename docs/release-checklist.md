@@ -21,16 +21,52 @@ a GPU-less runner.
 - [ ] Confirm both the portable ZIP and the MSI contain `exosnap-updater.exe` (validation report
       required-files section) — without it the in-app updater is non-functional in packaged builds.
 
-## 3. Publish the GitHub release
+## 3. Cut a release candidate (prerelease)
+
+The live checks in §5, §6 and §7 have to run against **real official artifacts** — in particular the
+updater round-trip in §7 needs a genuinely published GitHub Release to download from. Publishing the
+final `vX.Y.Z` tag first and testing afterwards is not an option: that tag is the release. So cut an
+RC first. It is built by the same pipeline, from the same commit, with the same signing key and the
+same gates as the final release; it differs only in which tag it lands on and in being marked as a
+GitHub **prerelease**, which the in-app update check reads from GitHub's own `prerelease` flag — so
+only users on the **Preview** channel are ever offered it, and Stable users are unaffected.
+
+- [ ] **Dispatch `release-candidate.yml` with `rc_tag` set** (Actions → Release Candidate → Run
+      workflow, from the branch or commit you intend to release), e.g. `v0.9.0-rc1`. The tag does
+      not need to exist — the workflow creates it, pinned to the exact commit it built. `rc_tag`
+      must be a pre-release tag (`vX.Y.Z-<suffix>`) whose `X.Y.Z` matches `CMakeLists.txt`; both are
+      checked in seconds, before the build starts. Leaving `rc_tag` empty is still a plain manual
+      build/validation run that publishes nothing.
+- [ ] **Let the pipeline run and confirm it went green.** It performs exactly the steps listed in §4
+      — fail-closed official build, signed manifest, draft Release, upload, re-download + re-hash +
+      signature re-verification — and then publishes the Release **as a prerelease**. A failure
+      leaves a hidden draft, same as for a final release.
+- [ ] **Confirm the RC page shows the "Pre-release" badge** and carries `update-manifest.json` +
+      `update-manifest.json.sig` next to the ZIP + MSI.
+- [ ] **Run §5, §6 and §7 against this RC build.** Set the test install's update channel to
+      **Preview** (Settings → updates card, Stable/Preview toggle) before the updater checks — a
+      Stable-channel client will not see a prerelease at all.
+- [ ] **If anything fails:** fix it, and cut the next candidate (`v0.9.0-rc2`) from the new commit.
+      A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
+      already-published Release.
+- [ ] **Once every check passes, push the final `vX.Y.Z` tag from the *same commit* the passing RC
+      was built from** and continue with §4. Re-cut an RC if that commit moved.
+
+> The RC prerelease stays on the releases page as a normal, visible prerelease. Note that an
+> RC and its eventual final release compare as the *same* version number (`0.9.0-rc1` → `0.9.0`),
+> so a machine left on the RC build will not be offered the final release as an in-app update —
+> install the final build there by hand (or delete the RC prerelease once the release is out).
+
+## 4. Publish the GitHub release
 
 For an **official** version tag (`vX.Y.Z` with the `EXOSNAP_UPDATE_PUBLIC_KEY_HEX` repository
 variable and the `EXOSNAP_UPDATE_SIGNING_KEY` secret provisioned), `release-candidate.yml` now owns
 this deterministically — there is no manual asset upload and no `sign-manifest.yml` re-run dance:
 
-- [ ] **Push the `vX.Y.Z` tag** (this is the *only* manual step, and it triggers everything below).
-      Do **not** hand-create the GitHub Release first — the workflow creates it. The build job
-      hard-fails if the update key is missing on a `v*` tag, so a version tag can never produce an
-      unofficial artifact.
+- [ ] **Push the `vX.Y.Z` tag** (this is the *only* manual step, and it triggers everything below),
+      from the same commit as the RC that passed §3. Do **not** hand-create the GitHub Release first
+      — the workflow creates it. The build job hard-fails if the update key is missing on a `v*`
+      tag, so a version tag can never produce an unofficial artifact.
 - [ ] **Let the pipeline run and confirm it went green.** On the tag push the workflow, in order:
   1. builds + validates the portable ZIP, MSI, and their `.sha256` sidecars (packaging gate);
   2. generates `update-manifest.json`, signs it (detached ed25519 `.sig`), and **verifies in CI**
@@ -56,10 +92,11 @@ this deterministically — there is no manual asset upload and no `sign-manifest
 > SHAs). It is only needed if the automated `publish-release` job is unavailable (e.g. re-signing an
 > old release); the normal path above requires no re-run.
 
-## 4. Updater RC live-check (manual, on real hardware)
+## 5. Updater RC live-check (manual, on real hardware)
 
-CI runs on GPU-less runners and cannot exercise a real swap. Before announcing an RC, verify these by
-hand from the previous shipped version (currently 0.8.1) to the RC build:
+CI runs on GPU-less runners and cannot exercise a real swap. Run these against the RC prerelease from
+§3, by hand, from the previous shipped version (currently 0.8.1) to the RC build — the test install
+must be on the **Preview** update channel to see the RC at all:
 
 - [ ] **Portable happy-path swap (0.8.1 → RC).** From a user-writable portable install, click Update;
       the dedicated updater downloads, verifies, closes the app, does the staged-rename swap, verifies,
@@ -79,7 +116,7 @@ hand from the previous shipped version (currently 0.8.1) to the RC build:
       `%TEMP%\ExoSnapUpdate\<version>\` is gone — the downloaded manifest, `.sig`, and ZIP/MSI are
       removed on the success path (they used to accumulate one full copy per version).
 
-## 5. Privacy review (every release)
+## 6. Privacy review (every release)
 
 ExoSnap promises a telemetry-free product; this is the repeatable step that keeps that promise
 provable rather than assumed. Full detail and rationale: `docs/privacy-review.md` (inventory +
@@ -109,10 +146,10 @@ walked by hand.
       walked against `docs/privacy-review.md`'s inventory for this release; bump `Effective date`
       if any field or recipient changed.
 
-## 6. 0.9 release gate — manual live verifications
+## 7. 0.9 release gate — manual live verifications
 
-0.9 is **not** tagged or released until these manual checks pass, on real hardware, in addition to
-the automated gates and the updater RC live-check above:
+0.9 is **not** tagged or released until these manual checks pass, on real hardware, against the RC
+prerelease from §3, in addition to the automated gates and the updater RC live-check above:
 
 - [ ] **Window-capture recording with the `APP` audio row.** Record a specific application window
       with the `APP` row enabled; play the result back and confirm per-app audio is present and
@@ -150,7 +187,7 @@ the automated gates and the updater RC live-check above:
       into the middle of a multi-GOP clip and Save; the exported file starts cleanly (no black or
       frozen lead-in, no overshoot past the end), with duration matching the trimmed range.
 
-## 7. Downstream package managers
+## 8. Downstream package managers
 
 WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside
 tracked files; both are easy to forget because nothing fails locally if they go stale. Update them
