@@ -44,8 +44,8 @@ _ZERO_PIVOT_TOL = 1e-300
 # fitted cubic's residual at the original sample points (see _polyfit3's
 # docstring for the full rationale). Hand-verified against real matrix
 # data: legitimate sweeps top out around 1.2e-8 max residual (worst
-# observed case, [99, 99.2, 99.4, 99.6]; reviewer independently measured
-# up to ~1.5e-7 across a similar set), while the genuinely-clustered/
+# observed case, [99, 99.2, 99.4, 99.6]; independently measured up to
+# ~1.5e-7 across a similar set), while the genuinely-clustered/
 # near-duplicate case measures ~4.3e-4 -- roughly 4-5 orders of magnitude
 # higher. 1e-5 sits in between with a wide margin on both sides (~800x
 # above the worst legitimate residual seen, ~40x below the degenerate
@@ -170,11 +170,11 @@ def _solve_linear_system(a, b):
     matrix is bounded to [-1, 1] regardless of the original matrix's scale.
     This is kept purely for the numerical-stability benefit during
     elimination itself (it measurably reduces rounding error in the
-    fitted coefficients) — NOT as a singularity decision. Two prior fix
-    rounds tried using the (equilibrated) pivot magnitude itself as the
-    singularity/ill-conditioning signal, compared against a fixed
-    threshold; both were proven wrong by hand-verification against real
-    sweep data — see _polyfit3's docstring and the module-level comment on
+    fitted coefficients) — NOT as a singularity decision. Using the
+    (equilibrated) pivot magnitude itself as the singularity/ill-
+    conditioning signal, compared against a fixed threshold, was tried and
+    proven wrong by hand-verification against real sweep data — see
+    _polyfit3's docstring and the module-level comment on
     _FIT_RESIDUAL_TOL for why no fixed pivot-magnitude threshold can
     discriminate a genuinely-degenerate fit from a legitimate one. The
     singularity decision now lives entirely in _polyfit3's post-fit
@@ -295,8 +295,8 @@ def _self_test():
         abs(shape - expected_shape) < 1e-6,
     )
 
-    # Regression test for a real false positive found in review: an entirely
-    # ordinary, evenly-spaced quality sweep with NO clustering at all
+    # Regression test for a real false positive: an entirely ordinary,
+    # evenly-spaced quality sweep with NO clustering at all
     # (metrics=[95, 96, 97, 98], step of exactly 1 VMAF point) used to raise
     # ValueError under a singularity guard that compared pivots to the
     # whole matrix's single largest entry. _polyfit3's normal-equations
@@ -322,10 +322,10 @@ def _self_test():
         abs(narrow - expected_narrow) < 1e-6,
     )
 
-    # Third-review-round regression: three more high-VMAF, evenly-spaced,
-    # entirely ordinary sweeps that a PRIOR fix round's pivot-magnitude
-    # guard (after equilibration) still falsely flagged as singular. Hand-
-    # verification proved the equilibrated pivot floor for these sweeps
+    # Regression test: three more high-VMAF, evenly-spaced, entirely
+    # ordinary sweeps that an earlier pivot-magnitude guard (even after
+    # equilibration) falsely flagged as singular. Hand-verification proved
+    # the equilibrated pivot floor for these sweeps
     # (~6e-16 to ~2e-15) genuinely overlaps the floor of the real
     # degenerate/clustered case below (~2e-16 to ~5e-16) — no fixed pivot
     # threshold can separate them. The actual discriminator is the fit

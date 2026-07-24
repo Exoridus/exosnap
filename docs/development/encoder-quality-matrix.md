@@ -59,15 +59,23 @@ Writes `<output>.csv` (raw data) and `<output>.md` (human-readable table).
 ## Result storage
 
 File results under `docs/development/quality-results/<date>-<gpu>-<codec>-<clip>.md` (matching
-the `--output` path above) — tracked in git so results are diffable across runs.
+the `--output` path above) — tracked in git so results are diffable across runs. The `<gpu>` in
+the filename is manual: the generated report logs the `ffmpeg` version but not the GPU name,
+driver version, or the probe binary's commit hash, so note those in the filename or a line at the
+top of the `.md` before committing a result if the comparison will ever cross hardware or driver
+versions.
 
 ## Computing BD-rate between two runs
 
 `bd_rate()` in `scripts/dev/encoder_quality_matrix.py` takes two (bitrate, VMAF) curves — the
 baseline and the candidate — and returns the percent bitrate delta at equal quality (negative =
-candidate is better). Import it directly from a small script, or extend
-`encoder_quality_matrix.py` with a `--compare` mode when a concrete before/after comparison is
-needed (not built speculatively here — see the harness design's non-goals).
+candidate is better). Each curve must be **exactly 4** (bitrate, VMAF) points — matching the
+4 CQ / 4 VBR points `default_matrix()` sweeps per preset — and raises `ValueError` for any other
+count; the fit-quality check that catches ill-conditioned input only holds at exactly 4 points
+(see `bd_rate`'s and `_polyfit3`'s docstrings for why). Import it directly from a small script, or
+extend `encoder_quality_matrix.py` with a `--compare` mode when a concrete before/after comparison
+is needed (not built speculatively here — kept out of scope for this measurement-only pass, not
+comparison tooling).
 
 ## Gate rule for shipping an encoder-quality change
 

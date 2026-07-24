@@ -1,5 +1,7 @@
 #include "yuv_convert.h"
 
+#include <algorithm>
+
 namespace recorder_core {
 
 void ConvertI420ToNv12(const uint8_t* i420, uint32_t width, uint32_t height, std::vector<uint8_t>& out_nv12) {
