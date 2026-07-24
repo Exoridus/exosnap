@@ -97,8 +97,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Pinned so the signing job can't silently pick up a new PyNaCl release
+      # mid-cycle; verified working (1.6.2) as of this pin. Bump deliberately.
       - name: Install pynacl
-        run: pip install pynacl
+        run: pip install pynacl==1.6.2
 
       - name: Generate and sign manifest
         env:

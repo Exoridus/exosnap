@@ -56,7 +56,16 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipSmoke,
     [switch]$SkipMsi,
-    [switch]$KeepStaging
+    [switch]$KeepStaging,
+    # An 'inconclusive' smoke result (MSI/portable/updater) means the process launched
+    # and didn't crash, but the script couldn't positively confirm a stable run (e.g. it
+    # exited cleanly within the wait window, which could be a genuine early success OR
+    # the single-instance guard OR something else quiet). That ambiguity is acceptable
+    # for local/dev iteration, where re-running the gate is cheap. It must NOT be for an
+    # official release gate: pass this switch there so every 'inconclusive' becomes a
+    # hard failure instead of silently passing. See .workspace/audit.md, "Release-Smokes
+    # sind weiterhin teilweise fail-open".
+    [switch]$FailOnInconclusive
 )
 
 Set-StrictMode -Version Latest
@@ -896,6 +905,10 @@ if (-not $SkipMsi) {
                                             else {
                                                 $msiSmokeResult = 'inconclusive'
                                                 $msiSmokeNotes += "MSI exe exited with code $($msiProc.ExitCode) — loader succeeded; may be GPU-less runner or single-instance guard."
+                                                if ($FailOnInconclusive) {
+                                                    Add-Error "MSI smoke: inconclusive result treated as failure (-FailOnInconclusive) — exit code $($msiProc.ExitCode)"
+                                                    $msiSmokeResult = 'failed'
+                                                }
                                             }
                                         }
                                         else {
@@ -1079,6 +1092,10 @@ if (-not $SkipSmoke) {
             if ($proc.ExitCode -eq 0) {
                 $smokeResult = 'inconclusive'
                 $smokeNotes += "Process exited cleanly (exit 0) within the wait window; may be the single-instance guard. UI stability not confirmed."
+                if ($FailOnInconclusive) {
+                    Add-Error "Portable ZIP smoke: inconclusive result treated as failure (-FailOnInconclusive) — exited cleanly within the wait window without positive confirmation of a stable run"
+                    $smokeResult = 'failed'
+                }
             }
             else {
                 Add-Error "Smoke: extracted exe exited with code $($proc.ExitCode) (likely a startup/dependency failure)"
@@ -1228,9 +1245,13 @@ if (-not $SkipSmoke) {
             }
             else {
                 # Still running past the auto-close deadline: loader succeeded (it
-                # rendered), but the self-close never fired. Force close; not fatal.
+                # rendered), but the self-close never fired.
                 $updaterSmokeResult = 'inconclusive'
                 $updaterSmokeNotes += "Updater still running after $([int]12)s auto-close deadline; loader succeeded but --preview-smoke self-close did not fire."
+                if ($FailOnInconclusive) {
+                    Add-Error "Updater smoke: inconclusive result treated as failure (-FailOnInconclusive) — --preview-smoke self-close did not fire within 12s"
+                    $updaterSmokeResult = 'failed'
+                }
                 try { $uProc.Kill($true) } catch { }
             }
             Write-Host "  Updater smoke result: $updaterSmokeResult"
