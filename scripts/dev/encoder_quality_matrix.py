@@ -614,6 +614,12 @@ def main(argv=None):
     if not args.clip or not args.vcodec:
         parser.error("--clip and --vcodec are required unless --self-test is given")
 
+    # measure_quality() runs ffmpeg with cwd set to a scratch directory (see
+    # its docstring for why), so a relative --clip would no longer resolve
+    # against the caller's cwd by the time ffmpeg sees it. Resolve once, here,
+    # rather than at every args.clip use site in run_matrix()/measure_quality().
+    args.clip = os.path.abspath(args.clip)
+
     run_matrix(args)
     return 0
 
