@@ -153,6 +153,12 @@ by hand, every release:
       the path) and `checksum64` (lowercase SHA-256, from the same `.msi.sha256`). Also
       `packaging/chocolatey/exosnap.nuspec` — `<version>`, the `@vX.Y.Z` tag in `<iconUrl>`,
       `<releaseNotes>`, and any version-specific line in `<description>`.
+  - Run `scripts/validate-chocolatey-package.ps1` before publishing — it proves the CMake
+    version, nuspec `<version>`/`<iconUrl>`/`<releaseNotes>`, and `chocolateyinstall.ps1`
+    `url64bit` all agree, flags any other stale version reference left in
+    `packaging/chocolatey/`, and (when `.workspace/release/<version>/artifact-manifest.json`
+    is present) checks `checksum64` against the manifest's `msiSha256`. Static checks only —
+    it does not run `choco pack` or install/uninstall the package.
 - [ ] **Scoop.** `packaging/scoop/exosnap.json` carries an `autoupdate`/`checkver` block, so the
       *published* bucket entry (`Exoridus/scoop-exosnap`) refreshes its own version/URL/hash once
       `scoop update` runs against the new GitHub Release — no manual bucket edit needed. Still keep
