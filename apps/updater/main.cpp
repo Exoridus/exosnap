@@ -18,6 +18,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -141,7 +142,17 @@ int main(int argc, char** argv) {
         window.show();
         CenterOnScreen(window);
         if (previewSmoke) {
-            QTimer::singleShot(kPreviewSmokeCloseMs, &app, &QCoreApplication::quit);
+            // QCoreApplication::quit() was found NOT to reliably return control from
+            // app.exec() in this exact launch shape (confirmed with instrumentation:
+            // the timer fires and quit() runs, but exec() never returns) on both this
+            // dev machine and the GitHub Actions windows-2022 release-pipeline runner
+            // -- root cause not pinned down (no child event loop or extra thread exists
+            // on this short-circuit path to explain a stuck quit propagation). This
+            // smoke's only job is proving the packaged exe loads its Qt runtime and
+            // renders; std::exit() sidesteps whatever is holding exec() open instead of
+            // depending on normal Qt shutdown, which is fine for this dev/CI-only path
+            // that never runs for a real update.
+            QTimer::singleShot(kPreviewSmokeCloseMs, &app, [] { std::exit(0); });
         }
         return app.exec();
     }
