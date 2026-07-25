@@ -31,12 +31,12 @@ same gates as the final release; it differs only in which tag it lands on and in
 GitHub **prerelease**, which the in-app update check reads from GitHub's own `prerelease` flag — so
 only users on the **Preview** channel are ever offered it, and Stable users are unaffected.
 
-- [ ] **Dispatch `release-candidate.yml` with `rc_tag` set** (Actions → Release Candidate → Run
-      workflow, from the branch or commit you intend to release), e.g. `v0.9.0-rc1`. The tag does
-      not need to exist — the workflow creates it, pinned to the exact commit it built. `rc_tag`
-      must be a pre-release tag (`vX.Y.Z-<suffix>`) whose `X.Y.Z` matches `CMakeLists.txt`; both are
-      checked in seconds, before the build starts. Leaving `rc_tag` empty is still a plain manual
-      build/validation run that publishes nothing.
+- [ ] **Push a release-candidate tag yourself**, e.g. `v0.9.0-rc1` (`vX.Y.Z-<suffix>`, `X.Y.Z`
+      matching `CMakeLists.txt` — both are validated in seconds, before the build starts). This
+      workflow cannot create the tag itself: the repository's "Block version tags" ruleset
+      (`refs/tags/v*`) blocks tag creation/update/deletion for the GitHub Actions token, and only
+      bypasses for a human pushing over their own credentials. Pushing the tag is what triggers the
+      pipeline — same as the final tag in §4, just with an RC suffix.
 - [ ] **Let the pipeline run and confirm it went green.** It performs exactly the steps listed in §4
       — fail-closed official build, signed manifest, draft Release, upload, re-download + re-hash +
       signature re-verification — and then publishes the Release **as a prerelease**. A failure

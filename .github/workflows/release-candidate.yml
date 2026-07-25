@@ -2,68 +2,57 @@ name: Release Candidate
 
 on:
   workflow_dispatch:
-    inputs:
-      rc_tag:
-        description: >-
-          Optional release-candidate tag, e.g. v0.9.0-rc1. Leave EMPTY for a plain manual
-          build/validation run that publishes nothing. When set, this run builds exactly like an
-          official version-tag build and publishes a GitHub PRERELEASE under this tag, so only the
-          Preview update channel sees it. Must be a pre-release tag (vX.Y.Z-<suffix>) whose X.Y.Z
-          matches the version in CMakeLists.txt.
-        required: false
-        type: string
-  # Run automatically on version tags (e.g. v0.5.0) and release/** branches so
-  # a missing-DLL or packaging regression is caught before the release ships.
+  # Run automatically on version tags -- both FINAL (vX.Y.Z, e.g. v0.9.0) and
+  # RELEASE CANDIDATE (vX.Y.Z-<suffix>, e.g. v0.9.0-rc1) -- and release/** branches
+  # so a missing-DLL or packaging regression is caught before the release ships.
   # Do NOT add pull_request here — the full VS Release build is too slow for PR CI.
   push:
     tags: ['v*']
     branches: ['release/**']
 
 # This workflow produces the canonical release artifacts (portable ZIP + MSI)
-# from a single Release build and install tree. It does NOT create the final version
-# tag (the human pushes that — it is what triggers this workflow), change repository
-# visibility, or publish to WinGet. It DOES create the release-candidate tag on the
-# RC path below, because nothing else can: that tag is named by a dispatch input, not
-# by a ref.
+# from a single Release build and install tree. It does NOT create any tag (a
+# human always pushes it — that is what triggers this workflow), change
+# repository visibility, or publish to WinGet.
 #
-# For an OFFICIAL release build it now DOES own the GitHub Release deterministically:
+# For an OFFICIAL release build it DOES own the GitHub Release deterministically:
 # the `publish-release` job creates a DRAFT Release for the tag, uploads every asset
 # plus the signed update manifest, re-downloads and re-hashes them, and only then
 # un-drafts (publishes) the Release. If any validation fails the Release stays a
 # hidden draft, so a release is never visible to users or the in-app updater until
 # every check passed. See docs/release-checklist.md §4.
 #
-# There are TWO ways to get an official release build, and they differ only in which
-# tag the Release lands on and whether it is marked as a GitHub prerelease:
+# There are TWO shapes of official release, both triggered by pushing a real tag
+# (never created by this workflow — see the "Block version tags" repository ruleset
+# note in resolve-identity below), differing only in whether the Release is marked
+# as a GitHub prerelease:
 #
-#   1. FINAL: a `v*` tag push (e.g. v0.9.0) → published as a normal (Stable) Release.
-#   2. RELEASE CANDIDATE: workflow_dispatch with the `rc_tag` input set (e.g.
-#      v0.9.0-rc1) → published as a GitHub PRERELEASE under that tag. The client-side
-#      channel logic (libs/update/src/release_locator.cpp) filters on GitHub's real
-#      `prerelease` flag, so an RC is only ever offered to users on the Preview
-#      channel; Stable users never see it. This exists so the manual live checks in
+#   1. FINAL: push vX.Y.Z (e.g. v0.9.0) → published as a normal (Stable) Release.
+#   2. RELEASE CANDIDATE: push vX.Y.Z-<suffix> (e.g. v0.9.0-rc1) → published as a
+#      GitHub PRERELEASE. The client-side channel logic
+#      (libs/update/src/release_locator.cpp) filters on GitHub's real `prerelease`
+#      flag, so an RC is only ever offered to users on the Preview channel; Stable
+#      users never see it. This exists so the manual live checks in
 #      docs/release-checklist.md §5/§6/§7 — in particular the end-to-end updater
-#      round trip, which needs a REAL published release to download from — can be run
-#      against real official artifacts BEFORE the final `v*` tag is pushed. Once the
-#      RC passes, the same commit is tagged `vX.Y.Z` and takes path 1.
+#      round trip, which needs a REAL published release to download from — can be
+#      run against real official artifacts BEFORE the final tag is pushed. Once the
+#      RC passes, push `vX.Y.Z` from the same commit and it takes path 1.
 #
-# Both paths run the identical build, validation, signing and publish steps; the
+# Both shapes run the identical build, validation, signing and publish steps; the
 # `resolve-identity` job below is the single place that decides which tag is being
-# released, whether the run is official, and whether it is a prerelease.
+# released, whether the run is official, and whether it is a prerelease (purely
+# from the pushed tag's own shape — no dispatch input involved).
 #
-# Fail-closed: an official release build (either path) with the update key MISSING
+# Fail-closed: an official release build (either shape) with the update key MISSING
 # hard-fails the build job (see "Configure Release tree") rather than silently
 # degrading to an unofficial artifact. Non-release builds (PRs via release/**
-# branches, forks, a plain manual dispatch with no `rc_tag`) keep building working
-# UNOFFICIAL artifacts and publish nothing.
+# branches, forks, a plain manual dispatch) keep building working UNOFFICIAL
+# artifacts and publish nothing.
 
 jobs:
   # Single source of truth for "what is this run releasing, and is it official?".
   # Every downstream job reads these outputs instead of re-deriving the answer from
-  # github.ref / GITHUB_REF_TYPE, because the RC path is a workflow_dispatch run on a
-  # branch: it has no version-tag ref at dispatch time, yet must clear exactly the same
-  # official-build gates (fail-closed PUBKEY, -FailOnInconclusive smokes, PDB hard-fail,
-  # draft → verify → publish) as a real tag push.
+  # github.ref / GITHUB_REF_TYPE.
   #
   # Outputs:
   #   release_tag  — the tag the GitHub Release lives under ('' = publish nothing)
@@ -82,58 +71,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Validated BEFORE the ~30-minute Release build so a malformed rc_tag fails in
+      # An earlier version of this workflow could create a release-candidate tag
+      # itself from a workflow_dispatch input (gh release create --target
+      # $GITHUB_SHA). That broke on the first real RC dispatch: this repo's "Block
+      # version tags" ruleset (refs/tags/v*, blocks creation/update/deletion) has no
+      # bypass for the Actions token, only for certain repository roles held by a
+      # human pushing over their own credentials — so un-drafting the Release (which
+      # requires the tag to actually exist) failed with a 422 "creations being
+      # restricted". Tags are therefore always human-pushed now, both final and RC;
+      # this step only classifies whichever tag triggered the run, never creates one.
+      #
+      # Validated BEFORE the ~30-minute Release build so a malformed tag fails in
       # seconds rather than after a full build. Two guards, both fail-closed:
-      #   (a) rc_tag must be a PRE-release tag (vX.Y.Z-<suffix>). Dispatching with a bare
-      #       final tag (v0.9.0) would burn the real release tag on a prerelease and then
-      #       make the eventual final tag push hard-fail on an already-published Release.
+      #   (a) shape must be exactly vX.Y.Z (final) or vX.Y.Z-<suffix> (RC) — catches
+      #       a mistyped tag (vfoo) or stray extra dots/segments.
       #   (b) its X.Y.Z must equal the version in CMakeLists.txt (the single source of
-      #       truth the artifact filenames are built from), so an RC tag can never claim a
+      #       truth the artifact filenames are built from), so a tag can never claim a
       #       version the artifacts inside it do not carry.
       - name: Resolve release tag / official-ness
         id: id
-        env:
-          RC_TAG: ${{ inputs.rc_tag }}
         run: |
           set -euo pipefail
           release_tag=""
           prerelease="false"
-          if [ -n "${RC_TAG:-}" ] && [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            echo "::error::rc_tag '$RC_TAG' was supplied on a run whose ref is already the tag '$GITHUB_REF_NAME'. That is ambiguous — which one is being released? Dispatch the RC from a branch or commit, or push the final tag without rc_tag."
-            exit 1
-          fi
           if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
-            # A pushed tag gets the same two guards as rc_tag below (strict shape,
-            # version must match CMakeLists.txt) — it was previously accepted on
-            # nothing more than a "v" prefix, which would have let a mistyped tag
-            # (vfoo), a version-mismatched tag (v0.9.1 while CMake still says
-            # 0.9.0), or an RC-shaped tag pushed directly (v0.9.0-rc1, bypassing
-            # the rc_tag dispatch and its --prerelease marking) all through as a
-            # normal Stable release.
-            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::Tag '$GITHUB_REF_NAME' is not a final release tag. Expected exactly vX.Y.Z (no prerelease/build suffix) — an RC-shaped tag must be published via the rc_tag workflow_dispatch input, not pushed directly, so it is correctly marked as a GitHub prerelease."
+            if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              prerelease="false"
+            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+              prerelease="true"
+            else
+              echo "::error::Tag '$GITHUB_REF_NAME' is not a valid release tag. Expected vX.Y.Z (final, e.g. v0.9.0) or vX.Y.Z-<suffix> (release candidate, e.g. v0.9.0-rc1)."
               exit 1
             fi
             cmake_version=$(sed -nE 's/^[[:space:]]*project\([[:space:]]*exosnap[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
-            tag_version="${GITHUB_REF_NAME#v}"
+            tag_version="${GITHUB_REF_NAME#v}"; tag_version="${tag_version%%-*}"
             if [ "$tag_version" != "$cmake_version" ]; then
               echo "::error::Tag '$GITHUB_REF_NAME' targets version $tag_version, but CMakeLists.txt declares $cmake_version. The artifacts this run builds would be named ExoSnap-$cmake_version-*, not matching the tag. Bump the version first (release-checklist §1) or fix the tag."
               exit 1
             fi
             release_tag="$GITHUB_REF_NAME"
-          elif [ -n "${RC_TAG:-}" ]; then
-            if [[ ! "$RC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
-              echo "::error::rc_tag '$RC_TAG' is not a pre-release version tag. Expected vX.Y.Z-<suffix>, e.g. v0.9.0-rc1. The final release tag (vX.Y.Z) is produced by pushing the tag, never by this input."
-              exit 1
-            fi
-            cmake_version=$(sed -nE 's/^[[:space:]]*project\([[:space:]]*exosnap[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
-            rc_version="${RC_TAG#v}"; rc_version="${rc_version%%-*}"
-            if [ "$rc_version" != "$cmake_version" ]; then
-              echo "::error::rc_tag '$RC_TAG' targets version $rc_version, but CMakeLists.txt declares $cmake_version. The artifacts this run builds would be named ExoSnap-$cmake_version-*. Bump the version first (release-checklist §1) or fix rc_tag."
-              exit 1
-            fi
-            release_tag="$RC_TAG"
-            prerelease="true"
           fi
           is_official=$([ -n "$release_tag" ] && echo true || echo false)
           {
@@ -216,15 +192,15 @@ jobs:
       # official builds). The embedded public key is required by the CMake gate and
       # used by the signed-manifest verification.
       #
-      # FAIL-CLOSED on official release builds: a `v*` tag push and an `rc_tag` dispatch
-      # both produce artifacts real users install. If the update key is missing on such a
-      # build we hard-fail rather than silently shipping an UNOFFICIAL artifact (no crash
-      # key, updater disabled, no embedded verification key) under a release tag — a
-      # v0.9.0 (or v0.9.0-rc1) tag must never produce an artifact that lacks the
-      # update-verification key. An RC that shipped without it could not be updater-tested
-      # at all, which is the entire point of cutting one. Builds that release nothing
-      # (release/** test branches, forks, manual dispatch with no rc_tag) keep building a
-      # working UNOFFICIAL artifact so the fork/PR path is never broken.
+      # FAIL-CLOSED on official release builds: pushing a final (vX.Y.Z) or RC
+      # (vX.Y.Z-<suffix>) tag both produce artifacts real users install. If the update
+      # key is missing on such a build we hard-fail rather than silently shipping an
+      # UNOFFICIAL artifact (no crash key, updater disabled, no embedded verification
+      # key) under a release tag — a v0.9.0 (or v0.9.0-rc1) tag must never produce an
+      # artifact that lacks the update-verification key. An RC that shipped without it
+      # could not be updater-tested at all, which is the entire point of cutting one.
+      # Builds that release nothing (release/** test branches, forks, manual dispatch)
+      # keep building a working UNOFFICIAL artifact so the fork/PR path is never broken.
       - name: Configure Release tree
         shell: pwsh
         env:
@@ -272,7 +248,7 @@ jobs:
       # A nonzero exit fails this job and blocks the release push.
       # -SkipConfigure is passed because cmake was configured in the step above;
       # the important gates (-SkipSmoke, -SkipMsi, -SkipBuild) are all OFF.
-      # -FailOnInconclusive on an official release build (final tag OR rc_tag dispatch):
+      # -FailOnInconclusive on an official release build (final tag OR RC tag):
       # an inconclusive smoke (MSI/portable/updater) must not silently pass the gate that
       # produces the artifacts an actual release ships. Non-official builds keep the
       # lenient default so a GPU-less fork/PR run doesn't spuriously fail on ambiguous
@@ -388,7 +364,7 @@ jobs:
   # release from 0.9.0 on: the 0.9+ update checker only surfaces a release that
   # carries an update-manifest.json asset — a release published without it is
   # invisible to in-app updates forever. Runs on every official release build — a
-  # version-tag push or an rc_tag dispatch — when the signing key is provisioned
+  # final or RC version-tag push — when the signing key is provisioned
   # (EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable present = official build). Forks
   # without the key skip it rather than hard-failing. The asset URLs are the canonical
   # GitHub Release download paths for the RESOLVED release tag: for an RC that is the
@@ -420,13 +396,14 @@ jobs:
       portable_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.resolve-identity.outputs.release_tag }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64-portable.zip
       attach_to_release: false
       # Unused while attach_to_release is false (publish-release owns the upload), but
-      # passed so the called workflow never has to guess the tag from the ref — on the RC
-      # path there is no tag ref, and "v<version>" would name the final release.
+      # passed so the called workflow never has to guess the tag — resolve-identity's
+      # release_tag is always right, including for an RC tag where "v<version>" would
+      # wrongly name the eventual final release instead.
       release_tag: ${{ needs.resolve-identity.outputs.release_tag }}
     secrets: inherit
 
-  # Deterministic release publication (official release builds only — a version-tag push
-  # or an rc_tag dispatch; identical steps for both, the RC just lands on its own tag and
+  # Deterministic release publication (official release builds only — a final or RC
+  # version-tag push; identical steps for both, the RC just lands on its own tag and
   # is marked as a GitHub prerelease). Fixes the
   # release/signing race: nothing used to create the GitHub Release, yet sign-manifest
   # assumed it existed and tried to `gh release upload` into it. Order here is:
@@ -480,12 +457,11 @@ jobs:
       # Hard-fail instead: a published Release for this tag is a completed run: there
       # is nothing left for this job to safely do.
       #
-      # On the RC path the git tag usually does not exist yet — nobody pushed it, the
-      # dispatch only named it. `gh release create` creates it, and `--target
-      # "$GITHUB_SHA"` pins it to the exact commit this run built, NOT to whatever the
-      # default branch happens to point at. That is what makes "RC passed → tag the same
-      # commit vX.Y.Z" true rather than approximately true. On the version-tag path the
-      # tag already exists and GitHub ignores the target.
+      # The tag (final or RC) always already exists here — a human pushed it, which is
+      # what triggered this run (see the ruleset note on resolve-identity above: this
+      # workflow cannot create tags itself). `--target "$GITHUB_SHA"` is a no-op safety
+      # net GitHub ignores whenever the tag already exists; kept only so this command
+      # stays correct if that ever changes.
       - name: Create draft GitHub Release (if absent)
         run: |
           set -euo pipefail
@@ -512,7 +488,7 @@ jobs:
             # before touching the draft at all.
             tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq '.sha')
             if [ "$tag_commit" != "$GITHUB_SHA" ]; then
-              echo "::error::Release $TAG's tag already exists and points at commit $tag_commit, but this run built commit $GITHUB_SHA. Refusing to upload this run's artifacts into that draft -- they would not match the tag. For an RC, cut the next candidate (a new rc_tag) instead. For a final tag, delete and re-push the tag from the intended commit first (a deliberate, manual decision)."
+              echo "::error::Release $TAG's tag already exists and points at commit $tag_commit, but this run built commit $GITHUB_SHA. Refusing to upload this run's artifacts into that draft -- they would not match the tag. For an RC, push the next candidate tag (e.g. v0.9.0-rc2) instead. For a final tag, delete and re-push the tag from the intended commit first (a deliberate, manual decision)."
               exit 1
             fi
             echo "Release $TAG already exists as a draft at the expected commit; uploading into it."
