@@ -460,8 +460,13 @@ const QVector<VisualScenario> kScenarios = {
     // Webcam chroma-key scenarios route to the Settings page's embedded webcam
     // card — the sole home for webcam config now that the standalone WebcamPage is
     // gone. The card's chroma-key group renders these distinctly: disabled →
-    // collapsed group; green/blue/custom → group open with the matching key-colour
-    // swatch (webcam_chroma_enabled + webcam_chroma_color_mode drive the panel via
+    // collapsed group; green/blue/custom → group open with the Key color button
+    // showing the matching hex value. The panel has no chip-button enum path
+    // left (the picker always sets a Custom color), so
+    // applyVisualState()/chromaColorFromString() applies each mode string
+    // straight as an RGB value — the same path a real picker pick takes —
+    // instead of dispatching through the Green/Blue/Magenta enum presets
+    // (webcam_chroma_enabled + webcam_chroma_color_mode drive the panel via
     // applyVisualWebcamState).
     {.id = QStringLiteral("settings-webcam-chroma-disabled"),
      .title = QStringLiteral("Settings / Webcam / Chroma Disabled"),

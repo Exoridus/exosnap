@@ -5,6 +5,7 @@
 #include "../../services/WebcamService.h"
 
 #include <QHideEvent>
+#include <QResizeEvent>
 #include <QShowEvent>
 #include <QWidget>
 #include <vector>
@@ -22,10 +23,11 @@ class ExoToggle;
 
 // Reusable inline webcam setup panel for the Settings Webcam card.
 //
-// Packages the live CameraPreview, enable toggle, device combo, resolution
-// combo, and a compact Rescan button into a single embeddable widget. The
-// preview starts when the panel is shown and stops on hide. No overlay
-// placement controls: those belong in the Record preview.
+// Packages the live CameraPreview (full-width, on top), enable toggle, device
+// combo, resolution combo, and a compact Rescan button floating on the
+// preview's bottom-right corner into a single embeddable widget. The preview
+// starts when the panel is shown and stops on hide. No overlay placement
+// controls: those belong in the Record preview.
 class WebcamSetupPanel : public QWidget {
     Q_OBJECT
   public:
@@ -96,13 +98,18 @@ class WebcamSetupPanel : public QWidget {
   private:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
     void refreshDevices();
     void refreshFormats();
     void startPreview();
     void stopPreview();
-    void updateChromaColorButtons();
-    void updateChromaSwatch();
+    // Refreshes the Key color button's icon swatch + hex text from the active
+    // chroma-key color (current_settings_.chroma_key.active_color()).
+    void updateKeyColorButton();
+    // Repositions rescan_btn_ bottom-right over camera_preview_ (it is a
+    // floating, non-layout child of the preview, not the device row).
+    void positionRescanButton();
     WebcamSettings collectSettings() const;
 
     std::vector<WebcamDeviceInfo> devices_;
@@ -128,11 +135,10 @@ class WebcamSetupPanel : public QWidget {
     // Chroma-key group (collapsed while disabled; live-editable when shown).
     ExoToggle* chroma_toggle_ = nullptr;
     QWidget* chroma_body_ = nullptr;
-    QPushButton* chroma_swatch_ = nullptr;
-    QPushButton* chroma_green_btn_ = nullptr;
-    QPushButton* chroma_blue_btn_ = nullptr;
-    QPushButton* chroma_magenta_btn_ = nullptr;
-    QPushButton* chroma_custom_btn_ = nullptr;
+    // Flat button showing the active key color as an icon swatch + hex text;
+    // opens the QColorDialog custom-color picker. Replaces the former four
+    // preset chip buttons (Green/Blue/Magenta/Custom).
+    QPushButton* key_color_btn_ = nullptr;
     QSlider* tolerance_slider_ = nullptr;
     QLabel* tolerance_value_label_ = nullptr;
     QSlider* softness_slider_ = nullptr;

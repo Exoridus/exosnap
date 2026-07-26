@@ -14,6 +14,9 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QPainter>
+#include <QPen>
+#include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
 #include <QSize>
@@ -38,14 +41,23 @@ QString pct(int value) {
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-WebcamChromaKeyColorMode colorModeFromString(const QString& mode) {
+struct RgbTriplet {
+    uint8_t r, g, b;
+};
+
+// The panel's only way to set a key color is now the picker (always Custom
+// mode) — there is no chip-button enum path left to reach the Green/Blue/
+// Magenta presets from the UI. So the visual-test "green"/"blue"/"magenta"/
+// "custom" mode strings map straight to an RGB triplet applied as a Custom
+// color, exactly mirroring how the picker itself would set it.
+RgbTriplet chromaColorFromString(const QString& mode) {
     if (mode.compare(QStringLiteral("blue"), Qt::CaseInsensitive) == 0)
-        return WebcamChromaKeyColorMode::Blue;
+        return {kChromaBlueR, kChromaBlueG, kChromaBlueB};
     if (mode.compare(QStringLiteral("magenta"), Qt::CaseInsensitive) == 0)
-        return WebcamChromaKeyColorMode::Magenta;
+        return {kChromaMagentaR, kChromaMagentaG, kChromaMagentaB};
     if (mode.compare(QStringLiteral("custom"), Qt::CaseInsensitive) == 0)
-        return WebcamChromaKeyColorMode::Custom;
-    return WebcamChromaKeyColorMode::Green;
+        return {255, 140, 0}; // distinctive non-preset colour
+    return {kChromaGreenR, kChromaGreenG, kChromaGreenB};
 }
 #endif
 
@@ -54,26 +66,20 @@ WebcamChromaKeyColorMode colorModeFromString(const QString& mode) {
 WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("webcamSetupPanel"));
 
-    auto* root = new QHBoxLayout(this);
+    // v0.9 redesign: the preview sits full-width on top of the control rows
+    // (vertical stack) instead of a compact side column, so it reads at a usable
+    // size and the Rescan button can float on it directly (see below).
+    auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(18);
+    root->setSpacing(12);
 
-    // ── Left column: compact live preview ────────────────────────────────────
+    // ── Preview: full-width, on top ──────────────────────────────────────────
     camera_preview_ = new CameraPreview(this);
-    // Override the standalone-page WIDTH only: compact 180-300px for the Settings
-    // embed. Height is intentionally left Expanding (not a hardcoded Fixed value)
-    // so the preview grows to match the right column's control stack. A previous
-    // hardcoded setFixedHeight(175) + Qt::AlignTop matched the control column back
-    // when it only held Enable/Camera/Resolution/Mirror; once Overlay opacity and
-    // the Chroma key group were added the right column grew taller than 175px,
-    // leaving a dead gap below the pinned-height preview.
-    camera_preview_->setMinimumHeight(175);
+    camera_preview_->setMinimumHeight(150);
     camera_preview_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    camera_preview_->setMaximumWidth(300);
-    camera_preview_->setMinimumWidth(180);
     root->addWidget(camera_preview_, 0);
 
-    // ── Right column: controls ────────────────────────────────────────────────
+    // ── Control rows, stacked below the preview ──────────────────────────────
     auto* right_col = new QWidget(this);
     auto* right_layout = new QVBoxLayout(right_col);
     right_layout->setContentsMargins(0, 0, 0, 0);
@@ -95,25 +101,25 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     right_layout->addWidget(makeHairline(right_col));
 
-    // Device row: combo + compact rescan button
+    // Device row: just the combo now — Rescan lives on the preview (below).
     auto* device_label = new QLabel(QStringLiteral("Camera"), right_col);
     device_label->setProperty("labelRole", "settingsRowLabel");
     right_layout->addWidget(device_label);
 
-    auto* device_row = new QWidget(right_col);
-    auto* dr = new QHBoxLayout(device_row);
-    dr->setContentsMargins(0, 0, 0, 0);
-    dr->setSpacing(6);
     device_combo_ = new QComboBox(right_col);
     device_combo_->setObjectName(QStringLiteral("webcamPanelDeviceCombo"));
     device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    dr->addWidget(device_combo_, 1);
+    right_layout->addWidget(device_combo_);
 
-    rescan_btn_ = new QPushButton(right_col); // #09: icon-only rescan button
+    // #09/v0.9: icon-only rescan button, re-parented onto the preview itself
+    // (bottom-right corner) instead of sitting beside the device combo. It is a
+    // floating, non-layout child of camera_preview_ — positionRescanButton()
+    // places it in resizeEvent().
+    rescan_btn_ = new QPushButton(camera_preview_);
     rescan_btn_->setObjectName(QStringLiteral("webcamPanelRescanBtn"));
     rescan_btn_->setProperty("role", "ghost");
     rescan_btn_->setToolTip(QStringLiteral("Rescan for cameras"));
-    rescan_btn_->setFixedWidth(36);
+    rescan_btn_->setFixedSize(26, 26);
     rescan_btn_->setCursor(Qt::PointingHandCursor);
     {
         // Themed lucide glyph in HT.mut — the previous currentColor SVG inherited the
@@ -123,8 +129,8 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
             QStringLiteral("refresh-cw"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
         rescan_btn_->setIconSize(QSize(14, 14));
     }
-    dr->addWidget(rescan_btn_);
-    right_layout->addWidget(device_row);
+    positionRescanButton();
+    rescan_btn_->raise();
 
     // Resolution / FPS
     auto* res_label = new QLabel(QStringLiteral("Resolution / FPS"), right_col);
@@ -158,7 +164,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
         auto* row = new QWidget(row_parent);
         auto* rl = new QHBoxLayout(row);
         rl->setContentsMargins(0, 0, 0, 0);
-        rl->setSpacing(8);
+        rl->setSpacing(4);
         auto* lbl = new QLabel(label_text, row);
         lbl->setProperty("labelRole", "settingsRowLabel");
         rl->addWidget(lbl, 1);
@@ -166,11 +172,11 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
         slider->setObjectName(object_name);
         slider->setRange(0, 100);
         slider->setValue(def);
-        slider->setFixedWidth(140);
+        slider->setFixedWidth(116);
         rl->addWidget(slider, 0);
         value_label = new QLabel(pct(def), row);
         value_label->setProperty("labelRole", "settingsRowLabel");
-        value_label->setFixedWidth(38);
+        value_label->setFixedWidth(40);
         value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         rl->addWidget(value_label, 0);
         return row;
@@ -203,7 +209,10 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     cb->setContentsMargins(0, 2, 0, 0);
     cb->setSpacing(8);
 
-    // Key colour: swatch preview + preset chips + custom picker.
+    // Key colour: a single flat button showing the active color (icon swatch +
+    // hex text) that opens the QColorDialog custom-color picker. Replaces the
+    // former swatch + four preset chip buttons — the picker is the one way to
+    // set the key color now.
     auto* color_row = new QWidget(chroma_body_);
     auto* clr = new QHBoxLayout(color_row);
     clr->setContentsMargins(0, 0, 0, 0);
@@ -212,28 +221,13 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     color_label->setProperty("labelRole", "settingsRowLabel");
     clr->addWidget(color_label, 1);
 
-    chroma_swatch_ = new QPushButton(color_row);
-    chroma_swatch_->setObjectName(QStringLiteral("webcamPanelChromaSwatch"));
-    chroma_swatch_->setToolTip(QStringLiteral("Current key color"));
-    chroma_swatch_->setFixedSize(22, 22);
-    chroma_swatch_->setCursor(Qt::PointingHandCursor);
-    chroma_swatch_->setFlat(true);
-    clr->addWidget(chroma_swatch_, 0);
-
-    auto makeChip = [&](const QString& text, const QString& object_name) -> QPushButton* {
-        auto* btn = new QPushButton(text, color_row);
-        btn->setObjectName(object_name);
-        btn->setCheckable(true);
-        btn->setCursor(Qt::PointingHandCursor);
-        btn->setProperty("role", "ghost");
-        clr->addWidget(btn, 0);
-        return btn;
-    };
-    chroma_green_btn_ = makeChip(QStringLiteral("Green"), QStringLiteral("webcamPanelChromaGreenBtn"));
-    chroma_blue_btn_ = makeChip(QStringLiteral("Blue"), QStringLiteral("webcamPanelChromaBlueBtn"));
-    chroma_magenta_btn_ = makeChip(QStringLiteral("Magenta"), QStringLiteral("webcamPanelChromaMagentaBtn"));
-    chroma_custom_btn_ = makeChip(QStringLiteral("Custom…"), QStringLiteral("webcamPanelChromaCustomBtn"));
-    chroma_green_btn_->setChecked(true);
+    key_color_btn_ = new QPushButton(color_row);
+    key_color_btn_->setObjectName(QStringLiteral("webcamPanelKeyColorBtn"));
+    key_color_btn_->setToolTip(QStringLiteral("Pick key color"));
+    key_color_btn_->setCursor(Qt::PointingHandCursor);
+    key_color_btn_->setFlat(true);
+    key_color_btn_->setProperty("role", "ghost");
+    clr->addWidget(key_color_btn_, 0);
 
     cb->addWidget(color_row);
     cb->addWidget(addSliderRow(QStringLiteral("Tolerance"), QStringLiteral("webcamPanelChromaToleranceSlider"), 40,
@@ -245,7 +239,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     right_layout->addWidget(chroma_body_);
     chroma_body_->setVisible(false); // collapsed while disabled
-    updateChromaSwatch();
+    updateKeyColorButton();
 
     // v0.9 polish: the placement note moved into the Webcam card's info-i (kWebcamPlacement),
     // which also reclaims the trailing hairline + note row that padded the card height.
@@ -265,33 +259,21 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     connect(rescan_btn_, &QPushButton::clicked, this, &WebcamSetupPanel::onRescan);
     connect(opacity_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onOpacityChanged);
     connect(chroma_toggle_, &ExoToggle::toggled, this, &WebcamSetupPanel::onChromaEnableToggled);
-    connect(chroma_green_btn_, &QPushButton::clicked, this,
-            [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Green); });
-    connect(chroma_blue_btn_, &QPushButton::clicked, this,
-            [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Blue); });
-    connect(chroma_magenta_btn_, &QPushButton::clicked, this,
-            [this]() { onColorModeChanged(WebcamChromaKeyColorMode::Magenta); });
-    // The swatch and the "Custom…" chip open the same colour picker (the obvious
-    // expectation for a clickable colour swatch).
-    const auto pick_custom_color = [this]() {
+    // The Key color button opens the same colour picker the old swatch/"Custom…"
+    // chip used (the obvious expectation for a clickable colour button).
+    connect(key_color_btn_, &QPushButton::clicked, this, [this]() {
         const auto& ck = current_settings_.chroma_key;
         const QColor initial = (ck.color_mode == WebcamChromaKeyColorMode::Custom)
                                    ? QColor(ck.custom_r, ck.custom_g, ck.custom_b)
                                    : QColor(ck.active_color().r, ck.active_color().g, ck.active_color().b);
         const QColor picked = QColorDialog::getColor(initial, this, QStringLiteral("Pick chroma key color"));
-        if (!picked.isValid()) {
-            // Restore the checked state to the still-active mode (the chip was
-            // clicked, flipping its checked flag before the dialog was cancelled).
-            updateChromaColorButtons();
-            return;
-        }
+        if (!picked.isValid())
+            return; // cancelled: nothing to restore, the button has no checked state
         current_settings_.chroma_key.custom_r = static_cast<uint8_t>(picked.red());
         current_settings_.chroma_key.custom_g = static_cast<uint8_t>(picked.green());
         current_settings_.chroma_key.custom_b = static_cast<uint8_t>(picked.blue());
         onColorModeChanged(WebcamChromaKeyColorMode::Custom);
-    };
-    connect(chroma_custom_btn_, &QPushButton::clicked, this, pick_custom_color);
-    connect(chroma_swatch_, &QPushButton::clicked, this, pick_custom_color);
+    });
     connect(tolerance_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onToleranceChanged);
     connect(softness_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onSoftnessChanged);
     connect(spill_slider_, &QSlider::valueChanged, this, &WebcamSetupPanel::onSpillReductionChanged);
@@ -332,6 +314,20 @@ void WebcamSetupPanel::showEvent(QShowEvent* event) {
 void WebcamSetupPanel::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
     stopPreview();
+}
+
+void WebcamSetupPanel::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    positionRescanButton();
+}
+
+void WebcamSetupPanel::positionRescanButton() {
+    if (!rescan_btn_ || !camera_preview_)
+        return;
+    constexpr int kMargin = 6;
+    rescan_btn_->move(camera_preview_->width() - rescan_btn_->width() - kMargin,
+                      camera_preview_->height() - rescan_btn_->height() - kMargin);
+    rescan_btn_->raise();
 }
 
 void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
@@ -376,8 +372,7 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
         chroma_toggle_->setChecked(s.chroma_key.enabled);
     if (chroma_body_)
         chroma_body_->setVisible(s.chroma_key.enabled);
-    updateChromaColorButtons();
-    updateChromaSwatch();
+    updateKeyColorButton();
     if (tolerance_slider_) {
         tolerance_slider_->setValue(static_cast<int>(std::lround(s.chroma_key.tolerance * 100.0f)));
         if (tolerance_value_label_)
@@ -415,10 +410,8 @@ void WebcamSetupPanel::setControlsLocked(bool locked) {
         opacity_slider_->setEnabled(true);
     if (chroma_toggle_)
         chroma_toggle_->setEnabled(true);
-    for (auto* btn : {chroma_swatch_, chroma_green_btn_, chroma_blue_btn_, chroma_magenta_btn_, chroma_custom_btn_}) {
-        if (btn)
-            btn->setEnabled(true);
-    }
+    if (key_color_btn_)
+        key_color_btn_->setEnabled(true);
     for (auto* slider : {tolerance_slider_, softness_slider_, spill_slider_}) {
         if (slider)
             slider->setEnabled(true);
@@ -447,10 +440,8 @@ void WebcamSetupPanel::setMfUnavailable(bool unavailable) {
         opacity_slider_->setEnabled(false);
     if (chroma_toggle_)
         chroma_toggle_->setEnabled(false);
-    for (auto* btn : {chroma_swatch_, chroma_green_btn_, chroma_blue_btn_, chroma_magenta_btn_, chroma_custom_btn_}) {
-        if (btn)
-            btn->setEnabled(false);
-    }
+    if (key_color_btn_)
+        key_color_btn_->setEnabled(false);
     for (auto* slider : {tolerance_slider_, softness_slider_, spill_slider_}) {
         if (slider)
             slider->setEnabled(false);
@@ -501,8 +492,7 @@ void WebcamSetupPanel::onChromaEnableToggled(bool enabled) {
 
 void WebcamSetupPanel::onColorModeChanged(WebcamChromaKeyColorMode mode) {
     current_settings_.chroma_key.color_mode = mode;
-    updateChromaColorButtons();
-    updateChromaSwatch();
+    updateKeyColorButton();
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -531,30 +521,30 @@ void WebcamSetupPanel::onSpillReductionChanged(int value) {
         emit settingsChanged(collectSettings());
 }
 
-void WebcamSetupPanel::updateChromaColorButtons() {
-    const auto mode = current_settings_.chroma_key.color_mode;
-    if (chroma_green_btn_)
-        chroma_green_btn_->setChecked(mode == WebcamChromaKeyColorMode::Green);
-    if (chroma_blue_btn_)
-        chroma_blue_btn_->setChecked(mode == WebcamChromaKeyColorMode::Blue);
-    if (chroma_magenta_btn_)
-        chroma_magenta_btn_->setChecked(mode == WebcamChromaKeyColorMode::Magenta);
-    if (chroma_custom_btn_)
-        chroma_custom_btn_->setChecked(mode == WebcamChromaKeyColorMode::Custom);
-}
-
-void WebcamSetupPanel::updateChromaSwatch() {
-    if (!chroma_swatch_)
+void WebcamSetupPanel::updateKeyColorButton() {
+    if (!key_color_btn_)
         return;
     const auto ac = current_settings_.chroma_key.active_color();
     const QColor fill(ac.r, ac.g, ac.b);
-    // Inline stylesheet on this one widget only (dynamic colour): never touches the
-    // theme QSS, so it cannot trip the ${token} start-up crash.
-    const QString border = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line);
-    chroma_swatch_->setStyleSheet(QStringLiteral("QPushButton#webcamPanelChromaSwatch {"
-                                                 " background-color: %1; border: 1px solid %2;"
-                                                 " border-radius: 4px; }")
-                                      .arg(fill.name(), border));
+
+    // A small solid-color square icon stands in for the old separate swatch
+    // widget; the button's own text carries the hex value.
+    const qreal dpr = key_color_btn_->devicePixelRatioF();
+    const int px = static_cast<int>(std::lround(16 * dpr));
+    QPixmap pixmap(px, px);
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+    {
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QColor border(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line));
+        painter.setPen(QPen(border, 1));
+        painter.setBrush(fill);
+        painter.drawRoundedRect(QRectF(0.5, 0.5, 16 - 1.0, 16 - 1.0), 4, 4);
+    }
+    key_color_btn_->setIcon(QIcon(pixmap));
+    key_color_btn_->setIconSize(QSize(16, 16));
+    key_color_btn_->setText(fill.name(QColor::HexRgb).toUpper());
 }
 
 void WebcamSetupPanel::onDeviceChanged(int) {
@@ -790,27 +780,24 @@ void WebcamSetupPanel::applyVisualState(bool available, bool mirror, bool chroma
     if (camera_preview_)
         camera_preview_->setMirror(mirror);
 
-    // Chroma-key group: deterministic enable + key-colour mode so the
+    // Chroma-key group: deterministic enable + key-colour value so the
     // settings-webcam-chroma-* scenarios render visibly distinct (group open with
-    // the selected key colour, or collapsed when disabled).
+    // the selected key colour, or collapsed when disabled). Applied straight as a
+    // Custom colour value — the same path the Key color picker itself uses —
+    // rather than through the (UI-unreachable) Green/Blue/Magenta enum presets.
     current_settings_.chroma_key.enabled = chroma_enabled;
     if (!chroma_color_mode.isEmpty()) {
-        const auto mode = colorModeFromString(chroma_color_mode);
-        current_settings_.chroma_key.color_mode = mode;
-        if (mode == WebcamChromaKeyColorMode::Custom) {
-            // A distinctive non-preset colour so the "custom" render is visibly
-            // different from the green/blue swatches.
-            current_settings_.chroma_key.custom_r = 255;
-            current_settings_.chroma_key.custom_g = 140;
-            current_settings_.chroma_key.custom_b = 0;
-        }
+        const auto rgb = chromaColorFromString(chroma_color_mode);
+        current_settings_.chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
+        current_settings_.chroma_key.custom_r = rgb.r;
+        current_settings_.chroma_key.custom_g = rgb.g;
+        current_settings_.chroma_key.custom_b = rgb.b;
     }
     if (chroma_toggle_)
         chroma_toggle_->setChecked(chroma_enabled);
     if (chroma_body_)
         chroma_body_->setVisible(chroma_enabled);
-    updateChromaColorButtons();
-    updateChromaSwatch();
+    updateKeyColorButton();
 
     if (available) {
         device_combo_->addItem(QStringLiteral("Visual Test Camera"), QStringLiteral("visual-test-camera"));

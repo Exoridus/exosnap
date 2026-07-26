@@ -533,10 +533,15 @@ TEST_F(ConfigPageTest, WebcamSetupPanel_HasCompactRescanNotLargeOpenSetup) {
         EXPECT_NE(btn->text(), QStringLiteral("Open Webcam Setup"))
             << "Settings must not require 'Open Webcam Setup' for standard configuration";
 
-    // The compact rescan button lives inside the panel.
+    // The compact rescan button lives inside the panel, floating on the preview
+    // itself (Task 9) rather than beside the device combo.
     auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
     ASSERT_NE(panel, nullptr);
-    EXPECT_NE(panel->findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn")), nullptr);
+    auto* rescan = panel->findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn"));
+    ASSERT_NE(rescan, nullptr);
+    auto* preview = panel->findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+    EXPECT_EQ(rescan->parentWidget(), preview) << "Rescan must be parented onto the camera preview, not a device row";
 }
 
 TEST_F(ConfigPageTest, WebcamSetupPanel_ApplySettingsUpdatesEnabledState) {
