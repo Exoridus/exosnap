@@ -223,11 +223,12 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       `MIC` enabled as separate tracks, clock slaving at its default (on).** Continuous real system
       audio for the whole run (e.g. a music/video playlist). Machine must not sleep; displays stay
       on; display settings unchanged during the run.
-- [ ] **A/V sync marker at start AND end.** Play an audio/video sync-test clip (beep + frame flash)
-      shortly after start and again shortly before stop; with webcam PiP enabled, additionally clap
-      hands in view for a `MIC`-track marker. Afterwards, measure flash-to-beep offset at both
-      markers (frame-step in mpv or similar); the start→end difference is the accumulated drift and
-      must stay under one video frame (~16 ms at 60 fps).
+- [ ] **A/V sync marker at start AND end.** Play `scripts/play-av-sync-marker.ps1` (generates a
+      beep + frame-flash clip locally via ffmpeg and plays it back; `-Screen N` targets a monitor
+      under mpv) shortly after start and again shortly before stop; with webcam PiP enabled,
+      additionally clap hands in view for a `MIC`-track marker. Afterwards, measure flash-to-beep
+      offset at both markers (frame-step in mpv or similar); the start→end difference is the
+      accumulated drift and must stay under one video frame (~16 ms at 60 fps).
 - [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
       (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
 - [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track;
