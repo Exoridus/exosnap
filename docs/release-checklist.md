@@ -44,18 +44,34 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
 - [ ] **Confirm the RC page shows the "Pre-release" badge** and carries `update-manifest.json` +
       `update-manifest.json.sig` next to the ZIP + MSI.
 - [ ] **Run §5, §6 and §7 against this RC build.** Set the test install's update channel to
-      **Preview** (Settings → updates card, Stable/Preview toggle) before the updater checks — a
-      Stable-channel client will not see a prerelease at all.
+      **Preview** (Settings → Updates card → "Update channel" dropdown) before the updater checks —
+      a Stable-channel client will not see a prerelease at all.
+- [ ] **In-app RC→RC update offer (first live proof of the prerelease-ordering fix).** With a
+      running `v0.9.0-rc2` install on the Preview channel, confirm it is **offered** `v0.9.0-rc3`
+      in-app (rc2 is the first build carrying the SemVer prerelease-ordering fix, so rc2 → rc3 is
+      the first pair that can prove it live) and complete that in-app update end to end.
 - [ ] **If anything fails:** fix it, and cut the next candidate (`v0.9.0-rc2`) from the new commit.
       A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
       already-published Release.
 - [ ] **Once every check passes, push the final `vX.Y.Z` tag from the *same commit* the passing RC
       was built from** and continue with §4. Re-cut an RC if that commit moved.
 
-> The RC prerelease stays on the releases page as a normal, visible prerelease. Note that an
-> RC and its eventual final release compare as the *same* version number (`0.9.0-rc1` → `0.9.0`),
-> so a machine left on the RC build will not be offered the final release as an in-app update —
-> install the final build there by hand (or delete the RC prerelease once the release is out).
+> The RC prerelease stays on the releases page as a normal, visible prerelease. As of the
+> UPDATE-SEMVER-PRERELEASE-R1 fix (first shipped in `v0.9.0-rc2`), a running RC correctly detects a
+> later RC or the eventual final release of the same `X.Y.Z` as a newer, available update (`rc1 <
+> rc2 < ... < the final X.Y.Z`) — **but only if the running build itself already contains this fix**.
+> `v0.9.0-rc1` predates it and still compares every `0.9.0`-family tag as equal, so a machine left on
+> rc1 will not be offered rc2/rc3/the final release in-app; install by hand there (or delete the rc1
+> prerelease once a newer one is out).
+>
+> **§5's live checks need the *previous shipped version* to already contain the in-app swap-updater
+> client** (the code that does the actual download/verify/staged-rename — not just the version
+> *check*). `v0.8.1` does not: the swap updater (`26f7760`) landed six days after the `v0.8.1` tag,
+> so its "Update to X" button unconditionally opens a browser tab and can never exercise §5's UAC/
+> network-fail/close-refusal/temp-cleanup mechanics, no matter which RC it's pointed at. Before
+> relying on "the previous shipped version" for §5, confirm it actually ships `exosnap-updater.exe`
+> (portable ZIP) — if not, cut two RCs from the current cycle instead (rc_N as the swap-capable
+> baseline, rc_N+1 as the target) to get a real swap test.
 
 ## 4. Publish the GitHub release
 
@@ -95,8 +111,10 @@ this deterministically — there is no manual asset upload and no `sign-manifest
 ## 5. Updater RC live-check (manual, on real hardware)
 
 CI runs on GPU-less runners and cannot exercise a real swap. Run these against the RC prerelease from
-§3, by hand, from the previous shipped version (currently 0.8.1) to the RC build — the test install
-must be on the **Preview** update channel to see the RC at all:
+§3, by hand, from the previous shipped version to the RC build — but while the last shipped version
+(0.8.1) predates the swap updater (see the §3 note), use the newest swap-capable RC as the baseline
+instead: currently that means `v0.9.0-rc2` → `v0.9.0-rc3`. The test install must be on the
+**Preview** update channel to see the RC at all:
 
 - [ ] **Portable happy-path swap (0.8.1 → RC).** From a user-writable portable install, click Update;
       the dedicated updater downloads, verifies, closes the app, does the staged-rename swap, verifies,
@@ -186,6 +204,18 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 - [ ] **Trim keeps the keyframe at or before the cut.** In the Edit overlay, drag the start handle
       into the middle of a multi-GOP clip and Save; the exported file starts cleanly (no black or
       frozen lead-in, no overshoot past the end), with duration matching the trimmed range.
+- [ ] **APP audio row arming across targets (settings rework).** On a display target, enable the
+      receded `APP` row in Settings; switch the capture target to a specific window and record —
+      per-app audio is present in the file. Switch back to a display target: the row stays
+      configured (rendered receded), and a new recording carries no app track.
+- [ ] **Five-tier quality + free frame rate record/playback.** Record one clip at `CQ 16 · Ultra`
+      and one with an Expert free frame rate (e.g. 48 fps): both play back correctly and the
+      container reports the chosen rate. Leaving Expert shows the nearest list entry in the combo
+      while the "Current format" footer keeps the true stored rate.
+- [ ] **Reworked Settings page visual walkthrough.** One pass in both modes: rebalanced columns
+      (left Container/Quality/Webcam/Notifications/Hotkeys, right Output/Audio/Updates/Appearance/
+      Developer), uniform 46 px rows, webcam card with full-width live preview and key-color picker,
+      "Split by time"/"Split by size" rows, Developer card visible without Expert.
 
 ## 8. Downstream package managers
 

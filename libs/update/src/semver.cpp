@@ -7,8 +7,10 @@
 namespace exosnap::update {
 
 std::optional<SemVer> ParseSemVer(std::string_view s) noexcept {
-    // Accept "X.Y.Z" only; reject pre-release tags (e.g. "-alpha") and build
-    // metadata ("+build") so the comparison stays unambiguous.
+    // Accept "X.Y.Z", plus "X.Y.Z-rcN" pre-release tags ordered rc1 < rc2 < ...
+    // < the final X.Y.Z release (see below); other "-label" suffixes and
+    // build metadata ("+build") are tolerated rather than rejected, but don't
+    // get the same fine-grained ordering.
     SemVer v;
     const char* p = s.data();
     const char* end = s.data() + s.size();
