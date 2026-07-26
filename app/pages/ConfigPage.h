@@ -687,15 +687,22 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoCheckBox* limiter_check_ = nullptr;
     ui::widgets::ExoCheckBox* clock_slaving_check_ = nullptr;
     QDoubleSpinBox* limiter_ceiling_spin_ = nullptr;
-    // Microphone high-pass filter (Audio v2 — 0.6.0).
+    // Microphone high-pass filter (Audio v2 — 0.6.0). The *_param_row_ container
+    // holds the stage's numeric parameter and is shown only while the stage is on.
+    // seedAudioControlsFromState() must set it explicitly: it seeds the stage
+    // checkbox under a QSignalBlocker, so the toggled->setVisible connect made in
+    // buildAudioDefaultSettingsSection() never fires on that path.
     ui::widgets::ExoCheckBox* mic_hpf_check_ = nullptr;
     QDoubleSpinBox* mic_hpf_cutoff_spin_ = nullptr;
+    QWidget* mic_hpf_param_row_ = nullptr;
     // Microphone noise gate (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_gate_check_ = nullptr;
     QDoubleSpinBox* mic_gate_threshold_spin_ = nullptr;
+    QWidget* mic_gate_param_row_ = nullptr;
     // Microphone automatic gain control (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_agc_check_ = nullptr;
     QDoubleSpinBox* mic_agc_target_spin_ = nullptr;
+    QWidget* mic_agc_param_row_ = nullptr;
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
     ui::widgets::ExoCheckBox* mic_rnnoise_check_ = nullptr;
     // Slice 3 (cogwheels -> inline): mic post-processing is an inline disclosure

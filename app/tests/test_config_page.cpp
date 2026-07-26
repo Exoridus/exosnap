@@ -2313,6 +2313,42 @@ TEST_F(ConfigPageTest, MicPostProcessing_ParamRowsOnlyWhileStageOn) {
     EXPECT_TRUE(gate_param_row->isHidden()) << "turning the gate off hides its threshold row again";
 }
 
+// Hydrating from a pushed state (preset apply) must move the stage parameter rows
+// too. The stage checkboxes are seeded under a QSignalBlocker, so the
+// toggled->setVisible connect never fires on that path and the seed has to drive
+// the rows explicitly.
+TEST_F(ConfigPageTest, MicPostProcessing_ParamRowVisibilityFollowsPushedState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
+    auto* gate_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micGateCheck"));
+    auto* gate_spin = page.findChild<QDoubleSpinBox*>(QStringLiteral("micGateThresholdSpin"));
+    ASSERT_NE(disclosure, nullptr);
+    ASSERT_NE(gate_check, nullptr);
+    ASSERT_NE(gate_spin, nullptr);
+    auto* gate_param_row = gate_spin->parentWidget();
+    ASSERT_NE(gate_param_row, nullptr);
+
+    disclosure->setChecked(true); // expand, so only the stage gate can hide the row
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Display;
+    state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                         {recorder_core::AudioSourceKind::Mic, true, false}};
+    state.mic_gate_enabled = true;
+    page.setAudioUiState(state);
+
+    EXPECT_TRUE(gate_check->isChecked()) << "the pushed state enables the gate";
+    EXPECT_FALSE(gate_param_row->isHidden())
+        << "a pushed state with the gate on must reveal its threshold row, not just enable the spin";
+
+    state.mic_gate_enabled = false;
+    page.setAudioUiState(state);
+
+    EXPECT_FALSE(gate_check->isChecked());
+    EXPECT_TRUE(gate_param_row->isHidden()) << "a pushed state with the gate off must hide its threshold row again";
+}
+
 // The AGC stage is labelled with the short, scannable acronym.
 TEST_F(ConfigPageTest, MicPostProcessing_AgcStageUsesShortLabel) {
     ConfigPage page(output_defaults_, video_defaults_);

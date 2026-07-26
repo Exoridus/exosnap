@@ -3560,6 +3560,10 @@ void ConfigPage::seedAudioControlsFromState() {
         mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
         mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
     }
+    // The stage checkbox above was seeded under a QSignalBlocker, so its
+    // toggled->setVisible connect did not run: drive the parameter row here.
+    if (mic_hpf_param_row_)
+        mic_hpf_param_row_->setVisible(audio_ui_state_.mic_hpf_enabled);
     if (mic_gate_check_) {
         const QSignalBlocker b(mic_gate_check_);
         mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
@@ -3569,6 +3573,8 @@ void ConfigPage::seedAudioControlsFromState() {
         mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
         mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
     }
+    if (mic_gate_param_row_)
+        mic_gate_param_row_->setVisible(audio_ui_state_.mic_gate_enabled);
     if (mic_agc_check_) {
         const QSignalBlocker b(mic_agc_check_);
         mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
@@ -3578,6 +3584,8 @@ void ConfigPage::seedAudioControlsFromState() {
         mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
         mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
     }
+    if (mic_agc_param_row_)
+        mic_agc_param_row_->setVisible(audio_ui_state_.mic_agc_enabled);
     if (mic_rnnoise_check_) {
         const QSignalBlocker b(mic_rnnoise_check_);
         mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
@@ -4232,8 +4240,12 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
 
         // Each sub-stage is a mini row: toggle (+ info-i) and, where relevant, an
         // indented parameter row that only shows while its stage is on.
+        // `param_row_out` hands the parameter container back to the caller so
+        // seedAudioControlsFromState() can drive its visibility directly (its
+        // QSignalBlocker'd checkbox seeding never fires the connect below).
         auto makeStageRow = [](ui::widgets::ExoCheckBox* toggle, const QString& hint, QDoubleSpinBox* param_spin,
-                               const QString& param_label, QWidget* stage_parent) -> QWidget* {
+                               const QString& param_label, QWidget* stage_parent,
+                               QWidget** param_row_out = nullptr) -> QWidget* {
             auto* container = new QWidget(stage_parent);
             auto* vl = new QVBoxLayout(container);
             vl->setContentsMargins(0, 0, 0, 0);
@@ -4263,16 +4275,20 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
                 param_row->setVisible(toggle->isChecked());
                 QObject::connect(toggle, &ui::widgets::ExoCheckBox::toggled, param_row,
                                  [param_row](bool on) { param_row->setVisible(on); });
+                if (param_row_out)
+                    *param_row_out = param_row;
             }
             return container;
         };
 
         content_layout->addWidget(makeStageRow(mic_hpf_check_, ui::hints::kHighPassFilter, mic_hpf_cutoff_spin_,
-                                               QStringLiteral("HPF cutoff"), mic_post_content_));
+                                               QStringLiteral("HPF cutoff"), mic_post_content_, &mic_hpf_param_row_));
         content_layout->addWidget(makeStageRow(mic_gate_check_, ui::hints::kNoiseGate, mic_gate_threshold_spin_,
-                                               QStringLiteral("Gate threshold"), mic_post_content_));
+                                               QStringLiteral("Gate threshold"), mic_post_content_,
+                                               &mic_gate_param_row_));
         content_layout->addWidget(makeStageRow(mic_agc_check_, ui::hints::kAgc, mic_agc_target_spin_,
-                                               QStringLiteral("AGC target level"), mic_post_content_));
+                                               QStringLiteral("AGC target level"), mic_post_content_,
+                                               &mic_agc_param_row_));
         content_layout->addWidget(
             makeStageRow(mic_rnnoise_check_, ui::hints::kRnnoise, nullptr, QString(), mic_post_content_));
 
