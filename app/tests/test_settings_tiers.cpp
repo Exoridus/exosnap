@@ -276,28 +276,60 @@ TEST_F(SettingsTiersTest, ConfigPage_ExpertWarnBanner_IsGone) {
 
 TEST_F(SettingsTiersTest, ConfigPage_OutputSplitExpanderExists) {
     // Wave 2: no SettingsCardExpander named "outputSplitExpander" exists.
-    // The split expert section (plain QWidget) replaced it.
+    // The split section (plain QWidget) replaced it.
     ConfigPage page(output_defaults_, video_defaults_);
     auto* expander = page.findChild<ui::widgets::SettingsCardExpander*>(QStringLiteral("outputSplitExpander"));
     EXPECT_EQ(expander, nullptr);
-    // The split controls exist once expert mode lazily builds the section.
-    page.setExpertModeEnabled(true);
+    // Task 7: the split controls are Default tier and exist without expert mode.
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
     EXPECT_NE(combo, nullptr);
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_HiddenByDefault) {
-    // Wave 2: splitModeCombo is now inside split_expert_section_ (expert-gated).
-    // It is hidden by default because expert mode is off.
+    // Task 7: splitModeCombo lives inside split_expert_section_, which is now built
+    // eagerly and always visible (Default tier, not expert-gated). The combo itself
+    // is only reachable through splitIntervalRow, whose visibility follows
+    // splitModeToggle — not expert mode. With expert mode off and the toggle at its
+    // default (off), the interval row is hidden because of the toggle, not the tier.
     ConfigPage page(output_defaults_, video_defaults_);
-    // Lazy: the split expert section isn't built until expert mode turns on,
-    // so by default it doesn't exist yet — which still means it is not shown.
+
     auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
-    EXPECT_TRUE(section == nullptr || section->isHidden());
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden()) << "split section is Default tier and always visible";
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
+    auto* interval_row = page.findChild<QWidget*>(QStringLiteral("splitIntervalRow"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_NE(interval_row, nullptr);
+    EXPECT_FALSE(toggle->isOn());
+    EXPECT_TRUE(interval_row->isHidden()) << "interval row hidden because the toggle is off";
+}
+
+TEST_F(SettingsTiersTest, SplitControls_VisibleWithoutExpertMode) {
+    // Task 7: the split section never needed expert mode enabled to be built or
+    // shown — it is Default tier, built eagerly from the constructor.
+    ConfigPage page(output_defaults_, video_defaults_);
+    EXPECT_FALSE(page.expertModeEnabled());
+
+    auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden());
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
+    EXPECT_NE(combo, nullptr);
+
+    // Turning the toggle on (still with expert mode off) reveals the interval row.
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
+    auto* interval_row = page.findChild<QWidget*>(QStringLiteral("splitIntervalRow"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_NE(interval_row, nullptr);
+    toggle->setOn(true);
+    EXPECT_FALSE(interval_row->isHidden());
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_VisibleWhenExpanded) {
-    // Wave 2: split controls are shown when expert mode is on (not via expander).
+    // Task 7: split controls are visible regardless of expert mode; this test keeps
+    // covering the (now redundant but harmless) expert-mode-on case.
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true);
     auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));

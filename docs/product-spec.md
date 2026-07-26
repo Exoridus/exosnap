@@ -607,11 +607,12 @@ the Edit/Output/Save "Review" step.)
 boundaries stay keyframe-safe; counters reset per segment. Split is supported for MKV, WebM, and MP4.
 For MP4, each completed segment is remuxed to progressive MP4 in the background while recording
 continues; "Saved" is reported only once all segment remuxes finish. Manual split is independent of
-automatic split. Under Expert mode the split controls are laid out inline within the Output card
-(time and size sub-sections), not tucked behind a popover. Each sub-section leads with an on/off
-**toggle**; the interval selector (Split recording) and the segment-size field (Split by size) appear
-only while their toggle is on. Toggling off is exactly the "off" state — it changes no persisted value
-beyond the split mode itself, so presets and exported TOML round-trip identically.
+automatic split. The split controls are Default tier — always visible, laid out inline within the
+Output card (time and size sub-sections), not tucked behind a popover or an Expert-mode gate. Each
+sub-section leads with an on/off **toggle**; the interval selector (**Split by time**) and the
+segment-size field (**Split by size**) appear only while their toggle is on. Toggling off is exactly
+the "off" state — it changes no persisted value beyond the split mode itself, so presets and exported
+TOML round-trip identically.
 
 **Low-disk guard.** A configurable soft **warning threshold** (default around 2 GB free) shows a
 Diagnostics notice but still allows recording; a lower **hard-stop threshold** (default around

@@ -116,7 +116,7 @@ class ConfigPage : public QWidget {
     [[nodiscard]] bool expertModeEnabled() const noexcept;
 
     // SETTINGS-TIERS-R1: Per-card expander state — no-op stub kept for MainWindow compat.
-    // Wave 2: the split controls are now expert-gated (no per-card expander).
+    // Task 7: the split controls are Default tier, built eagerly (no per-card expander).
     void setAudioSeparateExpanderExpanded(bool expanded);
     [[nodiscard]] bool audioSeparateExpanderExpanded() const noexcept;
 
@@ -381,6 +381,8 @@ class ConfigPage : public QWidget {
     // Startup-perf: builds the Expert audio subtree (Opus frame duration, Opus
     // complexity, sample rate, audio clock slaving) on first expert-enable.
     void buildAudioExpertSection();
+    // Split-by-time / split-by-size controls (Default tier) — built eagerly from
+    // the constructor; not expert-gated.
     void buildSplitExpertSection();
     void buildDeveloperCard();
     // Startup-perf: the interleaved Expert rate/format subtree (CQ precision row,
@@ -537,8 +539,9 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
     QLabel* expert_mode_label_ = nullptr; // "Expert mode" label (mut -> accent when on)
     bool expert_mode_enabled_ = false;
-    // Wave 2: split recording controls moved out of expander; now expert-gated section.
-    // Lazily built on first expert-enable (see buildSplitExpertSection).
+    // Task 7: split-by-time / split-by-size controls (Default tier) — built eagerly
+    // from the constructor. split_expert_built_ only guards buildSplitExpertSection()
+    // against being invoked more than once.
     QWidget* split_expert_section_ = nullptr;
     bool split_expert_built_ = false;
     int split_expert_insert_index_ = -1;

@@ -1392,6 +1392,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // ---- OUTPUT CARD (right column — v10) ----
     auto* out_panel = makePanel(right_col);
     out_panel_ = out_panel;
+    out_panel_->setObjectName(QStringLiteral("outputPanel")); // Task 7: scope label lookups to this card in tests
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(18, 16, 18, 18);
     out_panel_layout->setSpacing(12);
@@ -1474,13 +1475,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_resolution_validation_label_->setVisible(false);
     out_panel_layout->addWidget(custom_resolution_validation_label_);
 
-    // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) — Wave 2: expert-gated section ----
-    // Wave 2: the SettingsCardExpander was dissolved. Split controls now live in a plain
-    // QWidget that is shown/hidden by updateExpertModeVisibility() together with the
-    // developer card (same expert-mode gate, no per-card expander).
-    // Split recording (expert-gated) — built lazily on first expert-enable.
-    // Record the slot so the lazy build inserts it before the output-split field.
+    // ---- Split by time / Split by size (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) ----
+    // Task 7: Default tier — the SettingsCardExpander was already dissolved in Wave 2;
+    // the split controls now live in a plain QWidget that is built eagerly and always
+    // visible (no expert-mode gate, no per-card expander).
+    // Record the slot so the section is inserted before the output-split field.
     split_expert_insert_index_ = out_panel_layout->count();
+    buildSplitExpertSection();
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -2003,7 +2004,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             return;
         onOutputResolutionSelected(output_res_combo_->itemData(index).toInt());
     });
-    // Split connects live in buildSplitExpertSection() (lazy build).
+    // Split connects live in buildSplitExpertSection() (called eagerly above).
     connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
     connect(custom_height_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomHeightChanged);
     connect(cursor_check_, &QAbstractButton::toggled, this, &ConfigPage::onCursorChanged);
@@ -4589,7 +4590,8 @@ void ConfigPage::buildAudioExpertSection() {
     });
 }
 
-// Startup-perf: the split-recording expert subtree is built on first expert-enable.
+// Task 7: split-by-time / split-by-size is a Default-tier section, built eagerly
+// from the constructor. split_expert_built_ only guards against double construction.
 void ConfigPage::buildSplitExpertSection() {
     if (split_expert_built_)
         return;
@@ -4597,7 +4599,6 @@ void ConfigPage::buildSplitExpertSection() {
     QWidget* out_panel = out_panel_; // alias: moved construction references it
     split_expert_section_ = new QWidget(out_panel);
     split_expert_section_->setObjectName(QStringLiteral("splitExpertSection"));
-    split_expert_section_->setVisible(false); // hidden until expert mode is on
     {
         auto* split_expert_layout = new QVBoxLayout(split_expert_section_);
         split_expert_layout->setContentsMargins(0, 0, 0, 0);
@@ -4667,16 +4668,17 @@ void ConfigPage::buildSplitExpertSection() {
         // --- Lay the split controls out inline inside the Output card so they
         // fill the card instead of hiding behind a popover row. ---
         split_expert_layout->addWidget(makeHRule(split_expert_section_));
-        split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Automatic split"),
-                                                                  ui::hints::kSplitRecording, split_expert_section_));
 
-        // "Split recording" (by time) sub-section: label + on/off toggle on one row; the
-        // interval selector only appears once the toggle is on.
+        // "Split by time" sub-section: label + on/off toggle on one row; the interval
+        // selector only appears once the toggle is on. The kSplitRecording info hint
+        // (previously on its own deleted "Automatic split" header row) lives here now.
         auto* split_time_header = new QWidget(split_expert_section_);
         auto* split_time_header_hl = new QHBoxLayout(split_time_header);
         split_time_header_hl->setContentsMargins(0, 4, 0, 4);
         split_time_header_hl->setSpacing(8);
-        split_time_header_hl->addWidget(makeOutputSubLabel(QStringLiteral("Split recording"), split_time_header), 1);
+        split_time_header_hl->addWidget(
+            makeOutputSubLabelWithHint(QStringLiteral("Split by time"), ui::hints::kSplitRecording, split_time_header),
+            1);
         split_time_header_hl->addWidget(split_toggle_, 0, Qt::AlignVCenter);
         split_expert_layout->addWidget(split_time_header);
 
@@ -5419,9 +5421,8 @@ void ConfigPage::updateExpertModeVisibility() {
     if (expert_mode_enabled_ && !developer_card_built_) {
         buildDeveloperCard();
     }
-    if (expert_mode_enabled_ && !split_expert_built_) {
-        buildSplitExpertSection();
-    }
+    // Task 7: split-by-time / split-by-size is Default tier — buildSplitExpertSection()
+    // is already called unconditionally from the constructor, so no gate here.
     // startup-perf: lazily build the heavy audio expert subtree the first time
     // expert mode turns on, before the re-seed block below repopulates it.
     if (expert_mode_enabled_ && !audio_expert_built_) {
@@ -5436,9 +5437,8 @@ void ConfigPage::updateExpertModeVisibility() {
     // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
     if (developer_card_)
         developer_card_->setVisible(expert_mode_enabled_);
-    // Wave 2 Part A: split recording section is now expert-gated (was behind expander).
-    if (split_expert_section_)
-        split_expert_section_->setVisible(expert_mode_enabled_);
+    // Task 7: split_expert_section_ is Default tier and always visible — no
+    // expert-mode visibility toggle here anymore.
     // v10: Default shows the five-tier "CQ 24 · Balanced" dropdown; Expert hides it
     // and reveals Rate control + CQ spinbox.
     if (quality_preset_row_widget_)

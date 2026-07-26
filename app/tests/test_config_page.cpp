@@ -61,6 +61,21 @@ class ConfigPageTest : public ::testing::Test {
         return false;
     }
 
+    // Scoped variant: search only within a given widget subtree (e.g. the Output
+    // panel), so label assertions can't accidentally match a same-named row living
+    // elsewhere on the page (the Hotkeys card has its own "Split recording" HOTKEY
+    // row, distinct from the Output card's split-by-time controls).
+    static bool HasLabelText(const QWidget* scope, const QString& text) {
+        if (!scope)
+            return false;
+        const auto labels = scope->findChildren<QLabel*>();
+        for (const auto* label : labels) {
+            if (label->text() == text)
+                return true;
+        }
+        return false;
+    }
+
     // Check ExoCheckBox (or QCheckBox) text anywhere in the widget tree.
     // THEME-SLICE-1: audio source rows are now ExoCheckBox, so search both.
     static bool HasCheckText(const ConfigPage& page, const QString& text) {
@@ -1813,7 +1828,6 @@ TEST_F(ConfigPageTest, Mp4DisablesAutomaticSplitControlsWithHonestSummary) {
     settings.split.mode = SplitRecordingMode::Every30Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
@@ -1832,7 +1846,6 @@ TEST_F(ConfigPageTest, SplitModeSurvivesContainerRoundTripThroughMp4) {
     settings.split.mode = SplitRecordingMode::Every15Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
@@ -1859,7 +1872,6 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
     settings.split.custom_minutes = 45;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomMinutesSpin"));
@@ -1875,7 +1887,6 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
 
 TEST_F(ConfigPageTest, SplitSizeModeToggle_ReplacesTheOffCustomCombo) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     // The old Off/Custom combo is gone; on/off is an ExoToggle.
     EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo")), nullptr);
@@ -1890,7 +1901,6 @@ TEST_F(ConfigPageTest, SplitSizeMode_Off_HidesCustomSizeSpin) {
     settings.split.size_mode = SplitSizeMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
@@ -1907,7 +1917,6 @@ TEST_F(ConfigPageTest, SplitSizeMode_Custom_ShowsCustomSizeSpin) {
     settings.split.custom_size_mb = 512;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
@@ -1924,7 +1933,6 @@ TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeToggle) {
     settings.split.custom_size_mb = 1024;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitSizeModeToggle"));
@@ -1943,7 +1951,6 @@ TEST_F(ConfigPageTest, SplitModeToggle_OffHidesIntervalRow_OnShowsIt) {
     settings.split.mode = SplitRecordingMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     page.setOutputSettings(settings);
 
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
@@ -1967,7 +1974,6 @@ TEST_F(ConfigPageTest, SplitModeToggle_OffEmitsModeOff) {
     settings.split.mode = SplitRecordingMode::Every30Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     page.setOutputSettings(settings);
 
     OutputSettingsModel emitted;
@@ -1987,7 +1993,6 @@ TEST_F(ConfigPageTest, SplitSizeToggle_OnEmitsCustom_OffEmitsOff) {
     settings.split.size_mode = SplitSizeMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     page.setOutputSettings(settings);
 
     OutputSettingsModel emitted;
@@ -2000,6 +2005,28 @@ TEST_F(ConfigPageTest, SplitSizeToggle_OnEmitsCustom_OffEmitsOff) {
     EXPECT_EQ(emitted.split.size_mode, SplitSizeMode::Custom);
     toggle->setOn(false);
     EXPECT_EQ(emitted.split.size_mode, SplitSizeMode::Off);
+}
+
+TEST_F(ConfigPageTest, OutputCard_SplitByTimeLabelReplacesSplitRecordingAndAutomaticSplit) {
+    // Task 7: the "Automatic split" sub-label row is deleted and "Split recording"
+    // is renamed to "Split by time" (with the kSplitRecording info hint moved onto
+    // it). Scope to the Output panel — the Hotkeys card has its own unrelated
+    // "Split recording" HOTKEY row that must not affect this assertion.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* out_panel = page.findChild<QWidget*>(QStringLiteral("outputPanel"));
+    ASSERT_NE(out_panel, nullptr);
+
+    EXPECT_TRUE(HasLabelText(out_panel, QStringLiteral("Split by time")));
+    EXPECT_FALSE(HasLabelText(out_panel, QStringLiteral("Split recording")))
+        << "\"Split recording\" must be renamed to \"Split by time\" in the Output card";
+    EXPECT_FALSE(HasLabelText(out_panel, QStringLiteral("Automatic split")))
+        << "the \"Automatic split\" header row must be deleted";
+
+    // The whole-page helper still finds the Hotkeys card's unrelated "Split
+    // recording" hotkey row — confirming the scoped assertion above is meaningful.
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Split recording")))
+        << "the Hotkeys card's \"Split recording\" hotkey row must be untouched";
 }
 
 // ── SETTINGS-TIERS-P3: Presence + Appearance cards (moved from AdvancedPage) ──
@@ -2195,7 +2222,6 @@ TEST_F(ConfigPageTest, ClockSlavingCheck_ExistsInExpertAudio) {
 
 TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitModeCombo")), nullptr)
         << "splitModeCombo (interval selector) must still exist";

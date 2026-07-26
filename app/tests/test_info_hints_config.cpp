@@ -190,15 +190,12 @@ TEST_F(InfoHintsConfigTest, ConfigPage_FilenamePattern_HasInfoHint) {
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_SplitRecording_HasInfoHint) {
+    // Task 7: split-by-time / split-by-size is Default tier, built eagerly from the
+    // constructor — no expert-mode-enable needed for the hint to exist.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // The split-recording row lives in the Advanced (expert) subtree, which is built
-    // lazily on first expert-enable (startup-perf lazy-build). Enable expert mode so
-    // the section — and its InfoHint — actually exists before asserting on it.
-    page.setExpertModeEnabled(true);
-
     const int count = CountHintsWithText(page, ui::hints::kSplitRecording);
-    EXPECT_GE(count, 1) << "Split recording setting must have an InfoHint (inside the Advanced expander)";
+    EXPECT_GE(count, 1) << "Split by time setting must have an InfoHint";
 }
 
 // Colour range (fmt_expert_section_) is constructed eagerly (unlike the lazily-built
