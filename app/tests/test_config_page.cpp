@@ -76,6 +76,24 @@ class ConfigPageTest : public ::testing::Test {
         return false;
     }
 
+    // Returns the "Container & codecs" card widget (fmt_panel_) by climbing up
+    // from containerCombo (a direct fmt_panel_ row) until crossing into the
+    // sibling "Quality & timing" card -- fmt_panel_ has no objectName of its own,
+    // and frameRateCombo only exists under quality_panel_, so the highest ancestor
+    // that does NOT yet contain it is fmt_panel_ itself.
+    static QWidget* FmtPanel(const ConfigPage& page) {
+        auto* combo = page.findChild<QComboBox*>(QStringLiteral("containerCombo"));
+        if (!combo)
+            return nullptr;
+        QWidget* candidate = nullptr;
+        for (QWidget* w = combo->parentWidget(); w != nullptr; w = w->parentWidget()) {
+            if (w->findChild<QComboBox*>(QStringLiteral("frameRateCombo")) != nullptr)
+                break;
+            candidate = w;
+        }
+        return candidate;
+    }
+
     // Check ExoCheckBox (or QCheckBox) text anywhere in the widget tree.
     // THEME-SLICE-1: audio source rows are now ExoCheckBox, so search both.
     static bool HasCheckText(const ConfigPage& page, const QString& text) {
@@ -2657,6 +2675,23 @@ TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
     EXPECT_EQ(range->currentData().toInt(), static_cast<int>(capability::ColorRange::Limited));
 }
 
+// Task 8: en-US spelling everywhere on the Container & codecs card -- "Colour
+// range" became "Color range" and no other visible label under fmt_panel_ may
+// carry the British spelling either. Scoped to fmt_panel_ so a same-worded
+// label living elsewhere on the page can't accidentally satisfy the check.
+TEST_F(ConfigPageTest, FmtCard_UsesAmericanColorSpelling) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // build the expert rows (bit depth, color range, ...) too
+
+    auto* fmt_panel = FmtPanel(page);
+    ASSERT_NE(fmt_panel, nullptr);
+    for (const auto* label : fmt_panel->findChildren<QLabel*>()) {
+        EXPECT_FALSE(label->text().contains(QStringLiteral("Colour")))
+            << "British spelling found on the Container & codecs card: " << label->text().toStdString();
+    }
+    EXPECT_TRUE(HasLabelText(fmt_panel, QStringLiteral("Color range")));
+}
+
 // Selecting Limited emits the colour range in the model; it is never codec-gated
 // (works for H.264, which cannot take 10-bit).
 TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
@@ -2959,11 +2994,17 @@ TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
 // HDR-active display; SDR-only facts keep it hidden, an HDR-active display
 // reveals it. Pre-probe (no facts yet) counts as "no HDR display".
 TEST_F(ConfigPageTest, HdrRow_HiddenWithoutHdrActiveDisplay_ShownWithOne) {
+    // Task 8: HDR handling joins the Default tier -- the row is built eagerly in
+    // the constructor now, so it must obey the display gate with expert mode OFF.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
 
     auto* row = page.findChild<QWidget*>(QStringLiteral("videoHdrModeRow"));
     ASSERT_NE(row, nullptr);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(combo, nullptr);
+    ASSERT_GE(combo->count(), 2);
+    EXPECT_EQ(combo->itemText(1), QStringLiteral("Native HDR10"));
 
     // Pre-probe: no display facts → hidden.
     EXPECT_TRUE(row->isHidden()) << "HDR row must stay hidden before display facts arrive";

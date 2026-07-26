@@ -125,10 +125,10 @@ inline const QString kVideoBitDepth =
 inline const QString kChromaSubsampling =
     detail::card(QStringLiteral("<b>Chroma subsampling.</b><br>"
                                 "4:2:0 is universal and the right choice for almost everything.<br>"
-                                "4:4:4 keeps full colour resolution (sharper text and UI, larger files) but needs "
+                                "4:4:4 keeps full color resolution (sharper text and UI, larger files) but needs "
                                 "8-bit H.264 or HEVC \xE2\x80\x94 not available with AV1 or 10-bit."));
 inline const QString kVideoColorRange =
-    detail::card(QStringLiteral("<b>Colour range.</b><br>"
+    detail::card(QStringLiteral("<b>Color range.</b><br>"
                                 "Limited is compatible with every player.<br>"
                                 "Full keeps marginally more tonal detail, but some players (notably VLC) ignore the "
                                 "range flag and expand as Limited, so Full-range recordings look too dark there.<br>"

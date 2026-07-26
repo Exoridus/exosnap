@@ -208,13 +208,13 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     auto* clr = new QHBoxLayout(color_row);
     clr->setContentsMargins(0, 0, 0, 0);
     clr->setSpacing(8);
-    auto* color_label = new QLabel(QStringLiteral("Key colour"), color_row);
+    auto* color_label = new QLabel(QStringLiteral("Key color"), color_row);
     color_label->setProperty("labelRole", "settingsRowLabel");
     clr->addWidget(color_label, 1);
 
     chroma_swatch_ = new QPushButton(color_row);
     chroma_swatch_->setObjectName(QStringLiteral("webcamPanelChromaSwatch"));
-    chroma_swatch_->setToolTip(QStringLiteral("Current key colour"));
+    chroma_swatch_->setToolTip(QStringLiteral("Current key color"));
     chroma_swatch_->setFixedSize(22, 22);
     chroma_swatch_->setCursor(Qt::PointingHandCursor);
     chroma_swatch_->setFlat(true);
@@ -278,7 +278,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
         const QColor initial = (ck.color_mode == WebcamChromaKeyColorMode::Custom)
                                    ? QColor(ck.custom_r, ck.custom_g, ck.custom_b)
                                    : QColor(ck.active_color().r, ck.active_color().g, ck.active_color().b);
-        const QColor picked = QColorDialog::getColor(initial, this, QStringLiteral("Pick chroma key colour"));
+        const QColor picked = QColorDialog::getColor(initial, this, QStringLiteral("Pick chroma key color"));
         if (!picked.isValid()) {
             // Restore the checked state to the still-active mode (the chip was
             // clicked, flipping its checked flag before the dialog was cancelled).

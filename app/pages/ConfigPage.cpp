@@ -927,6 +927,57 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Audio codec"), audio_codec_compare_hint_,
                                           QString(), audio_codec_combo_));
 
+    // --- HDR handling (Task 8: joins Default tier) ---
+    // HDR-capable displays are auto-detected elsewhere; this control only selects
+    // what the pipeline does once one is found — and the whole row stays
+    // relevance-gated on that detection (hidden while no probed display is
+    // HDR-active; see updateVideoHdrModeControl()), independent of expert mode.
+    // Off is intentionally not offered — it has no user-facing value ("break my
+    // recording") and stays enum/config-internal. Hdr10 is selectable only when
+    // the chosen codec carries a native HDR10 signal (capability::QueryHdr10Native
+    // — HEVC/AV1; never H.264); the gating mirrors the bit-depth row but does NOT
+    // snap the stored value back to TonemapSdr when the codec changes — the live
+    // pre-flight blocker (rec.hdr.h264) owns that conflict at recording time (see
+    // updateVideoHdrModeControl()).
+    {
+        video_hdr_mode_row_ = new QWidget(fmt_panel);
+        video_hdr_mode_row_->setObjectName(QStringLiteral("videoHdrModeRow"));
+        auto* hvl = new QVBoxLayout(video_hdr_mode_row_);
+        hvl->setContentsMargins(0, 0, 0, 0);
+        hvl->setSpacing(0);
+        auto* hrule = new QFrame(video_hdr_mode_row_);
+        hrule->setFrameShape(QFrame::HLine);
+        hrule->setProperty("frameRole", "sectionRuleLine");
+        hvl->addWidget(hrule);
+        auto* hhl = new QHBoxLayout();
+        hhl->setContentsMargins(0, 12, 0, 12);
+        hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
+        hlbl->setProperty("labelRole", "settingsRowLabel");
+        hhl->addWidget(hlbl, 0);
+        hhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoHdrMode, video_hdr_mode_row_), 0,
+                       Qt::AlignVCenter);
+        hhl->addStretch(1);
+        video_hdr_mode_combo_ = new QComboBox(video_hdr_mode_row_);
+        video_hdr_mode_combo_->setObjectName(QStringLiteral("videoHdrModeCombo"));
+        video_hdr_mode_combo_->addItem(QStringLiteral("Tone-map to SDR"),
+                                       static_cast<int>(recorder_core::HdrMode::TonemapSdr));
+        video_hdr_mode_combo_->addItem(QStringLiteral("Native HDR10"), static_cast<int>(recorder_core::HdrMode::Hdr10));
+        video_hdr_mode_combo_->setFixedWidth(160);
+        video_hdr_mode_combo_->setProperty("settingsRowInput", true);
+        hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
+        hvl->addLayout(hhl);
+        video_hdr_mode_row_->setProperty("settingsRow", true);
+        fmt_layout->addWidget(video_hdr_mode_row_);
+
+        // Calm inline hint (never a warning colour) shown only while H.264 disables
+        // the Hdr10 item — mirrors the muted validation-hint idiom used elsewhere.
+        video_hdr_mode_hint_ =
+            makeHint(QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC."), fmt_panel);
+        video_hdr_mode_hint_->setVisible(false);
+        fmt_layout->addWidget(video_hdr_mode_hint_);
+    }
+
     // ---- v10: QUALITY & TIMING CARD (left column, below Container & codecs) ----
     // The old "Format & encoding" mega-card is split here. From this point on,
     // Quality / Rate control / Frame rate / Frame timing / Capture cursor rows are
@@ -1701,8 +1752,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         // Brief description
         auto* appearance_desc = new QLabel(
-            QStringLiteral("Four curated themes \xE2\x80\x94 two dark, two light. Each is a complete colour set. "
-                           "Status colours stay on-meaning in every theme."),
+            QStringLiteral("Four curated themes \xE2\x80\x94 two dark, two light. Each is a complete color set. "
+                           "Status colors stay on-meaning in every theme."),
             appearance_panel);
         appearance_desc->setWordWrap(true);
         appearance_desc->setProperty("labelRole", "body");
@@ -1970,12 +2021,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoCodecChanged);
-    // The Container-card expert control connects (bit depth, chroma, colour range,
-    // HDR, encoder preset, frame pacing, keyframe interval) live in
+    // The Container-card expert control connects (bit depth, chroma, color range,
+    // encoder preset, frame pacing, keyframe interval) live in
     // buildFormatQualityExpertSections() — those widgets don't exist until the first
     // expert-enable builds them lazily.
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
+    // HDR handling (Task 8) is built eagerly — connect here alongside the other
+    // Default-tier fmt-card rows.
+    connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoHdrModeChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onProfileSelectionChanged);
     connect(quality_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ConfigPage::onQualityChanged);
@@ -5039,7 +5094,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             auto* rhl = new QHBoxLayout();
             rhl->setContentsMargins(0, 12, 0, 12);
             rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* rlbl = new QLabel(QStringLiteral("Colour range"), video_color_range_row_);
+            auto* rlbl = new QLabel(QStringLiteral("Color range"), video_color_range_row_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
             rhl->addWidget(rlbl, 0);
             rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoColorRange, video_color_range_row_), 0,
@@ -5190,56 +5245,10 @@ void ConfigPage::buildFormatQualityExpertSections() {
             fes_layout->addWidget(ki_row);
         }
 
-        // --- HDR handling (expert-only) ---
-        // HDR-capable displays are auto-detected elsewhere; this control only selects
-        // what the pipeline does once one is found — and the whole row is
-        // relevance-gated on that detection (hidden while no probed display is
-        // HDR-active; see updateVideoHdrModeControl). Off is intentionally not offered —
-        // it has no user-facing value ("break my recording") and stays enum/config-
-        // internal. Hdr10 is selectable only when the chosen codec carries a native
-        // HDR10 signal (capability::QueryHdr10Native — HEVC/AV1; never H.264); the
-        // gating mirrors the bit-depth row but does NOT snap the stored value back to
-        // TonemapSdr when the codec changes — the live pre-flight blocker (rec.hdr.h264)
-        // owns that conflict at recording time (see updateVideoHdrModeControl()).
-        {
-            video_hdr_mode_row_ = new QWidget(fmt_expert_section_);
-            video_hdr_mode_row_->setObjectName(QStringLiteral("videoHdrModeRow"));
-            auto* hvl = new QVBoxLayout(video_hdr_mode_row_);
-            hvl->setContentsMargins(0, 0, 0, 0);
-            hvl->setSpacing(0);
-            auto* hrule = new QFrame(video_hdr_mode_row_);
-            hrule->setFrameShape(QFrame::HLine);
-            hrule->setProperty("frameRole", "sectionRuleLine");
-            hvl->addWidget(hrule);
-            auto* hhl = new QHBoxLayout();
-            hhl->setContentsMargins(0, 12, 0, 12);
-            hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
-            hlbl->setProperty("labelRole", "settingsRowLabel");
-            hhl->addWidget(hlbl, 0);
-            hhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoHdrMode, video_hdr_mode_row_), 0,
-                           Qt::AlignVCenter);
-            hhl->addStretch(1);
-            video_hdr_mode_combo_ = new QComboBox(video_hdr_mode_row_);
-            video_hdr_mode_combo_->setObjectName(QStringLiteral("videoHdrModeCombo"));
-            video_hdr_mode_combo_->addItem(QStringLiteral("Tone-map to SDR"),
-                                           static_cast<int>(recorder_core::HdrMode::TonemapSdr));
-            video_hdr_mode_combo_->addItem(QStringLiteral("Record native HDR10"),
-                                           static_cast<int>(recorder_core::HdrMode::Hdr10));
-            video_hdr_mode_combo_->setFixedWidth(200);
-            video_hdr_mode_combo_->setProperty("settingsRowInput", true);
-            hhl->addWidget(video_hdr_mode_combo_, 0, Qt::AlignVCenter);
-            hvl->addLayout(hhl);
-            video_hdr_mode_row_->setProperty("settingsRow", true);
-            fes_layout->addWidget(video_hdr_mode_row_);
-
-            // Calm inline hint (never a warning colour) shown only while H.264 disables
-            // the Hdr10 item — mirrors the muted validation-hint idiom used elsewhere.
-            video_hdr_mode_hint_ = makeHint(
-                QStringLiteral("Not available with H.264 \xe2\x80\x94 switch to AV1 or HEVC."), fmt_expert_section_);
-            video_hdr_mode_hint_->setVisible(false);
-            fes_layout->addWidget(video_hdr_mode_hint_);
-        }
+        // HDR handling (Task 8) is built eagerly in the constructor now, right after
+        // the Audio codec row in fmt_panel_ — see video_hdr_mode_row_ construction
+        // there. It stays display-conditional (updateVideoHdrModeControl()) but no
+        // longer lives inside fmt_expert_section_ or gates on expert mode.
 
         // --- Chroma subsampling (expert): 4:2:0 default / 4:4:4 gated ---
         // Real control: 4:4:4 is an 8-bit H.264/HEVC-only path (AYUV, NVENC High
@@ -5315,8 +5324,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             &ConfigPage::onVideoChromaChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
-    connect(video_hdr_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigPage::onVideoHdrModeChanged);
+    // video_hdr_mode_combo_ connects in the constructor now (Task 8: eager build).
     connect(video_encoder_preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoEncoderPresetChanged);
     connect(frame_pacing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
