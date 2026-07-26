@@ -97,15 +97,18 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("settings-output-720p"),
         QStringLiteral("settings-output-custom-resolution"),
         QStringLiteral("settings-output-custom-resolution-invalid"),
-        QStringLiteral("settings-format-24-cfr"),
+        QStringLiteral("settings-format-15-cfr"),
         QStringLiteral("settings-format-30-cfr"),
         QStringLiteral("settings-format-60-cfr"),
         QStringLiteral("settings-format-120-unavailable"),
+        QStringLiteral("settings-format-expert-free-fps"),
         QStringLiteral("settings-format-vfr"),
         QStringLiteral("settings-format-container-mkv"),
         QStringLiteral("settings-format-container-mp4"),
         QStringLiteral("settings-format-incompatible"),
         QStringLiteral("settings-format-recording-locked"),
+        QStringLiteral("settings-quality-efficient"),
+        QStringLiteral("settings-quality-ultra"),
         QStringLiteral("record-output-native"),
         QStringLiteral("record-output-1080p"),
         QStringLiteral("record-output-letterbox"),
@@ -314,11 +317,39 @@ TEST(VisualScenarioTest, ScenarioParserRejectsInvalidOutputDimensions) {
 TEST(VisualScenarioTest, ScenarioParserRejectsInvalidFrameRate) {
     VisualScenario scenario;
     scenario.id = QStringLiteral("bad-frame-rate");
-    scenario.frame_rate_num = 0;
     scenario.frame_rate_den = 1;
+
+    scenario.frame_rate_num = 0;
     QString error;
     EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("frame rate")));
+
+    scenario.frame_rate_num = 241;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("frame rate")));
+
+    scenario.frame_rate_num = 47;
+    EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
+}
+
+TEST(VisualScenarioTest, ScenarioParserAcceptsOptionalQualityCq) {
+    VisualScenario scenario;
+    scenario.id = QStringLiteral("quality-cq-probe");
+    QString error;
+
+    // Unset (0) is the default and must stay valid — most scenarios never set it.
+    EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
+
+    // The two tiers the fix-round scenarios seed (Efficient=30, Ultra=16).
+    scenario.quality_cq = 30;
+    EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
+    scenario.quality_cq = 16;
+    EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
+
+    // Out of recorder_core::kNvencCqMin..kNvencCqMax (1-51) is rejected.
+    scenario.quality_cq = 52;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("quality"), Qt::CaseInsensitive));
 }
 
 TEST(VisualScenarioTest, OutputFormatScenariosCarryManifestFields) {

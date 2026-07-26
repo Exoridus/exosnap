@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -61,6 +63,39 @@ class ConfigPageTest : public ::testing::Test {
         return false;
     }
 
+    // Scoped variant: search only within a given widget subtree (e.g. the Output
+    // panel), so label assertions can't accidentally match a same-named row living
+    // elsewhere on the page (the Hotkeys card has its own "Split recording" HOTKEY
+    // row, distinct from the Output card's split-by-time controls).
+    static bool HasLabelText(const QWidget* scope, const QString& text) {
+        if (!scope)
+            return false;
+        const auto labels = scope->findChildren<QLabel*>();
+        for (const auto* label : labels) {
+            if (label->text() == text)
+                return true;
+        }
+        return false;
+    }
+
+    // Returns the "Container & codecs" card widget (fmt_panel_) by climbing up
+    // from containerCombo (a direct fmt_panel_ row) until crossing into the
+    // sibling "Quality & timing" card -- fmt_panel_ has no objectName of its own,
+    // and frameRateCombo only exists under quality_panel_, so the highest ancestor
+    // that does NOT yet contain it is fmt_panel_ itself.
+    static QWidget* FmtPanel(const ConfigPage& page) {
+        auto* combo = page.findChild<QComboBox*>(QStringLiteral("containerCombo"));
+        if (!combo)
+            return nullptr;
+        QWidget* candidate = nullptr;
+        for (QWidget* w = combo->parentWidget(); w != nullptr; w = w->parentWidget()) {
+            if (w->findChild<QComboBox*>(QStringLiteral("frameRateCombo")) != nullptr)
+                break;
+            candidate = w;
+        }
+        return candidate;
+    }
+
     // Check ExoCheckBox (or QCheckBox) text anywhere in the widget tree.
     // THEME-SLICE-1: audio source rows are now ExoCheckBox, so search both.
     static bool HasCheckText(const ConfigPage& page, const QString& text) {
@@ -108,6 +143,15 @@ class ConfigPageTest : public ::testing::Test {
         return (section != nullptr) && !section->isHidden();
     }
 
+    // The APP row is a permanent row: instead of disappearing for non-Window
+    // targets it recedes, which the row's explanatory label announces.
+    static bool AppRowReceded(const ConfigPage& page) {
+        const auto* label = page.findChild<QLabel*>(QStringLiteral("settingsAudioAppSourceLabel"));
+        return (label != nullptr) &&
+               label->text() ==
+                   QStringLiteral("Takes effect while a specific application window is the capture target.");
+    }
+
     OutputSettingsModel output_defaults_;
     VideoSettingsModel video_defaults_;
 };
@@ -145,9 +189,11 @@ TEST_F(ConfigPageTest, VideoQualityComboExists) {
 TEST_F(ConfigPageTest, QualitySegmentsExist_WithStableObjectNames) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra")), nullptr);
 }
 
 TEST_F(ConfigPageTest, LegacyQualityCards_AreRemoved) {
@@ -260,7 +306,11 @@ TEST_F(ConfigPageTest, FrameRateControl_UsesRealValues) {
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(frame_rate, nullptr);
     EXPECT_TRUE(frame_rate->isEnabled());
-    EXPECT_GE(frame_rate->count(), 6);
+    EXPECT_EQ(frame_rate->count(), 4);
+    EXPECT_GE(frame_rate->findData(15), 0);
+    EXPECT_GE(frame_rate->findData(30), 0);
+    EXPECT_GE(frame_rate->findData(60), 0);
+    EXPECT_EQ(frame_rate->findData(24), -1);
 
     VideoSettingsModel changed;
     bool emitted = false;
@@ -275,6 +325,32 @@ TEST_F(ConfigPageTest, FrameRateControl_UsesRealValues) {
     EXPECT_TRUE(emitted);
     EXPECT_EQ(changed.frame_rate_num, 30u);
     EXPECT_EQ(changed.frame_rate_den, 1u);
+}
+
+TEST_F(ConfigPageTest, FrameRate_ExpertSwapsComboForFreeSpinbox) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>("frameRateCombo");
+    auto* spin = page.findChild<QSpinBox*>("frameRateSpin");
+    ASSERT_NE(combo, nullptr);
+    ASSERT_NE(spin, nullptr);
+    EXPECT_TRUE(combo->isHidden());
+    EXPECT_FALSE(spin->isHidden());
+    EXPECT_EQ(spin->minimum(), 1);
+    EXPECT_EQ(spin->maximum(), 240);
+    spin->setValue(48);
+    // leaving Expert keeps the value and displays the nearest list entry
+    page.setExpertModeEnabled(false);
+    EXPECT_FALSE(combo->isHidden());
+    EXPECT_EQ(combo->currentData().toInt(), 60); // nearest of {15,30,60} to 48
+}
+
+TEST_F(ConfigPageTest, TimingCombo_UsesDescriptiveLabels) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* timing = page.findChild<QComboBox*>("timingCombo");
+    ASSERT_NE(timing, nullptr);
+    EXPECT_EQ(timing->itemText(0), QStringLiteral("CFR \xc2\xb7 Constant"));
+    EXPECT_EQ(timing->itemText(1), QStringLiteral("VFR \xc2\xb7 Variable"));
 }
 
 TEST_F(ConfigPageTest, TimingCombo_MapsToVideoSettingsAndMp4DisablesVfr) {
@@ -459,10 +535,15 @@ TEST_F(ConfigPageTest, WebcamSetupPanel_HasCompactRescanNotLargeOpenSetup) {
         EXPECT_NE(btn->text(), QStringLiteral("Open Webcam Setup"))
             << "Settings must not require 'Open Webcam Setup' for standard configuration";
 
-    // The compact rescan button lives inside the panel.
+    // The compact rescan button lives inside the panel, floating on the preview
+    // itself (Task 9) rather than beside the device combo.
     auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
     ASSERT_NE(panel, nullptr);
-    EXPECT_NE(panel->findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn")), nullptr);
+    auto* rescan = panel->findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn"));
+    ASSERT_NE(rescan, nullptr);
+    auto* preview = panel->findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+    EXPECT_EQ(rescan->parentWidget(), preview) << "Rescan must be parented onto the camera preview, not a device row";
 }
 
 TEST_F(ConfigPageTest, WebcamSetupPanel_ApplySettingsUpdatesEnabledState) {
@@ -556,10 +637,16 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
     ASSERT_NE(combo, nullptr);
 
-    combo->setCurrentIndex(0); // High — same as default, won't emit
+    // The seam combo is kept in sync with the model, whose default preset is
+    // Balanced — so re-selecting it is a no-op.
+    const int balanced_idx = combo->findData(static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
+    ASSERT_GE(balanced_idx, 0);
+    combo->setCurrentIndex(balanced_idx);
     EXPECT_FALSE(emitted);
 
-    combo->setCurrentIndex(2); // Small
+    const int ultra_idx = combo->findData(static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
+    ASSERT_GE(ultra_idx, 0);
+    combo->setCurrentIndex(ultra_idx);
     EXPECT_TRUE(emitted);
 }
 
@@ -573,31 +660,45 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
         changed = settings;
     });
 
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
     auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    ASSERT_NE(small_segment, nullptr);
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(draft_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
+    ASSERT_NE(ultra_segment, nullptr);
 
-    // Default quality is High, so each click below is a real change and emits.
-    small_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small));
-    EXPECT_TRUE(small_segment->isChecked());
-    EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
-    EXPECT_FALSE(high_segment->isChecked());
+    // Default quality is Balanced, so each click below is a real change and emits.
+    draft_segment->click();
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Draft));
+    EXPECT_TRUE(draft_segment->isChecked());
+    EXPECT_TRUE(draft_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(balanced_segment->isChecked());
+
+    efficient_segment->click();
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient));
+    EXPECT_TRUE(efficient_segment->isChecked());
+    EXPECT_FALSE(draft_segment->isChecked());
 
     balanced_segment->click();
     EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
     EXPECT_TRUE(balanced_segment->isChecked());
-    EXPECT_FALSE(small_segment->isChecked());
+    EXPECT_FALSE(efficient_segment->isChecked());
 
     high_segment->click();
     EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High));
     EXPECT_TRUE(high_segment->isChecked());
     EXPECT_FALSE(balanced_segment->isChecked());
 
-    EXPECT_EQ(emit_count, 3);
+    ultra_segment->click();
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Ultra));
+    EXPECT_TRUE(ultra_segment->isChecked());
+    EXPECT_FALSE(high_segment->isChecked());
+
+    EXPECT_EQ(emit_count, 5);
 }
 
 TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
@@ -607,19 +708,27 @@ TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
     balanced.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced);
     page.setVideoSettings(balanced);
 
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
     auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    ASSERT_NE(small_segment, nullptr);
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(draft_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
+    ASSERT_NE(ultra_segment, nullptr);
 
-    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_FALSE(draft_segment->isChecked());
+    EXPECT_FALSE(efficient_segment->isChecked());
     EXPECT_TRUE(balanced_segment->isChecked());
-    EXPECT_FALSE(small_segment->isChecked());
-    EXPECT_FALSE(high_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_FALSE(ultra_segment->isChecked());
+    EXPECT_FALSE(draft_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(efficient_segment->property("qualitySegmentSelected").toBool());
     EXPECT_TRUE(balanced_segment->property("qualitySegmentSelected").toBool());
-    EXPECT_FALSE(small_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(high_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(ultra_segment->property("qualitySegmentSelected").toBool());
 }
 
 // The "✓ Current format" footer summarises frame rate + timing, but its refresh
@@ -635,11 +744,11 @@ TEST_F(ConfigPageTest, FormatSummary_RefreshesOnFrameRateComboChange) {
     auto* summary = page.findChild<QLabel*>(QStringLiteral("compatOkLabel"));
     ASSERT_NE(summary, nullptr);
 
-    const int idx24 = frame_rate->findData(24);
-    ASSERT_GE(idx24, 0);
-    frame_rate->setCurrentIndex(idx24);
+    const int idx15 = frame_rate->findData(15);
+    ASSERT_GE(idx15, 0);
+    frame_rate->setCurrentIndex(idx15);
 
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("24 fps")))
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("15 fps")))
         << "Summary must follow the frame-rate combo, got: " << summary->text().toStdString();
 }
 
@@ -702,9 +811,15 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* quality_high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
     ASSERT_NE(quality_high_segment, nullptr);
     EXPECT_FALSE(quality_high_segment->isEnabled());
-    auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
-    ASSERT_NE(quality_small_segment, nullptr);
-    EXPECT_FALSE(quality_small_segment->isEnabled());
+    auto* quality_efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
+    ASSERT_NE(quality_efficient_segment, nullptr);
+    EXPECT_FALSE(quality_efficient_segment->isEnabled());
+    auto* quality_draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    ASSERT_NE(quality_draft_segment, nullptr);
+    EXPECT_FALSE(quality_draft_segment->isEnabled());
+    auto* quality_ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(quality_ultra_segment, nullptr);
+    EXPECT_FALSE(quality_ultra_segment->isEnabled());
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(frame_rate, nullptr);
     EXPECT_FALSE(frame_rate->isEnabled());
@@ -760,9 +875,15 @@ TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
     auto* quality_high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
     ASSERT_NE(quality_high_segment, nullptr);
     EXPECT_TRUE(quality_high_segment->isEnabled());
-    auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
-    ASSERT_NE(quality_small_segment, nullptr);
-    EXPECT_TRUE(quality_small_segment->isEnabled());
+    auto* quality_efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
+    ASSERT_NE(quality_efficient_segment, nullptr);
+    EXPECT_TRUE(quality_efficient_segment->isEnabled());
+    auto* quality_draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    ASSERT_NE(quality_draft_segment, nullptr);
+    EXPECT_TRUE(quality_draft_segment->isEnabled());
+    auto* quality_ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(quality_ultra_segment, nullptr);
+    EXPECT_TRUE(quality_ultra_segment->isEnabled());
 
     // Mic device combo: disabled by default because no audio plan has been set yet.
     // (In production, setAudioUiState is called immediately after construction, so
@@ -885,21 +1006,39 @@ TEST_F(ConfigPageTest, UpdatesCard_ChannelCombo_UserSelectionEmitsChannelChanged
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
-    // Caption labels removed; segment labels are now "Small"/"Balanced"/"High" without CQ numbers.
+    // Caption labels removed; segment labels are the five tier names without CQ numbers.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
     auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    ASSERT_NE(small_segment, nullptr);
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(draft_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
-    EXPECT_EQ(small_segment->text(), QStringLiteral("Small"));
+    ASSERT_NE(ultra_segment, nullptr);
+    EXPECT_EQ(draft_segment->text(), QStringLiteral("Draft"));
+    EXPECT_EQ(efficient_segment->text(), QStringLiteral("Efficient"));
     EXPECT_EQ(balanced_segment->text(), QStringLiteral("Balanced"));
     EXPECT_EQ(high_segment->text(), QStringLiteral("High"));
+    EXPECT_EQ(ultra_segment->text(), QStringLiteral("Ultra"));
     // Caption labels are gone.
     EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel")), nullptr);
     EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel")), nullptr);
+}
+
+TEST_F(ConfigPageTest, QualityPresetCombo_HasFiveCqFirstLabels) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>("qualityPresetCombo");
+    ASSERT_NE(combo, nullptr);
+    ASSERT_EQ(combo->count(), 5);
+    EXPECT_EQ(combo->itemText(0), QStringLiteral("CQ 35 \xc2\xb7 Draft"));
+    EXPECT_EQ(combo->itemText(1), QStringLiteral("CQ 30 \xc2\xb7 Efficient"));
+    EXPECT_EQ(combo->itemText(2), QStringLiteral("CQ 24 \xc2\xb7 Balanced"));
+    EXPECT_EQ(combo->itemText(3), QStringLiteral("CQ 19 \xc2\xb7 High"));
+    EXPECT_EQ(combo->itemText(4), QStringLiteral("CQ 16 \xc2\xb7 Ultra"));
 }
 
 // ── SETTINGS-AUDIO-METER-R1: live mono meters in the Settings Audio card ─────
@@ -957,6 +1096,14 @@ TEST_F(ConfigPageTest, SetAudioMeterLevels_SysActiveDoesNotModifyAppOrMic) {
 
 TEST_F(ConfigPageTest, SetAudioMeterLevels_AppActiveDoesNotModifySystemOrMic) {
     ConfigPage page(output_defaults_, video_defaults_);
+
+    // A receded App row never shows a level, so the row must be live first.
+    capability::AudioUiState window_state;
+    window_state.target_kind = capability::CaptureTargetKind::Window;
+    window_state.source_rows = {{recorder_core::AudioSourceKind::App, true, false},
+                                {recorder_core::AudioSourceKind::Sys, false, false},
+                                {recorder_core::AudioSourceKind::Mic, false, false}};
+    page.setAudioUiState(window_state);
 
     page.setAudioMeterLevels(0.0f, 0.7f, 0.0f, /*sys_active=*/false, /*app_active=*/true,
                              /*mic_active=*/false);
@@ -1094,7 +1241,7 @@ TEST_F(ConfigPageTest, SetAudioUiState_WindowWithAppRow_EnablesAppCheckbox) {
     EXPECT_TRUE(app_check->isChecked());
 }
 
-TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_HidesAppSection) {
+TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_RecedesAppSection) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     capability::AudioUiState state;
@@ -1105,7 +1252,21 @@ TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_HidesAppSection) {
     };
     page.setAudioUiState(state);
 
-    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    // The APP row is a permanent row now: for a Display target it recedes
+    // (explanatory text + inactive meter) instead of disappearing.
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section stays visible for Display target";
+
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_TRUE(app_check->isEnabled()) << "App checkbox stays interactable while not recording-locked";
+
+    auto* app_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    ASSERT_NE(app_meter, nullptr);
+    EXPECT_FALSE(app_meter->isActive()) << "The receded App row must not show a live meter";
+
+    EXPECT_TRUE(
+        HasLabelText(page, QStringLiteral("Takes effect while a specific application window is the capture target.")))
+        << "The receded App row must explain when it applies";
 }
 
 TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_SysLabelIsComputerAudio) {
@@ -1122,7 +1283,8 @@ TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_SysLabelIsComputerAudio) {
     auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
     ASSERT_NE(sys_check, nullptr);
     EXPECT_EQ(sys_check->text(), QStringLiteral("Computer audio"));
-    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section stays visible for Display target";
+    EXPECT_TRUE(AppRowReceded(page)) << "App row must recede for Display target";
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
 }
 
@@ -1159,7 +1321,8 @@ TEST_F(ConfigPageTest, AudioPolicy_DisplayMode_ShowsComputerAudioPlusmic) {
 
     EXPECT_TRUE(HasCheckText(page, QStringLiteral("Computer audio")));
     EXPECT_FALSE(HasCheckText(page, QStringLiteral("Other system audio")));
-    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section stays visible for Display target";
+    EXPECT_TRUE(AppRowReceded(page)) << "App row must recede for Display target";
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
 }
 
@@ -1190,7 +1353,8 @@ TEST_F(ConfigPageTest, AudioPolicy_DisplayToWindow_AppSectionBecomesVisible) {
     display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
                                  {recorder_core::AudioSourceKind::Mic, false, false}};
     page.setAudioUiState(display_state);
-    EXPECT_FALSE(AppSectionVisible(page));
+    EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_TRUE(AppRowReceded(page));
 
     capability::AudioUiState window_state;
     window_state.target_kind = capability::CaptureTargetKind::Window;
@@ -1199,9 +1363,10 @@ TEST_F(ConfigPageTest, AudioPolicy_DisplayToWindow_AppSectionBecomesVisible) {
                                 {recorder_core::AudioSourceKind::Sys, false, false}};
     page.setAudioUiState(window_state);
     EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_FALSE(AppRowReceded(page)) << "Window target makes the App row live again";
 }
 
-TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionHides) {
+TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionRecedes) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     capability::AudioUiState window_state;
@@ -1211,13 +1376,15 @@ TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionHides) {
                                 {recorder_core::AudioSourceKind::Sys, false, false}};
     page.setAudioUiState(window_state);
     EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_FALSE(AppRowReceded(page));
 
     capability::AudioUiState display_state;
     display_state.target_kind = capability::CaptureTargetKind::Display;
     display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
                                  {recorder_core::AudioSourceKind::Mic, false, false}};
     page.setAudioUiState(display_state);
-    EXPECT_FALSE(AppSectionVisible(page));
+    EXPECT_TRUE(AppSectionVisible(page)) << "The App row stays; it only recedes";
+    EXPECT_TRUE(AppRowReceded(page));
 }
 
 TEST_F(ConfigPageTest, AudioPolicy_AppMeterInactiveForDisplayMode) {
@@ -1333,34 +1500,36 @@ TEST_F(ConfigPageTest, LockOrderInvariant_UnlockRestoresControls) {
     EXPECT_TRUE(app_check->isEnabled()) << "After unlock, App checkbox must be re-enabled for Window target";
 }
 
-TEST_F(ConfigPageTest, LockOrderInvariant_DisplayTarget_AppCheckAlwaysDisabledRegardlessOfLock) {
-    // Test 23/27: Display target — App check is always disabled (not visible/available),
-    // regardless of lock state.
+TEST_F(ConfigPageTest, LockOrderInvariant_DisplayTarget_AppCheckEnabledUnlessLocked) {
+    // The APP row is permanent: for a Display target it recedes but stays
+    // interactable, so only the recording lock disables its checkbox.
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeDisplayAudioState());
 
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
-    EXPECT_FALSE(app_check->isEnabled()) << "Display target: App checkbox must be disabled (not available)";
+    EXPECT_TRUE(app_check->isEnabled()) << "Display target: App checkbox stays interactable";
 
     page.setRecordingControlsLocked(true);
-    EXPECT_FALSE(app_check->isEnabled()) << "Display target + lock: App checkbox must still be disabled";
+    EXPECT_FALSE(app_check->isEnabled()) << "Display target + lock: App checkbox must be disabled";
 
     page.setRecordingControlsLocked(false);
-    EXPECT_FALSE(app_check->isEnabled()) << "Display target + unlock: App checkbox must stay disabled (no App row)";
+    EXPECT_TRUE(app_check->isEnabled()) << "Display target + unlock: App checkbox must be interactable again";
 }
 
-TEST_F(ConfigPageTest, AudioState_OneSnapshotDeterminesRowVisibility) {
-    // Test 23: One audio snapshot fully determines row visibility.
-    // Window target → App section visible; Display target → App section hidden.
+TEST_F(ConfigPageTest, AudioState_OneSnapshotDeterminesRowRecession) {
+    // Test 23: One audio snapshot fully determines row presentation.
+    // Window target → App row live; Display target → App row receded (still shown).
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeWindowAudioState());
     EXPECT_TRUE(AppSectionVisible(page)) << "Window target: App section must be visible";
+    EXPECT_FALSE(AppRowReceded(page)) << "Window target: App row is live";
 
     page.setAudioUiState(MakeDisplayAudioState());
-    EXPECT_FALSE(AppSectionVisible(page)) << "Display target: App section must be hidden";
+    EXPECT_TRUE(AppSectionVisible(page)) << "Display target: App section stays visible";
+    EXPECT_TRUE(AppRowReceded(page)) << "Display target: App row recedes";
 }
 
 TEST_F(ConfigPageTest, AudioState_TargetSwitch_UpdatesSettingsImmediately) {
@@ -1369,15 +1538,16 @@ TEST_F(ConfigPageTest, AudioState_TargetSwitch_UpdatesSettingsImmediately) {
 
     // Start with Window.
     page.setAudioUiState(MakeWindowAudioState());
-    EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_FALSE(AppRowReceded(page));
 
     // Switch to Display.
     page.setAudioUiState(MakeDisplayAudioState());
-    EXPECT_FALSE(AppSectionVisible(page)) << "After switching to Display, App section must disappear immediately";
+    EXPECT_TRUE(AppRowReceded(page)) << "After switching to Display, the App row must recede immediately";
 }
 
 TEST_F(ConfigPageTest, AudioState_NoStaleAppRow_AfterWindowToDisplay) {
-    // Test 27: No stale App row after Window → Display switch.
+    // Test 27: No stale App state after Window → Display switch — the row
+    // recedes (explanatory text, inactive meter) instead of disappearing.
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeWindowAudioState());
@@ -1385,8 +1555,13 @@ TEST_F(ConfigPageTest, AudioState_NoStaleAppRow_AfterWindowToDisplay) {
 
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
-    // App section hidden → the check is either hidden or disabled.
-    EXPECT_FALSE(app_check->isEnabled()) << "After Window → Display switch, App checkbox must not be enabled";
+    EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_TRUE(AppRowReceded(page)) << "After Window → Display switch, the App row must read as receded";
+    EXPECT_TRUE(app_check->isEnabled()) << "…but it stays interactable while not recording-locked";
+
+    auto* app_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    ASSERT_NE(app_meter, nullptr);
+    EXPECT_FALSE(app_meter->isActive()) << "A receded App row must not keep a live meter";
 }
 
 TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
@@ -1394,14 +1569,80 @@ TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeDisplayAudioState());
-    EXPECT_FALSE(AppSectionVisible(page));
+    EXPECT_TRUE(AppRowReceded(page));
 
     page.setAudioUiState(MakeWindowAudioState());
     EXPECT_TRUE(AppSectionVisible(page)) << "After Display → Window switch, App section must appear";
+    EXPECT_FALSE(AppRowReceded(page)) << "After Display → Window switch, the App row is live";
 
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_TRUE(app_check->isEnabled()) << "After Display → Window switch, App checkbox must be enabled";
+}
+
+// The App row's checkbox stays interactable for a Display target so it can be armed
+// ahead of switching to a window. A Display state ships without an App row at all, so
+// arming it has to CREATE the row it promises — otherwise the toggle no-ops and the
+// checkbox snaps back on the next state application.
+TEST_F(ConfigPageTest, AudioApp_ArmingOnDisplayTarget_CreatesAppRow) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState display_state = MakeDisplayAudioState();
+    ASSERT_TRUE(std::none_of(
+        display_state.source_rows.begin(), display_state.source_rows.end(),
+        [](const recorder_core::AudioSourceRow& r) { return r.kind == recorder_core::AudioSourceKind::App; }))
+        << "precondition: the Display state must ship without an App row";
+    page.setAudioUiState(display_state);
+
+    capability::AudioUiState emitted;
+    bool got = false;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged, [&](const capability::AudioUiState& s) {
+        emitted = s;
+        got = true;
+    });
+
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    app_check->setChecked(true);
+
+    ASSERT_TRUE(got) << "arming the App row must emit audioSettingsChanged";
+    ASSERT_FALSE(emitted.source_rows.empty());
+    EXPECT_EQ(emitted.source_rows.front().kind, recorder_core::AudioSourceKind::App)
+        << "the created App row must sit at the front of the canonical row order";
+    EXPECT_TRUE(emitted.source_rows.front().enabled) << "the created App row must be enabled";
+    EXPECT_FALSE(emitted.source_rows.front().merge_with_above) << "the first row has no row above it to merge into";
+    EXPECT_TRUE(emitted.IsAppEnabled());
+
+    // Round-trip: re-applying the emitted state must keep the checkbox checked.
+    page.setAudioUiState(emitted);
+    EXPECT_TRUE(app_check->isChecked()) << "the App checkbox must not snap back after the state round-trip";
+}
+
+// Same root cause on the merge control: toggling "Merge with above" on a Display
+// target has to create the App row before it can carry the flag.
+TEST_F(ConfigPageTest, AudioApp_MergeToggleOnDisplayTarget_CreatesAppRow) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setAudioUiState(MakeDisplayAudioState());
+
+    capability::AudioUiState emitted;
+    bool got = false;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged, [&](const capability::AudioUiState& s) {
+        emitted = s;
+        got = true;
+    });
+
+    auto* app_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioAppMerge"));
+    ASSERT_NE(app_merge, nullptr);
+    // Flip whatever the control currently reads, so this exercises a real user toggle.
+    const bool flipped = !app_merge->isChecked();
+    app_merge->setChecked(flipped);
+
+    ASSERT_TRUE(got) << "toggling the App merge control must emit audioSettingsChanged";
+    ASSERT_FALSE(emitted.source_rows.empty());
+    EXPECT_EQ(emitted.source_rows.front().kind, recorder_core::AudioSourceKind::App)
+        << "the created App row must sit at the front of the canonical row order";
+    EXPECT_EQ(emitted.source_rows.front().merge_with_above, flipped)
+        << "the created App row must carry the merge flag the toggle just set";
 }
 
 // ---------------------------------------------------------------------------
@@ -1677,7 +1918,6 @@ TEST_F(ConfigPageTest, Mp4DisablesAutomaticSplitControlsWithHonestSummary) {
     settings.split.mode = SplitRecordingMode::Every30Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
@@ -1696,7 +1936,6 @@ TEST_F(ConfigPageTest, SplitModeSurvivesContainerRoundTripThroughMp4) {
     settings.split.mode = SplitRecordingMode::Every15Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
@@ -1723,7 +1962,6 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
     settings.split.custom_minutes = 45;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomMinutesSpin"));
@@ -1739,7 +1977,6 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
 
 TEST_F(ConfigPageTest, SplitSizeModeToggle_ReplacesTheOffCustomCombo) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     // The old Off/Custom combo is gone; on/off is an ExoToggle.
     EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo")), nullptr);
@@ -1754,7 +1991,6 @@ TEST_F(ConfigPageTest, SplitSizeMode_Off_HidesCustomSizeSpin) {
     settings.split.size_mode = SplitSizeMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
@@ -1771,7 +2007,6 @@ TEST_F(ConfigPageTest, SplitSizeMode_Custom_ShowsCustomSizeSpin) {
     settings.split.custom_size_mb = 512;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
@@ -1788,7 +2023,6 @@ TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeToggle) {
     settings.split.custom_size_mb = 1024;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitSizeModeToggle"));
@@ -1807,7 +2041,6 @@ TEST_F(ConfigPageTest, SplitModeToggle_OffHidesIntervalRow_OnShowsIt) {
     settings.split.mode = SplitRecordingMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     page.setOutputSettings(settings);
 
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
@@ -1831,7 +2064,6 @@ TEST_F(ConfigPageTest, SplitModeToggle_OffEmitsModeOff) {
     settings.split.mode = SplitRecordingMode::Every30Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     page.setOutputSettings(settings);
 
     OutputSettingsModel emitted;
@@ -1851,7 +2083,6 @@ TEST_F(ConfigPageTest, SplitSizeToggle_OnEmitsCustom_OffEmitsOff) {
     settings.split.size_mode = SplitSizeMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     page.setOutputSettings(settings);
 
     OutputSettingsModel emitted;
@@ -1864,6 +2095,28 @@ TEST_F(ConfigPageTest, SplitSizeToggle_OnEmitsCustom_OffEmitsOff) {
     EXPECT_EQ(emitted.split.size_mode, SplitSizeMode::Custom);
     toggle->setOn(false);
     EXPECT_EQ(emitted.split.size_mode, SplitSizeMode::Off);
+}
+
+TEST_F(ConfigPageTest, OutputCard_SplitByTimeLabelReplacesSplitRecordingAndAutomaticSplit) {
+    // Task 7: the "Automatic split" sub-label row is deleted and "Split recording"
+    // is renamed to "Split by time" (with the kSplitRecording info hint moved onto
+    // it). Scope to the Output panel — the Hotkeys card has its own unrelated
+    // "Split recording" HOTKEY row that must not affect this assertion.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* out_panel = page.findChild<QWidget*>(QStringLiteral("outputPanel"));
+    ASSERT_NE(out_panel, nullptr);
+
+    EXPECT_TRUE(HasLabelText(out_panel, QStringLiteral("Split by time")));
+    EXPECT_FALSE(HasLabelText(out_panel, QStringLiteral("Split recording")))
+        << "\"Split recording\" must be renamed to \"Split by time\" in the Output card";
+    EXPECT_FALSE(HasLabelText(out_panel, QStringLiteral("Automatic split")))
+        << "the \"Automatic split\" header row must be deleted";
+
+    // The whole-page helper still finds the Hotkeys card's unrelated "Split
+    // recording" hotkey row — confirming the scoped assertion above is meaningful.
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Split recording")))
+        << "the Hotkeys card's \"Split recording\" hotkey row must be untouched";
 }
 
 // ── SETTINGS-TIERS-P3: Presence + Appearance cards (moved from AdvancedPage) ──
@@ -1996,13 +2249,14 @@ TEST_F(ConfigPageTest, AdvancedDetailsButton_IsGone) {
     EXPECT_EQ(advanced_btn, nullptr) << "Settings must not contain the 'Open Advanced' signpost button after P3";
 }
 
-TEST_F(ConfigPageTest, DeveloperCard_HiddenByDefault) {
+TEST_F(ConfigPageTest, DeveloperCard_VisibleByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Expert mode off by default; the Developer card is built lazily on first
-    // expert-enable, so by default it doesn't exist yet (which still means not shown).
+    // The Developer card is built eagerly in the constructor and is not
+    // expert-gated -- it must be findable and visible without expert mode.
     auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    EXPECT_TRUE(card == nullptr || card->isHidden());
+    ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
+    EXPECT_FALSE(card->isHidden());
 }
 
 TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {
@@ -2059,7 +2313,6 @@ TEST_F(ConfigPageTest, ClockSlavingCheck_ExistsInExpertAudio) {
 
 TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitModeCombo")), nullptr)
         << "splitModeCombo (interval selector) must still exist";
@@ -2111,8 +2364,8 @@ TEST_F(ConfigPageTest, BrickwallLimiter_CeilingSpinVisibilityTracksToggle) {
 // Microphone post-processing: the disclosure starts collapsed (stage rows hidden)
 // and expanding it via the chevron button reveals the four stage controls in place.
 TEST_F(ConfigPageTest, MicPostProcessing_DisclosureStartsCollapsedAndExpands) {
+    // The mic post-processing group lives in the Default tier — no expert prelude.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
 
     auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
     auto* content = page.findChild<QWidget*>(QStringLiteral("micPostProcessingContent"));
@@ -2138,8 +2391,8 @@ TEST_F(ConfigPageTest, MicPostProcessing_DisclosureStartsCollapsedAndExpands) {
 // The mic post-processing header shows a live "Off" / active-stage-list status,
 // independent of whether the disclosure is expanded.
 TEST_F(ConfigPageTest, MicPostProcessing_HeaderStatusReflectsActiveStages) {
+    // Default tier — no expert prelude.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
 
     auto* status = page.findChild<QLabel*>(QStringLiteral("micPostProcessingStatus"));
     auto* hpf = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck"));
@@ -2150,6 +2403,76 @@ TEST_F(ConfigPageTest, MicPostProcessing_HeaderStatusReflectsActiveStages) {
 
     hpf->setChecked(true);
     EXPECT_EQ(status->text(), QStringLiteral("High-pass")) << "status label must reflect the enabled HPF stage";
+}
+
+// A stage's numeric parameter row is only shown while that stage is switched on.
+TEST_F(ConfigPageTest, MicPostProcessing_ParamRowsOnlyWhileStageOn) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
+    auto* gate_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micGateCheck"));
+    auto* gate_spin = page.findChild<QDoubleSpinBox*>(QStringLiteral("micGateThresholdSpin"));
+    ASSERT_NE(disclosure, nullptr);
+    ASSERT_NE(gate_check, nullptr);
+    ASSERT_NE(gate_spin, nullptr);
+
+    disclosure->setChecked(true); // expand, so only the stage gate can hide the row
+    ASSERT_FALSE(gate_check->isChecked()) << "the noise gate defaults off";
+
+    auto* gate_param_row = gate_spin->parentWidget();
+    ASSERT_NE(gate_param_row, nullptr);
+    EXPECT_TRUE(gate_param_row->isHidden()) << "the threshold row is hidden while the gate is off";
+
+    gate_check->setChecked(true);
+    EXPECT_FALSE(gate_param_row->isHidden()) << "turning the gate on reveals its threshold row";
+
+    gate_check->setChecked(false);
+    EXPECT_TRUE(gate_param_row->isHidden()) << "turning the gate off hides its threshold row again";
+}
+
+// Hydrating from a pushed state (preset apply) must move the stage parameter rows
+// too. The stage checkboxes are seeded under a QSignalBlocker, so the
+// toggled->setVisible connect never fires on that path and the seed has to drive
+// the rows explicitly.
+TEST_F(ConfigPageTest, MicPostProcessing_ParamRowVisibilityFollowsPushedState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
+    auto* gate_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micGateCheck"));
+    auto* gate_spin = page.findChild<QDoubleSpinBox*>(QStringLiteral("micGateThresholdSpin"));
+    ASSERT_NE(disclosure, nullptr);
+    ASSERT_NE(gate_check, nullptr);
+    ASSERT_NE(gate_spin, nullptr);
+    auto* gate_param_row = gate_spin->parentWidget();
+    ASSERT_NE(gate_param_row, nullptr);
+
+    disclosure->setChecked(true); // expand, so only the stage gate can hide the row
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Display;
+    state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                         {recorder_core::AudioSourceKind::Mic, true, false}};
+    state.mic_gate_enabled = true;
+    page.setAudioUiState(state);
+
+    EXPECT_TRUE(gate_check->isChecked()) << "the pushed state enables the gate";
+    EXPECT_FALSE(gate_param_row->isHidden())
+        << "a pushed state with the gate on must reveal its threshold row, not just enable the spin";
+
+    state.mic_gate_enabled = false;
+    page.setAudioUiState(state);
+
+    EXPECT_FALSE(gate_check->isChecked());
+    EXPECT_TRUE(gate_param_row->isHidden()) << "a pushed state with the gate off must hide its threshold row again";
+}
+
+// The AGC stage is labelled with the short, scannable acronym.
+TEST_F(ConfigPageTest, MicPostProcessing_AgcStageUsesShortLabel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* agc = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micAgcCheck"));
+    ASSERT_NE(agc, nullptr);
+    EXPECT_EQ(agc->text(), QStringLiteral("AGC"));
 }
 
 // Audio clock slaving keeps its explanatory info-i even as a plain inline row (a
@@ -2423,6 +2746,23 @@ TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
     EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Limited)), 0);
     // Default is Limited.
     EXPECT_EQ(range->currentData().toInt(), static_cast<int>(capability::ColorRange::Limited));
+}
+
+// Task 8: en-US spelling everywhere on the Container & codecs card -- "Colour
+// range" became "Color range" and no other visible label under fmt_panel_ may
+// carry the British spelling either. Scoped to fmt_panel_ so a same-worded
+// label living elsewhere on the page can't accidentally satisfy the check.
+TEST_F(ConfigPageTest, FmtCard_UsesAmericanColorSpelling) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // build the expert rows (bit depth, color range, ...) too
+
+    auto* fmt_panel = FmtPanel(page);
+    ASSERT_NE(fmt_panel, nullptr);
+    for (const auto* label : fmt_panel->findChildren<QLabel*>()) {
+        EXPECT_FALSE(label->text().contains(QStringLiteral("Colour")))
+            << "British spelling found on the Container & codecs card: " << label->text().toStdString();
+    }
+    EXPECT_TRUE(HasLabelText(fmt_panel, QStringLiteral("Color range")));
 }
 
 // Selecting Limited emits the colour range in the model; it is never codec-gated
@@ -2727,11 +3067,17 @@ TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
 // HDR-active display; SDR-only facts keep it hidden, an HDR-active display
 // reveals it. Pre-probe (no facts yet) counts as "no HDR display".
 TEST_F(ConfigPageTest, HdrRow_HiddenWithoutHdrActiveDisplay_ShownWithOne) {
+    // Task 8: HDR handling joins the Default tier -- the row is built eagerly in
+    // the constructor now, so it must obey the display gate with expert mode OFF.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
 
     auto* row = page.findChild<QWidget*>(QStringLiteral("videoHdrModeRow"));
     ASSERT_NE(row, nullptr);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoHdrModeCombo"));
+    ASSERT_NE(combo, nullptr);
+    ASSERT_GE(combo->count(), 2);
+    EXPECT_EQ(combo->itemText(1), QStringLiteral("Native HDR10"));
 
     // Pre-probe: no display facts → hidden.
     EXPECT_TRUE(row->isHidden()) << "HDR row must stay hidden before display facts arrive";
@@ -2902,18 +3248,31 @@ TEST_F(ConfigPageTest, CqSpinBox_SegmentSelectionFollowsNearestPreset) {
     page.setExpertModeEnabled(true);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
     ASSERT_NE(spin, nullptr);
+    ASSERT_NE(ultra_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
-    ASSERT_NE(small_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
+    ASSERT_NE(draft_segment, nullptr);
+
+    spin->setValue(17); // nearest canonical tier is Ultra (16)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(17), recorder_core::NvencQualityPreset::Ultra);
+    EXPECT_TRUE(ultra_segment->property("qualitySegmentSelected").toBool());
 
     spin->setValue(20); // nearest canonical tier is High (19)
     EXPECT_EQ(recorder_core::NearestQualityPreset(20), recorder_core::NvencQualityPreset::High);
     EXPECT_TRUE(high_segment->property("qualitySegmentSelected").toBool());
 
-    spin->setValue(29); // nearest canonical tier is Small (30)
-    EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
+    spin->setValue(29); // nearest canonical tier is Efficient (30)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(29), recorder_core::NvencQualityPreset::Efficient);
+    EXPECT_TRUE(efficient_segment->property("qualitySegmentSelected").toBool());
+
+    spin->setValue(33); // nearest canonical tier is Draft (35)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(33), recorder_core::NvencQualityPreset::Draft);
+    EXPECT_TRUE(draft_segment->property("qualitySegmentSelected").toBool());
 }
 
 // A non-canonical CQ is never snapped onto a tier; it reaches the model verbatim.
@@ -2931,11 +3290,11 @@ TEST_F(ConfigPageTest, CqSpinBox_KeepsNonCanonicalValuesAndReachesTheModel) {
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
     ASSERT_NE(spin, nullptr);
 
-    spin->setValue(16);
-    EXPECT_FALSE(recorder_core::IsCanonicalCq(16));
+    spin->setValue(22);
+    EXPECT_FALSE(recorder_core::IsCanonicalCq(22));
     EXPECT_EQ(emit_count, 1);
-    EXPECT_EQ(changed.cq, 16u);
-    EXPECT_EQ(spin->value(), 16) << "the value must survive, not snap to a tier";
+    EXPECT_EQ(changed.cq, 22u);
+    EXPECT_EQ(spin->value(), 22) << "the value must survive, not snap to a tier";
 }
 
 // Scrolling the settings page must not silently retune quality.
@@ -2994,6 +3353,32 @@ TEST_F(ConfigPageTest, SettingsAudio_MergeControlUsesDocumentedLabel) {
     // The old inverted "Separate track" label must be gone.
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Separate track")))
         << "The inverted 'Separate track' label must no longer appear";
+}
+
+// APP is the first listed source, so it has no row "above" to merge into: its
+// merge cluster is hidden while SYS and MIC keep theirs.
+TEST_F(ConfigPageTest, SettingsAudio_AppRowHasNoMergeCluster) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Window;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Sys, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+    };
+    page.setAudioUiState(state);
+
+    auto* app_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioAppMerge"));
+    auto* sys_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioSysMerge"));
+    auto* mic_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioMicMerge"));
+    ASSERT_NE(app_merge, nullptr);
+    ASSERT_NE(sys_merge, nullptr);
+    ASSERT_NE(mic_merge, nullptr);
+
+    EXPECT_TRUE(app_merge->isHidden()) << "the first source row has no 'Merge with above' control";
+    EXPECT_FALSE(sys_merge->isHidden());
+    EXPECT_FALSE(mic_merge->isHidden());
 }
 
 TEST_F(ConfigPageTest, SettingsAudio_RowsFollowAppSysMicOrder) {
@@ -3073,13 +3458,14 @@ TEST_F(ConfigPageTest, SettingsAudio_MergeToggleReflectsAndSetsMergeWithAbove) {
 
 // ── Crash-report auto-send consent toggle (Developer/Advanced card) ────────────
 
-TEST_F(ConfigPageTest, CrashReportsToggle_HiddenBeforeExpertMode) {
+TEST_F(ConfigPageTest, CrashReportsToggle_VisibleByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // The Developer/Advanced card (and its crash-report toggle) is built lazily
-    // on first expert-enable, so by default it doesn't exist yet.
+    // The Developer card (and its crash-report toggle) is built eagerly in the
+    // constructor and is not expert-gated.
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    EXPECT_EQ(toggle, nullptr) << "crashReportsAutoSendToggle must not exist before expert mode is enabled";
+    ASSERT_NE(toggle, nullptr) << "crashReportsAutoSendToggle must exist by default";
+    EXPECT_FALSE(toggle->isHidden());
 }
 
 TEST_F(ConfigPageTest, CrashReportsToggle_VisibleAndLabeledWhenExpertModeEnabled) {
@@ -3102,20 +3488,16 @@ TEST_F(ConfigPageTest, CrashReportsToggle_DefaultsOff) {
     EXPECT_FALSE(toggle->isChecked()) << "consent defaults to off, matching auto_send_crash_reports' default";
 }
 
-TEST_F(ConfigPageTest, CrashReportsToggle_SetterAppliesBeforeAndAfterLazyBuild) {
+TEST_F(ConfigPageTest, CrashReportsToggle_SetterAppliesImmediately) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Seed the persisted "on" state before the Developer card exists -- it must
-    // be remembered and applied once the card is lazily constructed (same
-    // contract as setDeveloperLogLevel).
+    // The Developer card is built eagerly, so the setter applies to the toggle
+    // as soon as it is called -- no lazy-build handoff to verify anymore.
     page.setAutoSendCrashReports(true);
-
-    page.setExpertModeEnabled(true);
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
     ASSERT_NE(toggle, nullptr);
-    EXPECT_TRUE(toggle->isChecked()) << "the pre-seeded consent state must survive the lazy build";
+    EXPECT_TRUE(toggle->isChecked());
 
-    // Once the card exists, the setter must also apply immediately.
     page.setAutoSendCrashReports(false);
     EXPECT_FALSE(toggle->isChecked());
 }

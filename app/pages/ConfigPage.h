@@ -116,7 +116,7 @@ class ConfigPage : public QWidget {
     [[nodiscard]] bool expertModeEnabled() const noexcept;
 
     // SETTINGS-TIERS-R1: Per-card expander state — no-op stub kept for MainWindow compat.
-    // Wave 2: the split controls are now expert-gated (no per-card expander).
+    // Task 7: the split controls are Default tier, built eagerly (no per-card expander).
     void setAudioSeparateExpanderExpanded(bool expanded);
     [[nodiscard]] bool audioSeparateExpanderExpanded() const noexcept;
 
@@ -142,9 +142,9 @@ class ConfigPage : public QWidget {
     void applyVisualHdrDisplayPresent(bool present);
 
     // Settings/Diagnostics polish, Slice 3 (cogwheels -> inline): open/close the
-    // Audio expert card's mic post-processing chevron disclosure so its four DSP
-    // stage rows render deterministically for visual-test scenarios. No-op if the
-    // audio-expert subtree isn't built yet (caller must enable expert mode first).
+    // Audio card's mic post-processing chevron disclosure so its four DSP stage
+    // rows render deterministically for visual-test scenarios. The group is
+    // Default-tier, so no expert-mode prelude is required.
     void applyVisualMicPostProcessingExpanded(bool expanded);
 
     // Force the Output card into a Custom-resolution state with (intentionally
@@ -173,14 +173,13 @@ class ConfigPage : public QWidget {
     void setPresentDiagnosticsOptIn(bool on);
     void setThemeId(const QString& theme_id);
     // SETTINGS-HONESTY-R1: seeds the Developer card's log-level combo from the
-    // persisted value. One of "Off"|"Error"|"Warning"|"Info"|"Debug". Safe to call
-    // before the (lazily built) Developer card exists -- the value is remembered and
-    // applied once the combo is constructed. No signal emitted.
+    // persisted value. One of "Off"|"Error"|"Warning"|"Info"|"Debug". The Developer
+    // card is built eagerly in the constructor, so the combo already exists by the
+    // time this is called. No signal emitted.
     void setDeveloperLogLevel(const QString& level);
-    // Seeds the "Send crash reports automatically" toggle (Developer/Advanced
-    // card) from persisted settings. Safe to call before the lazily built
-    // Developer card exists -- the value is remembered and applied once the
-    // card is constructed. No signal emitted.
+    // Seeds the "Send crash reports automatically" toggle (Developer card) from
+    // persisted settings. The Developer card is built eagerly in the constructor,
+    // so the toggle already exists by the time this is called. No signal emitted.
     void setAutoSendCrashReports(bool on);
 
     // Drives the visible Updates card (ADR 0034 Phase A). state is one of
@@ -286,6 +285,7 @@ class ConfigPage : public QWidget {
     void onQualityChanged(int index);
     void onQualitySegmentSelected(int preset_id);
     void onFrameRateChanged(int index);
+    void onFrameRateSpinChanged(int fps);
     void onTimingSelected(int timing_id);
     void onOutputResolutionSelected(int mode_id);
     void onSplitToggled(bool on);
@@ -351,6 +351,10 @@ class ConfigPage : public QWidget {
     // inconsistent widget state.
     void applyAudioConfigurationState();
 
+    // Inserts a disabled App row at the front of audio_ui_state_.source_rows when none
+    // exists, so the App controls can arm a row that a Display/Region state omits.
+    void ensureAppSourceRow();
+
     void onAudioAppToggled();
     void onAudioMicToggled();
     void onAudioSysToggled();
@@ -362,6 +366,10 @@ class ConfigPage : public QWidget {
     void emitCurrentAudioSettings();
     // Update codec-gated visibility for the four ADR 0030 audio format controls.
     void updateAudioFormatControlVisibility();
+    // Re-seed every audio settings control (Default + Expert tier) from
+    // audio_ui_state_. All accesses are null-guarded, so it is safe to call
+    // before the lazy Expert subtree exists.
+    void seedAudioControlsFromState();
 
     // Preset management handlers.
     void onSavePresetAs();
@@ -369,10 +377,18 @@ class ConfigPage : public QWidget {
     void onDeletePreset();
     void updatePresetActionState();
     void updateExpertModeVisibility();
-    // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
-    // (eager-then-hidden cost kept off the default ConfigPage construction path).
+    // Everyday audio controls (mic channel mode, bitrate, channels, bit depth,
+    // FLAC compression, mic gain, brickwall limiter, mic post-processing) — built
+    // eagerly from the constructor because they are Default-tier.
+    void buildAudioDefaultSettingsSection();
+    // Startup-perf: builds the Expert audio subtree (Opus frame duration, Opus
+    // complexity, sample rate, audio clock slaving) on first expert-enable.
     void buildAudioExpertSection();
+    // Split-by-time / split-by-size controls (Default tier) — built eagerly from
+    // the constructor; not expert-gated.
     void buildSplitExpertSection();
+    // Developer card (Default tier) — built eagerly from the constructor; not
+    // expert-gated. developer_card_built_ is a double-construction fence only.
     void buildDeveloperCard();
     // Startup-perf: the interleaved Expert rate/format subtree (CQ precision row,
     // rate control + bitrate + frame pacing on the Quality card; bit depth, colour
@@ -424,10 +440,15 @@ class ConfigPage : public QWidget {
 
     QComboBox* quality_combo_ = nullptr;
     QComboBox* frame_rate_combo_ = nullptr;
+    // Expert-only free-entry frame rate input (1-240 fps); swapped in for
+    // frame_rate_combo_ by updateExpertModeVisibility().
+    QSpinBox* frame_rate_spin_ = nullptr;
     QButtonGroup* quality_segment_group_ = nullptr;
-    QPushButton* quality_segment_small_ = nullptr;
+    QPushButton* quality_segment_draft_ = nullptr;
+    QPushButton* quality_segment_efficient_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;
     QPushButton* quality_segment_high_ = nullptr;
+    QPushButton* quality_segment_ultra_ = nullptr;
     // v10/Canon: Frame timing is a dropdown (SSelect), not a segmented button group.
     QComboBox* timing_combo_ = nullptr;
     ui::widgets::ExoToggle* cursor_check_ = nullptr;
@@ -523,8 +544,9 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
     QLabel* expert_mode_label_ = nullptr; // "Expert mode" label (mut -> accent when on)
     bool expert_mode_enabled_ = false;
-    // Wave 2: split recording controls moved out of expander; now expert-gated section.
-    // Lazily built on first expert-enable (see buildSplitExpertSection).
+    // Task 7: split-by-time / split-by-size controls (Default tier) — built eagerly
+    // from the constructor. split_expert_built_ only guards buildSplitExpertSection()
+    // against being invoked more than once.
     QWidget* split_expert_section_ = nullptr;
     bool split_expert_built_ = false;
     int split_expert_insert_index_ = -1;
@@ -557,16 +579,18 @@ class ConfigPage : public QWidget {
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;
     QString current_theme_id_ = QStringLiteral("dark-default");
-    // Expert-gated developer card — lazily built on first expert-enable (see
-    // buildDeveloperCard). left_col_ + insert index let the lazy build place it.
+    // Developer card — built eagerly in the constructor, always visible (not
+    // expert-gated). developer_card_built_ is a double-construction fence only.
+    // developer_col_ + insert index let buildDeveloperCard() place it in the
+    // right column.
     QWidget* developer_card_ = nullptr;
     bool developer_card_built_ = false;
     int developer_insert_index_ = -1;
-    QWidget* left_col_ = nullptr;
+    QWidget* developer_col_ = nullptr;
     // SETTINGS-HONESTY-R1: developer log-level combo, genuinely wired to
     // AppLog::setMinSeverity via MainWindow. developer_log_level_ is the pending/
     // current value string ("Off"|"Error"|"Warning"|"Info"|"Debug"); it is applied to
-    // the combo on build (lazy) or immediately if already built (setDeveloperLogLevel).
+    // the combo on construction, or immediately via setDeveloperLogLevel() after.
     QComboBox* developer_log_level_combo_ = nullptr;
     QString developer_log_level_ = QStringLiteral("Debug");
     // Crash-report auto-send consent toggle (Developer/Advanced card).
@@ -646,9 +670,18 @@ class ConfigPage : public QWidget {
     // Keyframe interval (0.9.0 S1): 2 s / 1 s / 0.5 s. Expert only.
     QComboBox* keyframe_interval_combo_ = nullptr;
 
-    // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
-    // Lazily built on first expert-enable (see buildAudioExpertSection); built_ guards
-    // against rebuilds, insert_index_ records its slot in the audio panel layout.
+    // Default Audio settings section — mic channel mode, bitrate, channels, bit
+    // depth, FLAC compression, mic gain, brickwall limiter, mic post-processing.
+    // Built eagerly (Default tier) by buildAudioDefaultSettingsSection().
+    QWidget* audio_default_section_ = nullptr;
+    // True while the App row is "live" (a specific window is the capture target).
+    // Gates the App meter so a receded row never shows a level.
+    bool app_row_active_ = false;
+
+    // PS-PHASE-C: Expert Audio section — Opus frame duration/complexity, sample
+    // rate, audio clock slaving. Lazily built on first expert-enable (see
+    // buildAudioExpertSection); built_ guards against rebuilds, insert_index_
+    // records its slot in the audio panel layout.
     QWidget* audio_expert_section_ = nullptr;
     bool audio_expert_built_ = false;
     int audio_expert_insert_index_ = -1;
@@ -664,15 +697,22 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoCheckBox* limiter_check_ = nullptr;
     ui::widgets::ExoCheckBox* clock_slaving_check_ = nullptr;
     QDoubleSpinBox* limiter_ceiling_spin_ = nullptr;
-    // Microphone high-pass filter (Audio v2 — 0.6.0).
+    // Microphone high-pass filter (Audio v2 — 0.6.0). The *_param_row_ container
+    // holds the stage's numeric parameter and is shown only while the stage is on.
+    // seedAudioControlsFromState() must set it explicitly: it seeds the stage
+    // checkbox under a QSignalBlocker, so the toggled->setVisible connect made in
+    // buildAudioDefaultSettingsSection() never fires on that path.
     ui::widgets::ExoCheckBox* mic_hpf_check_ = nullptr;
     QDoubleSpinBox* mic_hpf_cutoff_spin_ = nullptr;
+    QWidget* mic_hpf_param_row_ = nullptr;
     // Microphone noise gate (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_gate_check_ = nullptr;
     QDoubleSpinBox* mic_gate_threshold_spin_ = nullptr;
+    QWidget* mic_gate_param_row_ = nullptr;
     // Microphone automatic gain control (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_agc_check_ = nullptr;
     QDoubleSpinBox* mic_agc_target_spin_ = nullptr;
+    QWidget* mic_agc_param_row_ = nullptr;
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
     ui::widgets::ExoCheckBox* mic_rnnoise_check_ = nullptr;
     // Slice 3 (cogwheels -> inline): mic post-processing is an inline disclosure

@@ -3,7 +3,9 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QPushButton>
+#include <QRect>
 #include <QSlider>
 #include <QWidget>
 
@@ -225,9 +227,12 @@ TEST_F(WebcamSetupPanelTest, ApplySettings_SyncsChromaControlsFromPreset) {
     ASSERT_NE(body, nullptr);
     EXPECT_FALSE(body->isHidden()) << "Preset with chroma enabled must expand the group";
 
-    auto* blue = panel.findChild<QPushButton*>(QStringLiteral("webcamPanelChromaBlueBtn"));
-    ASSERT_NE(blue, nullptr);
-    EXPECT_TRUE(blue->isChecked()) << "Blue key-colour must be selected from the preset";
+    // No chip buttons remain — the Key color button's hex text reflects the
+    // preset's active color instead (blue = #0000FF).
+    auto* key_btn = panel.findChild<QPushButton*>(QStringLiteral("webcamPanelKeyColorBtn"));
+    ASSERT_NE(key_btn, nullptr);
+    EXPECT_EQ(key_btn->text(), QStringLiteral("#0000FF"))
+        << "Key color button must show the Blue preset's hex value from the applied settings";
 
     auto* tol = panel.findChild<QSlider*>(QStringLiteral("webcamPanelChromaToleranceSlider"));
     ASSERT_NE(tol, nullptr);
@@ -288,31 +293,28 @@ TEST_F(WebcamSetupPanelTest, ChromaSliders_EmitParameterValues) {
 }
 
 // ---------------------------------------------------------------------------
-// Layout regression: the camera preview must not reserve a stale fixed height.
+// Layout regression: the camera preview must not reserve a stale fixed height,
+// and (Task 9) must span the full panel width, not a compact side column.
 // ---------------------------------------------------------------------------
 
 // Regression test: the embedded preview used to be pinned to a hardcoded
 // setFixedHeight(175) + Qt::AlignTop, sized for the control column back when it
-// only held Enable/Camera/Resolution/Mirror. Once Overlay opacity + Chroma key
-// rows were added, the control column grew taller than 175px, leaving a dead
-// gap below the preview (the Fixed vertical policy refuses to grow beyond its
-// pinned height regardless of how tall its sibling column is). The preview must
-// have a vertical policy that lets it grow to match, not Fixed.
+// only held Enable/Camera/Resolution/Mirror. The preview must have a vertical
+// policy that lets it grow, not Fixed.
 TEST_F(WebcamSetupPanelTest, CameraPreview_VerticalPolicyIsNotFixed) {
     ui::widgets::WebcamSetupPanel panel;
 
     auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
     ASSERT_NE(preview, nullptr);
     EXPECT_NE(preview->sizePolicy().verticalPolicy(), QSizePolicy::Fixed)
-        << "Camera preview must not be vertically Fixed, or it leaves a dead gap "
-           "below itself whenever the control column (opacity + chroma rows) grows "
-           "taller than the hardcoded height.";
+        << "Camera preview must not be vertically Fixed.";
 }
 
-// Laid out at a representative Settings width, the preview's bottom edge must
-// reach down to (at least) the control column's bottom edge -- i.e. no dead
-// space between the preview's bottom and the last visible control row.
-TEST_F(WebcamSetupPanelTest, CameraPreview_HeightMatchesControlColumn) {
+// Task 9: the preview moved from a compact 180-300px side column to a
+// full-width row on top of the control stack. Laid out at a representative
+// Settings width, it must span (approximately) the whole panel width -- the
+// old setMaximumWidth(300) cap must be gone.
+TEST_F(WebcamSetupPanelTest, CameraPreview_SpansFullWidth) {
     ui::widgets::WebcamSetupPanel panel;
     panel.resize(640, panel.sizeHint().height());
     panel.show();
@@ -320,17 +322,8 @@ TEST_F(WebcamSetupPanelTest, CameraPreview_HeightMatchesControlColumn) {
 
     auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
     ASSERT_NE(preview, nullptr);
-
-    // Mirror toggle sits near the bottom of the always-visible control rows
-    // (chroma body is collapsed by default, so it must not count towards the
-    // "content" height).
-    auto* mirror = panel.findChild<ui::widgets::ExoToggle*>(QStringLiteral("webcamPanelMirrorToggle"));
-    ASSERT_NE(mirror, nullptr);
-
-    const int preview_bottom = preview->mapTo(&panel, QPoint(0, preview->height())).y();
-    const int mirror_bottom = mirror->mapTo(&panel, QPoint(0, mirror->height())).y();
-    EXPECT_GE(preview_bottom, mirror_bottom) << "Preview must grow tall enough to reach the visible control rows -- "
-                                                "no dead gap left below it.";
+    EXPECT_GE(preview->width(), 600) << "Preview must span the full panel width, not a compact side column "
+                                        "(the old 180-300px width cap must be removed).";
     panel.hide();
 }
 
@@ -346,6 +339,97 @@ TEST_F(WebcamSetupPanelTest, MfUnavailable_DisablesOpacityAndChroma) {
     auto* chroma = panel.findChild<ui::widgets::ExoToggle*>(QStringLiteral("webcamPanelChromaToggle"));
     ASSERT_NE(chroma, nullptr);
     EXPECT_FALSE(chroma->isEnabled()) << "Chroma toggle must be disabled when MF is unavailable";
+}
+
+// ---------------------------------------------------------------------------
+// Task 9: Key color button replaces the four preset chip buttons; rescan
+// re-parents onto the preview.
+// ---------------------------------------------------------------------------
+
+TEST_F(WebcamSetupPanelTest, KeyColorButton_OpensPickerAndShowsHex) {
+    ui::widgets::WebcamSetupPanel panel;
+
+    auto* key_btn = panel.findChild<QPushButton*>(QStringLiteral("webcamPanelKeyColorBtn"));
+    ASSERT_NE(key_btn, nullptr) << "Key color button must exist";
+
+    EXPECT_FALSE(key_btn->isVisibleTo(&panel))
+        << "Key color row lives inside the chroma body, which is collapsed while chroma is off";
+
+    auto* toggle = panel.findChild<ui::widgets::ExoToggle*>(QStringLiteral("webcamPanelChromaToggle"));
+    ASSERT_NE(toggle, nullptr);
+    toggle->setChecked(true);
+
+    EXPECT_TRUE(key_btn->isVisibleTo(&panel)) << "Key color button becomes visible once chroma key is enabled";
+    EXPECT_TRUE(key_btn->text().contains(QStringLiteral("#")))
+        << "Key color button must show the active key color as hex text. text=" << key_btn->text().toStdString();
+}
+
+TEST_F(WebcamSetupPanelTest, RescanButton_LivesOnThePreview) {
+    ui::widgets::WebcamSetupPanel panel;
+
+    auto* rescan = panel.findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn"));
+    ASSERT_NE(rescan, nullptr);
+    auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+    EXPECT_EQ(rescan->parentWidget(), preview)
+        << "Rescan button must be re-parented onto camera_preview_, not the device row";
+}
+
+// Real positioning math (not just parentage): after layout at a representative
+// width, the button's geometry must sit fully inside the preview, pinned to
+// its bottom-right corner with the documented 6px margin.
+TEST_F(WebcamSetupPanelTest, RescanButton_PinnedBottomRightOfPreview) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.resize(640, panel.sizeHint().height());
+    panel.show();
+    QCoreApplication::processEvents();
+
+    auto* rescan = panel.findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn"));
+    ASSERT_NE(rescan, nullptr);
+    auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+
+    constexpr int kMargin = 6;
+    const QRect preview_rect = preview->rect();
+    const QRect btn_geom = rescan->geometry(); // in camera_preview_'s local coords
+
+    EXPECT_TRUE(preview_rect.contains(btn_geom))
+        << "Rescan button must lie entirely within the preview. preview=" << preview_rect.width() << "x"
+        << preview_rect.height() << " btn=" << btn_geom.x() << "," << btn_geom.y() << " " << btn_geom.width() << "x"
+        << btn_geom.height();
+    EXPECT_EQ(preview_rect.right() - btn_geom.right(), kMargin)
+        << "Rescan button's right edge must sit kMargin px from the preview's right edge";
+    EXPECT_EQ(preview_rect.bottom() - btn_geom.bottom(), kMargin)
+        << "Rescan button's bottom edge must sit kMargin px from the preview's bottom edge";
+
+    // Resize again after the initial show: this exercises the preview's own
+    // Resize event (caught via WebcamSetupPanel's event filter on
+    // camera_preview_), not just the panel's resizeEvent from the first show.
+    panel.resize(500, panel.sizeHint().height() + 40);
+    QCoreApplication::processEvents();
+    const QRect preview_rect2 = preview->rect();
+    const QRect btn_geom2 = rescan->geometry();
+    EXPECT_TRUE(preview_rect2.contains(btn_geom2))
+        << "Rescan button must stay pinned inside the preview after a second resize";
+    EXPECT_EQ(preview_rect2.right() - btn_geom2.right(), kMargin);
+    EXPECT_EQ(preview_rect2.bottom() - btn_geom2.bottom(), kMargin);
+
+    panel.hide();
+}
+
+TEST_F(WebcamSetupPanelTest, KeyColorLabel_UsesAmericanSpelling) {
+    ui::widgets::WebcamSetupPanel panel;
+
+    bool found_us_spelling = false;
+    bool found_uk_spelling = false;
+    for (auto* label : panel.findChildren<QLabel*>()) {
+        if (label->text() == QStringLiteral("Key color"))
+            found_us_spelling = true;
+        if (label->text() == QStringLiteral("Key colour"))
+            found_uk_spelling = true;
+    }
+    EXPECT_TRUE(found_us_spelling) << "Label must read 'Key color' (en-US)";
+    EXPECT_FALSE(found_uk_spelling) << "Label must not read 'Key colour' (en-GB)";
 }
 
 } // namespace

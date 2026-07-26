@@ -276,28 +276,60 @@ TEST_F(SettingsTiersTest, ConfigPage_ExpertWarnBanner_IsGone) {
 
 TEST_F(SettingsTiersTest, ConfigPage_OutputSplitExpanderExists) {
     // Wave 2: no SettingsCardExpander named "outputSplitExpander" exists.
-    // The split expert section (plain QWidget) replaced it.
+    // The split section (plain QWidget) replaced it.
     ConfigPage page(output_defaults_, video_defaults_);
     auto* expander = page.findChild<ui::widgets::SettingsCardExpander*>(QStringLiteral("outputSplitExpander"));
     EXPECT_EQ(expander, nullptr);
-    // The split controls exist once expert mode lazily builds the section.
-    page.setExpertModeEnabled(true);
+    // Task 7: the split controls are Default tier and exist without expert mode.
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
     EXPECT_NE(combo, nullptr);
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_HiddenByDefault) {
-    // Wave 2: splitModeCombo is now inside split_expert_section_ (expert-gated).
-    // It is hidden by default because expert mode is off.
+    // Task 7: splitModeCombo lives inside split_expert_section_, which is now built
+    // eagerly and always visible (Default tier, not expert-gated). The combo itself
+    // is only reachable through splitIntervalRow, whose visibility follows
+    // splitModeToggle — not expert mode. With expert mode off and the toggle at its
+    // default (off), the interval row is hidden because of the toggle, not the tier.
     ConfigPage page(output_defaults_, video_defaults_);
-    // Lazy: the split expert section isn't built until expert mode turns on,
-    // so by default it doesn't exist yet — which still means it is not shown.
+
     auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
-    EXPECT_TRUE(section == nullptr || section->isHidden());
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden()) << "split section is Default tier and always visible";
+
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
+    auto* interval_row = page.findChild<QWidget*>(QStringLiteral("splitIntervalRow"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_NE(interval_row, nullptr);
+    EXPECT_FALSE(toggle->isOn());
+    EXPECT_TRUE(interval_row->isHidden()) << "interval row hidden because the toggle is off";
+}
+
+TEST_F(SettingsTiersTest, SplitControls_VisibleWithoutExpertMode) {
+    // Task 7: the split section never needed expert mode enabled to be built or
+    // shown — it is Default tier, built eagerly from the constructor.
+    ConfigPage page(output_defaults_, video_defaults_);
+    EXPECT_FALSE(page.expertModeEnabled());
+
+    auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden());
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
+    EXPECT_NE(combo, nullptr);
+
+    // Turning the toggle on (still with expert mode off) reveals the interval row.
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("splitModeToggle"));
+    auto* interval_row = page.findChild<QWidget*>(QStringLiteral("splitIntervalRow"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_NE(interval_row, nullptr);
+    toggle->setOn(true);
+    EXPECT_FALSE(interval_row->isHidden());
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_VisibleWhenExpanded) {
-    // Wave 2: split controls are shown when expert mode is on (not via expander).
+    // Task 7: split controls are visible regardless of expert mode; this test keeps
+    // covering the (now redundant but harmless) expert-mode-on case.
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true);
     auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
@@ -348,7 +380,6 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasFiveRealLevels_No
     // (fully-suppressed) option. The former stub combo also offered "Trace", which
     // doesn't correspond to anything AppLog can emit -- it must not survive the wiring.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // lazily builds the Developer card
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     ASSERT_EQ(combo->count(), 5);
@@ -364,19 +395,17 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasFiveRealLevels_No
 TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_DefaultsToDebug) {
     // Review F1: ship default is Debug (record everything); see the store test above.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Debug"));
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_BeforeCardBuilt_AppliesOnBuild) {
-    // setDeveloperLogLevel must be safe to call before the lazily-built Developer
-    // card exists, and the pending value must be applied once it IS built. Probe with
-    // a NON-default value ("Warning") so the assertion cannot pass vacuously.
+TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_AppliesImmediately) {
+    // The Developer card is built eagerly in the constructor, so
+    // setDeveloperLogLevel applies to the combo as soon as it is called. Probe
+    // with a NON-default value ("Warning") so the assertion cannot pass vacuously.
     ConfigPage page(output_defaults_, video_defaults_);
     page.setDeveloperLogLevel(QStringLiteral("Warning"));
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Warning"));
@@ -386,7 +415,6 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasConsequenceToolti
     // Review F3: raising the level silently drops lines from support diagnostics;
     // the combo must carry a tooltip that names that consequence.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("hides lower-severity lines")));
@@ -394,7 +422,6 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasConsequenceToolti
 
 TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_ChangeEmitsSignal) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
 
@@ -414,7 +441,6 @@ TEST_F(SettingsTiersTest, ConfigPage_NvtxProfilingCheck_HonestlyDisabledWithTool
     // No NVTX infrastructure exists in the app -- the control must stay disabled with
     // a "planned" tooltip rather than pretending to work.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("nvtxProfilingCheck"));
     ASSERT_NE(check, nullptr);
     EXPECT_FALSE(check->isEnabled());
@@ -485,13 +511,62 @@ TEST_F(SettingsTiersTest, ConfigPage_AudioExpertSection_VisibleInExpertMode) {
 TEST_F(SettingsTiersTest, ConfigPage_AudioExpertControls_Exist) {
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
-    // Polish-R1: mic gain is now a QSlider (micGainSlider) + read-only QLabel (micGainDbLabel).
-    EXPECT_NE(page.findChild<QSlider*>(QStringLiteral("micGainSlider")), nullptr);
+    // The Expert audio subtree keeps only the four genuinely expert rows; the
+    // everyday mic/format controls live in the eager Default section.
+    auto* section = page.findChild<QWidget*>(QStringLiteral("audioExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_NE(section->findChild<QComboBox*>(QStringLiteral("opusFrameDurationCombo")), nullptr);
+    EXPECT_NE(section->findChild<QSpinBox*>(QStringLiteral("opusComplexitySpin")), nullptr);
+    EXPECT_NE(section->findChild<QComboBox*>(QStringLiteral("audioSampleRateCombo")), nullptr);
+    EXPECT_NE(section->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("clockSlavingCheck")), nullptr);
+
+    // The Default-tier controls must NOT be part of the expert subtree any more.
+    EXPECT_EQ(section->findChild<QSlider*>(QStringLiteral("micGainSlider")), nullptr);
+    EXPECT_EQ(section->findChild<QComboBox*>(QStringLiteral("micChannelModeCombo")), nullptr);
+    EXPECT_EQ(section->findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin")), nullptr);
+    EXPECT_EQ(section->findChild<QComboBox*>(QStringLiteral("audioChannelsCombo")), nullptr);
+    EXPECT_EQ(section->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck")), nullptr);
+    EXPECT_EQ(section->findChild<QWidget*>(QStringLiteral("micPostProcessingHeader")), nullptr);
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioDefaultControls_VisibleWithoutExpert) {
+    // No setExpertModeEnabled() call: the everyday audio controls are built
+    // eagerly and are visible in the Default tier.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* mic_channel = page.findChild<QComboBox*>(QStringLiteral("micChannelModeCombo"));
+    auto* bitrate = page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin"));
+    auto* channels = page.findChild<QComboBox*>(QStringLiteral("audioChannelsCombo"));
+    auto* mic_gain = page.findChild<QSlider*>(QStringLiteral("micGainSlider"));
+    auto* limiter = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck"));
+    auto* mic_post = page.findChild<QWidget*>(QStringLiteral("micPostProcessingHeader"));
+
+    ASSERT_NE(mic_channel, nullptr);
+    ASSERT_NE(bitrate, nullptr);
+    ASSERT_NE(channels, nullptr);
+    ASSERT_NE(mic_gain, nullptr);
+    ASSERT_NE(limiter, nullptr);
+    ASSERT_NE(mic_post, nullptr);
+
+    EXPECT_FALSE(mic_channel->isHidden());
+    EXPECT_FALSE(bitrate->isHidden());
+    EXPECT_FALSE(channels->isHidden());
+    EXPECT_FALSE(mic_gain->isHidden());
+    EXPECT_FALSE(limiter->isHidden());
+    EXPECT_FALSE(mic_post->isHidden());
     EXPECT_NE(page.findChild<QLabel*>(QStringLiteral("micGainDbLabel")), nullptr);
-    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("micChannelModeCombo")), nullptr);
-    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin")), nullptr);
-    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("opusFrameDurationCombo")), nullptr);
-    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("opusComplexitySpin")), nullptr);
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_MicGainSliderSpansSharedControlWidth) {
+    // Track + value label must add up to the shared 160 px settings-row control
+    // width (116 + 4 px row spacing + 40).
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* slider = page.findChild<QSlider*>(QStringLiteral("micGainSlider"));
+    auto* db_label = page.findChild<QLabel*>(QStringLiteral("micGainDbLabel"));
+    ASSERT_NE(slider, nullptr);
+    ASSERT_NE(db_label, nullptr);
+    EXPECT_EQ(slider->width(), 116);
+    EXPECT_EQ(db_label->width(), 40);
 }
 
 } // namespace

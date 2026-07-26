@@ -50,9 +50,12 @@ Top-level navigation is **six items**, in order:
   (H.264 / HEVC — AV1 is 4:2:0 only), plus per-codec NVENC advanced-encode facts — B-frames
   (max count), Lookahead, and Temporal AQ — probed the same way (informational only; no Expert
   control reads these facts yet). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
-  x264/SVT-AV1) appear as honest greyed-out "planned" rows — never fabricated probes.
-- **Settings** — unified recording configuration, hosting six embedded sections:
-  **Video · Audio · Output · Webcam · Hotkeys · Advanced**. Advanced is expert-only and collapsible.
+  x264/SVT-AV1) appear as honest grayed-out "planned" rows — never fabricated probes.
+- **Settings** — unified recording configuration, hosting embedded sections: **Container & codecs ·
+  Quality & timing · Audio · Output · Webcam · Notifications & overlays · Hotkeys · Updates ·
+  Appearance · Developer**. There is no separate Advanced section — a global **Expert** toggle
+  (shared with Diagnostics) reveals additional rows in place within a section rather than hiding or
+  revealing a whole card; every section, including Developer, is visible in both modes (§12).
   Hotkeys is an embedded full-width card, not a separate nav item.
 - **Diagnostics** — the live, changeable environment as readiness cards (disk, display, audio,
   elevation, blockers), plus a capability-matrix reference section.
@@ -72,9 +75,9 @@ produced during recording.
 
 The default theme is **dark mode**.
 
-The frameless main window carries a **subtle native 1px border** in the active theme's line colour
+The frameless main window carries a **subtle native 1px border** in the active theme's line color
 (it follows Windows 11's rounded window corners and updates on a theme switch). On Windows versions
-without per-window border colours the default system frame is kept — never an error.
+without per-window border colors the default system frame is kept — never an error.
 
 ---
 
@@ -88,14 +91,14 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Container | MKV |
 | Video codec | AV1 (NVENC) |
 | Audio codec | Opus |
-| Frame rate | CFR 60 fps |
+| Frame rate | CFR 60 fps (Default list: 15/30/60 fps, plus 120 fps shown disabled; Expert mode swaps the list for a free-entry 1–240 fps field — see §6) |
 | Rate control | Constant quality (CQ), quality "High" |
 | NVENC encoder preset | P4 (all codecs) |
 | Frame pacing | Phase-correct |
 | Color range | Limited |
 | Cursor capture | On |
 | Countdown | 0 seconds (selectable 0/3/5/10) |
-| Audio source rows | Order is `APP`, `SYS`, `MIC`. Which rows exist depends on the capture target: an `APP` row exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
+| Audio source rows | Order is `APP`, `SYS`, `MIC`. The Settings **Audio** card always lists all three rows: the `APP` row is a persisted setting that recedes (inactive meter, explanatory line "Takes effect while a specific application window is the capture target.") whenever a window is not the capture target, and it carries no **Merge with above** control because it is the first row. Which sources enter the recording plan still depends on the capture target — an `APP` source exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
 | Resulting tracks | Each enabled source is a separate resulting track unless merged with the row above |
 | Webcam | Off |
 
@@ -191,10 +194,16 @@ back to H.264 or AV1 if issues appear.
 
 ## 5. Audio model
 
-**Source order and defaults.** The audio source row order is **`APP`, `SYS`, `MIC`**. Defaults are
-**context-aware** (see §3 and "Resolved-decision notes" below): the `APP` row exists only while a
-specific application window is the capture target, and defaults enabled there; for screen capture
-(no `APP` row) the shipped default is `SYS` enabled and `MIC` present but off. Each enabled source
+**Source order and defaults.** The audio source row order is **`APP`, `SYS`, `MIC`**. The Settings
+**Audio** card always lists all three rows: the `APP` row is a persisted setting, always present and
+configurable, not conditional on the capture target. While no specific application window is the
+capture target it recedes (inactive meter, explanatory line "Takes effect while a specific
+application window is the capture target.") instead of disappearing, and — being the first listed
+row — it carries no **Merge with above** control, since there is no row above it to fold into.
+Whether an `APP` source actually contributes audio to the recording still depends on the capture
+target: it contributes only while a specific application window is being captured. Defaults are
+**context-aware** (see §3 and "Resolved-decision notes" below): the `APP` row defaults enabled; for
+screen capture the shipped default is `SYS` enabled and `MIC` present but off. Each enabled source
 produces its own separate resulting track.
 
 **Editable source rows → resolved tracks.** The UI presents editable source rows. The engine resolves
@@ -253,18 +262,41 @@ product (UI, tooltip, or API). ExoSnap presents a canonical model mapped per enc
 - **Constant quality (CQ)** — the default (NVENC CQ/CQP under the hood).
 - **Variable bitrate (VBR)**
 - **Constant bitrate (CBR)**
-- **Lossless** — hidden (not greyed) unless the active encoder+codec combination confirms support.
+- **Lossless** — hidden (not grayed) unless the active encoder+codec combination confirms support.
 
 A bitrate control accompanies the bitrate-based modes. Switching encoders preserves the selected
 canonical mode; only the internal mapping changes. Expert rate-control, bitrate, and frame-timing
 controls sit behind the Expert toggle.
+
+**Quality ladder.** In Default mode, quality is chosen from a five-tier, CQ-first-labelled ladder:
+
+| Tier | Label | CQ |
+|------|-------|----|
+| 1 | Draft | 35 |
+| 2 | Efficient | 30 |
+| 3 | Balanced | 24 |
+| 4 | High (default) | 19 |
+| 5 | Ultra | 16 |
+
+The top tier deliberately avoids "Best" (vague) and "Quality" (collides with the built-in Quality
+preset's name). The built-in **Quality** preset's CQ 16 now lands exactly on the Ultra tier instead
+of only approximating it. Expert mode replaces the ladder with the explicit **Rate control**
+selector (CQ/VBR/CBR) plus a **CQ** spinbox (1–51, no suffix) or a **bitrate** spinbox, depending on
+the selected mode.
 
 **Encoder preset.** An expert **NVENC encoder preset** control (in the Container & codecs expert
 section) exposes presets **P1–P7** (P1 fastest, P7 best) uniformly for all codecs; it is never
 capability-gated (only the recording lock disables it). The **default is P4 for all codecs**. It
 takes effect from the next recording.
 
-**Frame rate and pacing.** The default is **CFR 60 fps**. An expert **"Frame pacing"** control offers
+**Frame rate and pacing.** The default is **CFR 60 fps**. The Default frame-rate control is a fixed
+list — **15 / 30 / 60 fps** (the older 24 fps cinema and 25 fps PAL entries are dropped) plus
+**120 fps**, present but shown disabled ("unavailable") until a hardware-proven path exists. Expert
+mode replaces the list with a **free-entry fps field (1–240)**, not capability-checked at entry. When
+Expert leaves a configured rate that is not in the Default list, the value is kept and the Default
+combo displays the **nearest list entry** — the same nearest-match rule already used when a custom
+CQ value doesn't match a quality tier — while the current-format footer always shows the true
+configured value. An expert **"Frame pacing"** control offers
 **"Phase-correct"** (default) and **"Lowest latency"**. Phase-correct selects frames by
 present time (it does not blend), so uncapped VRR / high-refresh sources record to smooth,
 judder-free 60 fps; it does not make 60 fps look like 144 Hz. It is GPU-only and requires no
@@ -289,7 +321,7 @@ setting (§HDR below) — "10-bit" as a concept is not SDR-only, only this parti
 
 **Chroma.** **4:2:0** is the default and is universal (all codecs, 8- and 10-bit). **4:4:4** is an
 Expert-mode option available for **H.264 and HEVC at 8-bit** (NVENC High 4:4:4 Predictive / HEVC
-Range Extensions) on GPUs that report YUV444 encode support; it keeps full colour resolution (sharper
+Range Extensions) on GPUs that report YUV444 encode support; it keeps full color resolution (sharper
 text/UI) at the cost of larger files. **4:4:4 is not available for AV1** (NVENC AV1 is 4:2:0 only),
 **not available at 10-bit**, and not available with native HDR10. The Expert **Chroma subsampling**
 row itself only appears when the selected codec **and** the active GPU can carry 4:4:4 at all; for
@@ -351,11 +383,11 @@ Behavior:
   screen; 203 cd/m² is the fallback when the level cannot be read. The level is sampled once when
   the recording starts — moving the Windows SDR-brightness slider afterward does not retune an
   active recording.
-- **Advanced Color Management (SDR desktop, HDR off):** with Windows' automatic colour management
+- **Advanced Color Management (SDR desktop, HDR off):** with Windows' automatic color management
   enabled, the desktop composites to scRGB FP16 even though the display stays in SDR mode. Such a
   desktop carries SDR content (reference white = 1.0) and is recorded by encoding it with the sRGB
   transfer function — it is **not** tone-mapped, and it records in every HDR-handling mode, including
-  `Off`. Only a display that actively reports an HDR colour space is treated as HDR. Recorded output
+  `Off`. Only a display that actively reports an HDR color space is treated as HDR. Recorded output
   therefore matches the live preview and the desktop.
 - **HDR scope for 1.0:** HDR handling (both tone-map-to-SDR and native HDR10) applies to **monitor
   (duplication) capture** and to **window/game capture** (Windows Graphics Capture). When the window's
@@ -440,10 +472,10 @@ its picture-in-picture to match the file, and a notification says so. The previe
 overlay the recording will not contain. Webcam opacity (0–100%, default 100%) is applied identically in the
 Record-page preview and the recorded output; it is a live control on the Settings → Webcam card. The
 mirror is a live, UI-editable control and its preview matches the file.
-The chroma key composites the same way: the live preview uses the identical key colour, tolerance, softness
+The chroma key composites the same way: the live preview uses the identical key color, tolerance, softness
 and spill reduction the encoder uses, so a green screen that looks clean while setting up is the one that
-lands in the file. Those chroma parameters — an on/off toggle, a key colour (Green, Blue, Magenta or a
-custom picked colour), and tolerance, softness and spill-reduction sliders — are editable on the Settings →
+lands in the file. Those chroma parameters — an on/off toggle, a key color (Green, Blue, Magenta or a
+custom picked color), and tolerance, softness and spill-reduction sliders — are editable on the Settings →
 Webcam card in a group that stays collapsed until chroma keying is turned on. Opacity and every chroma
 parameter are pushed live while recording (they never require a restart), the same class as the mirror; only
 the camera device and resolution are fixed for the duration of a recording. Its on/off is a single control
@@ -547,7 +579,7 @@ falls back to its raw number rather than borrowing another display's.
   monitor ends the recording cleanly with an explicit size-change error (the footage up to that point
   stays valid).
 
-*(Cells requiring a real legacy-FSE title are verified live before being promised as behaviour; the
+*(Cells requiring a real legacy-FSE title are verified live before being promised as behavior; the
 matrix above reflects the shipped detection + monitor path.)*
 
 ---
@@ -607,11 +639,12 @@ the Edit/Output/Save "Review" step.)
 boundaries stay keyframe-safe; counters reset per segment. Split is supported for MKV, WebM, and MP4.
 For MP4, each completed segment is remuxed to progressive MP4 in the background while recording
 continues; "Saved" is reported only once all segment remuxes finish. Manual split is independent of
-automatic split. Under Expert mode the split controls are laid out inline within the Output card
-(time and size sub-sections), not tucked behind a popover. Each sub-section leads with an on/off
-**toggle**; the interval selector (Split recording) and the segment-size field (Split by size) appear
-only while their toggle is on. Toggling off is exactly the "off" state — it changes no persisted value
-beyond the split mode itself, so presets and exported TOML round-trip identically.
+automatic split. The split controls are Default tier — always visible, laid out inline within the
+Output card (time and size sub-sections), not tucked behind a popover or an Expert-mode gate. Each
+sub-section leads with an on/off **toggle**; the interval selector (**Split by time**) and the
+segment-size field (**Split by size**) appear only while their toggle is on. Toggling off is exactly
+the "off" state — it changes no persisted value beyond the split mode itself, so presets and exported
+TOML round-trip identically.
 
 **Low-disk guard.** A configurable soft **warning threshold** (default around 2 GB free) shows a
 Diagnostics notice but still allows recording; a lower **hard-stop threshold** (default around
@@ -671,9 +704,9 @@ or duration readout above the strip:
   anywhere on the track — jumps the preview position there; playback pauses for the duration of
   the drag and resumes on release **only if it was playing before** (paused stays paused).
 - **Drag feedback.** While a handle or the playhead is being dragged, it scales slightly and a
-  centred time label appears above it: `MM:SS.mmm`, with an hour field (`HH:MM:SS.mmm`) only when
+  centered time label appears above it: `MM:SS.mmm`, with an hour field (`HH:MM:SS.mmm`) only when
   the recording is one hour or longer.
-- **Markers.** Markers placed during recording render as thin caution-coloured verticals across
+- **Markers.** Markers placed during recording render as thin caution-colored verticals across
   the timeline, positioned proportionally (a recording with unknown duration shows an inert
   timeline rather than guessing). Marker editing is not part of the edit surface.
 
@@ -758,16 +791,16 @@ behind an expert toggle, and always shows hard blockers.
 and never blocks recording; a **Blocker** prevents recording from starting.
 
 **The four-tier honesty model.** Every diagnostic **declares its own tier** as part of the diagnosis
-— the tier is not re-derived downstream from an id list. The tier sets both the colour and the
+— the tier is not re-derived downstream from an id list. The tier sets both the color and the
 default visibility, and the honesty rail is a hard rule: **hiding is only ever for noise (Tier 3 +
 4); a real problem (Tier 1 + 2) is always visible in both Simple and Expert.** No check may show a
-Tier-3 optimisation in a warn colour.
+Tier-3 optimization in a warn color.
 
 - **Tier 1 — Blocker** (coral). Always shown; gates recording start.
 - **Tier 2 — measured problem** (amber). A live or environment problem that was actually *measured*
   (judder, disk write-stall, low disk, audio device loss, unresolved saved display). Always shown as
   its own card. Only ever fires when the condition is real — never predicted.
-- **Tier 3 — optimisation tip** (mint, "better, but it runs" — codec, container, colour range, FAT32,
+- **Tier 3 — optimization tip** (mint, "better, but it runs" — codec, container, color range, FAT32,
   Opus-in-MP4). Bundled into one quiet tip chip; never turns the verdict amber.
 - **Tier 4 — fact** (neutral). Capability/environment facts (elevation baseline, live audio format).
   Run through the same model, shown only in the Expert Environment panel, never counted in the
@@ -779,7 +812,7 @@ Tier-3 optimisation in a warn colour.
 
 The Diagnostics page has a **Simple (default) view** and an **Expert toggle** (a single global state
 shared with Settings that reveals depth, not a second mode). It is a top-anchored readiness dashboard
-that fills the page height rather than a centred, compact statement: a header band (verdict icon +
+that fills the page height rather than a centered, compact statement: a header band (verdict icon +
 headline + subline, the Run-check control, and the last-check timestamp), then a responsive tile grid
 — **Readiness · Encoder · Disk · Display · Audio · Capture target**, plus a **Last session** tile once
 a completed recording exists — that reflows from four columns down to two as the window narrows. Any
@@ -850,17 +883,39 @@ degrades gracefully.
 
 ## 12. Settings model (Default / Expert)
 
-Settings uses a **Default / Expert split**: common controls are shown up front; expert controls (rate
-control, bitrate, frame-timing, NVENC preset, frame pacing, audio DSP, color range, HDR handling,
-keyframe interval, chroma subsampling) are hidden behind an **Expert** toggle. The Expert toggle is
-a single global state shared with the Diagnostics page. Within Expert mode, a second, narrower gate
-applies to three rows whose relevance depends on the active codec/GPU/display rather than on Expert
-mode alone: **HDR handling** (shown only once an HDR-active display is detected — Section 6), **Bit
-depth** (shown only for a codec that carries 10-bit — HEVC/AV1) and **Chroma subsampling** (shown
-only when the selected codec and the active GPU can carry 4:4:4 at all). A row that fails its
-relevance gate is not shown rather than shown-and-disabled, so the expert view lists only what
-currently applies; the Chroma row is the one exception that stays visible-but-disabled for a 10-bit
-conflict specifically, because that conflict is fixable in place (switch Bit depth back to 8-bit).
+Settings uses a **Default / Expert split** drawn around an explicit gating criterion rather than by
+how a control looks. A row is Expert-only when at least one holds: misconfiguring it can produce an
+incompatible or broken file (**bit depth, color range, chroma subsampling, rate control**); it is
+meaningless without format expertise (**NVENC encoder preset, keyframe interval, Opus frame
+duration/complexity**); or it protects pipeline integrity and disabling it can ruin a long recording
+(**audio clock slaving**). Everything else is Default-visible even when it looks technical — mic
+gain, mic channel mode, audio bitrate, channel count, audio bit depth and FLAC compression, the
+brickwall limiter, microphone post-processing, and automatic split all live in Default. The Expert
+toggle is a single global state shared with the Diagnostics page.
+
+Expert mode adds, in place within their existing section: **Bit depth**, **Color range**, **NVENC
+encoder preset**, **Keyframe interval**, and **Chroma subsampling** (Container & codecs); the
+**Rate control** selector (CQ/VBR/CBR) with its **CQ** or **bitrate** spinbox, the free-entry **frame
+rate** field (1–240 fps), and **Frame pacing** (Quality & timing); **Opus frame duration**, **Opus
+complexity**, **Sample rate**, and **Audio clock slaving** (Audio).
+
+**HDR handling** is Default, not Expert: HDR-capable displays are mainstream, the row is already
+display-conditional (Section 6), and its default (Tone-map to SDR) is the safe, universally
+compatible choice, so gating it further behind Expert added no safety.
+
+Within Expert mode, a narrower relevance gate still applies to two rows whose visibility depends on
+the active codec/GPU rather than on Expert mode alone: **Bit depth** (shown only for a codec that
+carries 10-bit — HEVC/AV1) and **Chroma subsampling** (shown only when the selected codec and the
+active GPU can carry 4:4:4 at all). A row that fails its relevance gate is not shown rather than
+shown-and-disabled, so the expert view lists only what currently applies; the Chroma row is the one
+exception that stays visible-but-disabled for a 10-bit conflict specifically, because that conflict
+is fixable in place (switch Bit depth back to 8-bit).
+
+**No section is Expert-gated.** Every embedded Settings section, including **Developer** (a logging
+level, an honest disabled "planned" NVTX/profiling-markers row, and crash-report consent), is visible
+in both Default and Expert; Expert only reveals additional rows in place inside a section, it never
+hides or reveals a whole section.
+
 Settings offers inline info hints (hover
 popovers on info-i icons and the countdown chevron) and search. Info-i placement is **selective**:
 only rows with a genuine A/B tradeoff carry the icon (plain boolean rows do not), and per-option
@@ -1039,8 +1094,9 @@ release binaries will be signed once the certificate is issued.
 ## Resolved-decision notes
 
 - **Default audio state.** The canonical default is **context-aware**, per Section 3: the `APP` row
-  exists only while a specific application window is the capture target, and defaults enabled
-  there; for screen capture (no `APP` row) the shipped default is `SYS` enabled and `MIC` present
-  but off. Each enabled source is a separate resulting track (per `CLAUDE.md`). An older internal
-  preset note described a System-only default with no `MIC` row at all; Section 3's context-aware
-  default is authoritative.
+  is always present in the Settings Audio card, is a persisted setting, and defaults enabled — but
+  it only actually contributes audio while a specific application window is the capture target; for
+  a screen or region capture it recedes and no `APP` source enters the recording. For screen capture
+  the shipped default is `SYS` enabled and `MIC` present but off. Each enabled source is a separate
+  resulting track (per `CLAUDE.md`). An older internal preset note described a System-only default
+  with no `MIC` row at all; Section 3's context-aware default is authoritative.

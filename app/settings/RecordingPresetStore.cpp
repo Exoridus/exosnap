@@ -159,29 +159,6 @@ std::optional<capability::AudioCodec> AudioCodecFromString(QStringView s) {
     return std::nullopt;
 }
 
-QString NvencQualityPresetToString(recorder_core::NvencQualityPreset v) {
-    switch (v) {
-    case recorder_core::NvencQualityPreset::High:
-        return QStringLiteral("high");
-    case recorder_core::NvencQualityPreset::Balanced:
-        return QStringLiteral("balanced");
-    case recorder_core::NvencQualityPreset::Small:
-        return QStringLiteral("small");
-    }
-    return QStringLiteral("balanced");
-}
-
-std::optional<recorder_core::NvencQualityPreset> NvencQualityPresetFromString(QStringView s) {
-    const QString n = s.trimmed().toString().toLower();
-    if (n == QStringLiteral("high"))
-        return recorder_core::NvencQualityPreset::High;
-    if (n == QStringLiteral("balanced"))
-        return recorder_core::NvencQualityPreset::Balanced;
-    if (n == QStringLiteral("small"))
-        return recorder_core::NvencQualityPreset::Small;
-    return std::nullopt;
-}
-
 QString NvencPresetToString(recorder_core::NvencPreset v) {
     switch (v) {
     case recorder_core::NvencPreset::P1:

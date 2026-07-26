@@ -1104,9 +1104,10 @@ QLabel[labelRole="cardTitle"] {
     color: ${text0};
 }
 
-/* v10: per-card glyph chip to the left of the card title. The filled/bordered
-   box was dropped (v0.9 polish): it read as an active button. The chip is now a
-   plain accent-tinted glyph; the fixed 28x28 size keeps a stable title gutter. */
+/* Task 10: per-card glyph to the left of the card title. The filled/bordered
+   box was dropped (v0.9 polish): it read as an active button. Task 10 shrank the
+   fixed size from 28x28 to 18x18 (title ink, no chip/border/tint) so the icon's
+   left edge sits flush with the card body instead of reserving a chip gutter. */
 QLabel#cardGlyphChip {
     background: transparent;
     border: none;

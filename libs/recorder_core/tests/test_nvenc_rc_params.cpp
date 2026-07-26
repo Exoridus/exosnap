@@ -37,9 +37,9 @@ TEST(ComputeNvencRcParams, ConstantQuality_Balanced_QPValues) {
     EXPECT_EQ(p.qpInterB, 26u);
 }
 
-TEST(ComputeNvencRcParams, ConstantQuality_Small_QPValues) {
+TEST(ComputeNvencRcParams, ConstantQuality_Efficient_QPValues) {
     const RcParams p =
-        ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(NvencQualityPreset::Small), 20000);
+        ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(NvencQualityPreset::Efficient), 20000);
     EXPECT_EQ(p.rateControlMode, static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP));
     EXPECT_EQ(p.qpIntra, 30u);
     EXPECT_EQ(p.qpInterP, 32u);
@@ -140,32 +140,38 @@ TEST(ComputeNvencRcParams, ConstantQuality_ClampsOutOfRangeAndInterQp) {
 
 // --- Preset <-> CQ mapping (single source of truth) -------------------------
 
-TEST(QualityPresetMapping, CanonicalCqMatchesTheHistoricQpValues) {
-    EXPECT_EQ(CanonicalCq(NvencQualityPreset::High), 19u);
-    EXPECT_EQ(CanonicalCq(NvencQualityPreset::Balanced), 24u);
-    EXPECT_EQ(CanonicalCq(NvencQualityPreset::Small), 30u);
+TEST(QualityPresetMapping, CanonicalCqMatchesTheFiveTierLadder) {
+    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Ultra), 16u);
+    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High), 19u);
+    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced), 24u);
+    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient), 30u);
+    EXPECT_EQ(recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Draft), 35u);
 }
 
 TEST(QualityPresetMapping, NearestPresetRoundTripsAndSnapsBetweenValues) {
-    for (auto p : {NvencQualityPreset::High, NvencQualityPreset::Balanced, NvencQualityPreset::Small}) {
-        EXPECT_EQ(NearestQualityPreset(CanonicalCq(p)), p);
+    using recorder_core::NearestQualityPreset;
+    using recorder_core::NvencQualityPreset;
+    for (auto p : {NvencQualityPreset::Ultra, NvencQualityPreset::High, NvencQualityPreset::Balanced,
+                   NvencQualityPreset::Efficient, NvencQualityPreset::Draft}) {
+        EXPECT_EQ(NearestQualityPreset(recorder_core::CanonicalCq(p)), p);
     }
-    EXPECT_EQ(NearestQualityPreset(1), NvencQualityPreset::High);
-    EXPECT_EQ(NearestQualityPreset(20), NvencQualityPreset::High);    // |20-19|=1
-    EXPECT_EQ(NearestQualityPreset(23), NvencQualityPreset::Balanced) // |23-24|=1
-        << "23 is nearer Balanced than High";
-    EXPECT_EQ(NearestQualityPreset(28), NvencQualityPreset::Small); // |28-30|=2 < |28-24|=4
-    EXPECT_EQ(NearestQualityPreset(51), NvencQualityPreset::Small);
-    // Exact midpoints resolve toward the higher quality (lower CQ).
-    EXPECT_EQ(NearestQualityPreset(27), NvencQualityPreset::Balanced);
+    EXPECT_EQ(NearestQualityPreset(1u), NvencQualityPreset::Ultra);
+    EXPECT_EQ(NearestQualityPreset(17u), NvencQualityPreset::Ultra);
+    EXPECT_EQ(NearestQualityPreset(20u), NvencQualityPreset::High);
+    EXPECT_EQ(NearestQualityPreset(23u), NvencQualityPreset::Balanced);
+    EXPECT_EQ(NearestQualityPreset(28u), NvencQualityPreset::Efficient);
+    EXPECT_EQ(NearestQualityPreset(33u), NvencQualityPreset::Draft);
+    EXPECT_EQ(NearestQualityPreset(51u), NvencQualityPreset::Draft);
+    // Midpoints resolve toward the lower CQ (higher quality):
+    EXPECT_EQ(NearestQualityPreset(27u), NvencQualityPreset::Balanced);
+    EXPECT_EQ(NearestQualityPreset(32u), NvencQualityPreset::Efficient);
 }
 
-TEST(QualityPresetMapping, IsCanonicalCqOnlyForTheThreeNamedValues) {
-    EXPECT_TRUE(IsCanonicalCq(19));
-    EXPECT_TRUE(IsCanonicalCq(24));
-    EXPECT_TRUE(IsCanonicalCq(30));
-    EXPECT_FALSE(IsCanonicalCq(20));
-    EXPECT_FALSE(IsCanonicalCq(23));
+TEST(QualityPresetMapping, IsCanonicalCqOnlyForTheFiveNamedValues) {
+    for (uint32_t cq = recorder_core::kNvencCqMin; cq <= recorder_core::kNvencCqMax; ++cq) {
+        const bool expected = (cq == 16u || cq == 19u || cq == 24u || cq == 30u || cq == 35u);
+        EXPECT_EQ(recorder_core::IsCanonicalCq(cq), expected) << "cq=" << cq;
+    }
 }
 
 } // namespace recorder_core

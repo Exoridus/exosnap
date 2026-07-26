@@ -186,7 +186,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset efficiency = MakeDefaultPreset();
     efficiency.id = std::string(kEfficiencyPresetId);
     efficiency.name = "Efficiency";
-    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
     efficiency.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
     result.push_back(std::move(efficiency));
 
@@ -256,11 +256,12 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.video.frame_rate_den = 1;
     }
     {
-        constexpr std::array<uint32_t, 5> kValidFps = {24, 25, 30, 50, 60};
-        const bool valid_rate =
-            config.video.frame_rate_den == 1 &&
-            std::find(kValidFps.begin(), kValidFps.end(), config.video.frame_rate_num) != kValidFps.end();
-        if (!valid_rate) {
+        // Free frame rate (Expert entry): integer fps 1–240, den always 1. The
+        // Default combo offers 15/30/60 and displays the nearest for any other
+        // stored value; validity is intentionally wider than the list.
+        const bool fps_valid =
+            config.video.frame_rate_den == 1 && config.video.frame_rate_num >= 1 && config.video.frame_rate_num <= 240;
+        if (!fps_valid) {
             config.video.frame_rate_num = 60;
             config.video.frame_rate_den = 1;
         }
@@ -291,14 +292,19 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.video.bitrate_kbps = kMaxBitrateKbps;
     }
 
-    // Audio: App and Sys are both scoped to one window's process. Paired with a display
-    // or region target there is no process to scope them to. The stored combination used
-    // to survive the load — the Record dock showed a plausible SYS row, but the plan
-    // demanded a process id nobody could supply and the next recording refused to start.
-    if (config.audio.target_kind != capability::CaptureTargetKind::Window) {
-        config.audio.source_rows =
-            recorder_core::NormalizeSourceRowsForTarget(std::move(config.audio.source_rows), /*window_target=*/false);
-        config.audio.selected_window_pid = std::nullopt;
+    // Audio: the App row's enabled/merge configuration is a persisted setting like any
+    // other and survives every capture target, including Display/Region. Only its ACTIVE
+    // state (receded vs. live) follows the target, and that derivation belongs to
+    // PresentationStateBuilder — sanitize no longer strips or rewrites source rows here.
+    // The actual recording-time audio plan still normalizes away the App row for a
+    // non-Window target (recorder_core::NormalizeSourceRowsForTarget, via BuildAudioPlan),
+    // since a display/region capture genuinely has no process to scope it to.
+
+    // Audio: the first source row has no row above it, so a stored "merge with above"
+    // there is meaningless state. Normalize it away rather than leave the resolver to
+    // guess (pre-1.0: no compatibility duty for already-stored presets).
+    if (!config.audio.source_rows.empty()) {
+        config.audio.source_rows.front().merge_with_above = false;
     }
 
     // Audio: ensure mic_gain_linear is finite and strictly positive.

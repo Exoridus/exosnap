@@ -15,13 +15,13 @@ Read:
 ## Product decisions (authoritative source: `docs/product-spec.md`)
 
 - Dark mode by default
-- Audio source row order: `APP`, `SYS`, `MIC`. The `APP` row exists only while a specific application window is the capture target; for screen capture the shipped default is `SYS` on, `MIC` off
+- Audio source row order: `APP`, `SYS`, `MIC`. The `APP` row is always present and configurable; it takes effect while a specific application window is the capture target. For screen capture the shipped default is `SYS` on, `MIC` off
 - Each enabled source becomes its own resulting track unless merged with the row above
 - Exact label: `Merge with above`
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
 - Top-level navigation: **Record, Device, Settings, Diagnostics, Logs, About** (6 items; Hotkeys moved into Settings as an embedded card — PS-PHASE-C; Device tab added in the final-redesign port)
-  - **Settings** hosts Video, Audio, Output, Webcam, Hotkeys, and Advanced (expert-only) as embedded sections
+  - **Settings** hosts recording configuration across embedded sections (Container & codecs, Quality & timing, Audio, Output, Webcam, Notifications & overlays, Hotkeys, Updates, Appearance, Developer); no section is Expert-only — a shared Expert toggle reveals additional rows in place per section instead
   - **Device** hosts adapter selection + the per-GPU capability matrix (moved out of Diagnostics)
   - **Edit/Output/Save** is an overlay over the Record page (ADR 0022), not a nav item
 

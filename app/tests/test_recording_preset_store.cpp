@@ -757,12 +757,12 @@ TEST(RecordingPresetStore, FrameRatePersists_50fps) {
     CleanupFile(path);
 }
 
-TEST(RecordingPresetStore, FrameRate120Unavailable_ResetsTo60fps) {
+TEST(RecordingPresetStore, FrameRate120_PersistsThroughStore) {
     const QString path = UniqueTempPath();
 
     RecordingPreset p;
     p.id = GeneratePresetId();
-    p.name = "Unavailable 120fps Preset";
+    p.name = "120fps Preset";
     p.config = MakeDefaultPreset().config;
     p.config.video.frame_rate_num = 120;
     p.config.video.frame_rate_den = 1;
@@ -777,7 +777,7 @@ TEST(RecordingPresetStore, FrameRate120Unavailable_ResetsTo60fps) {
         const PersistedPresetState state = store.Load();
         EXPECT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_num, 60u);
+        EXPECT_EQ(state.user_presets[0].config.video.frame_rate_num, 120u);
         EXPECT_EQ(state.user_presets[0].config.video.frame_rate_den, 1u);
     }
 

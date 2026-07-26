@@ -23,7 +23,7 @@ namespace {
 RecordingPresetConfig MakeDistinctConfig() {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.countdown_seconds = 3;
-    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
     return cfg;
 }
 
@@ -232,7 +232,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingAudio_IsDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    live.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 
@@ -439,8 +439,9 @@ TEST(RecordingPresetRegistry, AddPreset_StripsEnvironmentFields) {
 // environment) and SanitizePresetConfig, and the dirty check compares that
 // against the newly-selected preset via IsSelectedDirty. It runs the full
 // from→to matrix so every built-in is verified both as the switch source and
-// the switch target (Efficiency's cq 30 = CanonicalCq(Small) is the case that
-// historically snapped to a canonical value and produced a spurious dirty).
+// the switch target (Efficiency's cq 30 = CanonicalCq(Efficient) is the case
+// that historically snapped to a canonical value and produced a spurious
+// dirty).
 TEST(RecordingPresetRegistry, SelectingBuiltIn_NeverReportsDirty_AllTransitions) {
     const std::array<std::string_view, 4> ids = {kDefaultPresetId, kQualityPresetId, kEfficiencyPresetId,
                                                  kCompatibilityPresetId};
