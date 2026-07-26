@@ -11,6 +11,7 @@
 #include <vector>
 
 class QComboBox;
+class QEvent;
 class QPushButton;
 class QSlider;
 class QLabel;
@@ -99,6 +100,12 @@ class WebcamSetupPanel : public QWidget {
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    // Catches camera_preview_'s own Resize/Move so rescan_btn_ stays pinned to
+    // its bottom-right corner even if the preview is ever resized/moved
+    // independently of the panel (e.g. a future heightForWidth or splitter
+    // layout) — the panel's own resizeEvent alone only works today because the
+    // preview happens to scale 1:1 with the panel.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
     void refreshDevices();
     void refreshFormats();

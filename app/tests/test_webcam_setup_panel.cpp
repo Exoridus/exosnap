@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QLabel>
 #include <QPushButton>
+#include <QRect>
 #include <QSlider>
 #include <QWidget>
 
@@ -372,6 +373,48 @@ TEST_F(WebcamSetupPanelTest, RescanButton_LivesOnThePreview) {
     ASSERT_NE(preview, nullptr);
     EXPECT_EQ(rescan->parentWidget(), preview)
         << "Rescan button must be re-parented onto camera_preview_, not the device row";
+}
+
+// Real positioning math (not just parentage): after layout at a representative
+// width, the button's geometry must sit fully inside the preview, pinned to
+// its bottom-right corner with the documented 6px margin.
+TEST_F(WebcamSetupPanelTest, RescanButton_PinnedBottomRightOfPreview) {
+    ui::widgets::WebcamSetupPanel panel;
+    panel.resize(640, panel.sizeHint().height());
+    panel.show();
+    QCoreApplication::processEvents();
+
+    auto* rescan = panel.findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn"));
+    ASSERT_NE(rescan, nullptr);
+    auto* preview = panel.findChild<ui::widgets::CameraPreview*>();
+    ASSERT_NE(preview, nullptr);
+
+    constexpr int kMargin = 6;
+    const QRect preview_rect = preview->rect();
+    const QRect btn_geom = rescan->geometry(); // in camera_preview_'s local coords
+
+    EXPECT_TRUE(preview_rect.contains(btn_geom))
+        << "Rescan button must lie entirely within the preview. preview=" << preview_rect.width() << "x"
+        << preview_rect.height() << " btn=" << btn_geom.x() << "," << btn_geom.y() << " " << btn_geom.width() << "x"
+        << btn_geom.height();
+    EXPECT_EQ(preview_rect.right() - btn_geom.right(), kMargin)
+        << "Rescan button's right edge must sit kMargin px from the preview's right edge";
+    EXPECT_EQ(preview_rect.bottom() - btn_geom.bottom(), kMargin)
+        << "Rescan button's bottom edge must sit kMargin px from the preview's bottom edge";
+
+    // Resize again after the initial show: this exercises the preview's own
+    // Resize event (caught via WebcamSetupPanel's event filter on
+    // camera_preview_), not just the panel's resizeEvent from the first show.
+    panel.resize(500, panel.sizeHint().height() + 40);
+    QCoreApplication::processEvents();
+    const QRect preview_rect2 = preview->rect();
+    const QRect btn_geom2 = rescan->geometry();
+    EXPECT_TRUE(preview_rect2.contains(btn_geom2))
+        << "Rescan button must stay pinned inside the preview after a second resize";
+    EXPECT_EQ(preview_rect2.right() - btn_geom2.right(), kMargin);
+    EXPECT_EQ(preview_rect2.bottom() - btn_geom2.bottom(), kMargin);
+
+    panel.hide();
 }
 
 TEST_F(WebcamSetupPanelTest, KeyColorLabel_UsesAmericanSpelling) {

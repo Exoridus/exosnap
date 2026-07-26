@@ -10,6 +10,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QEvent>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -114,7 +115,9 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     // #09/v0.9: icon-only rescan button, re-parented onto the preview itself
     // (bottom-right corner) instead of sitting beside the device combo. It is a
     // floating, non-layout child of camera_preview_ — positionRescanButton()
-    // places it in resizeEvent().
+    // places it in resizeEvent() AND whenever camera_preview_ itself resizes
+    // or moves (caught via the event filter below), so the button stays
+    // pinned even if the preview is ever laid out independently of the panel.
     rescan_btn_ = new QPushButton(camera_preview_);
     rescan_btn_->setObjectName(QStringLiteral("webcamPanelRescanBtn"));
     rescan_btn_->setProperty("role", "ghost");
@@ -131,6 +134,9 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     }
     positionRescanButton();
     rescan_btn_->raise();
+    // See eventFilter(): keeps the button pinned if the preview resizes/moves
+    // on its own, independent of the panel's own resizeEvent.
+    camera_preview_->installEventFilter(this);
 
     // Resolution / FPS
     auto* res_label = new QLabel(QStringLiteral("Resolution / FPS"), right_col);
@@ -319,6 +325,19 @@ void WebcamSetupPanel::hideEvent(QHideEvent* event) {
 void WebcamSetupPanel::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     positionRescanButton();
+}
+
+bool WebcamSetupPanel::eventFilter(QObject* watched, QEvent* event) {
+    // rescan_btn_ is a floating, non-layout child of camera_preview_. Our own
+    // resizeEvent() above repositions it whenever the panel resizes, which
+    // works today only because camera_preview_ scales 1:1 with the panel via
+    // the root layout. Catching the preview's own Resize/Move here keeps the
+    // button pinned even if that stops being true (e.g. a future
+    // heightForWidth constraint or a splitter that resizes the preview
+    // independently).
+    if (watched == camera_preview_ && (event->type() == QEvent::Resize || event->type() == QEvent::Move))
+        positionRescanButton();
+    return QWidget::eventFilter(watched, event);
 }
 
 void WebcamSetupPanel::positionRescanButton() {
