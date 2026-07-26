@@ -1911,12 +1911,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         updates_auto_toggle_ = new ui::widgets::ExoToggle(updates_panel_);
         updates_auto_toggle_->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
         updates_auto_toggle_->setOn(true);
-        updates_layout->addWidget(makeSettingsRow(
-            updates_panel_, QStringLiteral("Check for updates automatically"),
-            new ui::widgets::InfoHintIcon(
-                QStringLiteral("Check in the background and notify you when a new version is available."),
-                updates_panel_),
-            QString(), updates_auto_toggle_, /*first=*/true));
+        updates_layout->addWidget(
+            makeSettingsRow(updates_panel_, QStringLiteral("Check for updates automatically"),
+                            new ui::widgets::InfoHintIcon(
+                                QStringLiteral("Check in the background and notify you when a new version is "
+                                               "available. Downloads are signature-verified and installed by the "
+                                               "separate Updater — nothing installs without you clicking Update."),
+                                updates_panel_),
+                            QString(), updates_auto_toggle_, /*first=*/true));
         connect(updates_auto_toggle_, &ui::widgets::ExoToggle::toggled, this, &ConfigPage::autoUpdateCheckToggled);
 
         // Update channel (UPDATE-WIRE-R1). "Preview" surfaces GitHub prereleases
