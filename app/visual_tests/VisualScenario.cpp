@@ -841,10 +841,10 @@ const QVector<VisualScenario> kScenarios = {
      .content_width = 2560,
      .content_height = 1440},
 
-    {.id = QStringLiteral("settings-format-24-cfr"),
-     .title = QStringLiteral("Settings / Format / 24 CFR"),
+    {.id = QStringLiteral("settings-format-15-cfr"),
+     .title = QStringLiteral("Settings / Format / 15 CFR"),
      .page = VisualPage::Settings,
-     .frame_rate_num = 24,
+     .frame_rate_num = 15,
      .frame_rate_den = 1,
      .cfr = true},
     {.id = QStringLiteral("settings-format-30-cfr"),
@@ -866,6 +866,16 @@ const QVector<VisualScenario> kScenarios = {
      .frame_rate_den = 1,
      .cfr = true,
      .reconciliation_warning = QStringLiteral("requested 120 fps unavailable; effective 60 fps")},
+    // Expert-only free-entry frame rate (ConfigPage's frame_rate_spin_, 1-240 fps):
+    // seeds an off-ladder value the combo can't represent, to prove the spin
+    // control (not the combo) renders in Expert mode.
+    {.id = QStringLiteral("settings-format-expert-free-fps"),
+     .title = QStringLiteral("Settings / Format / Expert free-entry fps"),
+     .page = VisualPage::Settings,
+     .frame_rate_num = 48,
+     .frame_rate_den = 1,
+     .cfr = true,
+     .settings_expert_mode = true},
     {.id = QStringLiteral("settings-format-vfr"),
      .title = QStringLiteral("Settings / Format / VFR"),
      .page = VisualPage::Settings,
@@ -898,14 +908,14 @@ const QVector<VisualScenario> kScenarios = {
      .record_state = VisualRecordState::Recording,
      .controls_locked = true},
 
-    // --- HDR handling control (expert-only Video/Quality section) ---
+    // --- HDR handling control (Default-tier Video/Quality section; the HDR row
+    // is relevance-gated on a probed HDR-active display, not on Expert mode) ---
     {.id = QStringLiteral("settings-hdr-tonemap-default"),
      .title = QStringLiteral("Settings / HDR / Tone-map to SDR (default)"),
      .page = VisualPage::Settings,
      .container = capability::Container::Matroska,
      .video_codec = capability::VideoCodec::Av1Nvenc,
      .audio_codec = capability::AudioCodec::Opus,
-     .settings_expert_mode = true,
      .hdr_mode = recorder_core::HdrMode::TonemapSdr},
     {.id = QStringLiteral("settings-hdr-native-hdr10"),
      .title = QStringLiteral("Settings / HDR / Record native HDR10"),
@@ -913,7 +923,6 @@ const QVector<VisualScenario> kScenarios = {
      .container = capability::Container::Matroska,
      .video_codec = capability::VideoCodec::Av1Nvenc,
      .audio_codec = capability::AudioCodec::Opus,
-     .settings_expert_mode = true,
      .hdr_mode = recorder_core::HdrMode::Hdr10},
     {.id = QStringLiteral("settings-hdr-h264-disabled"),
      .title = QStringLiteral("Settings / HDR / Disabled with H.264"),
@@ -921,7 +930,6 @@ const QVector<VisualScenario> kScenarios = {
      .container = capability::Container::Mp4,
      .video_codec = capability::VideoCodec::H264Nvenc,
      .audio_codec = capability::AudioCodec::AacMf,
-     .settings_expert_mode = true,
      .hdr_mode = recorder_core::HdrMode::TonemapSdr},
 
     {.id = QStringLiteral("record-output-native"),
@@ -1326,21 +1334,23 @@ const QVector<VisualScenario> kScenarios = {
      .page = VisualPage::Settings,
      .settings_target = VisualSettingsTarget::Display,
      .settings_expert_mode = true},
-    // Settings/Diagnostics polish, Slice 3 (cogwheels -> inline): the Audio card's
-    // expert section with the three former SettingsPopoverRow gears now inline —
-    // Audio clock slaving (plain toggle), Brickwall limiter (toggle + inline
-    // right-aligned ceiling spin), and the mic post-processing disclosure header.
+    // Audio card re-gating (Task 6): Brickwall limiter and the mic post-processing
+    // group moved into the always-visible Default section; only Opus frame
+    // duration/complexity, sample rate, and Audio clock slaving remain gated on
+    // Expert mode. This scenario captures that genuinely expert-only rump.
     {.id = QStringLiteral("settings-audio-expert-inline"),
      .title = QStringLiteral("Settings / Audio expert / Cogwheels inline"),
      .page = VisualPage::Settings,
      .settings_expert_mode = true,
      .scroll_target = QStringLiteral("settings/audio")},
-    // Same card with the mic post-processing chevron expanded, revealing the four
-    // DSP stage rows (HPF / Gate / AGC / RNNoise) inline within the card.
+    // Mic post-processing chevron expanded, revealing the four DSP stage rows
+    // (HPF / Gate / AGC / RNNoise) inline within the card. The group lives in the
+    // Default section now (Task 6), so this no longer needs Expert mode — its id
+    // predates the move but still accurately names what it renders (mic-post-open),
+    // not an expert-tier assertion.
     {.id = QStringLiteral("settings-audio-expert-mic-post-open"),
      .title = QStringLiteral("Settings / Audio expert / Mic post-processing open"),
      .page = VisualPage::Settings,
-     .settings_expert_mode = true,
      .settings_mic_post_expanded = true,
      .scroll_target = QStringLiteral("settings/audio")},
     {.id = QStringLiteral("settings-advanced-open"),
@@ -2035,7 +2045,9 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
         !valid_size_or_zero(scenario.content_width, scenario.content_height)) {
         return fail(QStringLiteral("Invalid visual-test output dimensions"));
     }
-    if (scenario.frame_rate_num == 0 || scenario.frame_rate_den == 0) {
+    // Mirrors ConfigPage's expert-only free-entry frame_rate_spin_ range (1-240 fps,
+    // ConfigPage.cpp:1147) — the widest frame rate the app can ever seed.
+    if (scenario.frame_rate_den == 0 || scenario.frame_rate_num < 1 || scenario.frame_rate_num > 240) {
         return fail(QStringLiteral("Invalid visual-test frame rate"));
     }
     if (scenario.content_width > 0 && scenario.content_height > 0 && scenario.effective_width > 0 &&

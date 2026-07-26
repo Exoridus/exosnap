@@ -97,10 +97,11 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("settings-output-720p"),
         QStringLiteral("settings-output-custom-resolution"),
         QStringLiteral("settings-output-custom-resolution-invalid"),
-        QStringLiteral("settings-format-24-cfr"),
+        QStringLiteral("settings-format-15-cfr"),
         QStringLiteral("settings-format-30-cfr"),
         QStringLiteral("settings-format-60-cfr"),
         QStringLiteral("settings-format-120-unavailable"),
+        QStringLiteral("settings-format-expert-free-fps"),
         QStringLiteral("settings-format-vfr"),
         QStringLiteral("settings-format-container-mkv"),
         QStringLiteral("settings-format-container-mp4"),
@@ -314,11 +315,19 @@ TEST(VisualScenarioTest, ScenarioParserRejectsInvalidOutputDimensions) {
 TEST(VisualScenarioTest, ScenarioParserRejectsInvalidFrameRate) {
     VisualScenario scenario;
     scenario.id = QStringLiteral("bad-frame-rate");
-    scenario.frame_rate_num = 0;
     scenario.frame_rate_den = 1;
+
+    scenario.frame_rate_num = 0;
     QString error;
     EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("frame rate")));
+
+    scenario.frame_rate_num = 241;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("frame rate")));
+
+    scenario.frame_rate_num = 47;
+    EXPECT_TRUE(ValidateVisualScenario(scenario, &error));
 }
 
 TEST(VisualScenarioTest, OutputFormatScenariosCarryManifestFields) {
