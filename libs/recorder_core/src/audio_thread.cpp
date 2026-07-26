@@ -687,6 +687,34 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             waitForCaptureWork();
     }
 
+    // --- Drain the resampler before the source (and its SwrContext) goes away ---
+    // Whenever a resample context is active — a non-default output rate/channel
+    // count, or engaged clock slaving on the default 48 kHz path — libswresample
+    // holds already-captured audio in its filter delay (~10 ms on a rate
+    // conversion, sub-ms to a few ms otherwise). Push it through the encoder as a
+    // normal buffer first: the encoder derives PTS from the accumulated frame
+    // counter, so the tail lands directly after the last real packet. Shutdown()
+    // frees the context, so this must run before it; the encoder's own EOS drain
+    // must run after, or the tail would sit behind an already-flushed encoder.
+    if (output_format_src_ != nullptr && !failed) {
+        RawAudioBuffer tail{};
+        const uint32_t tail_frames = output_format_src_->DrainResampler(tail);
+        if (tail_frames > 0 && tail.bytes != nullptr) {
+            std::vector<EncodedAudioPacket> tailPkts;
+            enc.FeedFloat32(reinterpret_cast<const float*>(tail.bytes),
+                            static_cast<size_t>(tail_frames) * static_cast<size_t>(channels), 0,
+                            encoderAccumulatedFrames, sample_rate, channels, tailPkts);
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                for (const auto& p : tailPkts) {
+                    m_state.stats.audio_packets++;
+                    m_state.stats.audio_bytes += p.bytes.size();
+                }
+            }
+            routeAudioPackets(tailPkts);
+        }
+    }
+
     source_->Shutdown();
 
     // --- Drain the encoder (flush semantics are the encoder's own: Opus pads

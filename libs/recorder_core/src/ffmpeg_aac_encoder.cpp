@@ -235,7 +235,18 @@ void FfmpegAacEncoder::FeedFloat32(const float* data, size_t total_float_samples
         av_freep(&converted);
     }
 
-    // Encode every whole frame currently buffered.
+    EncodeBufferedFrames(&accumulated_frames, out_packets);
+}
+
+// ---------------------------------------------------------------------------
+// EncodeBufferedFrames — encode every whole frame the FIFO currently holds.
+// ---------------------------------------------------------------------------
+
+void FfmpegAacEncoder::EncodeBufferedFrames(uint64_t* accumulated_frames,
+                                            std::vector<EncodedAudioPacket>& out_packets) {
+    if (m_ctx == nullptr || m_fifo == nullptr || m_frame == nullptr) {
+        return;
+    }
     while (av_audio_fifo_size(m_fifo) >= m_frame_size) {
         if (av_frame_make_writable(m_frame) < 0) {
             break;
@@ -254,17 +265,49 @@ void FfmpegAacEncoder::FeedFloat32(const float* data, size_t total_float_samples
             break;
         }
         ReceiveAvailable(m_pts_origin_ns, out_packets);
-        accumulated_frames += static_cast<uint64_t>(kFrameSizeSamples);
+        if (accumulated_frames != nullptr) {
+            *accumulated_frames += static_cast<uint64_t>(kFrameSizeSamples);
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Flush — zero-pad the trailing partial frame, then EOS-drain the encoder.
+// Flush — drain the converter into the FIFO, encode what that completes,
+// zero-pad the trailing partial frame, then EOS-drain the encoder.
 // ---------------------------------------------------------------------------
 
 void FfmpegAacEncoder::Flush(std::vector<EncodedAudioPacket>& out_packets) {
     if (m_ctx == nullptr || m_fifo == nullptr || m_frame == nullptr) {
         return;
+    }
+
+    // Drain the format converter first — swr_convert with a null input pushes
+    // out whatever it still holds. The configured conversion is same-rate
+    // interleaved->planar, which carries no filter delay, so this normally
+    // yields nothing; doing it unconditionally keeps the tail whole (and keeps
+    // the FIFO the single source of truth at EOS) if the conversion ever gains a
+    // rate change, which would buffer samples here.
+    if (m_swr != nullptr && m_channels > 0 && m_sample_rate > 0) {
+        const int64_t delay = swr_get_delay(m_swr, static_cast<int64_t>(m_sample_rate));
+        if (delay > 0) {
+            uint8_t** flushed = nullptr;
+            int linesize = 0;
+            const int capacity = static_cast<int>(delay);
+            if (av_samples_alloc_array_and_samples(&flushed, &linesize, static_cast<int>(m_channels), capacity,
+                                                   kEncoderSampleFmt, 0) >= 0) {
+                const int produced = swr_convert(m_swr, flushed, capacity, nullptr, 0);
+                if (produced > 0) {
+                    av_audio_fifo_write(m_fifo, reinterpret_cast<void**>(flushed), produced);
+                }
+                av_freep(&flushed[0]);
+                av_freep(&flushed);
+            } else {
+                LogWarn("av_samples_alloc_array_and_samples failed (flush drain)");
+            }
+        }
+        // Whole frames the drain completed go out normally; only the remainder
+        // below needs zero-padding.
+        EncodeBufferedFrames(nullptr, out_packets);
     }
 
     const int remaining = av_audio_fifo_size(m_fifo);

@@ -4,6 +4,7 @@
 #include "session_internal.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <variant>
@@ -308,6 +309,43 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_FlacCodec_EncodesSuccessfully) {
 
     EXPECT_FALSE(state.HasFailure());
     EXPECT_FALSE(GatherQueuedAudioPackets(state).empty());
+}
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_ResampledTrack_DrainsResamplerTailAtStop) {
+    // End-of-stream ordering: the resampler must be drained while the source (and
+    // its SwrContext) is still alive, before Shutdown() and before the encoder's
+    // own flush. PCM makes the result countable — every fed frame becomes exactly
+    // channels * (bit_depth / 8) output bytes with no encoder framing.
+    auto state_ptr = std::make_shared<SessionState>();
+    SessionState& state = *state_ptr;
+    state.config.audio_codec = AudioCodec::Pcm;
+    state.config.audio_sample_rate = 44100; // != the 48 kHz mock => real resample context
+    state.config.audio_channels = 2;
+    state.config.audio_bit_depth = 16;
+    state.audio_track_count = 1;
+
+    // MockAudioCaptureSource delivers 960 frames per packet at 48 kHz.
+    constexpr size_t kPackets = 5;
+    constexpr uint64_t kInputFrames = kPackets * 960ull;                     // 100 ms
+    constexpr uint64_t kExpectedFrames = kInputFrames * 44100ull / 48000ull; // exactly 4410
+
+    auto source = std::make_unique<MockAudioCaptureSource>(&state.stop_requested, kPackets);
+    auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
+
+    thread->Start();
+    ASSERT_TRUE(thread->Join(5000));
+    EXPECT_FALSE(state.HasFailure());
+
+    size_t total_bytes = 0;
+    for (const auto& pkt : GatherQueuedAudioPackets(state)) {
+        total_bytes += pkt.bytes.size();
+    }
+    const uint64_t out_frames = static_cast<uint64_t>(total_bytes) / (2ull * sizeof(int16_t));
+
+    // Before the drain the last ~10 ms sat in the resampler and never reached the
+    // file; tolerance is the single frame swresample may round by.
+    EXPECT_GE(out_frames, kExpectedFrames - 1);
+    EXPECT_LE(out_frames, kExpectedFrames + 1);
 }
 
 // Mock source that delivers kFramesPerPacket-sample chunks and signals stop after all packets.

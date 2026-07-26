@@ -590,4 +590,95 @@ TEST(OutputFormatAudioSrc, ClockSlaving_OnResamplePath_44kCompensates) {
     EXPECT_GT(count_out(+500.0), count_out(-500.0));
 }
 
+// ---------------------------------------------------------------------------
+// End-of-stream drain: the resampler's filter delay must reach the encoder.
+// ---------------------------------------------------------------------------
+
+namespace {
+struct DrainResult {
+    int64_t frames_before = 0; // frames the acquire loop produced
+    uint32_t drained = 0;      // frames DrainResampler flushed out
+    int64_t frames_after = 0;  // frames_before + drained
+};
+
+// Drive `packets` buffers of `frames` 48 kHz stereo Float32 frames through a
+// decorator targeting target_rate/target_channels, then drain it at stop.
+DrainResult DriveThenDrain(uint32_t target_rate, uint32_t target_channels, int packets, double ppm = 0.0,
+                           uint32_t frames = 480) {
+    auto stub = std::make_unique<StubSource>();
+    stub->sample_rate = 48000;
+    stub->channels = 2;
+    stub->frames = frames;
+    stub->data.assign(static_cast<size_t>(frames) * 2u, 0.25f);
+
+    OutputFormatAudioSrc src(std::move(stub), target_rate, target_channels);
+    std::string err;
+    EXPECT_TRUE(src.Init(err)) << err;
+    if (ppm != 0.0) {
+        src.SetCompensationPpm(ppm);
+    }
+
+    DrainResult r;
+    for (int i = 0; i < packets; ++i) {
+        RawAudioBuffer buf{};
+        if (!src.AcquireBuffer(buf, err)) {
+            break;
+        }
+        r.frames_before += buf.num_frames;
+        src.ReleaseBuffer();
+    }
+
+    RawAudioBuffer tail{};
+    r.drained = src.DrainResampler(tail);
+    EXPECT_EQ(tail.num_frames, r.drained);
+    if (r.drained > 0) {
+        EXPECT_NE(tail.bytes, nullptr);
+        // A second drain has nothing left: the delay line was emptied.
+        RawAudioBuffer again{};
+        EXPECT_EQ(src.DrainResampler(again), 0u);
+    }
+    r.frames_after = r.frames_before + static_cast<int64_t>(r.drained);
+    return r;
+}
+} // namespace
+
+TEST(OutputFormatAudioSrc, Drain_RateConversion_RecoversFullInputDuration) {
+    // 100 x 480 frames at 48 kHz is exactly 1.000 s, i.e. exactly 44100 frames at
+    // 44.1 kHz. Without the end-of-stream drain the resampler kept ~10 ms in its
+    // filter delay and the audio track ended that much short of the video.
+    const DrainResult r = DriveThenDrain(44100, 2, 100);
+    EXPECT_GT(r.drained, 0u) << "the filter delay holds real frames at stop";
+    EXPECT_LT(r.frames_before, 44100) << "pre-drain output is short by the filter delay";
+    EXPECT_GE(r.frames_after, 44099);
+    EXPECT_LE(r.frames_after, 44101);
+}
+
+TEST(OutputFormatAudioSrc, Drain_CompensationEngaged_RecoversTailAtSetRate) {
+    // Clock slaving keeps re-arming a compensation window; the drain must still
+    // flush the (identity-rate) resampler with that compensation in effect.
+    // +500 ppm can only stretch the timeline, so the drained total must not fall
+    // below the input duration.
+    constexpr int64_t kInputFrames = 100 * 480;
+    const DrainResult r = DriveThenDrain(48000, 2, 100, +500.0);
+    EXPECT_GT(r.drained, 0u) << "a compensating context also buffers a filter delay";
+    EXPECT_LT(r.frames_before, r.frames_after);
+    EXPECT_GE(r.frames_after, kInputFrames) << "the tail must not be lost under compensation";
+}
+
+TEST(OutputFormatAudioSrc, Drain_Passthrough_ProducesNothing) {
+    // The fast path buffers nothing, so stop has nothing to flush and the frame
+    // count already matches the input exactly.
+    const DrainResult r = DriveThenDrain(48000, 2, 100);
+    EXPECT_EQ(r.drained, 0u);
+    EXPECT_EQ(r.frames_before, 100 * 480);
+}
+
+TEST(OutputFormatAudioSrc, Drain_RematrixOnly_ProducesNothing) {
+    // A stereo->mono context at the same rate rematrixes frame-for-frame; it has
+    // no resampling filter, so there is no tail to recover either.
+    const DrainResult r = DriveThenDrain(48000, 1, 100);
+    EXPECT_EQ(r.drained, 0u);
+    EXPECT_EQ(r.frames_before, 100 * 480);
+}
+
 } // namespace

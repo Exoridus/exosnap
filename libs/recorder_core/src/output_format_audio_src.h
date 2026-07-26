@@ -80,6 +80,19 @@ class OutputFormatAudioSrc final : public IAudioCaptureSource {
     // called on the audio worker thread.
     void SetCompensationPpm(double ppm);
 
+    // --- End-of-stream drain -------------------------------------------------
+    // Push the resampler's internal filter delay out at stop. Whenever a
+    // SwrContext is active — a non-default target rate/channel count, or engaged
+    // clock slaving on the default 48 kHz path — it holds already-captured audio
+    // (~10 ms on a rate conversion, sub-ms to a few ms for a compensating
+    // identity context) that would otherwise die with the context in Shutdown().
+    // Returns the number of Float32 frames produced; out_buf views internal
+    // storage that stays valid until the next AcquireBuffer / DrainResampler /
+    // Shutdown. Returns 0 in passthrough mode (the fast path buffers nothing) and
+    // on a second call (the context is empty by then). Call after the last
+    // AcquireBuffer and before Shutdown(), on the audio worker thread.
+    uint32_t DrainResampler(RawAudioBuffer& out_buf);
+
     // Cumulative applied compensation in ms of the output timeline, from the real
     // frame accounting (out_total/target_rate - in_total/inner_rate). 0.0 until a
     // compensating context has processed frames. This is A in the controller's
