@@ -256,11 +256,12 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.video.frame_rate_den = 1;
     }
     {
-        constexpr std::array<uint32_t, 5> kValidFps = {24, 25, 30, 50, 60};
-        const bool valid_rate =
-            config.video.frame_rate_den == 1 &&
-            std::find(kValidFps.begin(), kValidFps.end(), config.video.frame_rate_num) != kValidFps.end();
-        if (!valid_rate) {
+        // Free frame rate (Expert entry): integer fps 1–240, den always 1. The
+        // Default combo offers 15/30/60 and displays the nearest for any other
+        // stored value; validity is intentionally wider than the list.
+        const bool fps_valid =
+            config.video.frame_rate_den == 1 && config.video.frame_rate_num >= 1 && config.video.frame_rate_num <= 240;
+        if (!fps_valid) {
             config.video.frame_rate_num = 60;
             config.video.frame_rate_den = 1;
         }

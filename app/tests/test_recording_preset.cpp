@@ -492,22 +492,38 @@ TEST(RecordingPreset, Sanitize_FrameRateDen0_ResetTo60_1) {
     EXPECT_EQ(s.video.frame_rate_den, 1u);
 }
 
-TEST(RecordingPreset, Sanitize_FrameRateUnsupported_ResetTo60_1) {
-    RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.video.frame_rate_num = 47;
-    cfg.video.frame_rate_den = 1;
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.video.frame_rate_num, 60u);
-    EXPECT_EQ(s.video.frame_rate_den, 1u);
+TEST(RecordingPreset, Sanitize_FrameRateFreeValueInRange_Kept) {
+    RecordingPresetConfig c = MakeDefaultPreset().config;
+    c.video.frame_rate_num = 47;
+    c.video.frame_rate_den = 1;
+    c = SanitizePresetConfig(c);
+    EXPECT_EQ(c.video.frame_rate_num, 47u);
+    EXPECT_EQ(c.video.frame_rate_den, 1u);
 }
 
-TEST(RecordingPreset, Sanitize_FrameRate120Unavailable_ResetTo60_1) {
-    RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.video.frame_rate_num = 120;
-    cfg.video.frame_rate_den = 1;
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.video.frame_rate_num, 60u);
-    EXPECT_EQ(s.video.frame_rate_den, 1u);
+TEST(RecordingPreset, Sanitize_FrameRate120_KeptAsExpertValue) {
+    RecordingPresetConfig c = MakeDefaultPreset().config;
+    c.video.frame_rate_num = 120;
+    c.video.frame_rate_den = 1;
+    c = SanitizePresetConfig(c);
+    EXPECT_EQ(c.video.frame_rate_num, 120u);
+}
+
+TEST(RecordingPreset, Sanitize_FrameRateAboveCeiling_ResetTo60_1) {
+    RecordingPresetConfig c = MakeDefaultPreset().config;
+    c.video.frame_rate_num = 241;
+    c.video.frame_rate_den = 1;
+    c = SanitizePresetConfig(c);
+    EXPECT_EQ(c.video.frame_rate_num, 60u);
+}
+
+TEST(RecordingPreset, Sanitize_FrameRateNonIntegerRational_ResetTo60_1) {
+    RecordingPresetConfig c = MakeDefaultPreset().config;
+    c.video.frame_rate_num = 30000;
+    c.video.frame_rate_den = 1001;
+    c = SanitizePresetConfig(c);
+    EXPECT_EQ(c.video.frame_rate_num, 60u);
+    EXPECT_EQ(c.video.frame_rate_den, 1u);
 }
 
 TEST(RecordingPreset, Sanitize_Mp4Vfr_ReconcilesToCfr) {
