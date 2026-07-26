@@ -33,19 +33,41 @@ std::optional<SemVer> ParseSemVer(std::string_view s) noexcept {
     ++p;
     if (!parse_uint(v.patch))
         return std::nullopt;
-    // Deliberately tolerant of anything after the patch number (prerelease
-    // "-rc.1", build metadata "+build", ...): release_locator.cpp's Preview
-    // channel depends on this to parse real prerelease GitHub tags (e.g.
-    // "v0.9.0-rc1") by their numeric major.minor.patch alone (channel filtering
-    // itself uses GitHub's own "prerelease" API flag, not this suffix).
-    // Consequence, not yet resolved: a prerelease and its eventual same-numbered
-    // final release ("0.9.0-rc1" vs "0.9.0") compare EQUAL here — SemVer has no
-    // prerelease field to order them correctly. Fine for channel-filtered
-    // "newest release in this channel" selection (there is only ever one
-    // candidate per channel at a time in practice); would be wrong for a
-    // cross-channel or downgrade-prevention comparison that needs to know a
-    // prerelease is ordered BEFORE its final release of the same number.
-    // (GitHub tags like "v0.4.0" have the "v" stripped by the caller.)
+
+    // Nothing after the patch number -- a final release (e.g. "v0.4.0", with
+    // the "v" already stripped by the caller).
+    if (p == end)
+        return v;
+
+    // "-rcN": this project's release pipeline only ever tags release
+    // candidates this way (release-checklist.md §3: "vX.Y.Z-<suffix>", always
+    // "-rcN" in practice). Parse the ordinal so LocateRelease's Preview-channel
+    // "newest release" selection and UpdateService's "is this newer than what
+    // I'm running" check can tell rc1 from rc2 from the eventual final release
+    // of the same X.Y.Z apart, instead of all three comparing equal.
+    if (*p == '-') {
+        ++p;
+        v.is_prerelease = true;
+        if (end - p >= 2 && p[0] == 'r' && p[1] == 'c') {
+            uint32_t rc_num = 0;
+            auto [ptr, ec] = std::from_chars(p + 2, end, rc_num);
+            if (ec == std::errc{})
+                v.prerelease_number = rc_num;
+            // A malformed/non-numeric suffix after "-rc" still parses as a
+            // prerelease (ordinal 0) rather than being rejected outright --
+            // matches the historic "deliberately tolerant" stance below.
+        }
+        // A "-" suffix that isn't "-rcN" (unexpected label) still marks the
+        // tag as a prerelease (ordinal 0); it sorts before the final release
+        // of the same X.Y.Z, just without fine-grained ordering against other
+        // unusually-labelled prereleases. Not expected in this project's own
+        // tags, but tolerated rather than rejected, same as before.
+        return v;
+    }
+
+    // Anything else after the patch number (build metadata "+build", ...) is
+    // tolerated and treated as the final release's core version, same as the
+    // historic behavior before prerelease parsing existed.
     return v;
 }
 

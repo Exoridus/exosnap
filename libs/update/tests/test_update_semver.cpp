@@ -26,16 +26,40 @@ TEST(SemVer, ParseWithVPrefix) {
 }
 
 TEST(SemVer, ParseWithPrereleaseLabel) {
-    // Deliberately tolerant: release_locator.cpp's Preview channel depends on
-    // parsing real prerelease GitHub tags (e.g. "v0.9.0-rc1") by their numeric
-    // major.minor.patch alone. See semver.cpp's ParseSemVer comment for the
-    // known consequence (a prerelease and its same-numbered final release
-    // compare equal here) and where that would and wouldn't be a problem.
+    // "-rcN" is this project's only real prerelease tag shape (release-checklist.md
+    // §3). The ordinal is captured so rc1/rc2/the eventual final release of the
+    // same X.Y.Z compare distinctly instead of all three being equal.
     auto v = ParseSemVer("2.0.0-rc1");
     ASSERT_TRUE(v.has_value());
     EXPECT_EQ(v->major, 2u);
     EXPECT_EQ(v->minor, 0u);
     EXPECT_EQ(v->patch, 0u);
+    EXPECT_TRUE(v->is_prerelease);
+    EXPECT_EQ(v->prerelease_number, 1u);
+}
+
+TEST(SemVer, ParseFinalReleaseIsNotPrerelease) {
+    auto v = ParseSemVer("2.0.0");
+    ASSERT_TRUE(v.has_value());
+    EXPECT_FALSE(v->is_prerelease);
+    EXPECT_EQ(v->prerelease_number, 0u);
+}
+
+TEST(SemVer, ParseWithMultiDigitPrereleaseOrdinal) {
+    auto v = ParseSemVer("0.9.0-rc12");
+    ASSERT_TRUE(v.has_value());
+    EXPECT_TRUE(v->is_prerelease);
+    EXPECT_EQ(v->prerelease_number, 12u);
+}
+
+TEST(SemVer, ParseWithUnrecognizedPrereleaseLabelStillParsesAsPrerelease) {
+    // Not a shape this project's own tooling produces, but tolerated rather
+    // than rejected -- sorts as prerelease ordinal 0 (before the final release
+    // of the same X.Y.Z), just without fine-grained ordering.
+    auto v = ParseSemVer("1.0.0-alpha");
+    ASSERT_TRUE(v.has_value());
+    EXPECT_TRUE(v->is_prerelease);
+    EXPECT_EQ(v->prerelease_number, 0u);
 }
 
 TEST(SemVer, ParseWithBuildMetadata) {
@@ -90,4 +114,50 @@ TEST(SemVer, ToString) {
 TEST(SemVer, ToStringLargeNumbers) {
     SemVer v{10, 20, 300};
     EXPECT_EQ(v.ToString(), "10.20.300");
+}
+
+// ---------------------------------------------------------------------------
+// Prerelease ordering (UPDATE-SEMVER-PRERELEASE-R1)
+// ---------------------------------------------------------------------------
+TEST(SemVer, Rc1LessThanRc2SameCoreVersion) {
+    auto rc1 = ParseSemVer("0.9.0-rc1");
+    auto rc2 = ParseSemVer("0.9.0-rc2");
+    ASSERT_TRUE(rc1.has_value());
+    ASSERT_TRUE(rc2.has_value());
+    EXPECT_LT(*rc1, *rc2);
+    EXPECT_FALSE(*rc2 < *rc1);
+    EXPECT_NE(*rc1, *rc2);
+}
+
+TEST(SemVer, PrereleaseLessThanFinalOfSameCoreVersion) {
+    auto rc1 = ParseSemVer("0.9.0-rc1");
+    auto final_release = ParseSemVer("0.9.0");
+    ASSERT_TRUE(rc1.has_value());
+    ASSERT_TRUE(final_release.has_value());
+    EXPECT_LT(*rc1, *final_release);
+    EXPECT_GT(*final_release, *rc1);
+}
+
+TEST(SemVer, TwoFinalReleasesOfSameCoreVersionCompareEqual) {
+    EXPECT_EQ(ParseSemVer("0.9.0"), ParseSemVer("0.9.0"));
+}
+
+TEST(SemVer, HigherCoreVersionOutranksPrereleaseRegardlessOfOrdinal) {
+    // 0.10.0-rc1 must still beat 0.9.0-rc99 -- prerelease ordering only
+    // matters once major.minor.patch are equal.
+    auto next_rc1 = ParseSemVer("0.10.0-rc1");
+    auto old_rc99 = ParseSemVer("0.9.0-rc99");
+    ASSERT_TRUE(next_rc1.has_value());
+    ASSERT_TRUE(old_rc99.has_value());
+    EXPECT_GT(*next_rc1, *old_rc99);
+}
+
+TEST(SemVer, ToStringIncludesPrereleaseSuffix) {
+    SemVer v = *ParseSemVer("0.9.0-rc3");
+    EXPECT_EQ(v.ToString(), "0.9.0-rc3");
+}
+
+TEST(SemVer, ToStringOmitsSuffixForFinalRelease) {
+    SemVer v = *ParseSemVer("0.9.0");
+    EXPECT_EQ(v.ToString(), "0.9.0");
 }

@@ -109,9 +109,12 @@ TEST(CollectReleaseNotes, StableGapNewestFirstExclusiveLowerInclusiveUpper) {
 TEST(CollectReleaseNotes, PreviewIncludesPrereleaseInRange) {
     auto notes = CollectReleaseNotes(kNotes, SemVer{1, 0, 0}, SemVer{1, 2, 0}, UpdateChannel::Preview);
     // (1.0.0, 1.2.0] on Preview => 1.2.0, 1.1.5-rc.1, 1.1.0.
+    // "-rc.1" (dot before the ordinal) isn't this project's own "-rcN" tag shape, so
+    // it parses as a prerelease with ordinal 0 (UPDATE-SEMVER-PRERELEASE-R1) rather
+    // than being rejected -- see ParseWithUnrecognizedPrereleaseLabelStillParsesAsPrerelease.
     ASSERT_EQ(notes.size(), 3u);
     EXPECT_EQ(notes[0].version, (SemVer{1, 2, 0}));
-    EXPECT_EQ(notes[1].version, (SemVer{1, 1, 5}));
+    EXPECT_EQ(notes[1].version, (SemVer{1, 1, 5, true, 0}));
     EXPECT_EQ(notes[2].version, (SemVer{1, 1, 0}));
 }
 

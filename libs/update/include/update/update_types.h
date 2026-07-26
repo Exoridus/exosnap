@@ -41,14 +41,31 @@ struct SemVer {
     uint32_t major = 0;
     uint32_t minor = 0;
     uint32_t patch = 0;
+    // Release-candidate ordinal for a GitHub prerelease tag ("-rcN"). Only
+    // meaningful when is_prerelease is true; 0 for a final release.
+    // is_prerelease=false, prerelease_number=0 is the aggregate-init default,
+    // so every pre-existing `SemVer{X, Y, Z}` call site in the codebase still
+    // means "final release X.Y.Z" without being touched.
+    bool is_prerelease = false;
+    uint32_t prerelease_number = 0;
 
     [[nodiscard]] bool operator==(const SemVer&) const noexcept = default;
+    // SemVer precedence (extends the plain X.Y.Z compare with prerelease
+    // ordering, mirroring semver.org's rule that a final release outranks any
+    // prerelease of the same X.Y.Z, and prereleases of the same X.Y.Z order by
+    // their ordinal): rc1 < rc2 < ... < the final X.Y.Z release.
     [[nodiscard]] bool operator<(const SemVer& o) const noexcept {
         if (major != o.major)
             return major < o.major;
         if (minor != o.minor)
             return minor < o.minor;
-        return patch < o.patch;
+        if (patch != o.patch)
+            return patch < o.patch;
+        if (is_prerelease != o.is_prerelease)
+            return is_prerelease; // this is a prerelease, other is final -> this is older
+        if (!is_prerelease)
+            return false; // both final, same X.Y.Z -> equal, not less
+        return prerelease_number < o.prerelease_number;
     }
     [[nodiscard]] bool operator>(const SemVer& o) const noexcept {
         return o < *this;
@@ -61,7 +78,10 @@ struct SemVer {
     }
 
     [[nodiscard]] std::string ToString() const {
-        return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+        std::string s = std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
+        if (is_prerelease)
+            s += "-rc" + std::to_string(prerelease_number);
+        return s;
     }
 };
 
