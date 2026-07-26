@@ -2219,7 +2219,7 @@ void ConfigPage::onFrameRateChanged(int index) {
 }
 
 void ConfigPage::onFrameRateSpinChanged(int fps) {
-    if (updating_frame_rate_ || fps <= 0)
+    if (fps <= 0)
         return;
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;

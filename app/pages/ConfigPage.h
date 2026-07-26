@@ -523,9 +523,6 @@ class ConfigPage : public QWidget {
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
 
-    // Reentrancy guard for the Expert free-entry frame-rate spinbox handler.
-    bool updating_frame_rate_ = false;
-
     QWidget* token_chip_flow_ = nullptr; // v10: always visible below pattern input
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
