@@ -908,6 +908,19 @@ const QVector<VisualScenario> kScenarios = {
      .record_state = VisualRecordState::Recording,
      .controls_locked = true},
 
+    // Quality combo width probe (fix round 1 on Task 12): seeds a non-default CQ so the
+    // Default-tier "qualityPresetCombo" (ConfigPage.cpp:1071-1084, fixedWidth 160) renders
+    // its Efficient/Ultra labels closed, for a direct pixel check of clipping/ellipsis
+    // rather than reasoning from the Balanced label alone.
+    {.id = QStringLiteral("settings-quality-efficient"),
+     .title = QStringLiteral("Settings / Quality / Efficient (combo width)"),
+     .page = VisualPage::Settings,
+     .quality_cq = 30},
+    {.id = QStringLiteral("settings-quality-ultra"),
+     .title = QStringLiteral("Settings / Quality / Ultra (combo width)"),
+     .page = VisualPage::Settings,
+     .quality_cq = 16},
+
     // --- HDR handling control (Default-tier Video/Quality section; the HDR row
     // is relevance-gated on a probed HDR-active display, not on Expert mode) ---
     {.id = QStringLiteral("settings-hdr-tonemap-default"),
@@ -1082,6 +1095,7 @@ const QVector<VisualScenario> kScenarios = {
      60,
      1,
      true,
+     0, // quality_cq (unset — these are legacy positional entries, not quality scenarios)
      capability::Container::WebM,
      capability::VideoCodec::Av1Nvenc,
      capability::AudioCodec::Opus,
@@ -1141,6 +1155,7 @@ const QVector<VisualScenario> kScenarios = {
      60,
      1,
      true,
+     0, // quality_cq (unset — these are legacy positional entries, not quality scenarios)
      capability::Container::WebM,
      capability::VideoCodec::Av1Nvenc,
      capability::AudioCodec::Opus,
@@ -1200,6 +1215,7 @@ const QVector<VisualScenario> kScenarios = {
      60,
      1,
      true,
+     0, // quality_cq (unset — these are legacy positional entries, not quality scenarios)
      capability::Container::WebM,
      capability::VideoCodec::Av1Nvenc,
      capability::AudioCodec::Opus,
@@ -1259,6 +1275,7 @@ const QVector<VisualScenario> kScenarios = {
      60,
      1,
      true,
+     0, // quality_cq (unset — these are legacy positional entries, not quality scenarios)
      capability::Container::WebM,
      capability::VideoCodec::Av1Nvenc,
      capability::AudioCodec::Opus,
@@ -1318,6 +1335,7 @@ const QVector<VisualScenario> kScenarios = {
      60,
      1,
      true,
+     0, // quality_cq (unset — these are legacy positional entries, not quality scenarios)
      capability::Container::WebM,
      capability::VideoCodec::Av1Nvenc,
      capability::AudioCodec::Opus,
@@ -2049,6 +2067,11 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
     // ConfigPage.cpp:1147) — the widest frame rate the app can ever seed.
     if (scenario.frame_rate_den == 0 || scenario.frame_rate_num < 1 || scenario.frame_rate_num > 240) {
         return fail(QStringLiteral("Invalid visual-test frame rate"));
+    }
+    // quality_cq is optional (0 = unset); a non-zero seed must be a real NVENC CQ value.
+    if (scenario.quality_cq != 0 &&
+        (scenario.quality_cq < recorder_core::kNvencCqMin || scenario.quality_cq > recorder_core::kNvencCqMax)) {
+        return fail(QStringLiteral("Invalid visual-test quality (CQ) value"));
     }
     if (scenario.content_width > 0 && scenario.content_height > 0 && scenario.effective_width > 0 &&
         scenario.effective_height > 0) {

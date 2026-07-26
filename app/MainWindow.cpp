@@ -3216,6 +3216,8 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     video.frame_rate_num = scenario.frame_rate_num;
     video.frame_rate_den = scenario.frame_rate_den;
     video.cfr = scenario.cfr;
+    if (scenario.quality_cq != 0)
+        video.cq = scenario.quality_cq;
     config_page_->setOutputSettings(output);
     // Invalid custom-resolution fixture: setOutputSettings() sanitized the unusable
     // size back to Native, so re-assert the honest invalid Custom state (fields +

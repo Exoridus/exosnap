@@ -147,6 +147,12 @@ struct VisualScenario {
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
     bool cfr = true;
+    // NVENC CQ value to seed into VideoSettingsModel::cq (recorder_core::kNvencCqMin..Max,
+    // 1-51). 0 (the sentinel) means "leave the model's own default" (Balanced/CQ 24) —
+    // the field is optional; most scenarios never set it. Non-zero values let a
+    // scenario render the Quality combo/segments at a specific tier (e.g. 30 = Efficient,
+    // 16 = Ultra) instead of always showing the construction-time default.
+    uint32_t quality_cq = 0;
     // Shipped default fixture: MKV + AV1 + Opus (the product default profile), so
     // renders show the real out-of-the-box format instead of WebM. Scenarios that
     // genuinely need a different container set it explicitly.
