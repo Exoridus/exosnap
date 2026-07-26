@@ -223,14 +223,15 @@ TEST(RecordingPreset, DefaultPreset_SanitizeRoundTrip) {
 }
 
 // ===========================================================================
-// SanitizePresetConfig — the application audio source belongs to a window
+// SanitizePresetConfig — the application audio row is a persisted setting
 //
-// An App audio row is scoped to a specific window's process. Paired with a
-// display target (a region capture is a display target too) there is no process
-// to scope it to, and the stored combination used to survive the load: the Record
-// dock hid the toggle, but the row stayed in the plan, demanded a process id
-// nobody could supply, and the next recording refused to start with
-// "Window target PID unavailable".
+// The App audio row's enabled/merge configuration is a user setting like any
+// other and survives every capture target, including Display/Region. Only its
+// ACTIVE state (rendered receded vs. live) follows the capture target — that
+// derivation happens in PresentationStateBuilder, not here. The actual
+// recording-time audio plan still drops the App row for a non-Window target
+// (recorder_core::NormalizeSourceRowsForTarget, invoked from BuildAudioPlan),
+// since a display/region capture genuinely has no process to scope it to.
 // ===========================================================================
 
 namespace {
@@ -249,10 +250,16 @@ RecordingPresetConfig WithAppRow(capability::CaptureTargetKind target) {
 }
 } // namespace
 
-TEST(RecordingPreset, Sanitize_AppAudioRow_DroppedForDisplayTarget) {
+TEST(RecordingPreset, Sanitize_AppAudioRow_KeptForDisplayTarget) {
     const RecordingPresetConfig sanitized = SanitizePresetConfig(WithAppRow(capability::CaptureTargetKind::Display));
-    EXPECT_FALSE(HasAppRow(sanitized)) << "a display capture has no application process to record";
-    EXPECT_FALSE(sanitized.audio.selected_window_pid.has_value());
+    ASSERT_TRUE(HasAppRow(sanitized))
+        << "the application-audio row is a persisted setting and survives every capture target";
+    const auto it = std::find_if(
+        sanitized.audio.source_rows.begin(), sanitized.audio.source_rows.end(),
+        [](const recorder_core::AudioSourceRow& r) { return r.kind == recorder_core::AudioSourceKind::App; });
+    ASSERT_NE(it, sanitized.audio.source_rows.end());
+    EXPECT_TRUE(it->enabled);
+    EXPECT_FALSE(it->merge_with_above);
 }
 
 TEST(RecordingPreset, Sanitize_AppAudioRow_KeptForWindowTarget) {
@@ -262,13 +269,17 @@ TEST(RecordingPreset, Sanitize_AppAudioRow_KeptForWindowTarget) {
     EXPECT_EQ(*sanitized.audio.selected_window_pid, 4242u);
 }
 
-// Other sources are untouched by the reconcile.
+// Other sources are untouched by the reconcile — sanitize touches none of the
+// audio source rows for a display target anymore, App included.
 TEST(RecordingPreset, Sanitize_AppAudioRow_LeavesSystemAndMicAlone) {
     const RecordingPresetConfig before = WithAppRow(capability::CaptureTargetKind::Display);
     const RecordingPresetConfig after = SanitizePresetConfig(before);
-    EXPECT_EQ(after.audio.source_rows.size(), before.audio.source_rows.size() - 1);
-    for (const auto& row : after.audio.source_rows) {
-        EXPECT_NE(row.kind, recorder_core::AudioSourceKind::App);
+    ASSERT_EQ(after.audio.source_rows.size(), before.audio.source_rows.size());
+    for (std::size_t i = 0; i < before.audio.source_rows.size(); ++i) {
+        if (before.audio.source_rows[i].kind == recorder_core::AudioSourceKind::App) {
+            continue;
+        }
+        EXPECT_EQ(after.audio.source_rows[i].kind, before.audio.source_rows[i].kind);
     }
 }
 

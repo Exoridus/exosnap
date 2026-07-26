@@ -292,15 +292,13 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.video.bitrate_kbps = kMaxBitrateKbps;
     }
 
-    // Audio: App and Sys are both scoped to one window's process. Paired with a display
-    // or region target there is no process to scope them to. The stored combination used
-    // to survive the load — the Record dock showed a plausible SYS row, but the plan
-    // demanded a process id nobody could supply and the next recording refused to start.
-    if (config.audio.target_kind != capability::CaptureTargetKind::Window) {
-        config.audio.source_rows =
-            recorder_core::NormalizeSourceRowsForTarget(std::move(config.audio.source_rows), /*window_target=*/false);
-        config.audio.selected_window_pid = std::nullopt;
-    }
+    // Audio: the App row's enabled/merge configuration is a persisted setting like any
+    // other and survives every capture target, including Display/Region. Only its ACTIVE
+    // state (receded vs. live) follows the target, and that derivation belongs to
+    // PresentationStateBuilder — sanitize no longer strips or rewrites source rows here.
+    // The actual recording-time audio plan still normalizes away the App row for a
+    // non-Window target (recorder_core::NormalizeSourceRowsForTarget, via BuildAudioPlan),
+    // since a display/region capture genuinely has no process to scope it to.
 
     // Audio: ensure mic_gain_linear is finite and strictly positive.
     if (!std::isfinite(config.audio.mic_gain_linear) || config.audio.mic_gain_linear <= 0.0f) {

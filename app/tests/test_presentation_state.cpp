@@ -33,10 +33,12 @@ capability::AudioUiState MakeWindowState(bool app_enabled = true, bool sys_enabl
 // Test: target-kind → visibility
 // ---------------------------------------------------------------------------
 
-TEST(PresentationStateBuilderTest, DisplayTarget_AppHidden) {
-    // Test 1 / 9: Display target hides App audio row.
+TEST(PresentationStateBuilderTest, DisplayTarget_AppVisibleButInactive) {
+    // The App row is a persisted setting and stays visible for every target;
+    // only its "active" (receded vs. live) state follows the target kind.
     const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
-    EXPECT_FALSE(snap.app.visible);
+    EXPECT_TRUE(snap.app.visible);
+    EXPECT_FALSE(snap.app.active);
 }
 
 TEST(PresentationStateBuilderTest, DisplayTarget_SysAndMicVisible) {
@@ -47,10 +49,22 @@ TEST(PresentationStateBuilderTest, DisplayTarget_SysAndMicVisible) {
 }
 
 TEST(PresentationStateBuilderTest, WindowTarget_AppVisible) {
-    // Test 8: Window target makes App visible.
+    // Test 8: Window target makes App visible (and active).
     const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeWindowState(), false);
     EXPECT_TRUE(snap.app.visible);
     EXPECT_TRUE(snap.app.available);
+}
+
+TEST(PresentationStateBuilderTest, AppActive_TracksWindowTarget) {
+    // app.active is the target-kind-derived field the ConfigPage will consume
+    // (Task 6) to render the App row receded vs. live; app.visible is always true.
+    const auto snap_display = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
+    EXPECT_TRUE(snap_display.app.visible);
+    EXPECT_FALSE(snap_display.app.active);
+
+    const auto snap_window = PresentationStateBuilder::BuildAudioConfiguration(MakeWindowState(), false);
+    EXPECT_TRUE(snap_window.app.visible);
+    EXPECT_TRUE(snap_window.app.active);
 }
 
 TEST(PresentationStateBuilderTest, WindowTarget_SysAndMicVisible) {
@@ -234,9 +248,9 @@ TEST(PresentationStateBuilderTest, DifferentTarget_NotEquals) {
 // ---------------------------------------------------------------------------
 
 TEST(PresentationStateBuilderTest, NoDuplicateAppRow_DisplayTarget) {
-    // Test 13: Display target — App row NOT in plan and not visible.
+    // Test 13: Display target — App row NOT in the Display audio-ui-state's
+    // source rows, so it is not available (still visible-but-inactive though).
     const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
-    EXPECT_FALSE(snap.app.visible);
     EXPECT_FALSE(snap.app.available);
 }
 
