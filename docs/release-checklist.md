@@ -217,6 +217,24 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       Developer), uniform 46 px rows, webcam card with full-width live preview and key-color picker,
       "Split by time"/"Split by size" rows, Developer card visible without Expert.
 
+### Long-duration soak (clock slaving)
+
+- [ ] **2–3 h soak recording, default profile (MKV + AV1 + Opus, CFR 60), monitor capture, `SYS` +
+      `MIC` enabled as separate tracks, clock slaving at its default (on).** Continuous real system
+      audio for the whole run (e.g. a music/video playlist). Machine must not sleep; displays stay
+      on; display settings unchanged during the run.
+- [ ] **A/V sync marker at start AND end.** Play an audio/video sync-test clip (beep + frame flash)
+      shortly after start and again shortly before stop; with webcam PiP enabled, additionally clap
+      hands in view for a `MIC`-track marker. Afterwards, measure flash-to-beep offset at both
+      markers (frame-step in mpv or similar); the start→end difference is the accumulated drift and
+      must stay under one video frame (~16 ms at 60 fps).
+- [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
+      (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
+- [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track;
+      spot-listen at start/middle/end plus a waveform scan for crackles/discontinuities; confirm the
+      end-of-session report (session stats log written at stop) shows the expected drift/compensation
+      numbers and no unexplained device events.
+
 ## 8. Downstream package managers
 
 WinGet and Chocolatey each pin an exact version, download URL, and SHA-256 for the release inside
