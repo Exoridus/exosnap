@@ -17,7 +17,7 @@ reserved for controls that carry real risk or require format expertise.
 A row is **Expert-only** when at least one of these holds:
 
 1. Misconfiguration can produce incompatible or broken files
-   (bit depth, colour range, chroma subsampling, rate control).
+   (bit depth, color range, chroma subsampling, rate control).
 2. It is meaningless without format expertise
    (NVENC preset, keyframe interval, Opus frame duration/complexity).
 3. It protects pipeline integrity and disabling it can ruin a long recording
@@ -49,12 +49,26 @@ makes the UI text literally true.
     the right. Verified: both modes end within ~150 px per column.
 - One shared control width (160 px) for all selects/spinboxes/sliders,
   right-aligned to a common edge (ADR 0031). 160 is derived from the longest
-  fixed label, "CQ 30 · Efficient"; device-name selects may still ellipsize
-  (device strings are unbounded — accepted).
+  fixed label, "CQ 30 · Efficient". The microphone device select is the one
+  exception: it spans its own sub-row under the source rows and takes the
+  available width there (device strings are unbounded).
+- One row height everywhere: 46 px (border-box), regardless of control kind —
+  select/spinbox rows, toggle rows, slider rows, two-line label+subtext rows
+  and button rows all land on the same height (content is centered; the
+  tallest control, the 34 px select chrome, exactly fills it).
+- Sliders are plain tracks exactly 160 px wide in the shared control column —
+  no permanent side read-out. The current value appears as a small bubble
+  above the thumb while hovering or dragging; sliders may carry tick markers
+  (e.g. the 0 dB center of Mic gain — `QSlider::setTickPosition` in the app).
+- en-US spelling app-wide: "color", not "colour" (labels, options, hints).
+- Buttons share one visual family (pill radius) everywhere, including the
+  per-row Set/Change/Cancel buttons on Hotkey rows.
 - Dependent rows follow one pattern everywhere: a toggle/select row, then its
-  detail rows rendered only while applicable (limiter → ceiling, chroma key →
-  colour/tolerance/softness/spill, split toggles → interval/size, audio codec →
-  bit depth/FLAC compression, output resolution → custom size).
+  detail rows rendered only while applicable — as plain full-width rows with
+  normal label alignment, never indented (limiter → ceiling, chroma key →
+  key color/tolerance/softness/spill, split toggles → interval/size, audio
+  codec → bit depth/FLAC compression, output resolution → custom size,
+  mic post-processing stages → their numeric parameter).
 
 ## Card inventory
 
@@ -63,7 +77,7 @@ makes the UI text literally true.
 Default: Container (MKV/WebM/MP4) · Video codec (AV1/H.264/HEVC) · Audio codec
 (Opus/AAC/PCM/FLAC) · **HDR handling** (Tone-map to SDR / Native HDR10; row
 only rendered while an HDR-active display is detected).
-Expert adds: Bit depth (8/10-bit) · Colour range (Full/Limited) · Encoder
+Expert adds: Bit depth (8/10-bit) · Color range (Full/Limited) · Encoder
 preset (NVENC P1–P7) · Keyframe interval (2 s/1 s/0.5 s) · Chroma subsampling
 (4:2:0/4:4:4).
 
@@ -101,18 +115,23 @@ current-format footer always shows the true value.
 
 ### Audio (left)
 
-Source rows (unchanged): Application audio · Computer audio · Microphone, in
-that order, each with enable checkbox, dB read-out, "Merge with above" +
-info, VU meter; APP row only while a window is the capture target. Mic device
-combo + rescan below the Microphone row.
+Source rows: Application audio · Computer audio · Microphone, in that order,
+each with enable checkbox, dB read-out, "Merge with above" + info, VU meter;
+APP row only while a window is the capture target. The FIRST listed source
+shows neither the merge cluster (there is no "above" to fold into) nor a dB
+read-out while it has no signal. Mic device combo (full sub-row width) +
+rescan below the Microphone row.
 
-Default (re-gated): Mic gain (−12…+12 dB slider) · Mic channel mode
-(Auto/Mono mix/Preserve stereo/L → Stereo/R → Stereo) · Audio bitrate
-(32–510 kbps) · Channels (Stereo/Mono) · Bit depth + FLAC compression
-(codec-conditional: PCM/FLAC only) · Brickwall limiter toggle (+ Limiter
-ceiling while on) · Microphone post-processing disclosure (HPF, Noise gate,
-AGC, RNNoise; collapsed by default; each stage's numeric parameter row exists
-only while that stage's checkbox is on).
+Default (re-gated): Mic gain (−12…+12 dB slider with 0 dB center tick) ·
+Mic channel mode (Auto/Mono mix/Preserve stereo/L → Stereo/R → Stereo) ·
+Audio bitrate (32–510 kbps) · Channels (Stereo/Mono) · Bit depth + FLAC
+compression (codec-conditional: PCM/FLAC only) · Brickwall limiter toggle
+(+ Limiter ceiling while on) · **Microphone post-processing as a flat,
+always-visible labelled section** — High-pass filter, Noise gate, AGC and
+Noise suppression (RNNoise) as ordinary toggle rows, each stage's numeric
+parameter row (HPF cutoff, Gate threshold, AGC target level) rendered as a
+plain full-width row only while that stage is on. This replaces today's
+chevron disclosure + indented checkboxes deliberately.
 Expert adds (in place): Opus frame duration · Opus complexity · Sample rate ·
 Audio clock slaving.
 
@@ -137,9 +156,11 @@ management, cannot hurt a recording.
 ### Webcam (right)
 
 Never Expert-gated (unchanged). Hero row: Record-webcam toggle + inline live
-preview (128×80) with rescan affordance on the preview corner. Camera ·
-Resolution/FPS · Mirror image · Overlay opacity · Chroma key row (swatch +
-toggle; colour/tolerance/softness/spill only while on).
+preview (128×80) with a rescan affordance inside the preview corner. Camera ·
+Resolution/FPS · Mirror image · Overlay opacity (slider) · Chroma key as a
+plain toggle row; while on it reveals Key color (a picker-style chip showing
+swatch + hex — always at full strength, never dimmed by the toggle state),
+Tolerance, Softness and Spill reduction (sliders).
 
 ### Notifications & overlays (right)
 
@@ -175,7 +196,17 @@ profiling markers (planned, disabled) · Send crash reports automatically.
    their parent toggle/stage is on.
 6. Updates card moves to the right column; Developer card renders in the
    right column.
-7. Shared control width 160 px across the page.
+7. Shared control width 160 px and shared row height 46 px across the page.
+8. Microphone post-processing flattens from a chevron disclosure with
+   indented checkboxes into an always-visible labelled section of standard
+   toggle rows.
+9. Chroma key becomes a plain toggle row; the key color moves to its own
+   picker-chip detail row (replacing the color-name badge strip).
+10. Sliders lose their permanent side read-out; value shows as a hover/drag
+    bubble above the thumb, with optional tick markers.
+11. The first listed audio source row hides the "Merge with above" cluster
+    and shows no dB read-out while signal-less.
+12. en-US spelling app-wide: every "colour" label/hint becomes "color".
 
 Each of these requires the matching `docs/product-spec.md` update and
 ConfigPage/test changes; the quality ladder and free fps entry additionally
