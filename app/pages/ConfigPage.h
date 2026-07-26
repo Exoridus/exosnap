@@ -351,6 +351,10 @@ class ConfigPage : public QWidget {
     // inconsistent widget state.
     void applyAudioConfigurationState();
 
+    // Inserts a disabled App row at the front of audio_ui_state_.source_rows when none
+    // exists, so the App controls can arm a row that a Display/Region state omits.
+    void ensureAppSourceRow();
+
     void onAudioAppToggled();
     void onAudioMicToggled();
     void onAudioSysToggled();

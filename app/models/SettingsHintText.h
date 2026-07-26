@@ -115,7 +115,7 @@ inline const QString kClockSlaving =
                                 "Off = byte-exact capture."));
 inline const QString kHighPassFilter = QStringLiteral("HPF removes low-frequency rumble below the cutoff frequency");
 inline const QString kNoiseGate = QStringLiteral("Silences the mic when input falls below the threshold");
-inline const QString kAgc = QStringLiteral("Automatic gain control normalises mic loudness to the target level");
+inline const QString kAgc = QStringLiteral("Automatic gain control normalizes mic loudness to the target level");
 inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression \xC2\xB7 removes background noise");
 inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
 inline const QString kVideoBitDepth =
@@ -132,7 +132,7 @@ inline const QString kVideoColorRange =
                                 "Limited is compatible with every player.<br>"
                                 "Full keeps marginally more tonal detail, but some players (notably VLC) ignore the "
                                 "range flag and expand as Limited, so Full-range recordings look too dark there.<br>"
-                                "Only choose Full if your whole playback chain honours it."));
+                                "Only choose Full if your whole playback chain honors it."));
 inline const QString kFrameTiming = detail::card(QStringLiteral("<b>Frame timing.</b><br>"
                                                                 "CFR = constant frame rate, best for editors.<br>"
                                                                 "VFR = variable frame rate."));

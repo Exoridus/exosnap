@@ -4267,7 +4267,9 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         mic_post_header_ = new QWidget(audio_default_section_);
         mic_post_header_->setObjectName(QStringLiteral("micPostProcessingHeader"));
         auto* header_hl = new QHBoxLayout(mic_post_header_);
-        header_hl->setContentsMargins(0, 12, 0, 12);
+        // Same 5px vertical padding as every other settings row: the 28px disclosure
+        // button then lands the header at the shared ~46px row rhythm.
+        header_hl->setContentsMargins(0, 5, 0, 5);
         header_hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* header_lbl = new QLabel(QStringLiteral("Microphone post-processing"), mic_post_header_);
         header_lbl->setProperty("labelRole", "settingsRowLabel");
@@ -5625,7 +5627,24 @@ void ConfigPage::setThemeId(const QString& theme_id) {
         buttons.first()->setChecked(true);
 }
 
+// The App row's controls stay interactable for every capture target so the row can be
+// armed ahead of switching to a window, but a Display/Region state ships without an App
+// row at all. Create the row the toggle promises instead of no-opping — the engine drops
+// it again at recording time for a non-Window target
+// (recorder_core::NormalizeSourceRowsForTarget), so persisting it is safe.
+void ConfigPage::ensureAppSourceRow() {
+    using K = recorder_core::AudioSourceKind;
+    const bool has_app = std::any_of(audio_ui_state_.source_rows.begin(), audio_ui_state_.source_rows.end(),
+                                     [](const recorder_core::AudioSourceRow& r) { return r.kind == K::App; });
+    if (has_app)
+        return;
+    // App is first in the canonical row order (APP, SYS, MIC).
+    audio_ui_state_.source_rows.insert(audio_ui_state_.source_rows.begin(),
+                                       recorder_core::AudioSourceRow{K::App, false, false});
+}
+
 void ConfigPage::onAudioAppToggled() {
+    ensureAppSourceRow();
     for (auto& row : audio_ui_state_.source_rows) {
         if (row.kind == recorder_core::AudioSourceKind::App)
             row.enabled = app_enabled_check_->isChecked();
@@ -5652,6 +5671,7 @@ void ConfigPage::onAudioSysToggled() {
 // The "Merge with above" toggle is on when the source folds into the track above,
 // so its checked state maps directly to merge_with_above.
 void ConfigPage::onAudioAppSeparateToggled() {
+    ensureAppSourceRow();
     for (auto& row : audio_ui_state_.source_rows) {
         if (row.kind == recorder_core::AudioSourceKind::App)
             row.merge_with_above = app_separate_check_->isChecked();

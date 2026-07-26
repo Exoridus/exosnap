@@ -283,6 +283,26 @@ TEST(RecordingPreset, Sanitize_AppAudioRow_LeavesSystemAndMicAlone) {
     }
 }
 
+// "Merge with above" on the FIRST source row has nothing to merge into, so a stored
+// true there is meaningless state that the resolver would have to guess about.
+TEST(RecordingPreset, Sanitize_FirstSourceRow_MergeWithAboveIsCleared) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, /*merge_with_above=*/true},
+                             {recorder_core::AudioSourceKind::Mic, true, /*merge_with_above=*/true}};
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+
+    ASSERT_EQ(s.audio.source_rows.size(), 2u);
+    EXPECT_FALSE(s.audio.source_rows[0].merge_with_above) << "the first row has no row above it";
+    EXPECT_TRUE(s.audio.source_rows[1].merge_with_above) << "following rows keep their merge flag";
+}
+
+TEST(RecordingPreset, Sanitize_EmptySourceRows_IsHandled) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.source_rows.clear();
+    EXPECT_TRUE(SanitizePresetConfig(cfg).audio.source_rows.empty());
+}
+
 // ===========================================================================
 // SanitizePresetConfig — video bit depth (0.7.0 — S7)
 // ===========================================================================

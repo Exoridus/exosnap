@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <windows.h>
 
@@ -588,10 +589,26 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
         };
     } else {
         // Display/Region: Computer audio ON; Microphone OFF by default.
+        //
+        // The App row's enabled/merge configuration is a persisted setting like any
+        // other, so a target switch must not silently discard it — carry an existing App
+        // row over instead of rebuilding without it. Only its ACTIVE state (receded vs.
+        // live) follows the target, and the engine strips the row from the recording-time
+        // plan anyway (recorder_core::NormalizeSourceRowsForTarget, via BuildAudioPlan),
+        // since a display/region capture has no process to scope it to.
+        const auto existing_app = std::find_if(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
+                                               [](const recorder_core::AudioSourceRow& r) { return r.kind == K::App; });
+        std::optional<recorder_core::AudioSourceRow> carried_app;
+        if (existing_app != audio_ui_state.source_rows.end())
+            carried_app = *existing_app;
+
         audio_ui_state.source_rows = {
             {K::SystemOutput, true, false},
             {K::Mic, false, false},
         };
+        // App keeps its canonical front position in the row order (APP, SYS, MIC).
+        if (carried_app.has_value())
+            audio_ui_state.source_rows.insert(audio_ui_state.source_rows.begin(), *carried_app);
     }
 
     RebuildAudioPlan();

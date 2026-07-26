@@ -90,9 +90,45 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayResetsToDi
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
 
-    EXPECT_FALSE(vm.audio_ui_state.IsAppEnabled());
+    // Sys/Mic snap back to the Display defaults. The App row's configuration is a
+    // persisted setting and survives (see AppRowConfigSurvives... below); what matters
+    // here is that it never reaches the plan for a Display target.
     EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
     EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled()); // Mic OFF by default policy
+
+    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
+    EXPECT_EQ(vm.audio_track_preview[0].source_key, "system_output");
+}
+
+// The App row's enabled/merge configuration is a persisted setting like any other:
+// switching to Display/Region must not silently discard it. The engine strips the row
+// at recording time (NormalizeSourceRowsForTarget), so keeping it is safe.
+TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayKeepsAppRowConfig) {
+    RecordViewModel vm;
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    for (auto& r : vm.audio_ui_state.source_rows) {
+        if (r.kind == recorder_core::AudioSourceKind::App) {
+            r.enabled = true;
+            r.merge_with_above = true;
+        }
+    }
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+
+    const auto& rows = vm.audio_ui_state.source_rows;
+    const auto it = std::find_if(rows.begin(), rows.end(), [](const recorder_core::AudioSourceRow& r) {
+        return r.kind == recorder_core::AudioSourceKind::App;
+    });
+    ASSERT_NE(it, rows.end()) << "the App row must survive a switch to a Display target";
+    EXPECT_TRUE(it->enabled);
+    EXPECT_TRUE(it->merge_with_above);
+    EXPECT_EQ(rows.front().kind, recorder_core::AudioSourceKind::App)
+        << "the carried App row keeps its canonical front position";
+
+    // ...but it must not reach the audio plan for a Display target.
+    for (const auto& preview : vm.audio_track_preview)
+        EXPECT_NE(preview.source_key, "app");
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnOutputToggles) {

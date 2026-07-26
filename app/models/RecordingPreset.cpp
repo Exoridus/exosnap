@@ -300,6 +300,13 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     // non-Window target (recorder_core::NormalizeSourceRowsForTarget, via BuildAudioPlan),
     // since a display/region capture genuinely has no process to scope it to.
 
+    // Audio: the first source row has no row above it, so a stored "merge with above"
+    // there is meaningless state. Normalize it away rather than leave the resolver to
+    // guess (pre-1.0: no compatibility duty for already-stored presets).
+    if (!config.audio.source_rows.empty()) {
+        config.audio.source_rows.front().merge_with_above = false;
+    }
+
     // Audio: ensure mic_gain_linear is finite and strictly positive.
     if (!std::isfinite(config.audio.mic_gain_linear) || config.audio.mic_gain_linear <= 0.0f) {
         config.audio.mic_gain_linear = 1.0f;

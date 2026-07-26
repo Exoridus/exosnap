@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -1576,6 +1578,71 @@ TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_TRUE(app_check->isEnabled()) << "After Display → Window switch, App checkbox must be enabled";
+}
+
+// The App row's checkbox stays interactable for a Display target so it can be armed
+// ahead of switching to a window. A Display state ships without an App row at all, so
+// arming it has to CREATE the row it promises — otherwise the toggle no-ops and the
+// checkbox snaps back on the next state application.
+TEST_F(ConfigPageTest, AudioApp_ArmingOnDisplayTarget_CreatesAppRow) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState display_state = MakeDisplayAudioState();
+    ASSERT_TRUE(std::none_of(
+        display_state.source_rows.begin(), display_state.source_rows.end(),
+        [](const recorder_core::AudioSourceRow& r) { return r.kind == recorder_core::AudioSourceKind::App; }))
+        << "precondition: the Display state must ship without an App row";
+    page.setAudioUiState(display_state);
+
+    capability::AudioUiState emitted;
+    bool got = false;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged, [&](const capability::AudioUiState& s) {
+        emitted = s;
+        got = true;
+    });
+
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    app_check->setChecked(true);
+
+    ASSERT_TRUE(got) << "arming the App row must emit audioSettingsChanged";
+    ASSERT_FALSE(emitted.source_rows.empty());
+    EXPECT_EQ(emitted.source_rows.front().kind, recorder_core::AudioSourceKind::App)
+        << "the created App row must sit at the front of the canonical row order";
+    EXPECT_TRUE(emitted.source_rows.front().enabled) << "the created App row must be enabled";
+    EXPECT_FALSE(emitted.source_rows.front().merge_with_above) << "the first row has no row above it to merge into";
+    EXPECT_TRUE(emitted.IsAppEnabled());
+
+    // Round-trip: re-applying the emitted state must keep the checkbox checked.
+    page.setAudioUiState(emitted);
+    EXPECT_TRUE(app_check->isChecked()) << "the App checkbox must not snap back after the state round-trip";
+}
+
+// Same root cause on the merge control: toggling "Merge with above" on a Display
+// target has to create the App row before it can carry the flag.
+TEST_F(ConfigPageTest, AudioApp_MergeToggleOnDisplayTarget_CreatesAppRow) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setAudioUiState(MakeDisplayAudioState());
+
+    capability::AudioUiState emitted;
+    bool got = false;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged, [&](const capability::AudioUiState& s) {
+        emitted = s;
+        got = true;
+    });
+
+    auto* app_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioAppMerge"));
+    ASSERT_NE(app_merge, nullptr);
+    // Flip whatever the control currently reads, so this exercises a real user toggle.
+    const bool flipped = !app_merge->isChecked();
+    app_merge->setChecked(flipped);
+
+    ASSERT_TRUE(got) << "toggling the App merge control must emit audioSettingsChanged";
+    ASSERT_FALSE(emitted.source_rows.empty());
+    EXPECT_EQ(emitted.source_rows.front().kind, recorder_core::AudioSourceKind::App)
+        << "the created App row must sit at the front of the canonical row order";
+    EXPECT_EQ(emitted.source_rows.front().merge_with_above, flipped)
+        << "the created App row must carry the merge flag the toggle just set";
 }
 
 // ---------------------------------------------------------------------------
