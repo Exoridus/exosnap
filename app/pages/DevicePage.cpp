@@ -155,11 +155,9 @@ QWidget* make444Row(bool h264_advertised, bool h264_ok, bool hevc_advertised, bo
     row_layout->addStretch(1);
     const QString chip444 = QStringLiteral("deviceChroma444Chip");
     if (h264_advertised)
-        row_layout->addWidget(
-            makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::H264Nvenc), h264_ok, row, chip444));
+        row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::H264), h264_ok, row, chip444));
     if (hevc_advertised)
-        row_layout->addWidget(
-            makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::HevcNvenc), hevc_ok, row, chip444));
+        row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(capability::VideoCodec::Hevc), hevc_ok, row, chip444));
 
     return row;
 }
@@ -192,9 +190,9 @@ QWidget* makeBFramesRow(bool h264_advertised, int h264_max, bool hevc_advertised
         const QString label = QStringLiteral("%1 (%2)").arg(ui::videoCodecLabel(codec)).arg(max_bframes);
         row_layout->addWidget(makeCodecChip(label, max_bframes > 0, row, chip));
     };
-    add_chip(h264_advertised, capability::VideoCodec::H264Nvenc, h264_max);
-    add_chip(hevc_advertised, capability::VideoCodec::HevcNvenc, hevc_max);
-    add_chip(av1_advertised, capability::VideoCodec::Av1Nvenc, av1_max);
+    add_chip(h264_advertised, capability::VideoCodec::H264, h264_max);
+    add_chip(hevc_advertised, capability::VideoCodec::Hevc, hevc_max);
+    add_chip(av1_advertised, capability::VideoCodec::Av1, av1_max);
 
     return row;
 }
@@ -222,9 +220,9 @@ QWidget* makeAdvancedEncodeToggleRow(const QString& label, const QString& object
             return;
         row_layout->addWidget(makeCodecChip(ui::videoCodecLabel(codec), on, row, object_name));
     };
-    add_chip(h264_advertised, capability::VideoCodec::H264Nvenc, h264_on);
-    add_chip(hevc_advertised, capability::VideoCodec::HevcNvenc, hevc_on);
-    add_chip(av1_advertised, capability::VideoCodec::Av1Nvenc, av1_on);
+    add_chip(h264_advertised, capability::VideoCodec::H264, h264_on);
+    add_chip(hevc_advertised, capability::VideoCodec::Hevc, hevc_on);
+    add_chip(av1_advertised, capability::VideoCodec::Av1, av1_on);
 
     return row;
 }

@@ -508,7 +508,7 @@ TEST(OutputSettingsTest, Defaults_AudioCodecIsAac) {
 
 TEST(OutputSettingsTest, Defaults_VideoCodecIsH264) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(defaults.video_codec, capability::VideoCodec::H264);
 }
 
 TEST(OutputSettingsTest, DefaultResolutionIsNativeContain) {
@@ -741,15 +741,15 @@ TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedAudioCodec) 
 TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedContainerOrVideoCodec) {
     recorder_core::RecorderConfig config{};
     config.container = recorder_core::Container::Mp4; // resolver's answer
-    config.video_codec = recorder_core::VideoCodec::H264Nvenc;
+    config.video_codec = recorder_core::VideoCodec::H264;
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
     settings.container = capability::Container::WebM; // raw, unresolved wish
-    settings.video_codec = capability::VideoCodec::Av1Nvenc;
+    settings.video_codec = capability::VideoCodec::Av1;
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
     EXPECT_EQ(config.container, recorder_core::Container::Mp4);
-    EXPECT_EQ(config.video_codec, recorder_core::VideoCodec::H264Nvenc);
+    EXPECT_EQ(config.video_codec, recorder_core::VideoCodec::H264);
 }
 
 TEST(OutputSettingsTest, ApplyOutputResolution_PassesFixedSizeToRecorderConfig) {
@@ -851,7 +851,7 @@ TEST(OutputSettingsTest, FilenameTokens_ProfileContainerVideoAudioRender) {
     const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
     FilenameTargetContext context = WindowContext();
     context.profile_name = L"MKV H264 AAC";
-    context.video_codec = capability::VideoCodec::H264Nvenc;
+    context.video_codec = capability::VideoCodec::H264;
     context.audio_codec = capability::AudioCodec::Aac;
     const auto filename =
         BuildFilename(L"{profile}_{container}_{video}_{audio}", capability::Container::Matroska, ts, context);
@@ -1216,7 +1216,7 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     // from every UiRecordingResult default, so a leak of the defaults cannot
     // pass by coincidence.
     validation.resolved_config.container = capability::Container::Mp4;
-    validation.resolved_config.video_codec = capability::VideoCodec::H264Nvenc;
+    validation.resolved_config.video_codec = capability::VideoCodec::H264;
     validation.resolved_config.audio_codec = capability::AudioCodec::Aac;
     coordinator.OnCapabilitiesReady(caps, validation);
 
@@ -1236,7 +1236,7 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     // SetOutputSettings re-stamps the resolved config's format from this model,
     // so the format under test must live here, not only in the ResolveResult.
     settings.container = capability::Container::Mp4;
-    settings.video_codec = capability::VideoCodec::H264Nvenc;
+    settings.video_codec = capability::VideoCodec::H264;
     settings.audio_codec = capability::AudioCodec::Aac;
     coordinator.SetOutputSettings(settings);
 
@@ -1283,14 +1283,14 @@ void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesyst
     capability::ResolveResult validation;
     validation.succeeded = true;
     validation.resolved_config.container = capability::Container::Matroska;
-    validation.resolved_config.video_codec = capability::VideoCodec::Av1Nvenc;
+    validation.resolved_config.video_codec = capability::VideoCodec::Av1;
     validation.resolved_config.audio_codec = capability::AudioCodec::Opus;
     coordinator.OnCapabilitiesReady(caps, validation);
 
     OutputSettingsModel settings;
     settings.output_folder = out_folder;
     settings.container = capability::Container::Matroska;
-    settings.video_codec = capability::VideoCodec::Av1Nvenc;
+    settings.video_codec = capability::VideoCodec::Av1;
     settings.audio_codec = capability::AudioCodec::Opus;
     coordinator.SetOutputSettings(settings);
 }

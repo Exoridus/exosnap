@@ -62,7 +62,7 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[3].id, kCompatibilityPresetId);
     EXPECT_EQ(b[3].name, "Compatibility");
     EXPECT_EQ(b[3].config.output.container, capability::Container::Mp4);
-    EXPECT_EQ(b[3].config.output.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(b[3].config.output.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(b[3].config.output.audio_codec, capability::AudioCodec::Aac);
     EXPECT_EQ(b[3].config.video.cq, 19u);
     EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
@@ -107,7 +107,7 @@ TEST(RecordingPreset, DefaultPreset_IdAndName) {
 TEST(RecordingPreset, DefaultPreset_Container_Video_Audio) {
     const RecordingPreset p = MakeDefaultPreset();
     EXPECT_EQ(p.config.output.container, capability::Container::Matroska);
-    EXPECT_EQ(p.config.output.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(p.config.output.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(p.config.output.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -121,7 +121,7 @@ TEST(RecordingPreset, DefaultPreset_OutputResolutionNativeContain) {
 
 TEST(RecordingPreset, DefaultPreset_VideoSettings) {
     const RecordingPreset p = MakeDefaultPreset();
-    EXPECT_EQ(p.config.video.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High));
+    EXPECT_EQ(p.config.video.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::High));
     EXPECT_TRUE(p.config.video.cfr);
     EXPECT_TRUE(p.config.video.capture_cursor);
     EXPECT_EQ(p.config.video.frame_rate_num, 60u);
@@ -212,7 +212,7 @@ TEST(RecordingPreset, DefaultPreset_ReconcileDoesNotChangeAv1Opus_MKV) {
     EXPECT_EQ(p.config.output.video_codec, video_before);
     EXPECT_EQ(p.config.output.audio_codec, audio_before);
     EXPECT_EQ(p.config.output.container, capability::Container::Matroska);
-    EXPECT_EQ(p.config.output.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(p.config.output.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(p.config.output.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -311,7 +311,7 @@ TEST(RecordingPreset, Sanitize_EmptySourceRows_IsHandled) {
 TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitH264_ForcesEightBit) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
-    cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
+    cfg.output.video_codec = capability::VideoCodec::H264;
     cfg.output.bit_depth = capability::BitDepth::Bit10;
 
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
@@ -322,7 +322,7 @@ TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitH264_ForcesEightBit) {
 TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitHevc_Preserved) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
-    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.video_codec = capability::VideoCodec::Hevc;
     cfg.output.audio_codec = capability::AudioCodec::Opus;
     cfg.output.bit_depth = capability::BitDepth::Bit10;
 
@@ -334,7 +334,7 @@ TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitHevc_Preserved) {
 TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitAv1_Preserved) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
-    cfg.output.video_codec = capability::VideoCodec::Av1Nvenc;
+    cfg.output.video_codec = capability::VideoCodec::Av1;
     cfg.output.bit_depth = capability::BitDepth::Bit10;
 
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
@@ -348,19 +348,18 @@ TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitAv1_Preserved) {
 TEST(RecordingPreset, Sanitize_VideoBitDepth_Mp4Hevc_KeepsTenBit) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Mp4;
-    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.video_codec = capability::VideoCodec::Hevc;
     cfg.output.audio_codec = capability::AudioCodec::Aac; // MP4 audio is AAC-only
     cfg.output.bit_depth = capability::BitDepth::Bit10;
 
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Hevc);
     EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
 }
 
 // 8-bit is always valid and never altered by codec.
 TEST(RecordingPreset, Sanitize_VideoBitDepth_EightBit_AlwaysPreserved) {
-    for (const auto codec :
-         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+    for (const auto codec : {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
         RecordingPresetConfig cfg = MakeDefaultPreset().config;
         cfg.output.container = capability::Container::Matroska;
         cfg.output.video_codec = codec;
@@ -375,7 +374,7 @@ TEST(RecordingPreset, Sanitize_VideoBitDepth_EightBit_AlwaysPreserved) {
 // bit_depth participates in dirty/normalized equality.
 TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
-    a.output.video_codec = capability::VideoCodec::HevcNvenc;
+    a.output.video_codec = capability::VideoCodec::Hevc;
     a.output.audio_codec = capability::AudioCodec::Opus;
     a.output.bit_depth = capability::BitDepth::Bit8;
     RecordingPresetConfig b = a;
@@ -392,8 +391,7 @@ TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
 TEST(RecordingPreset, Sanitize_ColorRange_DefaultIsLimited_AndPreservedForAllCodecs) {
     EXPECT_EQ(MakeDefaultPreset().config.output.color_range, capability::ColorRange::Limited);
 
-    for (const auto codec :
-         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+    for (const auto codec : {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
         for (const auto range : {capability::ColorRange::Full, capability::ColorRange::Limited}) {
             RecordingPresetConfig cfg = MakeDefaultPreset().config;
             cfg.output.container = capability::Container::Matroska;
@@ -424,8 +422,7 @@ TEST(RecordingPreset, NormalizedEquals_ColorRangeDifference_NotEqual) {
 TEST(RecordingPreset, Sanitize_NvencPreset_DefaultIsP4_AndPreservedForAllCodecs) {
     EXPECT_EQ(MakeDefaultPreset().config.output.nvenc_preset, recorder_core::NvencPreset::P4);
 
-    for (const auto codec :
-         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+    for (const auto codec : {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
         for (const auto preset :
              {recorder_core::NvencPreset::P1, recorder_core::NvencPreset::P4, recorder_core::NvencPreset::P7}) {
             RecordingPresetConfig cfg = MakeDefaultPreset().config;
@@ -702,20 +699,20 @@ TEST(RecordingPreset, Sanitize_Webcam_Opacity_Nan_ResetToOne) {
 TEST(RecordingPreset, Reconcile_Mp4_ForcesH264Aac) {
     OutputSettingsModel out;
     out.container = capability::Container::Mp4;
-    out.video_codec = capability::VideoCodec::Av1Nvenc;
+    out.video_codec = capability::VideoCodec::Av1;
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Reconcile_WebM_ForcesAv1Opus) {
     OutputSettingsModel out;
     out.container = capability::Container::WebM;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Aac;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -724,10 +721,10 @@ TEST(RecordingPreset, Reconcile_Mkv_H264Opus_Unchanged) {
     // The reconciler must leave it unchanged — no rewrite to AAC.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -735,10 +732,10 @@ TEST(RecordingPreset, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
     // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Reconciler must leave it unchanged.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
-    out.video_codec = capability::VideoCodec::HevcNvenc;
+    out.video_codec = capability::VideoCodec::Hevc;
     out.audio_codec = capability::AudioCodec::Aac;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Hevc);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
@@ -748,23 +745,23 @@ TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
     // WebM cannot carry PCM (Prohibited); MP4 + PCM is Experimental (ADR 0030, ipcm).
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Pcm;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Pcm);
 }
 
 TEST(RecordingPreset, Reconcile_Mp4_Pcm_ForcesAac) {
     // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental — the reconciler
     // must fix audio to AAC. PCM is deferred for MP4 (libavformat emits ipcm, limited
-    // player support). MP4 video is forced to H264Nvenc regardless.
+    // player support). MP4 video is forced to H264 regardless.
     OutputSettingsModel out;
     out.container = capability::Container::Mp4;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Pcm;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
@@ -772,10 +769,10 @@ TEST(RecordingPreset, Reconcile_Mp4_Opus_ForcesAac) {
     // MP4 + Opus remains Prohibited; reconciler replaces Opus with AAC.
     OutputSettingsModel out;
     out.container = capability::Container::Mp4;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
@@ -783,10 +780,10 @@ TEST(RecordingPreset, Reconcile_Mp4_Flac_ForcesAac) {
     // MP4 + FLAC remains Experimental (not selectable); reconciler fixes it to AAC.
     OutputSettingsModel out;
     out.container = capability::Container::Mp4;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Flac;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
@@ -794,10 +791,10 @@ TEST(RecordingPreset, Reconcile_WebM_Pcm_ForcesOpus) {
     // WebM cannot carry PCM (Prohibited); reconciler swaps to the WebM-preferred Opus.
     OutputSettingsModel out;
     out.container = capability::Container::WebM;
-    out.video_codec = capability::VideoCodec::Av1Nvenc;
+    out.video_codec = capability::VideoCodec::Av1;
     out.audio_codec = capability::AudioCodec::Pcm;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -807,10 +804,10 @@ TEST(RecordingPreset, Reconcile_Mkv_Flac_Unchanged) {
     // FLAC-in-WebM is Prohibited; both reconcile to the container's preferred audio.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
-    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.video_codec = capability::VideoCodec::H264;
     out.audio_codec = capability::AudioCodec::Flac;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Flac);
 }
 
@@ -818,40 +815,40 @@ TEST(RecordingPreset, Reconcile_WebM_Flac_ForcesOpus) {
     // WebM cannot carry FLAC (Prohibited); reconciler swaps to WebM-preferred Opus.
     OutputSettingsModel out;
     out.container = capability::Container::WebM;
-    out.video_codec = capability::VideoCodec::Av1Nvenc;
+    out.video_codec = capability::VideoCodec::Av1;
     out.audio_codec = capability::AudioCodec::Flac;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Av1Opus_Unchanged) {
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
-    out.video_codec = capability::VideoCodec::Av1Nvenc;
+    out.video_codec = capability::VideoCodec::Av1;
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
 TEST(RecordingPreset, Sanitize_Mp4Container_ForcesH264Aac) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Mp4;
-    cfg.output.video_codec = capability::VideoCodec::Av1Nvenc;
+    cfg.output.video_codec = capability::VideoCodec::Av1;
     cfg.output.audio_codec = capability::AudioCodec::Opus;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Sanitize_WebMContainer_ForcesAv1Opus) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::WebM;
-    cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
+    cfg.output.video_codec = capability::VideoCodec::H264;
     cfg.output.audio_codec = capability::AudioCodec::Aac;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Av1);
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -860,10 +857,10 @@ TEST(RecordingPreset, Sanitize_Mkv_H264Opus_Unchanged) {
     // Sanitization must leave it unchanged — no rewrite to AAC.
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
-    cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
+    cfg.output.video_codec = capability::VideoCodec::H264;
     cfg.output.audio_codec = capability::AudioCodec::Opus;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::H264);
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
 }
 
@@ -871,10 +868,10 @@ TEST(RecordingPreset, Sanitize_Mkv_Hevc_Aac_IsPreserved) {
     // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Sanitizer must leave it unchanged.
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
-    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.video_codec = capability::VideoCodec::Hevc;
     cfg.output.audio_codec = capability::AudioCodec::Aac;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Hevc);
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Aac);
 }
 
@@ -958,7 +955,7 @@ TEST(RecordingPreset, NormalizedEquals_OutputContainerChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_VideoQualityChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -1077,7 +1074,7 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_VideoQualityChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -1358,7 +1355,7 @@ TEST(RecordingPreset, SanitizePreset_NonEmptyId_Preserved) {
 // settings-changed handler.
 TEST(RecordingPreset, DirtyEquivalent_BitDepthDifference_NotChanged) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
-    a.output.video_codec = capability::VideoCodec::HevcNvenc;
+    a.output.video_codec = capability::VideoCodec::Hevc;
     RecordingPresetConfig b = a;
     b.output.bit_depth = capability::BitDepth::Bit10;
 
@@ -1380,7 +1377,7 @@ TEST(RecordingPreset, DirtyEquivalent_HdrModeDifference_NotChanged) {
 // before applyPresetConfig, so a switch never overrides the environment.
 TEST(RecordingPreset, WithEnvironmentFields_PreservesLiveEnvironment) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
-    live.output.video_codec = capability::VideoCodec::HevcNvenc;
+    live.output.video_codec = capability::VideoCodec::Hevc;
     live.output.bit_depth = capability::BitDepth::Bit10;
     live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Window;
@@ -1405,7 +1402,7 @@ TEST(RecordingPreset, WithEnvironmentFields_H264Clamp_StillForcesEightBit) {
 
     RecordingPresetConfig preset = MakeDefaultPreset().config;
     preset.output.container = capability::Container::Mp4;
-    preset.output.video_codec = capability::VideoCodec::H264Nvenc;
+    preset.output.video_codec = capability::VideoCodec::H264;
     preset.output.audio_codec = capability::AudioCodec::Aac;
 
     const RecordingPresetConfig applied = SanitizePresetConfig(WithEnvironmentFields(preset, live));
@@ -1451,7 +1448,7 @@ TEST(RecordingPreset, WithEnvironmentFields_UndoOverlaysCurrentEnvironment_NotPr
 // StripEnvironmentFields so exported preset files carry no environment claims.
 TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
-    live.output.video_codec = capability::VideoCodec::HevcNvenc;
+    live.output.video_codec = capability::VideoCodec::Hevc;
     live.output.bit_depth = capability::BitDepth::Bit10;
     live.output.hdr_mode = recorder_core::HdrMode::Hdr10;
     live.capture.kind = PresetCaptureKind::Region;
@@ -1465,7 +1462,7 @@ TEST(RecordingPreset, StripEnvironmentFields_ResetsToModelDefaults) {
     EXPECT_EQ(stripped.output.hdr_mode, defaults.hdr_mode);
     EXPECT_EQ(stripped.capture.kind, PresetCaptureKind::Display);
     EXPECT_FALSE(stripped.capture.has_region);
-    EXPECT_EQ(stripped.output.video_codec, capability::VideoCodec::HevcNvenc); // intent kept
+    EXPECT_EQ(stripped.output.video_codec, capability::VideoCodec::Hevc); // intent kept
 }
 
 } // namespace

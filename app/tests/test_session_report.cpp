@@ -35,7 +35,7 @@ SessionReportInputs MakeInputs() {
     in.result.frame_rate_den = 1;
     in.result.cfr = true;
     in.result.container = recorder_core::Container::Matroska;
-    in.result.video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    in.result.video_codec = recorder_core::VideoCodec::Av1;
     in.result.audio_codec = recorder_core::AudioCodec::Opus;
     in.output_filename = QStringLiteral("ExoSnap_2026.mkv");
 
@@ -52,7 +52,7 @@ SessionReportInputs MakeInputs() {
     s.peak_av_drift_ms = 9.0;
     s.peak_av_drift_availability = recorder_core::MetricAvailability::Available;
     s.encoder_init.valid = true;
-    s.encoder_init.codec = recorder_core::VideoCodec::Av1Nvenc;
+    s.encoder_init.codec = recorder_core::VideoCodec::Av1;
     s.encoder_init.preset = recorder_core::NvencPreset::P5;
     s.encoder_init.rc_mode = recorder_core::RateControlMode::VariableBitrate;
     s.encoder_init.target_bitrate_kbps = 20000;

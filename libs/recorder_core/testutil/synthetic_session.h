@@ -26,7 +26,7 @@
 namespace recorder_core::testutil {
 
 struct SyntheticSessionConfig {
-    VideoCodec video_codec = VideoCodec::Av1Nvenc;
+    VideoCodec video_codec = VideoCodec::Av1;
     AudioCodec audio_codec = AudioCodec::Opus;
     std::string output_path; // the MKV the pipeline writes
     double target_seconds = 2.0;

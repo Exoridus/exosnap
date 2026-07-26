@@ -86,18 +86,18 @@ class SettingsResolver {
 // 10-bit (HEVC Main10 / AV1 10-bit P010) is valid only for HEVC and AV1,
 // never H.264 — the same static rule translation.cpp enforces.
 [[nodiscard]] constexpr bool CodecSupports10Bit(VideoCodec codec) noexcept {
-    return codec == VideoCodec::HevcNvenc || codec == VideoCodec::Av1Nvenc;
+    return codec == VideoCodec::Hevc || codec == VideoCodec::Av1;
 }
 
 // 4:4:4 is an 8-bit H.264/HEVC-only expert path (AV1 NVENC is 4:2:0 only).
 [[nodiscard]] constexpr bool CodecSupportsChroma444(VideoCodec codec) noexcept {
-    return codec == VideoCodec::H264Nvenc || codec == VideoCodec::HevcNvenc;
+    return codec == VideoCodec::H264 || codec == VideoCodec::Hevc;
 }
 
 // The raw wish as the user stored it, before any rule is applied.
 struct OutputFormatRequest {
     Container container = Container::Matroska;
-    VideoCodec video_codec = VideoCodec::Av1Nvenc;
+    VideoCodec video_codec = VideoCodec::Av1;
     AudioCodec audio_codec = AudioCodec::Opus;
     BitDepth bit_depth = BitDepth::Bit8;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;

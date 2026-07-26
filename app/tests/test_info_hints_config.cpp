@@ -123,7 +123,7 @@ TEST_F(InfoHintsConfigTest, ConfigPage_WebMWithH264_ShowsCompatCallout) {
     // Simulate selecting WebM container + H.264 video codec (incompatible combo).
     OutputSettingsModel settings = output_defaults_;
     settings.container = capability::Container::WebM;
-    settings.video_codec = capability::VideoCodec::H264Nvenc;
+    settings.video_codec = capability::VideoCodec::H264;
     settings.audio_codec = capability::AudioCodec::Opus;
     page.setOutputSettings(settings);
 

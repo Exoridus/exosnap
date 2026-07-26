@@ -31,7 +31,7 @@ ui::dialogs::RecordingErrorModel SampleModel(bool can_send = false) {
     model.summary = QStringLiteral("ExoSnap couldn't start this recording.");
     model.phase = QStringLiteral("Validate");
     model.code = QStringLiteral("0x80004001");
-    model.detail = QStringLiteral("Container::Matroska requires VideoCodec::Av1Nvenc");
+    model.detail = QStringLiteral("Container::Matroska requires VideoCodec::Av1");
     model.container = QStringLiteral("MKV");
     model.video_codec = QStringLiteral("HEVC");
     model.audio_codec = QStringLiteral("Opus");
@@ -73,7 +73,7 @@ TEST_F(RecordingErrorTest, RendersTitlePhaseCodeDetailAndFormat) {
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("Validate")));
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("0x80004001")));
     // The DETAIL line humanizes raw engine enum tokens to canonical labels:
-    // "Container::Matroska requires VideoCodec::Av1Nvenc" -> "MKV requires AV1".
+    // "Container::Matroska requires VideoCodec::Av1" -> "MKV requires AV1".
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("MKV requires AV1")));
     EXPECT_FALSE(ContainsLabel(panel, QStringLiteral("VideoCodec::")));
     // Codec triple collapses into one FORMAT line.

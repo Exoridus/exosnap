@@ -88,7 +88,7 @@ SupportAnnotation StaticMatrixAnnotation(Container c, VideoCodec v, AudioCodec a
     // rejected here so the resolver falls back or blocks. Per-codec/per-GPU 4:4:4
     // availability is layered on via QueryChroma444 in QueryCombo.
     if (cs == ChromaSubsampling::Cs444) {
-        if (v == VideoCodec::Av1Nvenc) {
+        if (v == VideoCodec::Av1) {
             return {SupportLevel::NotImplemented, "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."};
         }
         if (bd == BitDepth::Bit10) {
@@ -98,7 +98,7 @@ SupportAnnotation StaticMatrixAnnotation(Container c, VideoCodec v, AudioCodec a
 
     // 8-bit is universal. 10-bit (HEVC Main10 / AV1 10-bit, P010, SDR BT.709 — 0.7.0 S5)
     // is implemented only for the NVENC HEVC and AV1 codecs; H.264 stays 8-bit only.
-    if (bd == BitDepth::Bit10 && v != VideoCodec::HevcNvenc && v != VideoCodec::Av1Nvenc) {
+    if (bd == BitDepth::Bit10 && v != VideoCodec::Hevc && v != VideoCodec::Av1) {
         return {SupportLevel::NotImplemented, "10-bit requires the HEVC or AV1 codec; H.264 is 8-bit only."};
     }
 

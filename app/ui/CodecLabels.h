@@ -56,11 +56,11 @@ inline QString videoCodecLabel(capability::VideoCodec codec) {
 
 inline QString videoCodecLabel(recorder_core::VideoCodec codec) {
     switch (codec) {
-    case recorder_core::VideoCodec::H264Nvenc:
+    case recorder_core::VideoCodec::H264:
         return QStringLiteral("H.264");
-    case recorder_core::VideoCodec::HevcNvenc:
+    case recorder_core::VideoCodec::Hevc:
         return QStringLiteral("HEVC");
-    case recorder_core::VideoCodec::Av1Nvenc:
+    case recorder_core::VideoCodec::Av1:
         return QStringLiteral("AV1");
     }
     return QStringLiteral("AV1");

@@ -287,10 +287,10 @@ static std::wstring BuildCapabilityStatusText(const capability::UserRecorderConf
 
     const wchar_t* video_name = L"AV1 NVENC";
     switch (config.video_codec) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         video_name = L"H.264 NVENC";
         break;
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         video_name = L"HEVC NVENC";
         break;
     default:
@@ -865,7 +865,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     }
 
     auto config = exosnap::capability::ToRecorderCoreConfig(ctx.resolved_user_config, ctx.caps);
-    config.nvenc_cq = ctx.video_settings.cq;
+    config.cq = ctx.video_settings.cq;
     config.nvenc_rate_control = ctx.video_settings.rate_control;
     config.nvenc_bitrate_kbps = ctx.video_settings.bitrate_kbps;
     config.frame_rate_num = ctx.video_settings.frame_rate_num;
@@ -2149,9 +2149,9 @@ const std::wstring& RecordingCoordinator::CapabilityStatusText() const {
 
 std::wstring RecordingCoordinator::ResolvedVideoCodecLabel() const {
     switch (resolved_user_config_.video_codec) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return L"H.264 NVENC encoder";
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return L"HEVC NVENC encoder";
     default:
         return L"AV1 NVENC encoder";

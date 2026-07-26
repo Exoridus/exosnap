@@ -74,11 +74,11 @@ std::wstring ContainerLabel(recorder_core::Container container) {
 
 std::wstring VideoCodecLabel(recorder_core::VideoCodec codec) {
     switch (codec) {
-    case recorder_core::VideoCodec::H264Nvenc:
+    case recorder_core::VideoCodec::H264:
         return L"H.264";
-    case recorder_core::VideoCodec::HevcNvenc:
+    case recorder_core::VideoCodec::Hevc:
         return L"HEVC";
-    case recorder_core::VideoCodec::Av1Nvenc:
+    case recorder_core::VideoCodec::Av1:
         return L"AV1";
     }
     return L"AV1";
@@ -569,7 +569,7 @@ void RecordViewModel::ResetStats() {
     result_frame_rate_den = 1;
     result_cfr = true;
     result_container = recorder_core::Container::WebM;
-    result_video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    result_video_codec = recorder_core::VideoCodec::Av1;
     result_audio_codec = recorder_core::AudioCodec::Opus;
     live_stats_available = false;
 }

@@ -81,7 +81,7 @@ TEST(WebMContainerValidationTest, Validate_DefaultConfigIsWebMOpus) {
     const RecorderConfig cfg{};
     EXPECT_EQ(cfg.container, Container::WebM);
     EXPECT_EQ(cfg.audio_codec, AudioCodec::Opus);
-    EXPECT_EQ(cfg.video_codec, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(cfg.video_codec, VideoCodec::Av1);
 }
 
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Aac) {
@@ -91,7 +91,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Aac) {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Matroska;
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Aac;
 
     RecorderResult result{};
@@ -106,7 +106,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsWebMH264) {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::WebM;
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Opus;
 
     RecorderResult result{};
@@ -129,7 +129,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv1Pcm) {
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Pcm) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Pcm;
 
     RecorderResult result{};
@@ -160,7 +160,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4Pcm) {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Mp4;
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Pcm;
 
     RecorderResult result{};
@@ -184,7 +184,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv1Flac) {
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Flac) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Flac;
 
     RecorderResult result{};
@@ -211,7 +211,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4Flac) {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Mp4;
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Flac;
 
     RecorderResult result{};
@@ -229,7 +229,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4Flac) {
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcOpus) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = AudioCodec::Opus;
 
     RecorderResult result{};
@@ -240,7 +240,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcOpus) {
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcAac) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = AudioCodec::Aac;
 
     RecorderResult result{};
@@ -251,7 +251,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcAac) {
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcPcm) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = AudioCodec::Pcm;
 
     RecorderResult result{};
@@ -262,7 +262,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcPcm) {
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcFlac) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = AudioCodec::Flac;
 
     RecorderResult result{};
@@ -277,7 +277,7 @@ static RecorderConfig MakeMp4HevcConfig(AudioCodec audio) {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Mp4;
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = audio;
     return cfg;
 }
@@ -327,7 +327,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4HevcFlac) {
 TEST(WebMContainerValidationTest, Validate_RejectsWebMHevc) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidWebMConfig();
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
 
     RecorderResult result{};
     EXPECT_FALSE(session.Validate(cfg, &result));
@@ -343,7 +343,7 @@ using recorder_core::BitDepth;
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevc10Bit) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = AudioCodec::Aac;
     cfg.bit_depth = BitDepth::Bit10;
 
@@ -385,7 +385,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv110Bit) {
 TEST(WebMContainerValidationTest, Validate_RejectsMkvH26410Bit) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Aac;
     cfg.bit_depth = BitDepth::Bit10;
 
@@ -403,7 +403,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4H26410Bit) {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Mp4;
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
     cfg.audio_codec = AudioCodec::Aac;
     cfg.bit_depth = BitDepth::Bit10;
 

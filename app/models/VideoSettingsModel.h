@@ -17,7 +17,7 @@ struct VideoSettingsModel {
     // Constant-quality target (1 = best, 51 = worst). The three named presets are
     // shorthands for canonical values, not a separate setting: the selected
     // segment is derived via recorder_core::NearestQualityPreset(cq).
-    uint32_t cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced);
+    uint32_t cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced);
     recorder_core::RateControlMode rate_control = recorder_core::RateControlMode::ConstantQuality;
     uint32_t bitrate_kbps = 20000; // Used for VariableBitrate and ConstantBitrate modes
     bool cfr = true;

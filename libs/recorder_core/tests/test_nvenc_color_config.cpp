@@ -54,7 +54,7 @@ TEST(ApplyColorMetadataToNvenc, DefaultColorMetadata_IsLimitedRange) {
 
 TEST(ApplyColorMetadataToNvenc, Av1_DefaultColorMetadata_SignalsStudioRange) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1Nvenc, ColorMetadata::Sdr709());
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1, ColorMetadata::Sdr709());
     const auto& av1 = cfg.encodeCodecConfig.av1Config;
     EXPECT_EQ(av1.colorPrimaries, NV_ENC_VUI_COLOR_PRIMARIES_BT709);
     EXPECT_EQ(av1.transferCharacteristics, NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709);
@@ -64,14 +64,14 @@ TEST(ApplyColorMetadataToNvenc, Av1_DefaultColorMetadata_SignalsStudioRange) {
 
 TEST(ApplyColorMetadataToNvenc, H264_DefaultColorMetadata_SignalsLimitedRange) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::H264Nvenc, ColorMetadata::Sdr709());
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::H264, ColorMetadata::Sdr709());
     const auto& vui = cfg.encodeCodecConfig.h264Config.h264VUIParameters;
     EXPECT_EQ(vui.videoFullRangeFlag, 0u) << "default ColorMetadata must signal limited (0), not full (1)";
 }
 
 TEST(ApplyColorMetadataToNvenc, Hevc_DefaultColorMetadata_SignalsLimitedRange) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::HevcNvenc, ColorMetadata::Sdr709());
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Hevc, ColorMetadata::Sdr709());
     const auto& vui = cfg.encodeCodecConfig.hevcConfig.hevcVUIParameters;
     EXPECT_EQ(vui.videoFullRangeFlag, 0u) << "default ColorMetadata must signal limited (0), not full (1)";
 }
@@ -82,7 +82,7 @@ TEST(ApplyColorMetadataToNvenc, Hevc_DefaultColorMetadata_SignalsLimitedRange) {
 
 TEST(ApplyColorMetadataToNvenc, Av1_FullRange_Bt709) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1Nvenc, MakeSdrColor(ColorRange::Full));
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1, MakeSdrColor(ColorRange::Full));
     const auto& av1 = cfg.encodeCodecConfig.av1Config;
     EXPECT_EQ(av1.colorPrimaries, NV_ENC_VUI_COLOR_PRIMARIES_BT709);
     EXPECT_EQ(av1.transferCharacteristics, NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709);
@@ -92,7 +92,7 @@ TEST(ApplyColorMetadataToNvenc, Av1_FullRange_Bt709) {
 
 TEST(ApplyColorMetadataToNvenc, Av1_LimitedRange_Bt709) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1Nvenc, MakeSdrColor(ColorRange::Limited));
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1, MakeSdrColor(ColorRange::Limited));
     const auto& av1 = cfg.encodeCodecConfig.av1Config;
     EXPECT_EQ(av1.colorPrimaries, NV_ENC_VUI_COLOR_PRIMARIES_BT709);
     EXPECT_EQ(av1.transferCharacteristics, NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709);
@@ -109,7 +109,7 @@ TEST(ApplyColorMetadataToNvenc, Av1_NonDefaultColor_Bt2020Pq) {
     color.transfer = TransferCharacteristics::SmpteSt2084;
     color.matrix = MatrixCoefficients::Bt2020Ncl;
     color.range = ColorRange::Full;
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1Nvenc, color);
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Av1, color);
     const auto& av1 = cfg.encodeCodecConfig.av1Config;
     EXPECT_EQ(av1.colorPrimaries, NV_ENC_VUI_COLOR_PRIMARIES_BT2020);
     EXPECT_EQ(av1.transferCharacteristics, NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084);
@@ -123,7 +123,7 @@ TEST(ApplyColorMetadataToNvenc, Av1_NonDefaultColor_Bt2020Pq) {
 
 TEST(ApplyColorMetadataToNvenc, H264_FullRange_Bt709) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::H264Nvenc, MakeSdrColor(ColorRange::Full));
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::H264, MakeSdrColor(ColorRange::Full));
     const auto& vui = cfg.encodeCodecConfig.h264Config.h264VUIParameters;
     EXPECT_EQ(vui.videoSignalTypePresentFlag, 1u);
     EXPECT_EQ(vui.videoFormat, NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED);
@@ -136,7 +136,7 @@ TEST(ApplyColorMetadataToNvenc, H264_FullRange_Bt709) {
 
 TEST(ApplyColorMetadataToNvenc, H264_LimitedRange_Bt709) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::H264Nvenc, MakeSdrColor(ColorRange::Limited));
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::H264, MakeSdrColor(ColorRange::Limited));
     const auto& vui = cfg.encodeCodecConfig.h264Config.h264VUIParameters;
     EXPECT_EQ(vui.videoSignalTypePresentFlag, 1u);
     EXPECT_EQ(vui.videoFullRangeFlag, 0u) << "videoFullRangeFlag must be 0 (limited) for ColorRange::Limited";
@@ -153,7 +153,7 @@ TEST(ApplyColorMetadataToNvenc, H264_LimitedRange_Bt709) {
 
 TEST(ApplyColorMetadataToNvenc, Hevc_FullRange_Bt709) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::HevcNvenc, MakeSdrColor(ColorRange::Full));
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Hevc, MakeSdrColor(ColorRange::Full));
     const auto& vui = cfg.encodeCodecConfig.hevcConfig.hevcVUIParameters;
     EXPECT_EQ(vui.videoSignalTypePresentFlag, 1u);
     EXPECT_EQ(vui.videoFormat, NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED);
@@ -166,7 +166,7 @@ TEST(ApplyColorMetadataToNvenc, Hevc_FullRange_Bt709) {
 
 TEST(ApplyColorMetadataToNvenc, Hevc_LimitedRange_Bt709) {
     NV_ENC_CONFIG cfg{};
-    ApplyColorMetadataToNvenc(cfg, VideoCodec::HevcNvenc, MakeSdrColor(ColorRange::Limited));
+    ApplyColorMetadataToNvenc(cfg, VideoCodec::Hevc, MakeSdrColor(ColorRange::Limited));
     const auto& vui = cfg.encodeCodecConfig.hevcConfig.hevcVUIParameters;
     EXPECT_EQ(vui.videoSignalTypePresentFlag, 1u);
     EXPECT_EQ(vui.videoFullRangeFlag, 0u);

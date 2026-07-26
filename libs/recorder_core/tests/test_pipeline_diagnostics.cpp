@@ -35,7 +35,7 @@ SessionStats MakeStats() {
     s.frame_rate_num = 60;
     s.frame_rate_den = 1;
     s.cfr = true;
-    s.video_codec = VideoCodec::Av1Nvenc;
+    s.video_codec = VideoCodec::Av1;
     s.audio_codec = AudioCodec::Opus;
     s.output_size = FrameSize{1920, 1080};
     return s;
@@ -1064,7 +1064,7 @@ TEST(EncoderInit, InvalidUntilSetThenCarriedOnSnapshots) {
 
     EncoderInitInfo info;
     info.valid = true;
-    info.codec = VideoCodec::Av1Nvenc;
+    info.codec = VideoCodec::Av1;
     info.preset = NvencPreset::P5;
     info.rc_mode = RateControlMode::VariableBitrate;
     info.target_bitrate_kbps = 20000;

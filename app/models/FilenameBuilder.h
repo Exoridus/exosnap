@@ -14,7 +14,7 @@ struct FilenameTargetContext {
     std::wstring process_name;
     std::wstring window_title;
     std::wstring profile_name;
-    capability::VideoCodec video_codec = capability::VideoCodec::H264Nvenc;
+    capability::VideoCodec video_codec = capability::VideoCodec::H264;
     capability::AudioCodec audio_codec = capability::AudioCodec::Aac;
 };
 

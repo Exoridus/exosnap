@@ -8,9 +8,9 @@ bool NvencVideoEncoder::Open(void* gpu_context, std::string& out_error) {
     if (!m_nvenc.Open(device, out_error))
         return false;
     bool ok = false;
-    if (m_codec == VideoCodec::H264Nvenc) {
+    if (m_codec == VideoCodec::H264) {
         ok = m_nvenc.QueryH264Nv12Support(out_error);
-    } else if (m_codec == VideoCodec::HevcNvenc) {
+    } else if (m_codec == VideoCodec::Hevc) {
         ok = m_nvenc.QueryHevcNv12Support(out_error);
     } else {
         ok = m_nvenc.QueryAv1Nv12Support(out_error);

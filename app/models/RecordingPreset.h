@@ -160,7 +160,7 @@ struct RecordingPreset {
 //   MP4  → H.264 (Recommended) or HEVC (Allowed via hvc1 remux, 0.7.0) kept;
 //           AV1 is deferred → falls back. Audio forced to Aac (Opus/PCM/FLAC
 //           Prohibited or deferred in MP4 — ADR 0010/0030).
-//   WebM → Av1Nvenc + Opus (forced); AAC/PCM/FLAC and H.264/HEVC Prohibited.
+//   WebM → Av1 + Opus (forced); AAC/PCM/FLAC and H.264/HEVC Prohibited.
 //   MKV  → AV1/H.264/HEVC + Opus/AAC/PCM/FLAC all Allowed or Recommended.
 void ReconcileContainerCodecs(OutputSettingsModel& output);
 

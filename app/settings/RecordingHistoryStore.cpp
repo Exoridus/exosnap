@@ -43,11 +43,11 @@ std::optional<recorder_core::Container> StringToContainer(const QString& s) {
 
 QString VideoCodecToString(recorder_core::VideoCodec c) {
     switch (c) {
-    case recorder_core::VideoCodec::Av1Nvenc:
+    case recorder_core::VideoCodec::Av1:
         return QStringLiteral("av1");
-    case recorder_core::VideoCodec::H264Nvenc:
+    case recorder_core::VideoCodec::H264:
         return QStringLiteral("h264");
-    case recorder_core::VideoCodec::HevcNvenc:
+    case recorder_core::VideoCodec::Hevc:
         return QStringLiteral("hevc");
     }
     return QString();
@@ -55,12 +55,12 @@ QString VideoCodecToString(recorder_core::VideoCodec c) {
 
 std::optional<recorder_core::VideoCodec> StringToVideoCodec(const QString& s) {
     const QString lower = s.trimmed().toLower();
-    if (lower == QStringLiteral("av1") || lower == QStringLiteral("av1_nvenc"))
-        return recorder_core::VideoCodec::Av1Nvenc;
-    if (lower == QStringLiteral("h264") || lower == QStringLiteral("h264_nvenc"))
-        return recorder_core::VideoCodec::H264Nvenc;
-    if (lower == QStringLiteral("hevc") || lower == QStringLiteral("hevc_nvenc") || lower == QStringLiteral("h265"))
-        return recorder_core::VideoCodec::HevcNvenc;
+    if (lower == QStringLiteral("av1"))
+        return recorder_core::VideoCodec::Av1;
+    if (lower == QStringLiteral("h264"))
+        return recorder_core::VideoCodec::H264;
+    if (lower == QStringLiteral("hevc") || lower == QStringLiteral("h265"))
+        return recorder_core::VideoCodec::Hevc;
     return std::nullopt;
 }
 

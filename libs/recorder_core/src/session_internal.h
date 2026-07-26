@@ -82,9 +82,9 @@ struct CodecPrivateData {
     std::array<bool, kMaxAudioTracks> audio_track_ready{};
 
     [[nodiscard]] bool VideoReady(VideoCodec codec) const noexcept {
-        if (codec == VideoCodec::H264Nvenc)
+        if (codec == VideoCodec::H264)
             return h264_ready;
-        if (codec == VideoCodec::HevcNvenc)
+        if (codec == VideoCodec::Hevc)
             return hevc_ready;
         return av1_ready;
     }

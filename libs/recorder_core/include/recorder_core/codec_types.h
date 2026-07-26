@@ -10,10 +10,13 @@ enum class Container {
     Mp4,      // .mp4  — IMFSinkWriter (MPEG4MediaSink); H.264 + AAC path
 };
 
+// Codec identity only — never the encoder that produces it. NVENC is today's
+// only backend; an AMF/QSV/software encoder for the same codec must reuse these
+// enumerators instead of adding vendor-suffixed twins.
 enum class VideoCodec {
-    Av1Nvenc,  // NVENC AV1 — primary validated codec
-    H264Nvenc, // NVENC H.264 — MP4 path
-    HevcNvenc, // NVENC H.265 / HEVC — Matroska and MP4 (V_MPEGH/ISO/HEVC)
+    Av1,  // AV1 — primary validated codec
+    H264, // H.264 — MP4 path
+    Hevc, // H.265 / HEVC — Matroska and MP4 (V_MPEGH/ISO/HEVC)
 };
 
 enum class AudioCodec {
@@ -35,30 +38,31 @@ enum class BitDepth {
     Bit10, // 10-bit — P010 input, HEVC Main10 / AV1 Main 10-bit (SDR BT.709); H.264 unsupported
 };
 
-// CQP quality targets for NVENC. Named shorthands for five canonical CQ values;
-// the CQ value itself is what the encoder consumes (RecorderConfig::nvenc_cq).
+// Constant-quality targets. Named shorthands for five canonical CQ values;
+// the CQ value itself is what the encoder consumes (RecorderConfig::cq).
 // New members are appended after the original three so existing
 // static_cast<int> item data (persisted presets, combo-box userData) stays
 // stable across the rename (Small -> Efficient).
-enum class NvencQualityPreset { High, Balanced, Efficient, Draft, Ultra };
+enum class QualityPreset { High, Balanced, Efficient, Draft, Ultra };
 
-// Valid CQ (constant-quality) range for NVENC CQP. 1 = best, 51 = worst.
-inline constexpr uint32_t kNvencCqMin = 1;
-inline constexpr uint32_t kNvencCqMax = 51;
+// Valid CQ (constant-quality) range. 1 = best, 51 = worst. NVENC maps it onto
+// CQP; another backend maps it onto its own quality parameter.
+inline constexpr uint32_t kCqMin = 1;
+inline constexpr uint32_t kCqMax = 51;
 
 // The canonical CQ value a named preset stands for. Single source of truth for
 // preset -> CQ; nothing else may hardcode 16/19/24/30/35.
-inline constexpr uint32_t CanonicalCq(NvencQualityPreset preset) noexcept {
+inline constexpr uint32_t CanonicalCq(QualityPreset preset) noexcept {
     switch (preset) {
-    case NvencQualityPreset::Ultra:
+    case QualityPreset::Ultra:
         return 16;
-    case NvencQualityPreset::High:
+    case QualityPreset::High:
         return 19;
-    case NvencQualityPreset::Efficient:
+    case QualityPreset::Efficient:
         return 30;
-    case NvencQualityPreset::Draft:
+    case QualityPreset::Draft:
         return 35;
-    case NvencQualityPreset::Balanced:
+    case QualityPreset::Balanced:
         break;
     }
     return 24;
@@ -66,13 +70,12 @@ inline constexpr uint32_t CanonicalCq(NvencQualityPreset preset) noexcept {
 
 // The named preset a CQ value is closest to, for UI segment selection. Ties
 // resolve toward the lower CQ (higher quality), matching the ladder order.
-inline constexpr NvencQualityPreset NearestQualityPreset(uint32_t cq) noexcept {
-    constexpr NvencQualityPreset kByQuality[] = {NvencQualityPreset::Ultra, NvencQualityPreset::High,
-                                                 NvencQualityPreset::Balanced, NvencQualityPreset::Efficient,
-                                                 NvencQualityPreset::Draft};
-    NvencQualityPreset best = NvencQualityPreset::Ultra;
+inline constexpr QualityPreset NearestQualityPreset(uint32_t cq) noexcept {
+    constexpr QualityPreset kByQuality[] = {QualityPreset::Ultra, QualityPreset::High, QualityPreset::Balanced,
+                                            QualityPreset::Efficient, QualityPreset::Draft};
+    QualityPreset best = QualityPreset::Ultra;
     uint32_t best_d = ~0u;
-    for (NvencQualityPreset p : kByQuality) {
+    for (QualityPreset p : kByQuality) {
         const uint32_t c = CanonicalCq(p);
         const uint32_t d = cq > c ? cq - c : c - cq;
         if (d < best_d) {
@@ -91,7 +94,7 @@ inline constexpr bool IsCanonicalCq(uint32_t cq) noexcept {
 
 // NVENC encoder speed/quality preset (SDK presets P1-P7). P1 is fastest with the
 // lowest quality/highest throughput; P7 is slowest with the best quality. This is
-// independent of NvencQualityPreset (which only tunes CQP QP values) and of
+// independent of QualityPreset (which only tunes CQP QP values) and of
 // RateControlMode (which selects CQP/VBR/CBR) — the preset instead selects the
 // NVENC internal encoding pipeline/algorithm tradeoff. Applies uniformly across
 // all three NVENC codecs (H.264, HEVC, AV1); never capability-gated. Default P4

@@ -171,7 +171,7 @@ struct EncoderDiagnostics {
     // mismatch is fatal and aborts the encode, so it never exceeds 1.
     uint64_t output_ts_mismatches = 0;
     uint64_t keyframe_prediction_mismatches = 0;
-    VideoCodec codec = VideoCodec::Av1Nvenc;
+    VideoCodec codec = VideoCodec::Av1;
     uint32_t width = 0;
     uint32_t height = 0;
     bool cfr = true;
@@ -183,7 +183,7 @@ struct EncoderDiagnostics {
 // false until the encoder has been configured (e.g. a failure before configure).
 struct EncoderInitInfo {
     bool valid = false;
-    VideoCodec codec = VideoCodec::Av1Nvenc;
+    VideoCodec codec = VideoCodec::Av1;
     NvencPreset preset = NvencPreset::P4;
     RateControlMode rc_mode = RateControlMode::ConstantQuality;
     uint32_t target_bitrate_kbps = 0; // averageBitRate (0 for pure CQ)

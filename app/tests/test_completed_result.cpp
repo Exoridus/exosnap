@@ -77,7 +77,7 @@ class CompletedResultTest : public ::testing::Test {
         result.frame_rate_den = 1;
         result.cfr = true;
         result.container = recorder_core::Container::Matroska;
-        result.video_codec = recorder_core::VideoCodec::H264Nvenc;
+        result.video_codec = recorder_core::VideoCodec::H264;
         result.audio_codec = recorder_core::AudioCodec::Aac;
         return result;
     }

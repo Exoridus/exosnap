@@ -75,7 +75,7 @@ static RecorderConfig MakeBaseConfig() {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1; // non-zero sentinel
     cfg.container = recorder_core::Container::Matroska;
-    cfg.video_codec = recorder_core::VideoCodec::H264Nvenc;
+    cfg.video_codec = recorder_core::VideoCodec::H264;
     cfg.audio_codec = recorder_core::AudioCodec::Aac;
     cfg.frame_rate_num = 60;
     cfg.frame_rate_den = 1;

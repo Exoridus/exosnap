@@ -56,7 +56,7 @@ class DiagnosticsPageTest : public ::testing::Test {
         capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
         OutputSettingsModel output;
         output.container = capability::Container::Matroska;
-        output.video_codec = capability::VideoCodec::Av1Nvenc;
+        output.video_codec = capability::VideoCodec::Av1;
         output.audio_codec = capability::AudioCodec::Opus;
         VideoSettingsModel video;
         capability::AudioUiState audio;
@@ -141,7 +141,7 @@ TEST_F(DiagnosticsPageTest, DiskStepProbesOutputFolderNotSettingsFile) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.video_codec = capability::VideoCodec::Av1;
     output.audio_codec = capability::AudioCodec::Opus;
     output.output_folder = dir;
     VideoSettingsModel video;
@@ -170,7 +170,7 @@ TEST_F(DiagnosticsPageTest, DiskStepAcceptsAnOutputFolderThatDoesNotExistYet) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.video_codec = capability::VideoCodec::Av1;
     output.audio_codec = capability::AudioCodec::Opus;
     output.output_folder = dir;
     VideoSettingsModel video;
@@ -605,7 +605,7 @@ recorder_core::RecordingDiagnosticsSnapshot MakeRecordingSnapshot() {
     s.video_encoder.frames_submitted = 700;
     s.video_encoder.frames_encoded = 700;
     s.video_encoder.output_fps = 60.0;
-    s.video_encoder.codec = VideoCodec::Av1Nvenc;
+    s.video_encoder.codec = VideoCodec::Av1;
     s.video_encoder.width = 1920;
     s.video_encoder.height = 1080;
     s.video_encoder.cfr = true;
@@ -878,7 +878,7 @@ TEST_F(DiagnosticsPageTest, TipsOnlyConfigStaysReadyWithTipChipAndNoCards) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
-    output.video_codec = capability::VideoCodec::H264Nvenc; // AV1 available → tip fires
+    output.video_codec = capability::VideoCodec::H264; // AV1 available → tip fires
     output.audio_codec = capability::AudioCodec::Aac;
     VideoSettingsModel video;
     capability::AudioUiState audio;
@@ -922,7 +922,7 @@ TEST_F(DiagnosticsPageTest, ColorRangeFull_IsTipNotCard_VerdictStaysReady) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.video_codec = capability::VideoCodec::Av1;
     output.audio_codec = capability::AudioCodec::Opus;
     output.color_range = capability::ColorRange::Full;
     VideoSettingsModel video;
@@ -963,7 +963,7 @@ TEST_F(DiagnosticsPageTest, BlockerShowsCardInSimpleViewAndBlocksVerdict) {
     OutputSettingsModel output;
     output.container = capability::Container::Mp4;
     output.audio_codec = capability::AudioCodec::Flac; // rec.009 Blocker
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.video_codec = capability::VideoCodec::Av1;
     VideoSettingsModel video;
     capability::AudioUiState audio;
     page.setDiagnosticData(caps, output, video, audio, "MP4 AV1 FLAC", "Start/Stop: Alt+F9", "", true);
@@ -1039,7 +1039,7 @@ TEST_F(DiagnosticsPageTest, BlockerCardCarriesIdChipAndEvidence) {
     OutputSettingsModel output;
     output.container = capability::Container::Mp4;
     output.audio_codec = capability::AudioCodec::Flac; // rec.009 blocker
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.video_codec = capability::VideoCodec::Av1;
     VideoSettingsModel video;
     capability::AudioUiState audio;
     page.setDiagnosticData(caps, output, video, audio, "MP4 AV1 FLAC", "Start/Stop: Alt+F9", "", true);

@@ -63,10 +63,10 @@ capability::Container MapContainer(const QString& name) {
 
 capability::VideoCodec MapVideoCodec(const QString& name) {
     if (name == QStringLiteral("h264"))
-        return capability::VideoCodec::H264Nvenc;
+        return capability::VideoCodec::H264;
     if (name == QStringLiteral("hevc"))
-        return capability::VideoCodec::HevcNvenc;
-    return capability::VideoCodec::Av1Nvenc; // "av1"
+        return capability::VideoCodec::Hevc;
+    return capability::VideoCodec::Av1; // "av1"
 }
 
 capability::AudioCodec MapAudioCodec(const QString& name) {

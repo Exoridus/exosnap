@@ -93,7 +93,7 @@ struct UiRecordingResult {
     uint32_t frame_rate_den = 1;
     bool cfr = true;
     recorder_core::Container container = recorder_core::Container::WebM;
-    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1;
     recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
     std::vector<RecordingMarker> markers;
     std::wstring marker_sidecar_path;
@@ -151,7 +151,7 @@ class RecordViewModel {
     uint32_t result_frame_rate_den = 1;
     bool result_cfr = true;
     recorder_core::Container result_container = recorder_core::Container::WebM;
-    recorder_core::VideoCodec result_video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    recorder_core::VideoCodec result_video_codec = recorder_core::VideoCodec::Av1;
     recorder_core::AudioCodec result_audio_codec = recorder_core::AudioCodec::Opus;
     // 0.9.0 S1: edit master path (empty for split sessions / failures)
     std::wstring result_mkv_master_path;

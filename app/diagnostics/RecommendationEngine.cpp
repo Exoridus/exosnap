@@ -266,11 +266,11 @@ void RecommendationEngine::checkRecommendedCodec(DiagnosticChecklist& checklist)
     // default (AV1 on a modern GPU) stays silent.
     const auto rank = [](capability::VideoCodec v) -> int {
         switch (v) {
-        case capability::VideoCodec::Av1Nvenc:
+        case capability::VideoCodec::Av1:
             return 0;
-        case capability::VideoCodec::HevcNvenc:
+        case capability::VideoCodec::Hevc:
             return 1;
-        case capability::VideoCodec::H264Nvenc:
+        case capability::VideoCodec::H264:
             return 2;
         }
         return 99;
@@ -365,19 +365,18 @@ void RecommendationEngine::checkHdrH264Blocker(DiagnosticChecklist& checklist) c
     //       MainWindow handler's ReconcileContainerCodecs silently reverts it to
     //       H.264 — the fix self-reverts and the blocker re-fires.
     const capability::ContainerCompatLevel av1_combo =
-        capability::ContainerCompatRegistry::Query(config_.container, capability::VideoCodec::Av1Nvenc,
-                                                   config_.audio_codec)
+        capability::ContainerCompatRegistry::Query(config_.container, capability::VideoCodec::Av1, config_.audio_codec)
             .level;
     const bool av1_is_working_combo = av1_combo == capability::ContainerCompatLevel::Recommended ||
                                       av1_combo == capability::ContainerCompatLevel::Allowed;
     const capability::VideoCodec proposed_codec =
-        capability::IsSelectable(caps_.QueryVideoCodec(capability::VideoCodec::Av1Nvenc)) && av1_is_working_combo
-            ? capability::VideoCodec::Av1Nvenc
-            : capability::VideoCodec::HevcNvenc;
+        capability::IsSelectable(caps_.QueryVideoCodec(capability::VideoCodec::Av1)) && av1_is_working_combo
+            ? capability::VideoCodec::Av1
+            : capability::VideoCodec::Hevc;
     const std::string current_label(capability::VisibleVideoCodecLabel(config_.video_codec));
     const std::string proposed_label(capability::VisibleVideoCodecLabel(proposed_codec));
     const std::string fix_id =
-        proposed_codec == capability::VideoCodec::Av1Nvenc ? "fix.hdr.codec.av1" : "fix.hdr.codec.hevc";
+        proposed_codec == capability::VideoCodec::Av1 ? "fix.hdr.codec.av1" : "fix.hdr.codec.hevc";
     DiagnosticResult r = MakeResult(
         "rec.hdr.h264", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
         current_label + " cannot record HDR10",
@@ -579,7 +578,7 @@ void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checkl
 }
 
 void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const {
-    if (config_.video_codec == capability::VideoCodec::HevcNvenc && config_.container == capability::Container::WebM) {
+    if (config_.video_codec == capability::VideoCodec::Hevc && config_.container == capability::Container::WebM) {
         DiagnosticResult r =
             MakeResult("rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
                        "HEVC is not supported in WebM",
@@ -601,7 +600,7 @@ void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist
         return;
     }
 
-    if (config_.video_codec == capability::VideoCodec::H264Nvenc && config_.container == capability::Container::WebM) {
+    if (config_.video_codec == capability::VideoCodec::H264 && config_.container == capability::Container::WebM) {
         DiagnosticResult r =
             MakeResult("rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, DiagnosticTier::Blocker,
                        "H.264 is not supported in WebM",

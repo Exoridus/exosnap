@@ -426,9 +426,9 @@ void VideoThread::Run() {
          << "\", target.native_id=0x" << std::hex << target.native_id << std::dec
          << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
          << ", capture.modeDescFormat=" << preInitFormatName << ", videoCodec="
-         << (m_state.config.video_codec == VideoCodec::H264Nvenc
+         << (m_state.config.video_codec == VideoCodec::H264
                  ? "H264_NVENC"
-                 : (m_state.config.video_codec == VideoCodec::HevcNvenc ? "HEVC_NVENC" : "AV1_NVENC"))
+                 : (m_state.config.video_codec == VideoCodec::Hevc ? "HEVC_NVENC" : "AV1_NVENC"))
          << ", chroma=4:2:0, bitDepth=8, frameRate=" << m_state.config.frame_rate_num << "/"
          << m_state.config.frame_rate_den << ", nvencInputBufferFormat=NV_ENC_BUFFER_FORMAT_NV12";
 
@@ -559,7 +559,7 @@ void VideoThread::Run() {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetChroma(m_state.config.chroma);
-        nvenc.SetCq(m_state.config.nvenc_cq);
+        nvenc.SetCq(m_state.config.cq);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
         nvenc.SetPreset(m_state.config.nvenc_preset);
         // Keyframe interval (Settings → Advanced → Video). Must be set before
@@ -2001,7 +2001,7 @@ void VideoThread::Run() {
             return true;
 
         if (pkt.keyframe) {
-            if (m_state.config.video_codec == VideoCodec::H264Nvenc && !h264CodecPrivateReady) {
+            if (m_state.config.video_codec == VideoCodec::H264 && !h264CodecPrivateReady) {
                 std::vector<uint8_t> spsPps;
                 if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
                     std::lock_guard lk(m_state.premux_mutex);
@@ -2010,7 +2010,7 @@ void VideoThread::Run() {
                     h264CodecPrivateReady = true;
                     m_state.premux_cv.notify_all();
                 }
-            } else if (m_state.config.video_codec == VideoCodec::HevcNvenc && !hevcCodecPrivateReady) {
+            } else if (m_state.config.video_codec == VideoCodec::Hevc && !hevcCodecPrivateReady) {
                 std::vector<uint8_t> vpsSpsPps;
                 if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
                     std::lock_guard lk(m_state.premux_mutex);
@@ -2022,7 +2022,7 @@ void VideoThread::Run() {
                     logging::log(logging::LogLevel::Warn, "video_thread",
                                  "HEVC VPS/SPS/PPS extraction failed on keyframe");
                 }
-            } else if (m_state.config.video_codec == VideoCodec::Av1Nvenc && !av1CodecPrivateReady) {
+            } else if (m_state.config.video_codec == VideoCodec::Av1 && !av1CodecPrivateReady) {
                 char reason[256] = {};
                 uint8_t cp[4] = {};
                 if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
@@ -3549,7 +3549,7 @@ end_encode_loop:
             const size_t drain_bytes = pkt.bytes.size();
 
             if (pkt.keyframe) {
-                if (m_state.config.video_codec == VideoCodec::H264Nvenc && !h264CodecPrivateReady) {
+                if (m_state.config.video_codec == VideoCodec::H264 && !h264CodecPrivateReady) {
                     std::vector<uint8_t> spsPps;
                     if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
                         std::lock_guard lk(m_state.premux_mutex);
@@ -3558,7 +3558,7 @@ end_encode_loop:
                         h264CodecPrivateReady = true;
                         m_state.premux_cv.notify_all();
                     }
-                } else if (m_state.config.video_codec == VideoCodec::HevcNvenc && !hevcCodecPrivateReady) {
+                } else if (m_state.config.video_codec == VideoCodec::Hevc && !hevcCodecPrivateReady) {
                     std::vector<uint8_t> vpsSpsPps;
                     if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
                         std::lock_guard lk(m_state.premux_mutex);
@@ -3567,7 +3567,7 @@ end_encode_loop:
                         hevcCodecPrivateReady = true;
                         m_state.premux_cv.notify_all();
                     }
-                } else if (m_state.config.video_codec == VideoCodec::Av1Nvenc && !av1CodecPrivateReady) {
+                } else if (m_state.config.video_codec == VideoCodec::Av1 && !av1CodecPrivateReady) {
                     char reason[256] = {};
                     uint8_t cp[4] = {};
                     if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,

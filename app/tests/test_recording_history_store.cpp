@@ -45,7 +45,7 @@ CompletedRecording MakeTestRecording(const QString& path, int index = 0) {
     rec.frame_rate_den = 1;
     rec.cfr = true;
     rec.container = recorder_core::Container::Matroska;
-    rec.video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    rec.video_codec = recorder_core::VideoCodec::Av1;
     rec.audio_codec = recorder_core::AudioCodec::Opus;
     rec.completed_at = QDateTime::fromString(
         QStringLiteral("2026-06-09T12:34:%1.789Z").arg(56 + index, 2, 10, QChar('0')), Qt::ISODateWithMs);
@@ -125,7 +125,7 @@ TEST(RecordingHistoryStoreTest, ValidEntriesRoundTrip) {
     EXPECT_EQ(loaded[0].file_path, file1);
     EXPECT_EQ(loaded[1].file_path, file2);
     EXPECT_EQ(loaded[0].container, recorder_core::Container::Matroska);
-    EXPECT_EQ(loaded[0].video_codec, recorder_core::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(loaded[0].video_codec, recorder_core::VideoCodec::Av1);
     EXPECT_EQ(loaded[0].audio_codec, recorder_core::AudioCodec::Opus);
     EXPECT_EQ(loaded[0].source_width, 2560u);
     EXPECT_EQ(loaded[0].source_height, 1440u);
@@ -469,6 +469,47 @@ TEST(RecordingHistoryStoreTest, AacPersistsAsAac_LegacySpellingDropsEntry) {
     const QString text = QString::fromUtf8(written.readAll());
     EXPECT_TRUE(text.contains(QStringLiteral("\"aac\"")));
     EXPECT_FALSE(text.contains(QStringLiteral("aac_mf")));
+}
+
+// =============================================================================
+// 11a2. Vendor-suffixed video codec spellings are no longer accepted
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, VendorSuffixedVideoCodecSpellingDropsEntry) {
+    const QString path = UniqueTestStorePath();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString legacy_path = dir.filePath(QStringLiteral("legacy.mkv"));
+    {
+        QFile f(legacy_path);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.close();
+    }
+
+    {
+        QJsonObject legacy;
+        legacy[QStringLiteral("path")] = legacy_path;
+        legacy[QStringLiteral("container")] = QStringLiteral("mkv");
+        legacy[QStringLiteral("videoCodec")] = QStringLiteral("av1_nvenc");
+        legacy[QStringLiteral("audioCodec")] = QStringLiteral("opus");
+        legacy[QStringLiteral("createdAt")] = QStringLiteral("2026-06-09T12:34:56.789Z");
+
+        QJsonArray arr;
+        arr.append(legacy);
+
+        QJsonObject root;
+        root[QStringLiteral("version")] = 1;
+        root[QStringLiteral("recordings")] = arr;
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+    }
+
+    RecordingHistoryStore store(path);
+    EXPECT_TRUE(store.Load().isEmpty());
 }
 
 // =============================================================================

@@ -243,14 +243,14 @@ class NvencEncoder {
     NvencEncoder(const NvencEncoder&) = delete;
     NvencEncoder& operator=(const NvencEncoder&) = delete;
 
-    // Set codec before calling Open(). Defaults to Av1Nvenc.
+    // Set codec before calling Open(). Defaults to Av1.
     void SetCodec(VideoCodec codec) noexcept {
         m_codec = codec;
     }
 
     // Set encoder bit depth before calling Open()/FetchPresetConfig(). Defaults to Bit8.
     // Bit10 selects P010 (NV_ENC_BUFFER_FORMAT_YUV420_10BIT) input and the HEVC Main10 /
-    // AV1 10-bit profile. Only valid for HevcNvenc and Av1Nvenc (validated upstream).
+    // AV1 10-bit profile. Only valid for Hevc and Av1 (validated upstream).
     void SetBitDepth(BitDepth depth) noexcept {
         m_bitDepth = depth;
     }
@@ -258,7 +258,7 @@ class NvencEncoder {
     // Set the chroma subsampling before calling Open()/FetchPresetConfig().
     // Defaults to Cs420. Cs444 selects AYUV input, chromaFormatIDC=3, and the
     // codec's 4:4:4 profile (H.264 High 4:4:4 / HEVC FREXT); it is valid only for
-    // HevcNvenc and H264Nvenc at 8-bit (validated upstream — AV1 and 10-bit are
+    // Hevc and H264 at 8-bit (validated upstream — AV1 and 10-bit are
     // rejected before reaching the encoder).
     void SetChroma(ChromaSubsampling chroma) noexcept {
         m_chroma = chroma;
@@ -341,7 +341,7 @@ class NvencEncoder {
     // Honest 4:4:4 gate for the current codec (call after Open(), before
     // InitEncoder). Verifies the GPU advertises NV_ENC_CAPS_SUPPORT_YUV444_ENCODE
     // and that the AYUV input format is enumerated for the codec. Only meaningful
-    // for H264Nvenc/HevcNvenc; fails honestly (out_error set) when 4:4:4 is
+    // for H264/Hevc; fails honestly (out_error set) when 4:4:4 is
     // unavailable so the session can refuse rather than mis-encode.
     bool QueryYuv444Support(std::string& out_error);
 
@@ -445,10 +445,10 @@ class NvencEncoder {
     std::array<InputSlot, 8> m_slots;
     int32_t m_slotCursor = 0;
 
-    VideoCodec m_codec = VideoCodec::Av1Nvenc;
+    VideoCodec m_codec = VideoCodec::Av1;
     BitDepth m_bitDepth = BitDepth::Bit8;
     ChromaSubsampling m_chroma = ChromaSubsampling::Cs420;
-    uint32_t m_cq = CanonicalCq(NvencQualityPreset::Balanced);
+    uint32_t m_cq = CanonicalCq(QualityPreset::Balanced);
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;
     ColorMetadata m_color = ColorMetadata::Sdr709();

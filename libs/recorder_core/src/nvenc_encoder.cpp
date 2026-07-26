@@ -159,7 +159,7 @@ void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const Color
     const auto transfer = static_cast<NV_ENC_VUI_TRANSFER_CHARACTERISTIC>(color.transfer);
     const auto matrix = static_cast<NV_ENC_VUI_MATRIX_COEFFS>(color.matrix);
 
-    if (codec == VideoCodec::Av1Nvenc) {
+    if (codec == VideoCodec::Av1) {
         auto& av1 = cfg.encodeCodecConfig.av1Config;
         av1.colorPrimaries = primaries;
         av1.transferCharacteristics = transfer;
@@ -171,7 +171,7 @@ void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const Color
 
     // H.264 and HEVC share the identical VUI parameters layout
     // (NV_ENC_CONFIG_HEVC_VUI_PARAMETERS is a typedef of the H.264 struct).
-    NV_ENC_CONFIG_H264_VUI_PARAMETERS& vui = (codec == VideoCodec::HevcNvenc)
+    NV_ENC_CONFIG_H264_VUI_PARAMETERS& vui = (codec == VideoCodec::Hevc)
                                                  ? cfg.encodeCodecConfig.hevcConfig.hevcVUIParameters
                                                  : cfg.encodeCodecConfig.h264Config.h264VUIParameters;
     vui.videoSignalTypePresentFlag = 1;
@@ -227,10 +227,10 @@ uint32_t NvencChromaFormatIDC(ChromaSubsampling chroma) noexcept {
 }
 
 GUID Nvenc444ProfileGuid(VideoCodec codec) noexcept {
-    if (codec == VideoCodec::H264Nvenc) {
+    if (codec == VideoCodec::H264) {
         return NV_ENC_H264_PROFILE_HIGH_444_GUID;
     }
-    if (codec == VideoCodec::HevcNvenc) {
+    if (codec == VideoCodec::Hevc) {
         // HEVC Range Extensions (FREXT) — the 4:2:2/4:4:4 8/10-bit profile.
         return NV_ENC_HEVC_PROFILE_FREXT_GUID;
     }
@@ -587,10 +587,10 @@ bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
 bool NvencEncoder::QueryYuv444Support(std::string& out_error) {
     GUID codecGuid;
     const char* label;
-    if (m_codec == VideoCodec::H264Nvenc) {
+    if (m_codec == VideoCodec::H264) {
         codecGuid = NV_ENC_CODEC_H264_GUID;
         label = "H264";
-    } else if (m_codec == VideoCodec::HevcNvenc) {
+    } else if (m_codec == VideoCodec::Hevc) {
         codecGuid = NV_ENC_CODEC_HEVC_GUID;
         label = "HEVC";
     } else {
@@ -653,10 +653,10 @@ RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrat
         p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP);
         // Out-of-range values are clamped rather than rejected: the encoder must
         // never be handed a QP outside [1, 51], whatever the caller passed.
-        const uint32_t qp = cq < kNvencCqMin ? kNvencCqMin : (cq > kNvencCqMax ? kNvencCqMax : cq);
+        const uint32_t qp = cq < kCqMin ? kCqMin : (cq > kCqMax ? kCqMax : cq);
         // Inter frames carry +2 QP relative to intra — the ratio the three named
         // presets always used (19/21, 24/26, 30/32), now applied to every CQ.
-        const uint32_t qp_inter = (qp + 2u) > kNvencCqMax ? kNvencCqMax : qp + 2u;
+        const uint32_t qp_inter = (qp + 2u) > kCqMax ? kCqMax : qp + 2u;
         p.qpIntra = qp;
         p.qpInterP = qp_inter;
         p.qpInterB = qp_inter;
@@ -688,8 +688,7 @@ RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrat
     case RateControlMode::Lossless:
         // Lossless is not yet implemented. Capability marks it NotImplemented so
         // the UI hides it. Defensively fall back to ConstantQuality/Balanced.
-        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(NvencQualityPreset::Balanced),
-                                 bitrate_kbps);
+        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, CanonicalCq(QualityPreset::Balanced), bitrate_kbps);
         break;
     }
     return p;
@@ -712,10 +711,10 @@ uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num,
 void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) noexcept {
     cfg.gopLength = gop_length;
     switch (codec) {
-    case VideoCodec::H264Nvenc:
+    case VideoCodec::H264:
         cfg.encodeCodecConfig.h264Config.idrPeriod = gop_length;
         break;
-    case VideoCodec::HevcNvenc:
+    case VideoCodec::Hevc:
         cfg.encodeCodecConfig.hevcConfig.idrPeriod = gop_length;
         break;
     default:
@@ -770,9 +769,9 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
 
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
-    if (m_codec == VideoCodec::H264Nvenc) {
+    if (m_codec == VideoCodec::H264) {
         codecGuid = NV_ENC_CODEC_H264_GUID;
-    } else if (m_codec == VideoCodec::HevcNvenc) {
+    } else if (m_codec == VideoCodec::Hevc) {
         codecGuid = NV_ENC_CODEC_HEVC_GUID;
     }
 
@@ -809,11 +808,11 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     const uint32_t chromaIdc = NvencChromaFormatIDC(m_chroma);
     const bool is444 = (m_chroma == ChromaSubsampling::Cs444);
 
-    if (m_codec == VideoCodec::H264Nvenc) {
+    if (m_codec == VideoCodec::H264) {
         m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = chromaIdc;
         if (is444)
             m_encodeConfig.profileGUID = Nvenc444ProfileGuid(m_codec); // High 4:4:4 Predictive
-    } else if (m_codec == VideoCodec::HevcNvenc) {
+    } else if (m_codec == VideoCodec::Hevc) {
         m_encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = chromaIdc; // YUV420/P010 or YUV444/AYUV
         m_encodeConfig.encodeCodecConfig.hevcConfig.inputBitDepth = nvBitDepth;
         m_encodeConfig.encodeCodecConfig.hevcConfig.outputBitDepth = nvBitDepth;
@@ -879,13 +878,13 @@ void NvencEncoder::BuildHdrBitstreamPayloads() {
     m_hdrCllPayload.clear();
 
     // H.264 never carries HDR10-native (blocked upstream); only HEVC/AV1 do.
-    if (m_codec != VideoCodec::HevcNvenc && m_codec != VideoCodec::Av1Nvenc) {
+    if (m_codec != VideoCodec::Hevc && m_codec != VideoCodec::Av1) {
         return;
     }
     if (!hdr_meta::ShouldEmitHdrBitstreamMetadata(m_color)) {
         return;
     }
-    const bool av1 = (m_codec == VideoCodec::Av1Nvenc);
+    const bool av1 = (m_codec == VideoCodec::Av1);
 
     if (hdr_meta::HasMasteringDisplayData(m_color)) {
         m_hdrMdcvPayload = av1 ? hdr_meta::BuildAv1MasteringDisplayObuPayload(m_color)
@@ -930,13 +929,13 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     BuildHdrBitstreamPayloads();
 
     GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
-    if (m_codec == VideoCodec::H264Nvenc)
+    if (m_codec == VideoCodec::H264)
         codecGuid = NV_ENC_CODEC_H264_GUID;
-    else if (m_codec == VideoCodec::HevcNvenc)
+    else if (m_codec == VideoCodec::Hevc)
         codecGuid = NV_ENC_CODEC_HEVC_GUID;
 
     // codec_index: 0=AV1, 1=H264, 2=HEVC — used in diag string and error messages
-    const int codec_index = (m_codec == VideoCodec::H264Nvenc) ? 1 : (m_codec == VideoCodec::HevcNvenc) ? 2 : 0;
+    const int codec_index = (m_codec == VideoCodec::H264) ? 1 : (m_codec == VideoCodec::Hevc) ? 2 : 0;
 
     int capWidthMin = -1;
     int capWidthMax = -1;
@@ -1457,7 +1456,7 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // segment/split file and mid-stream join point carries it. The payload
     // buffers are owned members that outlive this synchronous encode call.
     if (isKeyframe && m_hdrPayloadCount > 0) {
-        if (m_codec == VideoCodec::Av1Nvenc) {
+        if (m_codec == VideoCodec::Av1) {
             pic.codecPicParams.av1PicParams.obuPayloadArray = m_hdrPayloadEntries.data();
             pic.codecPicParams.av1PicParams.obuPayloadArrayCnt = m_hdrPayloadCount;
         } else {

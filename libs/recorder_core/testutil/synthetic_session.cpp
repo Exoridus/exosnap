@@ -169,7 +169,7 @@ SyntheticSessionResult SyntheticSession::Run() {
 
     const uint64_t frame_dur_ns = 1000000000ULL / cfg.fps;
     const uint32_t frame_count = static_cast<uint32_t>(cfg.target_seconds * cfg.fps);
-    const bool is_h264 = (cfg.video_codec == VideoCodec::H264Nvenc);
+    const bool is_h264 = (cfg.video_codec == VideoCodec::H264);
     const bool realtime = cfg.realtime_pace;
 
     std::thread video_feeder([&, state_ptr] {

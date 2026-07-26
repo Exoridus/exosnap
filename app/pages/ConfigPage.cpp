@@ -660,11 +660,11 @@ int AudioCodecToInt(capability::AudioCodec codec) {
 }
 
 capability::VideoCodec IntToVideoCodec(int value) {
-    if (value == static_cast<int>(capability::VideoCodec::Av1Nvenc))
-        return capability::VideoCodec::Av1Nvenc;
-    if (value == static_cast<int>(capability::VideoCodec::HevcNvenc))
-        return capability::VideoCodec::HevcNvenc;
-    return capability::VideoCodec::H264Nvenc;
+    if (value == static_cast<int>(capability::VideoCodec::Av1))
+        return capability::VideoCodec::Av1;
+    if (value == static_cast<int>(capability::VideoCodec::Hevc))
+        return capability::VideoCodec::Hevc;
+    return capability::VideoCodec::H264;
 }
 
 capability::AudioCodec IntToAudioCodec(int value) {
@@ -1003,12 +1003,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Hidden combo is the single model-change emitter (existing test seam).
     quality_combo_ = new QComboBox(quality_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
-    quality_combo_->addItem(QStringLiteral("Draft"), static_cast<int>(recorder_core::NvencQualityPreset::Draft));
-    quality_combo_->addItem(QStringLiteral("Efficient"),
-                            static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
-    quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
-    quality_combo_->addItem(QStringLiteral("High"), static_cast<int>(recorder_core::NvencQualityPreset::High));
-    quality_combo_->addItem(QStringLiteral("Ultra"), static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
+    quality_combo_->addItem(QStringLiteral("Draft"), static_cast<int>(recorder_core::QualityPreset::Draft));
+    quality_combo_->addItem(QStringLiteral("Efficient"), static_cast<int>(recorder_core::QualityPreset::Efficient));
+    quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::QualityPreset::Balanced));
+    quality_combo_->addItem(QStringLiteral("High"), static_cast<int>(recorder_core::QualityPreset::High));
+    quality_combo_->addItem(QStringLiteral("Ultra"), static_cast<int>(recorder_core::QualityPreset::Ultra));
     quality_combo_->setVisible(false);
     quality_combo_->setFocusPolicy(Qt::NoFocus);
     quality_layout->addWidget(quality_combo_);
@@ -1030,7 +1029,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_segment_group_->setExclusive(true);
 
     auto makeQualitySegment = [&](const QString& object_name, const QString& label,
-                                  recorder_core::NvencQualityPreset preset) -> QPushButton* {
+                                  recorder_core::QualityPreset preset) -> QPushButton* {
         auto* segment = new QPushButton(label, quality_segmented);
         segment->setObjectName(object_name);
         segment->setCheckable(true);
@@ -1046,16 +1045,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     };
 
     quality_segment_draft_ = makeQualitySegment(QStringLiteral("qualitySegmentDraft"), QStringLiteral("Draft"),
-                                                recorder_core::NvencQualityPreset::Draft);
+                                                recorder_core::QualityPreset::Draft);
     quality_segment_efficient_ =
         makeQualitySegment(QStringLiteral("qualitySegmentEfficient"), QStringLiteral("Efficient"),
-                           recorder_core::NvencQualityPreset::Efficient);
+                           recorder_core::QualityPreset::Efficient);
     quality_segment_balanced_ = makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced"),
-                                                   recorder_core::NvencQualityPreset::Balanced);
+                                                   recorder_core::QualityPreset::Balanced);
     quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High"),
-                                               recorder_core::NvencQualityPreset::High);
+                                               recorder_core::QualityPreset::High);
     quality_segment_ultra_ = makeQualitySegment(QStringLiteral("qualitySegmentUltra"), QStringLiteral("Ultra"),
-                                                recorder_core::NvencQualityPreset::Ultra);
+                                                recorder_core::QualityPreset::Ultra);
 
     quality_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), quality_panel);
@@ -1065,21 +1064,21 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // v10: Default Quality presentation — a single five-tier dropdown, CQ-first
     // ("CQ 24 · Balanced"). It mirrors the hidden quality_combo_ model seam:
-    // choosing an item drives the same NvencQualityPreset path
+    // choosing an item drives the same QualityPreset path
     // (onQualityPresetComboChanged → quality_combo_).
     {
         quality_preset_combo_ = new QComboBox(quality_panel);
         quality_preset_combo_->setObjectName(QStringLiteral("qualityPresetCombo"));
         quality_preset_combo_->addItem(QStringLiteral("CQ 35 \xc2\xb7 Draft"),
-                                       static_cast<int>(recorder_core::NvencQualityPreset::Draft));
+                                       static_cast<int>(recorder_core::QualityPreset::Draft));
         quality_preset_combo_->addItem(QStringLiteral("CQ 30 \xc2\xb7 Efficient"),
-                                       static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
+                                       static_cast<int>(recorder_core::QualityPreset::Efficient));
         quality_preset_combo_->addItem(QStringLiteral("CQ 24 \xc2\xb7 Balanced"),
-                                       static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
+                                       static_cast<int>(recorder_core::QualityPreset::Balanced));
         quality_preset_combo_->addItem(QStringLiteral("CQ 19 \xc2\xb7 High"),
-                                       static_cast<int>(recorder_core::NvencQualityPreset::High));
+                                       static_cast<int>(recorder_core::QualityPreset::High));
         quality_preset_combo_->addItem(QStringLiteral("CQ 16 \xc2\xb7 Ultra"),
-                                       static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
+                                       static_cast<int>(recorder_core::QualityPreset::Ultra));
         quality_preset_combo_->setFixedWidth(160);
         quality_preset_combo_->setProperty("settingsRowInput", true);
 
@@ -2271,8 +2270,8 @@ void ConfigPage::onQualityChanged(int index) {
     if (index < 0)
         return;
     // A named preset selects its canonical CQ value; CQ stays the single source.
-    video_settings_.cq = recorder_core::CanonicalCq(
-        static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt()));
+    video_settings_.cq =
+        recorder_core::CanonicalCq(static_cast<recorder_core::QualityPreset>(quality_combo_->itemData(index).toInt()));
     updateQualitySegmentSelection();
     emitCurrentVideoSettings();
 }
@@ -2490,12 +2489,12 @@ void ConfigPage::reconcileContainerCodecRules() {
 void ConfigPage::updateVideoCodecChoices() {
     const QSignalBlocker blocker(video_codec_combo_);
     if (video_codec_combo_->count() == 0) {
-        video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
-        video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
+        video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1));
+        video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264));
         // HEVC (0.7.0 — S3): GPU-verified end-to-end (MKV V_MPEGH/ISO/HEVC + MP4 hvc1).
         // A normal, always-present choice; container reconcile falls back to AV1/H.264
         // when the selected container cannot carry HEVC.
-        video_codec_combo_->addItem(QStringLiteral("HEVC"), VideoCodecToInt(capability::VideoCodec::HevcNvenc));
+        video_codec_combo_->addItem(QStringLiteral("HEVC"), VideoCodecToInt(capability::VideoCodec::Hevc));
     }
     const int vidx = video_codec_combo_->findData(VideoCodecToInt(format_settings_.video_codec));
     if (vidx >= 0)
@@ -2823,10 +2822,10 @@ void ConfigPage::updateCompatCallout() {
     const auto a = format_settings_.audio_codec;
     bool video_bad = false, audio_bad = false;
     if (c == capability::Container::WebM) {
-        video_bad = (v != capability::VideoCodec::Av1Nvenc);
+        video_bad = (v != capability::VideoCodec::Av1);
         audio_bad = (a != capability::AudioCodec::Opus);
     } else if (c == capability::Container::Mp4) {
-        video_bad = (v != capability::VideoCodec::H264Nvenc);
+        video_bad = (v != capability::VideoCodec::H264);
         audio_bad = (a != capability::AudioCodec::Aac);
     }
     const bool compat_bad = video_bad || audio_bad;
@@ -2914,8 +2913,8 @@ void ConfigPage::onVideoBitDepthChanged(int index) {
     const auto requested = static_cast<capability::BitDepth>(video_bit_depth_combo_->itemData(index).toInt());
     // Guard: 10-bit is only honored for HEVC / AV1 (the disabled item should prevent
     // this, but keep the model authoritative regardless of how the index changed).
-    const bool supports_10bit = format_settings_.video_codec == capability::VideoCodec::HevcNvenc ||
-                                format_settings_.video_codec == capability::VideoCodec::Av1Nvenc;
+    const bool supports_10bit = format_settings_.video_codec == capability::VideoCodec::Hevc ||
+                                format_settings_.video_codec == capability::VideoCodec::Av1;
     format_settings_.bit_depth = (requested == capability::BitDepth::Bit10 && supports_10bit)
                                      ? capability::BitDepth::Bit10
                                      : capability::BitDepth::Bit8;
@@ -2933,7 +2932,7 @@ void ConfigPage::onVideoChromaChanged(int index) {
     // that supports it. The disabled item should prevent this, but keep the model
     // authoritative regardless of how the index changed. Mirrors updateVideoChromaControl.
     const auto codec = format_settings_.video_codec;
-    const bool codec_ok = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::H264Nvenc;
+    const bool codec_ok = codec == capability::VideoCodec::Hevc || codec == capability::VideoCodec::H264;
     const bool gpu_ok = !runtime_caps_set_ || capability::IsSelectable(runtime_caps_.QueryChroma444(codec));
     const bool supports_444 = codec_ok && format_settings_.bit_depth == capability::BitDepth::Bit8 && gpu_ok;
     format_settings_.chroma_subsampling = (requested == capability::ChromaSubsampling::Cs444 && supports_444)
@@ -3107,7 +3106,7 @@ void ConfigPage::updateQualitySegmentSelection() {
     if (!quality_segment_group_)
         return;
 
-    const auto sync_segment = [this](QPushButton* segment, recorder_core::NvencQualityPreset preset) {
+    const auto sync_segment = [this](QPushButton* segment, recorder_core::QualityPreset preset) {
         if (!segment)
             return;
 
@@ -3119,11 +3118,11 @@ void ConfigPage::updateQualitySegmentSelection() {
     };
 
     const QSignalBlocker blocker(quality_segment_group_);
-    sync_segment(quality_segment_draft_, recorder_core::NvencQualityPreset::Draft);
-    sync_segment(quality_segment_efficient_, recorder_core::NvencQualityPreset::Efficient);
-    sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
-    sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
-    sync_segment(quality_segment_ultra_, recorder_core::NvencQualityPreset::Ultra);
+    sync_segment(quality_segment_draft_, recorder_core::QualityPreset::Draft);
+    sync_segment(quality_segment_efficient_, recorder_core::QualityPreset::Efficient);
+    sync_segment(quality_segment_balanced_, recorder_core::QualityPreset::Balanced);
+    sync_segment(quality_segment_high_, recorder_core::QualityPreset::High);
+    sync_segment(quality_segment_ultra_, recorder_core::QualityPreset::Ultra);
 
     // Keep the hidden quality_combo_ seam in sync with the model preset too:
     // onQualitySegmentSelected() compares a clicked segment's preset against
@@ -3151,19 +3150,19 @@ void ConfigPage::updateQualitySegmentSelection() {
 
     if (quality_compare_hint_) {
         switch (recorder_core::NearestQualityPreset(video_settings_.cq)) {
-        case recorder_core::NvencQualityPreset::Draft:
+        case recorder_core::QualityPreset::Draft:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Draft"));
             break;
-        case recorder_core::NvencQualityPreset::Efficient:
+        case recorder_core::QualityPreset::Efficient:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Efficient"));
             break;
-        case recorder_core::NvencQualityPreset::Balanced:
+        case recorder_core::QualityPreset::Balanced:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Balanced"));
             break;
-        case recorder_core::NvencQualityPreset::High:
+        case recorder_core::QualityPreset::High:
             quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
             break;
-        case recorder_core::NvencQualityPreset::Ultra:
+        case recorder_core::QualityPreset::Ultra:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Ultra"));
             break;
         }
@@ -4949,8 +4948,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
         qehl->addStretch(1);
         quality_cq_spin_ = new QSpinBox(qecontent);
         quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
-        quality_cq_spin_->setRange(static_cast<int>(recorder_core::kNvencCqMin),
-                                   static_cast<int>(recorder_core::kNvencCqMax));
+        quality_cq_spin_->setRange(static_cast<int>(recorder_core::kCqMin), static_cast<int>(recorder_core::kCqMax));
         quality_cq_spin_->setFixedWidth(160); // same column width as every other row input
         // Scrolling the settings page must not silently retune quality: the wheel
         // only steps the value once the box has been focused deliberately.

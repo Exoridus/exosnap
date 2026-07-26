@@ -25,7 +25,7 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
 
     UserRecorderConfig current{};
     current.container = Container::Matroska;
-    current.video_codec = VideoCodec::Av1Nvenc;
+    current.video_codec = VideoCodec::Av1;
     current.audio_codec = AudioCodec::Aac;
 
     const std::vector<OptionEntry> options = query.GetAudioCodecOptions(current);
@@ -63,7 +63,7 @@ TEST(OptionQueryTest, WebMAv1AudioOptionsMatchBaseline) {
 
     UserRecorderConfig current;
     current.container = Container::WebM;
-    current.video_codec = VideoCodec::Av1Nvenc;
+    current.video_codec = VideoCodec::Av1;
 
     const std::vector<OptionEntry> options = query.GetAudioCodecOptions(current);
     ASSERT_EQ(options.size(), AllAudioCodecs().size());

@@ -16,57 +16,57 @@ void SetCodec(CapabilitySet& caps, VideoCodec v, SupportLevel level) {
 // (MKV, all 3 Available) -> AV1 (preference order picks AV1 first).
 TEST(CodecSelectionTest, MkvAllAvailable_PicksAv1) {
     CapabilitySet caps;
-    SetCodec(caps, VideoCodec::Av1Nvenc, SupportLevel::Available);
-    SetCodec(caps, VideoCodec::HevcNvenc, SupportLevel::Available);
-    SetCodec(caps, VideoCodec::H264Nvenc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Av1, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Hevc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::H264, SupportLevel::Available);
 
     const auto best = BestAvailableVideoCodec(caps, Container::Matroska);
     ASSERT_TRUE(best.has_value());
-    EXPECT_EQ(*best, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(*best, VideoCodec::Av1);
 }
 
 // (MKV, AV1=NotImplemented, HEVC/H264 Available) -> HEVC (next in order).
 TEST(CodecSelectionTest, MkvAv1Missing_PicksHevc) {
     CapabilitySet caps;
-    SetCodec(caps, VideoCodec::Av1Nvenc, SupportLevel::NotImplemented);
-    SetCodec(caps, VideoCodec::HevcNvenc, SupportLevel::Available);
-    SetCodec(caps, VideoCodec::H264Nvenc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Av1, SupportLevel::NotImplemented);
+    SetCodec(caps, VideoCodec::Hevc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::H264, SupportLevel::Available);
 
     const auto best = BestAvailableVideoCodec(caps, Container::Matroska);
     ASSERT_TRUE(best.has_value());
-    EXPECT_EQ(*best, VideoCodec::HevcNvenc);
+    EXPECT_EQ(*best, VideoCodec::Hevc);
 }
 
 // ValidUnvalidated also qualifies as GPU-supported.
 TEST(CodecSelectionTest, MkvAv1ValidUnvalidated_StillPicksAv1) {
     CapabilitySet caps;
-    SetCodec(caps, VideoCodec::Av1Nvenc, SupportLevel::ValidUnvalidated);
-    SetCodec(caps, VideoCodec::HevcNvenc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Av1, SupportLevel::ValidUnvalidated);
+    SetCodec(caps, VideoCodec::Hevc, SupportLevel::Available);
 
     const auto best = BestAvailableVideoCodec(caps, Container::Matroska);
     ASSERT_TRUE(best.has_value());
-    EXPECT_EQ(*best, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(*best, VideoCodec::Av1);
 }
 
 // (WebM, AV1 Available) -> AV1 (WebM only carries AV1; AV1 is valid there).
 TEST(CodecSelectionTest, WebmAv1Available_PicksAv1) {
     CapabilitySet caps;
-    SetCodec(caps, VideoCodec::Av1Nvenc, SupportLevel::Available);
-    SetCodec(caps, VideoCodec::HevcNvenc, SupportLevel::Available);
-    SetCodec(caps, VideoCodec::H264Nvenc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Av1, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Hevc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::H264, SupportLevel::Available);
 
     const auto best = BestAvailableVideoCodec(caps, Container::WebM);
     ASSERT_TRUE(best.has_value());
-    EXPECT_EQ(*best, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(*best, VideoCodec::Av1);
 }
 
 // (WebM, AV1=NotImplemented) -> nullopt: HEVC/H264 are container-prohibited in
 // WebM even though the GPU might support them, so nothing qualifies.
 TEST(CodecSelectionTest, WebmAv1Missing_HevcAndH264Prohibited_ReturnsNullopt) {
     CapabilitySet caps;
-    SetCodec(caps, VideoCodec::Av1Nvenc, SupportLevel::NotImplemented);
-    SetCodec(caps, VideoCodec::HevcNvenc, SupportLevel::Available);
-    SetCodec(caps, VideoCodec::H264Nvenc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::Av1, SupportLevel::NotImplemented);
+    SetCodec(caps, VideoCodec::Hevc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::H264, SupportLevel::Available);
 
     const auto best = BestAvailableVideoCodec(caps, Container::WebM);
     EXPECT_FALSE(best.has_value());
@@ -76,12 +76,12 @@ TEST(CodecSelectionTest, WebmAv1Missing_HevcAndH264Prohibited_ReturnsNullopt) {
 // (not selectable), so H.264 is the best valid MP4 codec.
 TEST(CodecSelectionTest, Mp4OnlyH264Available_PicksH264) {
     CapabilitySet caps;
-    SetCodec(caps, VideoCodec::H264Nvenc, SupportLevel::Available);
+    SetCodec(caps, VideoCodec::H264, SupportLevel::Available);
     // AV1 and HEVC deliberately not present -> Invalid -> not selectable.
 
     const auto best = BestAvailableVideoCodec(caps, Container::Mp4);
     ASSERT_TRUE(best.has_value());
-    EXPECT_EQ(*best, VideoCodec::H264Nvenc);
+    EXPECT_EQ(*best, VideoCodec::H264);
 }
 
 // Empty caps -> nothing GPU-supported -> nullopt.
@@ -92,9 +92,9 @@ TEST(CodecSelectionTest, EmptyCaps_ReturnsNullopt) {
 
 // Canonical visible labels (single-source spelling canon).
 TEST(CodecSelectionTest, VisibleLabels_AreCanonical) {
-    EXPECT_EQ(VisibleVideoCodecLabel(VideoCodec::Av1Nvenc), "AV1");
-    EXPECT_EQ(VisibleVideoCodecLabel(VideoCodec::HevcNvenc), "HEVC");
-    EXPECT_EQ(VisibleVideoCodecLabel(VideoCodec::H264Nvenc), "H.264");
+    EXPECT_EQ(VisibleVideoCodecLabel(VideoCodec::Av1), "AV1");
+    EXPECT_EQ(VisibleVideoCodecLabel(VideoCodec::Hevc), "HEVC");
+    EXPECT_EQ(VisibleVideoCodecLabel(VideoCodec::H264), "H.264");
 }
 
 } // namespace

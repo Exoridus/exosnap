@@ -15,11 +15,11 @@ namespace {
 // Stable, locale-independent tokens for the perf log records.
 const char* CodecToken(VideoCodec c) noexcept {
     switch (c) {
-    case VideoCodec::Av1Nvenc:
+    case VideoCodec::Av1:
         return "av1";
-    case VideoCodec::H264Nvenc:
+    case VideoCodec::H264:
         return "h264";
-    case VideoCodec::HevcNvenc:
+    case VideoCodec::Hevc:
         return "hevc";
     }
     return "unknown";

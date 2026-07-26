@@ -87,7 +87,7 @@ QString presentModeText(PresentMode m) {
 }
 
 QString videoCodecText(VideoCodec c) {
-    return c == VideoCodec::H264Nvenc ? QStringLiteral("H.264") : QStringLiteral("AV1");
+    return c == VideoCodec::H264 ? QStringLiteral("H.264") : QStringLiteral("AV1");
 }
 
 QString audioCodecText(AudioCodec c) {

@@ -23,7 +23,7 @@ namespace {
 RecordingPresetConfig MakeDistinctConfig() {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.countdown_seconds = 3;
-    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
+    cfg.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
     return cfg;
 }
 
@@ -232,7 +232,7 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingAudio_IsDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
+    live.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 
@@ -417,7 +417,7 @@ TEST(RecordingPresetRegistry, LoadState_DropsPersistedBuiltInIds_DedupesReserved
 TEST(RecordingPresetRegistry, AddPreset_StripsEnvironmentFields) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = MakeDefaultPreset().config;
-    live.output.video_codec = capability::VideoCodec::HevcNvenc;
+    live.output.video_codec = capability::VideoCodec::Hevc;
     live.output.bit_depth = capability::BitDepth::Bit10;
     live.capture.display_id.device_path = "monitor-1";
     const std::string id = reg.AddPreset(live, "Mine");

@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QString>
 #include <QTemporaryDir>
@@ -226,7 +227,7 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_HevcTenBit) {
     p.config = MakeDefaultPreset().config;
     // 10-bit is only valid for HEVC/AV1 — use MKV + HEVC so sanitize keeps it.
     p.config.output.container = capability::Container::Matroska;
-    p.config.output.video_codec = capability::VideoCodec::HevcNvenc;
+    p.config.output.video_codec = capability::VideoCodec::Hevc;
     p.config.output.audio_codec = capability::AudioCodec::Opus;
     p.config.output.bit_depth = capability::BitDepth::Bit10;
 
@@ -241,7 +242,7 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_HevcTenBit) {
         EXPECT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
         EXPECT_EQ(state.user_presets[0].config.output.bit_depth, capability::BitDepth::Bit10);
-        EXPECT_EQ(state.user_presets[0].config.output.video_codec, capability::VideoCodec::HevcNvenc);
+        EXPECT_EQ(state.user_presets[0].config.output.video_codec, capability::VideoCodec::Hevc);
     }
 
     CleanupFile(path);
@@ -1638,7 +1639,7 @@ TEST(RecordingPresetStore, LiveTable_RoundTrips) {
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.video.cq = 33;
     live.output.container = capability::Container::Mp4;
-    live.output.video_codec = capability::VideoCodec::H264Nvenc;
+    live.output.video_codec = capability::VideoCodec::H264;
     live.output.audio_codec = capability::AudioCodec::Aac;
     live.output.bit_depth = capability::BitDepth::Bit8;
 
@@ -1660,19 +1661,44 @@ TEST(RecordingPresetStore, AudioCodecAac_PersistsAsAac) {
 
     RecordingPresetConfig live = MakeDefaultPreset().config;
     live.output.container = capability::Container::Mp4;
-    live.output.video_codec = capability::VideoCodec::H264Nvenc;
+    live.output.video_codec = capability::VideoCodec::H264;
     live.output.audio_codec = capability::AudioCodec::Aac;
     store.Save({}, std::string(kDefaultPresetId), live);
 
     QFile f(path);
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString text = QString::fromUtf8(f.readAll());
-    EXPECT_TRUE(text.contains(QStringLiteral("audio_codec = \"aac\"")));
+    // toml++ picks the quoting style, so match the value, not the quotes.
+    EXPECT_TRUE(text.contains(QRegularExpression(QStringLiteral("audio_codec\\s*=\\s*['\"]aac['\"]"))));
     EXPECT_FALSE(text.contains(QStringLiteral("aac_mf")));
 
     const PersistedPresetState state = store.Load();
     ASSERT_TRUE(state.live.has_value());
     EXPECT_EQ(state.live->output.audio_codec, capability::AudioCodec::Aac);
+    CleanupFile(path);
+}
+
+// Video codecs are persisted by codec identity ("av1"/"h264"/"hevc"), never by
+// the encoder that produced them — dropping the Nvenc suffix from the
+// enumerators must leave the on-disk format byte-identical.
+TEST(RecordingPresetStore, VideoCodec_PersistsWithoutVendorSuffix) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.output.container = capability::Container::Matroska;
+    live.output.video_codec = capability::VideoCodec::Hevc;
+    store.Save({}, std::string(kDefaultPresetId), live);
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromUtf8(f.readAll());
+    EXPECT_TRUE(text.contains(QRegularExpression(QStringLiteral("video_codec\\s*=\\s*['\"]hevc['\"]"))));
+    EXPECT_FALSE(text.contains(QStringLiteral("_nvenc")));
+
+    const PersistedPresetState state = store.Load();
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_EQ(state.live->output.video_codec, capability::VideoCodec::Hevc);
     CleanupFile(path);
 }
 
@@ -1772,7 +1798,7 @@ TEST(RecordingPresetStore, LiveTable_CorruptField_ClampedNotReset) {
     // Out-of-range cq is dropped by the field parser, leaving the struct
     // default (VideoSettingsModel's Balanced CQ), not the built-in Default
     // preset's High CQ — SanitizePresetConfig does not range-clamp cq itself.
-    EXPECT_EQ(state.live->video.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
+    EXPECT_EQ(state.live->video.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced));
     CleanupFile(path);
 }
 

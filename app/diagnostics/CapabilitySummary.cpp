@@ -20,11 +20,11 @@ std::string SupportLevelString(capability::SupportLevel level) {
 
 std::string VideoCodecDisplayName(capability::VideoCodec v) {
     switch (v) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return "H.264 (NVENC)";
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return "HEVC (NVENC)";
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return "AV1 (NVENC)";
     }
     return "Unknown";
@@ -109,8 +109,7 @@ CapabilitySummary CapabilitySummary::FromCapabilitySet(const capability::Capabil
     }
 
     // Video codecs
-    for (const auto& v :
-         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+    for (const auto& v : {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
         const auto& ann = caps.QueryVideoCodec(v);
         summary.entries.push_back({VideoCodecDisplayName(v), SupportLevelString(ann.level),
                                    capability::IsSelectable(ann.level) ? "available" : "unavailable",

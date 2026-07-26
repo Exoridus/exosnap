@@ -44,7 +44,7 @@ class StubFilesystemProvider final : public IFilesystemProvider {
 
 static capability::CapabilitySet MakeBasicCaps() {
     capability::CapabilitySet caps;
-    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Available, ""};
     caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
     return caps;
 }
@@ -52,7 +52,7 @@ static capability::CapabilitySet MakeBasicCaps() {
 static capability::UserRecorderConfig MakeBasicConfig() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
-    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
     // Explicit: keep the filesystem fixtures isolated from rec.color.range
     // (a Full range would add an unrelated Notice to the checklist).

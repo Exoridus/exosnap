@@ -11,8 +11,8 @@ namespace exosnap::ui::dialogs {
 namespace {
 
 TEST(RecordingErrorDetailText, MapsQualifiedContainerAndVideoTokens) {
-    const QString in = QStringLiteral(
-        "Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc, or VideoCodec::HevcNvenc");
+    const QString in =
+        QStringLiteral("Container::Matroska requires VideoCodec::Av1, VideoCodec::H264, or VideoCodec::Hevc");
     const QString out = HumanizeEngineDetail(in);
     EXPECT_EQ(out, QStringLiteral("MKV requires AV1, H.264, or HEVC"));
 }
