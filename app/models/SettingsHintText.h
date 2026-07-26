@@ -32,16 +32,17 @@ inline QString card(const QString& body) {
 inline const QString kContainer = QStringLiteral("MKV safest \xC2\xB7 MP4 most compatible");
 inline const QString kVideoCodecAv1 = QStringLiteral("Best compression \xC2\xB7 newer players");
 inline const QString kVideoCodecH264 = QStringLiteral("Universal compatibility \xC2\xB7 larger files");
-inline const QString kQualityPreset = detail::card(QStringLiteral("<b>Constant-quality presets.</b><br>"
-                                                                  "Small \xe2\x89\x88 CQ 30 (smaller files).<br>"
-                                                                  "Balanced \xe2\x89\x88 CQ 24.<br>"
-                                                                  "High \xe2\x89\x88 CQ 19 (sharper, larger files).<br>"
-                                                                  "Lower CQ = higher quality."));
+inline const QString kQualityPreset =
+    detail::card(QStringLiteral("<b>Constant-quality presets.</b><br>"
+                                "Draft \xe2\x89\x88 CQ 35 \xe2\x80\xa6 "
+                                "Ultra \xe2\x89\x88 CQ 16 (sharpest, largest files).<br>"
+                                "Lower CQ = higher quality."));
 inline const QString kConstantQuality =
     detail::card(QStringLiteral("<b>Quantizer target (1\xe2\x80\x93"
                                 "51).</b><br>"
                                 "Lower = better quality, larger files.<br>"
-                                "19 = High \xC2\xB7 24 = Balanced \xC2\xB7 30 = Small."));
+                                "16 = Ultra \xC2\xB7 19 = High \xC2\xB7 24 = Balanced \xC2\xB7 30 = Efficient \xC2\xB7 "
+                                "35 = Draft."));
 inline const QString kFrameRate = QStringLiteral("Constant rate \xC2\xB7 editor-friendly");
 inline const QString kCaptureCursor = QStringLiteral("Show the mouse pointer");
 inline const QString kOutputResolution = QStringLiteral("Downscale to save size \xC2\xB7 re-encodes");

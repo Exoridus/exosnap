@@ -928,18 +928,22 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Hidden combo is the single model-change emitter (existing test seam).
     quality_combo_ = new QComboBox(quality_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
-    quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
+    quality_combo_->addItem(QStringLiteral("Draft"), static_cast<int>(recorder_core::NvencQualityPreset::Draft));
+    quality_combo_->addItem(QStringLiteral("Efficient"),
+                            static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
-    quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
+    quality_combo_->addItem(QStringLiteral("High"), static_cast<int>(recorder_core::NvencQualityPreset::High));
+    quality_combo_->addItem(QStringLiteral("Ultra"), static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
     quality_combo_->setVisible(false);
     quality_combo_->setFocusPolicy(Qt::NoFocus);
     quality_layout->addWidget(quality_combo_);
 
-    // v10: the Small/Balanced/High segmented control is preserved as a hidden test
-    // seam (clicks + checked-state still drive the model), but the visible Default
-    // presentation is a single "Balanced · CQ 24" dropdown (quality_preset_combo_)
-    // built below. The segmented control is created here and added hidden so its
-    // objectNames + qualitySegmentSelected property survive for tests.
+    // v10: the five-tier (Draft/Efficient/Balanced/High/Ultra) segmented control is
+    // preserved as a hidden test seam (clicks + checked-state still drive the model),
+    // but the visible Default presentation is a single "CQ 24 · Balanced" dropdown
+    // (quality_preset_combo_) built below. The segmented control is created here and
+    // added hidden so its objectNames + qualitySegmentSelected property survive for
+    // tests.
     auto* quality_segmented = new QWidget(quality_panel);
     quality_segmented->setObjectName(QStringLiteral("qualitySegmented"));
     quality_segmented->setVisible(false);
@@ -966,12 +970,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         return segment;
     };
 
-    quality_segment_small_ = makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small"),
-                                                recorder_core::NvencQualityPreset::Efficient);
+    quality_segment_draft_ = makeQualitySegment(QStringLiteral("qualitySegmentDraft"), QStringLiteral("Draft"),
+                                                recorder_core::NvencQualityPreset::Draft);
+    quality_segment_efficient_ =
+        makeQualitySegment(QStringLiteral("qualitySegmentEfficient"), QStringLiteral("Efficient"),
+                           recorder_core::NvencQualityPreset::Efficient);
     quality_segment_balanced_ = makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced"),
                                                    recorder_core::NvencQualityPreset::Balanced);
     quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High"),
                                                recorder_core::NvencQualityPreset::High);
+    quality_segment_ultra_ = makeQualitySegment(QStringLiteral("qualitySegmentUltra"), QStringLiteral("Ultra"),
+                                                recorder_core::NvencQualityPreset::Ultra);
 
     quality_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), quality_panel);
@@ -979,18 +988,23 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // laid out / discoverable; park it (hidden) in the quality card.
     quality_layout->addWidget(quality_segmented);
 
-    // v10: Default Quality presentation — a single dropdown "Balanced · CQ 24".
-    // It mirrors the hidden quality_combo_ model seam: choosing an item drives the
-    // same NvencQualityPreset path (onQualityPresetComboChanged → quality_combo_).
+    // v10: Default Quality presentation — a single five-tier dropdown, CQ-first
+    // ("CQ 24 · Balanced"). It mirrors the hidden quality_combo_ model seam:
+    // choosing an item drives the same NvencQualityPreset path
+    // (onQualityPresetComboChanged → quality_combo_).
     {
         quality_preset_combo_ = new QComboBox(quality_panel);
         quality_preset_combo_->setObjectName(QStringLiteral("qualityPresetCombo"));
-        quality_preset_combo_->addItem(QStringLiteral("Small \xc2\xb7 CQ 30"),
+        quality_preset_combo_->addItem(QStringLiteral("CQ 35 \xc2\xb7 Draft"),
+                                       static_cast<int>(recorder_core::NvencQualityPreset::Draft));
+        quality_preset_combo_->addItem(QStringLiteral("CQ 30 \xc2\xb7 Efficient"),
                                        static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
-        quality_preset_combo_->addItem(QStringLiteral("Balanced \xc2\xb7 CQ 24"),
+        quality_preset_combo_->addItem(QStringLiteral("CQ 24 \xc2\xb7 Balanced"),
                                        static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
-        quality_preset_combo_->addItem(QStringLiteral("High \xc2\xb7 CQ 19"),
+        quality_preset_combo_->addItem(QStringLiteral("CQ 19 \xc2\xb7 High"),
                                        static_cast<int>(recorder_core::NvencQualityPreset::High));
+        quality_preset_combo_->addItem(QStringLiteral("CQ 16 \xc2\xb7 Ultra"),
+                                       static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
         quality_preset_combo_->setFixedWidth(160);
         quality_preset_combo_->setProperty("settingsRowInput", true);
 
@@ -2963,9 +2977,26 @@ void ConfigPage::updateQualitySegmentSelection() {
     };
 
     const QSignalBlocker blocker(quality_segment_group_);
-    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Efficient);
+    sync_segment(quality_segment_draft_, recorder_core::NvencQualityPreset::Draft);
+    sync_segment(quality_segment_efficient_, recorder_core::NvencQualityPreset::Efficient);
     sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
     sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
+    sync_segment(quality_segment_ultra_, recorder_core::NvencQualityPreset::Ultra);
+
+    // Keep the hidden quality_combo_ seam in sync with the model preset too:
+    // onQualitySegmentSelected() compares a clicked segment's preset against
+    // quality_combo_->currentIndex() to detect "already selected" (a same-tier
+    // click, which should re-poll the UI but not re-emit). Without this sync the
+    // seam combo stays at its construction-time default (index 0) forever, so
+    // clicking whichever segment happens to occupy index 0 silently no-ops
+    // instead of updating the model.
+    if (quality_combo_) {
+        const QSignalBlocker cb(quality_combo_);
+        const int cidx =
+            quality_combo_->findData(static_cast<int>(recorder_core::NearestQualityPreset(video_settings_.cq)));
+        if (cidx >= 0)
+            quality_combo_->setCurrentIndex(cidx);
+    }
 
     // v10: keep the visible Default dropdown in sync with the model preset.
     if (quality_preset_combo_) {
@@ -2978,17 +3009,20 @@ void ConfigPage::updateQualitySegmentSelection() {
 
     if (quality_compare_hint_) {
         switch (recorder_core::NearestQualityPreset(video_settings_.cq)) {
-        case recorder_core::NvencQualityPreset::High:
-            quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
+        case recorder_core::NvencQualityPreset::Draft:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Draft"));
+            break;
+        case recorder_core::NvencQualityPreset::Efficient:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Efficient"));
             break;
         case recorder_core::NvencQualityPreset::Balanced:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Balanced"));
             break;
-        case recorder_core::NvencQualityPreset::Efficient:
-            quality_compare_hint_->setCurrentValue(QStringLiteral("Small"));
+        case recorder_core::NvencQualityPreset::High:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
             break;
-        case recorder_core::NvencQualityPreset::Draft:
         case recorder_core::NvencQualityPreset::Ultra:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Ultra"));
             break;
         }
     }
@@ -5299,8 +5333,8 @@ void ConfigPage::updateExpertModeVisibility() {
     // Wave 2 Part A: split recording section is now expert-gated (was behind expander).
     if (split_expert_section_)
         split_expert_section_->setVisible(expert_mode_enabled_);
-    // v10: Default shows the "Balanced · CQ 24" dropdown; Expert hides it and reveals
-    // Rate control + CQ spinbox.
+    // v10: Default shows the five-tier "CQ 24 · Balanced" dropdown; Expert hides it
+    // and reveals Rate control + CQ spinbox.
     if (quality_preset_row_widget_)
         quality_preset_row_widget_->setVisible(!expert_mode_enabled_);
     if (quality_rate_section_)
@@ -5875,9 +5909,11 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     if (quality_preset_combo_)
         quality_preset_combo_->setEnabled(enabled);
     frame_rate_combo_->setEnabled(enabled);
-    quality_segment_small_->setEnabled(enabled);
+    quality_segment_draft_->setEnabled(enabled);
+    quality_segment_efficient_->setEnabled(enabled);
     quality_segment_balanced_->setEnabled(enabled);
     quality_segment_high_->setEnabled(enabled);
+    quality_segment_ultra_->setEnabled(enabled);
     updateTimingSelection();
     cursor_check_->setEnabled(enabled);
     if (output_res_combo_)

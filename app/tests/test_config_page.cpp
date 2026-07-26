@@ -145,9 +145,11 @@ TEST_F(ConfigPageTest, VideoQualityComboExists) {
 TEST_F(ConfigPageTest, QualitySegmentsExist_WithStableObjectNames) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra")), nullptr);
 }
 
 TEST_F(ConfigPageTest, LegacyQualityCards_AreRemoved) {
@@ -556,10 +558,16 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
     ASSERT_NE(combo, nullptr);
 
-    combo->setCurrentIndex(0); // High — same as default, won't emit
+    // The seam combo is kept in sync with the model, whose default preset is
+    // Balanced — so re-selecting it is a no-op.
+    const int balanced_idx = combo->findData(static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
+    ASSERT_GE(balanced_idx, 0);
+    combo->setCurrentIndex(balanced_idx);
     EXPECT_FALSE(emitted);
 
-    combo->setCurrentIndex(2); // Small
+    const int ultra_idx = combo->findData(static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
+    ASSERT_GE(ultra_idx, 0);
+    combo->setCurrentIndex(ultra_idx);
     EXPECT_TRUE(emitted);
 }
 
@@ -573,31 +581,45 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
         changed = settings;
     });
 
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
     auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    ASSERT_NE(small_segment, nullptr);
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(draft_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
+    ASSERT_NE(ultra_segment, nullptr);
 
-    // Default quality is High, so each click below is a real change and emits.
-    small_segment->click();
+    // Default quality is Balanced, so each click below is a real change and emits.
+    draft_segment->click();
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Draft));
+    EXPECT_TRUE(draft_segment->isChecked());
+    EXPECT_TRUE(draft_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(balanced_segment->isChecked());
+
+    efficient_segment->click();
     EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient));
-    EXPECT_TRUE(small_segment->isChecked());
-    EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
-    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_TRUE(efficient_segment->isChecked());
+    EXPECT_FALSE(draft_segment->isChecked());
 
     balanced_segment->click();
     EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
     EXPECT_TRUE(balanced_segment->isChecked());
-    EXPECT_FALSE(small_segment->isChecked());
+    EXPECT_FALSE(efficient_segment->isChecked());
 
     high_segment->click();
     EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High));
     EXPECT_TRUE(high_segment->isChecked());
     EXPECT_FALSE(balanced_segment->isChecked());
 
-    EXPECT_EQ(emit_count, 3);
+    ultra_segment->click();
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Ultra));
+    EXPECT_TRUE(ultra_segment->isChecked());
+    EXPECT_FALSE(high_segment->isChecked());
+
+    EXPECT_EQ(emit_count, 5);
 }
 
 TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
@@ -607,19 +629,27 @@ TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
     balanced.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced);
     page.setVideoSettings(balanced);
 
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
     auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    ASSERT_NE(small_segment, nullptr);
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(draft_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
+    ASSERT_NE(ultra_segment, nullptr);
 
-    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_FALSE(draft_segment->isChecked());
+    EXPECT_FALSE(efficient_segment->isChecked());
     EXPECT_TRUE(balanced_segment->isChecked());
-    EXPECT_FALSE(small_segment->isChecked());
-    EXPECT_FALSE(high_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_FALSE(ultra_segment->isChecked());
+    EXPECT_FALSE(draft_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(efficient_segment->property("qualitySegmentSelected").toBool());
     EXPECT_TRUE(balanced_segment->property("qualitySegmentSelected").toBool());
-    EXPECT_FALSE(small_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(high_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(ultra_segment->property("qualitySegmentSelected").toBool());
 }
 
 // The "✓ Current format" footer summarises frame rate + timing, but its refresh
@@ -702,9 +732,15 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* quality_high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
     ASSERT_NE(quality_high_segment, nullptr);
     EXPECT_FALSE(quality_high_segment->isEnabled());
-    auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
-    ASSERT_NE(quality_small_segment, nullptr);
-    EXPECT_FALSE(quality_small_segment->isEnabled());
+    auto* quality_efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
+    ASSERT_NE(quality_efficient_segment, nullptr);
+    EXPECT_FALSE(quality_efficient_segment->isEnabled());
+    auto* quality_draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    ASSERT_NE(quality_draft_segment, nullptr);
+    EXPECT_FALSE(quality_draft_segment->isEnabled());
+    auto* quality_ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(quality_ultra_segment, nullptr);
+    EXPECT_FALSE(quality_ultra_segment->isEnabled());
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(frame_rate, nullptr);
     EXPECT_FALSE(frame_rate->isEnabled());
@@ -760,9 +796,15 @@ TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
     auto* quality_high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
     ASSERT_NE(quality_high_segment, nullptr);
     EXPECT_TRUE(quality_high_segment->isEnabled());
-    auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
-    ASSERT_NE(quality_small_segment, nullptr);
-    EXPECT_TRUE(quality_small_segment->isEnabled());
+    auto* quality_efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
+    ASSERT_NE(quality_efficient_segment, nullptr);
+    EXPECT_TRUE(quality_efficient_segment->isEnabled());
+    auto* quality_draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    ASSERT_NE(quality_draft_segment, nullptr);
+    EXPECT_TRUE(quality_draft_segment->isEnabled());
+    auto* quality_ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(quality_ultra_segment, nullptr);
+    EXPECT_TRUE(quality_ultra_segment->isEnabled());
 
     // Mic device combo: disabled by default because no audio plan has been set yet.
     // (In production, setAudioUiState is called immediately after construction, so
@@ -885,21 +927,39 @@ TEST_F(ConfigPageTest, UpdatesCard_ChannelCombo_UserSelectionEmitsChannelChanged
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
-    // Caption labels removed; segment labels are now "Small"/"Balanced"/"High" without CQ numbers.
+    // Caption labels removed; segment labels are the five tier names without CQ numbers.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
     auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    ASSERT_NE(small_segment, nullptr);
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
+    ASSERT_NE(draft_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
-    EXPECT_EQ(small_segment->text(), QStringLiteral("Small"));
+    ASSERT_NE(ultra_segment, nullptr);
+    EXPECT_EQ(draft_segment->text(), QStringLiteral("Draft"));
+    EXPECT_EQ(efficient_segment->text(), QStringLiteral("Efficient"));
     EXPECT_EQ(balanced_segment->text(), QStringLiteral("Balanced"));
     EXPECT_EQ(high_segment->text(), QStringLiteral("High"));
+    EXPECT_EQ(ultra_segment->text(), QStringLiteral("Ultra"));
     // Caption labels are gone.
     EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel")), nullptr);
     EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel")), nullptr);
+}
+
+TEST_F(ConfigPageTest, QualityPresetCombo_HasFiveCqFirstLabels) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>("qualityPresetCombo");
+    ASSERT_NE(combo, nullptr);
+    ASSERT_EQ(combo->count(), 5);
+    EXPECT_EQ(combo->itemText(0), QStringLiteral("CQ 35 \xc2\xb7 Draft"));
+    EXPECT_EQ(combo->itemText(1), QStringLiteral("CQ 30 \xc2\xb7 Efficient"));
+    EXPECT_EQ(combo->itemText(2), QStringLiteral("CQ 24 \xc2\xb7 Balanced"));
+    EXPECT_EQ(combo->itemText(3), QStringLiteral("CQ 19 \xc2\xb7 High"));
+    EXPECT_EQ(combo->itemText(4), QStringLiteral("CQ 16 \xc2\xb7 Ultra"));
 }
 
 // ── SETTINGS-AUDIO-METER-R1: live mono meters in the Settings Audio card ─────
@@ -2902,18 +2962,31 @@ TEST_F(ConfigPageTest, CqSpinBox_SegmentSelectionFollowsNearestPreset) {
     page.setExpertModeEnabled(true);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
+    auto* ultra_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentUltra"));
     auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
-    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* efficient_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentEfficient"));
+    auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
     ASSERT_NE(spin, nullptr);
+    ASSERT_NE(ultra_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
-    ASSERT_NE(small_segment, nullptr);
+    ASSERT_NE(efficient_segment, nullptr);
+    ASSERT_NE(draft_segment, nullptr);
+
+    spin->setValue(17); // nearest canonical tier is Ultra (16)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(17), recorder_core::NvencQualityPreset::Ultra);
+    EXPECT_TRUE(ultra_segment->property("qualitySegmentSelected").toBool());
 
     spin->setValue(20); // nearest canonical tier is High (19)
     EXPECT_EQ(recorder_core::NearestQualityPreset(20), recorder_core::NvencQualityPreset::High);
     EXPECT_TRUE(high_segment->property("qualitySegmentSelected").toBool());
 
-    spin->setValue(29); // nearest canonical tier is Small (30)
-    EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
+    spin->setValue(29); // nearest canonical tier is Efficient (30)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(29), recorder_core::NvencQualityPreset::Efficient);
+    EXPECT_TRUE(efficient_segment->property("qualitySegmentSelected").toBool());
+
+    spin->setValue(33); // nearest canonical tier is Draft (35)
+    EXPECT_EQ(recorder_core::NearestQualityPreset(33), recorder_core::NvencQualityPreset::Draft);
+    EXPECT_TRUE(draft_segment->property("qualitySegmentSelected").toBool());
 }
 
 // A non-canonical CQ is never snapped onto a tier; it reaches the model verbatim.

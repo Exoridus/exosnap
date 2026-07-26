@@ -425,9 +425,11 @@ class ConfigPage : public QWidget {
     QComboBox* quality_combo_ = nullptr;
     QComboBox* frame_rate_combo_ = nullptr;
     QButtonGroup* quality_segment_group_ = nullptr;
-    QPushButton* quality_segment_small_ = nullptr;
+    QPushButton* quality_segment_draft_ = nullptr;
+    QPushButton* quality_segment_efficient_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;
     QPushButton* quality_segment_high_ = nullptr;
+    QPushButton* quality_segment_ultra_ = nullptr;
     // v10/Canon: Frame timing is a dropdown (SSelect), not a segmented button group.
     QComboBox* timing_combo_ = nullptr;
     ui::widgets::ExoToggle* cursor_check_ = nullptr;
