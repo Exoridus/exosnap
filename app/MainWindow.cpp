@@ -1391,7 +1391,7 @@ std::string CrashAudioCodecToken(capability::AudioCodec a) {
     switch (a) {
     case capability::AudioCodec::Opus:
         return "Opus";
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return "AAC";
     case capability::AudioCodec::Pcm:
         return "PCM";
@@ -5143,10 +5143,10 @@ void MainWindow::buildDiagnosticsPage() {
                     output_settings_.video_codec = *best;
                 ReconcileContainerCodecs(output_settings_);
             } else if (fix_id == QStringLiteral("fix.codec.audio.default")) {
-                output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                output_settings_.audio_codec = capability::AudioCodec::Aac;
             } else if (fix_id == QStringLiteral("fix.audio.opus_to_aac")) {
                 // rec.009 Notice (Opus-in-MP4): switch audio to AAC and reconcile.
-                output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                output_settings_.audio_codec = capability::AudioCodec::Aac;
                 ReconcileContainerCodecs(output_settings_);
             } else if (fix_id == QStringLiteral("fix.color.range")) {
                 // rec.color.range Notice: Full range is crushed/too dark in players that ignore

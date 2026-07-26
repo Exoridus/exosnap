@@ -30,7 +30,7 @@ std::string_view ToString(AudioCodec value) noexcept {
     switch (value) {
     case AudioCodec::Opus:
         return "Opus";
-    case AudioCodec::AacMf:
+    case AudioCodec::Aac:
         return "AAC (Media Foundation)";
     case AudioCodec::Pcm:
         return "PCM";

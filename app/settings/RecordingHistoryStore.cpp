@@ -66,7 +66,7 @@ std::optional<recorder_core::VideoCodec> StringToVideoCodec(const QString& s) {
 
 QString AudioCodecToString(recorder_core::AudioCodec c) {
     switch (c) {
-    case recorder_core::AudioCodec::AacMf:
+    case recorder_core::AudioCodec::Aac:
         return QStringLiteral("aac");
     case recorder_core::AudioCodec::Opus:
         return QStringLiteral("opus");
@@ -80,8 +80,8 @@ QString AudioCodecToString(recorder_core::AudioCodec c) {
 
 std::optional<recorder_core::AudioCodec> StringToAudioCodec(const QString& s) {
     const QString lower = s.trimmed().toLower();
-    if (lower == QStringLiteral("aac") || lower == QStringLiteral("aac_mf"))
-        return recorder_core::AudioCodec::AacMf;
+    if (lower == QStringLiteral("aac"))
+        return recorder_core::AudioCodec::Aac;
     if (lower == QStringLiteral("opus"))
         return recorder_core::AudioCodec::Opus;
     if (lower == QStringLiteral("pcm"))

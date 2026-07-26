@@ -31,7 +31,7 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.audio_codecs.emplace(
         AudioCodec::Opus,
         SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
-    caps.audio_codecs.emplace(AudioCodec::AacMf,
+    caps.audio_codecs.emplace(AudioCodec::Aac,
                               SupportAnnotation{SupportLevel::Available, "Validated AAC-LC Media Foundation path."});
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
@@ -142,15 +142,15 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         caps.bit_depths[BitDepth::Bit10] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         // Force primary combos to non-selectable via combo_override.
-        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
-                                   ChromaSubsampling::Cs420, BitDepth::Bit8};
+        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                                   BitDepth::Bit8};
         caps.combo_overrides[mkv_av1_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
-        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Aac,
                                     ChromaSubsampling::Cs420, BitDepth::Bit8};
         caps.combo_overrides[mkv_h264_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
-        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
         caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
     }
@@ -161,23 +161,23 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
             "AAC audio encoding (Media Foundation) is not available on this system. "
             "Switch to an Opus recording profile or ensure Media Foundation components are installed.";
 
-        // Lower the dimension-level annotation for AacMf.
-        caps.audio_codecs[AudioCodec::AacMf] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
+        // Lower the dimension-level annotation for Aac.
+        caps.audio_codecs[AudioCodec::Aac] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
 
         // Force primary AAC combos to non-selectable via combo_override.
-        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
-                                   ChromaSubsampling::Cs420, BitDepth::Bit8};
+        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                                   BitDepth::Bit8};
         if (caps.combo_overrides.find(mkv_av1_key) == caps.combo_overrides.end()) {
             caps.combo_overrides.try_emplace(mkv_av1_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
         }
 
-        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Aac,
                                     ChromaSubsampling::Cs420, BitDepth::Bit8};
         if (caps.combo_overrides.find(mkv_h264_key) == caps.combo_overrides.end()) {
             caps.combo_overrides.try_emplace(mkv_h264_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
         }
 
-        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
         if (caps.combo_overrides.find(mp4_key) == caps.combo_overrides.end()) {
             caps.combo_overrides.try_emplace(mp4_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});

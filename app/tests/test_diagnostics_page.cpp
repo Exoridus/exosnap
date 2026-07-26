@@ -879,7 +879,7 @@ TEST_F(DiagnosticsPageTest, TipsOnlyConfigStaysReadyWithTipChipAndNoCards) {
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
     output.video_codec = capability::VideoCodec::H264Nvenc; // AV1 available → tip fires
-    output.audio_codec = capability::AudioCodec::AacMf;
+    output.audio_codec = capability::AudioCodec::Aac;
     VideoSettingsModel video;
     capability::AudioUiState audio;
     page.setDiagnosticData(caps, output, video, audio, "MKV H264 AAC", "Start/Stop: Alt+F9", "", true);

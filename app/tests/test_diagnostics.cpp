@@ -125,7 +125,7 @@ TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsVideoCodecs) {
 TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsAudioCodecs) {
     capability::CapabilitySet caps;
     caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
-    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Aac] = {capability::SupportLevel::Available, ""};
     caps.audio_codecs[capability::AudioCodec::Pcm] = {capability::SupportLevel::NotImplemented, ""};
 
     auto summary = CapabilitySummary::FromCapabilitySet(caps);
@@ -162,7 +162,7 @@ TEST(ConfigSummaryTest, FromCurrentSettings_HasExpectedFields) {
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
     output.video_codec = capability::VideoCodec::H264Nvenc;
-    output.audio_codec = capability::AudioCodec::AacMf;
+    output.audio_codec = capability::AudioCodec::Aac;
     output.output_folder = std::filesystem::path(L"C:/Videos/ExoSnap");
     output.naming_pattern = L"{datetime}_{app}";
 
@@ -296,7 +296,7 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_MapsMp4H264AacProfileSelection) {
     OutputSettingsModel output;
     output.container = capability::Container::Mp4;
     output.video_codec = capability::VideoCodec::H264Nvenc;
-    output.audio_codec = capability::AudioCodec::AacMf;
+    output.audio_codec = capability::AudioCodec::Aac;
 
     VideoSettingsModel video;
     video.cfr = true;
@@ -304,7 +304,7 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_MapsMp4H264AacProfileSelection) {
     const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
     EXPECT_EQ(config.container, capability::Container::Mp4);
     EXPECT_EQ(config.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(config.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(config.audio_codec, capability::AudioCodec::Aac);
     EXPECT_EQ(config.frame_rate_num, 60u);
     EXPECT_EQ(config.frame_rate_den, 1u);
 }
@@ -446,13 +446,13 @@ TEST(RecommendationEngineTest, Generate_OutputNotWritable_Blocks) {
 TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
-    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Aac] = {capability::SupportLevel::Available, ""};
     caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
 
     capability::UserRecorderConfig config;
     config.container = capability::Container::Mp4;
     config.video_codec = capability::VideoCodec::H264Nvenc;
-    config.audio_codec = capability::AudioCodec::AacMf;
+    config.audio_codec = capability::AudioCodec::Aac;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
@@ -472,13 +472,13 @@ TEST(RecommendationEngineTest, Generate_Mp4_HasFixAction_Assisted) {
     // a one-click path that opens Output settings (user still performs the last step).
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
-    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Aac] = {capability::SupportLevel::Available, ""};
     caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
 
     capability::UserRecorderConfig config;
     config.container = capability::Container::Mp4;
     config.video_codec = capability::VideoCodec::H264Nvenc;
-    config.audio_codec = capability::AudioCodec::AacMf;
+    config.audio_codec = capability::AudioCodec::Aac;
 
     RecommendationEngine engine(caps, config, 0, std::nullopt, true);
     auto checklist = engine.Generate();
@@ -1214,13 +1214,13 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_DefaultMkvH264Aac_MatchesPrimaryC
     OutputSettingsModel output;
     output.container = capability::Container::Matroska;
     output.video_codec = capability::VideoCodec::H264Nvenc;
-    output.audio_codec = capability::AudioCodec::AacMf;
+    output.audio_codec = capability::AudioCodec::Aac;
     VideoSettingsModel video;
 
     const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
     EXPECT_EQ(config.container, capability::Container::Matroska);
     EXPECT_EQ(config.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(config.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(config.audio_codec, capability::AudioCodec::Aac);
     EXPECT_EQ(config.chroma, capability::ChromaSubsampling::Cs420);
     EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(config.frame_rate_num, 60u);
@@ -1236,7 +1236,7 @@ TEST(BlockedScenarioTest, FailedStartupValidation_ResolvedConfig_HasSafeDimensio
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
     const capability::ComboKey mkv_h264{capability::Container::Matroska, capability::VideoCodec::H264Nvenc,
-                                        capability::AudioCodec::AacMf, capability::ChromaSubsampling::Cs420,
+                                        capability::AudioCodec::Aac, capability::ChromaSubsampling::Cs420,
                                         capability::BitDepth::Bit8};
     caps.combo_overrides[mkv_h264] = {capability::SupportLevel::NotImplemented, nvenc_reason};
 
@@ -1244,7 +1244,7 @@ TEST(BlockedScenarioTest, FailedStartupValidation_ResolvedConfig_HasSafeDimensio
     capability::UserRecorderConfig primary;
     primary.container = capability::Container::Matroska;
     primary.video_codec = capability::VideoCodec::H264Nvenc;
-    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.audio_codec = capability::AudioCodec::Aac;
     primary.chroma = capability::ChromaSubsampling::Cs420;
     primary.bit_depth = capability::BitDepth::Bit8;
     primary.frame_rate_num = 60;
@@ -1377,7 +1377,7 @@ TEST(DisplayNameTest, VideoCodecDisplayNames) {
 
 TEST(DisplayNameTest, AudioCodecDisplayNames) {
     EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Opus), "Opus");
-    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::AacMf), "AAC (Media Foundation)");
+    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Aac), "AAC (Media Foundation)");
     EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Pcm), "PCM");
 }
 
@@ -1411,7 +1411,7 @@ TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_ValidateFails) {
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
     const capability::ComboKey mkv_h264{capability::Container::Matroska, capability::VideoCodec::H264Nvenc,
-                                        capability::AudioCodec::AacMf, capability::ChromaSubsampling::Cs420,
+                                        capability::AudioCodec::Aac, capability::ChromaSubsampling::Cs420,
                                         capability::BitDepth::Bit8};
     caps.combo_overrides[mkv_h264] = {capability::SupportLevel::NotImplemented, nvenc_reason};
 
@@ -1421,7 +1421,7 @@ TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_ValidateFails) {
     capability::UserRecorderConfig primary;
     primary.container = capability::Container::Matroska;
     primary.video_codec = capability::VideoCodec::H264Nvenc;
-    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.audio_codec = capability::AudioCodec::Aac;
     primary.chroma = capability::ChromaSubsampling::Cs420;
     primary.bit_depth = capability::BitDepth::Bit8;
     primary.frame_rate_num = 60;
@@ -1443,7 +1443,7 @@ TEST(BlockedScenarioTest, StartupConfig_NvencAvailable_ValidateSucceeds) {
     capability::UserRecorderConfig primary;
     primary.container = capability::Container::Matroska;
     primary.video_codec = capability::VideoCodec::H264Nvenc;
-    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.audio_codec = capability::AudioCodec::Aac;
     primary.chroma = capability::ChromaSubsampling::Cs420;
     primary.bit_depth = capability::BitDepth::Bit8;
     primary.frame_rate_num = 60;
@@ -1463,7 +1463,7 @@ TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_InvalidityDisplayMapsTo
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
     const capability::ComboKey mkv_h264{capability::Container::Matroska, capability::VideoCodec::H264Nvenc,
-                                        capability::AudioCodec::AacMf, capability::ChromaSubsampling::Cs420,
+                                        capability::AudioCodec::Aac, capability::ChromaSubsampling::Cs420,
                                         capability::BitDepth::Bit8};
     caps.combo_overrides[mkv_h264] = {capability::SupportLevel::NotImplemented, nvenc_reason};
 
@@ -1471,7 +1471,7 @@ TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_InvalidityDisplayMapsTo
     capability::UserRecorderConfig primary;
     primary.container = capability::Container::Matroska;
     primary.video_codec = capability::VideoCodec::H264Nvenc;
-    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.audio_codec = capability::AudioCodec::Aac;
     primary.chroma = capability::ChromaSubsampling::Cs420;
     primary.bit_depth = capability::BitDepth::Bit8;
     primary.frame_rate_num = 60;
@@ -1502,7 +1502,7 @@ TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVide
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
     config.video_codec = capability::VideoCodec::H264Nvenc;
-    config.audio_codec = capability::AudioCodec::AacMf;
+    config.audio_codec = capability::AudioCodec::Aac;
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
 
@@ -1770,7 +1770,7 @@ capability::UserRecorderConfig MakeH264Config() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
     config.video_codec = capability::VideoCodec::H264Nvenc;
-    config.audio_codec = capability::AudioCodec::AacMf;
+    config.audio_codec = capability::AudioCodec::Aac;
     return config;
 }
 } // namespace

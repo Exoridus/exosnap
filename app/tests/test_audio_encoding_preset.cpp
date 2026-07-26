@@ -785,7 +785,7 @@ TEST(AudioEncodingPreset, Sanitize_FlacRejects32BitFallsBackTo16) {
 
 TEST(AudioEncodingPreset, Sanitize_LossyNormalizesDepthTo16) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.output.audio_codec = capability::AudioCodec::AacMf;
+    cfg.output.audio_codec = capability::AudioCodec::Aac;
     cfg.audio.audio_bit_depth = 24u; // ignored for lossy
     const auto sanitized = SanitizePresetConfig(cfg);
     EXPECT_EQ(sanitized.audio.audio_bit_depth, 16u);

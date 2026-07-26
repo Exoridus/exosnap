@@ -134,7 +134,7 @@ std::optional<capability::ColorRange> ColorRangeFromString(QStringView s) {
 
 QString AudioCodecToString(capability::AudioCodec v) {
     switch (v) {
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return QStringLiteral("aac");
     case capability::AudioCodec::Opus:
         return QStringLiteral("opus");
@@ -151,7 +151,7 @@ std::optional<capability::AudioCodec> AudioCodecFromString(QStringView s) {
     if (n == QStringLiteral("opus"))
         return capability::AudioCodec::Opus;
     if (n == QStringLiteral("aac"))
-        return capability::AudioCodec::AacMf;
+        return capability::AudioCodec::Aac;
     if (n == QStringLiteral("pcm"))
         return capability::AudioCodec::Pcm;
     if (n == QStringLiteral("flac"))

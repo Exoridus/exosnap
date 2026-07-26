@@ -503,7 +503,7 @@ TEST(OutputSettingsTest, Defaults_ContainerIsMatroska) {
 
 TEST(OutputSettingsTest, Defaults_AudioCodecIsAac) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(OutputSettingsTest, Defaults_VideoCodecIsH264) {
@@ -731,7 +731,7 @@ TEST(OutputSettingsTest, ApplyOutputSettings_DoesNotOverrideResolvedAudioCodec) 
     config.audio_codec = recorder_core::AudioCodec::Opus; // resolver's answer
 
     OutputSettingsModel settings = OutputSettingsModel::Defaults();
-    settings.audio_codec = capability::AudioCodec::AacMf; // raw, unresolved wish
+    settings.audio_codec = capability::AudioCodec::Aac; // raw, unresolved wish
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
     EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus)
@@ -852,7 +852,7 @@ TEST(OutputSettingsTest, FilenameTokens_ProfileContainerVideoAudioRender) {
     FilenameTargetContext context = WindowContext();
     context.profile_name = L"MKV H264 AAC";
     context.video_codec = capability::VideoCodec::H264Nvenc;
-    context.audio_codec = capability::AudioCodec::AacMf;
+    context.audio_codec = capability::AudioCodec::Aac;
     const auto filename =
         BuildFilename(L"{profile}_{container}_{video}_{audio}", capability::Container::Matroska, ts, context);
     EXPECT_EQ(filename, L"MKV H264 AAC_mkv_h264_aac.mkv");
@@ -1217,7 +1217,7 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     // pass by coincidence.
     validation.resolved_config.container = capability::Container::Mp4;
     validation.resolved_config.video_codec = capability::VideoCodec::H264Nvenc;
-    validation.resolved_config.audio_codec = capability::AudioCodec::AacMf;
+    validation.resolved_config.audio_codec = capability::AudioCodec::Aac;
     coordinator.OnCapabilitiesReady(caps, validation);
 
     std::optional<UiRecordingResult> failure;
@@ -1237,7 +1237,7 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     // so the format under test must live here, not only in the ResolveResult.
     settings.container = capability::Container::Mp4;
     settings.video_codec = capability::VideoCodec::H264Nvenc;
-    settings.audio_codec = capability::AudioCodec::AacMf;
+    settings.audio_codec = capability::AudioCodec::Aac;
     coordinator.SetOutputSettings(settings);
 
     recorder_core::CaptureTarget target;

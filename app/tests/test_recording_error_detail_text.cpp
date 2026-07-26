@@ -23,7 +23,7 @@ TEST(RecordingErrorDetailText, MapsBareContainerName) {
 }
 
 TEST(RecordingErrorDetailText, MapsAudioTokens) {
-    EXPECT_EQ(HumanizeEngineDetail(QStringLiteral("AudioCodec::AacMf not allowed with Container::WebM")),
+    EXPECT_EQ(HumanizeEngineDetail(QStringLiteral("AudioCodec::Aac not allowed with Container::WebM")),
               QStringLiteral("AAC not allowed with WebM"));
     EXPECT_EQ(HumanizeEngineDetail(QStringLiteral("AudioCodec::Pcm and AudioCodec::Flac are Matroska-only")),
               QStringLiteral("PCM and FLAC are MKV-only"));

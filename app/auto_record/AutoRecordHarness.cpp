@@ -71,7 +71,7 @@ capability::VideoCodec MapVideoCodec(const QString& name) {
 
 capability::AudioCodec MapAudioCodec(const QString& name) {
     if (name == QStringLiteral("aac"))
-        return capability::AudioCodec::AacMf;
+        return capability::AudioCodec::Aac;
     if (name == QStringLiteral("pcm"))
         return capability::AudioCodec::Pcm;
     if (name == QStringLiteral("flac"))

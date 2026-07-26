@@ -299,7 +299,7 @@ static std::wstring BuildCapabilityStatusText(const capability::UserRecorderConf
 
     const wchar_t* audio_name = L"Opus";
     switch (config.audio_codec) {
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         audio_name = L"AAC";
         break;
     case capability::AudioCodec::Pcm:

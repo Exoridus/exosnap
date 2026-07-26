@@ -408,6 +408,70 @@ TEST(RecordingHistoryStoreTest, InvalidEntrySkippedValidEntriesSurvive) {
 }
 
 // =============================================================================
+// 11a. AAC persists as "aac"; the retired "aac_mf" spelling is dropped cleanly
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, AacPersistsAsAac_LegacySpellingDropsEntry) {
+    const QString path = UniqueTestStorePath();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString aac_path = dir.filePath(QStringLiteral("aac.mkv"));
+    const QString legacy_path = dir.filePath(QStringLiteral("legacy.mkv"));
+    for (const QString& p : {aac_path, legacy_path}) {
+        QFile f(p);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.close();
+    }
+
+    {
+        QJsonObject current;
+        current[QStringLiteral("path")] = aac_path;
+        current[QStringLiteral("container")] = QStringLiteral("mkv");
+        current[QStringLiteral("videoCodec")] = QStringLiteral("av1");
+        current[QStringLiteral("audioCodec")] = QStringLiteral("aac");
+        current[QStringLiteral("createdAt")] = QStringLiteral("2026-06-09T12:34:56.789Z");
+
+        // Written by no shipped build — the enumerator was always serialized as
+        // "aac". A stored entry carrying it is simply skipped (pre-1.0: reset,
+        // never migrate), and must not take the rest of the history with it.
+        QJsonObject legacy;
+        legacy[QStringLiteral("path")] = legacy_path;
+        legacy[QStringLiteral("container")] = QStringLiteral("mkv");
+        legacy[QStringLiteral("videoCodec")] = QStringLiteral("av1");
+        legacy[QStringLiteral("audioCodec")] = QStringLiteral("aac_mf");
+        legacy[QStringLiteral("createdAt")] = QStringLiteral("2026-06-09T12:35:56.789Z");
+
+        QJsonArray arr;
+        arr.append(current);
+        arr.append(legacy);
+
+        QJsonObject root;
+        root[QStringLiteral("version")] = 1;
+        root[QStringLiteral("recordings")] = arr;
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+    }
+
+    RecordingHistoryStore store(path);
+    const auto recordings = store.Load();
+    ASSERT_EQ(recordings.size(), 1);
+    EXPECT_EQ(recordings[0].file_path, aac_path);
+    EXPECT_EQ(recordings[0].audio_codec, recorder_core::AudioCodec::Aac);
+
+    // Re-saving spells it "aac" on disk.
+    ASSERT_TRUE(store.Save(recordings));
+    QFile written(path);
+    ASSERT_TRUE(written.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(written.readAll());
+    EXPECT_TRUE(text.contains(QStringLiteral("\"aac\"")));
+    EXPECT_FALSE(text.contains(QStringLiteral("aac_mf")));
+}
+
+// =============================================================================
 // 11b. Multi-segment recording round-trips (SPLIT-RECORDING-R1)
 // =============================================================================
 

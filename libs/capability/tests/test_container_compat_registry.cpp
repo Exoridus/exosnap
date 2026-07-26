@@ -26,7 +26,7 @@ TEST(ContainerCompatRegistry, Mkv_Av1_Opus_IsRecommended) {
 }
 
 TEST(ContainerCompatRegistry, Mkv_Av1_Aac_IsRecommended) {
-    EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Recommended);
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Aac), ContainerCompatLevel::Recommended);
 }
 
 TEST(ContainerCompatRegistry, Mkv_Av1_Pcm_IsAllowed) {
@@ -42,7 +42,7 @@ TEST(ContainerCompatRegistry, Mkv_Av1_Flac_IsAllowed) {
 }
 
 TEST(ContainerCompatRegistry, Mkv_H264_Aac_IsRecommended) {
-    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Recommended);
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Aac), ContainerCompatLevel::Recommended);
 }
 
 TEST(ContainerCompatRegistry, Mkv_H264_Opus_IsAllowed) {
@@ -74,7 +74,7 @@ TEST(ContainerCompatRegistry, Mp4_H264_Flac_IsExperimental) {
 
 TEST(ContainerCompatRegistry, Mkv_Hevc_Aac_IsAllowed) {
     // 0.7.0: MKV + HEVC NVENC implemented (V_MPEGH/ISO/HEVC, hvcC codec-private).
-    EXPECT_EQ(Level(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf), ContainerCompatLevel::Allowed);
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::Aac), ContainerCompatLevel::Allowed);
 }
 
 TEST(ContainerCompatRegistry, Mkv_Hevc_Opus_IsAllowed) {
@@ -97,7 +97,7 @@ TEST(ContainerCompatRegistry, Mkv_Hevc_Flac_IsAllowed) {
 // ---------------------------------------------------------------------------
 
 TEST(ContainerCompatRegistry, Mp4_H264_Aac_IsRecommended) {
-    EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Recommended);
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac), ContainerCompatLevel::Recommended);
 }
 
 TEST(ContainerCompatRegistry, Mp4_H264_Opus_IsProhibited) {
@@ -116,7 +116,7 @@ TEST(ContainerCompatRegistry, Mp4_H264_Pcm_IsExperimental) {
 TEST(ContainerCompatRegistry, Mp4_Hevc_Aac_IsAllowed) {
     // 0.7.0: HEVC recorded to a transient MKV and remuxed to MP4 with the 'hvc1'
     // sample-entry FourCC (out-of-band parameter sets) for Apple/NLE compatibility.
-    EXPECT_EQ(Level(Container::Mp4, VideoCodec::HevcNvenc, AudioCodec::AacMf), ContainerCompatLevel::Allowed);
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::HevcNvenc, AudioCodec::Aac), ContainerCompatLevel::Allowed);
 }
 
 TEST(ContainerCompatRegistry, Mp4_Hevc_Opus_IsProhibited) {
@@ -129,7 +129,7 @@ TEST(ContainerCompatRegistry, Mp4_Hevc_Pcm_IsExperimental) {
 
 TEST(ContainerCompatRegistry, Mp4_Av1_Aac_IsExperimental) {
     // AV1-in-MP4 not yet validated.
-    EXPECT_EQ(Level(Container::Mp4, VideoCodec::Av1Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Experimental);
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::Av1Nvenc, AudioCodec::Aac), ContainerCompatLevel::Experimental);
 }
 
 TEST(ContainerCompatRegistry, Mp4_Av1_Opus_IsProhibited) {
@@ -158,7 +158,7 @@ TEST(ContainerCompatRegistry, WebM_Av1_Opus_IsRecommended) {
 }
 
 TEST(ContainerCompatRegistry, WebM_Av1_Aac_IsProhibited) {
-    EXPECT_EQ(Level(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Prohibited);
+    EXPECT_EQ(Level(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::Aac), ContainerCompatLevel::Prohibited);
 }
 
 TEST(ContainerCompatRegistry, WebM_Av1_Pcm_IsProhibited) {
@@ -171,7 +171,7 @@ TEST(ContainerCompatRegistry, WebM_H264_Opus_IsProhibited) {
 }
 
 TEST(ContainerCompatRegistry, WebM_H264_Aac_IsProhibited) {
-    EXPECT_EQ(Level(Container::WebM, VideoCodec::H264Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Prohibited);
+    EXPECT_EQ(Level(Container::WebM, VideoCodec::H264Nvenc, AudioCodec::Aac), ContainerCompatLevel::Prohibited);
 }
 
 TEST(ContainerCompatRegistry, WebM_H264_Pcm_IsProhibited) {
@@ -184,7 +184,7 @@ TEST(ContainerCompatRegistry, WebM_Hevc_Opus_IsProhibited) {
 }
 
 TEST(ContainerCompatRegistry, WebM_Hevc_Aac_IsProhibited) {
-    EXPECT_EQ(Level(Container::WebM, VideoCodec::HevcNvenc, AudioCodec::AacMf), ContainerCompatLevel::Prohibited);
+    EXPECT_EQ(Level(Container::WebM, VideoCodec::HevcNvenc, AudioCodec::Aac), ContainerCompatLevel::Prohibited);
 }
 
 TEST(ContainerCompatRegistry, WebM_Hevc_Pcm_IsProhibited) {
@@ -269,7 +269,7 @@ TEST(ContainerCompatRegistry, PreferredAudio_Mkv_IsOpus) {
 }
 
 TEST(ContainerCompatRegistry, PreferredAudio_Mp4_IsAac) {
-    EXPECT_EQ(ContainerCompatRegistry::PreferredAudioCodec(Container::Mp4), AudioCodec::AacMf);
+    EXPECT_EQ(ContainerCompatRegistry::PreferredAudioCodec(Container::Mp4), AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, PreferredAudio_WebM_IsOpus) {
@@ -302,18 +302,18 @@ TEST(ContainerCompatRegistry, Reconcile_Mkv_Av1_Opus_Unchanged) {
 
 TEST(ContainerCompatRegistry, Reconcile_Mkv_Av1_Aac_Unchanged) {
     VideoCodec v = VideoCodec::Av1Nvenc;
-    AudioCodec a = AudioCodec::AacMf;
+    AudioCodec a = AudioCodec::Aac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
     EXPECT_EQ(v, VideoCodec::Av1Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Aac_Unchanged) {
     VideoCodec v = VideoCodec::H264Nvenc;
-    AudioCodec a = AudioCodec::AacMf;
+    AudioCodec a = AudioCodec::Aac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Opus_Unchanged) {
@@ -362,7 +362,7 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Pcm_FixesAudioToAac) {
     AudioCodec a = AudioCodec::Pcm;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Opus_FixesAudioToAac_AfterAdr0030) {
@@ -371,7 +371,7 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Opus_FixesAudioToAac_AfterAdr00
     AudioCodec a = AudioCodec::Opus;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Flac_FixesAudioToAac_AfterAdr0030) {
@@ -380,7 +380,7 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Flac_FixesAudioToAac_AfterAdr00
     AudioCodec a = AudioCodec::Flac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mkv_Av1_Flac_Unchanged) {
@@ -418,24 +418,24 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Flac_FixesAudioToAac) {
     AudioCodec a = AudioCodec::Flac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
     // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Reconciler must leave it unchanged.
     VideoCodec v = VideoCodec::HevcNvenc;
-    AudioCodec a = AudioCodec::AacMf;
+    AudioCodec a = AudioCodec::Aac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
     EXPECT_EQ(v, VideoCodec::HevcNvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Aac_Unchanged) {
     VideoCodec v = VideoCodec::H264Nvenc;
-    AudioCodec a = AudioCodec::AacMf;
+    AudioCodec a = AudioCodec::Aac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_Av1_Opus_FixesToH264Aac) {
@@ -445,7 +445,7 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_Av1_Opus_FixesToH264Aac) {
     AudioCodec a = AudioCodec::Opus;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Opus_FixesAudioToAac) {
@@ -454,7 +454,7 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Opus_FixesAudioToAac) {
     AudioCodec a = AudioCodec::Opus;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Aac);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_WebM_Av1_Opus_Unchanged) {
@@ -468,7 +468,7 @@ TEST(ContainerCompatRegistry, Reconcile_WebM_Av1_Opus_Unchanged) {
 TEST(ContainerCompatRegistry, Reconcile_WebM_H264_Aac_FixesToAv1Opus) {
     // H.264 + AAC in WebM is doubly Prohibited. Full fallback: AV1 + Opus.
     VideoCodec v = VideoCodec::H264Nvenc;
-    AudioCodec a = AudioCodec::AacMf;
+    AudioCodec a = AudioCodec::Aac;
     ContainerCompatRegistry::ReconcileCodecs(Container::WebM, v, a);
     EXPECT_EQ(v, VideoCodec::Av1Nvenc);
     EXPECT_EQ(a, AudioCodec::Opus);

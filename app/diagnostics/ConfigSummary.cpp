@@ -36,7 +36,7 @@ std::string AudioCodecName(capability::AudioCodec a) {
     switch (a) {
     case capability::AudioCodec::Opus:
         return "Opus";
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return "AAC";
     case capability::AudioCodec::Pcm:
         return "PCM";

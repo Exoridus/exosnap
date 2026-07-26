@@ -86,7 +86,7 @@ std::wstring VideoCodecLabel(recorder_core::VideoCodec codec) {
 
 std::wstring AudioCodecLabel(recorder_core::AudioCodec codec) {
     switch (codec) {
-    case recorder_core::AudioCodec::AacMf:
+    case recorder_core::AudioCodec::Aac:
         return L"AAC";
     case recorder_core::AudioCodec::Opus:
         return L"Opus";

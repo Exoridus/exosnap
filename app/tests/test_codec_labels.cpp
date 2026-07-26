@@ -43,12 +43,12 @@ TEST(CodecLabelsTest, VideoCodecCanonCasing) {
 
 TEST(CodecLabelsTest, AudioCodecCanonCasingNeverUppercaseOpus) {
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Opus), QStringLiteral("Opus"));
-    EXPECT_EQ(audioCodecLabel(capability::AudioCodec::AacMf), QStringLiteral("AAC"));
+    EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Aac), QStringLiteral("AAC"));
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Pcm), QStringLiteral("PCM"));
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Flac), QStringLiteral("FLAC"));
 
     EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Opus), QStringLiteral("Opus"));
-    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::AacMf), QStringLiteral("AAC"));
+    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Aac), QStringLiteral("AAC"));
     EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Pcm), QStringLiteral("PCM"));
     EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Flac), QStringLiteral("FLAC"));
 }

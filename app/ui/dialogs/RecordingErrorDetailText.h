@@ -43,7 +43,7 @@ inline QString HumanizeEngineDetail(const QString& detail) {
         {"H264Nvenc", "H.264"},
         {"HevcNvenc", "HEVC"},
         // Audio codecs
-        {"AacMf", "AAC"},
+        {"Aac", "AAC"},
         {"Opus", "Opus"},
         {"Pcm", "PCM"},
         {"Flac", "FLAC"},

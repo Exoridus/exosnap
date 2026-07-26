@@ -63,7 +63,7 @@ TEST(RecordingPreset, MakeBuiltInPresets_FourPresets_ExpectedValues) {
     EXPECT_EQ(b[3].name, "Compatibility");
     EXPECT_EQ(b[3].config.output.container, capability::Container::Mp4);
     EXPECT_EQ(b[3].config.output.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(b[3].config.output.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(b[3].config.output.audio_codec, capability::AudioCodec::Aac);
     EXPECT_EQ(b[3].config.video.cq, 19u);
     EXPECT_EQ(b[3].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
 
@@ -349,7 +349,7 @@ TEST(RecordingPreset, Sanitize_VideoBitDepth_Mp4Hevc_KeepsTenBit) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Mp4;
     cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
-    cfg.output.audio_codec = capability::AudioCodec::AacMf; // MP4 audio is AAC-only
+    cfg.output.audio_codec = capability::AudioCodec::Aac; // MP4 audio is AAC-only
     cfg.output.bit_depth = capability::BitDepth::Bit10;
 
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
@@ -706,14 +706,14 @@ TEST(RecordingPreset, Reconcile_Mp4_ForcesH264Aac) {
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Reconcile_WebM_ForcesAv1Opus) {
     OutputSettingsModel out;
     out.container = capability::Container::WebM;
     out.video_codec = capability::VideoCodec::H264Nvenc;
-    out.audio_codec = capability::AudioCodec::AacMf;
+    out.audio_codec = capability::AudioCodec::Aac;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
@@ -736,10 +736,10 @@ TEST(RecordingPreset, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::HevcNvenc;
-    out.audio_codec = capability::AudioCodec::AacMf;
+    out.audio_codec = capability::AudioCodec::Aac;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::HevcNvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
@@ -765,7 +765,7 @@ TEST(RecordingPreset, Reconcile_Mp4_Pcm_ForcesAac) {
     out.audio_codec = capability::AudioCodec::Pcm;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Reconcile_Mp4_Opus_ForcesAac) {
@@ -776,7 +776,7 @@ TEST(RecordingPreset, Reconcile_Mp4_Opus_ForcesAac) {
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Reconcile_Mp4_Flac_ForcesAac) {
@@ -787,7 +787,7 @@ TEST(RecordingPreset, Reconcile_Mp4_Flac_ForcesAac) {
     out.audio_codec = capability::AudioCodec::Flac;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Reconcile_WebM_Pcm_ForcesOpus) {
@@ -842,14 +842,14 @@ TEST(RecordingPreset, Sanitize_Mp4Container_ForcesH264Aac) {
     cfg.output.audio_codec = capability::AudioCodec::Opus;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
     EXPECT_EQ(s.output.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Aac);
 }
 
 TEST(RecordingPreset, Sanitize_WebMContainer_ForcesAv1Opus) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::WebM;
     cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
-    cfg.output.audio_codec = capability::AudioCodec::AacMf;
+    cfg.output.audio_codec = capability::AudioCodec::Aac;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
     EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Av1Nvenc);
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
@@ -872,10 +872,10 @@ TEST(RecordingPreset, Sanitize_Mkv_Hevc_Aac_IsPreserved) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
     cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
-    cfg.output.audio_codec = capability::AudioCodec::AacMf;
+    cfg.output.audio_codec = capability::AudioCodec::Aac;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
     EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
-    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Aac);
 }
 
 // ===========================================================================
@@ -1406,7 +1406,7 @@ TEST(RecordingPreset, WithEnvironmentFields_H264Clamp_StillForcesEightBit) {
     RecordingPresetConfig preset = MakeDefaultPreset().config;
     preset.output.container = capability::Container::Mp4;
     preset.output.video_codec = capability::VideoCodec::H264Nvenc;
-    preset.output.audio_codec = capability::AudioCodec::AacMf;
+    preset.output.audio_codec = capability::AudioCodec::Aac;
 
     const RecordingPresetConfig applied = SanitizePresetConfig(WithEnvironmentFields(preset, live));
     EXPECT_EQ(applied.output.bit_depth, capability::BitDepth::Bit8);

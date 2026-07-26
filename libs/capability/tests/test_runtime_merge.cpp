@@ -29,7 +29,7 @@ RuntimeCapabilitySnapshot MakeFavorableSnapshot() {
 // Shorthand for the primary M3.2 combo key.
 constexpr Container kC = Container::Matroska;
 constexpr VideoCodec kV = VideoCodec::Av1Nvenc;
-constexpr AudioCodec kA = AudioCodec::AacMf;
+constexpr AudioCodec kA = AudioCodec::Aac;
 constexpr ChromaSubsampling kCS = ChromaSubsampling::Cs420;
 constexpr BitDepth kBD = BitDepth::Bit8;
 
@@ -49,8 +49,8 @@ TEST(RuntimeMergeTest, TC1_AllPrerequisitesPresentKeepM32ComboAvailable) {
     EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)))
         << "VideoCodec::Av1Nvenc should be selectable.";
 
-    // AacMf dimension must be selectable.
-    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::AacMf))) << "AudioCodec::AacMf should be selectable.";
+    // Aac dimension must be selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac))) << "AudioCodec::Aac should be selectable.";
 }
 
 // -------------------------------------------------------------------------
@@ -113,9 +113,9 @@ TEST(RuntimeMergeTest, TC4_AacUnavailableBlocksAacPath) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    // AacMf dimension must not be selectable.
-    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::AacMf);
-    EXPECT_FALSE(IsSelectable(aac)) << "AudioCodec::AacMf must not be selectable when MF AAC is unavailable.";
+    // Aac dimension must not be selectable.
+    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::Aac);
+    EXPECT_FALSE(IsSelectable(aac)) << "AudioCodec::Aac must not be selectable when MF AAC is unavailable.";
 
     // M3.2 primary combo must not be selectable.
     const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
@@ -143,9 +143,9 @@ TEST(RuntimeMergeTest, TC5_DirectAacClsidFallbackIsSufficient) {
     EXPECT_TRUE(snap.mf_aac.available())
         << "MfAacRuntimeFacts::available() must be true when clsid_instantiable is true.";
 
-    // AacMf must remain selectable.
-    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::AacMf)))
-        << "AudioCodec::AacMf should remain selectable when CLSID fallback succeeds.";
+    // Aac must remain selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac)))
+        << "AudioCodec::Aac should remain selectable when CLSID fallback succeeds.";
 
     // M3.2 combo must remain Available.
     const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
@@ -166,7 +166,7 @@ TEST(RuntimeMergeTest, TC6_H264Available_WhenNvencPresent) {
     EXPECT_TRUE(IsSelectable(h264)) << "H.264 must be selectable when NVENC is present.";
 
     // MP4+H264+AAC primary combo must also be Available.
-    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac,
                                                         ChromaSubsampling::Cs420, BitDepth::Bit8);
     EXPECT_EQ(mp4_combo.level, SupportLevel::Available)
         << "MP4+H264+AAC must be Available when NVENC and AAC are present. reason: " << mp4_combo.reason;
@@ -182,7 +182,7 @@ TEST(RuntimeMergeTest, TC6b_H264NotImplemented_WhenNvencAbsent) {
     EXPECT_EQ(h264.level, SupportLevel::NotImplemented) << "H.264 must be NotImplemented when NVENC DLL is absent.";
     EXPECT_FALSE(IsSelectable(h264));
 
-    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac,
                                                         ChromaSubsampling::Cs420, BitDepth::Bit8);
     EXPECT_FALSE(IsSelectable(mp4_combo)) << "MP4+H264+AAC must not be selectable when NVENC is absent.";
 }
@@ -312,7 +312,7 @@ TEST(RuntimeMergeTest, TC11_AacDowngradeReason_IsUserFacing) {
     snap.mf_aac.clsid_instantiable = false;
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
-    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::AacMf);
+    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::Aac);
 
     // Must not expose internal COM/MF API identifiers.
     EXPECT_EQ(aac.reason.find("MFTEnumEx"), std::string::npos) << "reason: " << aac.reason;
@@ -483,11 +483,11 @@ TEST(NvencYuv444SupportTest, BuildEffective_NoYuv444_Blocks444KeepsCs420) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac,
                                               ChromaSubsampling::Cs444, BitDepth::Bit8)));
-    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf,
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::Aac,
                                               ChromaSubsampling::Cs444, BitDepth::Bit8)));
-    EXPECT_TRUE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+    EXPECT_TRUE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Aac,
                                              ChromaSubsampling::Cs420, BitDepth::Bit8)));
 }
 

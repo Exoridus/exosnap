@@ -227,13 +227,13 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_SourceInitFailureRecordsFailure)
 // ---------------------------------------------------------------------------
 // CV-BUG-004: MakeEncoderSetup's audio_codec switch must not fall back to AAC
 // for an unrecognized codec value, and named codecs must keep working after
-// the default: branch became an explicit case AudioCodec::AacMf.
+// the default: branch became an explicit case AudioCodec::Aac.
 // ---------------------------------------------------------------------------
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_UnrecognizedAudioCodec_FailsInsteadOfDefaultingToAac) {
     auto state_ptr = std::make_shared<SessionState>();
     SessionState& state = *state_ptr;
-    // Not a real member of enum class AudioCodec (Opus, AacMf, Pcm, Flac). This
+    // Not a real member of enum class AudioCodec (Opus, Aac, Pcm, Flac). This
     // stands in for a corrupted/out-of-range config value that a normal
     // exhaustive switch over named enumerators can never receive via
     // ordinary construction.
@@ -275,7 +275,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_UnrecognizedAudioCodec_FailsInst
 }
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_PcmCodec_EncodesSuccessfully) {
-    // Regression guard: Pcm must keep working unchanged now that AacMf has its
+    // Regression guard: Pcm must keep working unchanged now that Aac has its
     // own explicit case instead of being the switch's default: branch.
     auto state_ptr = std::make_shared<SessionState>();
     SessionState& state = *state_ptr;
@@ -293,7 +293,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_PcmCodec_EncodesSuccessfully) {
 }
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_FlacCodec_EncodesSuccessfully) {
-    // Regression guard: Flac must keep working unchanged now that AacMf has its
+    // Regression guard: Flac must keep working unchanged now that Aac has its
     // own explicit case instead of being the switch's default: branch.
     auto state_ptr = std::make_shared<SessionState>();
     SessionState& state = *state_ptr;
@@ -503,7 +503,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsStepMatchesFrameDuration_S
     // one AAC frame duration (21.333 ms).
     auto state_ptr = std::make_shared<SessionState>();
     SessionState& state = *state_ptr;
-    state.config.audio_codec = AudioCodec::AacMf;
+    state.config.audio_codec = AudioCodec::Aac;
     state.audio_track_count = 1;
 
     auto source = std::make_unique<SmallChunkMockSource>(&state.stop_requested, 480, 100);
@@ -537,7 +537,7 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsNotInflatedByIdleGaps) {
     // the average step toward ~46 ms; after the fix it must stay ~21.333 ms.
     auto state_ptr = std::make_shared<SessionState>();
     SessionState& state = *state_ptr;
-    state.config.audio_codec = AudioCodec::AacMf;
+    state.config.audio_codec = AudioCodec::Aac;
     state.audio_track_count = 1;
 
     auto source = std::make_unique<IdleGapMockSource>(&state.stop_requested, 1024, 16, 25);

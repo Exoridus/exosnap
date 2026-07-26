@@ -15,7 +15,7 @@ struct FilenameTargetContext {
     std::wstring window_title;
     std::wstring profile_name;
     capability::VideoCodec video_codec = capability::VideoCodec::H264Nvenc;
-    capability::AudioCodec audio_codec = capability::AudioCodec::AacMf;
+    capability::AudioCodec audio_codec = capability::AudioCodec::Aac;
 };
 
 std::wstring BuildFilename(const std::wstring& pattern, capability::Container container, std::time_t timestamp);

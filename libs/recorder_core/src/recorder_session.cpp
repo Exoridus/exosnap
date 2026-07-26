@@ -242,18 +242,18 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         // MP4 audio is AAC only. PCM is deferred (libavformat emits ipcm which has
         // limited player support); FLAC and Opus are also rejected for MP4 (ADR 0010,
         // ADR 0028, ADR 0030). Use MKV for PCM or FLAC.
-        if (config.audio_codec != AudioCodec::AacMf) {
+        if (config.audio_codec != AudioCodec::Aac) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "Container::Mp4 requires AudioCodec::AacMf; "
+                        "Container::Mp4 requires AudioCodec::Aac; "
                         "PCM is deferred (ipcm sample entry, limited player support), "
                         "Opus and FLAC are not valid for MP4");
         }
     } else if (config.audio_codec == AudioCodec::Opus) {
         // Opus: valid for WebM and Matroska
-    } else if (config.audio_codec == AudioCodec::AacMf) {
+    } else if (config.audio_codec == AudioCodec::Aac) {
         if (config.container == Container::WebM) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "AudioCodec::AacMf is not valid for Container::WebM; use AudioCodec::Opus");
+                        "AudioCodec::Aac is not valid for Container::WebM; use AudioCodec::Opus");
         }
     } else if (config.audio_codec == AudioCodec::Pcm) {
         // PCM (A_PCM/INT/LIT): Matroska only.
@@ -271,7 +271,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         }
     } else {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, "
+                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::Aac, "
                     "AudioCodec::Pcm, AudioCodec::Flac");
     }
 

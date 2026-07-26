@@ -1639,7 +1639,7 @@ TEST(RecordingPresetStore, LiveTable_RoundTrips) {
     live.video.cq = 33;
     live.output.container = capability::Container::Mp4;
     live.output.video_codec = capability::VideoCodec::H264Nvenc;
-    live.output.audio_codec = capability::AudioCodec::AacMf;
+    live.output.audio_codec = capability::AudioCodec::Aac;
     live.output.bit_depth = capability::BitDepth::Bit8;
 
     store.Save({}, std::string(kDefaultPresetId), live);
@@ -1649,6 +1649,47 @@ TEST(RecordingPresetStore, LiveTable_RoundTrips) {
     EXPECT_TRUE(NormalizedConfigEquals(*state.live, SanitizePresetConfig(live)));
     EXPECT_EQ(state.selected_id, kDefaultPresetId);
     EXPECT_FALSE(state.repaired);
+    CleanupFile(path);
+}
+
+// The persisted spelling of the AAC audio codec is "aac" and stays "aac" —
+// renaming the enumerator must not change a single byte of the on-disk format.
+TEST(RecordingPresetStore, AudioCodecAac_PersistsAsAac) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPresetConfig live = MakeDefaultPreset().config;
+    live.output.container = capability::Container::Mp4;
+    live.output.video_codec = capability::VideoCodec::H264Nvenc;
+    live.output.audio_codec = capability::AudioCodec::Aac;
+    store.Save({}, std::string(kDefaultPresetId), live);
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromUtf8(f.readAll());
+    EXPECT_TRUE(text.contains(QStringLiteral("audio_codec = \"aac\"")));
+    EXPECT_FALSE(text.contains(QStringLiteral("aac_mf")));
+
+    const PersistedPresetState state = store.Load();
+    ASSERT_TRUE(state.live.has_value());
+    EXPECT_EQ(state.live->output.audio_codec, capability::AudioCodec::Aac);
+    CleanupFile(path);
+}
+
+// A stored value this build no longer knows (the retired Media-Foundation-era
+// "aac_mf" spelling) must fall back to the struct default field-wise: no crash,
+// no store reset, no migration — the pre-1.0 policy for incompatible stored data.
+TEST(RecordingPresetStore, UnknownAudioCodecString_FallsBackToDefault) {
+    const QString path = UniqueTempPath();
+    QString toml = MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("limited"));
+    toml.replace(QStringLiteral("audio_codec = \"opus\""), QStringLiteral("audio_codec = \"aac_mf\""));
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+
+    ASSERT_EQ(state.user_presets.size(), 1u);
+    EXPECT_EQ(state.user_presets[0].config.output.audio_codec, OutputSettingsModel{}.audio_codec);
     CleanupFile(path);
 }
 

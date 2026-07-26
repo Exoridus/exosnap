@@ -44,7 +44,7 @@ static RecorderConfig MakeMp4Config() {
     cfg.output_path = std::filesystem::temp_directory_path() / "exosnap_test.mp4";
     cfg.container = Container::Mp4;
     cfg.video_codec = VideoCodec::H264Nvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
     cfg.record_audio = false;
     cfg.target.kind = CaptureTarget::Kind::Window;
     cfg.target.native_id = 1;
@@ -123,7 +123,7 @@ TEST(Mp4RemuxPipelineFlowTest, OpusMp4GatingAfterMfRemoval) {
 
 TEST(Mp4RemuxPipelineFlowTest, Mp4ValidatesWithAacH264) {
     RecorderSession session;
-    const auto cfg = MakeMp4Config(); // H264 + AacMf, audio off
+    const auto cfg = MakeMp4Config(); // H264 + Aac, audio off
 
     RecorderResult result{};
     EXPECT_TRUE(session.Validate(cfg, &result));

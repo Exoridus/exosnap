@@ -674,7 +674,7 @@ capability::AudioCodec IntToAudioCodec(int value) {
         return capability::AudioCodec::Pcm;
     if (value == static_cast<int>(capability::AudioCodec::Flac))
         return capability::AudioCodec::Flac;
-    return capability::AudioCodec::AacMf;
+    return capability::AudioCodec::Aac;
 }
 
 // Maps an arbitrary (Expert-entered) frame rate onto the closest entry in the
@@ -2797,7 +2797,7 @@ void ConfigPage::updateAudioCodecChoices() {
     if (audio_codec_combo_->count() != desired || (mkv && !has_pcm) || (!mkv && has_pcm)) {
         audio_codec_combo_->clear();
         audio_codec_combo_->addItem(QStringLiteral("Opus"), AudioCodecToInt(capability::AudioCodec::Opus));
-        audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
+        audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::Aac));
         if (mkv) {
             audio_codec_combo_->addItem(QStringLiteral("PCM (uncompressed)"),
                                         AudioCodecToInt(capability::AudioCodec::Pcm));
@@ -2827,7 +2827,7 @@ void ConfigPage::updateCompatCallout() {
         audio_bad = (a != capability::AudioCodec::Opus);
     } else if (c == capability::Container::Mp4) {
         video_bad = (v != capability::VideoCodec::H264Nvenc);
-        audio_bad = (a != capability::AudioCodec::AacMf);
+        audio_bad = (a != capability::AudioCodec::Aac);
     }
     const bool compat_bad = video_bad || audio_bad;
 

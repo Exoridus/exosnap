@@ -33,7 +33,7 @@ RecorderConfig MakeValidMatroskaConfig() {
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Matroska;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
     return cfg;
 }
 
@@ -68,7 +68,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv1Opus) {
 TEST(WebMContainerValidationTest, Validate_RejectsWebMAv1Aac) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidWebMConfig();
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
 
     RecorderResult result{};
     EXPECT_FALSE(session.Validate(cfg, &result));
@@ -92,7 +92,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Aac) {
     cfg.target.native_id = 1;
     cfg.container = Container::Matroska;
     cfg.video_codec = VideoCodec::H264Nvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
 
     RecorderResult result{};
     EXPECT_TRUE(session.Validate(cfg, &result));
@@ -241,7 +241,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcAac) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
     cfg.video_codec = VideoCodec::HevcNvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
 
     RecorderResult result{};
     EXPECT_TRUE(session.Validate(cfg, &result));
@@ -287,7 +287,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMp4HevcAac) {
     // 'hvc1' sample-entry FourCC. AAC is the only MP4 audio codec, so this is the
     // sole valid MP4 + HEVC combination.
     RecorderSession session;
-    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::AacMf);
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::Aac);
 
     RecorderResult result{};
     EXPECT_TRUE(session.Validate(cfg, &result));
@@ -344,7 +344,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevc10Bit) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
     cfg.video_codec = VideoCodec::HevcNvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
     cfg.bit_depth = BitDepth::Bit10;
 
     RecorderResult result{};
@@ -354,7 +354,7 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevc10Bit) {
 
 TEST(WebMContainerValidationTest, Validate_AcceptsMp4Hevc10Bit) {
     RecorderSession session;
-    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::AacMf);
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::Aac);
     cfg.bit_depth = BitDepth::Bit10;
 
     RecorderResult result{};
@@ -386,7 +386,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMkvH26410Bit) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidMatroskaConfig();
     cfg.video_codec = VideoCodec::H264Nvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
     cfg.bit_depth = BitDepth::Bit10;
 
     RecorderResult result{};
@@ -404,7 +404,7 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4H26410Bit) {
     cfg.target.native_id = 1;
     cfg.container = Container::Mp4;
     cfg.video_codec = VideoCodec::H264Nvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = AudioCodec::Aac;
     cfg.bit_depth = BitDepth::Bit10;
 
     RecorderResult result{};

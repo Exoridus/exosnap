@@ -198,7 +198,7 @@ bool ParseAudio(const std::string& s, AudioCodec& out, bool& record_audio) {
         return true;
     }
     if (s == "aac") {
-        out = AudioCodec::AacMf;
+        out = AudioCodec::Aac;
         return true;
     }
     if (s == "pcm") {

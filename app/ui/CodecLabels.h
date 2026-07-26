@@ -70,7 +70,7 @@ inline QString audioCodecLabel(capability::AudioCodec codec) {
     switch (codec) {
     case capability::AudioCodec::Opus:
         return QStringLiteral("Opus");
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return QStringLiteral("AAC");
     case capability::AudioCodec::Pcm:
         return QStringLiteral("PCM");
@@ -84,7 +84,7 @@ inline QString audioCodecLabel(recorder_core::AudioCodec codec) {
     switch (codec) {
     case recorder_core::AudioCodec::Opus:
         return QStringLiteral("Opus");
-    case recorder_core::AudioCodec::AacMf:
+    case recorder_core::AudioCodec::Aac:
         return QStringLiteral("AAC");
     case recorder_core::AudioCodec::Pcm:
         return QStringLiteral("PCM");

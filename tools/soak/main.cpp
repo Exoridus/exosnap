@@ -71,7 +71,7 @@ bool ParseVideo(const std::string& s, VideoCodec& out) {
 }
 bool ParseAudio(const std::string& s, AudioCodec& out) {
     if (s == "opus") { out = AudioCodec::Opus; return true; }
-    if (s == "aac") { out = AudioCodec::AacMf; return true; }
+    if (s == "aac") { out = AudioCodec::Aac; return true; }
     if (s == "flac") { out = AudioCodec::Flac; return true; }
     if (s == "pcm") { out = AudioCodec::Pcm; return true; }
     return false;

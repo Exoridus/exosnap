@@ -196,7 +196,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     compatibility.name = "Compatibility";
     compatibility.config.output.container = capability::Container::Mp4;
     compatibility.config.output.video_codec = capability::VideoCodec::H264Nvenc;
-    compatibility.config.output.audio_codec = capability::AudioCodec::AacMf;
+    compatibility.config.output.audio_codec = capability::AudioCodec::Aac;
     result.push_back(std::move(compatibility));
 
     return result;
@@ -1113,7 +1113,7 @@ std::wstring CodecToken(capability::VideoCodec codec) {
 
 std::wstring CodecToken(capability::AudioCodec codec) {
     switch (codec) {
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return L"aac";
     case capability::AudioCodec::Opus:
         return L"opus";

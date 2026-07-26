@@ -92,7 +92,7 @@ QString videoCodecText(VideoCodec c) {
 
 QString audioCodecText(AudioCodec c) {
     switch (c) {
-    case AudioCodec::AacMf:
+    case AudioCodec::Aac:
         return QStringLiteral("AAC");
     case AudioCodec::Opus:
         return QStringLiteral("Opus");
