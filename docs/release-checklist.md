@@ -73,7 +73,10 @@ this deterministically — there is no manual asset upload and no `sign-manifest
      that the signing key is the private half of the embedded public key and that the signature
      verifies;
   3. creates a **draft** GitHub Release for the tag;
-  4. uploads the ZIP, MSI, `.sha256` sidecars, `update-manifest.json`, and `update-manifest.json.sig`;
+  4. uploads the ZIP, MSI, `.sha256` sidecars, `update-manifest.json`, `update-manifest.json.sig`,
+     and `toolchain-manifest.json` (an informational record of the exact runner image, MSVC, CMake,
+     Qt, WiX, and pinned FFmpeg prebuilt that produced the build — not signed, not part of the
+     integrity gate);
   5. re-downloads those assets and re-hashes them, cross-checks the manifest's embedded SHA-256s
      against the shipped bytes, and re-verifies the signature against the embedded public key;
   6. only then **un-drafts (publishes)** the Release.

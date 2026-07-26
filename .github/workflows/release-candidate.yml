@@ -69,7 +69,7 @@ jobs:
       is_official: ${{ steps.id.outputs.is_official }}
       prerelease: ${{ steps.id.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # An earlier version of this workflow could create a release-candidate tag
       # itself from a workflow_dispatch input (gh release create --target
@@ -128,10 +128,10 @@ jobs:
       portable_sha256: ${{ steps.shas.outputs.portable_sha256 }}
       msi_sha256: ${{ steps.shas.outputs.msi_sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
@@ -151,7 +151,7 @@ jobs:
         shell: pwsh
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       # Crashpad + mini_chromium nest extremely deep under FetchContent; the
       # default build-tree path blows past Windows MAX_PATH (260). Long-path
@@ -171,7 +171,7 @@ jobs:
       # Studio 17 2022 does not match the generator used previously: Ninja".
       # The `-vs2022-` namespace keeps the two generators' caches from crossing.
       - name: Cache FetchContent deps (sentry-native + Crashpad)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: C:/es
           key: es-fetchcontent-${{ runner.os }}-vs2022-${{ hashFiles('cmake/VendorSentry.cmake') }}
@@ -315,7 +315,7 @@ jobs:
         shell: pwsh
 
       - name: Upload Release PDBs (symbol archive)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ExoSnap-${{ steps.pdbs.outputs.version }}-windows-x64-pdb-${{ github.run_id }}
           path: ${{ steps.pdbs.outputs.dir }}/*.pdb
@@ -328,6 +328,66 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "dir=.workspace/release/$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         shell: pwsh
+
+      # Archives the exact toolchain that produced this release's artifacts —
+      # runner image, MSVC/cl.exe, CMake, Qt, WiX, and the pinned FFmpeg
+      # prebuilt — as its own release asset. This is purely informational (it
+      # does not gate anything and carries no signature), so it is additive:
+      # dropped into the same staging dir as artifact-manifest.json and picked
+      # up by the existing "Upload all release artifacts" / publish-release
+      # upload steps below rather than any new upload/verify path.
+      - name: Generate toolchain manifest
+        id: toolchain
+        shell: pwsh
+        run: |
+          $dir = "${{ steps.artifact.outputs.dir }}"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+
+          $qtVersion = ''
+          if ($env:QT_ROOT_DIR -and ($env:QT_ROOT_DIR -match '[\\/](\d+\.\d+\.\d+)[\\/]')) {
+            $qtVersion = $Matches[1]
+          }
+
+          $clVersionLine = ((cl 2>&1 | Select-Object -First 1) -join ' ').Trim()
+          $cmakeVersionLine = (cmake --version | Select-Object -First 1).Trim()
+          $wixVersionLine = (wix --version).Trim()
+
+          $vendorFfmpeg = Get-Content -LiteralPath 'cmake/VendorFFmpeg.cmake' -Raw
+          $ffmpegUrl = [regex]::Match($vendorFfmpeg, 'URL\s+"([^"]+)"').Groups[1].Value
+          $ffmpegSha256 = [regex]::Match($vendorFfmpeg, 'URL_HASH\s+"SHA256=([0-9A-Fa-f]+)"').Groups[1].Value.ToLowerInvariant()
+
+          $manifest = [ordered]@{
+            product     = 'ExoSnap'
+            version     = '${{ steps.artifact.outputs.version }}'
+            sourceCommit = (& git rev-parse HEAD).Trim()
+            generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+            runner = [ordered]@{
+              imageLabel   = 'windows-2022'
+              imageOs      = $env:ImageOS
+              imageVersion = $env:ImageVersion
+            }
+            msvc = [ordered]@{
+              clVersion = $clVersionLine
+            }
+            cmake = [ordered]@{
+              version = $cmakeVersionLine
+            }
+            qt = [ordered]@{
+              version = $qtVersion
+              rootDir = $env:QT_ROOT_DIR
+            }
+            wix = [ordered]@{
+              version = $wixVersionLine
+            }
+            ffmpeg = [ordered]@{
+              url    = $ffmpegUrl
+              sha256 = $ffmpegSha256
+            }
+          }
+          $manifestPath = Join-Path $dir 'toolchain-manifest.json'
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+          Write-Host "Wrote toolchain manifest to $manifestPath"
+          Get-Content -LiteralPath $manifestPath | Write-Host
 
       # Expose the portable + MSI SHA-256 hashes as job outputs so the
       # sign-manifest job can bind them into the signed update-manifest.json.
@@ -348,7 +408,7 @@ jobs:
         shell: pwsh
 
       - name: Upload all release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64
           path: |
@@ -358,6 +418,7 @@ jobs:
             ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.msi.sha256
             ${{ steps.artifact.outputs.dir }}/artifact-manifest.json
             ${{ steps.artifact.outputs.dir }}/validation-report.md
+            ${{ steps.artifact.outputs.dir }}/toolchain-manifest.json
           if-no-files-found: error
 
   # Sign the update manifest for the in-app updater. MANDATORY for every official
@@ -434,13 +495,13 @@ jobs:
       EXPECTED_MSI_SHA: ${{ needs.build.outputs.msi_sha256 }}
     steps:
       - name: Download release artifacts (ZIP + MSI + sidecars)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ExoSnap-${{ needs.build.outputs.version }}-windows-x64
           path: release-assets
 
       - name: Download signed manifest
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: update-manifest
           path: release-assets
@@ -513,6 +574,7 @@ jobs:
             "ExoSnap-$VERSION-windows-x64.msi" \
             "ExoSnap-$VERSION-windows-x64.msi.sha256" \
             update-manifest.json update-manifest.json.sig \
+            toolchain-manifest.json \
             --repo "$GITHUB_REPOSITORY" --clobber
 
       # Re-download the assets straight from the Release and re-hash them, so what a
