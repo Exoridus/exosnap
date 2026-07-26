@@ -64,8 +64,13 @@ makes the UI text literally true.
   no border, no tinted background; the icon's left edge is flush with the
   card body.
 - en-US spelling app-wide: "color", not "colour" (labels, options, hints).
-- Buttons share one visual family (pill radius) everywhere, including the
-  per-row Set/Change/Cancel buttons on Hotkey rows.
+- Buttons share one SQUARE visual family (radius 9, matching the
+  select/spinbox chrome) everywhere, including the per-row Set/Change/Cancel
+  buttons on Hotkey rows — no pill buttons; small chips/badges sit at
+  radius 7.
+- Card bottoms end on the same visual 20 px everywhere: cards whose last
+  element is a plain Row use 14 px own padding (+ the row's intrinsic 6 px);
+  footer- and grid-ending cards use 20 px directly.
 - Dependent rows follow one pattern everywhere: a toggle/select row, then its
   detail rows rendered only while applicable — as plain full-width rows with
   normal label alignment, never indented (limiter → ceiling, chroma key →
@@ -156,7 +161,8 @@ the card header. Unset rows recede visually.
 ### Output (right)
 
 Default: Output resolution (Native/4K/1440p/1080p/720p/Custom; Custom reveals
-width×height) · Split recording toggle (→ interval row with exactly the
+width×height) · Split by time toggle ("Split by time", not the shipped
+"Split recording" — symmetric with "Split by size") (→ interval row with exactly the
 shipped options Every 15/30/60 min) · Split by size toggle (→ size row in
 MB; whichever limit hits first) · Destination folder · Filename pattern
 editor (token chips, live "Saves as" footer) · Open editor when finished.
@@ -185,7 +191,10 @@ administrator).
 ### Updates (right)
 
 Unchanged content: auto-check toggle · Update channel (Stable/Preview) ·
-update control (Check → Update in place) · verified-install footnote.
+update control (Check → Update in place). The old "Verified, installed by
+the Updater · no auto-install" footnote is removed — its substance (signature
+verification, separate Updater process, no auto-install) lives in the
+auto-check row's info tip instead.
 
 ### Appearance (right)
 
@@ -216,7 +225,9 @@ Expert-gated at all — Expert only reveals rows in place.
    right: output, audio, updates, appearance, developer) so both modes stay
    level; the "AUTOMATIC SPLIT" section header is dropped.
 7. Shared control width 160 px and shared row height 46 px across the page;
-   plain 18 px title-ink card icons (no chip); one pill button family.
+   plain 18 px title-ink card icons (no chip); one square (radius 9) button
+   family; "Split by time" label; Updates loses its verified-install
+   footnote (info moves into the auto-check tooltip).
 8. Microphone post-processing becomes a collapsible labelled section with a
    proper 46 px header row and a live enabled-stages summary; open, its
    stages are standard un-indented toggle rows.
