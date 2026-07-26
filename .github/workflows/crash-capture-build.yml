@@ -8,6 +8,7 @@ name: Crash-Capture Build
 #   - push to `main`          (catch breakage the moment it lands)
 #   - workflow_dispatch       (manual on-demand validation)
 #   - PRs labeled `crash-capture` (opt-in heavy check when touching the strand)
+#   - PRs that touch crash-capture-relevant paths (auto, via the `changes` job)
 #
 # EXOSNAP_OFFICIAL_BUILD stays OFF here, so NO secrets are required: the Sentry
 # DSN is not compiled in and the ed25519 update public key is not needed. This
@@ -30,15 +31,47 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
+  # PR-CI tiering: this build is slow (10-20 min, fetches+builds sentry-native
+  # from source) so it must not run unconditionally on every PR. It already
+  # has an opt-in path (the `crash-capture` label, for reviewing changes
+  # elsewhere that a human suspects might affect the strand); this adds an
+  # automatic path so a PR that actually touches the crash-capture code, its
+  # CMake wiring, or this workflow file doesn't rely on someone remembering to
+  # apply the label. Runs on pull_request only; push to main always runs the
+  # real job below regardless of this output.
+  changes:
+    name: detect crash-capture changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      crash_capture: ${{ steps.filter.outputs.crash_capture }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            crash_capture:
+              - 'libs/crash_capture/**'
+              - 'cmake/VendorSentry.cmake'
+              - 'app/CMakeLists.txt'
+              - 'CMakeLists.txt'
+              - '.github/workflows/crash-capture-build.yml'
+
   crash-capture-build:
     name: crash-capture-build (ON)
     runs-on: windows-2022
-    # On PRs, only run when the `crash-capture` label is present. Push to main
-    # and manual dispatch always run (github.event.label is null there, so the
-    # second clause short-circuits via the event_name check).
+    needs: changes
+    # On PRs, run when the `crash-capture` label is present OR the `changes`
+    # job flags a crash-capture-relevant path. Push to main and manual
+    # dispatch always run (github.event.label is null there and `changes` is
+    # skipped outside pull_request, so both clauses short-circuit via the
+    # event_name check on the first line).
     if: >-
       github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'crash-capture')
+      contains(github.event.pull_request.labels.*.name, 'crash-capture') ||
+      needs.changes.outputs.crash_capture == 'true'
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
