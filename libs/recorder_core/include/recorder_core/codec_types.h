@@ -35,26 +35,29 @@ enum class BitDepth {
     Bit10, // 10-bit — P010 input, HEVC Main10 / AV1 Main 10-bit (SDR BT.709); H.264 unsupported
 };
 
-// CQP quality targets for NVENC. Named shorthands for three canonical CQ values;
+// CQP quality targets for NVENC. Named shorthands for five canonical CQ values;
 // the CQ value itself is what the encoder consumes (RecorderConfig::nvenc_cq).
-enum class NvencQualityPreset {
-    High,     // cq=19 — large files, best quality
-    Balanced, // cq=24 — default
-    Small,    // cq=30 — smaller files, lower quality
-};
+// New members are appended after the original three so existing
+// static_cast<int> item data (persisted presets, combo-box userData) stays
+// stable across the rename (Small -> Efficient).
+enum class NvencQualityPreset { High, Balanced, Efficient, Draft, Ultra };
 
 // Valid CQ (constant-quality) range for NVENC CQP. 1 = best, 51 = worst.
 inline constexpr uint32_t kNvencCqMin = 1;
 inline constexpr uint32_t kNvencCqMax = 51;
 
 // The canonical CQ value a named preset stands for. Single source of truth for
-// preset -> CQ; nothing else may hardcode 19/24/30.
+// preset -> CQ; nothing else may hardcode 16/19/24/30/35.
 inline constexpr uint32_t CanonicalCq(NvencQualityPreset preset) noexcept {
     switch (preset) {
+    case NvencQualityPreset::Ultra:
+        return 16;
     case NvencQualityPreset::High:
         return 19;
-    case NvencQualityPreset::Small:
+    case NvencQualityPreset::Efficient:
         return 30;
+    case NvencQualityPreset::Draft:
+        return 35;
     case NvencQualityPreset::Balanced:
         break;
     }
@@ -62,29 +65,28 @@ inline constexpr uint32_t CanonicalCq(NvencQualityPreset preset) noexcept {
 }
 
 // The named preset a CQ value is closest to, for UI segment selection. Ties
-// resolve toward the higher quality (lower CQ), matching the segment order.
+// resolve toward the lower CQ (higher quality), matching the ladder order.
 inline constexpr NvencQualityPreset NearestQualityPreset(uint32_t cq) noexcept {
-    const auto distance = [cq](NvencQualityPreset p) constexpr -> uint32_t {
+    constexpr NvencQualityPreset kByQuality[] = {NvencQualityPreset::Ultra, NvencQualityPreset::High,
+                                                 NvencQualityPreset::Balanced, NvencQualityPreset::Efficient,
+                                                 NvencQualityPreset::Draft};
+    NvencQualityPreset best = NvencQualityPreset::Ultra;
+    uint32_t best_d = ~0u;
+    for (NvencQualityPreset p : kByQuality) {
         const uint32_t c = CanonicalCq(p);
-        return cq > c ? cq - c : c - cq;
-    };
-    const uint32_t d_high = distance(NvencQualityPreset::High);
-    const uint32_t d_balanced = distance(NvencQualityPreset::Balanced);
-    const uint32_t d_small = distance(NvencQualityPreset::Small);
-    if (d_high <= d_balanced && d_high <= d_small) {
-        return NvencQualityPreset::High;
+        const uint32_t d = cq > c ? cq - c : c - cq;
+        if (d < best_d) {
+            best_d = d;
+            best = p;
+        } // strict '<': earlier (lower-CQ) wins ties
     }
-    if (d_balanced <= d_small) {
-        return NvencQualityPreset::Balanced;
-    }
-    return NvencQualityPreset::Small;
+    return best;
 }
 
 // True when the CQ value is exactly one of the named presets (the UI shows "~"
 // in front of the tier name otherwise).
 inline constexpr bool IsCanonicalCq(uint32_t cq) noexcept {
-    return cq == CanonicalCq(NvencQualityPreset::High) || cq == CanonicalCq(NvencQualityPreset::Balanced) ||
-           cq == CanonicalCq(NvencQualityPreset::Small);
+    return cq == 16u || cq == 19u || cq == 24u || cq == 30u || cq == 35u;
 }
 
 // NVENC encoder speed/quality preset (SDK presets P1-P7). P1 is fastest with the

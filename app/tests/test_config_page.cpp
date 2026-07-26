@@ -582,7 +582,7 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
 
     // Default quality is High, so each click below is a real change and emits.
     small_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small));
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient));
     EXPECT_TRUE(small_segment->isChecked());
     EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
     EXPECT_FALSE(high_segment->isChecked());
@@ -2931,11 +2931,11 @@ TEST_F(ConfigPageTest, CqSpinBox_KeepsNonCanonicalValuesAndReachesTheModel) {
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("qualityCqSpin"));
     ASSERT_NE(spin, nullptr);
 
-    spin->setValue(16);
-    EXPECT_FALSE(recorder_core::IsCanonicalCq(16));
+    spin->setValue(22);
+    EXPECT_FALSE(recorder_core::IsCanonicalCq(22));
     EXPECT_EQ(emit_count, 1);
-    EXPECT_EQ(changed.cq, 16u);
-    EXPECT_EQ(spin->value(), 16) << "the value must survive, not snap to a tier";
+    EXPECT_EQ(changed.cq, 22u);
+    EXPECT_EQ(spin->value(), 22) << "the value must survive, not snap to a tier";
 }
 
 // Scrolling the settings page must not silently retune quality.

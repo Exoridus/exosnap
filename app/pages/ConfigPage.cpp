@@ -930,7 +930,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
-    quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
+    quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
     quality_combo_->setVisible(false);
     quality_combo_->setFocusPolicy(Qt::NoFocus);
     quality_layout->addWidget(quality_combo_);
@@ -967,7 +967,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     };
 
     quality_segment_small_ = makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small"),
-                                                recorder_core::NvencQualityPreset::Small);
+                                                recorder_core::NvencQualityPreset::Efficient);
     quality_segment_balanced_ = makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced"),
                                                    recorder_core::NvencQualityPreset::Balanced);
     quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High"),
@@ -986,7 +986,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         quality_preset_combo_ = new QComboBox(quality_panel);
         quality_preset_combo_->setObjectName(QStringLiteral("qualityPresetCombo"));
         quality_preset_combo_->addItem(QStringLiteral("Small \xc2\xb7 CQ 30"),
-                                       static_cast<int>(recorder_core::NvencQualityPreset::Small));
+                                       static_cast<int>(recorder_core::NvencQualityPreset::Efficient));
         quality_preset_combo_->addItem(QStringLiteral("Balanced \xc2\xb7 CQ 24"),
                                        static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
         quality_preset_combo_->addItem(QStringLiteral("High \xc2\xb7 CQ 19"),
@@ -2963,7 +2963,7 @@ void ConfigPage::updateQualitySegmentSelection() {
     };
 
     const QSignalBlocker blocker(quality_segment_group_);
-    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Small);
+    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Efficient);
     sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
     sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
 
@@ -2984,8 +2984,11 @@ void ConfigPage::updateQualitySegmentSelection() {
         case recorder_core::NvencQualityPreset::Balanced:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Balanced"));
             break;
-        case recorder_core::NvencQualityPreset::Small:
+        case recorder_core::NvencQualityPreset::Efficient:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Small"));
+            break;
+        case recorder_core::NvencQualityPreset::Draft:
+        case recorder_core::NvencQualityPreset::Ultra:
             break;
         }
     }

@@ -911,7 +911,7 @@ TEST(RecordingPreset, NormalizedEquals_OutputContainerChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_VideoQualityChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -1030,7 +1030,7 @@ TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_VideoQualityChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    b.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 

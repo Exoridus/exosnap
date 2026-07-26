@@ -78,12 +78,16 @@ std::string MicChannelModeName(recorder_core::MicChannelMode m) {
 
 std::string NvencQualityName(recorder_core::NvencQualityPreset q) {
     switch (q) {
+    case recorder_core::NvencQualityPreset::Ultra:
+        return "Ultra";
     case recorder_core::NvencQualityPreset::High:
         return "High";
     case recorder_core::NvencQualityPreset::Balanced:
         return "Balanced";
-    case recorder_core::NvencQualityPreset::Small:
-        return "Small";
+    case recorder_core::NvencQualityPreset::Efficient:
+        return "Efficient";
+    case recorder_core::NvencQualityPreset::Draft:
+        return "Draft";
     }
     return "Balanced";
 }

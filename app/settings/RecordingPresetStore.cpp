@@ -165,7 +165,7 @@ QString NvencQualityPresetToString(recorder_core::NvencQualityPreset v) {
         return QStringLiteral("high");
     case recorder_core::NvencQualityPreset::Balanced:
         return QStringLiteral("balanced");
-    case recorder_core::NvencQualityPreset::Small:
+    case recorder_core::NvencQualityPreset::Efficient:
         return QStringLiteral("small");
     }
     return QStringLiteral("balanced");
@@ -178,7 +178,7 @@ std::optional<recorder_core::NvencQualityPreset> NvencQualityPresetFromString(QS
     if (n == QStringLiteral("balanced"))
         return recorder_core::NvencQualityPreset::Balanced;
     if (n == QStringLiteral("small"))
-        return recorder_core::NvencQualityPreset::Small;
+        return recorder_core::NvencQualityPreset::Efficient;
     return std::nullopt;
 }
 

@@ -186,7 +186,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset efficiency = MakeDefaultPreset();
     efficiency.id = std::string(kEfficiencyPresetId);
     efficiency.name = "Efficiency";
-    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Small);
+    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
     efficiency.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
     result.push_back(std::move(efficiency));
 
