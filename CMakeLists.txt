@@ -118,7 +118,6 @@ endif()
 
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
-add_subdirectory(libs/recorder_facade)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
 add_subdirectory(app)
