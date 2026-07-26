@@ -380,7 +380,6 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasFiveRealLevels_No
     // (fully-suppressed) option. The former stub combo also offered "Trace", which
     // doesn't correspond to anything AppLog can emit -- it must not survive the wiring.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // lazily builds the Developer card
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     ASSERT_EQ(combo->count(), 5);
@@ -396,19 +395,17 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasFiveRealLevels_No
 TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_DefaultsToDebug) {
     // Review F1: ship default is Debug (record everything); see the store test above.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Debug"));
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_BeforeCardBuilt_AppliesOnBuild) {
-    // setDeveloperLogLevel must be safe to call before the lazily-built Developer
-    // card exists, and the pending value must be applied once it IS built. Probe with
-    // a NON-default value ("Warning") so the assertion cannot pass vacuously.
+TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_AppliesImmediately) {
+    // The Developer card is built eagerly in the constructor, so
+    // setDeveloperLogLevel applies to the combo as soon as it is called. Probe
+    // with a NON-default value ("Warning") so the assertion cannot pass vacuously.
     ConfigPage page(output_defaults_, video_defaults_);
     page.setDeveloperLogLevel(QStringLiteral("Warning"));
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Warning"));
@@ -418,7 +415,6 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasConsequenceToolti
     // Review F3: raising the level silently drops lines from support diagnostics;
     // the combo must carry a tooltip that names that consequence.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("hides lower-severity lines")));
@@ -426,7 +422,6 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasConsequenceToolti
 
 TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_ChangeEmitsSignal) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
 
@@ -446,7 +441,6 @@ TEST_F(SettingsTiersTest, ConfigPage_NvtxProfilingCheck_HonestlyDisabledWithTool
     // No NVTX infrastructure exists in the app -- the control must stay disabled with
     // a "planned" tooltip rather than pretending to work.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
     auto* check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("nvtxProfilingCheck"));
     ASSERT_NE(check, nullptr);
     EXPECT_FALSE(check->isEnabled());

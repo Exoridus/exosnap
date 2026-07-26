@@ -453,7 +453,7 @@ QByteArray cardGlyphPathFor(const QString& key) {
 }
 
 // Renders a card glyph into a HiDPI-crisp tinted pixmap (same inline-SVG technique as
-// AudioSourceToggle::paintIcon — stroke=color, width 1.7, round caps/joins, fill:none).
+// AudioSourceToggle::paintIcon — stroke=color, width 2.0, round caps/joins, fill:none).
 QPixmap cardGlyphPixmap(const QString& key, const QColor& color, int size, qreal dpr) {
     if (dpr <= 0.0)
         dpr = 1.0;
@@ -470,7 +470,7 @@ QPixmap cardGlyphPixmap(const QString& key, const QColor& color, int size, qreal
     svg.reserve(path.size() + 220);
     svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
     svg.append(color.name(QColor::HexRgb).toUtf8());
-    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
+    svg.append("' stroke-width='2.0' stroke-linecap='round' stroke-linejoin='round'><path d='");
     svg.append(path);
     svg.append("'/></svg>");
     QSvgRenderer renderer(svg);
@@ -484,9 +484,11 @@ QPixmap cardGlyphPixmap(const QString& key, const QColor& color, int size, qreal
 }
 
 // Card title: 15/600 per the design system "Section/card title" role.
-// v10: when `icon_key` is non-empty the title gains a 28x28 glyph chip on its left
-// (bg --ac-dim, border --ac-b2, 15px --ac stroke icon). Styling is QSS-driven via the
-// `cardGlyphChip` object name; the icon is tinted to the active theme's accent.
+// Task 10: when `icon_key` is non-empty the title gains a plain 18x18 title-ink
+// glyph on its left — no chip, no border, no tinted background; the icon's left
+// edge sits flush with the card body (no reserved gutter). The `cardGlyphChip`
+// object name is kept for QSS targeting even though the chip itself is now
+// invisible (background: transparent; border: none).
 // `trailing`, when given, is placed flush-right in the title row as a header badge
 // (e.g. the Hotkeys card's "Reset all"). It is reparented into the row.
 QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon_key = QString(),
@@ -505,10 +507,10 @@ QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon
     if (!icon_key.isEmpty()) {
         auto* chip = new QLabel(row);
         chip->setObjectName(QStringLiteral("cardGlyphChip"));
-        chip->setFixedSize(28, 28);
+        chip->setFixedSize(18, 18);
         chip->setAlignment(Qt::AlignCenter);
-        const QColor accent(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac));
-        chip->setPixmap(cardGlyphPixmap(icon_key, accent, 18, chip->devicePixelRatioF()));
+        const QColor title_ink(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink));
+        chip->setPixmap(cardGlyphPixmap(icon_key, title_ink, 18, chip->devicePixelRatioF()));
         hl->addWidget(chip, 0, Qt::AlignVCenter);
     }
 
@@ -546,6 +548,8 @@ QLabel* makeHint(const QString& text, QWidget* parent) {
 }
 
 // D6: Creates a "quiet row": hairline on top (unless first=true), label left, control right.
+// Task 10: content margins (0,5,0,5) land the row on the shared 46 px row height
+// (the 34 px select/spinbox chrome + 2*5 px + the 1 px hairline exactly fills it).
 // Returns the container QWidget* (parent is `parent`).
 QWidget* makeSettingsRow(QWidget* parent, const QString& label, QWidget* hint_widget, const QString& sub_label,
                          QWidget* control, bool first = false) {
@@ -563,7 +567,7 @@ QWidget* makeSettingsRow(QWidget* parent, const QString& label, QWidget* hint_wi
 
     auto* content = new QWidget(container);
     auto* hl = new QHBoxLayout(content);
-    hl->setContentsMargins(0, 12, 0, 12);
+    hl->setContentsMargins(0, 5, 0, 5);
     hl->setSpacing(14);
 
     // Left side: label block
@@ -861,8 +865,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     }
 
     // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
-    // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
-    // Right column: Output · Webcam · Notifications & overlays · Updates · Appearance.
+    // Left column:  Container & codecs · Quality & timing · Webcam · Notifications & overlays · Hotkeys.
+    // Right column: Output · Audio · Updates · Appearance · Developer.
+    // Task 10: the split parks Audio opposite Container & codecs / Quality & timing
+    // (the three cards that carry nearly all Expert row growth) so both Default and
+    // Expert stay visually level; the Developer card always lives at the bottom of
+    // the right column now that it is never Expert-gated.
     // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
     auto* columns = new QWidget(content);
     columns_layout_ = new QHBoxLayout(columns);
@@ -871,12 +879,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     auto* left_col = new QWidget(columns);
     auto* left_layout = new QVBoxLayout(left_col);
-    left_col_ = left_col; // stashed for the lazy developer-card build
     left_layout->setContentsMargins(0, 0, 0, 0);
     left_layout->setSpacing(18);
 
     auto* right_col = new QWidget(columns);
     auto* right_layout = new QVBoxLayout(right_col);
+    developer_col_ = right_col; // stashed for buildDeveloperCard()'s insertWidget
     right_layout->setContentsMargins(0, 0, 0, 0);
     right_layout->setSpacing(18);
 
@@ -950,7 +958,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         hrule->setProperty("frameRole", "sectionRuleLine");
         hvl->addWidget(hrule);
         auto* hhl = new QHBoxLayout();
-        hhl->setContentsMargins(0, 12, 0, 12);
+        hhl->setContentsMargins(0, 5, 0, 5);
         hhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* hlbl = new QLabel(QStringLiteral("HDR handling"), video_hdr_mode_row_);
         hlbl->setProperty("labelRole", "settingsRowLabel");
@@ -1085,7 +1093,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         qvl->addWidget(qrule);
         auto* qcontent = new QWidget(quality_preset_row_widget_);
         auto* qhl = new QHBoxLayout(qcontent);
-        qhl->setContentsMargins(0, 12, 0, 12);
+        qhl->setContentsMargins(0, 5, 0, 5);
         qhl->setSpacing(14);
         auto* qlabel_row = new QWidget(qcontent);
         auto* qlrl = new QHBoxLayout(qlabel_row);
@@ -1239,19 +1247,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     updateVideoCodecChoices();
     updateAudioCodecChoices();
 
-    // v10 (Delta 5): stable two-column placement, priority-ordered, identical in
-    // Default and Expert (Expert only adds rows in place + reveals Developer).
-    //   Left  : Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert)
-    //   Right : Output · Webcam · Notifications & overlays · Updates · Appearance
-    // Left cards Container/Quality/Audio are added in build order here; Hotkeys and
-    // Developer are appended in the consolidation block (they are built later).
-    // Right cards are parented to right_col but added to right_layout in one explicit,
-    // target-ordered block (see the consolidation block after the Updates card).
+    // Task 10: stable two-column placement, priority-ordered, identical in
+    // Default and Expert (Expert only adds rows in place — no card is Expert-gated).
+    //   Left  : Container & codecs · Quality & timing · Webcam · Notifications & overlays · Hotkeys
+    //   Right : Output · Audio · Updates · Appearance · Developer
+    // Left cards Container/Quality are added in build order here; Webcam, Notifications
+    // & overlays and Hotkeys are appended in the consolidation block (built later).
+    // Right cards (Output, Audio, Updates, Appearance, Developer) are parented to
+    // right_col but added to right_layout in one explicit, target-ordered block (see
+    // the consolidation block after the Updates card).
     left_layout->addWidget(fmt_panel);
     left_layout->addWidget(quality_panel);
 
-    // ---- AUDIO CARD (left column — v10) ----
-    auto* audio_panel = makePanel(left_col);
+    // ---- AUDIO CARD (right column — v10) ----
+    auto* audio_panel = makePanel(right_col);
     audio_panel_ = audio_panel;
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -1423,10 +1432,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setWordWrap(true);
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
-    left_layout->addWidget(audio_panel);
+    // audio_panel added to right_layout in the consolidation block below.
 
-    // ---- WEBCAM CARD (right column — v10) ----
-    auto* webcam_panel = makePanel(right_col);
+    // ---- WEBCAM CARD (left column — v10) ----
+    auto* webcam_panel = makePanel(left_col);
     webcam_panel_ = webcam_panel;
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -1666,13 +1675,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     out_panel_layout->addWidget(output_saves_to_label_);
     // out_panel added to right_layout in the consolidation block below.
 
-    // ---- NOTIFICATIONS & OVERLAYS CARD (right column — SETTINGS-TIERS-P3) ----
+    // ---- NOTIFICATIONS & OVERLAYS CARD (left column — SETTINGS-TIERS-P3) ----
     // v0.9 polish: renamed from "Presence" — the card gathers notifications,
     // on-screen overlays, and tray behaviour, which "Presence" undersold. The
     // bell glyph (notifications) stays; internal ids keep the presence_ prefix
     // ("settings/presence" deep-link target included).
     {
-        auto* presence_panel = makePanel(right_col);
+        auto* presence_panel = makePanel(left_col);
         presence_panel_ = presence_panel;
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
@@ -1884,10 +1893,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // hotkeys_panel_ added to left_layout in the consolidation block below.
     }
 
-    // Developer card (expert-gated, UI-only stubs) is built lazily on first
-    // expert-enable — see buildDeveloperCard().
+    // Developer card (UI-only stubs, never Expert-gated) is built eagerly right
+    // after the column consolidation below — see buildDeveloperCard().
 
-    // ---- UPDATES CARD (right column, between Notifications & overlays and Appearance) ----
+    // ---- UPDATES CARD (right column, between Audio and Appearance) ----
     // v10 masonry: Updates lives in the right column, wired to the real UpdateService
     // via MainWindow (ADR 0034 Phase A + UPDATE-WIRE-R1's channel row).
     {
@@ -1963,19 +1972,22 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // updates_panel_ added to right_layout in the consolidation block below.
     }
 
-    // ---- v10 (Delta 5): COLUMN CONSOLIDATION (stable, priority order) ----
-    // Left column: Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
-    // Right column: Output · Webcam · Notifications & overlays · Updates · Appearance.
-    // Expert only reveals rows in place / shows Developer card — nothing teleports sideways.
+    // ---- Task 10: COLUMN CONSOLIDATION (stable, priority order) ----
+    // Left column: Container & codecs · Quality & timing · Webcam · Notifications & overlays · Hotkeys.
+    // Right column: Output · Audio · Updates · Appearance · Developer.
+    // Expert only reveals rows in place — nothing teleports sideways, and no card
+    // (including Developer) is Expert-gated anymore.
+    left_layout->addWidget(webcam_panel);
+    left_layout->addWidget(presence_panel_);
     left_layout->addWidget(hotkeys_panel_);
-    developer_insert_index_ = left_layout->count(); // slot for the lazy developer card
     left_layout->addStretch();
 
     right_layout->addWidget(out_panel);
-    right_layout->addWidget(webcam_panel);
-    right_layout->addWidget(presence_panel_);
+    right_layout->addWidget(audio_panel);
     right_layout->addWidget(updates_panel_);
     right_layout->addWidget(appearance_panel_);
+    developer_insert_index_ = right_layout->count(); // slot for the Developer card
+    buildDeveloperCard();
     right_layout->addStretch();
 
     layout->addStretch();
@@ -3978,7 +3990,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
     {
         auto* row = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("Mic channel mode"), row);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4008,7 +4020,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         addRule();
         auto* row = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("Audio bitrate"), row);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4032,7 +4044,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         addRule();
         audio_channels_row_ = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(audio_channels_row_);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("Channels"), audio_channels_row_);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4060,7 +4072,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         addRule();
         audio_bit_depth_row_ = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(audio_bit_depth_row_);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("Bit depth"), audio_bit_depth_row_);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4093,7 +4105,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         addRule();
         flac_compression_row_ = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(flac_compression_row_);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("FLAC compression"), flac_compression_row_);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4119,7 +4131,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         addRule();
         auto* row = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4161,7 +4173,7 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         addRule();
         auto* row = new QWidget(audio_default_section_);
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setContentsMargins(0, 5, 0, 5);
         hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* lbl = new QLabel(QStringLiteral("Brickwall limiter"), row);
         lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4506,7 +4518,7 @@ void ConfigPage::buildAudioExpertSection() {
         {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setContentsMargins(0, 5, 0, 5);
             hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Opus frame duration"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4537,7 +4549,7 @@ void ConfigPage::buildAudioExpertSection() {
 
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setContentsMargins(0, 5, 0, 5);
             hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Opus complexity"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4564,7 +4576,7 @@ void ConfigPage::buildAudioExpertSection() {
 
             audio_sample_rate_row_ = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(audio_sample_rate_row_);
-            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setContentsMargins(0, 5, 0, 5);
             hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Sample rate"), audio_sample_rate_row_);
             lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4600,7 +4612,7 @@ void ConfigPage::buildAudioExpertSection() {
 
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setContentsMargins(0, 5, 0, 5);
             hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* lbl = new QLabel(QStringLiteral("Audio clock slaving"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
@@ -4784,15 +4796,19 @@ void ConfigPage::buildSplitExpertSection() {
     updateSplitSelection();
 }
 
-// Startup-perf: the Developer card (expert-gated, UI-only stubs) is built on
-// first expert-enable instead of eagerly-then-hidden.
+// Task 10: the Developer card is built eagerly (called from the constructor,
+// right after the column consolidation) and is never Expert-gated -- under the
+// "Expert = incompatibility risk / format expertise" criterion its content
+// (a logging level, one honest disabled "planned" row, crash-report consent)
+// is harmless in Default. developer_card_built_ is a double-construction fence
+// only (precedent: buildSplitExpertSection()'s split_expert_built_).
 void ConfigPage::buildDeveloperCard() {
     if (developer_card_built_)
         return;
     developer_card_built_ = true;
-    QWidget* left_col = left_col_; // alias: moved construction references it
+    QWidget* developer_col = developer_col_; // alias: moved construction references it
     {
-        developer_card_ = makePanel(left_col);
+        developer_card_ = makePanel(developer_col);
         developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
         auto* dev_layout = new QVBoxLayout(developer_card_);
         // Flat card style: same content margins + zero inter-row spacing as every other
@@ -4804,10 +4820,9 @@ void ConfigPage::buildDeveloperCard() {
         dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
         // SETTINGS-HONESTY-R1 (review F2): the old hint ("not persisted between
         // sessions") became false once the log level was genuinely wired + persisted.
-        dev_layout->addWidget(
-            makeHint(QStringLiteral("Expert debug controls. The logging level is persisted across sessions; "
-                                    "profiling markers are planned."),
-                     developer_card_));
+        dev_layout->addWidget(makeHint(QStringLiteral("Debug controls. The logging level is persisted across sessions; "
+                                                      "profiling markers are planned."),
+                                       developer_card_));
 
         // SETTINGS-HONESTY-R1: log level, genuinely wired to AppLog::setMinSeverity
         // (via MainWindow) and persisted (AppSettingsStore::developer_log_level).
@@ -4879,10 +4894,11 @@ void ConfigPage::buildDeveloperCard() {
             });
         }
 
-        developer_card_->setVisible(expert_mode_enabled_);
+        // Task 10: always visible -- no card is Expert-gated anymore.
+        developer_card_->setVisible(true);
     }
-    if (auto* left_layout = qobject_cast<QVBoxLayout*>(left_col_->layout())) {
-        left_layout->insertWidget(developer_insert_index_, developer_card_);
+    if (auto* right_layout = qobject_cast<QVBoxLayout*>(developer_col_->layout())) {
+        right_layout->insertWidget(developer_insert_index_, developer_card_);
     }
 }
 
@@ -4918,7 +4934,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
         // content row
         auto* qecontent = new QWidget(quality_expert_widget_);
         auto* qehl = new QHBoxLayout(qecontent);
-        qehl->setContentsMargins(0, 12, 0, 12);
+        qehl->setContentsMargins(0, 5, 0, 5);
         qehl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
         auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
         qelbl->setProperty("labelRole", "settingsRowLabel");
@@ -4991,7 +5007,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             rrule->setProperty("frameRole", "sectionRuleLine");
             rvl->addWidget(rrule);
             auto* rhl = new QHBoxLayout();
-            rhl->setContentsMargins(0, 12, 0, 12);
+            rhl->setContentsMargins(0, 5, 0, 5);
             rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* rlbl = new QLabel(QStringLiteral("Rate control"), rate_control_row_widget_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
@@ -5018,7 +5034,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             brule->setProperty("frameRole", "sectionRuleLine");
             bvl->addWidget(brule);
             auto* bhl = new QHBoxLayout();
-            bhl->setContentsMargins(0, 12, 0, 12);
+            bhl->setContentsMargins(0, 5, 0, 5);
             bhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* blbl = new QLabel(QStringLiteral("Bitrate"), bitrate_row_widget_);
             blbl->setProperty("labelRole", "settingsRowLabel");
@@ -5056,7 +5072,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             drule->setProperty("frameRole", "sectionRuleLine");
             dvl->addWidget(drule);
             auto* dhl = new QHBoxLayout();
-            dhl->setContentsMargins(0, 12, 0, 12);
+            dhl->setContentsMargins(0, 5, 0, 5);
             dhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* dlbl = new QLabel(QStringLiteral("Bit depth"), video_bit_depth_row_);
             dlbl->setProperty("labelRole", "settingsRowLabel");
@@ -5092,7 +5108,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             rrule->setProperty("frameRole", "sectionRuleLine");
             rvl->addWidget(rrule);
             auto* rhl = new QHBoxLayout();
-            rhl->setContentsMargins(0, 12, 0, 12);
+            rhl->setContentsMargins(0, 5, 0, 5);
             rhl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* rlbl = new QLabel(QStringLiteral("Color range"), video_color_range_row_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
@@ -5131,7 +5147,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             prule->setProperty("frameRole", "sectionRuleLine");
             pvl->addWidget(prule);
             auto* phl = new QHBoxLayout();
-            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setContentsMargins(0, 5, 0, 5);
             phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* plbl = new QLabel(QStringLiteral("Encoder preset (NVENC)"), video_encoder_preset_row_);
             plbl->setProperty("labelRole", "settingsRowLabel");
@@ -5188,7 +5204,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             prule->setProperty("frameRole", "sectionRuleLine");
             pvl->addWidget(prule);
             auto* phl = new QHBoxLayout();
-            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setContentsMargins(0, 5, 0, 5);
             phl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
             plbl->setProperty("labelRole", "settingsRowLabel");
@@ -5223,8 +5239,8 @@ void ConfigPage::buildFormatQualityExpertSections() {
             kirule->setProperty("frameRole", "sectionRuleLine");
             kivl->addWidget(kirule);
             auto* kihl = new QHBoxLayout();
-            kihl->setContentsMargins(0, 12, 0, 12); // flush with every other settings row
-            kihl->setSpacing(4);                    // label <-> info-i, matches makeSettingsRow
+            kihl->setContentsMargins(0, 5, 0, 5); // flush with every other settings row
+            kihl->setSpacing(4);                  // label <-> info-i, matches makeSettingsRow
             auto* kilbl = new QLabel(QStringLiteral("Keyframe interval"), ki_row);
             kilbl->setProperty("labelRole", "settingsRowLabel");
             kihl->addWidget(kilbl, 0);
@@ -5265,7 +5281,7 @@ void ConfigPage::buildFormatQualityExpertSections() {
             crule->setProperty("frameRole", "sectionRuleLine");
             cvl->addWidget(crule);
             auto* chl = new QHBoxLayout();
-            chl->setContentsMargins(0, 12, 0, 12);
+            chl->setContentsMargins(0, 5, 0, 5);
             chl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
             auto* clbl = new QLabel(QStringLiteral("Chroma subsampling"), video_chroma_row_);
             clbl->setProperty("labelRole", "settingsRowLabel");
@@ -5426,9 +5442,8 @@ void ConfigPage::updateExpertModeVisibility() {
     if (expert_mode_enabled_ && !fmt_quality_expert_built_) {
         buildFormatQualityExpertSections();
     }
-    if (expert_mode_enabled_ && !developer_card_built_) {
-        buildDeveloperCard();
-    }
+    // Task 10: the Developer card is built eagerly from the constructor and is
+    // never Expert-gated — no lazy-build call or visibility toggle here anymore.
     // Task 7: split-by-time / split-by-size is Default tier — buildSplitExpertSection()
     // is already called unconditionally from the constructor, so no gate here.
     // startup-perf: lazily build the heavy audio expert subtree the first time
@@ -5442,9 +5457,6 @@ void ConfigPage::updateExpertModeVisibility() {
         expert_mode_label_->style()->unpolish(expert_mode_label_);
         expert_mode_label_->style()->polish(expert_mode_label_);
     }
-    // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
-    if (developer_card_)
-        developer_card_->setVisible(expert_mode_enabled_);
     // Task 7: split_expert_section_ is Default tier and always visible — no
     // expert-mode visibility toggle here anymore.
     // v10: Default shows the five-tier "CQ 24 · Balanced" dropdown; Expert hides it
@@ -5578,7 +5590,7 @@ void ConfigPage::setPresentDiagnosticsOptIn(bool on) {
 void ConfigPage::setDeveloperLogLevel(const QString& level) {
     developer_log_level_ = level;
     if (!developer_log_level_combo_)
-        return; // Developer card not built yet (lazy) -- applied on buildDeveloperCard().
+        return; // Defensive only -- the Developer card is built eagerly in the constructor.
     const int idx = developer_log_level_combo_->findData(level);
     if (idx < 0)
         return;
@@ -5589,7 +5601,7 @@ void ConfigPage::setDeveloperLogLevel(const QString& level) {
 void ConfigPage::setAutoSendCrashReports(bool on) {
     auto_send_crash_reports_ = on;
     if (!crash_reports_auto_send_check_)
-        return; // Developer card not built yet (lazy) -- applied on buildDeveloperCard().
+        return; // Defensive only -- the Developer card is built eagerly in the constructor.
     const QSignalBlocker blocker(crash_reports_auto_send_check_);
     crash_reports_auto_send_check_->setOn(on);
 }

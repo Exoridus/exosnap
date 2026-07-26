@@ -2182,13 +2182,14 @@ TEST_F(ConfigPageTest, AdvancedDetailsButton_IsGone) {
     EXPECT_EQ(advanced_btn, nullptr) << "Settings must not contain the 'Open Advanced' signpost button after P3";
 }
 
-TEST_F(ConfigPageTest, DeveloperCard_HiddenByDefault) {
+TEST_F(ConfigPageTest, DeveloperCard_VisibleByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Expert mode off by default; the Developer card is built lazily on first
-    // expert-enable, so by default it doesn't exist yet (which still means not shown).
+    // The Developer card is built eagerly in the constructor and is not
+    // expert-gated -- it must be findable and visible without expert mode.
     auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    EXPECT_TRUE(card == nullptr || card->isHidden());
+    ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
+    EXPECT_FALSE(card->isHidden());
 }
 
 TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {
@@ -3390,13 +3391,14 @@ TEST_F(ConfigPageTest, SettingsAudio_MergeToggleReflectsAndSetsMergeWithAbove) {
 
 // ── Crash-report auto-send consent toggle (Developer/Advanced card) ────────────
 
-TEST_F(ConfigPageTest, CrashReportsToggle_HiddenBeforeExpertMode) {
+TEST_F(ConfigPageTest, CrashReportsToggle_VisibleByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // The Developer/Advanced card (and its crash-report toggle) is built lazily
-    // on first expert-enable, so by default it doesn't exist yet.
+    // The Developer card (and its crash-report toggle) is built eagerly in the
+    // constructor and is not expert-gated.
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    EXPECT_EQ(toggle, nullptr) << "crashReportsAutoSendToggle must not exist before expert mode is enabled";
+    ASSERT_NE(toggle, nullptr) << "crashReportsAutoSendToggle must exist by default";
+    EXPECT_FALSE(toggle->isHidden());
 }
 
 TEST_F(ConfigPageTest, CrashReportsToggle_VisibleAndLabeledWhenExpertModeEnabled) {
@@ -3419,20 +3421,16 @@ TEST_F(ConfigPageTest, CrashReportsToggle_DefaultsOff) {
     EXPECT_FALSE(toggle->isChecked()) << "consent defaults to off, matching auto_send_crash_reports' default";
 }
 
-TEST_F(ConfigPageTest, CrashReportsToggle_SetterAppliesBeforeAndAfterLazyBuild) {
+TEST_F(ConfigPageTest, CrashReportsToggle_SetterAppliesImmediately) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Seed the persisted "on" state before the Developer card exists -- it must
-    // be remembered and applied once the card is lazily constructed (same
-    // contract as setDeveloperLogLevel).
+    // The Developer card is built eagerly, so the setter applies to the toggle
+    // as soon as it is called -- no lazy-build handoff to verify anymore.
     page.setAutoSendCrashReports(true);
-
-    page.setExpertModeEnabled(true);
     auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
     ASSERT_NE(toggle, nullptr);
-    EXPECT_TRUE(toggle->isChecked()) << "the pre-seeded consent state must survive the lazy build";
+    EXPECT_TRUE(toggle->isChecked());
 
-    // Once the card exists, the setter must also apply immediately.
     page.setAutoSendCrashReports(false);
     EXPECT_FALSE(toggle->isChecked());
 }

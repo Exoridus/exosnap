@@ -173,14 +173,13 @@ class ConfigPage : public QWidget {
     void setPresentDiagnosticsOptIn(bool on);
     void setThemeId(const QString& theme_id);
     // SETTINGS-HONESTY-R1: seeds the Developer card's log-level combo from the
-    // persisted value. One of "Off"|"Error"|"Warning"|"Info"|"Debug". Safe to call
-    // before the (lazily built) Developer card exists -- the value is remembered and
-    // applied once the combo is constructed. No signal emitted.
+    // persisted value. One of "Off"|"Error"|"Warning"|"Info"|"Debug". The Developer
+    // card is built eagerly in the constructor, so the combo already exists by the
+    // time this is called. No signal emitted.
     void setDeveloperLogLevel(const QString& level);
-    // Seeds the "Send crash reports automatically" toggle (Developer/Advanced
-    // card) from persisted settings. Safe to call before the lazily built
-    // Developer card exists -- the value is remembered and applied once the
-    // card is constructed. No signal emitted.
+    // Seeds the "Send crash reports automatically" toggle (Developer card) from
+    // persisted settings. The Developer card is built eagerly in the constructor,
+    // so the toggle already exists by the time this is called. No signal emitted.
     void setAutoSendCrashReports(bool on);
 
     // Drives the visible Updates card (ADR 0034 Phase A). state is one of
@@ -384,6 +383,8 @@ class ConfigPage : public QWidget {
     // Split-by-time / split-by-size controls (Default tier) — built eagerly from
     // the constructor; not expert-gated.
     void buildSplitExpertSection();
+    // Developer card (Default tier) — built eagerly from the constructor; not
+    // expert-gated. developer_card_built_ is a double-construction fence only.
     void buildDeveloperCard();
     // Startup-perf: the interleaved Expert rate/format subtree (CQ precision row,
     // rate control + bitrate + frame pacing on the Quality card; bit depth, colour
@@ -574,16 +575,18 @@ class ConfigPage : public QWidget {
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;
     QString current_theme_id_ = QStringLiteral("dark-default");
-    // Expert-gated developer card — lazily built on first expert-enable (see
-    // buildDeveloperCard). left_col_ + insert index let the lazy build place it.
+    // Developer card — built eagerly in the constructor, always visible (not
+    // expert-gated). developer_card_built_ is a double-construction fence only.
+    // developer_col_ + insert index let buildDeveloperCard() place it in the
+    // right column.
     QWidget* developer_card_ = nullptr;
     bool developer_card_built_ = false;
     int developer_insert_index_ = -1;
-    QWidget* left_col_ = nullptr;
+    QWidget* developer_col_ = nullptr;
     // SETTINGS-HONESTY-R1: developer log-level combo, genuinely wired to
     // AppLog::setMinSeverity via MainWindow. developer_log_level_ is the pending/
     // current value string ("Off"|"Error"|"Warning"|"Info"|"Debug"); it is applied to
-    // the combo on build (lazy) or immediately if already built (setDeveloperLogLevel).
+    // the combo on construction, or immediately via setDeveloperLogLevel() after.
     QComboBox* developer_log_level_combo_ = nullptr;
     QString developer_log_level_ = QStringLiteral("Debug");
     // Crash-report auto-send consent toggle (Developer/Advanced card).
