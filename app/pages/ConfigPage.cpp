@@ -1766,9 +1766,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // expert-enable — see buildDeveloperCard().
 
     // ---- UPDATES CARD (right column, between Notifications & overlays and Appearance) ----
-    // v10 masonry: Updates lives in the right column. The full update service is not
-    // wired through ConfigPage; controls are stubs that preserve the real shape so the
-    // layout is stable and future wiring is a drop-in.
+    // v10 masonry: Updates lives in the right column, wired to the real UpdateService
+    // via MainWindow (ADR 0034 Phase A + UPDATE-WIRE-R1's channel row).
     {
         updates_panel_ = makePanel(right_col);
         updates_panel_->setObjectName(QStringLiteral("settingsUpdatesCard"));
@@ -1777,8 +1776,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         updates_layout->setSpacing(0);
         updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_, QStringLiteral("download")));
 
-        // Auto-check toggle (ADR 0034). We notify on a new release; we never
-        // auto-install (no Update-channel control — Stable is the only channel).
+        // Auto-check toggle (ADR 0034). We notify on a new release; we never auto-install.
         updates_auto_toggle_ = new ui::widgets::ExoToggle(updates_panel_);
         updates_auto_toggle_->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
         updates_auto_toggle_->setOn(true);
@@ -1789,6 +1787,24 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 updates_panel_),
             QString(), updates_auto_toggle_, /*first=*/true));
         connect(updates_auto_toggle_, &ui::widgets::ExoToggle::toggled, this, &ConfigPage::autoUpdateCheckToggled);
+
+        // Update channel (UPDATE-WIRE-R1). "Preview" surfaces GitHub prereleases
+        // (release candidates); "Stable" — the default — only ever sees the latest
+        // non-prerelease release. Persisted under [update] channel in settings.ini.
+        updates_channel_combo_ = new QComboBox(updates_panel_);
+        updates_channel_combo_->setObjectName(QStringLiteral("updatesChannelCombo"));
+        updates_channel_combo_->addItem(QStringLiteral("Stable"));
+        updates_channel_combo_->addItem(QStringLiteral("Preview"));
+        updates_channel_combo_->setFixedWidth(160);
+        updates_channel_combo_->setProperty("settingsRowInput", true);
+        updates_layout->addWidget(makeSettingsRow(
+            updates_panel_, QStringLiteral("Update channel"),
+            new ui::widgets::InfoHintIcon(
+                QStringLiteral(
+                    "Preview includes release candidates ahead of the stable release — expect rougher edges."),
+                updates_panel_),
+            QString(), updates_channel_combo_));
+        connect(updates_channel_combo_, &QComboBox::currentTextChanged, this, &ConfigPage::channelChanged);
 
         // Status + primary action (ADR 0034 Phase A): status text left, the
         // "Check for updates" / "Update to vX.Y" button right.
@@ -5919,6 +5935,14 @@ void ConfigPage::setAutoUpdateCheck(bool on) {
         QSignalBlocker block(updates_auto_toggle_);
         updates_auto_toggle_->setOn(on);
     }
+}
+
+void ConfigPage::setUpdateChannel(const QString& channel) {
+    if (!updates_channel_combo_)
+        return;
+    const int idx = updates_channel_combo_->findText(channel, Qt::MatchFixedString);
+    QSignalBlocker block(updates_channel_combo_);
+    updates_channel_combo_->setCurrentIndex(idx >= 0 ? idx : 0); // unknown value -> Stable
 }
 
 // ADR 0034 Phase A: render the live Updates-card state. Driven by MainWindow

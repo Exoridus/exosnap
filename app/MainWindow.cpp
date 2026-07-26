@@ -4808,6 +4808,19 @@ void MainWindow::buildConfigPage() {
     // ---- Audio rescan, update card, present-diagnostics opt-in, webcam-panel rescan ----
     connect(config_page_, &ConfigPage::audioRescanRequested, &audio_notifier_, &AudioDeviceNotifier::rescan);
     config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
+    config_page_->setUpdateChannel(persisted_settings_.update_channel);
+    connect(config_page_, &ConfigPage::channelChanged, this, [this](const QString& channel) {
+        persisted_settings_.update_channel = channel;
+        settings_store_.Save(persisted_settings_);
+        if (update_service_)
+            update_service_->SetChannel(UpdateChannelFromString(channel));
+        // Keep the hidden About-panel shim and the About page's channel metadata
+        // row in sync (both still read persisted_settings_.update_channel elsewhere).
+        if (about_page_)
+            about_page_->setChannelHint(channel);
+        // Channel applies immediately: re-check on the new channel (guarded).
+        triggerUpdateCheck();
+    });
     connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
         manual_update_check_ = true;
         // Recovery: a user-initiated check clears any persisted "Restart pending"

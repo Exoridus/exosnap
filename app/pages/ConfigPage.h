@@ -192,6 +192,9 @@ class ConfigPage : public QWidget {
     // Seeds the "Check for updates automatically" toggle from persisted settings
     // (no signal emitted).
     void setAutoUpdateCheck(bool on);
+    // Seeds the update-channel dropdown ("Stable" | "Preview") from persisted
+    // settings. No signal emitted.
+    void setUpdateChannel(const QString& channel);
 
     // Reactive device-change handlers (driven by MainWindow from the three notifiers).
     // These preserve selection state and never emit settings-changed or dirty the preset.
@@ -235,6 +238,9 @@ class ConfigPage : public QWidget {
     void whatsNewRequested();
     // "Check for updates automatically" toggle changed.
     void autoUpdateCheckToggled(bool enabled);
+    // Update-channel dropdown changed ("Stable" | "Preview"). MainWindow persists
+    // the value, re-points UpdateService at the new channel, and re-checks.
+    void channelChanged(const QString& channel);
 
     // SETTINGS-TIERS-P3: presence + appearance signals (moved from AdvancedPage).
     void showOverlayChanged(bool show);
@@ -577,6 +583,7 @@ class ConfigPage : public QWidget {
     QWidget* updates_panel_ = nullptr;
     // ADR 0034 Phase A: live Updates-card controls.
     ui::widgets::ExoToggle* updates_auto_toggle_ = nullptr;
+    QComboBox* updates_channel_combo_ = nullptr; // "Stable" | "Preview"
     QLabel* updates_status_label_ = nullptr;
     QPushButton* updates_action_btn_ = nullptr;
     QPushButton* updates_whats_new_link_ = nullptr; // WHATS-NEW: "What's new in vX.Y" (available only)

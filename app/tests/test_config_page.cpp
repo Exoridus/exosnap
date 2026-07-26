@@ -825,16 +825,63 @@ TEST_F(ConfigPageTest, UpdatesCard_IsPresent) {
     ASSERT_NE(updates_card, nullptr) << "settingsUpdatesCard must exist";
     EXPECT_FALSE(updates_card->isHidden()) << "Updates card must not be explicitly hidden by default";
 
-    // ADR 0034: the slim card has an auto-check toggle + a status action button
-    // (the unplanned Update-channel combo was removed).
+    // ADR 0034: an auto-check toggle + a status action button.
     auto* auto_toggle = page.findChild<QWidget*>(QStringLiteral("updatesAutoCheckToggle"));
     EXPECT_NE(auto_toggle, nullptr) << "updatesAutoCheckToggle must exist";
 
     auto* action_btn = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
     EXPECT_NE(action_btn, nullptr) << "updatesActionButton must exist";
 
+    // UPDATE-WIRE-R1: the Stable/Preview channel dropdown lives here too, so the
+    // real UpdateChannel logic (already wired end-to-end via UpdateService and
+    // release_locator's own GitHub `prerelease` check) is actually reachable —
+    // previously only a hidden About-overlay shim could set it.
     auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
-    EXPECT_EQ(channel_combo, nullptr) << "Update-channel combo must be gone (slim card)";
+    ASSERT_NE(channel_combo, nullptr) << "updatesChannelCombo must exist";
+    EXPECT_EQ(channel_combo->currentText(), QStringLiteral("Stable")) << "Stable must be the default channel";
+    EXPECT_EQ(channel_combo->count(), 2);
+    EXPECT_EQ(channel_combo->itemText(0), QStringLiteral("Stable"));
+    EXPECT_EQ(channel_combo->itemText(1), QStringLiteral("Preview"));
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_ChannelCombo_SetUpdateChannelSeedsWithoutSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    int emit_count = 0;
+    QObject::connect(&page, &ConfigPage::channelChanged, [&]() { ++emit_count; });
+
+    page.setUpdateChannel(QStringLiteral("Preview"));
+
+    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
+    ASSERT_NE(channel_combo, nullptr);
+    EXPECT_EQ(channel_combo->currentText(), QStringLiteral("Preview"));
+    EXPECT_EQ(emit_count, 0) << "setUpdateChannel is a seed, not a user action — it must not emit";
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_ChannelCombo_UnknownValueFallsBackToStable) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setUpdateChannel(QStringLiteral("bogus"));
+
+    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
+    ASSERT_NE(channel_combo, nullptr);
+    EXPECT_EQ(channel_combo->currentText(), QStringLiteral("Stable"));
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_ChannelCombo_UserSelectionEmitsChannelChanged) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    QString last_channel;
+    int emit_count = 0;
+    QObject::connect(&page, &ConfigPage::channelChanged, [&](const QString& channel) {
+        ++emit_count;
+        last_channel = channel;
+    });
+
+    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
+    ASSERT_NE(channel_combo, nullptr);
+    channel_combo->setCurrentText(QStringLiteral("Preview"));
+
+    EXPECT_EQ(emit_count, 1);
+    EXPECT_EQ(last_channel, QStringLiteral("Preview"));
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
