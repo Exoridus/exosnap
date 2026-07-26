@@ -142,9 +142,9 @@ class ConfigPage : public QWidget {
     void applyVisualHdrDisplayPresent(bool present);
 
     // Settings/Diagnostics polish, Slice 3 (cogwheels -> inline): open/close the
-    // Audio expert card's mic post-processing chevron disclosure so its four DSP
-    // stage rows render deterministically for visual-test scenarios. No-op if the
-    // audio-expert subtree isn't built yet (caller must enable expert mode first).
+    // Audio card's mic post-processing chevron disclosure so its four DSP stage
+    // rows render deterministically for visual-test scenarios. The group is
+    // Default-tier, so no expert-mode prelude is required.
     void applyVisualMicPostProcessingExpanded(bool expanded);
 
     // Force the Output card into a Custom-resolution state with (intentionally
@@ -363,6 +363,10 @@ class ConfigPage : public QWidget {
     void emitCurrentAudioSettings();
     // Update codec-gated visibility for the four ADR 0030 audio format controls.
     void updateAudioFormatControlVisibility();
+    // Re-seed every audio settings control (Default + Expert tier) from
+    // audio_ui_state_. All accesses are null-guarded, so it is safe to call
+    // before the lazy Expert subtree exists.
+    void seedAudioControlsFromState();
 
     // Preset management handlers.
     void onSavePresetAs();
@@ -370,8 +374,12 @@ class ConfigPage : public QWidget {
     void onDeletePreset();
     void updatePresetActionState();
     void updateExpertModeVisibility();
-    // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
-    // (eager-then-hidden cost kept off the default ConfigPage construction path).
+    // Everyday audio controls (mic channel mode, bitrate, channels, bit depth,
+    // FLAC compression, mic gain, brickwall limiter, mic post-processing) — built
+    // eagerly from the constructor because they are Default-tier.
+    void buildAudioDefaultSettingsSection();
+    // Startup-perf: builds the Expert audio subtree (Opus frame duration, Opus
+    // complexity, sample rate, audio clock slaving) on first expert-enable.
     void buildAudioExpertSection();
     void buildSplitExpertSection();
     void buildDeveloperCard();
@@ -652,9 +660,18 @@ class ConfigPage : public QWidget {
     // Keyframe interval (0.9.0 S1): 2 s / 1 s / 0.5 s. Expert only.
     QComboBox* keyframe_interval_combo_ = nullptr;
 
-    // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
-    // Lazily built on first expert-enable (see buildAudioExpertSection); built_ guards
-    // against rebuilds, insert_index_ records its slot in the audio panel layout.
+    // Default Audio settings section — mic channel mode, bitrate, channels, bit
+    // depth, FLAC compression, mic gain, brickwall limiter, mic post-processing.
+    // Built eagerly (Default tier) by buildAudioDefaultSettingsSection().
+    QWidget* audio_default_section_ = nullptr;
+    // True while the App row is "live" (a specific window is the capture target).
+    // Gates the App meter so a receded row never shows a level.
+    bool app_row_active_ = false;
+
+    // PS-PHASE-C: Expert Audio section — Opus frame duration/complexity, sample
+    // rate, audio clock slaving. Lazily built on first expert-enable (see
+    // buildAudioExpertSection); built_ guards against rebuilds, insert_index_
+    // records its slot in the audio panel layout.
     QWidget* audio_expert_section_ = nullptr;
     bool audio_expert_built_ = false;
     int audio_expert_insert_index_ = -1;

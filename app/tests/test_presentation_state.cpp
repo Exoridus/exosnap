@@ -30,50 +30,41 @@ capability::AudioUiState MakeWindowState(bool app_enabled = true, bool sys_enabl
 }
 
 // ---------------------------------------------------------------------------
-// Test: target-kind → visibility
+// Test: target-kind → App row recession
 // ---------------------------------------------------------------------------
 
-TEST(PresentationStateBuilderTest, DisplayTarget_AppHidden) {
-    // Test 1 / 9: Display target hides App audio row. `visible` is still the
-    // field ConfigPage::setVisible consumes (Task 6 ports it to `active`); the
-    // new `active` field carries the same window-scoped signal in the interim.
+TEST(PresentationStateBuilderTest, DisplayTarget_AppReceded) {
+    // Test 1 / 9: every audio row is permanently present; a Display target only
+    // makes the App row recede, which `active` carries.
     const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
-    EXPECT_FALSE(snap.app.visible);
     EXPECT_FALSE(snap.app.active);
 }
 
-TEST(PresentationStateBuilderTest, DisplayTarget_SysAndMicVisible) {
-    // Test 1: Display target shows Computer audio and Mic.
-    const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
-    EXPECT_TRUE(snap.system.visible);
-    EXPECT_TRUE(snap.mic.visible);
-}
-
-TEST(PresentationStateBuilderTest, WindowTarget_AppVisible) {
-    // Test 8: Window target makes App visible (and active).
+TEST(PresentationStateBuilderTest, WindowTarget_AppAvailable) {
+    // Test 8: Window target makes App live (active) and available.
     const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeWindowState(), false);
-    EXPECT_TRUE(snap.app.visible);
+    EXPECT_TRUE(snap.app.active);
     EXPECT_TRUE(snap.app.available);
 }
 
 TEST(PresentationStateBuilderTest, AppActive_TracksWindowTarget) {
-    // app.active is the target-kind-derived field the ConfigPage will consume
-    // (Task 6) to render the App row receded vs. live. Until that port lands,
-    // it is intentionally identical to `visible` (both window-scoped).
+    // app.active is the target-kind-derived field the ConfigPage consumes to
+    // render the App row receded vs. live.
     const auto snap_display = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
-    EXPECT_FALSE(snap_display.app.visible);
     EXPECT_FALSE(snap_display.app.active);
 
     const auto snap_window = PresentationStateBuilder::BuildAudioConfiguration(MakeWindowState(), false);
-    EXPECT_TRUE(snap_window.app.visible);
     EXPECT_TRUE(snap_window.app.active);
 }
 
-TEST(PresentationStateBuilderTest, WindowTarget_SysAndMicVisible) {
-    // Test 2: Window target shows Application audio, Other system audio, and Mic.
-    const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeWindowState(), false);
-    EXPECT_TRUE(snap.system.visible);
-    EXPECT_TRUE(snap.mic.visible);
+TEST(PresentationStateBuilderTest, SysAndMic_AreNeverReceded) {
+    // Sys and Mic are always live rows — `active` is an App-row concept only.
+    const auto display_snap = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
+    const auto window_snap = PresentationStateBuilder::BuildAudioConfiguration(MakeWindowState(), false);
+    EXPECT_TRUE(display_snap.system.available);
+    EXPECT_TRUE(display_snap.mic.available);
+    EXPECT_TRUE(window_snap.system.available);
+    EXPECT_TRUE(window_snap.mic.available);
 }
 
 TEST(PresentationStateBuilderTest, DisplayTarget_AppNotAvailable) {
@@ -159,16 +150,16 @@ TEST(PresentationStateBuilderTest, MeterUpdateCannotMakeUnavailableAppAvailable)
 // Test: per-source invariant
 // ---------------------------------------------------------------------------
 
-TEST(PresentationStateBuilderTest, ControlsEnabledInvariant_VisibleAndAvailableAndNotLocked) {
-    // Verify the invariant: controls_enabled = visible && available && !locked
+TEST(PresentationStateBuilderTest, ControlsEnabledInvariant_AvailableAndNotLocked) {
+    // Verify the invariant: controls_enabled = available && !locked
     // for each of the three sources.
     const auto state = MakeWindowState(true, true, true);
 
     for (bool locked : {false, true}) {
         const auto snap = PresentationStateBuilder::BuildAudioConfiguration(state, locked);
-        EXPECT_EQ(snap.app.controls_enabled, snap.app.visible && snap.app.available && !locked);
-        EXPECT_EQ(snap.system.controls_enabled, snap.system.visible && snap.system.available && !locked);
-        EXPECT_EQ(snap.mic.controls_enabled, snap.mic.visible && snap.mic.available && !locked);
+        EXPECT_EQ(snap.app.controls_enabled, snap.app.available && !locked);
+        EXPECT_EQ(snap.system.controls_enabled, snap.system.available && !locked);
+        EXPECT_EQ(snap.mic.controls_enabled, snap.mic.available && !locked);
     }
 }
 
@@ -184,7 +175,7 @@ TEST(PresentationStateBuilderTest, MicSurvivesTargetChange_DisplayToWindow) {
     s.source_rows.push_back({recorder_core::AudioSourceKind::Mic, true, false});
 
     const auto snap_display = PresentationStateBuilder::BuildAudioConfiguration(s, false);
-    EXPECT_TRUE(snap_display.mic.visible);
+    EXPECT_TRUE(snap_display.mic.available);
     EXPECT_TRUE(snap_display.mic.enabled);
 
     s.target_kind = capability::CaptureTargetKind::Window;
@@ -194,7 +185,7 @@ TEST(PresentationStateBuilderTest, MicSurvivesTargetChange_DisplayToWindow) {
     s.source_rows.push_back({recorder_core::AudioSourceKind::Mic, true, false}); // mic ON persists
 
     const auto snap_window = PresentationStateBuilder::BuildAudioConfiguration(s, false);
-    EXPECT_TRUE(snap_window.mic.visible);
+    EXPECT_TRUE(snap_window.mic.available);
     EXPECT_TRUE(snap_window.mic.enabled);
 }
 
@@ -250,9 +241,9 @@ TEST(PresentationStateBuilderTest, DifferentTarget_NotEquals) {
 // ---------------------------------------------------------------------------
 
 TEST(PresentationStateBuilderTest, NoDuplicateAppRow_DisplayTarget) {
-    // Test 13: Display target — App row NOT in plan and not visible.
+    // Test 13: Display target — App row NOT in plan, so the row is receded.
     const auto snap = PresentationStateBuilder::BuildAudioConfiguration(MakeDisplayState(), false);
-    EXPECT_FALSE(snap.app.visible);
+    EXPECT_FALSE(snap.app.active);
     EXPECT_FALSE(snap.app.available);
 }
 
@@ -316,7 +307,7 @@ TEST(PresentationStateBuilderTest, AudioMeterSnapshot_IsIndependentOfStructure) 
 
 TEST(AudioSourcePresentationStateTest, EqualityOperator) {
     AudioSourcePresentationState a;
-    a.visible = true;
+    a.active = true;
     a.available = true;
     a.enabled = true;
     a.controls_enabled = true;

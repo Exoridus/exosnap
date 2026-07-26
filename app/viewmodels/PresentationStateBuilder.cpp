@@ -23,14 +23,12 @@ const recorder_core::AudioSourceRow* FindRow(const capability::AudioUiState& sta
     return nullptr;
 }
 
-AudioSourcePresentationState DeriveSource(const recorder_core::AudioSourceRow* row, bool visible,
-                                          bool controls_locked) {
+AudioSourcePresentationState DeriveSource(const recorder_core::AudioSourceRow* row, bool controls_locked) {
     AudioSourcePresentationState s;
-    s.visible = visible;
     s.available = (row != nullptr);
     s.enabled = row ? row->enabled : false;
-    // Required invariant: controls_enabled = visible && available && !controls_locked
-    s.controls_enabled = s.visible && s.available && !controls_locked;
+    // Required invariant: controls_enabled = available && !controls_locked
+    s.controls_enabled = s.available && !controls_locked;
     s.separate_track = row ? !row->merge_with_above : false;
     return s;
 }
@@ -49,18 +47,18 @@ PresentationStateBuilder::BuildAudioConfiguration(const capability::AudioUiState
     snap.target_kind = audio_state.target_kind;
     snap.controls_locked = controls_locked;
 
-    // App visibility is unchanged (target-kind policy) — ConfigPage::setVisible
-    // still consumes `visible` directly and has not been ported to `active` yet
-    // (Task 6). `active` is the new field carrying the same window-scoped signal
-    // for the future consumer; today the two are intentionally identical.
-    snap.app = DeriveSource(app_row, /*visible=*/is_window, controls_locked);
+    // The App row is permanently present; it is "live" only while a specific
+    // application window is the capture target, and recedes otherwise.
+    snap.app = DeriveSource(app_row, controls_locked);
     snap.app.active = is_window;
 
-    // Sys is always visible (relabelled per target kind in the consumer).
-    snap.system = DeriveSource(sys_row, /*visible=*/true, controls_locked);
+    // Sys is always live (relabelled per target kind in the consumer).
+    snap.system = DeriveSource(sys_row, controls_locked);
+    snap.system.active = true;
 
-    // Mic is always visible.
-    snap.mic = DeriveSource(mic_row, /*visible=*/true, controls_locked);
+    // Mic is always live.
+    snap.mic = DeriveSource(mic_row, controls_locked);
+    snap.mic.active = true;
 
     snap.selected_mic_device_id = audio_state.selected_mic_device_id;
 

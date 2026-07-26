@@ -95,7 +95,7 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Color range | Limited |
 | Cursor capture | On |
 | Countdown | 0 seconds (selectable 0/3/5/10) |
-| Audio source rows | Order is `APP`, `SYS`, `MIC`. Which rows exist depends on the capture target: an `APP` row exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
+| Audio source rows | Order is `APP`, `SYS`, `MIC`. The Settings **Audio** card always lists all three rows: the `APP` row is a persisted setting that recedes (inactive meter, explanatory line "Takes effect while a specific application window is the capture target.") whenever a window is not the capture target, and it carries no **Merge with above** control because it is the first row. Which sources enter the recording plan still depends on the capture target — an `APP` source exists only while a specific application window is being captured. For screen capture the shipped default is `SYS` enabled and `MIC` present but off. |
 | Resulting tracks | Each enabled source is a separate resulting track unless merged with the row above |
 | Webcam | Off |
 

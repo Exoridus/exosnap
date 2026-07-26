@@ -14,15 +14,17 @@ namespace exosnap {
 // All fields are pre-computed — no widget need perform its own derivation.
 
 struct AudioSourcePresentationState {
-    bool visible = false;          // Row is shown (always true; kept for older callers)
+    // Every source row is permanently present in the Audio card; there is no
+    // per-row visibility signal any more. `active` distinguishes a live row
+    // from a receded one (App row only: it applies to Window targets).
     bool active = false;           // Row is "live" for the current target (vs. receded); App-row only
     bool available = false;        // Source is present in the audio plan
     bool enabled = false;          // User's toggle state (from AudioSourceRow)
-    bool controls_enabled = false; // Final: visible && available && !controls_locked
+    bool controls_enabled = false; // Final: available && !controls_locked
     bool separate_track = false;   // "Separate track" / !merge_with_above
 
     [[nodiscard]] bool operator==(const AudioSourcePresentationState& o) const noexcept {
-        return visible == o.visible && active == o.active && available == o.available && enabled == o.enabled &&
+        return active == o.active && available == o.available && enabled == o.enabled &&
                controls_enabled == o.controls_enabled && separate_track == o.separate_track;
     }
     [[nodiscard]] bool operator!=(const AudioSourcePresentationState& o) const noexcept {

@@ -485,13 +485,62 @@ TEST_F(SettingsTiersTest, ConfigPage_AudioExpertSection_VisibleInExpertMode) {
 TEST_F(SettingsTiersTest, ConfigPage_AudioExpertControls_Exist) {
     ConfigPage page(output_defaults_, video_defaults_);
     page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
-    // Polish-R1: mic gain is now a QSlider (micGainSlider) + read-only QLabel (micGainDbLabel).
-    EXPECT_NE(page.findChild<QSlider*>(QStringLiteral("micGainSlider")), nullptr);
+    // The Expert audio subtree keeps only the four genuinely expert rows; the
+    // everyday mic/format controls live in the eager Default section.
+    auto* section = page.findChild<QWidget*>(QStringLiteral("audioExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_NE(section->findChild<QComboBox*>(QStringLiteral("opusFrameDurationCombo")), nullptr);
+    EXPECT_NE(section->findChild<QSpinBox*>(QStringLiteral("opusComplexitySpin")), nullptr);
+    EXPECT_NE(section->findChild<QComboBox*>(QStringLiteral("audioSampleRateCombo")), nullptr);
+    EXPECT_NE(section->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("clockSlavingCheck")), nullptr);
+
+    // The Default-tier controls must NOT be part of the expert subtree any more.
+    EXPECT_EQ(section->findChild<QSlider*>(QStringLiteral("micGainSlider")), nullptr);
+    EXPECT_EQ(section->findChild<QComboBox*>(QStringLiteral("micChannelModeCombo")), nullptr);
+    EXPECT_EQ(section->findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin")), nullptr);
+    EXPECT_EQ(section->findChild<QComboBox*>(QStringLiteral("audioChannelsCombo")), nullptr);
+    EXPECT_EQ(section->findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck")), nullptr);
+    EXPECT_EQ(section->findChild<QWidget*>(QStringLiteral("micPostProcessingHeader")), nullptr);
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioDefaultControls_VisibleWithoutExpert) {
+    // No setExpertModeEnabled() call: the everyday audio controls are built
+    // eagerly and are visible in the Default tier.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* mic_channel = page.findChild<QComboBox*>(QStringLiteral("micChannelModeCombo"));
+    auto* bitrate = page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin"));
+    auto* channels = page.findChild<QComboBox*>(QStringLiteral("audioChannelsCombo"));
+    auto* mic_gain = page.findChild<QSlider*>(QStringLiteral("micGainSlider"));
+    auto* limiter = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck"));
+    auto* mic_post = page.findChild<QWidget*>(QStringLiteral("micPostProcessingHeader"));
+
+    ASSERT_NE(mic_channel, nullptr);
+    ASSERT_NE(bitrate, nullptr);
+    ASSERT_NE(channels, nullptr);
+    ASSERT_NE(mic_gain, nullptr);
+    ASSERT_NE(limiter, nullptr);
+    ASSERT_NE(mic_post, nullptr);
+
+    EXPECT_FALSE(mic_channel->isHidden());
+    EXPECT_FALSE(bitrate->isHidden());
+    EXPECT_FALSE(channels->isHidden());
+    EXPECT_FALSE(mic_gain->isHidden());
+    EXPECT_FALSE(limiter->isHidden());
+    EXPECT_FALSE(mic_post->isHidden());
     EXPECT_NE(page.findChild<QLabel*>(QStringLiteral("micGainDbLabel")), nullptr);
-    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("micChannelModeCombo")), nullptr);
-    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin")), nullptr);
-    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("opusFrameDurationCombo")), nullptr);
-    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("opusComplexitySpin")), nullptr);
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_MicGainSliderSpansSharedControlWidth) {
+    // Track + value label must add up to the shared 160 px settings-row control
+    // width (116 + 4 px row spacing + 40).
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* slider = page.findChild<QSlider*>(QStringLiteral("micGainSlider"));
+    auto* db_label = page.findChild<QLabel*>(QStringLiteral("micGainDbLabel"));
+    ASSERT_NE(slider, nullptr);
+    ASSERT_NE(db_label, nullptr);
+    EXPECT_EQ(slider->width(), 116);
+    EXPECT_EQ(db_label->width(), 40);
 }
 
 } // namespace

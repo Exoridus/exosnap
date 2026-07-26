@@ -108,6 +108,15 @@ class ConfigPageTest : public ::testing::Test {
         return (section != nullptr) && !section->isHidden();
     }
 
+    // The APP row is a permanent row: instead of disappearing for non-Window
+    // targets it recedes, which the row's explanatory label announces.
+    static bool AppRowReceded(const ConfigPage& page) {
+        const auto* label = page.findChild<QLabel*>(QStringLiteral("settingsAudioAppSourceLabel"));
+        return (label != nullptr) &&
+               label->text() ==
+                   QStringLiteral("Takes effect while a specific application window is the capture target.");
+    }
+
     OutputSettingsModel output_defaults_;
     VideoSettingsModel video_defaults_;
 };
@@ -1048,6 +1057,14 @@ TEST_F(ConfigPageTest, SetAudioMeterLevels_SysActiveDoesNotModifyAppOrMic) {
 TEST_F(ConfigPageTest, SetAudioMeterLevels_AppActiveDoesNotModifySystemOrMic) {
     ConfigPage page(output_defaults_, video_defaults_);
 
+    // A receded App row never shows a level, so the row must be live first.
+    capability::AudioUiState window_state;
+    window_state.target_kind = capability::CaptureTargetKind::Window;
+    window_state.source_rows = {{recorder_core::AudioSourceKind::App, true, false},
+                                {recorder_core::AudioSourceKind::Sys, false, false},
+                                {recorder_core::AudioSourceKind::Mic, false, false}};
+    page.setAudioUiState(window_state);
+
     page.setAudioMeterLevels(0.0f, 0.7f, 0.0f, /*sys_active=*/false, /*app_active=*/true,
                              /*mic_active=*/false);
 
@@ -1184,7 +1201,7 @@ TEST_F(ConfigPageTest, SetAudioUiState_WindowWithAppRow_EnablesAppCheckbox) {
     EXPECT_TRUE(app_check->isChecked());
 }
 
-TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_HidesAppSection) {
+TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_RecedesAppSection) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     capability::AudioUiState state;
@@ -1195,7 +1212,21 @@ TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_HidesAppSection) {
     };
     page.setAudioUiState(state);
 
-    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    // The APP row is a permanent row now: for a Display target it recedes
+    // (explanatory text + inactive meter) instead of disappearing.
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section stays visible for Display target";
+
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_TRUE(app_check->isEnabled()) << "App checkbox stays interactable while not recording-locked";
+
+    auto* app_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    ASSERT_NE(app_meter, nullptr);
+    EXPECT_FALSE(app_meter->isActive()) << "The receded App row must not show a live meter";
+
+    EXPECT_TRUE(
+        HasLabelText(page, QStringLiteral("Takes effect while a specific application window is the capture target.")))
+        << "The receded App row must explain when it applies";
 }
 
 TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_SysLabelIsComputerAudio) {
@@ -1212,7 +1243,8 @@ TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_SysLabelIsComputerAudio) {
     auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
     ASSERT_NE(sys_check, nullptr);
     EXPECT_EQ(sys_check->text(), QStringLiteral("Computer audio"));
-    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section stays visible for Display target";
+    EXPECT_TRUE(AppRowReceded(page)) << "App row must recede for Display target";
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
 }
 
@@ -1249,7 +1281,8 @@ TEST_F(ConfigPageTest, AudioPolicy_DisplayMode_ShowsComputerAudioPlusmic) {
 
     EXPECT_TRUE(HasCheckText(page, QStringLiteral("Computer audio")));
     EXPECT_FALSE(HasCheckText(page, QStringLiteral("Other system audio")));
-    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section stays visible for Display target";
+    EXPECT_TRUE(AppRowReceded(page)) << "App row must recede for Display target";
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
 }
 
@@ -1280,7 +1313,8 @@ TEST_F(ConfigPageTest, AudioPolicy_DisplayToWindow_AppSectionBecomesVisible) {
     display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
                                  {recorder_core::AudioSourceKind::Mic, false, false}};
     page.setAudioUiState(display_state);
-    EXPECT_FALSE(AppSectionVisible(page));
+    EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_TRUE(AppRowReceded(page));
 
     capability::AudioUiState window_state;
     window_state.target_kind = capability::CaptureTargetKind::Window;
@@ -1289,9 +1323,10 @@ TEST_F(ConfigPageTest, AudioPolicy_DisplayToWindow_AppSectionBecomesVisible) {
                                 {recorder_core::AudioSourceKind::Sys, false, false}};
     page.setAudioUiState(window_state);
     EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_FALSE(AppRowReceded(page)) << "Window target makes the App row live again";
 }
 
-TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionHides) {
+TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionRecedes) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     capability::AudioUiState window_state;
@@ -1301,13 +1336,15 @@ TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionHides) {
                                 {recorder_core::AudioSourceKind::Sys, false, false}};
     page.setAudioUiState(window_state);
     EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_FALSE(AppRowReceded(page));
 
     capability::AudioUiState display_state;
     display_state.target_kind = capability::CaptureTargetKind::Display;
     display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
                                  {recorder_core::AudioSourceKind::Mic, false, false}};
     page.setAudioUiState(display_state);
-    EXPECT_FALSE(AppSectionVisible(page));
+    EXPECT_TRUE(AppSectionVisible(page)) << "The App row stays; it only recedes";
+    EXPECT_TRUE(AppRowReceded(page));
 }
 
 TEST_F(ConfigPageTest, AudioPolicy_AppMeterInactiveForDisplayMode) {
@@ -1423,34 +1460,36 @@ TEST_F(ConfigPageTest, LockOrderInvariant_UnlockRestoresControls) {
     EXPECT_TRUE(app_check->isEnabled()) << "After unlock, App checkbox must be re-enabled for Window target";
 }
 
-TEST_F(ConfigPageTest, LockOrderInvariant_DisplayTarget_AppCheckAlwaysDisabledRegardlessOfLock) {
-    // Test 23/27: Display target — App check is always disabled (not visible/available),
-    // regardless of lock state.
+TEST_F(ConfigPageTest, LockOrderInvariant_DisplayTarget_AppCheckEnabledUnlessLocked) {
+    // The APP row is permanent: for a Display target it recedes but stays
+    // interactable, so only the recording lock disables its checkbox.
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeDisplayAudioState());
 
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
-    EXPECT_FALSE(app_check->isEnabled()) << "Display target: App checkbox must be disabled (not available)";
+    EXPECT_TRUE(app_check->isEnabled()) << "Display target: App checkbox stays interactable";
 
     page.setRecordingControlsLocked(true);
-    EXPECT_FALSE(app_check->isEnabled()) << "Display target + lock: App checkbox must still be disabled";
+    EXPECT_FALSE(app_check->isEnabled()) << "Display target + lock: App checkbox must be disabled";
 
     page.setRecordingControlsLocked(false);
-    EXPECT_FALSE(app_check->isEnabled()) << "Display target + unlock: App checkbox must stay disabled (no App row)";
+    EXPECT_TRUE(app_check->isEnabled()) << "Display target + unlock: App checkbox must be interactable again";
 }
 
-TEST_F(ConfigPageTest, AudioState_OneSnapshotDeterminesRowVisibility) {
-    // Test 23: One audio snapshot fully determines row visibility.
-    // Window target → App section visible; Display target → App section hidden.
+TEST_F(ConfigPageTest, AudioState_OneSnapshotDeterminesRowRecession) {
+    // Test 23: One audio snapshot fully determines row presentation.
+    // Window target → App row live; Display target → App row receded (still shown).
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeWindowAudioState());
     EXPECT_TRUE(AppSectionVisible(page)) << "Window target: App section must be visible";
+    EXPECT_FALSE(AppRowReceded(page)) << "Window target: App row is live";
 
     page.setAudioUiState(MakeDisplayAudioState());
-    EXPECT_FALSE(AppSectionVisible(page)) << "Display target: App section must be hidden";
+    EXPECT_TRUE(AppSectionVisible(page)) << "Display target: App section stays visible";
+    EXPECT_TRUE(AppRowReceded(page)) << "Display target: App row recedes";
 }
 
 TEST_F(ConfigPageTest, AudioState_TargetSwitch_UpdatesSettingsImmediately) {
@@ -1459,15 +1498,16 @@ TEST_F(ConfigPageTest, AudioState_TargetSwitch_UpdatesSettingsImmediately) {
 
     // Start with Window.
     page.setAudioUiState(MakeWindowAudioState());
-    EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_FALSE(AppRowReceded(page));
 
     // Switch to Display.
     page.setAudioUiState(MakeDisplayAudioState());
-    EXPECT_FALSE(AppSectionVisible(page)) << "After switching to Display, App section must disappear immediately";
+    EXPECT_TRUE(AppRowReceded(page)) << "After switching to Display, the App row must recede immediately";
 }
 
 TEST_F(ConfigPageTest, AudioState_NoStaleAppRow_AfterWindowToDisplay) {
-    // Test 27: No stale App row after Window → Display switch.
+    // Test 27: No stale App state after Window → Display switch — the row
+    // recedes (explanatory text, inactive meter) instead of disappearing.
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeWindowAudioState());
@@ -1475,8 +1515,13 @@ TEST_F(ConfigPageTest, AudioState_NoStaleAppRow_AfterWindowToDisplay) {
 
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
-    // App section hidden → the check is either hidden or disabled.
-    EXPECT_FALSE(app_check->isEnabled()) << "After Window → Display switch, App checkbox must not be enabled";
+    EXPECT_TRUE(AppSectionVisible(page));
+    EXPECT_TRUE(AppRowReceded(page)) << "After Window → Display switch, the App row must read as receded";
+    EXPECT_TRUE(app_check->isEnabled()) << "…but it stays interactable while not recording-locked";
+
+    auto* app_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    ASSERT_NE(app_meter, nullptr);
+    EXPECT_FALSE(app_meter->isActive()) << "A receded App row must not keep a live meter";
 }
 
 TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
@@ -1484,10 +1529,11 @@ TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     page.setAudioUiState(MakeDisplayAudioState());
-    EXPECT_FALSE(AppSectionVisible(page));
+    EXPECT_TRUE(AppRowReceded(page));
 
     page.setAudioUiState(MakeWindowAudioState());
     EXPECT_TRUE(AppSectionVisible(page)) << "After Display → Window switch, App section must appear";
+    EXPECT_FALSE(AppRowReceded(page)) << "After Display → Window switch, the App row is live";
 
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
@@ -2201,8 +2247,8 @@ TEST_F(ConfigPageTest, BrickwallLimiter_CeilingSpinVisibilityTracksToggle) {
 // Microphone post-processing: the disclosure starts collapsed (stage rows hidden)
 // and expanding it via the chevron button reveals the four stage controls in place.
 TEST_F(ConfigPageTest, MicPostProcessing_DisclosureStartsCollapsedAndExpands) {
+    // The mic post-processing group lives in the Default tier — no expert prelude.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
 
     auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
     auto* content = page.findChild<QWidget*>(QStringLiteral("micPostProcessingContent"));
@@ -2228,8 +2274,8 @@ TEST_F(ConfigPageTest, MicPostProcessing_DisclosureStartsCollapsedAndExpands) {
 // The mic post-processing header shows a live "Off" / active-stage-list status,
 // independent of whether the disclosure is expanded.
 TEST_F(ConfigPageTest, MicPostProcessing_HeaderStatusReflectsActiveStages) {
+    // Default tier — no expert prelude.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
 
     auto* status = page.findChild<QLabel*>(QStringLiteral("micPostProcessingStatus"));
     auto* hpf = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck"));
@@ -2240,6 +2286,40 @@ TEST_F(ConfigPageTest, MicPostProcessing_HeaderStatusReflectsActiveStages) {
 
     hpf->setChecked(true);
     EXPECT_EQ(status->text(), QStringLiteral("High-pass")) << "status label must reflect the enabled HPF stage";
+}
+
+// A stage's numeric parameter row is only shown while that stage is switched on.
+TEST_F(ConfigPageTest, MicPostProcessing_ParamRowsOnlyWhileStageOn) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* disclosure = page.findChild<QToolButton*>(QStringLiteral("micPostProcessingDisclosure"));
+    auto* gate_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micGateCheck"));
+    auto* gate_spin = page.findChild<QDoubleSpinBox*>(QStringLiteral("micGateThresholdSpin"));
+    ASSERT_NE(disclosure, nullptr);
+    ASSERT_NE(gate_check, nullptr);
+    ASSERT_NE(gate_spin, nullptr);
+
+    disclosure->setChecked(true); // expand, so only the stage gate can hide the row
+    ASSERT_FALSE(gate_check->isChecked()) << "the noise gate defaults off";
+
+    auto* gate_param_row = gate_spin->parentWidget();
+    ASSERT_NE(gate_param_row, nullptr);
+    EXPECT_TRUE(gate_param_row->isHidden()) << "the threshold row is hidden while the gate is off";
+
+    gate_check->setChecked(true);
+    EXPECT_FALSE(gate_param_row->isHidden()) << "turning the gate on reveals its threshold row";
+
+    gate_check->setChecked(false);
+    EXPECT_TRUE(gate_param_row->isHidden()) << "turning the gate off hides its threshold row again";
+}
+
+// The AGC stage is labelled with the short, scannable acronym.
+TEST_F(ConfigPageTest, MicPostProcessing_AgcStageUsesShortLabel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* agc = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micAgcCheck"));
+    ASSERT_NE(agc, nullptr);
+    EXPECT_EQ(agc->text(), QStringLiteral("AGC"));
 }
 
 // Audio clock slaving keeps its explanatory info-i even as a plain inline row (a
@@ -3097,6 +3177,32 @@ TEST_F(ConfigPageTest, SettingsAudio_MergeControlUsesDocumentedLabel) {
     // The old inverted "Separate track" label must be gone.
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Separate track")))
         << "The inverted 'Separate track' label must no longer appear";
+}
+
+// APP is the first listed source, so it has no row "above" to merge into: its
+// merge cluster is hidden while SYS and MIC keep theirs.
+TEST_F(ConfigPageTest, SettingsAudio_AppRowHasNoMergeCluster) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Window;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Sys, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+    };
+    page.setAudioUiState(state);
+
+    auto* app_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioAppMerge"));
+    auto* sys_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioSysMerge"));
+    auto* mic_merge = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("settingsAudioMicMerge"));
+    ASSERT_NE(app_merge, nullptr);
+    ASSERT_NE(sys_merge, nullptr);
+    ASSERT_NE(mic_merge, nullptr);
+
+    EXPECT_TRUE(app_merge->isHidden()) << "the first source row has no 'Merge with above' control";
+    EXPECT_FALSE(sys_merge->isHidden());
+    EXPECT_FALSE(mic_merge->isHidden());
 }
 
 TEST_F(ConfigPageTest, SettingsAudio_RowsFollowAppSysMicOrder) {

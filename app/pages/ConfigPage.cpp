@@ -1213,9 +1213,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // The pointer written back through `merge_check` is bound to merge_with_above, so
     // toggle-on maps to merge_with_above = true (see the toggle handlers and sync).
     // SETTINGS-TIERS-R2: InfoHintIcon added after enabled check and after the merge toggle.
+    // `with_merge` = false for the first listed source (APP): it has no row above to
+    // merge into, so its merge cluster (label + toggle + info-i) is created — the
+    // toggle stays a live model seam — but hidden.
     auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
                                  ui::widgets::ExoCheckBox*& enabled_check, ui::widgets::ExoToggle*& merge_check,
-                                 QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
+                                 QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out,
+                                 bool with_merge = true) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
 
@@ -1238,7 +1242,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         row->addWidget(merge_label);
         row->addWidget(merge_check);
         // InfoHint for the "Merge with above" toggle.
-        row->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kSeparateTrack, target_parent), 0, Qt::AlignVCenter);
+        auto* merge_info = new ui::widgets::InfoHintIcon(ui::hints::kSeparateTrack, target_parent);
+        row->addWidget(merge_info, 0, Qt::AlignVCenter);
+        if (!with_merge) {
+            merge_label->hide();
+            merge_check->hide();
+            merge_info->hide();
+        }
         target_layout->addLayout(row);
 
         meter_out = new ui::widgets::VUMeterWidget(target_parent);
@@ -1252,12 +1262,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     };
 
     // Audio source rows follow the documented order APP, SYS, MIC (product-spec §5).
-    // The APP row exists only while a specific application window is the capture
-    // target; when it is hidden, SYS becomes the first visible row.
+    // All three rows are permanently present. The APP row only applies while a
+    // specific application window is the capture target; for other targets it
+    // recedes (explanatory text + inactive meter) instead of disappearing, so the
+    // card never reflows when the capture target changes.
 
-    // Application audio section — wrapped in a container widget that is shown for
-    // Window targets and hidden for Display/Region targets. Its trailing rule
-    // divides it from the SYS row below and disappears together with the section.
+    // Application audio section — wrapped in a container widget so the row and its
+    // trailing rule stay one unit.
     app_row_section_ = new QWidget(audio_panel);
     app_row_section_->setObjectName(QStringLiteral("settingsAudioAppSection"));
     {
@@ -1266,9 +1277,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         app_section_layout->setSpacing(audio_panel_layout->spacing());
 
         makeSourceRowInto(app_section_layout, app_row_section_, QStringLiteral("Application audio"), app_enabled_check_,
-                          app_separate_check_, app_source_label_, audio_app_meter_, audio_app_db_label_);
+                          app_separate_check_, app_source_label_, audio_app_meter_, audio_app_db_label_,
+                          /*with_merge=*/false);
         app_enabled_check_->setObjectName(QStringLiteral("settingsAudioAppCheck"));
         app_separate_check_->setObjectName(QStringLiteral("settingsAudioAppMerge"));
+        app_source_label_->setObjectName(QStringLiteral("settingsAudioAppSourceLabel"));
         audio_app_meter_->setObjectName(QStringLiteral("settingsAudioAppMeter"));
         audio_app_db_label_->setObjectName(QStringLiteral("settingsAudioAppDbLabel"));
 
@@ -1278,8 +1291,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         app_section_layout->addWidget(app_rule);
     }
     audio_panel_layout->addWidget(app_row_section_);
-    // Hidden by default — shown when target kind is Window.
-    app_row_section_->setVisible(false);
 
     // System audio row (label + description change based on capture target kind):
     //   Display/Region → "Computer audio"
@@ -1343,10 +1354,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // here because each toggle is a per-row control, not a cohesive Advanced group.
     // audio_separate_expander_ remains null; the store field is harmless / unused.
 
+    // Default-tier audio settings (mic channel mode, bitrate, channels, bit depth,
+    // FLAC compression, mic gain, brickwall limiter, mic post-processing) — these
+    // are everyday controls, so they are built eagerly and are always visible.
+    buildAudioDefaultSettingsSection();
+
     // PS-PHASE-C: Expert Audio section is built lazily on first expert-enable
-    // (perf — keeps the heaviest ~480 LOC / 24-widget subtree off the default
-    // ConfigPage build path; default profile is non-expert). Record the slot so
-    // the lazy build inserts it above the trailing hint + summary.
+    // (perf — keeps the expert-only rows off the default ConfigPage build path;
+    // default profile is non-expert). Record the slot so the lazy build inserts
+    // it below the Default section and above the trailing hint + summary.
     audio_expert_insert_index_ = audio_panel_layout->count();
 
     // v0.9 polish: the "separate tracks…" explanation moved into the per-row
@@ -3487,107 +3503,111 @@ void ConfigPage::applyOutputSavesToElision() {
 void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
     audio_ui_state_ = state;
     applyAudioConfigurationState();
-    // PS-PHASE-C: sync expert audio controls if visible.
-    if (expert_mode_enabled_) {
-        if (mic_gain_slider_) {
-            const QSignalBlocker b(mic_gain_slider_);
-            const int db =
-                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
-            mic_gain_slider_->setValue(db);
-            if (mic_gain_db_label_)
-                mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
-        }
-        if (mic_channel_mode_combo_) {
-            const QSignalBlocker b(mic_channel_mode_combo_);
-            const int idx = mic_channel_mode_combo_->findData(static_cast<int>(audio_ui_state_.mic_channel_mode));
-            if (idx >= 0)
-                mic_channel_mode_combo_->setCurrentIndex(idx);
-        }
-        if (audio_bitrate_kbps_spin_) {
-            const QSignalBlocker b(audio_bitrate_kbps_spin_);
-            audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
-        }
-        if (opus_frame_duration_combo_) {
-            const QSignalBlocker b(opus_frame_duration_combo_);
-            const int idx = opus_frame_duration_combo_->findData(static_cast<int>(audio_ui_state_.opus_frame_duration));
-            if (idx >= 0)
-                opus_frame_duration_combo_->setCurrentIndex(idx);
-        }
-        if (opus_complexity_spin_) {
-            const QSignalBlocker b(opus_complexity_spin_);
-            opus_complexity_spin_->setValue(audio_ui_state_.opus_complexity);
-        }
-        if (limiter_check_) {
-            const QSignalBlocker b(limiter_check_);
-            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
-        }
-        if (clock_slaving_check_) {
-            const QSignalBlocker b(clock_slaving_check_);
-            clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
-        }
-        if (limiter_ceiling_spin_) {
-            const QSignalBlocker b(limiter_ceiling_spin_);
-            limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
-            limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
-        }
-        if (mic_hpf_check_) {
-            const QSignalBlocker b(mic_hpf_check_);
-            mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
-        }
-        if (mic_hpf_cutoff_spin_) {
-            const QSignalBlocker b(mic_hpf_cutoff_spin_);
-            mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
-            mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
-        }
-        if (mic_gate_check_) {
-            const QSignalBlocker b(mic_gate_check_);
-            mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
-        }
-        if (mic_gate_threshold_spin_) {
-            const QSignalBlocker b(mic_gate_threshold_spin_);
-            mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
-            mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
-        }
-        if (mic_agc_check_) {
-            const QSignalBlocker b(mic_agc_check_);
-            mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
-        }
-        if (mic_agc_target_spin_) {
-            const QSignalBlocker b(mic_agc_target_spin_);
-            mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
-            mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
-        }
-        if (mic_rnnoise_check_) {
-            const QSignalBlocker b(mic_rnnoise_check_);
-            mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
-        }
-        // Channel / sample-format model (ADR 0030 — 0.6.0).
-        if (audio_sample_rate_combo_) {
-            const QSignalBlocker b(audio_sample_rate_combo_);
-            const int idx = audio_sample_rate_combo_->findData(static_cast<int>(audio_ui_state_.audio_sample_rate));
-            if (idx >= 0)
-                audio_sample_rate_combo_->setCurrentIndex(idx);
-        }
-        if (audio_channels_combo_) {
-            const QSignalBlocker b(audio_channels_combo_);
-            const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
-            if (idx >= 0)
-                audio_channels_combo_->setCurrentIndex(idx);
-        }
-        if (audio_bit_depth_combo_) {
-            const QSignalBlocker b(audio_bit_depth_combo_);
-            const int idx = audio_bit_depth_combo_->findData(
-                EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
-            if (idx >= 0)
-                audio_bit_depth_combo_->setCurrentIndex(idx);
-        }
-        if (flac_compression_spin_) {
-            const QSignalBlocker b(flac_compression_spin_);
-            flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
-        }
-        // Reapply codec-gated visibility after state change.
-        updateAudioFormatControlVisibility();
+    seedAudioControlsFromState();
+}
+
+// Re-seed every audio settings control from audio_ui_state_. The Default-tier
+// controls exist from construction; the Expert-tier ones only after the lazy
+// build, so every access stays null-guarded and this is safe to call at any time.
+void ConfigPage::seedAudioControlsFromState() {
+    if (mic_gain_slider_) {
+        const QSignalBlocker b(mic_gain_slider_);
+        const int db =
+            static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
+        mic_gain_slider_->setValue(db);
+        if (mic_gain_db_label_)
+            mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
     }
+    if (mic_channel_mode_combo_) {
+        const QSignalBlocker b(mic_channel_mode_combo_);
+        const int idx = mic_channel_mode_combo_->findData(static_cast<int>(audio_ui_state_.mic_channel_mode));
+        if (idx >= 0)
+            mic_channel_mode_combo_->setCurrentIndex(idx);
+    }
+    if (audio_bitrate_kbps_spin_) {
+        const QSignalBlocker b(audio_bitrate_kbps_spin_);
+        audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
+    }
+    if (opus_frame_duration_combo_) {
+        const QSignalBlocker b(opus_frame_duration_combo_);
+        const int idx = opus_frame_duration_combo_->findData(static_cast<int>(audio_ui_state_.opus_frame_duration));
+        if (idx >= 0)
+            opus_frame_duration_combo_->setCurrentIndex(idx);
+    }
+    if (opus_complexity_spin_) {
+        const QSignalBlocker b(opus_complexity_spin_);
+        opus_complexity_spin_->setValue(audio_ui_state_.opus_complexity);
+    }
+    if (limiter_check_) {
+        const QSignalBlocker b(limiter_check_);
+        limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+    }
+    if (clock_slaving_check_) {
+        const QSignalBlocker b(clock_slaving_check_);
+        clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
+    }
+    if (limiter_ceiling_spin_) {
+        const QSignalBlocker b(limiter_ceiling_spin_);
+        limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
+        limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
+    }
+    if (mic_hpf_check_) {
+        const QSignalBlocker b(mic_hpf_check_);
+        mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
+    }
+    if (mic_hpf_cutoff_spin_) {
+        const QSignalBlocker b(mic_hpf_cutoff_spin_);
+        mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
+        mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
+    }
+    if (mic_gate_check_) {
+        const QSignalBlocker b(mic_gate_check_);
+        mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
+    }
+    if (mic_gate_threshold_spin_) {
+        const QSignalBlocker b(mic_gate_threshold_spin_);
+        mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
+        mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
+    }
+    if (mic_agc_check_) {
+        const QSignalBlocker b(mic_agc_check_);
+        mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
+    }
+    if (mic_agc_target_spin_) {
+        const QSignalBlocker b(mic_agc_target_spin_);
+        mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
+        mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
+    }
+    if (mic_rnnoise_check_) {
+        const QSignalBlocker b(mic_rnnoise_check_);
+        mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
+    }
+    // Channel / sample-format model (ADR 0030 — 0.6.0).
+    if (audio_sample_rate_combo_) {
+        const QSignalBlocker b(audio_sample_rate_combo_);
+        const int idx = audio_sample_rate_combo_->findData(static_cast<int>(audio_ui_state_.audio_sample_rate));
+        if (idx >= 0)
+            audio_sample_rate_combo_->setCurrentIndex(idx);
+    }
+    if (audio_channels_combo_) {
+        const QSignalBlocker b(audio_channels_combo_);
+        const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
+        if (idx >= 0)
+            audio_channels_combo_->setCurrentIndex(idx);
+    }
+    if (audio_bit_depth_combo_) {
+        const QSignalBlocker b(audio_bit_depth_combo_);
+        const int idx = audio_bit_depth_combo_->findData(
+            EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
+        if (idx >= 0)
+            audio_bit_depth_combo_->setCurrentIndex(idx);
+    }
+    if (flac_compression_spin_) {
+        const QSignalBlocker b(flac_compression_spin_);
+        flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
+    }
+    // Reapply codec-gated visibility after the state change.
+    updateAudioFormatControlVisibility();
 }
 
 void ConfigPage::applyAudioConfigurationState() {
@@ -3596,9 +3616,18 @@ void ConfigPage::applyAudioConfigurationState() {
 
     const bool is_window = (snap.target_kind == capability::CaptureTargetKind::Window);
 
-    // App section visibility (target-kind policy).
+    // The App row is permanent. It is live while a specific application window is
+    // the capture target and recedes otherwise — the row keeps its place, states
+    // why it does not apply, and stops showing a level.
+    app_row_active_ = snap.app.active;
     if (app_row_section_)
-        app_row_section_->setVisible(snap.app.visible);
+        app_row_section_->setVisible(true);
+    if (!app_row_active_ && audio_app_meter_) {
+        audio_app_meter_->setActive(false);
+        audio_app_meter_->setLevel(0.0f);
+        if (audio_app_db_label_)
+            audio_app_db_label_->setText(QStringLiteral("–"));
+    }
 
     // System audio row labels (target-kind-specific).
     if (sys_enabled_check_) {
@@ -3622,8 +3651,10 @@ void ConfigPage::applyAudioConfigurationState() {
         const QSignalBlocker ss(sys_separate_check_);
 
         // The merge toggle reads "Merge with above": on == merge == !separate_track.
-        app_enabled_check_->setEnabled(snap.app.controls_enabled);
-        app_separate_check_->setEnabled(snap.app.controls_enabled);
+        // The App row stays interactable even while receded (it can be armed ahead
+        // of switching to a window target) — only the recording lock disables it.
+        app_enabled_check_->setEnabled(!snap.controls_locked);
+        app_separate_check_->setEnabled(!snap.controls_locked);
         app_enabled_check_->setChecked(snap.app.enabled);
         app_separate_check_->setChecked(!snap.app.separate_track);
 
@@ -3659,8 +3690,12 @@ void ConfigPage::applyAudioConfigurationState() {
     }
 
     // Source description labels.
-    if (app_source_label_)
-        app_source_label_->setText(QStringLiteral("Records audio from the selected application."));
+    if (app_source_label_) {
+        app_source_label_->setText(
+            app_row_active_
+                ? QStringLiteral("Records audio from the selected application.")
+                : QStringLiteral("Takes effect while a specific application window is the capture target."));
+    }
     if (mic_source_label_) {
         mic_source_label_->setText(snap.mic.available ? QStringLiteral("Choose the microphone used for recording.")
                                                       : QStringLiteral("Not available"));
@@ -3685,11 +3720,9 @@ void ConfigPage::emitCurrentAudioSettings() {
 
 void ConfigPage::updateAudioFormatControlVisibility() {
     // Called whenever the audio codec or recording-lock state changes.
-    // Controls not created yet (expert mode off during construction) are guarded
-    // by null checks.
-    if (!expert_mode_enabled_)
-        return;
-
+    // Bit depth and FLAC compression are Default-tier rows now, so this runs in
+    // both tiers: the gating is codec-conditional, not expert-conditional. The
+    // Expert-only controls are guarded by null checks until they are built.
     const bool is_opus = (format_settings_.audio_codec == capability::AudioCodec::Opus);
     const bool is_pcm = (format_settings_.audio_codec == capability::AudioCodec::Pcm);
     const bool is_flac = (format_settings_.audio_codec == capability::AudioCodec::Flac);
@@ -3824,7 +3857,8 @@ void ConfigPage::setAudioMeterLevels(float sys01, float app01, float mic01, bool
         }
     };
     update(audio_sys_meter_, audio_sys_db_label_, sys01, sys_active);
-    update(audio_app_meter_, audio_app_db_label_, app01, app_active);
+    // A receded App row never shows a level, whatever the meter service reports.
+    update(audio_app_meter_, audio_app_db_label_, app01, app_active && app_row_active_);
     update(audio_mic_meter_, audio_mic_db_label_, mic01, mic_active);
 }
 
@@ -3854,10 +3888,530 @@ bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
     return false;
 }
 
-// SETTINGS-TIERS / startup-perf: the Expert audio subtree (~480 LOC, 24 widgets)
-// is built on first expert-enable instead of eagerly-then-hidden, so the default
-// non-expert ConfigPage construction never pays for it. All external access to
-// these widgets is already null-guarded; updateExpertModeVisibility() re-seeds them.
+// Default tier: the everyday audio controls (mic channel mode, bitrate, channels,
+// bit depth, FLAC compression, mic gain, brickwall limiter, mic post-processing).
+// Built eagerly from the constructor — these rows are visible without expert mode,
+// so there is nothing to defer.
+void ConfigPage::buildAudioDefaultSettingsSection() {
+    QWidget* audio_panel = audio_panel_;
+    audio_default_section_ = new QWidget(audio_panel);
+    audio_default_section_->setObjectName(QStringLiteral("audioDefaultSection"));
+    auto* ads_layout = new QVBoxLayout(audio_default_section_);
+    ads_layout->setContentsMargins(0, 0, 0, 0);
+    ads_layout->setSpacing(0);
+
+    // One hairline above the first row and between every following pair.
+    auto addRule = [this, ads_layout]() {
+        auto* rule = new QFrame(audio_default_section_);
+        rule->setFrameShape(QFrame::HLine);
+        rule->setProperty("frameRole", "sectionRuleLine");
+        ads_layout->addWidget(rule);
+    };
+
+    addRule();
+
+    // Mic channel mode
+    {
+        auto* row = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("Mic channel mode"), row);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicChannelMode, row), 0, Qt::AlignVCenter);
+        hl->addStretch(1);
+        mic_channel_mode_combo_ = new QComboBox(row);
+        mic_channel_mode_combo_->setObjectName(QStringLiteral("micChannelModeCombo"));
+        mic_channel_mode_combo_->addItem(QStringLiteral("Auto"), static_cast<int>(recorder_core::MicChannelMode::Auto));
+        mic_channel_mode_combo_->addItem(QStringLiteral("Mono mix"),
+                                         static_cast<int>(recorder_core::MicChannelMode::MonoMix));
+        mic_channel_mode_combo_->addItem(QStringLiteral("Preserve stereo"),
+                                         static_cast<int>(recorder_core::MicChannelMode::PreserveStereo));
+        mic_channel_mode_combo_->addItem(QStringLiteral("L \xe2\x86\x92 Stereo"),
+                                         static_cast<int>(recorder_core::MicChannelMode::LeftToStereo));
+        mic_channel_mode_combo_->addItem(QStringLiteral("R \xe2\x86\x92 Stereo"),
+                                         static_cast<int>(recorder_core::MicChannelMode::RightToStereo));
+        mic_channel_mode_combo_->setFixedWidth(160);
+        mic_channel_mode_combo_->setProperty("settingsRowInput", true);
+        hl->addWidget(mic_channel_mode_combo_, 0, Qt::AlignVCenter);
+        row->setProperty("settingsRow", true);
+        ads_layout->addWidget(row);
+    }
+
+    // Audio bitrate
+    {
+        addRule();
+        auto* row = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("Audio bitrate"), row);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioBitrate, row), 0, Qt::AlignVCenter);
+        hl->addStretch(1);
+        audio_bitrate_kbps_spin_ = new QSpinBox(row);
+        audio_bitrate_kbps_spin_->setObjectName(QStringLiteral("audioBitrateKbpsSpin"));
+        audio_bitrate_kbps_spin_->setRange(32, 510);
+        audio_bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
+        audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
+        audio_bitrate_kbps_spin_->setFixedWidth(160);
+        audio_bitrate_kbps_spin_->setProperty("settingsRowInput", true);
+        hl->addWidget(audio_bitrate_kbps_spin_, 0, Qt::AlignVCenter);
+        row->setProperty("settingsRow", true);
+        ads_layout->addWidget(row);
+    }
+
+    // Channels (ADR 0030 — 0.6.0)
+    {
+        addRule();
+        audio_channels_row_ = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(audio_channels_row_);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("Channels"), audio_channels_row_);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioChannels, audio_channels_row_), 0,
+                      Qt::AlignVCenter);
+        hl->addStretch(1);
+        audio_channels_combo_ = new QComboBox(audio_channels_row_);
+        audio_channels_combo_->setObjectName(QStringLiteral("audioChannelsCombo"));
+        audio_channels_combo_->addItem(QStringLiteral("Stereo"), 2);
+        audio_channels_combo_->addItem(QStringLiteral("Mono"), 1);
+        {
+            const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
+            audio_channels_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Stereo */);
+        }
+        audio_channels_combo_->setFixedWidth(160);
+        audio_channels_combo_->setProperty("settingsRowInput", true);
+        hl->addWidget(audio_channels_combo_, 0, Qt::AlignVCenter);
+        audio_channels_row_->setProperty("settingsRow", true);
+        ads_layout->addWidget(audio_channels_row_);
+    }
+
+    // Bit depth (ADR 0030 — 0.6.0): visible for PCM/FLAC only
+    {
+        addRule();
+        audio_bit_depth_row_ = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(audio_bit_depth_row_);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("Bit depth"), audio_bit_depth_row_);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioBitDepth, audio_bit_depth_row_), 0,
+                      Qt::AlignVCenter);
+        hl->addStretch(1);
+        audio_bit_depth_combo_ = new QComboBox(audio_bit_depth_row_);
+        audio_bit_depth_combo_->setObjectName(QStringLiteral("audioBitDepthCombo"));
+        // Items seeded for PCM (16/24/32/32-float); rebuilt when codec changes.
+        audio_bit_depth_combo_->addItem(QStringLiteral("16-bit"), 16);
+        audio_bit_depth_combo_->addItem(QStringLiteral("24-bit"), 24);
+        audio_bit_depth_combo_->addItem(QStringLiteral("32-bit"), 32);
+        audio_bit_depth_combo_->addItem(QStringLiteral("32-bit float"), kFloatBitDepthItemData);
+        {
+            const int idx = audio_bit_depth_combo_->findData(
+                EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
+            audio_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 16 */);
+        }
+        audio_bit_depth_combo_->setFixedWidth(160);
+        audio_bit_depth_combo_->setProperty("settingsRowInput", true);
+        hl->addWidget(audio_bit_depth_combo_, 0, Qt::AlignVCenter);
+        audio_bit_depth_row_->setProperty("settingsRow", true);
+        audio_bit_depth_row_->setVisible(false); // shown only for PCM/FLAC
+        ads_layout->addWidget(audio_bit_depth_row_);
+    }
+
+    // FLAC compression level (ADR 0030 — 0.6.0): visible for FLAC only
+    {
+        addRule();
+        flac_compression_row_ = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(flac_compression_row_);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("FLAC compression"), flac_compression_row_);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFlacCompression, flac_compression_row_), 0,
+                      Qt::AlignVCenter);
+        hl->addStretch(1);
+        flac_compression_spin_ = new QSpinBox(flac_compression_row_);
+        flac_compression_spin_->setObjectName(QStringLiteral("flacCompressionLevelSpin"));
+        flac_compression_spin_->setRange(0, 8);
+        flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
+        flac_compression_spin_->setFixedWidth(160);
+        flac_compression_spin_->setProperty("settingsRowInput", true);
+        hl->addWidget(flac_compression_spin_, 0, Qt::AlignVCenter);
+        flac_compression_row_->setProperty("settingsRow", true);
+        flac_compression_row_->setVisible(false); // shown only for FLAC
+        ads_layout->addWidget(flac_compression_row_);
+    }
+
+    // Mic gain — ExoSlider (–12…+12 dB, step 1) + read-only dB label.
+    // Track (116) + row spacing (4) + value label (40) = the shared 160 px control width.
+    {
+        addRule();
+        auto* row = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicGain, row), 0, Qt::AlignVCenter);
+        hl->addStretch(1);
+
+        const int init_db =
+            static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
+
+        // S3: ExoSlider with gradient groove + tick marks at -12, -6, 0 dB (unity), 6, 12.
+        mic_gain_slider_ = new ui::widgets::ExoSlider(Qt::Horizontal, row);
+        mic_gain_slider_->setObjectName(QStringLiteral("micGainSlider"));
+        mic_gain_slider_->setRange(-12, 12);
+        mic_gain_slider_->setSingleStep(1);
+        mic_gain_slider_->setPageStep(3);
+        mic_gain_slider_->setValue(init_db);
+        mic_gain_slider_->setDefaultValue(0); // 0 dB = unity gain (prominent marker)
+        mic_gain_slider_->setTickValues({-12, -6, 0, 6, 12});
+        mic_gain_slider_->setFixedWidth(116);
+        hl->addWidget(mic_gain_slider_, 0, Qt::AlignVCenter);
+
+        mic_gain_db_label_ = new QLabel(row);
+        mic_gain_db_label_->setObjectName(QStringLiteral("micGainDbLabel"));
+        mic_gain_db_label_->setProperty("labelRole", "settingsValueLabel");
+        mic_gain_db_label_->setFixedWidth(40);
+        mic_gain_db_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(init_db));
+        hl->addWidget(mic_gain_db_label_, 0, Qt::AlignVCenter);
+
+        row->setProperty("settingsRow", true);
+        ads_layout->addWidget(row);
+    }
+
+    // Brickwall limiter (Audio v2 — 0.6.0) — Slice 3 (cogwheels -> inline): the
+    // cogwheel popover is gone. Plain inline toggle; the ceiling spin appears
+    // inline, right-aligned in the same row, only while the limiter is on.
+    {
+        addRule();
+        auto* row = new QWidget(audio_default_section_);
+        auto* hl = new QHBoxLayout(row);
+        hl->setContentsMargins(0, 12, 0, 12);
+        hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* lbl = new QLabel(QStringLiteral("Brickwall limiter"), row);
+        lbl->setProperty("labelRole", "settingsRowLabel");
+        hl->addWidget(lbl, 0);
+        hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kBrickwallLimiter, row), 0, Qt::AlignVCenter);
+        hl->addStretch(1);
+
+        limiter_ceiling_spin_ = new QDoubleSpinBox(row);
+        limiter_ceiling_spin_->setObjectName(QStringLiteral("limiterCeilingSpin"));
+        limiter_ceiling_spin_->setRange(-60.0, 0.0);
+        limiter_ceiling_spin_->setSingleStep(0.5);
+        limiter_ceiling_spin_->setDecimals(1);
+        limiter_ceiling_spin_->setSuffix(QStringLiteral(" dB"));
+        limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
+        limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
+        limiter_ceiling_spin_->setFixedWidth(160);
+        limiter_ceiling_spin_->setProperty("settingsRowInput", true);
+        hl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
+
+        limiter_check_ = new ui::widgets::ExoCheckBox(QString(), row);
+        limiter_check_->setObjectName(QStringLiteral("limiterCheck"));
+        limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+        hl->addWidget(limiter_check_, 0, Qt::AlignVCenter);
+
+        row->setProperty("settingsRow", true);
+        ads_layout->addWidget(row);
+    }
+
+    // Microphone post-processing (Audio v2 — 0.6.0) — Slice 3 (cogwheels -> inline):
+    // the 4 stage rows sit behind an inline disclosure (chevron) instead of a
+    // cogwheel popover. HPF -> Gate -> AGC -> RNNoise order preserved. Each stage's
+    // numeric parameter row only exists while that stage is switched on.
+    {
+        addRule();
+
+        // --- Create all sub-controls (objectNames + values preserved as before). ---
+        mic_hpf_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("High-pass filter"), audio_default_section_);
+        mic_hpf_check_->setObjectName(QStringLiteral("micHpfCheck"));
+        mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
+
+        mic_hpf_cutoff_spin_ = new QDoubleSpinBox(audio_default_section_);
+        mic_hpf_cutoff_spin_->setObjectName(QStringLiteral("micHpfCutoffSpin"));
+        mic_hpf_cutoff_spin_->setRange(20.0, 1000.0);
+        mic_hpf_cutoff_spin_->setSingleStep(5.0);
+        mic_hpf_cutoff_spin_->setDecimals(0);
+        mic_hpf_cutoff_spin_->setSuffix(QStringLiteral(" Hz"));
+        mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
+        mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
+        mic_hpf_cutoff_spin_->setFixedWidth(160);
+        mic_hpf_cutoff_spin_->setProperty("settingsRowInput", true);
+
+        mic_gate_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise gate"), audio_default_section_);
+        mic_gate_check_->setObjectName(QStringLiteral("micGateCheck"));
+        mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
+
+        mic_gate_threshold_spin_ = new QDoubleSpinBox(audio_default_section_);
+        mic_gate_threshold_spin_->setObjectName(QStringLiteral("micGateThresholdSpin"));
+        mic_gate_threshold_spin_->setRange(-80.0, 0.0);
+        mic_gate_threshold_spin_->setSingleStep(1.0);
+        mic_gate_threshold_spin_->setDecimals(0);
+        mic_gate_threshold_spin_->setSuffix(QStringLiteral(" dB"));
+        mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
+        mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
+        mic_gate_threshold_spin_->setFixedWidth(160);
+        mic_gate_threshold_spin_->setProperty("settingsRowInput", true);
+
+        // Short, scannable acronym — the info-i carries the long explanation.
+        mic_agc_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("AGC"), audio_default_section_);
+        mic_agc_check_->setObjectName(QStringLiteral("micAgcCheck"));
+        mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
+
+        mic_agc_target_spin_ = new QDoubleSpinBox(audio_default_section_);
+        mic_agc_target_spin_->setObjectName(QStringLiteral("micAgcTargetSpin"));
+        mic_agc_target_spin_->setRange(-40.0, 0.0);
+        mic_agc_target_spin_->setSingleStep(1.0);
+        mic_agc_target_spin_->setDecimals(0);
+        mic_agc_target_spin_->setSuffix(QStringLiteral(" dB"));
+        mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
+        mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
+        mic_agc_target_spin_->setFixedWidth(160);
+        mic_agc_target_spin_->setProperty("settingsRowInput", true);
+
+        mic_rnnoise_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Noise suppression (RNNoise)"), audio_default_section_);
+        mic_rnnoise_check_->setObjectName(QStringLiteral("micRnnoiseCheck"));
+        mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
+
+        // --- Disclosure header row: label + info-i + live status + chevron. ---
+        mic_post_header_ = new QWidget(audio_default_section_);
+        mic_post_header_->setObjectName(QStringLiteral("micPostProcessingHeader"));
+        auto* header_hl = new QHBoxLayout(mic_post_header_);
+        header_hl->setContentsMargins(0, 12, 0, 12);
+        header_hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
+        auto* header_lbl = new QLabel(QStringLiteral("Microphone post-processing"), mic_post_header_);
+        header_lbl->setProperty("labelRole", "settingsRowLabel");
+        header_hl->addWidget(header_lbl, 0);
+        header_hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicPostProcessing, mic_post_header_), 0,
+                             Qt::AlignVCenter);
+        header_hl->addStretch(1);
+
+        mic_post_status_label_ = new QLabel(mic_post_header_);
+        mic_post_status_label_->setObjectName(QStringLiteral("micPostProcessingStatus"));
+        mic_post_status_label_->setProperty("labelRole", "muted");
+        header_hl->addWidget(mic_post_status_label_, 0, Qt::AlignVCenter);
+
+        mic_post_disclosure_btn_ = new QToolButton(mic_post_header_);
+        mic_post_disclosure_btn_->setObjectName(QStringLiteral("micPostProcessingDisclosure"));
+        mic_post_disclosure_btn_->setAutoRaise(true);
+        mic_post_disclosure_btn_->setCheckable(true);
+        mic_post_disclosure_btn_->setChecked(false);
+        mic_post_disclosure_btn_->setCursor(Qt::PointingHandCursor);
+        mic_post_disclosure_btn_->setFixedSize(28, 28);
+        mic_post_disclosure_btn_->setIconSize(QSize(16, 16));
+        mic_post_disclosure_btn_->setToolTip(QStringLiteral("Expand microphone post-processing stages"));
+        mic_post_disclosure_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("chevron-down"),
+                                                                QString::fromUtf8(ui::theme::ActiveTheme().mut), 16,
+                                                                mic_post_disclosure_btn_->devicePixelRatioF()));
+        header_hl->addWidget(mic_post_disclosure_btn_, 0, Qt::AlignVCenter);
+
+        mic_post_header_->setProperty("settingsRow", true);
+        ads_layout->addWidget(mic_post_header_);
+
+        // --- Disclosure content: the four stage rows, hidden until expanded. ---
+        // Un-indented: the group is a Default-tier row like every other one here.
+        mic_post_content_ = new QWidget(audio_default_section_);
+        mic_post_content_->setObjectName(QStringLiteral("micPostProcessingContent"));
+        auto* content_layout = new QVBoxLayout(mic_post_content_);
+        content_layout->setContentsMargins(0, 0, 0, 12);
+        content_layout->setSpacing(10);
+        mic_post_content_->setVisible(false);
+        ads_layout->addWidget(mic_post_content_);
+
+        // Each sub-stage is a mini row: toggle (+ info-i) and, where relevant, an
+        // indented parameter row that only shows while its stage is on.
+        auto makeStageRow = [](ui::widgets::ExoCheckBox* toggle, const QString& hint, QDoubleSpinBox* param_spin,
+                               const QString& param_label, QWidget* stage_parent) -> QWidget* {
+            auto* container = new QWidget(stage_parent);
+            auto* vl = new QVBoxLayout(container);
+            vl->setContentsMargins(0, 0, 0, 0);
+            vl->setSpacing(4);
+
+            auto* toggle_row = new QWidget(container);
+            auto* thl = new QHBoxLayout(toggle_row);
+            thl->setContentsMargins(0, 0, 0, 0);
+            thl->setSpacing(4);
+            thl->addWidget(toggle, 0);
+            if (!hint.isEmpty())
+                thl->addWidget(new ui::widgets::InfoHintIcon(hint, toggle_row), 0, Qt::AlignVCenter);
+            thl->addStretch(1);
+            vl->addWidget(toggle_row);
+
+            if (param_spin) {
+                auto* param_row = new QWidget(container);
+                auto* hl = new QHBoxLayout(param_row);
+                hl->setContentsMargins(20, 0, 0, 0); // indent under toggle
+                hl->setSpacing(14);
+                auto* lbl = new QLabel(param_label, param_row);
+                lbl->setProperty("labelRole", "settingsRowLabel");
+                hl->addWidget(lbl, 1);
+                hl->addWidget(param_spin, 0, Qt::AlignVCenter);
+                vl->addWidget(param_row);
+                // The numeric parameter is only meaningful while its stage runs.
+                param_row->setVisible(toggle->isChecked());
+                QObject::connect(toggle, &ui::widgets::ExoCheckBox::toggled, param_row,
+                                 [param_row](bool on) { param_row->setVisible(on); });
+            }
+            return container;
+        };
+
+        content_layout->addWidget(makeStageRow(mic_hpf_check_, ui::hints::kHighPassFilter, mic_hpf_cutoff_spin_,
+                                               QStringLiteral("HPF cutoff"), mic_post_content_));
+        content_layout->addWidget(makeStageRow(mic_gate_check_, ui::hints::kNoiseGate, mic_gate_threshold_spin_,
+                                               QStringLiteral("Gate threshold"), mic_post_content_));
+        content_layout->addWidget(makeStageRow(mic_agc_check_, ui::hints::kAgc, mic_agc_target_spin_,
+                                               QStringLiteral("AGC target level"), mic_post_content_));
+        content_layout->addWidget(
+            makeStageRow(mic_rnnoise_check_, ui::hints::kRnnoise, nullptr, QString(), mic_post_content_));
+
+        // Expand/collapse: flip the chevron and show/hide the content container.
+        connect(mic_post_disclosure_btn_, &QToolButton::toggled, this, [this](bool expanded) {
+            if (mic_post_content_)
+                mic_post_content_->setVisible(expanded);
+            if (mic_post_disclosure_btn_) {
+                mic_post_disclosure_btn_->setIcon(
+                    ui::theme::lucideIcon(expanded ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
+                                          QString::fromUtf8(ui::theme::ActiveTheme().mut), 16,
+                                          mic_post_disclosure_btn_->devicePixelRatioF()));
+                mic_post_disclosure_btn_->setToolTip(expanded
+                                                         ? QStringLiteral("Collapse microphone post-processing stages")
+                                                         : QStringLiteral("Expand microphone post-processing stages"));
+            }
+        });
+
+        // Status text: list the active stages, updated whenever any stage toggles.
+        auto updateMicPostStatus = [this]() {
+            QStringList active;
+            if (mic_hpf_check_->isChecked())
+                active << QStringLiteral("High-pass");
+            if (mic_gate_check_->isChecked())
+                active << QStringLiteral("Gate");
+            if (mic_agc_check_->isChecked())
+                active << QStringLiteral("AGC");
+            if (mic_rnnoise_check_->isChecked())
+                active << QStringLiteral("RNNoise");
+            if (mic_post_status_label_)
+                mic_post_status_label_->setText(active.isEmpty() ? QStringLiteral("Off")
+                                                                 : active.join(QStringLiteral(" \xC2\xB7 ")));
+        };
+        // Wire to the stage toggles so the status stays live.
+        connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+        connect(mic_gate_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+        connect(mic_agc_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+        connect(mic_rnnoise_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+        // Set initial status text.
+        updateMicPostStatus();
+    }
+
+    if (auto* audio_panel_layout = qobject_cast<QVBoxLayout*>(audio_panel_->layout()))
+        audio_panel_layout->addWidget(audio_default_section_);
+
+    // --- Model bindings for the Default-tier audio controls. ---
+    connect(mic_gain_slider_, &QSlider::valueChanged, this, [this](int db) {
+        if (mic_gain_db_label_)
+            mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
+        audio_ui_state_.mic_gain_linear = std::powf(10.f, static_cast<float>(db) / 20.f);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_channel_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0)
+            return;
+        audio_ui_state_.mic_channel_mode =
+            static_cast<recorder_core::MicChannelMode>(mic_channel_mode_combo_->itemData(idx).toInt());
+        emitCurrentAudioSettings();
+    });
+    connect(audio_bitrate_kbps_spin_, &QSpinBox::valueChanged, this, [this](int kbps) {
+        audio_ui_state_.audio_bitrate_kbps = static_cast<uint32_t>(kbps);
+        emitCurrentAudioSettings();
+    });
+    connect(audio_channels_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !audio_channels_combo_)
+            return;
+        audio_ui_state_.audio_channels = static_cast<uint32_t>(audio_channels_combo_->itemData(idx).toInt());
+        emitCurrentAudioSettings();
+    });
+    connect(audio_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !audio_bit_depth_combo_)
+            return;
+        // Float-PCM uses the negative kFloatBitDepthItemData sentinel (see
+        // EncodeBitDepthComboData) so it cannot be confused with the plain
+        // int "32-bit" entry.
+        const int raw = audio_bit_depth_combo_->itemData(idx).toInt();
+        if (raw < 0) {
+            audio_ui_state_.audio_bit_depth = 32u;
+            audio_ui_state_.audio_pcm_float = true;
+        } else {
+            audio_ui_state_.audio_bit_depth = static_cast<uint32_t>(raw);
+            audio_ui_state_.audio_pcm_float = false;
+        }
+        emitCurrentAudioSettings();
+    });
+    connect(flac_compression_spin_, &QSpinBox::valueChanged, this, [this](int val) {
+        audio_ui_state_.flac_compression_level = val;
+        emitCurrentAudioSettings();
+    });
+    connect(limiter_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.limiter_enabled = on;
+        if (limiter_ceiling_spin_)
+            limiter_ceiling_spin_->setVisible(on);
+        emitCurrentAudioSettings();
+    });
+    connect(limiter_ceiling_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
+        audio_ui_state_.limiter_ceiling_db = static_cast<float>(db);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_hpf_enabled = on;
+        if (mic_hpf_cutoff_spin_)
+            mic_hpf_cutoff_spin_->setEnabled(on);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_hpf_cutoff_spin_, &QDoubleSpinBox::valueChanged, this, [this](double hz) {
+        audio_ui_state_.mic_hpf_cutoff_hz = static_cast<float>(hz);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_gate_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_gate_enabled = on;
+        if (mic_gate_threshold_spin_)
+            mic_gate_threshold_spin_->setEnabled(on);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_gate_threshold_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
+        audio_ui_state_.mic_gate_threshold_db = static_cast<float>(db);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_agc_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_agc_enabled = on;
+        if (mic_agc_target_spin_)
+            mic_agc_target_spin_->setEnabled(on);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_agc_target_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
+        audio_ui_state_.mic_agc_target_db = static_cast<float>(db);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_rnnoise_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_rnnoise_enabled = on;
+        emitCurrentAudioSettings();
+    });
+}
+
+// SETTINGS-TIERS / startup-perf: the Expert audio subtree is built on first
+// expert-enable instead of eagerly-then-hidden, so the default non-expert
+// ConfigPage construction never pays for it. All external access to these
+// widgets is null-guarded; seedAudioControlsFromState() re-seeds them.
 void ConfigPage::buildAudioExpertSection() {
     if (audio_expert_built_)
         return;
@@ -3876,120 +4430,8 @@ void ConfigPage::buildAudioExpertSection() {
         aes_rule_top->setProperty("frameRole", "sectionRuleLine");
         aes_layout->addWidget(aes_rule_top);
 
-        // Mic gain — QSlider (–12…+12 dB, step 1) + read-only dB label.
-        // Polish-R1: switched from QSpinBox to QSlider per mockup (suite-settings.jsx).
-        {
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicGain, row), 0, Qt::AlignVCenter);
-            hl->addStretch(1);
-
-            const int init_db =
-                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
-
-            // S3: ExoSlider with gradient groove + tick marks at -12, -6, 0 dB (unity), 6, 12.
-            mic_gain_slider_ = new ui::widgets::ExoSlider(Qt::Horizontal, row);
-            mic_gain_slider_->setObjectName(QStringLiteral("micGainSlider"));
-            mic_gain_slider_->setRange(-12, 12);
-            mic_gain_slider_->setSingleStep(1);
-            mic_gain_slider_->setPageStep(3);
-            mic_gain_slider_->setValue(init_db);
-            mic_gain_slider_->setDefaultValue(0); // 0 dB = unity gain (prominent marker)
-            mic_gain_slider_->setTickValues({-12, -6, 0, 6, 12});
-            mic_gain_slider_->setFixedWidth(120);
-            hl->addWidget(mic_gain_slider_, 0, Qt::AlignVCenter);
-
-            mic_gain_db_label_ = new QLabel(row);
-            mic_gain_db_label_->setObjectName(QStringLiteral("micGainDbLabel"));
-            mic_gain_db_label_->setProperty("labelRole", "settingsValueLabel");
-            mic_gain_db_label_->setFixedWidth(42);
-            mic_gain_db_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(init_db));
-            hl->addWidget(mic_gain_db_label_, 0, Qt::AlignVCenter);
-
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
-        }
-
-        // Mic channel mode
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("Mic channel mode"), row);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicChannelMode, row), 0, Qt::AlignVCenter);
-            hl->addStretch(1);
-            mic_channel_mode_combo_ = new QComboBox(row);
-            mic_channel_mode_combo_->setObjectName(QStringLiteral("micChannelModeCombo"));
-            mic_channel_mode_combo_->addItem(QStringLiteral("Auto"),
-                                             static_cast<int>(recorder_core::MicChannelMode::Auto));
-            mic_channel_mode_combo_->addItem(QStringLiteral("Mono mix"),
-                                             static_cast<int>(recorder_core::MicChannelMode::MonoMix));
-            mic_channel_mode_combo_->addItem(QStringLiteral("Preserve stereo"),
-                                             static_cast<int>(recorder_core::MicChannelMode::PreserveStereo));
-            mic_channel_mode_combo_->addItem(QStringLiteral("L \xe2\x86\x92 Stereo"),
-                                             static_cast<int>(recorder_core::MicChannelMode::LeftToStereo));
-            mic_channel_mode_combo_->addItem(QStringLiteral("R \xe2\x86\x92 Stereo"),
-                                             static_cast<int>(recorder_core::MicChannelMode::RightToStereo));
-            mic_channel_mode_combo_->setFixedWidth(160);
-            mic_channel_mode_combo_->setProperty("settingsRowInput", true);
-            hl->addWidget(mic_channel_mode_combo_, 0, Qt::AlignVCenter);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
-        }
-
-        // Capture the insertion point for the Microphone post-processing row, which is
-        // built later but must appear visually here (immediately after Mic channel mode).
-        int mic_post_insert_index = aes_layout->count();
-
-        // Audio bitrate
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("Audio bitrate"), row);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioBitrate, row), 0, Qt::AlignVCenter);
-            hl->addStretch(1);
-            audio_bitrate_kbps_spin_ = new QSpinBox(row);
-            audio_bitrate_kbps_spin_->setObjectName(QStringLiteral("audioBitrateKbpsSpin"));
-            audio_bitrate_kbps_spin_->setRange(32, 510);
-            audio_bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
-            audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
-            audio_bitrate_kbps_spin_->setFixedWidth(160);
-            audio_bitrate_kbps_spin_->setProperty("settingsRowInput", true);
-            hl->addWidget(audio_bitrate_kbps_spin_, 0, Qt::AlignVCenter);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
-        }
-
         // Opus frame duration
         {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(0, 12, 0, 12);
@@ -4074,144 +4516,6 @@ void ConfigPage::buildAudioExpertSection() {
             aes_layout->addWidget(audio_sample_rate_row_);
         }
 
-        // Channels (ADR 0030 — 0.6.0)
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            audio_channels_row_ = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(audio_channels_row_);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("Channels"), audio_channels_row_);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioChannels, audio_channels_row_), 0,
-                          Qt::AlignVCenter);
-            hl->addStretch(1);
-            audio_channels_combo_ = new QComboBox(audio_channels_row_);
-            audio_channels_combo_->setObjectName(QStringLiteral("audioChannelsCombo"));
-            audio_channels_combo_->addItem(QStringLiteral("Stereo"), 2);
-            audio_channels_combo_->addItem(QStringLiteral("Mono"), 1);
-            {
-                const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
-                audio_channels_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Stereo */);
-            }
-            audio_channels_combo_->setFixedWidth(160);
-            audio_channels_combo_->setProperty("settingsRowInput", true);
-            hl->addWidget(audio_channels_combo_, 0, Qt::AlignVCenter);
-            audio_channels_row_->setProperty("settingsRow", true);
-            aes_layout->addWidget(audio_channels_row_);
-        }
-
-        // Bit depth (ADR 0030 — 0.6.0): visible for PCM/FLAC only
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            audio_bit_depth_row_ = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(audio_bit_depth_row_);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("Bit depth"), audio_bit_depth_row_);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioBitDepth, audio_bit_depth_row_), 0,
-                          Qt::AlignVCenter);
-            hl->addStretch(1);
-            audio_bit_depth_combo_ = new QComboBox(audio_bit_depth_row_);
-            audio_bit_depth_combo_->setObjectName(QStringLiteral("audioBitDepthCombo"));
-            // Items seeded for PCM (16/24/32/32-float); rebuilt when codec changes.
-            audio_bit_depth_combo_->addItem(QStringLiteral("16-bit"), 16);
-            audio_bit_depth_combo_->addItem(QStringLiteral("24-bit"), 24);
-            audio_bit_depth_combo_->addItem(QStringLiteral("32-bit"), 32);
-            audio_bit_depth_combo_->addItem(QStringLiteral("32-bit float"), kFloatBitDepthItemData);
-            {
-                const int idx = audio_bit_depth_combo_->findData(
-                    EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
-                audio_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 16 */);
-            }
-            audio_bit_depth_combo_->setFixedWidth(160);
-            audio_bit_depth_combo_->setProperty("settingsRowInput", true);
-            hl->addWidget(audio_bit_depth_combo_, 0, Qt::AlignVCenter);
-            audio_bit_depth_row_->setProperty("settingsRow", true);
-            audio_bit_depth_row_->setVisible(false); // shown only for PCM/FLAC
-            aes_layout->addWidget(audio_bit_depth_row_);
-        }
-
-        // FLAC compression level (ADR 0030 — 0.6.0): visible for FLAC only
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            flac_compression_row_ = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(flac_compression_row_);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("FLAC compression"), flac_compression_row_);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFlacCompression, flac_compression_row_), 0,
-                          Qt::AlignVCenter);
-            hl->addStretch(1);
-            flac_compression_spin_ = new QSpinBox(flac_compression_row_);
-            flac_compression_spin_->setObjectName(QStringLiteral("flacCompressionLevelSpin"));
-            flac_compression_spin_->setRange(0, 8);
-            flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
-            flac_compression_spin_->setFixedWidth(160);
-            flac_compression_spin_->setProperty("settingsRowInput", true);
-            hl->addWidget(flac_compression_spin_, 0, Qt::AlignVCenter);
-            flac_compression_row_->setProperty("settingsRow", true);
-            flac_compression_row_->setVisible(false); // shown only for FLAC
-            aes_layout->addWidget(flac_compression_row_);
-        }
-
-        // Brickwall limiter (Audio v2 — 0.6.0) — Slice 3 (cogwheels -> inline): the
-        // cogwheel popover is gone. Plain inline toggle; the ceiling spin appears
-        // inline, right-aligned in the same row, only while the limiter is on.
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* lbl = new QLabel(QStringLiteral("Brickwall limiter"), row);
-            lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 0);
-            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kBrickwallLimiter, row), 0, Qt::AlignVCenter);
-            hl->addStretch(1);
-
-            limiter_ceiling_spin_ = new QDoubleSpinBox(row);
-            limiter_ceiling_spin_->setObjectName(QStringLiteral("limiterCeilingSpin"));
-            limiter_ceiling_spin_->setRange(-60.0, 0.0);
-            limiter_ceiling_spin_->setSingleStep(0.5);
-            limiter_ceiling_spin_->setDecimals(1);
-            limiter_ceiling_spin_->setSuffix(QStringLiteral(" dB"));
-            limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
-            limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
-            limiter_ceiling_spin_->setFixedWidth(160);
-            limiter_ceiling_spin_->setProperty("settingsRowInput", true);
-            hl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
-
-            limiter_check_ = new ui::widgets::ExoCheckBox(QString(), row);
-            limiter_check_->setObjectName(QStringLiteral("limiterCheck"));
-            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
-            hl->addWidget(limiter_check_, 0, Qt::AlignVCenter);
-
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
-        }
-
         // A/V clock slaving (H-3) — expert toggle, default on. A single
         // enable/disable control (no sub-parameters: the controller constants are
         // fixed, there is no meaningful user choice between thresholds). Slice 3
@@ -4240,221 +4544,12 @@ void ConfigPage::buildAudioExpertSection() {
             row->setProperty("settingsRow", true);
             aes_layout->addWidget(row);
         }
-
-        // Microphone post-processing (Audio v2 — 0.6.0) — Slice 3 (cogwheels -> inline):
-        // the 4 stage rows sit behind an inline disclosure (chevron) instead of a
-        // cogwheel popover. HPF -> Gate -> AGC -> RNNoise order preserved.
-        // Constructed here but inserted at mic_post_insert_index so it appears visually
-        // immediately after the Mic channel mode row (mic source/tuning/processing grouped).
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->insertWidget(mic_post_insert_index, rule);
-
-            // --- Create all sub-controls (objectNames + values preserved as before). ---
-            mic_hpf_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("High-pass filter"), audio_expert_section_);
-            mic_hpf_check_->setObjectName(QStringLiteral("micHpfCheck"));
-            mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
-
-            mic_hpf_cutoff_spin_ = new QDoubleSpinBox(audio_expert_section_);
-            mic_hpf_cutoff_spin_->setObjectName(QStringLiteral("micHpfCutoffSpin"));
-            mic_hpf_cutoff_spin_->setRange(20.0, 1000.0);
-            mic_hpf_cutoff_spin_->setSingleStep(5.0);
-            mic_hpf_cutoff_spin_->setDecimals(0);
-            mic_hpf_cutoff_spin_->setSuffix(QStringLiteral(" Hz"));
-            mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
-            mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
-            mic_hpf_cutoff_spin_->setFixedWidth(160);
-            mic_hpf_cutoff_spin_->setProperty("settingsRowInput", true);
-
-            mic_gate_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise gate"), audio_expert_section_);
-            mic_gate_check_->setObjectName(QStringLiteral("micGateCheck"));
-            mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
-
-            mic_gate_threshold_spin_ = new QDoubleSpinBox(audio_expert_section_);
-            mic_gate_threshold_spin_->setObjectName(QStringLiteral("micGateThresholdSpin"));
-            mic_gate_threshold_spin_->setRange(-80.0, 0.0);
-            mic_gate_threshold_spin_->setSingleStep(1.0);
-            mic_gate_threshold_spin_->setDecimals(0);
-            mic_gate_threshold_spin_->setSuffix(QStringLiteral(" dB"));
-            mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
-            mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
-            mic_gate_threshold_spin_->setFixedWidth(160);
-            mic_gate_threshold_spin_->setProperty("settingsRowInput", true);
-
-            mic_agc_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Automatic gain control"), audio_expert_section_);
-            mic_agc_check_->setObjectName(QStringLiteral("micAgcCheck"));
-            mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
-
-            mic_agc_target_spin_ = new QDoubleSpinBox(audio_expert_section_);
-            mic_agc_target_spin_->setObjectName(QStringLiteral("micAgcTargetSpin"));
-            mic_agc_target_spin_->setRange(-40.0, 0.0);
-            mic_agc_target_spin_->setSingleStep(1.0);
-            mic_agc_target_spin_->setDecimals(0);
-            mic_agc_target_spin_->setSuffix(QStringLiteral(" dB"));
-            mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
-            mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
-            mic_agc_target_spin_->setFixedWidth(160);
-            mic_agc_target_spin_->setProperty("settingsRowInput", true);
-
-            mic_rnnoise_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Noise suppression (RNNoise)"), audio_expert_section_);
-            mic_rnnoise_check_->setObjectName(QStringLiteral("micRnnoiseCheck"));
-            mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
-
-            // --- Disclosure header row: label + info-i + live status + chevron. ---
-            mic_post_header_ = new QWidget(audio_expert_section_);
-            mic_post_header_->setObjectName(QStringLiteral("micPostProcessingHeader"));
-            auto* header_hl = new QHBoxLayout(mic_post_header_);
-            header_hl->setContentsMargins(0, 12, 0, 12);
-            header_hl->setSpacing(4); // label <-> info-i, matches makeSettingsRow
-            auto* header_lbl = new QLabel(QStringLiteral("Microphone post-processing"), mic_post_header_);
-            header_lbl->setProperty("labelRole", "settingsRowLabel");
-            header_hl->addWidget(header_lbl, 0);
-            header_hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicPostProcessing, mic_post_header_), 0,
-                                 Qt::AlignVCenter);
-            header_hl->addStretch(1);
-
-            mic_post_status_label_ = new QLabel(mic_post_header_);
-            mic_post_status_label_->setObjectName(QStringLiteral("micPostProcessingStatus"));
-            mic_post_status_label_->setProperty("labelRole", "muted");
-            header_hl->addWidget(mic_post_status_label_, 0, Qt::AlignVCenter);
-
-            mic_post_disclosure_btn_ = new QToolButton(mic_post_header_);
-            mic_post_disclosure_btn_->setObjectName(QStringLiteral("micPostProcessingDisclosure"));
-            mic_post_disclosure_btn_->setAutoRaise(true);
-            mic_post_disclosure_btn_->setCheckable(true);
-            mic_post_disclosure_btn_->setChecked(false);
-            mic_post_disclosure_btn_->setCursor(Qt::PointingHandCursor);
-            mic_post_disclosure_btn_->setFixedSize(28, 28);
-            mic_post_disclosure_btn_->setIconSize(QSize(16, 16));
-            mic_post_disclosure_btn_->setToolTip(QStringLiteral("Expand microphone post-processing stages"));
-            mic_post_disclosure_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("chevron-down"),
-                                                                    QString::fromUtf8(ui::theme::ActiveTheme().mut), 16,
-                                                                    mic_post_disclosure_btn_->devicePixelRatioF()));
-            header_hl->addWidget(mic_post_disclosure_btn_, 0, Qt::AlignVCenter);
-
-            mic_post_header_->setProperty("settingsRow", true);
-            aes_layout->insertWidget(mic_post_insert_index + 1, mic_post_header_);
-
-            // --- Disclosure content: the four stage rows, hidden until expanded. ---
-            mic_post_content_ = new QWidget(audio_expert_section_);
-            mic_post_content_->setObjectName(QStringLiteral("micPostProcessingContent"));
-            auto* content_layout = new QVBoxLayout(mic_post_content_);
-            content_layout->setContentsMargins(20, 0, 0, 12); // indent under the header label
-            content_layout->setSpacing(10);
-            mic_post_content_->setVisible(false);
-            aes_layout->insertWidget(mic_post_insert_index + 2, mic_post_content_);
-
-            // Each sub-stage is a mini row: toggle (+ info-i) and, where relevant, an
-            // indented parameter row.
-            auto makeStageRow = [](ui::widgets::ExoCheckBox* toggle, const QString& hint, QDoubleSpinBox* param_spin,
-                                   const QString& param_label, QWidget* stage_parent) -> QWidget* {
-                auto* container = new QWidget(stage_parent);
-                auto* vl = new QVBoxLayout(container);
-                vl->setContentsMargins(0, 0, 0, 0);
-                vl->setSpacing(4);
-
-                auto* toggle_row = new QWidget(container);
-                auto* thl = new QHBoxLayout(toggle_row);
-                thl->setContentsMargins(0, 0, 0, 0);
-                thl->setSpacing(4);
-                thl->addWidget(toggle, 0);
-                if (!hint.isEmpty())
-                    thl->addWidget(new ui::widgets::InfoHintIcon(hint, toggle_row), 0, Qt::AlignVCenter);
-                thl->addStretch(1);
-                vl->addWidget(toggle_row);
-
-                if (param_spin) {
-                    auto* param_row = new QWidget(container);
-                    auto* hl = new QHBoxLayout(param_row);
-                    hl->setContentsMargins(20, 0, 0, 0); // indent under toggle
-                    hl->setSpacing(14);
-                    auto* lbl = new QLabel(param_label, param_row);
-                    lbl->setProperty("labelRole", "settingsRowLabel");
-                    hl->addWidget(lbl, 1);
-                    hl->addWidget(param_spin, 0, Qt::AlignVCenter);
-                    vl->addWidget(param_row);
-                }
-                return container;
-            };
-
-            content_layout->addWidget(makeStageRow(mic_hpf_check_, ui::hints::kHighPassFilter, mic_hpf_cutoff_spin_,
-                                                   QStringLiteral("HPF cutoff"), mic_post_content_));
-            content_layout->addWidget(makeStageRow(mic_gate_check_, ui::hints::kNoiseGate, mic_gate_threshold_spin_,
-                                                   QStringLiteral("Gate threshold"), mic_post_content_));
-            content_layout->addWidget(makeStageRow(mic_agc_check_, ui::hints::kAgc, mic_agc_target_spin_,
-                                                   QStringLiteral("AGC target level"), mic_post_content_));
-            content_layout->addWidget(
-                makeStageRow(mic_rnnoise_check_, ui::hints::kRnnoise, nullptr, QString(), mic_post_content_));
-
-            // Expand/collapse: flip the chevron and show/hide the content container.
-            connect(mic_post_disclosure_btn_, &QToolButton::toggled, this, [this](bool expanded) {
-                if (mic_post_content_)
-                    mic_post_content_->setVisible(expanded);
-                if (mic_post_disclosure_btn_) {
-                    mic_post_disclosure_btn_->setIcon(
-                        ui::theme::lucideIcon(expanded ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
-                                              QString::fromUtf8(ui::theme::ActiveTheme().mut), 16,
-                                              mic_post_disclosure_btn_->devicePixelRatioF()));
-                    mic_post_disclosure_btn_->setToolTip(
-                        expanded ? QStringLiteral("Collapse microphone post-processing stages")
-                                 : QStringLiteral("Expand microphone post-processing stages"));
-                }
-            });
-
-            // Status text: list the active stages, updated whenever any stage toggles.
-            auto updateMicPostStatus = [this]() {
-                QStringList active;
-                if (mic_hpf_check_->isChecked())
-                    active << QStringLiteral("High-pass");
-                if (mic_gate_check_->isChecked())
-                    active << QStringLiteral("Gate");
-                if (mic_agc_check_->isChecked())
-                    active << QStringLiteral("AGC");
-                if (mic_rnnoise_check_->isChecked())
-                    active << QStringLiteral("RNNoise");
-                if (mic_post_status_label_)
-                    mic_post_status_label_->setText(active.isEmpty() ? QStringLiteral("Off")
-                                                                     : active.join(QStringLiteral(" \xC2\xB7 ")));
-            };
-            // Wire to the stage toggles so the status stays live.
-            connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
-            connect(mic_gate_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
-            connect(mic_agc_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
-            connect(mic_rnnoise_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
-            // Set initial status text.
-            updateMicPostStatus();
-        }
-
-        // (0.6.0: the former "PCM / FLAC codecs" roadmap placeholder was removed —
-        // PCM and FLAC are now real, selectable audio codecs in the codec dropdown,
-        // so advertising them as upcoming here would contradict the live control.)
     }
     if (auto* audio_panel_layout = qobject_cast<QVBoxLayout*>(audio_panel_->layout())) {
         audio_panel_layout->insertWidget(audio_expert_insert_index_, audio_expert_section_);
     }
 
-    // PS-PHASE-C: Audio expert controls (Polish-R1: slider replaces spinbox for mic gain).
-    connect(mic_gain_slider_, &QSlider::valueChanged, this, [this](int db) {
-        if (mic_gain_db_label_)
-            mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
-        audio_ui_state_.mic_gain_linear = std::powf(10.f, static_cast<float>(db) / 20.f);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_channel_mode_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        if (idx < 0)
-            return;
-        audio_ui_state_.mic_channel_mode =
-            static_cast<recorder_core::MicChannelMode>(mic_channel_mode_combo_->itemData(idx).toInt());
-        emitCurrentAudioSettings();
-    });
-    connect(audio_bitrate_kbps_spin_, &QSpinBox::valueChanged, this, [this](int kbps) {
-        audio_ui_state_.audio_bitrate_kbps = static_cast<uint32_t>(kbps);
-        emitCurrentAudioSettings();
-    });
+    // --- Model bindings for the Expert-tier audio controls. ---
     connect(opus_frame_duration_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         if (idx < 0)
             return;
@@ -4466,85 +4561,14 @@ void ConfigPage::buildAudioExpertSection() {
         audio_ui_state_.opus_complexity = val;
         emitCurrentAudioSettings();
     });
-    // Channel / sample-format model (ADR 0030 — 0.6.0).
     connect(audio_sample_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         if (idx < 0 || !audio_sample_rate_combo_)
             return;
         audio_ui_state_.audio_sample_rate = static_cast<uint32_t>(audio_sample_rate_combo_->itemData(idx).toInt());
         emitCurrentAudioSettings();
     });
-    connect(audio_channels_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        if (idx < 0 || !audio_channels_combo_)
-            return;
-        audio_ui_state_.audio_channels = static_cast<uint32_t>(audio_channels_combo_->itemData(idx).toInt());
-        emitCurrentAudioSettings();
-    });
-    connect(audio_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
-        if (idx < 0 || !audio_bit_depth_combo_)
-            return;
-        // Float-PCM uses the negative kFloatBitDepthItemData sentinel (see
-        // EncodeBitDepthComboData) so it cannot be confused with the plain
-        // int "32-bit" entry.
-        const int raw = audio_bit_depth_combo_->itemData(idx).toInt();
-        if (raw < 0) {
-            audio_ui_state_.audio_bit_depth = 32u;
-            audio_ui_state_.audio_pcm_float = true;
-        } else {
-            audio_ui_state_.audio_bit_depth = static_cast<uint32_t>(raw);
-            audio_ui_state_.audio_pcm_float = false;
-        }
-        emitCurrentAudioSettings();
-    });
-    connect(flac_compression_spin_, &QSpinBox::valueChanged, this, [this](int val) {
-        audio_ui_state_.flac_compression_level = val;
-        emitCurrentAudioSettings();
-    });
-    connect(limiter_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
-        audio_ui_state_.limiter_enabled = on;
-        if (limiter_ceiling_spin_)
-            limiter_ceiling_spin_->setVisible(on);
-        emitCurrentAudioSettings();
-    });
-    connect(limiter_ceiling_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
-        audio_ui_state_.limiter_ceiling_db = static_cast<float>(db);
-        emitCurrentAudioSettings();
-    });
     connect(clock_slaving_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
         audio_ui_state_.clock_slaving_enabled = on;
-        emitCurrentAudioSettings();
-    });
-    connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
-        audio_ui_state_.mic_hpf_enabled = on;
-        if (mic_hpf_cutoff_spin_)
-            mic_hpf_cutoff_spin_->setEnabled(on);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_hpf_cutoff_spin_, &QDoubleSpinBox::valueChanged, this, [this](double hz) {
-        audio_ui_state_.mic_hpf_cutoff_hz = static_cast<float>(hz);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_gate_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
-        audio_ui_state_.mic_gate_enabled = on;
-        if (mic_gate_threshold_spin_)
-            mic_gate_threshold_spin_->setEnabled(on);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_gate_threshold_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
-        audio_ui_state_.mic_gate_threshold_db = static_cast<float>(db);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_agc_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
-        audio_ui_state_.mic_agc_enabled = on;
-        if (mic_agc_target_spin_)
-            mic_agc_target_spin_->setEnabled(on);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_agc_target_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
-        audio_ui_state_.mic_agc_target_db = static_cast<float>(db);
-        emitCurrentAudioSettings();
-    });
-    connect(mic_rnnoise_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
-        audio_ui_state_.mic_rnnoise_enabled = on;
         emitCurrentAudioSettings();
     });
 }
@@ -5466,106 +5490,9 @@ void ConfigPage::updateExpertModeVisibility() {
     // PS-PHASE-C: audio_expert_section.
     if (audio_expert_section_)
         audio_expert_section_->setVisible(expert_mode_enabled_);
-    if (expert_mode_enabled_) {
-        // Seed audio expert controls from model.
-        if (mic_gain_slider_) {
-            const QSignalBlocker b(mic_gain_slider_);
-            const int db =
-                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
-            mic_gain_slider_->setValue(db);
-            if (mic_gain_db_label_)
-                mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
-        }
-        if (mic_channel_mode_combo_) {
-            const QSignalBlocker b(mic_channel_mode_combo_);
-            const int idx = mic_channel_mode_combo_->findData(static_cast<int>(audio_ui_state_.mic_channel_mode));
-            if (idx >= 0)
-                mic_channel_mode_combo_->setCurrentIndex(idx);
-        }
-        if (audio_bitrate_kbps_spin_) {
-            const QSignalBlocker b(audio_bitrate_kbps_spin_);
-            audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
-        }
-        if (opus_frame_duration_combo_) {
-            const QSignalBlocker b(opus_frame_duration_combo_);
-            const int idx = opus_frame_duration_combo_->findData(static_cast<int>(audio_ui_state_.opus_frame_duration));
-            if (idx >= 0)
-                opus_frame_duration_combo_->setCurrentIndex(idx);
-        }
-        if (opus_complexity_spin_) {
-            const QSignalBlocker b(opus_complexity_spin_);
-            opus_complexity_spin_->setValue(audio_ui_state_.opus_complexity);
-        }
-        if (limiter_check_) {
-            const QSignalBlocker b(limiter_check_);
-            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
-        }
-        if (clock_slaving_check_) {
-            const QSignalBlocker b(clock_slaving_check_);
-            clock_slaving_check_->setChecked(audio_ui_state_.clock_slaving_enabled);
-        }
-        if (limiter_ceiling_spin_) {
-            const QSignalBlocker b(limiter_ceiling_spin_);
-            limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
-            limiter_ceiling_spin_->setVisible(audio_ui_state_.limiter_enabled);
-        }
-        if (mic_hpf_check_) {
-            const QSignalBlocker b(mic_hpf_check_);
-            mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
-        }
-        if (mic_hpf_cutoff_spin_) {
-            const QSignalBlocker b(mic_hpf_cutoff_spin_);
-            mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
-            mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
-        }
-        if (mic_gate_check_) {
-            const QSignalBlocker b(mic_gate_check_);
-            mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
-        }
-        if (mic_gate_threshold_spin_) {
-            const QSignalBlocker b(mic_gate_threshold_spin_);
-            mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
-            mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
-        }
-        if (mic_agc_check_) {
-            const QSignalBlocker b(mic_agc_check_);
-            mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
-        }
-        if (mic_agc_target_spin_) {
-            const QSignalBlocker b(mic_agc_target_spin_);
-            mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
-            mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
-        }
-        if (mic_rnnoise_check_) {
-            const QSignalBlocker b(mic_rnnoise_check_);
-            mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
-        }
-        // Channel / sample-format model (ADR 0030 — 0.6.0).
-        if (audio_sample_rate_combo_) {
-            const QSignalBlocker b(audio_sample_rate_combo_);
-            const int idx = audio_sample_rate_combo_->findData(static_cast<int>(audio_ui_state_.audio_sample_rate));
-            if (idx >= 0)
-                audio_sample_rate_combo_->setCurrentIndex(idx);
-        }
-        if (audio_channels_combo_) {
-            const QSignalBlocker b(audio_channels_combo_);
-            const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
-            if (idx >= 0)
-                audio_channels_combo_->setCurrentIndex(idx);
-        }
-        if (audio_bit_depth_combo_) {
-            const QSignalBlocker b(audio_bit_depth_combo_);
-            const int idx = audio_bit_depth_combo_->findData(
-                EncodeBitDepthComboData(audio_ui_state_.audio_bit_depth, audio_ui_state_.audio_pcm_float));
-            if (idx >= 0)
-                audio_bit_depth_combo_->setCurrentIndex(idx);
-        }
-        if (flac_compression_spin_) {
-            const QSignalBlocker b(flac_compression_spin_);
-            flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
-        }
-        updateAudioFormatControlVisibility();
-    }
+    // Re-seed every audio control from the model: the Default tier is always
+    // live, and the Expert rows have just been lazily built above.
+    seedAudioControlsFromState();
     // PS-PHASE-C: Presence v0.6 placeholder section.
     if (auto* pres_ph = presence_panel_
                             ? presence_panel_->findChild<QWidget*>(QStringLiteral("presenceV1PlaceholderSection"))
