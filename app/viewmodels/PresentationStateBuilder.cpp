@@ -49,11 +49,11 @@ PresentationStateBuilder::BuildAudioConfiguration(const capability::AudioUiState
     snap.target_kind = audio_state.target_kind;
     snap.controls_locked = controls_locked;
 
-    // App is always visible now — it is a persisted setting, not scoped to one
-    // capture target. Only its "active" state (rendered receded vs. live) tracks
-    // whether the current target is a window; the ConfigPage consumes `active`
-    // to decide receded rendering.
-    snap.app = DeriveSource(app_row, /*visible=*/true, controls_locked);
+    // App visibility is unchanged (target-kind policy) — ConfigPage::setVisible
+    // still consumes `visible` directly and has not been ported to `active` yet
+    // (Task 6). `active` is the new field carrying the same window-scoped signal
+    // for the future consumer; today the two are intentionally identical.
+    snap.app = DeriveSource(app_row, /*visible=*/is_window, controls_locked);
     snap.app.active = is_window;
 
     // Sys is always visible (relabelled per target kind in the consumer).
