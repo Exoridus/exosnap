@@ -57,7 +57,7 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
       was built from** and continue with §4. Re-cut an RC if that commit moved.
 
 > The RC prerelease stays on the releases page as a normal, visible prerelease. As of the
-> UPDATE-SEMVER-PRERELEASE-R1 fix (first shipped in `v0.9.0-rc2`), a running RC correctly detects a
+> SemVer prerelease-ordering fix (first shipped in `v0.9.0-rc2`), a running RC correctly detects a
 > later RC or the eventual final release of the same `X.Y.Z` as a newer, available update (`rc1 <
 > rc2 < ... < the final X.Y.Z`) — **but only if the running build itself already contains this fix**.
 > `v0.9.0-rc1` predates it and still compares every `0.9.0`-family tag as equal, so a machine left on
