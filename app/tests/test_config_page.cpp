@@ -262,7 +262,11 @@ TEST_F(ConfigPageTest, FrameRateControl_UsesRealValues) {
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(frame_rate, nullptr);
     EXPECT_TRUE(frame_rate->isEnabled());
-    EXPECT_GE(frame_rate->count(), 6);
+    EXPECT_EQ(frame_rate->count(), 4);
+    EXPECT_GE(frame_rate->findData(15), 0);
+    EXPECT_GE(frame_rate->findData(30), 0);
+    EXPECT_GE(frame_rate->findData(60), 0);
+    EXPECT_EQ(frame_rate->findData(24), -1);
 
     VideoSettingsModel changed;
     bool emitted = false;
@@ -277,6 +281,32 @@ TEST_F(ConfigPageTest, FrameRateControl_UsesRealValues) {
     EXPECT_TRUE(emitted);
     EXPECT_EQ(changed.frame_rate_num, 30u);
     EXPECT_EQ(changed.frame_rate_den, 1u);
+}
+
+TEST_F(ConfigPageTest, FrameRate_ExpertSwapsComboForFreeSpinbox) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>("frameRateCombo");
+    auto* spin = page.findChild<QSpinBox*>("frameRateSpin");
+    ASSERT_NE(combo, nullptr);
+    ASSERT_NE(spin, nullptr);
+    EXPECT_TRUE(combo->isHidden());
+    EXPECT_FALSE(spin->isHidden());
+    EXPECT_EQ(spin->minimum(), 1);
+    EXPECT_EQ(spin->maximum(), 240);
+    spin->setValue(48);
+    // leaving Expert keeps the value and displays the nearest list entry
+    page.setExpertModeEnabled(false);
+    EXPECT_FALSE(combo->isHidden());
+    EXPECT_EQ(combo->currentData().toInt(), 60); // nearest of {15,30,60} to 48
+}
+
+TEST_F(ConfigPageTest, TimingCombo_UsesDescriptiveLabels) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* timing = page.findChild<QComboBox*>("timingCombo");
+    ASSERT_NE(timing, nullptr);
+    EXPECT_EQ(timing->itemText(0), QStringLiteral("CFR \xc2\xb7 Constant"));
+    EXPECT_EQ(timing->itemText(1), QStringLiteral("VFR \xc2\xb7 Variable"));
 }
 
 TEST_F(ConfigPageTest, TimingCombo_MapsToVideoSettingsAndMp4DisablesVfr) {
@@ -665,11 +695,11 @@ TEST_F(ConfigPageTest, FormatSummary_RefreshesOnFrameRateComboChange) {
     auto* summary = page.findChild<QLabel*>(QStringLiteral("compatOkLabel"));
     ASSERT_NE(summary, nullptr);
 
-    const int idx24 = frame_rate->findData(24);
-    ASSERT_GE(idx24, 0);
-    frame_rate->setCurrentIndex(idx24);
+    const int idx15 = frame_rate->findData(15);
+    ASSERT_GE(idx15, 0);
+    frame_rate->setCurrentIndex(idx15);
 
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("24 fps")))
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("15 fps")))
         << "Summary must follow the frame-rate combo, got: " << summary->text().toStdString();
 }
 

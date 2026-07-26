@@ -673,6 +673,22 @@ capability::AudioCodec IntToAudioCodec(int value) {
     return capability::AudioCodec::AacMf;
 }
 
+// Maps an arbitrary (Expert-entered) frame rate onto the closest entry in the
+// default {15, 30, 60} list, so leaving Expert mode has a sane combo selection
+// instead of silently landing on whatever index 0 happens to be.
+int NearestListedFps(uint32_t num) {
+    int best = 60;
+    uint32_t best_d = ~0u;
+    for (int fps : {15, 30, 60}) {
+        const uint32_t d = num > uint32_t(fps) ? num - fps : fps - num;
+        if (d < best_d) {
+            best_d = d;
+            best = fps;
+        }
+    }
+    return best;
+}
+
 FilenameTargetContext ExamplePreviewContext(const QString& profile_name, const OutputSettingsModel& settings) {
     FilenameTargetContext context;
     context.target_name = L"Desktop - Display 1";
@@ -1053,7 +1069,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
     frame_rate_combo_->setFixedWidth(160);
     frame_rate_combo_->setProperty("settingsRowInput", true);
-    for (const int fps : {24, 25, 30, 50, 60}) {
+    for (const int fps : {15, 30, 60}) {
         frame_rate_combo_->addItem(QStringLiteral("%1 fps").arg(fps), fps);
     }
     frame_rate_combo_->addItem(QStringLiteral("120 fps (unavailable)"), 120);
@@ -1064,18 +1080,42 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
     }
 
+    // Expert-only free-entry frame rate (1-240 fps). Swapped in for the combo by
+    // updateExpertModeVisibility(); hidden by default (non-expert / at construction).
+    frame_rate_spin_ = new QSpinBox(quality_panel);
+    frame_rate_spin_->setObjectName(QStringLiteral("frameRateSpin"));
+    frame_rate_spin_->setAccessibleName(QStringLiteral("Frame rate"));
+    frame_rate_spin_->setRange(1, 240);
+    frame_rate_spin_->setSuffix(QStringLiteral(" fps"));
+    frame_rate_spin_->setFixedWidth(160);
+    frame_rate_spin_->setProperty("settingsRowInput", true);
+    frame_rate_spin_->setVisible(false);
+    // Same wheel-guard policy as quality_cq_spin_: scrolling the settings page
+    // must not silently retune the frame rate.
+    frame_rate_spin_->setFocusPolicy(Qt::StrongFocus);
+    frame_rate_spin_->installEventFilter(this);
+
+    auto* frame_rate_control = new QWidget(quality_panel);
+    auto* frame_rate_control_layout = new QHBoxLayout(frame_rate_control);
+    frame_rate_control_layout->setContentsMargins(0, 0, 0, 0);
+    frame_rate_control_layout->setSpacing(0);
+    frame_rate_control_layout->addWidget(frame_rate_combo_);
+    frame_rate_control_layout->addWidget(frame_rate_spin_);
+
     quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Frame rate"),
                                               new ui::widgets::InfoHintIcon(ui::hints::kFrameRate, quality_panel),
-                                              QString(), frame_rate_combo_));
+                                              QString(), frame_rate_control));
 
     // --- Frame timing row (Quality & timing card) ---
     // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
     // itemData carries the timing id (1 = CFR, 0 = VFR) consumed by onTimingSelected;
     // updateTimingSelection() disables the VFR item when the container can't carry it.
+    // Item order is CFR first (index 0) so the descriptive label reads naturally;
+    // all lookups below must use findData(), never a positional index.
     timing_combo_ = new QComboBox(quality_panel);
     timing_combo_->setObjectName(QStringLiteral("timingCombo"));
-    timing_combo_->addItem(QStringLiteral("CFR"), 1);
-    timing_combo_->addItem(QStringLiteral("VFR"), 0);
+    timing_combo_->addItem(QStringLiteral("CFR \xc2\xb7 Constant"), 1);
+    timing_combo_->addItem(QStringLiteral("VFR \xc2\xb7 Variable"), 0);
     timing_combo_->setFixedWidth(160);
     timing_combo_->setProperty("settingsRowInput", true);
 
@@ -1936,6 +1976,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     }
     connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onFrameRateChanged);
+    connect(frame_rate_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onFrameRateSpinChanged);
     connect(timing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (index < 0 || !timing_combo_)
             return;
@@ -2084,6 +2125,11 @@ bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
         event->ignore();
         return true;
     }
+    // Same guard for the Expert free-entry frame-rate spinbox.
+    if (watched == frame_rate_spin_ && event->type() == QEvent::Wheel && !frame_rate_spin_->hasFocus()) {
+        event->ignore();
+        return true;
+    }
     // Re-elide the resolved "Saves as <path>" footer when the label is resized.
     if (watched == output_saves_to_label_ && event->type() == QEvent::Resize) {
         applyOutputSavesToElision();
@@ -2164,6 +2210,16 @@ void ConfigPage::onFrameRateChanged(int index) {
         return;
     const int fps = frame_rate_combo_->itemData(index).toInt();
     if (fps <= 0 || fps == 120)
+        return;
+    video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
+    video_settings_.frame_rate_den = 1;
+    updateQualitySegmentSelection();
+    updateFormatDisplay();
+    emitCurrentVideoSettings();
+}
+
+void ConfigPage::onFrameRateSpinChanged(int fps) {
+    if (updating_frame_rate_ || fps <= 0)
         return;
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
@@ -3036,12 +3092,22 @@ void ConfigPage::updateQualitySegmentSelection() {
 }
 
 void ConfigPage::updateFrameRateSelection() {
+    // The Expert spinbox always mirrors the model's exact value, regardless of
+    // whether it is currently visible.
+    if (frame_rate_spin_) {
+        const QSignalBlocker sblocker(frame_rate_spin_);
+        frame_rate_spin_->setValue(static_cast<int>(video_settings_.frame_rate_num));
+    }
+
     if (!frame_rate_combo_)
         return;
 
+    // The combo only carries {15, 30, 60} (+ disabled 120), so an Expert-entered
+    // value that isn't one of those lands on the nearest enabled entry instead
+    // of leaving the combo on a stale selection.
     const QSignalBlocker blocker(frame_rate_combo_);
-    const int idx = frame_rate_combo_->findData(static_cast<int>(video_settings_.frame_rate_num));
-    if (idx >= 0 && video_settings_.frame_rate_num != 120) {
+    const int idx = frame_rate_combo_->findData(NearestListedFps(video_settings_.frame_rate_num));
+    if (idx >= 0) {
         frame_rate_combo_->setCurrentIndex(idx);
     }
 }
@@ -5337,6 +5403,15 @@ void ConfigPage::updateExpertModeVisibility() {
     // and reveals Rate control + CQ spinbox.
     if (quality_preset_row_widget_)
         quality_preset_row_widget_->setVisible(!expert_mode_enabled_);
+    // Task 5: Default shows the {15,30,60} list; Expert swaps in a free-entry
+    // spinbox (1-240 fps). Re-seed both from the model so leaving Expert lands
+    // the combo on the nearest listed entry, and entering Expert shows the
+    // exact current value in the spinbox.
+    if (frame_rate_combo_)
+        frame_rate_combo_->setVisible(!expert_mode_enabled_);
+    if (frame_rate_spin_)
+        frame_rate_spin_->setVisible(expert_mode_enabled_);
+    updateFrameRateSelection();
     if (quality_rate_section_)
         quality_rate_section_->setVisible(expert_mode_enabled_);
     if (quality_expert_widget_) {
@@ -5909,6 +5984,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     if (quality_preset_combo_)
         quality_preset_combo_->setEnabled(enabled);
     frame_rate_combo_->setEnabled(enabled);
+    if (frame_rate_spin_)
+        frame_rate_spin_->setEnabled(enabled);
     quality_segment_draft_->setEnabled(enabled);
     quality_segment_efficient_->setEnabled(enabled);
     quality_segment_balanced_->setEnabled(enabled);

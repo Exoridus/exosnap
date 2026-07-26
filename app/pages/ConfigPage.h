@@ -286,6 +286,7 @@ class ConfigPage : public QWidget {
     void onQualityChanged(int index);
     void onQualitySegmentSelected(int preset_id);
     void onFrameRateChanged(int index);
+    void onFrameRateSpinChanged(int fps);
     void onTimingSelected(int timing_id);
     void onOutputResolutionSelected(int mode_id);
     void onSplitToggled(bool on);
@@ -424,6 +425,9 @@ class ConfigPage : public QWidget {
 
     QComboBox* quality_combo_ = nullptr;
     QComboBox* frame_rate_combo_ = nullptr;
+    // Expert-only free-entry frame rate input (1-240 fps); swapped in for
+    // frame_rate_combo_ by updateExpertModeVisibility().
+    QSpinBox* frame_rate_spin_ = nullptr;
     QButtonGroup* quality_segment_group_ = nullptr;
     QPushButton* quality_segment_draft_ = nullptr;
     QPushButton* quality_segment_efficient_ = nullptr;
@@ -518,6 +522,9 @@ class ConfigPage : public QWidget {
 
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
+
+    // Reentrancy guard for the Expert free-entry frame-rate spinbox handler.
+    bool updating_frame_rate_ = false;
 
     QWidget* token_chip_flow_ = nullptr; // v10: always visible below pattern input
 
