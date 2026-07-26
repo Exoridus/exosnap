@@ -27,6 +27,7 @@
 #include "models/VideoSettingsModel.h"
 #include "models/WebcamSettings.h"
 #include "pages/ConfigPage.h"
+#include "pages/FrameRateLimits.h"
 #include "ui/widgets/CameraPreview.h"
 #include "ui/widgets/ExoCheckBox.h"
 #include "ui/widgets/ExoToggle.h"
@@ -337,12 +338,254 @@ TEST_F(ConfigPageTest, FrameRate_ExpertSwapsComboForFreeSpinbox) {
     EXPECT_TRUE(combo->isHidden());
     EXPECT_FALSE(spin->isHidden());
     EXPECT_EQ(spin->minimum(), 1);
-    EXPECT_EQ(spin->maximum(), 240);
+    // The ceiling follows the attached displays, so only its floor is host-independent.
+    EXPECT_EQ(spin->maximum(), page.maxFrameRate());
+    EXPECT_GE(spin->maximum(), kFallbackMaxFrameRate);
     spin->setValue(48);
-    // leaving Expert keeps the value and displays the nearest list entry
+    // Leaving Expert keeps the value AND displays it truthfully, instead of
+    // snapping the combo to a listed neighbour the app is not recording at.
     page.setExpertModeEnabled(false);
     EXPECT_FALSE(combo->isHidden());
-    EXPECT_EQ(combo->currentData().toInt(), 60); // nearest of {15,30,60} to 48
+    EXPECT_EQ(combo->currentData().toInt(), 48);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("48 fps (Custom)"));
+}
+
+// Truthful reporting: a frame rate outside the listed {15, 30, 60} must be shown
+// as itself, not rounded onto a listed entry.
+TEST_F(ConfigPageTest, FrameRate_CustomValueGetsItsOwnComboEntry) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+    const int listed_count = combo->count();
+
+    VideoSettingsModel custom = video_defaults_;
+    custom.frame_rate_num = 73;
+    custom.frame_rate_den = 1;
+    page.setVideoSettings(custom);
+
+    EXPECT_EQ(combo->count(), listed_count + 1);
+    EXPECT_EQ(combo->currentData().toInt(), 73);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("73 fps (Custom)"));
+    // Sits in numeric order: after 60 fps, before the disabled 120 entry.
+    EXPECT_EQ(combo->currentIndex(), combo->findData(60) + 1);
+}
+
+// A second custom value replaces the first one -- stale entries must not pile up.
+TEST_F(ConfigPageTest, FrameRate_CustomEntryIsReplacedNotAccumulated) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+    const int listed_count = combo->count();
+
+    VideoSettingsModel custom = video_defaults_;
+    custom.frame_rate_num = 73;
+    page.setVideoSettings(custom);
+    custom.frame_rate_num = 24;
+    page.setVideoSettings(custom);
+
+    EXPECT_EQ(combo->count(), listed_count + 1);
+    EXPECT_EQ(combo->currentData().toInt(), 24);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("24 fps (Custom)"));
+    EXPECT_EQ(combo->findData(73), -1);
+}
+
+// Choosing a listed entry adopts that value and retires the custom entry.
+TEST_F(ConfigPageTest, FrameRate_SelectingListedEntryRemovesCustomEntry) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+    const int listed_count = combo->count();
+
+    VideoSettingsModel custom = video_defaults_;
+    custom.frame_rate_num = 73;
+    page.setVideoSettings(custom);
+    ASSERT_EQ(combo->count(), listed_count + 1);
+
+    VideoSettingsModel changed;
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& settings) {
+        emitted = true;
+        changed = settings;
+    });
+
+    const int idx30 = combo->findData(30);
+    ASSERT_GE(idx30, 0);
+    combo->setCurrentIndex(idx30);
+
+    EXPECT_TRUE(emitted);
+    EXPECT_EQ(changed.frame_rate_num, 30u);
+    EXPECT_EQ(changed.frame_rate_den, 1u);
+    EXPECT_EQ(combo->count(), listed_count);
+    EXPECT_EQ(combo->currentData().toInt(), 30);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("30 fps"));
+}
+
+// The reported bug end to end: 60 -> Expert 73 -> back to Default must still say 73.
+TEST_F(ConfigPageTest, FrameRate_ExpertRoundTripKeepsCustomValueVisible) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+
+    VideoSettingsModel sixty = video_defaults_;
+    sixty.frame_rate_num = 60;
+    sixty.frame_rate_den = 1;
+    page.setVideoSettings(sixty);
+    ASSERT_EQ(combo->currentText(), QStringLiteral("60 fps"));
+
+    page.setExpertModeEnabled(true);
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("frameRateSpin"));
+    ASSERT_NE(spin, nullptr);
+    page.applyMaxFrameRate(144); // a 73 fps entry needs a display that can feed it
+    spin->setValue(73);
+
+    page.setExpertModeEnabled(false);
+    EXPECT_FALSE(combo->isHidden());
+    EXPECT_EQ(combo->currentText(), QStringLiteral("73 fps (Custom)"));
+    EXPECT_EQ(combo->currentData().toInt(), 73);
+}
+
+// The 120 entry stays exactly as it is: present, disabled, never selectable as a
+// listed value.
+TEST_F(ConfigPageTest, FrameRate_DisabledHundredTwentyEntryUnchanged) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+
+    const int idx120 = combo->findData(120);
+    ASSERT_GE(idx120, 0);
+    EXPECT_EQ(combo->itemText(idx120), QStringLiteral("120 fps (unavailable)"));
+    auto* model = qobject_cast<QStandardItemModel*>(combo->model());
+    ASSERT_NE(model, nullptr);
+    ASSERT_NE(model->item(idx120), nullptr);
+    EXPECT_FALSE(model->item(idx120)->isEnabled());
+
+    VideoSettingsModel changed;
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& settings) {
+        emitted = true;
+        changed = settings;
+    });
+    combo->setCurrentIndex(idx120);
+    EXPECT_FALSE(emitted) << "the disabled 120 entry must never reach the model";
+}
+
+// ── Expert frame-rate ceiling derived from the attached displays ─────────────
+// Screens can't be faked in a widget test, so the derivation itself is covered as
+// pure logic; the ConfigPage tests below drive the same re-evaluation entry point
+// the display-change signals use.
+
+TEST(FrameRateLimitsTest, MaxRefreshRateRoundsToNearestWholeFps) {
+    // 143.96 Hz -> 144: recording 144 CFR duplicates ~1 frame every 25 s, while
+    // rounding down to 143 would drop ~1 frame per second.
+    EXPECT_EQ(MaxFrameRateForRefreshRates({143.96}), 144);
+    EXPECT_EQ(MaxFrameRateForRefreshRates({59.94}), 60);
+    EXPECT_EQ(MaxFrameRateForRefreshRates({164.83}), 165);
+}
+
+TEST(FrameRateLimitsTest, MaxRefreshRateTakesTheFastestDisplay) {
+    EXPECT_EQ(MaxFrameRateForRefreshRates({60.0, 144.0, 75.0}), 144);
+    EXPECT_EQ(MaxFrameRateForRefreshRates({240.0, 60.0}), 240);
+}
+
+TEST(FrameRateLimitsTest, MaxRefreshRateFallsBackWhenNoRateIsReadable) {
+    EXPECT_EQ(MaxFrameRateForRefreshRates({}), kFallbackMaxFrameRate);
+    EXPECT_EQ(MaxFrameRateForRefreshRates({0.0}), kFallbackMaxFrameRate);
+    EXPECT_EQ(MaxFrameRateForRefreshRates({-1.0, 0.0}), kFallbackMaxFrameRate);
+    // The shipped default profile (CFR 60) must stay expressible on any host.
+    EXPECT_EQ(MaxFrameRateForRefreshRates({30.0}), kFallbackMaxFrameRate);
+}
+
+TEST(FrameRateLimitsTest, ClampKeepsValuesInsideTheUsableRange) {
+    EXPECT_EQ(ClampFrameRate(73u, 144), 73u);
+    EXPECT_EQ(ClampFrameRate(144u, 144), 144u);
+    EXPECT_EQ(ClampFrameRate(240u, 144), 144u);
+    EXPECT_EQ(ClampFrameRate(0u, 144), 1u);
+    EXPECT_EQ(ClampFrameRate(60u, 0), 1u);
+}
+
+TEST_F(ConfigPageTest, FrameRateCeiling_DrivesTheExpertSpinboxMaximum) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("frameRateSpin"));
+    ASSERT_NE(spin, nullptr);
+
+    page.applyMaxFrameRate(165);
+    EXPECT_EQ(page.maxFrameRate(), 165);
+    EXPECT_EQ(spin->maximum(), 165);
+    EXPECT_EQ(spin->minimum(), 1);
+}
+
+// A slower display becoming the fastest one (unplug of a high-refresh monitor)
+// must pull an over-ceiling configured rate down in the model, not just visually.
+TEST_F(ConfigPageTest, FrameRateCeiling_ClampsConfiguredRateOnReevaluation) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("frameRateSpin"));
+    ASSERT_NE(combo, nullptr);
+    ASSERT_NE(spin, nullptr);
+
+    page.applyMaxFrameRate(144);
+    VideoSettingsModel fast = video_defaults_;
+    fast.frame_rate_num = 110;
+    fast.frame_rate_den = 1;
+    page.setVideoSettings(fast);
+    ASSERT_EQ(combo->currentData().toInt(), 110);
+
+    VideoSettingsModel changed;
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& settings) {
+        emitted = true;
+        changed = settings;
+    });
+
+    page.applyMaxFrameRate(75);
+
+    EXPECT_TRUE(emitted) << "a clamped frame rate must be published, not silently displayed";
+    EXPECT_EQ(changed.frame_rate_num, 75u);
+    EXPECT_EQ(changed.frame_rate_den, 1u);
+    EXPECT_EQ(spin->value(), 75);
+    // The clamped value is off-list, so it is reported through the custom entry.
+    EXPECT_EQ(combo->currentText(), QStringLiteral("75 fps (Custom)"));
+}
+
+// Clamping onto a listed value retires the custom entry instead of leaving a
+// duplicate "60 fps (Custom)" next to the real 60 fps entry.
+TEST_F(ConfigPageTest, FrameRateCeiling_ClampOntoListedValueDropsCustomEntry) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+    const int listed_count = combo->count();
+
+    page.applyMaxFrameRate(144);
+    VideoSettingsModel fast = video_defaults_;
+    fast.frame_rate_num = 90;
+    page.setVideoSettings(fast);
+    ASSERT_EQ(combo->count(), listed_count + 1);
+
+    page.applyMaxFrameRate(60);
+
+    EXPECT_EQ(combo->count(), listed_count);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("60 fps"));
+    EXPECT_EQ(combo->currentData().toInt(), 60);
+}
+
+// A configured rate already inside the ceiling is left alone.
+TEST_F(ConfigPageTest, FrameRateCeiling_LeavesInRangeValueUntouched) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+
+    page.applyMaxFrameRate(144);
+    VideoSettingsModel fast = video_defaults_;
+    fast.frame_rate_num = 90;
+    page.setVideoSettings(fast);
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel&) { emitted = true; });
+
+    page.applyMaxFrameRate(120);
+
+    EXPECT_FALSE(emitted);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("90 fps (Custom)"));
 }
 
 TEST_F(ConfigPageTest, TimingCombo_UsesDescriptiveLabels) {

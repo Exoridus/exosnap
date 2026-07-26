@@ -8,6 +8,7 @@
 #include "../services/AudioDeviceNotifier.h"
 #include "../services/WebcamDeviceNotifier.h"
 #include "../viewmodels/PresentationState.h"
+#include "FrameRateLimits.h"
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 #include <recorder_core/audio_input_device.h>
@@ -119,6 +120,15 @@ class ConfigPage : public QWidget {
     // Task 7: the split controls are Default tier, built eagerly (no per-card expander).
     void setAudioSeparateExpanderExpanded(bool expanded);
     [[nodiscard]] bool audioSeparateExpanderExpanded() const noexcept;
+
+    // Applies the Expert free-entry frame-rate ceiling as if the attached displays
+    // had just been re-evaluated: it becomes the spinbox maximum, and a configured
+    // frame rate above it is clamped down (model + UI) and re-emitted. The real
+    // path derives the value from QScreen::refreshRate() across all screens; this
+    // entry point exists so the same re-evaluation can be driven deterministically
+    // without a display hot-plug.
+    void applyMaxFrameRate(int max_fps);
+    [[nodiscard]] int maxFrameRate() const noexcept;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Drive the embedded Webcam card deterministically for visual-test scenarios.
@@ -296,6 +306,10 @@ class ConfigPage : public QWidget {
     void onCursorChanged();
     void updateQualitySegmentSelection();
     void updateFrameRateSelection();
+    // Re-derives the Expert frame-rate ceiling from the attached displays and
+    // applies it. Called at construction and on every screen add/remove/refresh-rate
+    // change.
+    void updateFrameRateLimit();
     void updateTimingSelection();
     void updateOutputResolutionSelection();
     void updateCustomResolutionVisibility();
@@ -440,9 +454,13 @@ class ConfigPage : public QWidget {
 
     QComboBox* quality_combo_ = nullptr;
     QComboBox* frame_rate_combo_ = nullptr;
-    // Expert-only free-entry frame rate input (1-240 fps); swapped in for
-    // frame_rate_combo_ by updateExpertModeVisibility().
+    // Expert-only free-entry frame rate input; swapped in for frame_rate_combo_
+    // by updateExpertModeVisibility(). Its maximum is max_frame_rate_, not a
+    // fixed constant.
     QSpinBox* frame_rate_spin_ = nullptr;
+    // Highest offerable frame rate: the fastest attached display's refresh rate
+    // in whole fps (kFallbackMaxFrameRate when unknown). See FrameRateLimits.h.
+    int max_frame_rate_ = kFallbackMaxFrameRate;
     QButtonGroup* quality_segment_group_ = nullptr;
     QPushButton* quality_segment_draft_ = nullptr;
     QPushButton* quality_segment_efficient_ = nullptr;

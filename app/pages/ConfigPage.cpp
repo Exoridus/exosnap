@@ -9,6 +9,7 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
@@ -22,6 +23,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSize>
@@ -677,20 +679,22 @@ capability::AudioCodec IntToAudioCodec(int value) {
     return capability::AudioCodec::AacMf;
 }
 
-// Maps an arbitrary (Expert-entered) frame rate onto the closest entry in the
-// default {15, 30, 60} list, so leaving Expert mode has a sane combo selection
-// instead of silently landing on whatever index 0 happens to be.
-int NearestListedFps(uint32_t num) {
-    int best = 60;
-    uint32_t best_d = ~0u;
-    for (int fps : {15, 30, 60}) {
-        const uint32_t d = num > uint32_t(fps) ? num - fps : fps - num;
-        if (d < best_d) {
-            best_d = d;
-            best = fps;
-        }
+// The frame-rate values the Default-tier combo offers out of the box. The
+// disabled "120 fps (unavailable)" entry is deliberately not part of this set:
+// it exists to explain an absence, not to be selectable.
+constexpr int kListedFrameRates[] = {15, 30, 60};
+
+// Item-data role marking the dynamic "<n> fps (Custom)" entry the combo grows
+// when the model carries a frame rate the list does not offer (e.g. one entered
+// in Expert mode). Qt::UserRole itself carries the fps value.
+constexpr int kFrameRateCustomRole = Qt::UserRole + 1;
+
+bool IsListedFps(uint32_t num) {
+    for (const int fps : kListedFrameRates) {
+        if (num == static_cast<uint32_t>(fps))
+            return true;
     }
-    return best;
+    return false;
 }
 
 FilenameTargetContext ExamplePreviewContext(const QString& profile_name, const OutputSettingsModel& settings) {
@@ -1128,7 +1132,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
     frame_rate_combo_->setFixedWidth(160);
     frame_rate_combo_->setProperty("settingsRowInput", true);
-    for (const int fps : {15, 30, 60}) {
+    for (const int fps : kListedFrameRates) {
         frame_rate_combo_->addItem(QStringLiteral("%1 fps").arg(fps), fps);
     }
     frame_rate_combo_->addItem(QStringLiteral("120 fps (unavailable)"), 120);
@@ -1139,12 +1143,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
     }
 
-    // Expert-only free-entry frame rate (1-240 fps). Swapped in for the combo by
+    // Expert-only free-entry frame rate. Swapped in for the combo by
     // updateExpertModeVisibility(); hidden by default (non-expert / at construction).
+    // The upper bound is the fastest attached display's refresh rate and is applied
+    // by updateFrameRateLimit() below (and again on every display change).
     frame_rate_spin_ = new QSpinBox(quality_panel);
     frame_rate_spin_->setObjectName(QStringLiteral("frameRateSpin"));
     frame_rate_spin_->setAccessibleName(QStringLiteral("Frame rate"));
-    frame_rate_spin_->setRange(1, 240);
+    frame_rate_spin_->setRange(1, max_frame_rate_);
     frame_rate_spin_->setSuffix(QStringLiteral(" fps"));
     frame_rate_spin_->setFixedWidth(160);
     frame_rate_spin_->setProperty("settingsRowInput", true);
@@ -2182,6 +2188,24 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     updateOutputResolutionSelection();
     updateResponsiveLayout();
 
+    // The Expert frame-rate ceiling follows the attached displays, so it has to be
+    // re-derived whenever a screen appears, disappears, or changes its refresh
+    // rate (mode switch, VRR profile change).
+    if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        const auto watch_screen = [this](QScreen* screen) {
+            if (screen)
+                connect(screen, &QScreen::refreshRateChanged, this, [this](qreal) { updateFrameRateLimit(); });
+        };
+        for (QScreen* screen : gui->screens())
+            watch_screen(screen);
+        connect(gui, &QGuiApplication::screenAdded, this, [this, watch_screen](QScreen* screen) {
+            watch_screen(screen);
+            updateFrameRateLimit();
+        });
+        connect(gui, &QGuiApplication::screenRemoved, this, [this](QScreen*) { updateFrameRateLimit(); });
+    }
+    updateFrameRateLimit();
+
     QPointer<ConfigPage> safe = this;
     QTimer::singleShot(0, this, [safe]() {
         if (safe)
@@ -2295,10 +2319,20 @@ void ConfigPage::onFrameRateChanged(int index) {
     if (index < 0)
         return;
     const int fps = frame_rate_combo_->itemData(index).toInt();
-    if (fps <= 0 || fps == 120)
+    if (fps <= 0)
+        return;
+    // The dynamic custom entry mirrors the model's own frame rate, so landing on
+    // it changes nothing -- and it must not be mistaken for the disabled 120
+    // entry below when the custom value happens to be 120.
+    if (frame_rate_combo_->itemData(index, kFrameRateCustomRole).toBool())
+        return;
+    if (fps == 120)
         return;
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
+    // Picking a listed value retires the custom entry that may still be in the
+    // list from a previous Expert-entered rate.
+    updateFrameRateSelection();
     updateQualitySegmentSelection();
     updateFormatDisplay();
     emitCurrentVideoSettings();
@@ -3188,14 +3222,86 @@ void ConfigPage::updateFrameRateSelection() {
     if (!frame_rate_combo_)
         return;
 
-    // The combo only carries {15, 30, 60} (+ disabled 120), so an Expert-entered
-    // value that isn't one of those lands on the nearest enabled entry instead
-    // of leaving the combo on a stale selection.
     const QSignalBlocker blocker(frame_rate_combo_);
-    const int idx = frame_rate_combo_->findData(NearestListedFps(video_settings_.frame_rate_num));
+
+    // Drop a previous custom entry first: either the model moved back onto a
+    // listed value, or it moved to a different custom value. Either way the old
+    // one must not linger.
+    for (int i = frame_rate_combo_->count() - 1; i >= 0; --i) {
+        if (frame_rate_combo_->itemData(i, kFrameRateCustomRole).toBool())
+            frame_rate_combo_->removeItem(i);
+    }
+
+    const int fps = static_cast<int>(video_settings_.frame_rate_num);
+
+    // Truthful reporting: the combo statically offers {15, 30, 60} only, but the
+    // model can legitimately carry any 1-240 fps value entered in Expert mode.
+    // Snapping the display to the nearest listed entry would claim a frame rate
+    // the app is not recording at, so grow a dedicated entry for the real value
+    // instead. It sits in numeric order among the fixed entries and disappears
+    // again as soon as the model is back on a listed value.
+    if (!IsListedFps(video_settings_.frame_rate_num)) {
+        int insert_at = frame_rate_combo_->count();
+        for (int i = 0; i < frame_rate_combo_->count(); ++i) {
+            if (frame_rate_combo_->itemData(i).toInt() > fps) {
+                insert_at = i;
+                break;
+            }
+        }
+        frame_rate_combo_->insertItem(insert_at, QStringLiteral("%1 fps (Custom)").arg(fps), fps);
+        frame_rate_combo_->setItemData(insert_at, true, kFrameRateCustomRole);
+        // Select by position, not findData(): a custom 120 would otherwise match
+        // the disabled "120 fps (unavailable)" entry.
+        frame_rate_combo_->setCurrentIndex(insert_at);
+        return;
+    }
+
+    const int idx = frame_rate_combo_->findData(fps);
     if (idx >= 0) {
         frame_rate_combo_->setCurrentIndex(idx);
     }
+}
+
+void ConfigPage::updateFrameRateLimit() {
+    QList<qreal> refresh_rates;
+    if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        for (const QScreen* screen : gui->screens()) {
+            if (screen)
+                refresh_rates.append(screen->refreshRate());
+        }
+    }
+    applyMaxFrameRate(MaxFrameRateForRefreshRates(refresh_rates));
+}
+
+void ConfigPage::applyMaxFrameRate(int max_fps) {
+    max_frame_rate_ = (std::max)(1, max_fps);
+
+    if (frame_rate_spin_) {
+        // setMaximum() clamps the spinbox's own value; the model is clamped right
+        // below, so the two stay in agreement.
+        const QSignalBlocker blocker(frame_rate_spin_);
+        frame_rate_spin_->setMaximum(max_frame_rate_);
+    }
+
+    const uint32_t clamped = ClampFrameRate(video_settings_.frame_rate_num, max_frame_rate_);
+    if (clamped == video_settings_.frame_rate_num) {
+        updateFrameRateSelection();
+        return;
+    }
+
+    // Truthful reporting: the display the recorder feeds off cannot produce more
+    // frames than this, so a configured rate above the ceiling is lowered rather
+    // than kept as a promise the pipeline can't honour.
+    video_settings_.frame_rate_num = clamped;
+    video_settings_.frame_rate_den = 1;
+    updateFrameRateSelection();
+    updateQualitySegmentSelection();
+    updateFormatDisplay();
+    emitCurrentVideoSettings();
+}
+
+int ConfigPage::maxFrameRate() const noexcept {
+    return max_frame_rate_;
 }
 
 void ConfigPage::updateTimingSelection() {

@@ -876,6 +876,15 @@ const QVector<VisualScenario> kScenarios = {
      .frame_rate_den = 1,
      .cfr = true,
      .settings_expert_mode = true},
+    // Same off-ladder value back in the Default tier: the combo must report the
+    // real frame rate through a dynamic "73 fps (Custom)" entry rather than
+    // snapping the label to the nearest listed value (60 fps).
+    {.id = QStringLiteral("settings-format-custom-fps"),
+     .title = QStringLiteral("Settings / Format / Custom fps (Default tier)"),
+     .page = VisualPage::Settings,
+     .frame_rate_num = 73,
+     .frame_rate_den = 1,
+     .cfr = true},
     {.id = QStringLiteral("settings-format-vfr"),
      .title = QStringLiteral("Settings / Format / VFR"),
      .page = VisualPage::Settings,
@@ -2063,8 +2072,10 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
         !valid_size_or_zero(scenario.content_width, scenario.content_height)) {
         return fail(QStringLiteral("Invalid visual-test output dimensions"));
     }
-    // Mirrors ConfigPage's expert-only free-entry frame_rate_spin_ range (1-240 fps,
-    // ConfigPage.cpp:1147) — the widest frame rate the app can ever seed.
+    // Authoring bound for scenario fixtures. The live Expert field is capped at the
+    // fastest attached display's refresh rate instead, which is host-dependent and
+    // therefore not something a static scenario may assume; 240 fps is simply the
+    // widest rate a fixture is allowed to declare.
     if (scenario.frame_rate_den == 0 || scenario.frame_rate_num < 1 || scenario.frame_rate_num > 240) {
         return fail(QStringLiteral("Invalid visual-test frame rate"));
     }
