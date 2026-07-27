@@ -687,6 +687,47 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             waitForCaptureWork();
     }
 
+    // --- Drain the resampler before the source (and its SwrContext) goes away ---
+    // Whenever a resample context is active — a non-default output rate/channel
+    // count, or engaged clock slaving on the default 48 kHz path — libswresample
+    // holds already-captured audio in its filter delay (~10 ms on a rate
+    // conversion, sub-ms to a few ms otherwise). Push it through the encoder as a
+    // normal buffer first: the encoder derives PTS from the accumulated frame
+    // counter, so the tail lands directly after the last real packet. Shutdown()
+    // frees the context, so this must run before it; the encoder's own EOS drain
+    // must run after, or the tail would sit behind an already-flushed encoder.
+    if (output_format_src_ != nullptr && !failed) {
+        RawAudioBuffer tail{};
+        int64_t undrained_frames = 0;
+        const uint32_t tail_frames = output_format_src_->DrainResampler(tail, &undrained_frames);
+        if (undrained_frames > 0) {
+            // The flush loop gave up at its iteration bound with the context
+            // still holding audio. Not reachable with libswresample's real flush
+            // behaviour; log it rather than lose the remainder silently.
+            logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                     {"iteration_bound", std::to_string(OutputFormatAudioSrc::kMaxDrainIterations)},
+                                     {"drained_frames", std::to_string(tail_frames)},
+                                     {"undrained_frames", std::to_string(undrained_frames)}};
+            logging::log(logging::LogLevel::Warn, "audio.resampler_drain",
+                         "resampler drain hit its iteration bound; the remaining tail was dropped",
+                         std::span<const logging::LogField>(f, std::size(f)));
+        }
+        if (tail_frames > 0 && tail.bytes != nullptr) {
+            std::vector<EncodedAudioPacket> tailPkts;
+            enc.FeedFloat32(reinterpret_cast<const float*>(tail.bytes),
+                            static_cast<size_t>(tail_frames) * static_cast<size_t>(channels), 0,
+                            encoderAccumulatedFrames, sample_rate, channels, tailPkts);
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                for (const auto& p : tailPkts) {
+                    m_state.stats.audio_packets++;
+                    m_state.stats.audio_bytes += p.bytes.size();
+                }
+            }
+            routeAudioPackets(tailPkts);
+        }
+    }
+
     source_->Shutdown();
 
     // --- Drain the encoder (flush semantics are the encoder's own: Opus pads

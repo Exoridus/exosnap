@@ -71,6 +71,12 @@ class FfmpegAacEncoder : public IAudioEncoder {
     // so encoder delay is accounted for) and rescaled to nanoseconds.
     void ReceiveAvailable(uint64_t pts_origin_ns, std::vector<EncodedAudioPacket>& out_packets);
 
+    // Encode every whole frame currently held by the FIFO. Shared by FeedFloat32
+    // and Flush so the trailing samples the converter drain adds go out through
+    // exactly the same path as steady-state audio. accumulated_frames may be null
+    // (the flush path has no caller-side frame counter to advance).
+    void EncodeBufferedFrames(uint64_t* accumulated_frames, std::vector<EncodedAudioPacket>& out_packets);
+
     uint32_t m_bitrate_kbps = 0; // 0 = use kDefaultBitrateKbps
 
     AVCodecContext* m_ctx = nullptr;

@@ -311,6 +311,69 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
     return true;
 }
 
+uint32_t OutputFormatAudioSrc::DrainResampler(RawAudioBuffer& out_buf, int64_t* out_undrained_frames) {
+    out_buf = {};
+    if (out_undrained_frames != nullptr) {
+        *out_undrained_frames = 0;
+    }
+    if (passthrough_ || swr_ == nullptr) {
+        // Fast path: whole buffers are forwarded (or converted) 1:1 and no
+        // filter state is retained, so end-of-stream has nothing to flush.
+        return 0;
+    }
+
+    // swr_convert with a null input flushes the resampler's internal filter
+    // delay. Size each chunk from swr_get_delay (queried in output samples) plus
+    // a margin, so a reported delay of 0 still gets one call that can prove the
+    // context empty. This works unchanged with an armed compensation: the delta
+    // set by the last AcquireBuffer only shapes the rate, it does not gate the
+    // flush.
+    resample_buf_.clear();
+    uint32_t total_frames = 0;
+    constexpr int kMinChunkFrames = 64;
+    // libswresample empties its delay line in one call (two with an odd
+    // compensation phase); the bound keeps a pathological context from spinning
+    // the stop path forever.
+    bool emptied = false;
+    for (int iter = 0; iter < kMaxDrainIterations; ++iter) {
+        const int64_t delay = swr_get_delay(swr_, static_cast<int64_t>(target_sample_rate_));
+        const int chunk = (delay > 0 ? static_cast<int>(delay) : 0) + kMinChunkFrames;
+        const size_t base = resample_buf_.size();
+        resample_buf_.resize(base + static_cast<size_t>(chunk) * target_channels_);
+        uint8_t* out_ptr = reinterpret_cast<uint8_t*>(resample_buf_.data() + base);
+        const int produced = swr_convert(swr_, &out_ptr, chunk, nullptr, 0);
+        if (produced <= 0) {
+            resample_buf_.resize(base);
+            emptied = true;
+            break;
+        }
+        resample_buf_.resize(base + static_cast<size_t>(produced) * target_channels_);
+        total_frames += static_cast<uint32_t>(produced);
+    }
+
+    if (!emptied && out_undrained_frames != nullptr) {
+        // The bound was reached while the context was still producing, so the
+        // remainder is dropped. Unreachable with libswresample's actual flush
+        // behaviour, but report what was left instead of losing it silently —
+        // the caller has the track context to log it against.
+        *out_undrained_frames = swr_get_delay(swr_, static_cast<int64_t>(target_sample_rate_));
+    }
+
+    if (total_frames == 0) {
+        return 0;
+    }
+
+    // Count the flushed frames on the output axis so the applied-compensation
+    // metric stays consistent with what actually reached the encoder.
+    out_total_ += static_cast<int64_t>(total_frames);
+
+    exposed_buf_ = {};
+    exposed_buf_.bytes = reinterpret_cast<const uint8_t*>(resample_buf_.data());
+    exposed_buf_.num_frames = total_frames;
+    out_buf = exposed_buf_;
+    return total_frames;
+}
+
 void OutputFormatAudioSrc::ReleaseBuffer() {
     inner_->ReleaseBuffer();
 }

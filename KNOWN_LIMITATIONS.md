@@ -137,11 +137,6 @@ Invalid combinations are not offered.
   (`A_PCM/FLOAT/IEEE`) is a raw passthrough of the mix bus's native format and is
   PCM-only (FLAC has no float mode). **Deferred:** more than 2 channels (5.1/7.1)
   and non-vetted sample rates.
-  - A small tail of audio may be dropped at stop **whenever a resample context is
-    active** — a non-default sample rate (~10 ms tail) or engaged audio clock
-    slaving on the default 48 kHz path (sub-ms to a few ms, in filter-length order)
-    — because the resampler's internal buffer is not drained at end-of-stream;
-    negligible for normal recordings.
 - **Per-track gain & mute** and a **brickwall limiter** (on by default, 0 dBFS
   ceiling) on the mixed bus.
 - **Microphone DSP chain**, each stage **off by default** (capture is byte-identical
