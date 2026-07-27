@@ -297,11 +297,14 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   onto a different device — the same source is held or reacquired, or (for a
   process-keyed app/window audio capture whose target exited) stays silent rather
   than grab a stranger.
-  - Remaining boundary: when *every* inner source of a single merged audio track
-    is lost at once, that track's timeline holds (no packets) until an inner
-    returns, rather than being filled with exact-length silence; a bare
-    single-source track and the video track always get exact-length silence /
-    continuity. Video-only recording continues if all audio is lost.
+  - Every audio track keeps exact-length silence through an outage, including a
+    merged one: when *every* inner source of a merged track is lost at once the
+    track switches from source-driven to clock-driven and fills the outage with
+    exact silence on its own timeline, so its duration still matches wall time.
+    A returning source re-enters at the track's current position, and the drift
+    baseline and clock slaving re-align on the reacquired stream instead of
+    reading its restarted device position as drift. Video-only recording
+    continues if all audio is lost.
   - The degraded state is surfaced in Diagnostics, the post-flight report, and a
     standing notification that stays up for as long as a source is silenced,
     updates in place if the degraded set changes, and clears the moment every

@@ -503,25 +503,53 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         // source (MixedAudioSrc) never fails its acquire — it degrades individual
         // inners and keeps mixing the survivors. This runs every iteration (even
         // at 0 pending) so a fully-degraded merged track still reactivates and
-        // keeps its timeline continuous with silence.
+        // keeps its timeline continuous with silence. While at least one inner
+        // survives the track stays source-driven (the survivor's packets carry
+        // the timeline); only a total outage switches it to the clock-driven
+        // silence fill, and coming back out of one re-aligns it — the same two
+        // states, in the same order, as the bare_degraded branch above.
         {
             const uint32_t total_sources = source_->CaptureSourceCount();
             const uint32_t degraded_sources = source_->DegradedSourceCount();
             m_state.diagnostics.OnAudioSourceHealth(track_id_, degraded_sources, total_sources);
             if (degraded_sources > 0) {
                 markDegradedOccurred();
-                const auto nowtp = std::chrono::steady_clock::now();
-                if (nowtp - lastReinitAttempt >= kAudioReactivatePollDelay) {
-                    std::string rerr;
-                    source_->Reinit(rerr); // reacquires degraded inners; survivors untouched
-                    lastReinitAttempt = nowtp;
-                }
-                if (total_sources > 0 && degraded_sources == total_sources) {
-                    // Every inner is down: the mixer emits nothing, so hold the
-                    // track's timeline with silence like a bare degraded source.
+                // Every inner is down: the mixer emits nothing at all, so this
+                // track is clock-driven for the length of the outage — hold its
+                // timeline with wall-clock silence exactly like a bare degraded
+                // source. Filled before the reactivation attempt (the bare path's
+                // order), so the silence covers the outage right up to the
+                // moment the track comes back.
+                const bool fully_degraded = (total_sources > 0 && degraded_sources == total_sources);
+                if (fully_degraded) {
                     if (!emitSilenceForElapsed()) {
                         failed = true;
                         break;
+                    }
+                }
+                const auto nowtp = std::chrono::steady_clock::now();
+                if (nowtp - lastReinitAttempt >= kAudioReactivatePollDelay) {
+                    std::string rerr;
+                    const bool ok = source_->Reinit(rerr); // reacquires degraded inners; survivors untouched
+                    const AudioReactivateDecision decision =
+                        DecideAudioDeviceLoss(ok, kAudioReactivatePollDelay, kAudioReactivatePollDelay);
+                    lastReinitAttempt = nowtp;
+                    if (fully_degraded && decision.action == AudioReactivateAction::Reactivated) {
+                        // The track was silent-and-clock-driven and is live again.
+                        // Re-align it the same way a bare source is re-aligned:
+                        // the reacquired stream restarts its device position near
+                        // zero, so a stale drift baseline would read the whole
+                        // reacquired timeline as a huge drift, and the clock
+                        // slaving that stayed frozen through the outage (no source
+                        // clock to regulate against) must re-engage from a clean
+                        // baseline rather than resume against stale accounting.
+                        drift_estimator.Reset();
+                        clock_controller = ClockSlavingController{};
+                        clock_slaving_logged_engage = false;
+                        clock_slaving_logged_saturation = false;
+                        lastAccountedQpcNs = QpcNowNs();
+                        m_state.diagnostics.OnAudioSourceHealth(track_id_, source_->DegradedSourceCount(),
+                                                                total_sources);
                     }
                 }
             }
