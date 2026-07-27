@@ -187,24 +187,35 @@ TEST(NextGopKeyframePhase, ZeroGopLength_OnlyFirstFrameIsKeyframe) {
 // ResyncGopPhaseFromActual — order/keyframe hardening (warn-first)
 // ---------------------------------------------------------------------------
 
-TEST(ResyncGopPhaseFromActual, ActualIdr_ResetsPhaseToOne) {
-    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/true, /*frame_in_gop=*/0u), 1u);
+TEST(ResyncGopPhaseFromActual, ConfirmedIdr_LeavesAheadCounterUntouched) {
+    // Async buffering: the submission counter is already several frames ahead
+    // of the packet being consumed. A confirmed prediction must NOT rewind it —
+    // doing so stretched every GOP by the in-flight depth (~13 % at 0.5 s /
+    // 60 fps).
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*predicted_keyframe=*/true, /*actual_is_idr=*/true, /*frame_in_gop=*/4u), 4u);
 }
 
-TEST(ResyncGopPhaseFromActual, ActualIdr_ResetsEvenFromNonZeroPhase) {
-    // Drift from a buffered preset (P5-P7): submission side is already several
-    // frames ahead of the frame whose output we just consumed. An observed real
-    // IDR is still authoritative and resyncs to 1, regardless of how far the
-    // counter had climbed.
-    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/true, /*frame_in_gop=*/47u), 1u);
+TEST(ResyncGopPhaseFromActual, UnpredictedActualIdr_ResetsPhaseToOne) {
+    // Emergency self-healing: NVENC emitted an IDR we did not force. The
+    // submission-side cadence is provably wrong, so the observed IDR resyncs
+    // the phase regardless of how far the counter had climbed.
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*predicted_keyframe=*/false, /*actual_is_idr=*/true, /*frame_in_gop=*/47u), 1u);
 }
 
-TEST(ResyncGopPhaseFromActual, NonIdr_LeavesPhaseUnchanged) {
-    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/false, /*frame_in_gop=*/13u), 13u);
+TEST(ResyncGopPhaseFromActual, PredictedIdrMissing_LeavesPhaseUnchanged) {
+    // Warn-only: a forced IDR that did not materialize is logged/counted, but a
+    // single miss is not evidence the whole cadence has shifted.
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*predicted_keyframe=*/true, /*actual_is_idr=*/false, /*frame_in_gop=*/13u),
+              13u);
 }
 
-TEST(ResyncGopPhaseFromActual, NonIdr_LeavesZeroUnchanged) {
-    EXPECT_EQ(ResyncGopPhaseFromActual(/*actual_is_idr=*/false, /*frame_in_gop=*/0u), 0u);
+TEST(ResyncGopPhaseFromActual, ConfirmedNonIdr_LeavesPhaseUnchanged) {
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*predicted_keyframe=*/false, /*actual_is_idr=*/false, /*frame_in_gop=*/13u),
+              13u);
+}
+
+TEST(ResyncGopPhaseFromActual, ConfirmedNonIdr_LeavesZeroUnchanged) {
+    EXPECT_EQ(ResyncGopPhaseFromActual(/*predicted_keyframe=*/false, /*actual_is_idr=*/false, /*frame_in_gop=*/0u), 0u);
 }
 
 // ---------------------------------------------------------------------------

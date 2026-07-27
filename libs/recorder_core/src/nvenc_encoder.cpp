@@ -741,8 +741,8 @@ GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length
     return out;
 }
 
-uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noexcept {
-    return actual_is_idr ? 1u : frame_in_gop;
+uint32_t ResyncGopPhaseFromActual(bool predicted_keyframe, bool actual_is_idr, uint32_t frame_in_gop) noexcept {
+    return (actual_is_idr && !predicted_keyframe) ? 1u : frame_in_gop;
 }
 
 std::string FormatOutputTsMismatchError(uint64_t expected_output_ts, uint64_t actual_output_ts) {
@@ -755,7 +755,8 @@ std::string FormatOutputTsMismatchError(uint64_t expected_output_ts, uint64_t ac
 std::string FormatKeyframePredictionMismatchWarning(bool predicted_keyframe, bool actual_keyframe) {
     std::ostringstream oss;
     oss << "NVENC keyframe prediction mismatch: predicted=" << (predicted_keyframe ? "keyframe" : "non-keyframe")
-        << " actual=" << (actual_keyframe ? "keyframe" : "non-keyframe") << " (GOP phase resynced from actual)";
+        << " actual=" << (actual_keyframe ? "keyframe" : "non-keyframe")
+        << (actual_keyframe ? " (GOP phase resynced from actual IDR)" : " (GOP phase left as submitted)");
     return oss.str();
 }
 
@@ -1278,18 +1279,20 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
             return false;
         }
 
-        // Keyframe-prediction validation. A real IDR always resyncs the
-        // submission-side GOP phase, whether or not it was predicted; a mismatch
-        // (predicted != actual) is only logged/counted, never fatal at this
-        // stage — the actual pictureType (isKey below) remains authoritative for
-        // muxing regardless of the prediction.
+        // Keyframe-prediction validation. When the actual pictureType confirms
+        // the prediction, the submission-side GOP phase stays untouched — it is
+        // several frames ahead of this packet under async buffering, and
+        // rewinding it from here stretched every GOP by the in-flight depth.
+        // Only an unpredicted real IDR resyncs the phase; a mismatch is
+        // logged/counted, never fatal at this stage — the actual pictureType
+        // (isKey below) remains authoritative for muxing regardless.
         keyframePredictionMismatch = (pf.predicted_keyframe != actualIsIdr);
         if (keyframePredictionMismatch && !m_loggedKeyframePredictionMismatch) {
             m_loggedKeyframePredictionMismatch = true;
             logging::log(logging::LogLevel::Warn, "nvenc.order_validation",
                          FormatKeyframePredictionMismatchWarning(pf.predicted_keyframe, actualIsIdr));
         }
-        m_frameInGop = ResyncGopPhaseFromActual(actualIsIdr, m_frameInGop);
+        m_frameInGop = ResyncGopPhaseFromActual(pf.predicted_keyframe, actualIsIdr, m_frameInGop);
 
         // Release the associated input slot.
         if (pf.slot_idx >= 0 && pf.slot_idx < 8) {
