@@ -329,7 +329,7 @@ Lowest latency, Diagnostics recommends switching to Phase-correct via a fix acti
 
 The CFR timeline stays true to the wall clock. If the encoder cannot keep up in real time for a
 sustained stretch, the recorder **skips** the output frames it could never have encoded in time —
-counting them as **real** frame drops (the same encoder-backpressure signal a caution toast reports)
+counting them as **real** frame drops (part of the same real-drop count a caution toast reports)
 rather than letting the video media time fall behind the audio and silently compress the recording.
 The result is an honest, correctly-timed file with a visible drop count, not one that plays back out
 of sync.
