@@ -161,16 +161,34 @@ TEST(VfrVideoEpoch, StaleFirstFrameDoesNotInflateTheTimeline) {
 }
 
 TEST(VfrVideoEpoch, FollowUpFramesStayMonotone) {
+    // First frame is the stale pre-session one (negative delta, PTS 0), then
+    // strictly increasing post-session frames — the whole sequence must come
+    // out non-negative and non-decreasing from the clamped origin alone.
     const int64_t staleFrame = static_cast<int64_t>(kSessionStart100ns) - 3000 * static_cast<int64_t>(kMs100ns);
     const int64_t epoch = ClampedVfrVideoEpochTicks100ns(staleFrame, kSessionStart100ns);
     int64_t lastPtsMs = -1;
-    for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(VfrPtsMs(staleFrame, epoch), 0);
+    for (int i = 1; i <= 5; ++i) {
         const int64_t frame = static_cast<int64_t>(kSessionStart100ns) + (i * 17) * static_cast<int64_t>(kMs100ns);
         const int64_t ptsMs = VfrPtsMs(frame, epoch);
         EXPECT_GT(ptsMs, lastPtsMs);
         EXPECT_GE(ptsMs, 0);
         lastPtsMs = ptsMs;
     }
+}
+
+TEST(VfrVideoEpoch, PauseBeforeFirstFrameAdvancesTheFloor) {
+    // Pause served before the epoch exists: the caller advances the floor by
+    // the paused span. A stale first frame then clamps to the advanced floor,
+    // so the pause is excluded from the timeline instead of becoming a
+    // lead-in; the first post-resume frame lands at/near PTS 0.
+    const uint64_t paused = 2000 * kMs100ns;
+    const uint64_t floor100ns = kSessionStart100ns + paused;
+    const int64_t staleFrame = static_cast<int64_t>(kSessionStart100ns) - 1000 * static_cast<int64_t>(kMs100ns);
+    const int64_t epoch = ClampedVfrVideoEpochTicks100ns(staleFrame, floor100ns);
+    EXPECT_EQ(epoch, static_cast<int64_t>(floor100ns));
+    const int64_t firstAfterResume = static_cast<int64_t>(floor100ns) + 16 * static_cast<int64_t>(kMs100ns);
+    EXPECT_EQ(VfrPtsMs(firstAfterResume, epoch), 16);
 }
 
 } // namespace

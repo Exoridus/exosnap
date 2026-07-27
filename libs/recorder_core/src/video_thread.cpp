@@ -3226,6 +3226,11 @@ void VideoThread::Run() {
 
         bool videoEpochSet = false;
         int64_t videoEpochTicks100ns = 0;
+        // Floor for the not-yet-established epoch: the session start, advanced
+        // by any pause that happens BEFORE the first frame arrives. Without the
+        // advance, an early pause would sit before the clamped epoch and be
+        // burned into the file as a lead-in.
+        uint64_t vfrEpochFloor100ns = m_state.session_start_qpc_100ns;
 
         bool vfr_was_paused = false;
         uint64_t vfr_pause_start_100ns = 0;
@@ -3455,21 +3460,27 @@ void VideoThread::Run() {
                 continue;
             }
             if (vfr_was_paused) {
-                videoEpochTicks100ns += static_cast<int64_t>(Qpc100ns(qpcFreq) - vfr_pause_start_100ns);
+                const uint64_t paused100ns = Qpc100ns(qpcFreq) - vfr_pause_start_100ns;
+                if (videoEpochSet) {
+                    videoEpochTicks100ns += static_cast<int64_t>(paused100ns);
+                } else {
+                    vfrEpochFloor100ns += paused100ns;
+                }
                 vfr_was_paused = false;
             }
 
             if (latestTex != nullptr) {
-                // Establish video epoch (also publish for MP4 A/V alignment).
-                // The epoch is clamped so it never precedes the session start:
-                // a first frame can carry a present time from before recording
-                // began (static desktop), and an origin in the past inflates
-                // every later frame's PTS by that idle gap — the published A/V
-                // epoch and the internal PTS origin must be the SAME clamped
-                // value, or audio shifts away from the picture by the gap.
+                // Establish video epoch (also published for the muxer's A/V
+                // alignment). The epoch is clamped so it never precedes the
+                // session start (plus any pause served before the first frame):
+                // a first DXGI frame can carry a LastPresentTime from before
+                // recording began (static desktop), and an origin in the past
+                // inflates every later frame's PTS by that idle gap — the
+                // published A/V epoch and the internal PTS origin must be the
+                // SAME clamped value, or audio shifts away from the picture by
+                // the gap.
                 if (!videoEpochSet) {
-                    videoEpochTicks100ns =
-                        ClampedVfrVideoEpochTicks100ns(latestFrameTicks100ns, m_state.session_start_qpc_100ns);
+                    videoEpochTicks100ns = ClampedVfrVideoEpochTicks100ns(latestFrameTicks100ns, vfrEpochFloor100ns);
                     videoEpochSet = true;
                     // Publish the epoch the PTS timeline is actually built on,
                     // not the moment this frame happened to be processed. VFR

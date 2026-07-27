@@ -250,10 +250,11 @@ expert-only.
 trades encode CPU for file size).
 
 Deferred: more than two channels (5.1/7.1), non-vetted sample rates. When resampling is active, the
-resampler's filter-delay tail is **fully drained** into the encoder before end of stream — no audio
-tail is expected to be lost at stop. The session report records drained/undrained resampler frames
-per track; `undrained_frames > 0` is a diagnostic error condition (captured audio that never reached
-the file), not expected behavior.
+resampler's filter-delay tail is **fully drained** into the encoder before end of stream on a clean
+stop — no audio tail is expected to be lost. The session report records drained/undrained resampler
+frames per track; `undrained_frames > 0` is a diagnostic error condition (captured audio that never
+reached the file), not expected behavior. A failed or timed-out session does not reach the drain and
+reports the counters as unavailable rather than claiming a clean drain.
 
 ---
 
@@ -337,11 +338,12 @@ rather than letting the video media time fall behind the audio and silently comp
 The result is an honest, correctly-timed file with a visible drop count, not one that plays back out
 of sync.
 
-A **VFR** recording's timeline likewise never starts before the recording did: the first captured
-frame can carry a present timestamp from before Record was pressed (a desktop that sat static
-reports its last real repaint), and that stale origin is clamped to the session start. The file's
-duration therefore matches the real recording time — a static source before recording never inflates
-the lead-in — and the video timeline shares its origin with the published A/V epoch.
+A **VFR** recording's timeline likewise never starts before the recording did: on monitor capture,
+the first frame can carry the display's last real present timestamp from before Record was pressed
+(a desktop that sat static reports its last repaint), and that stale origin is clamped to the
+session start. The file's duration therefore matches the real recording time — a static source
+before recording never inflates the lead-in — and the video timeline shares its origin with the
+published A/V epoch.
 
 **Bit depth.** 8-bit for all final codecs; **10-bit (P010)** is available for HEVC Main10 and AV1
 where the GPU supports it (H.264 stays 8-bit only). The freely-choosable Expert **Bit depth** row is
