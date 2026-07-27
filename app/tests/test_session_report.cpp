@@ -248,12 +248,18 @@ TEST(SessionReport, CleanSessionReportsZeroKeyframePredictionMismatches) {
     EXPECT_EQ(counters[QStringLiteral("encoder_keyframe_prediction_mismatches")].toInt(), 0);
 }
 
-TEST(SessionReport, OutputTsMismatchesAreNotReported) {
-    // The outputTimeStamp check aborts the encode instead of emitting a packet,
-    // so its counter can never be non-zero. Reporting it would advertise a
-    // check that had a chance to fire; pin the deliberate omission.
+TEST(SessionReport, OutputTsMismatchesAreNotReportedUnderAnyName) {
+    // The outputTimeStamp check aborts the encode before the packet is filled
+    // in, so its counter is structurally always 0. Reporting it would advertise
+    // a check that had a chance to fire. Scan every counter key rather than
+    // guessing one spelling, so the omission holds however it gets named.
     const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
-    EXPECT_FALSE(counters.contains(QStringLiteral("encoder_output_ts_mismatches")));
+    for (auto it = counters.begin(); it != counters.end(); ++it) {
+        EXPECT_FALSE(it.key().contains(QStringLiteral("output_ts"), Qt::CaseInsensitive))
+            << "counters key '" << it.key().toStdString()
+            << "' reports the outputTimeStamp mismatch counter, which can never be non-zero "
+               "(the mismatch aborts the encode). See ADR 0053.";
+    }
 }
 
 TEST(SessionReport, PacingAverageIsUnavailableWithoutElapsedTime) {
