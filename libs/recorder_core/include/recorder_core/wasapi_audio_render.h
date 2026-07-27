@@ -86,6 +86,13 @@ class WasapiAudioRenderer {
     // Start() (it measures time-since-resume, not absolute clip position).
     // Read from IAudioClock; falls back to the count of frames written into the
     // endpoint buffer only if that service was unavailable at Init().
+    //
+    // Same single-caller-thread contract as the rest of this class's control
+    // API (Start/Stop/Shutdown): call it from the owner's thread -- in-app,
+    // EditPlayerSession's UI thread. It is NOT internally synchronized against
+    // a concurrent Stop()/Shutdown(), which releases the clock object this
+    // reads through. (PushSamples() is the one deliberate exception: it is
+    // callable from any thread, because the decode thread pushes into the ring.)
     [[nodiscard]] uint64_t FramesPlayed() const noexcept;
 
     // The render endpoint's actual sample rate (post-Init; 0 before Init()).

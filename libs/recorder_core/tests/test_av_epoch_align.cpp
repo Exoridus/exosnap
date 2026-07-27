@@ -9,13 +9,59 @@
 
 namespace {
 
+using recorder_core::AudioEpochNsFromPacket;
 using recorder_core::AudioTimelineShiftNs;
+using recorder_core::IsPlausibleAudioEpoch;
 using recorder_core::kMaxAudioEpochShiftNs;
 using recorder_core::ShiftAudioPts;
 
 // 100 ns units per millisecond.
 constexpr uint64_t kMs100ns = 10000ULL;
 constexpr int64_t kMsNs = 1000000LL;
+
+constexpr uint64_t kMsNsU = 1000000ULL;
+
+TEST(AudioEpochFromPacket, WalksBackOverTheFramesAlreadyOnTheTimeline) {
+    // A packet timestamped at 5 s that lands after 2 s of already-fed audio
+    // puts the timeline's zero point at 3 s.
+    EXPECT_EQ(AudioEpochNsFromPacket(5000 * kMsNsU, 96000, 48000), 3000 * kMsNsU);
+    // The first packet of a recording: nothing in front of it, so its own
+    // timestamp IS the zero point.
+    EXPECT_EQ(AudioEpochNsFromPacket(5000 * kMsNsU, 0, 48000), 5000 * kMsNsU);
+}
+
+TEST(AudioEpochFromPacket, CountsOnlyFramesActuallyFed) {
+    // The caller resolved a 1 s reported gap down to 0 (the wall clock had
+    // already filled that stretch). Counting the REPORTED gap instead of the
+    // fed one would walk the zero point a whole second too far back, and the
+    // muxer would trim a second of real audio off the head of the track.
+    constexpr uint64_t kPacketQpc = 5000 * kMsNsU;
+    constexpr uint64_t kFramesOnTimeline = 48000; // 1 s already fed
+    constexpr uint64_t kReportedGapFrames = 48000;
+    EXPECT_EQ(AudioEpochNsFromPacket(kPacketQpc, kFramesOnTimeline, 48000), 4000 * kMsNsU);
+    EXPECT_NE(AudioEpochNsFromPacket(kPacketQpc, kFramesOnTimeline + kReportedGapFrames, 48000), 4000 * kMsNsU);
+}
+
+TEST(AudioEpochFromPacket, UnmeasurableInputsReportZero) {
+    EXPECT_EQ(AudioEpochNsFromPacket(1000, 0, 0), 0u);         // no sample rate
+    EXPECT_EQ(AudioEpochNsFromPacket(1000, 48000, 48000), 0u); // walk-back precedes the origin
+}
+
+TEST(IsPlausibleAudioEpoch, AnUnmeasuredEpochIsNotUsable) {
+    EXPECT_FALSE(IsPlausibleAudioEpoch(0, 1000 * kMs100ns));
+}
+
+TEST(IsPlausibleAudioEpoch, EverydayOffsetsAreUsable) {
+    EXPECT_TRUE(IsPlausibleAudioEpoch(1080 * kMs100ns, 1000 * kMs100ns));
+    EXPECT_TRUE(IsPlausibleAudioEpoch(1000 * kMs100ns, 1120 * kMs100ns));
+}
+
+TEST(IsPlausibleAudioEpoch, ReadingsBeyondTheEnvelopeAreRejectedNotClamped) {
+    // The caller must fall back to the session baseline for these; applying
+    // the clamped shift would still be seconds wrong.
+    EXPECT_FALSE(IsPlausibleAudioEpoch(600000 * kMs100ns, 1000 * kMs100ns));
+    EXPECT_FALSE(IsPlausibleAudioEpoch(1000 * kMs100ns, 600000 * kMs100ns));
+}
 
 TEST(AudioTimelineShift, IdenticalEpochsNeedNoShift) {
     EXPECT_EQ(AudioTimelineShiftNs(1000 * kMs100ns, 1000 * kMs100ns), 0);

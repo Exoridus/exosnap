@@ -3,6 +3,7 @@
 #include "audio_clock_drift.h"
 #include "audio_device_loss_policy.h"
 #include "audio_silence_fill.h"
+#include "av_epoch_align.h"
 #include "clock_slaving.h"
 #include "codec_private.h"
 #include "ffmpeg_aac_encoder.h"
@@ -390,6 +391,26 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     bool silent_stalled = false;
     uint64_t silenceFilledFramesSincePacket = 0;
 
+    // Publish this track's measured zero point: the wall-clock instant audio PTS
+    // 0 sits at (av_epoch_align.h). Called from EVERY path that first puts
+    // frames on the encoder timeline, not just from a real capture packet — a
+    // recording that starts during a quiet stretch begins with clock-driven
+    // silence, and the muxer resolves a track's placement on its first packet,
+    // so a measurement that waits for real audio simply loses that race and the
+    // whole track falls back to the assumed start. First publication wins; the
+    // timeline it describes cannot be re-based afterwards.
+    auto publishAudioEpoch = [&](uint64_t qpc_ns, uint64_t frames_on_timeline) {
+        if (audio_epoch_published_) {
+            return;
+        }
+        const uint64_t epoch_ns = AudioEpochNsFromPacket(qpc_ns, frames_on_timeline, sample_rate);
+        if (epoch_ns == 0) {
+            return;
+        }
+        m_state.audio_epoch_qpc_100ns[track_id_].store(epoch_ns / 100);
+        audio_epoch_published_ = true;
+    };
+
     // Feed encoder-cadence silence covering the wall-clock elapsed since the last
     // accounted audio, keeping PTS continuous across a source outage. Returns
     // false only if routing the produced packets failed (a genuine mux failure).
@@ -402,6 +423,11 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         if (framesToFill == 0) {
             return true;
         }
+        // This silence covers wall time starting at lastAccountedQpcNs and is
+        // placed at the current frame count, so that pair IS the timeline's zero
+        // point by construction — the honest measurement when the track opens on
+        // silence rather than on a captured packet.
+        publishAudioEpoch(lastAccountedQpcNs, encoderAccumulatedFrames);
         std::vector<EncodedAudioPacket> pkts;
         feedGapSilence(static_cast<uint32_t>(framesToFill), encoderAccumulatedFrames, pkts);
         lastAccountedQpcNs += (framesToFill * 1000000000ULL) / sample_rate;
@@ -632,23 +658,28 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 m_state.diagnostics.OnAudioDiscontinuity();
             }
 
+            // How much of this packet's reported gap actually goes onto the
+            // timeline. A stall the wall clock already covered can come back as
+            // a device-position jump on the resuming packet; filling both would
+            // put the same outage on the track twice. Resolved BEFORE the epoch
+            // walk-back below, which has to count the frames really fed — using
+            // the raw reported gap there would walk the zero point back over
+            // silence the track does not contain.
+            const uint32_t gapFramesToFeed = RemainingGapFrames(raw.gap_frames, silenceFilledFramesSincePacket);
+
             {
                 AudioDeviceTiming timing{};
                 if (source_->LastBufferDeviceTiming(timing)) {
                     // Measured audio zero point: the QPC instant the endpoint
                     // recorded the FIRST frame of this packet at, walked back
-                    // over everything already on the encoder timeline. That is
-                    // where audio PTS 0 really sits on the wall clock, and the
-                    // muxer needs it to place the track against video — assuming
-                    // it started when Record() was called makes the whole track
-                    // lead the picture by however long the device took to open.
-                    if (!audio_epoch_published_ && raw.num_frames > 0) {
-                        const uint64_t frames_before_packet = encoderAccumulatedFrames + raw.gap_frames;
-                        const uint64_t elapsed_ns = (frames_before_packet * 1000000000ULL) / sample_rate;
-                        if (timing.qpc_position_ns > elapsed_ns) {
-                            m_state.audio_epoch_qpc_100ns[track_id_].store((timing.qpc_position_ns - elapsed_ns) / 100);
-                            audio_epoch_published_ = true;
-                        }
+                    // over everything already on the encoder timeline — the
+                    // frames really fed, gapFramesToFeed included. That is where
+                    // audio PTS 0 sits on the wall clock, and the muxer needs it
+                    // to place the track against video; assuming it started when
+                    // Record() was called makes the whole track lead the picture
+                    // by however long the device took to open.
+                    if (raw.num_frames > 0) {
+                        publishAudioEpoch(timing.qpc_position_ns, encoderAccumulatedFrames + gapFramesToFeed);
                     }
                     drift_estimator.AddObservation(timing.device_position_ns, timing.qpc_position_ns);
                     const double raw_drift = drift_estimator.DriftMs();
@@ -696,15 +727,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
             std::vector<EncodedAudioPacket> pkts;
             float new_rms = 0.0f;
-            if (raw.gap_frames > 0) {
-                // A stall the wall clock already covered can also come back as a
-                // device-position jump on the resuming packet. Fill only what the
-                // silence did not already account for, or the same outage lands on
-                // the timeline twice and the track runs permanently late.
-                const uint32_t remaining = RemainingGapFrames(raw.gap_frames, silenceFilledFramesSincePacket);
-                if (remaining > 0) {
-                    feedGapSilence(remaining, encoderAccumulatedFrames, pkts);
-                }
+            if (gapFramesToFeed > 0) {
+                feedGapSilence(gapFramesToFeed, encoderAccumulatedFrames, pkts);
             }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(channels);
             if (raw.silent) {

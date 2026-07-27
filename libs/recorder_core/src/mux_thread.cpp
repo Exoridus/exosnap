@@ -356,11 +356,25 @@ void MuxThread::Run() {
             return 0;
         if (!audio_shift_resolved[track]) {
             const uint64_t measured = m_state.audio_epoch_qpc_100ns[track].load();
-            const uint64_t audio_epoch = (measured != 0) ? measured : m_state.session_start_qpc_100ns;
+            // A reading that would place the track implausibly far from the
+            // picture is a bad clock, not a real offset: fall back to the
+            // session baseline (the alignment used before any of this existed)
+            // rather than apply a clamped but still seconds-wrong shift.
+            const bool usable = IsPlausibleAudioEpoch(measured, video_epoch_100ns);
+            if (measured != 0 && !usable) {
+                logging::LogField warn[] = {{"track", std::to_string(track)},
+                                            {"audio_epoch_100ns", std::to_string(measured)},
+                                            {"video_epoch_100ns", std::to_string(video_epoch_100ns)}};
+                logging::log(logging::LogLevel::Warn, "mux_thread",
+                             "measured audio epoch is implausibly far from the video epoch; "
+                             "aligning this track from the session start instead",
+                             std::span<const logging::LogField>(warn, std::size(warn)));
+            }
+            const uint64_t audio_epoch = usable ? measured : m_state.session_start_qpc_100ns;
             audio_shift_ns[track] = AudioTimelineShiftNs(audio_epoch, video_epoch_100ns);
             audio_shift_resolved[track] = true;
             logging::LogField fields[] = {{"track", std::to_string(track)},
-                                          {"measured", measured != 0 ? "1" : "0"},
+                                          {"measured", usable ? "1" : "0"},
                                           {"shift_ms", std::to_string(audio_shift_ns[track] / 1000000LL)}};
             logging::log(logging::LogLevel::Debug, "mux_thread", "audio track aligned to the video epoch",
                          std::span<const logging::LogField>(fields, std::size(fields)));

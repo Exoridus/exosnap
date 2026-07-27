@@ -26,8 +26,43 @@ namespace recorder_core {
 // timestamp from pushing the audio track seconds away from the picture.
 inline constexpr int64_t kMaxAudioEpochShiftNs = 5000000000LL; // 5 s
 
+// Where audio PTS 0 sits on the wall clock, given a capture packet's QPC
+// timestamp and how many frames the encoder timeline already held in front of
+// it. `frames_on_timeline` must be the count actually FED to the encoder ahead
+// of this packet -- counting silence that was decided against (a gap the wall
+// clock had already covered) walks the epoch back over time the track does not
+// contain and lands it that much too early. Returns 0 ("not measurable") when
+// the walk-back would run before the QPC origin.
+inline uint64_t AudioEpochNsFromPacket(uint64_t packet_qpc_ns, uint64_t frames_on_timeline,
+                                       uint32_t sample_rate) noexcept {
+    if (sample_rate == 0) {
+        return 0;
+    }
+    const uint64_t elapsed_ns = (frames_on_timeline * 1000000000ULL) / sample_rate;
+    if (packet_qpc_ns <= elapsed_ns) {
+        return 0;
+    }
+    return packet_qpc_ns - elapsed_ns;
+}
+
+// Whether a measured audio epoch places the track within a believable distance
+// of the video epoch. A reading outside this is a bad clock, not a real offset:
+// the caller should discard the measurement and fall back to the session
+// baseline rather than apply a clamped -- but still wrong by seconds -- shift.
+inline bool IsPlausibleAudioEpoch(uint64_t audio_epoch_100ns, uint64_t video_epoch_100ns,
+                                  int64_t max_abs_ns = kMaxAudioEpochShiftNs) noexcept {
+    if (audio_epoch_100ns == 0) {
+        return false; // never measured
+    }
+    const int64_t shift = (static_cast<int64_t>(audio_epoch_100ns) - static_cast<int64_t>(video_epoch_100ns)) * 100LL;
+    return shift <= max_abs_ns && shift >= -max_abs_ns;
+}
+
 // Nanoseconds to add to an audio packet's session PTS to place it on the video
-// timeline. Both epochs are QPC readings in 100 ns units.
+// timeline. Both epochs are QPC readings in 100 ns units. The clamp is a
+// last-resort guard only -- callers should reject an implausible measurement
+// via IsPlausibleAudioEpoch first, so a bad reading falls back to the session
+// baseline instead of being applied as a full-magnitude shift.
 inline int64_t AudioTimelineShiftNs(uint64_t audio_epoch_100ns, uint64_t video_epoch_100ns,
                                     int64_t max_abs_ns = kMaxAudioEpochShiftNs) noexcept {
     const int64_t shift = (static_cast<int64_t>(audio_epoch_100ns) - static_cast<int64_t>(video_epoch_100ns)) * 100LL;

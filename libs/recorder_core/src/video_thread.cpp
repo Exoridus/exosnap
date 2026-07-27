@@ -3349,7 +3349,10 @@ void VideoThread::Run() {
                     // session start: a first frame can carry a present time from
                     // before recording began, and an epoch in the past would
                     // shift the audio track away from the picture by that much.
-                    const auto epoch100ns = static_cast<uint64_t>(videoEpochTicks100ns);
+                    // Guard the sign before widening: a negative tick value would
+                    // become an enormous unsigned epoch and win the floor below.
+                    const uint64_t epoch100ns =
+                        videoEpochTicks100ns > 0 ? static_cast<uint64_t>(videoEpochTicks100ns) : 0ULL;
                     // Explicit template arg: windows.h's min/max function-like
                     // macros are live in this target (no NOMINMAX).
                     m_state.video_epoch_qpc_100ns.store(

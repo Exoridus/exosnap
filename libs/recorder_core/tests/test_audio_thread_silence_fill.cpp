@@ -6,7 +6,10 @@
 //     real position instead of sliding earlier,
 //   - a source that simply runs faster than real time is NOT padded,
 //   - a discontinuity gap covering a stretch the wall clock already filled is
-//     not filled a second time.
+//     not filled a second time,
+//   - the track's measured zero point is published even when the recording
+//     opens on silence, and is never walked back over silence the timeline
+//     does not actually contain.
 //
 // PCM makes the payload directly countable: one fed frame is exactly
 // `channels * 2` bytes of int16 with no encoder framing.
@@ -26,7 +29,21 @@
 #include <variant>
 #include <vector>
 
+#include <windows.h>
+
 namespace {
+
+// QPC now in nanoseconds -- the axis WASAPI reports its capture timestamps on
+// and the one AudioThread publishes its measured epoch against.
+uint64_t QpcNowNs() {
+    LARGE_INTEGER freq{};
+    LARGE_INTEGER counter{};
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    const auto c = static_cast<uint64_t>(counter.QuadPart);
+    const auto f = static_cast<uint64_t>(freq.QuadPart);
+    return (c / f) * 1000000000ULL + ((c % f) * 1000000000ULL) / f;
+}
 
 using recorder_core::AudioCodec;
 using recorder_core::AudioEosSentinel;
@@ -94,6 +111,11 @@ class GoesQuietSource : public IAudioCaptureSource {
         if (pre_left_ == 0 && post_left_ == 0)
             return false;
         acquired_ = true;
+        // Device timing, the way a real WASAPI endpoint attributes it: the QPC
+        // instant this packet's first frame was recorded at, plus the running
+        // device position.
+        last_device_ns_ = (delivered_frames_ * 1000000000ULL) / 48000ULL;
+        last_qpc_ns_ = QpcNowNs();
         out.bytes = reinterpret_cast<const uint8_t*>(data_.data());
         out.num_frames = kFrames;
         out.silent = false;
@@ -110,10 +132,18 @@ class GoesQuietSource : public IAudioCaptureSource {
         if (!acquired_)
             return;
         acquired_ = false;
+        delivered_frames_ += kFrames;
         if (pre_left_ > 0)
             --pre_left_;
         else if (post_left_ > 0)
             --post_left_;
+    }
+    bool LastBufferDeviceTiming(recorder_core::AudioDeviceTiming& out) const override {
+        if (last_qpc_ns_ == 0)
+            return false;
+        out.device_position_ns = last_device_ns_;
+        out.qpc_position_ns = last_qpc_ns_;
+        return true;
     }
     uint32_t SampleRate() const override {
         return 48000;
@@ -138,6 +168,9 @@ class GoesQuietSource : public IAudioCaptureSource {
     bool acquired_ = false;
     bool quiet_done_ = false;
     bool gap_reported_ = false;
+    uint64_t delivered_frames_ = 0;
+    uint64_t last_device_ns_ = 0;
+    uint64_t last_qpc_ns_ = 0;
     std::vector<float> data_;
     std::string name_ = "goes-quiet";
 };
@@ -248,6 +281,18 @@ struct QuietRun {
     uint64_t quiet_frames = 0;
     bool failed = false;
     bool has_eos = false;
+    // Measured zero point the worker published for track 0 (100 ns QPC units;
+    // 0 == never published) plus the wall-clock window the run occupied, which
+    // is what any honest epoch has to fall inside.
+    uint64_t audio_epoch_100ns = 0;
+    uint64_t qpc_before_start_100ns = 0;
+    uint64_t qpc_after_join_100ns = 0;
+    // The epoch as it stood the moment this track's FIRST packet became visible
+    // to the muxer. The muxer resolves a track's placement from that packet and
+    // never revisits it, so a measurement published later is a measurement
+    // thrown away. 0 == the first packet went out with no zero point behind it.
+    uint64_t epoch_at_first_packet_100ns = 0;
+    bool saw_first_packet = false;
 };
 
 QuietRun RunQuiet(QuietSourceOptions opts) {
@@ -262,10 +307,51 @@ QuietRun RunQuiet(QuietSourceOptions opts) {
     GoesQuietSource* raw_source = source.get();
     auto thread = std::make_shared<AudioThread>(state_ptr, std::move(source), 0);
 
+    QuietRun run;
+    run.qpc_before_start_100ns = QpcNowNs() / 100;
+
+    // Stand in for the muxer's ordering: it latches a track's placement from
+    // the first packet it can see, so sample the published epoch at exactly
+    // that instant. The worker publishes before it routes, so a watcher can
+    // never catch a packet with no epoch behind it — unless the ordering
+    // regresses, in which case the gap is the whole detection threshold wide.
+    std::atomic<bool> watching{true};
+    std::atomic<uint64_t> epoch_at_first{0};
+    std::atomic<bool> saw_first{false};
+    std::thread watcher([&] {
+        while (watching.load()) {
+            bool any = false;
+            {
+                std::lock_guard lk(state.premux_mutex);
+                any = !state.audio_premux.empty();
+            }
+            if (!any) {
+                std::lock_guard lk(state.mux_mutex);
+                for (const auto& item : state.mux_queue) {
+                    if (std::get_if<EncodedAudioPacket>(&item.payload) != nullptr) {
+                        any = true;
+                        break;
+                    }
+                }
+            }
+            if (any) {
+                epoch_at_first.store(state.audio_epoch_qpc_100ns[0].load());
+                saw_first.store(true);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    });
+
     thread->Start();
     EXPECT_TRUE(thread->Join(20000));
+    watching.store(false);
+    watcher.join();
+    run.qpc_after_join_100ns = QpcNowNs() / 100;
+    run.audio_epoch_100ns = state.audio_epoch_qpc_100ns[0].load();
+    run.epoch_at_first_packet_100ns = epoch_at_first.load();
+    run.saw_first_packet = saw_first.load();
 
-    QuietRun run;
     run.failed = state.HasFailure();
     run.has_eos = HasEos(state);
     run.packets = GatherAudioPacketsInOrder(state);
@@ -317,6 +403,62 @@ TEST(AudioThreadSilenceFill, QuietStretchIsNotFilledTwiceWhenTheDeviceAlsoReport
     EXPECT_LE(total_frames, expected + kToleranceFrames)
         << "the same outage was filled twice: " << total_frames << " frames for " << expected << " expected";
     EXPECT_GE(total_frames + kToleranceFrames, expected);
+}
+
+// 100 ns units per millisecond.
+constexpr uint64_t kMs100ns = 10000ULL;
+
+TEST(AudioThreadSilenceFill, RecordingThatOpensOnSilenceStillPublishesItsZeroPoint) {
+    // The everyday loopback case: recording starts while nothing is playing, so
+    // the track opens with clock-driven silence and no capture packet exists
+    // yet. The muxer places a track from its FIRST packet, so a measurement
+    // that waits for real audio loses that race and the whole track silently
+    // falls back to the assumed start — exactly the offset the measurement is
+    // there to remove. The fill itself defines the zero point, so it publishes.
+    QuietSourceOptions opts;
+    opts.pre = 0; // nothing is playing when the recording starts
+    opts.post = 3;
+    opts.quiet = std::chrono::milliseconds(700);
+    const QuietRun run = RunQuiet(opts);
+
+    EXPECT_FALSE(run.failed);
+    ASSERT_NE(run.audio_epoch_100ns, 0u) << "no zero point was published for a track that opened on silence";
+    EXPECT_GE(run.audio_epoch_100ns, run.qpc_before_start_100ns) << "the published zero point predates the recording";
+    // The timeline starts as soon as the worker does, so the epoch belongs at
+    // the very beginning of the run -- not after the quiet stretch.
+    EXPECT_LE(run.audio_epoch_100ns, run.qpc_before_start_100ns + (300 * kMs100ns))
+        << "the zero point landed after the silence instead of at the start of it";
+
+    // The ordering, which is what actually decides whether the measurement is
+    // used at all: the muxer places a track from its first packet, so a zero
+    // point published after that packet is a zero point thrown away.
+    ASSERT_TRUE(run.saw_first_packet) << "the track produced no packets at all";
+    EXPECT_NE(run.epoch_at_first_packet_100ns, 0u)
+        << "the first packet reached the muxer before any zero point was published -- "
+           "the measurement loses the race and the track falls back to the assumed start";
+}
+
+TEST(AudioThreadSilenceFill, ZeroPointStaysInsideTheRunWhenTheDeviceAlsoReportsTheStall) {
+    // End-to-end guard on the walk-back: whatever path publishes the zero
+    // point, it must land inside the run's own wall-clock window. A walk-back
+    // that counted the resuming packet's reported gap -- which is deliberately
+    // NOT fed, because the wall clock already covered it -- would put the epoch
+    // a whole quiet stretch before the recording began, and the muxer would
+    // then trim that much real audio off the head of the track. (The arithmetic
+    // itself is pinned by AudioEpochFromPacket.CountsOnlyFramesActuallyFed;
+    // both call sites go through that one helper.)
+    QuietSourceOptions opts;
+    opts.pre = 2;
+    opts.post = 3;
+    opts.quiet = std::chrono::milliseconds(900);
+    opts.report_gap_on_resume = true;
+    const QuietRun run = RunQuiet(opts);
+
+    EXPECT_FALSE(run.failed);
+    ASSERT_NE(run.audio_epoch_100ns, 0u);
+    EXPECT_GE(run.audio_epoch_100ns, run.qpc_before_start_100ns)
+        << "the zero point was walked back before the recording even started";
+    EXPECT_LE(run.audio_epoch_100ns, run.qpc_after_join_100ns);
 }
 
 TEST(AudioThreadSilenceFill, ShortGapsBetweenPacketsAreNotPadded) {
