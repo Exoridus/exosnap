@@ -27,8 +27,15 @@ jobs:
   # Fast, build-free checks. (Static analysis — clang-tidy/cppcheck — is NOT run
   # here: the VS generator silently ignored CMAKE_CXX_CLANG_TIDY/CPPCHECK, so the
   # old "build with static analysis" step was a no-op duplicate of build-test's
-  # debug build. Re-enabling real static analysis on Ninja surfaces a backlog of
-  # violations and is tracked as separate work.)
+  # debug build. Re-enabling real static analysis on Ninja surfaced a backlog of
+  # violations, so the broad pass stays advisory in advisory-unused-checks below.
+  #
+  # A small curated subset DOES block, as the "clang-tidy blocking check set" step
+  # inside build-test: bugprone-dangling-handle, clang-analyzer-core.CallAndMessage,
+  # clang-analyzer-core.uninitialized.*, clang-analyzer-cplusplus.NewDelete*. Each
+  # was measured at zero findings in repository-owned files across all 509 project
+  # translation units before it was promoted; see .clang-tidy for the candidates
+  # that did not qualify, and scripts/run-clang-tidy-blocking.ps1 for the runner.)
   lint:
     name: lint
     runs-on: windows-2022
@@ -258,6 +265,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The blocking clang-tidy step below diffs HEAD against HEAD^ to find
+          # which translation units a change affects. On a pull_request that first
+          # parent is the base branch tip (the checked-out ref is the merge
+          # commit); on a push it is the previous commit. Depth 2 is all either
+          # needs, and the default depth of 1 would leave HEAD^ unreachable.
+          fetch-depth: 2
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -292,6 +306,25 @@ jobs:
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/${{ matrix.preset }} -Config ${{ matrix.config }}
           -ExcludeLabel live
+
+      # Blocking static analysis. Deliberately a step inside build-test rather
+      # than a job of its own: build-test is already a required check, so the
+      # required status-check set does not change (a brand-new job would have to
+      # be added to branch protection to block anything at all, and an unrequired
+      # one that fails is just noise — the same trap advisory-unused-checks
+      # documents above). It also reuses the compile_commands.json the Ninja debug
+      # configure already wrote; the Release preset exports none, hence the guard.
+      #
+      # Scope is what the change touches: the changed translation units plus every
+      # translation unit that includes a changed header, resolved from Ninja's own
+      # recorded dependency graph. A full-tree pass of this check set measures
+      # ~5.6 CPU-hours — nearly all of it clang re-parsing Qt headers — so the full
+      # form stays a local / on-demand operation and CI runs the scoped one.
+      - name: clang-tidy blocking check set (${{ matrix.preset }})
+        if: matrix.config == 'Debug'
+        run: >-
+          pwsh -NonInteractive -File scripts/run-clang-tidy-blocking.ps1
+          -BuildDir build/${{ matrix.preset }} -Base HEAD^
 
       - name: sccache stats
         if: always()

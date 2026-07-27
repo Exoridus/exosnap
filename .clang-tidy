@@ -36,6 +36,36 @@
 #   misc-unused-alias-decls      stale type aliases
 #   readability-redundant-declaration  duplicate forward declarations
 # All five are informational only — do NOT promote to blocking without a human triage pass.
+#
+# Blocking check set (enforced in CI by scripts/run-clang-tidy-blocking.ps1):
+#   bugprone-dangling-handle
+#   clang-analyzer-core.CallAndMessage
+#   clang-analyzer-core.uninitialized.*
+#   clang-analyzer-cplusplus.NewDelete*
+# These four were measured at zero findings in repository-owned files across all
+# 509 project translation units, which is the only reason they may fail a build.
+# Two consequences worth knowing:
+#   * Requesting any clang-analyzer-* check makes clang-tidy register the entire
+#     clang-analyzer core package — -clang-analyzer-core.X cannot switch the
+#     extras back off — so the path-sensitive analyser now runs under this
+#     config. That is intended, but it makes the lint presets much slower.
+#   * CallAndMessage and NewDelete* do fire inside Qt and Windows SDK headers
+#     (cppwinrt's Windows.Graphics.Capture.h, QtCore's qsharedpointer_impl.h and
+#     qobjectdefs.h). Those are not ours to fix, so the CI gate only counts
+#     diagnostics located in files this repository owns.
+#
+# Candidates that did NOT qualify, with their finding counts from that same pass:
+#   bugprone-narrowing-conversions / cppcoreguidelines-narrowing-conversions  156
+#                                 qsizetype -> int at Qt call sites, tree-wide
+#   bugprone-integer-division                                                   5
+#                                 deliberate integer pixel math (4:2:0 chroma
+#                                 viewport, Matroska timescale)
+#   bugprone-use-after-move                                                     3
+#                                 one intentional moved-from assertion in a test,
+#                                 two loop-carried winrt::com_ptr uses in
+#                                 VideoThread::Run that need a human verdict
+#   clang-diagnostic-switch (enum-exhaustiveness)                               2
+#                                 see the note under HeaderFilterRegex below
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
@@ -68,7 +98,11 @@ Checks: >
   misc-unused-using-decls,
   misc-unused-parameters,
   misc-unused-alias-decls,
-  readability-redundant-declaration
+  readability-redundant-declaration,
+  bugprone-dangling-handle,
+  clang-analyzer-core.CallAndMessage,
+  clang-analyzer-core.uninitialized.*,
+  clang-analyzer-cplusplus.NewDelete*
 
 # clang-tidy parses with the clang frontend in MSVC-compat mode. Two args make it
 # parse this codebase cleanly:
@@ -94,6 +128,20 @@ WarningsAsErrors: >
   -misc-unused-using-decls,
   -misc-unused-parameters,
   -misc-unused-alias-decls,
-  -readability-redundant-declaration
+  -readability-redundant-declaration,
+  bugprone-dangling-handle,
+  clang-analyzer-core.CallAndMessage,
+  clang-analyzer-core.uninitialized.*,
+  clang-analyzer-cplusplus.NewDelete*
+
+# Enum-switch exhaustiveness is NOT covered by the compiler here. The build uses
+# /W4 /WX, but MSVC keeps C4062 (unhandled enumerator, no default label) and
+# C4061 (unhandled enumerator, default label present) off by default at every
+# warning level; they need an explicit /w44062 / /w44061. Verified by compiling a
+# probe with the project's exact flags: silent at /W4 /WX, diagnosed once the
+# warnings are switched on. clang's own -Wswitch does run here as
+# clang-diagnostic-switch and currently reports two unhandled enumerators
+# (RecordPage::canApplyPresetNow, VisualTestHarness), so it is not eligible for
+# the blocking set until those are resolved.
 HeaderFilterRegex: '^(?!.*third_party/).*'
 FormatStyle: file
