@@ -173,38 +173,56 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
 void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept;
 
 // ---------------------------------------------------------------------------
+// ComputeFrameIntervalNs — pure. Nominal frame duration in nanoseconds for the
+// configured rate (1e9 * den / num), with the same degenerate-rate fallback
+// family as ComputeGopLength (60 fps). Feeds the PTS-based keyframe cadence:
+// gop duration = gopLength * interval, keyframe tolerance = interval / 2.
+// ---------------------------------------------------------------------------
+uint64_t ComputeFrameIntervalNs(uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept;
+
+// ---------------------------------------------------------------------------
 // NextGopKeyframePhase — pure, testable IDR cadence decision. EncodeFrame does
 // not merely predict IDR placement from NVENC's idrPeriod timer — it actively
 // sets NV_ENC_PIC_FLAG_FORCEIDR on every submission this function marks as a
 // keyframe, so cadence is an enforced fact rather than an assumption about
 // driver behavior (idrPeriod stays set as a belt-and-braces backstop only).
-// With no B-frames and no lookahead (frameIntervalP=1) output order ==
-// submission order, so IDRs land on submission indices 0, gopLength,
-// 2*gopLength, ...; a forced IDR resets the phase. Given the current
-// frame-in-GOP counter, the configured GOP length, and whether a forced IDR
-// was requested this frame, returns whether this frame is a keyframe and the
-// counter to carry to the next frame. No GPU/NVENC session.
+//
+// The cadence is derived from MEDIA TIME (the submission's PTS), not from a
+// submitted-frame counter: the CFR scheduler advances the timeline without
+// submitting a frame on some paths (composite-failure drops, the
+// sustained-lag resync skip), and a counter would stretch the keyframe
+// interval in media time by every such gap. A frame is a keyframe when it is
+// forced, when it opens the stream (no GOP anchor yet), or when its PTS has
+// reached the current GOP's end (anchor + gop duration, with half a frame
+// interval of tolerance so rounding in the caller's PTS math cannot slip the
+// boundary frame past the threshold). Every keyframe re-anchors the GOP at
+// its own PTS. With no B-frames and no lookahead (frameIntervalP=1) output
+// order == submission order. No GPU/NVENC session.
 // ---------------------------------------------------------------------------
 struct GopKeyframePhase {
     bool is_keyframe = false;
-    uint32_t frame_in_gop = 0;
+    uint64_t gop_start_pts_ns = 0; // PTS anchoring the (possibly new) current GOP
 };
-GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length, bool forced_idr) noexcept;
+GopKeyframePhase NextGopKeyframePhase(uint64_t pts_ns, bool have_gop_start, uint64_t gop_start_pts_ns,
+                                      uint64_t gop_duration_ns, uint64_t frame_interval_ns, bool forced_idr) noexcept;
 
 // ---------------------------------------------------------------------------
-// ResyncGopPhaseFromActual — pure order/keyframe hardening (warn-first).
+// ResyncGopStartFromActual — pure order/keyframe hardening (warn-first).
 // Since keyframe cadence is enforced at submission time via FORCEIDR, the
-// submission-side counter is authoritative whenever the completed packet's
-// actual pictureType confirms the prediction — under async buffering it is
-// already several frames ahead of the packet being consumed, and rewinding it
-// from that delayed viewpoint stretched every GOP by the in-flight depth
-// (~13 % at 0.5 s / 60 fps). Only an UNPREDICTED real IDR resyncs the phase
-// to 1 (emergency self-healing; live-verified as never occurring, counted via
-// keyframe_prediction_mismatches). A predicted-but-missing IDR leaves the
-// counter untouched — warn-only, a single miss is not evidence the whole
-// cadence has shifted. No GPU/NVENC session.
+// submission-side GOP anchor is authoritative whenever the completed packet's
+// actual pictureType confirms the prediction — under async buffering the
+// submission side is already several frames ahead of the packet being
+// consumed, and rewinding the anchor from that delayed viewpoint stretched
+// every GOP by the in-flight depth (~13 % at 0.5 s / 60 fps). Only an
+// UNPREDICTED real IDR resyncs: the anchor moves to that packet's PTS
+// (emergency self-healing; live-verified as never occurring, counted via
+// keyframe_prediction_mismatches) — but never backwards past an anchor a
+// newer submission-side keyframe already set. A predicted-but-missing IDR
+// leaves the anchor untouched — warn-only, a single miss is not evidence the
+// whole cadence has shifted. No GPU/NVENC session.
 // ---------------------------------------------------------------------------
-uint32_t ResyncGopPhaseFromActual(bool predicted_keyframe, bool actual_is_idr, uint32_t frame_in_gop) noexcept;
+uint64_t ResyncGopStartFromActual(bool predicted_keyframe, bool actual_is_idr, uint64_t packet_pts_ns,
+                                  uint64_t gop_start_pts_ns) noexcept;
 
 // ---------------------------------------------------------------------------
 // Pure message formatters for the encoder's two output-order validations.
@@ -523,11 +541,17 @@ class NvencEncoder {
     std::vector<uint8_t> m_hdrCllPayload;
     std::array<NV_ENC_SEI_PAYLOAD, 2> m_hdrPayloadEntries{};
     uint32_t m_hdrPayloadCount = 0;
-    // Deterministic IDR cadence tracking (gopLength; no B-frames / no lookahead,
-    // so IDRs land on submission indices 0, gopLength, 2*gopLength, ... and each
-    // forced IDR resets the phase). Used to attach HDR metadata on keyframes.
+    // Deterministic IDR cadence tracking in MEDIA TIME (see NextGopKeyframePhase:
+    // keyframes are scheduled from the submission PTS against the GOP anchor, so
+    // CFR timeline gaps that never reach the encoder cannot stretch the keyframe
+    // interval). Also used to attach HDR metadata on keyframes. m_gopLength stays
+    // the frame-count GOP for NVENC config + diagnostics; the ns fields derive
+    // from it in InitEncoder.
     uint32_t m_gopLength = 0;
-    uint32_t m_frameInGop = 0;
+    uint64_t m_gopDurationNs = 0;
+    uint64_t m_frameIntervalNs = 0;
+    bool m_haveGopStart = false;  // false until the first submission anchors a GOP
+    uint64_t m_gopStartPtsNs = 0; // PTS of the current GOP's keyframe
 
     // Build the per-keyframe HDR metadata payloads for the current codec + color.
     // No-op (clears state) unless the session is HDR10-native on HEVC/AV1.
