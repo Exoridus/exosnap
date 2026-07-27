@@ -6,12 +6,13 @@
 
 // Tests for the pure, GPU-free GOP + AQ helpers backing the keyframe-interval
 // selector and the explicit adaptive-quantization setting:
-//   ComputeGopLength       — round(interval_secs * fps) with a degenerate-fps fallback
-//   ApplyGopToNvenc        — gopLength + codec-specific idrPeriod, kept consistent
-//   ApplySpatialAqToNvenc  — enableAQ=1, enableTemporalAQ=0, aqStrength=0
-//   ComputeFrameIntervalNs — nominal frame duration feeding the media-time cadence
-//   NextGopKeyframePhase   — media-time IDR cadence, robust against CFR timeline
-//                            gaps that never reach the encoder
+//   ComputeGopLength        — round(interval_secs * fps) with a degenerate-fps fallback
+//   ApplyGopToNvenc         — gopLength + codec-specific idrPeriod, kept consistent
+//   ComputeNvencGopBackstop — the frame-count backstop actually programmed into NVENC
+//   ApplySpatialAqToNvenc   — enableAQ=1, enableTemporalAQ=0, aqStrength=0
+//   ComputeFrameIntervalNs  — nominal frame duration feeding the media-time cadence
+//   NextGopKeyframePhase    — media-time IDR cadence, robust against CFR timeline
+//                             gaps that never reach the encoder
 //
 // NVENC SDK fields under test (NV_ENC_CONFIG):
 //   gopLength
@@ -100,6 +101,45 @@ TEST(ApplyGopToNvenc, IdrPeriodEqualsGopLengthForEveryCodec) {
 }
 
 // ---------------------------------------------------------------------------
+// ComputeNvencGopBackstop — the frame counter NVENC itself runs must never be
+// able to fire an IDR before the media-time cadence does
+// ---------------------------------------------------------------------------
+
+TEST(ComputeNvencGopBackstop, Cfr_KeepsTheFrameCountGop) {
+    // CFR submits at most one frame per media-time frame interval, so the
+    // submission counter can only reach gop_length at or after the media-time
+    // boundary — the backstop stays armed with the exact GOP length.
+    EXPECT_EQ(ComputeNvencGopBackstop(120u, /*constant_frame_rate=*/true), 120u);
+    EXPECT_EQ(ComputeNvencGopBackstop(30u, /*constant_frame_rate=*/true), 30u);
+}
+
+TEST(ComputeNvencGopBackstop, Vfr_DisablesTheFrameCountBackstop) {
+    // VFR passes source timestamps through and submits every frame the source
+    // produces. A 144 Hz source recorded at a 60 fps profile reaches 120
+    // submissions after ~0.83 s of media time — long before the 2 s media-time
+    // boundary — so a frame counter would insert an IDR the submission side
+    // never predicted. Keyframes are enforced per submission with FORCEIDR, so
+    // the counter is disabled rather than guessed at.
+    EXPECT_EQ(ComputeNvencGopBackstop(120u, /*constant_frame_rate=*/false), NVENC_INFINITE_GOPLENGTH);
+    EXPECT_EQ(ComputeNvencGopBackstop(30u, /*constant_frame_rate=*/false), NVENC_INFINITE_GOPLENGTH);
+}
+
+TEST(ApplyGopToNvenc, VfrBackstopReachesEveryCodecsIdrPeriod) {
+    // The disabled backstop must land in gopLength AND in the codec's own
+    // idrPeriod: leaving gopLength finite would still insert (non-IDR) I-frames
+    // on a frame counter, which the muxer would index as seek points.
+    for (const VideoCodec codec : {VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Av1}) {
+        NV_ENC_CONFIG cfg{};
+        ApplyGopToNvenc(cfg, codec, ComputeNvencGopBackstop(120u, /*constant_frame_rate=*/false));
+        EXPECT_EQ(cfg.gopLength, NVENC_INFINITE_GOPLENGTH);
+        const uint32_t idr = (codec == VideoCodec::H264)   ? cfg.encodeCodecConfig.h264Config.idrPeriod
+                             : (codec == VideoCodec::Hevc) ? cfg.encodeCodecConfig.hevcConfig.idrPeriod
+                                                           : cfg.encodeCodecConfig.av1Config.idrPeriod;
+        EXPECT_EQ(idr, NVENC_INFINITE_GOPLENGTH);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ApplySpatialAqToNvenc — spatial AQ on, temporal off, auto strength
 // ---------------------------------------------------------------------------
 
@@ -172,6 +212,43 @@ std::vector<uint64_t> KeyframeTicks(const std::vector<uint64_t>& submitted, uint
         have_start = have_start || phase.is_keyframe;
     }
     return keys;
+}
+
+// Same drive loop, but the PTS grid and the encoder's frame interval come from
+// DIFFERENT formulas — which is the production situation, see
+// ProductionCfrPtsStepNs. Returns the tick indices flagged as keyframes.
+std::vector<uint64_t> KeyframeTicksWithPtsStep(uint64_t tick_count, uint32_t gop_length, uint64_t pts_step_ns,
+                                               uint64_t encoder_interval_ns) {
+    std::vector<uint64_t> keys;
+    bool have_start = false;
+    uint64_t gop_start = 0;
+    const uint64_t gop_duration = encoder_interval_ns * gop_length;
+    for (uint64_t tick = 0; tick < tick_count; ++tick) {
+        const GopKeyframePhase phase = NextGopKeyframePhase(tick * pts_step_ns, have_start, gop_start, gop_duration,
+                                                            encoder_interval_ns, /*forced_idr=*/false);
+        if (phase.is_keyframe)
+            keys.push_back(tick);
+        gop_start = phase.gop_start_pts_ns;
+        have_start = have_start || phase.is_keyframe;
+    }
+    return keys;
+}
+
+// The CFR scheduler's PTS step (video_thread.cpp): frame_interval_100ns is
+// 1e7 * den / num truncated to whole 100 ns units, and PTS is tick index times
+// that. It is NOT ComputeFrameIntervalNs — 16 666 600 ns vs 16 666 666 ns at
+// 60 fps — and deliberately so: changing either formula changes either every
+// muxed timestamp or the cadence tolerance, so they are pinned independently
+// and the tests below pin the contract BETWEEN them.
+uint64_t ProductionCfrPtsStepNs(uint32_t frame_rate_num, uint32_t frame_rate_den) {
+    return (10000000ull * frame_rate_den / frame_rate_num) * 100ull;
+}
+
+std::vector<uint64_t> EveryNthUpTo(uint64_t step, uint64_t last) {
+    std::vector<uint64_t> v;
+    for (uint64_t i = 0; i <= last; i += step)
+        v.push_back(i);
+    return v;
 }
 
 std::vector<uint64_t> ContiguousTicks(uint64_t count) {
@@ -269,6 +346,54 @@ TEST(NextGopKeyframePhase, ZeroGopDuration_OnlyFirstFrameIsKeyframe) {
     // stream-opening frame is an IDR.
     const std::vector<uint64_t> keys = KeyframeTicks(ContiguousTicks(200), 0u, kInterval60);
     EXPECT_EQ(keys, (std::vector<uint64_t>{0u}));
+}
+
+// ---------------------------------------------------------------------------
+// Production PTS grid vs. the encoder's frame interval. The CFR scheduler's PTS
+// step and ComputeFrameIntervalNs are two different formulas over the same rate,
+// so every frame's PTS runs a few ns short of the cadence's own arithmetic. The
+// tolerance absorbs that, and — because each keyframe re-anchors at its own real
+// PTS — the per-GOP deficit must not accumulate across GOPs.
+// ---------------------------------------------------------------------------
+
+TEST(NextGopKeyframePhase, ProductionPtsStepDiffersFromTheEncoderFrameInterval) {
+    // Guard the premise of the tests below: if these ever converge, the cadence
+    // is being fed its own grid and the tolerance is no longer being exercised.
+    EXPECT_EQ(ProductionCfrPtsStepNs(60, 1), 16666600ull);
+    EXPECT_EQ(ComputeFrameIntervalNs(60, 1), 16666666ull);
+    EXPECT_NE(ProductionCfrPtsStepNs(60, 1), ComputeFrameIntervalNs(60, 1));
+}
+
+TEST(NextGopKeyframePhase, ProductionPtsGrid60fps_DeficitDoesNotAccumulate) {
+    // 60 s at 60 fps, 2 s GOP: 30 keyframe boundaries. The per-GOP deficit is
+    // 120 * 66 ns ≈ 7.9 µs against a half-frame tolerance of ≈ 8.3 ms, and
+    // re-anchoring at the real PTS keeps it per-GOP instead of cumulative.
+    const std::vector<uint64_t> keys =
+        KeyframeTicksWithPtsStep(3601, 120u, ProductionCfrPtsStepNs(60, 1), ComputeFrameIntervalNs(60, 1));
+    EXPECT_EQ(keys, EveryNthUpTo(120u, 3600u));
+}
+
+TEST(NextGopKeyframePhase, ProductionPtsGrid60fps_HalfSecondGop_DeficitDoesNotAccumulate) {
+    // Shortest selectable keyframe interval: 4x as many boundaries in the same
+    // wall time, so 4x as many chances for a rounding deficit to compound.
+    const std::vector<uint64_t> keys =
+        KeyframeTicksWithPtsStep(3601, 30u, ProductionCfrPtsStepNs(60, 1), ComputeFrameIntervalNs(60, 1));
+    EXPECT_EQ(keys, EveryNthUpTo(30u, 3600u));
+}
+
+TEST(NextGopKeyframePhase, ProductionPtsGrid30fps_DeficitDoesNotAccumulate) {
+    // 30 fps: 33 333 300 ns per tick vs the encoder's 33 333 333 ns.
+    const std::vector<uint64_t> keys =
+        KeyframeTicksWithPtsStep(1801, 60u, ProductionCfrPtsStepNs(30, 1), ComputeFrameIntervalNs(30, 1));
+    EXPECT_EQ(keys, EveryNthUpTo(60u, 1800u));
+}
+
+TEST(NextGopKeyframePhase, ProductionPtsGrid5994_DeficitDoesNotAccumulate) {
+    // Fractional rate, where both formulas truncate: 16 683 300 ns per tick vs
+    // the encoder's 16 683 333 ns.
+    const std::vector<uint64_t> keys =
+        KeyframeTicksWithPtsStep(3601, 120u, ProductionCfrPtsStepNs(60000, 1001), ComputeFrameIntervalNs(60000, 1001));
+    EXPECT_EQ(keys, EveryNthUpTo(120u, 3600u));
 }
 
 // ---------------------------------------------------------------------------

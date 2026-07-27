@@ -723,6 +723,15 @@ void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) 
     }
 }
 
+uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) noexcept {
+    // See nvenc_encoder.h: NVENC's gopLength/idrPeriod timer counts SUBMITTED
+    // PICTURES. That matches the media-time cadence only under CFR submission;
+    // under VFR passthrough a source faster than the configured rate reaches
+    // gop_length submissions before the media-time boundary and the driver would
+    // insert an IDR the submission side never predicted.
+    return constant_frame_rate ? gop_length : NVENC_INFINITE_GOPLENGTH;
+}
+
 void ApplySpatialAqToNvenc(NV_ENC_CONFIG& cfg) noexcept {
     cfg.rcParams.enableAQ = 1;         // spatial AQ — no capability gate; safe without lookahead
     cfg.rcParams.enableTemporalAQ = 0; // deliberately off (undocumented without lookahead)
@@ -930,9 +939,12 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     // Keyframe interval: gopLength = round(interval_secs * fps), applied together
     // with the codec-specific idrPeriod. m_keyframeIntervalSecs is set from the
     // user's Settings → Advanced selection (via SetKeyframeIntervalSecs) and
-    // defaults to 2.0 (pre-0.9.0 hardcoded behaviour when unset).
+    // defaults to 2.0 (pre-0.9.0 hardcoded behaviour when unset). What reaches
+    // NVENC is the BACKSTOP value: identical to kGopFrames under CFR submission,
+    // disabled (infinite) under VFR, where a frame counter would fire before the
+    // media-time cadence below — see ComputeNvencGopBackstop.
     const uint32_t kGopFrames = ComputeGopLength(m_keyframeIntervalSecs, frame_rate_num, frame_rate_den);
-    ApplyGopToNvenc(m_encodeConfig, m_codec, kGopFrames);
+    ApplyGopToNvenc(m_encodeConfig, m_codec, ComputeNvencGopBackstop(kGopFrames, m_constantFrameRate));
     // Remember the IDR cadence and (re)build the HDR metadata payloads for this
     // session. The cadence runs on media time: no GOP anchor exists yet, so the
     // first submitted frame — always an IDR — anchors the GOP and carries the
@@ -1470,8 +1482,9 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     // 1 s / 0.5 s keyframe interval), and folds in the one-shot forced-IDR
     // request. Whatever it decides, we drive it here with
     // NV_ENC_PIC_FLAG_FORCEIDR — idrPeriod stays set as a belt-and-braces
-    // backstop, but is no longer the mechanism the keyframe positions actually
-    // depend on.
+    // backstop wherever it cannot fire before this cadence (CFR only — see
+    // ComputeNvencGopBackstop), but is never the mechanism the keyframe
+    // positions actually depend on.
     const GopKeyframePhase phase =
         NextGopKeyframePhase(pts_ns, m_haveGopStart, m_gopStartPtsNs, m_gopDurationNs, m_frameIntervalNs, forcedIdr);
     const bool isKeyframe = phase.is_keyframe;

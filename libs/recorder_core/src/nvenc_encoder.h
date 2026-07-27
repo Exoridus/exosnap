@@ -154,10 +154,36 @@ RcParams ComputeNvencRcParams(RateControlMode mode, uint32_t cq, uint32_t bitrat
 //
 // ApplyGopToNvenc: writes gopLength and the codec-specific idrPeriod into an
 //   NV_ENC_CONFIG, keeping idrPeriod == gopLength for H.264/HEVC/AV1 (each codec
-//   config struct carries its own idrPeriod field).
+//   config struct carries its own idrPeriod field). The value it writes is the
+//   HARDWARE BACKSTOP, not the cadence — see ComputeNvencGopBackstop.
 // ---------------------------------------------------------------------------
 uint32_t ComputeGopLength(float keyframe_interval_secs, uint32_t frame_rate_num, uint32_t frame_rate_den) noexcept;
 void ApplyGopToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, uint32_t gop_length) noexcept;
+
+// ---------------------------------------------------------------------------
+// ComputeNvencGopBackstop — pure. The frame-count GOP/IDR period programmed into
+// NVENC, which is a BACKSTOP only: keyframe positions are enforced per
+// submission with NV_ENC_PIC_FLAG_FORCEIDR on the media-time cadence
+// (NextGopKeyframePhase). NVENC's own gopLength/idrPeriod timer counts SUBMITTED
+// PICTURES, so it only agrees with a media-time cadence while exactly one frame
+// is submitted per frame interval:
+//
+//   CFR — the scheduler submits at most one frame per tick, and the paths that
+//     skip a tick submit FEWER frames per media-time GOP. The forced IDR
+//     therefore always arrives at or before submission index gop_length, so the
+//     backstop can never fire first. gop_length is kept verbatim (it is also
+//     what the driver's rate control models as a GOP).
+//   VFR — PTS pass through from the source, and the loop submits every frame the
+//     source produces. A source faster than the configured rate (a 144 Hz window
+//     recorded at 60 fps) reaches gop_length submissions in ~0.83 s of media
+//     time, i.e. well before the 2 s media-time boundary. NVENC would insert an
+//     IDR nobody predicted: permanent keyframe_prediction_mismatches, perpetual
+//     emergency re-anchoring, and HDR10 metadata attached to the wrong picture.
+//     The backstop is therefore disabled (NVENC_INFINITE_GOPLENGTH — the
+//     documented pattern for a client that drives IDRs itself; valid because
+//     frameIntervalP is 1 / no B-frames).
+// ---------------------------------------------------------------------------
+uint32_t ComputeNvencGopBackstop(uint32_t gop_length, bool constant_frame_rate) noexcept;
 
 // ---------------------------------------------------------------------------
 // ApplySpatialAqToNvenc — pure, testable. Explicitly pins spatial adaptive
@@ -321,6 +347,14 @@ class NvencEncoder {
         m_keyframeIntervalSecs = (secs > 0.0f) ? secs : 2.0f;
     }
 
+    // Tell the encoder whether the caller submits on a constant-frame-rate
+    // schedule. Must be called before InitEncoder(). Only affects the hardware
+    // GOP backstop (ComputeNvencGopBackstop) — the keyframe cadence itself is
+    // media-time based either way. Defaults to true (the shipped default profile).
+    void SetConstantFrameRate(bool cfr) noexcept {
+        m_constantFrameRate = cfr;
+    }
+
     // Resolved encoder initialization parameters, valid after a successful
     // InitEncoder() (i.e. after Configure()). Plain data for diagnostics / the
     // session report — carries no NVENC types. hdr_mode is not known here (it is a
@@ -473,6 +507,7 @@ class NvencEncoder {
     uint32_t m_bitrate_kbps = 20000;
     ColorMetadata m_color = ColorMetadata::Sdr709();
     float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
+    bool m_constantFrameRate = true;     // submission regime; see ComputeNvencGopBackstop
 
     // NVENC speed/quality preset (P1..P7), user-selectable expert setting.
     // Default P4 — matches the prior hardcoded AV1/HEVC default; H.264 previously

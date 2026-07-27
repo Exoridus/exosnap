@@ -567,6 +567,12 @@ void VideoThread::Run() {
         // this the encoder silently stays at its 2 s default and the selector has
         // no effect.
         nvenc.SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
+        // Submission regime. The keyframe cadence is media-time based either way;
+        // this only decides whether NVENC's frame-counting gopLength/idrPeriod
+        // backstop stays armed. Under VFR the loop below submits every frame the
+        // source produces, so a source faster than the configured rate would trip
+        // that counter before the media-time boundary — see ComputeNvencGopBackstop.
+        nvenc.SetConstantFrameRate(m_state.config.cfr);
         // Color signaling (fix for color-range-signaling bug): the encoded
         // bitstream itself must carry the same color description as the
         // VideoProcessor conversion below and the Matroska Colour element
@@ -1543,16 +1549,30 @@ void VideoThread::Run() {
     // producer follows (WgcSourceProducer, ADR 0041). One persistent texture is
     // enough for seed/pending/held alike: they only ever mean "the latest
     // captured frame", exactly like the OD path's persistent odCapturedTex.
-    // Created lazily from the first frame's descriptor (pool size + format);
+    // Sized from the SESSION's source size (the pool was created at exactly that
+    // size and its surfaces never change size — a resize is reported by
+    // ContentSize instead) and created lazily from the first frame's format;
     // returns nullptr after recording the failure.
     winrt::com_ptr<ID3D11Texture2D> wgcCapturedTex;
     auto copyWgcFrame = [&](ID3D11Texture2D* rawTex) -> ID3D11Texture2D* {
+        D3D11_TEXTURE2D_DESC rawDesc{};
+        rawTex->GetDesc(&rawDesc);
+        // The pool surface must be the session's source size, or CopyResource
+        // below would silently no-op (mismatched dimensions) and the compositor
+        // would read a stale/empty texture. Kept as an explicit check — the same
+        // one the OD path applies to every acquired frame — so any divergence
+        // surfaces as the honest size failure instead of an opaque black frame.
+        if (rawDesc.Width != sourceWidth || rawDesc.Height != sourceHeight) {
+            std::ostringstream err;
+            err << "capture source size changed during session from " << sourceWidth << "x" << sourceHeight << " to "
+                << rawDesc.Width << "x" << rawDesc.Height << "; restart recording to reconfigure encoder";
+            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+            return nullptr;
+        }
         if (wgcCapturedTex == nullptr) {
-            D3D11_TEXTURE2D_DESC rawDesc{};
-            rawTex->GetDesc(&rawDesc);
             D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = rawDesc.Width;
-            desc.Height = rawDesc.Height;
+            desc.Width = sourceWidth;
+            desc.Height = sourceHeight;
             desc.MipLevels = 1;
             desc.ArraySize = 1;
             desc.Format = rawDesc.Format;
@@ -2721,10 +2741,29 @@ void VideoThread::Run() {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
                 const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
-                    while (true) {
-                        auto frame = framePool.TryGetNextFrame();
-                        if (frame == nullptr)
+                    // TryGetNextFrame hands back the OLDEST queued frame, and
+                    // only the newest is ever encoded. Walk to the newest first
+                    // and copy that one — copying every queued frame would burn
+                    // a full-surface GPU copy per coalesced frame (the preview
+                    // producer drains the same way, WgcSourceProducer::PollFrame).
+                    // Every frame walked past still counts as captured and, if
+                    // it displaced an unencoded one, as a coalesce drop.
+                    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    for (;;) {
+                        auto next = framePool.TryGetNextFrame();
+                        if (next == nullptr)
                             break;
+                        const bool diag_recording = !m_state.pause_requested.load();
+                        if (diag_recording)
+                            m_state.diagnostics.OnFrameCaptured();
+                        if (frame != nullptr || pendingWgcTex != nullptr) {
+                            ++droppedFrames;
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        frame = next;
+                    }
+                    if (frame != nullptr) {
                         // A window resize does NOT resize the pool's surfaces:
                         // WGC keeps rendering the (new-size) content into a
                         // corner of the old-size surface, so the texture
@@ -2743,31 +2782,23 @@ void VideoThread::Run() {
                                 << "; restart recording to reconfigure encoder";
                             m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
                             sourceLost = true;
-                            break;
-                        }
-                        auto surface = frame.Surface();
-                        auto access =
-                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                        winrt::com_ptr<ID3D11Texture2D> tex;
-                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                            // Copy out of the pool while the frame object is
-                            // still alive — the pool recycles this surface as
-                            // soon as the frame is released (see wgcCapturedTex).
-                            ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
-                            if (copied == nullptr) {
-                                // copyWgcFrame already recorded the failure.
-                                sourceLost = true;
-                                break;
+                        } else {
+                            auto surface = frame.Surface();
+                            auto access =
+                                surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                            winrt::com_ptr<ID3D11Texture2D> tex;
+                            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                // Copy out of the pool while the frame object is
+                                // still alive — the pool recycles this surface as
+                                // soon as the frame is released (see wgcCapturedTex).
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                if (copied == nullptr) {
+                                    // copyWgcFrame already recorded the failure.
+                                    sourceLost = true;
+                                } else {
+                                    pendingWgcTex.copy_from(copied);
+                                }
                             }
-                            const bool diag_recording = !m_state.pause_requested.load();
-                            if (diag_recording)
-                                m_state.diagnostics.OnFrameCaptured();
-                            if (pendingWgcTex != nullptr) {
-                                ++droppedFrames;
-                                if (diag_recording)
-                                    m_state.diagnostics.OnFrameDroppedCoalesced();
-                            }
-                            pendingWgcTex.copy_from(copied);
                         }
                     }
                 } catch (...) {
@@ -3336,11 +3367,26 @@ void VideoThread::Run() {
             } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
                 try {
-                    while (true) {
-                        auto frame = framePool.TryGetNextFrame();
-                        if (frame == nullptr)
+                    // Drain to the newest queued frame before copying — see the
+                    // CFR drain above (and WgcSourceProducer::PollFrame): only
+                    // the newest is encoded, so only the newest is worth a
+                    // full-surface GPU copy.
+                    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    for (;;) {
+                        auto next = framePool.TryGetNextFrame();
+                        if (next == nullptr)
                             break;
-
+                        const bool diag_recording = !m_state.pause_requested.load();
+                        if (diag_recording)
+                            m_state.diagnostics.OnFrameCaptured();
+                        if (frame != nullptr || latestTex != nullptr) {
+                            ++droppedFrames;
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        frame = next;
+                    }
+                    if (frame != nullptr) {
                         // Same as the CFR drain: the pool surface never changes
                         // size on a window resize — ContentSize is the real
                         // signal — and the surface is recycled by the pool, so
@@ -3354,29 +3400,21 @@ void VideoThread::Run() {
                                 << "; restart recording to reconfigure encoder";
                             m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
                             sourceLost = true;
-                            break;
-                        }
-                        auto surface = frame.Surface();
-                        auto access =
-                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                        winrt::com_ptr<ID3D11Texture2D> tex;
-                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                            ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
-                            if (copied == nullptr) {
-                                // copyWgcFrame already recorded the failure.
-                                sourceLost = true;
-                                break;
+                        } else {
+                            auto surface = frame.Surface();
+                            auto access =
+                                surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                            winrt::com_ptr<ID3D11Texture2D> tex;
+                            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                if (copied == nullptr) {
+                                    // copyWgcFrame already recorded the failure.
+                                    sourceLost = true;
+                                } else {
+                                    latestTex.copy_from(copied);
+                                    latestFrameTicks100ns = frame.SystemRelativeTime().count();
+                                }
                             }
-                            const bool diag_recording = !m_state.pause_requested.load();
-                            if (diag_recording)
-                                m_state.diagnostics.OnFrameCaptured();
-                            if (latestTex != nullptr) {
-                                ++droppedFrames;
-                                if (diag_recording)
-                                    m_state.diagnostics.OnFrameDroppedCoalesced();
-                            }
-                            latestTex.copy_from(copied);
-                            latestFrameTicks100ns = frame.SystemRelativeTime().count();
                         }
                     }
                 } catch (...) {
