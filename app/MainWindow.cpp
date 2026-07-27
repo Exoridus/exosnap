@@ -1360,7 +1360,7 @@ namespace {
 
 // Compact container/codec tokens for the session sidecar + crash report.
 // The capability ToString() helpers are verbose ("Matroska", "AV1 NVENC",
-// "AAC (Media Foundation)"); the crash facts want short, allowlisted tokens.
+// "AAC"); the crash facts want short, allowlisted tokens.
 // (Prefixed Crash* to avoid colliding with the std::wstring ContainerToken in
 // RecordingPreset.h used for filename building.)
 std::string CrashContainerToken(capability::Container c) {
@@ -4994,7 +4994,6 @@ void MainWindow::createSupportBundle() {
     inputs.capability.nvenc_444 = rt.nvidia.nvenc_yuv444_h264 || rt.nvidia.nvenc_yuv444_hevc;
     inputs.capability.os_version_string = QString::fromStdString(rt.os.version_string);
     inputs.capability.os_build_number = QString::number(rt.os.build_number);
-    inputs.capability.mf_aac = rt.mf_aac.available();
     inputs.capability.mf_webcam = rt.mf_webcam.available;
 
     for (const auto& a : capability::EnumerateAdapters()) {

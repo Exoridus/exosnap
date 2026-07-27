@@ -9,7 +9,6 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     CapabilitySet caps;
     caps.gpu_adapter_name = "validated-baseline-static";
     caps.nvenc_dll_present = true;
-    caps.mf_aac_available = true;
     caps.mf_webcam_available = true; // S4: baseline assumes MF present
 
     caps.containers.emplace(Container::Matroska,
@@ -30,8 +29,10 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.audio_codecs.emplace(
         AudioCodec::Opus,
         SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
-    caps.audio_codecs.emplace(AudioCodec::Aac,
-                              SupportAnnotation{SupportLevel::Available, "Validated AAC-LC Media Foundation path."});
+    caps.audio_codecs.emplace(
+        AudioCodec::Aac,
+        SupportAnnotation{SupportLevel::Available,
+                          "AAC-LC via FFmpeg's bundled native encoder (LGPL); always available (ADR 0052)."});
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
                                            "Uncompressed S16LE PCM (A_PCM/INT/LIT); Matroska-only (0.6.0 Audio v2)."});
@@ -119,7 +120,6 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // Propagate best-effort metadata from snapshot into legacy fields.
     caps.gpu_adapter_name = snapshot.nvidia.adapter_name;
     caps.nvenc_dll_present = snapshot.nvidia.nvenc_dll_present;
-    caps.mf_aac_available = snapshot.mf_aac.available();
     caps.mf_webcam_available = snapshot.mf_webcam.available; // S4: gate webcam UI
 
     // --- Downgrade rule A: missing NVENC blocks AV1 path ---
@@ -152,41 +152,17 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
     }
 
-    // --- Downgrade rule B: missing AAC blocks AAC path ---
-    if (!snapshot.mf_aac.available()) {
-        const std::string aac_reason =
-            "AAC audio encoding (Media Foundation) is not available on this system. "
-            "Switch to an Opus recording profile or ensure Media Foundation components are installed.";
-
-        // Lower the dimension-level annotation for Aac.
-        caps.audio_codecs[AudioCodec::Aac] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
-
-        // Force primary AAC combos to non-selectable via combo_override.
-        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1, AudioCodec::Aac, ChromaSubsampling::Cs420,
-                                   BitDepth::Bit8};
-        if (caps.combo_overrides.find(mkv_av1_key) == caps.combo_overrides.end()) {
-            caps.combo_overrides.try_emplace(mkv_av1_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
-        }
-
-        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
-                                    BitDepth::Bit8};
-        if (caps.combo_overrides.find(mkv_h264_key) == caps.combo_overrides.end()) {
-            caps.combo_overrides.try_emplace(mkv_h264_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
-        }
-
-        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
-                               BitDepth::Bit8};
-        if (caps.combo_overrides.find(mp4_key) == caps.combo_overrides.end()) {
-            caps.combo_overrides.try_emplace(mp4_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
-        }
-    }
+    // AAC has no runtime-availability downgrade rule: since ADR 0052 it is encoded
+    // by FFmpeg's bundled native AAC-LC encoder, which ships with every build and
+    // has no external/OS dependency to probe. The static baseline's Available
+    // annotation (BuildStaticValidatedBaseline above) always stands.
 
     // --- HEVC (0.7.0) ---
     // The static baseline sets Hevc to ValidUnvalidated (implemented engine path,
     // not yet validated on recording hardware). Downgrade rule A above lowers it to
     // NotImplemented when NVENC is absent, mirroring AV1/H.264. A live GPU smoke test is
     // required before promoting HEVC to Available.
-    // H.264 is Available in the baseline and is handled by downgrade rules A and B above.
+    // H.264 is Available in the baseline and is handled by downgrade rule A above.
 
     // --- Per-GPU NVENC codec-GUID refinement (truthful detection) ---
     // Runs AFTER the DLL-presence gate: when NVENC is absent, rule A already set every

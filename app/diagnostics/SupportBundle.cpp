@@ -47,7 +47,6 @@ QJsonObject BuildCapabilityJson(const BundleCapability& c) {
     os[QStringLiteral("build")] = c.os_build_number;
 
     QJsonObject mf;
-    mf[QStringLiteral("aac")] = c.mf_aac;
     mf[QStringLiteral("webcam")] = c.mf_webcam;
 
     QJsonObject root;

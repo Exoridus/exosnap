@@ -28,12 +28,8 @@ target_link_libraries(exosnap_capability
     recorder_core
   PRIVATE
     exosnap::warnings
-    mf
-    mfplat
-    mfuuid
     dxgi
     d3d11
-    ole32
     user32
 )
 

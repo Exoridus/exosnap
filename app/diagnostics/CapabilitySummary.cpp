@@ -35,7 +35,7 @@ std::string AudioCodecDisplayName(capability::AudioCodec a) {
     case capability::AudioCodec::Opus:
         return "Opus";
     case capability::AudioCodec::Aac:
-        return "AAC (Media Foundation)";
+        return "AAC";
     case capability::AudioCodec::Pcm:
         return "PCM";
     case capability::AudioCodec::Flac:

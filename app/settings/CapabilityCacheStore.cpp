@@ -16,7 +16,6 @@ namespace {
 
 using capability::CapabilityCacheKey;
 using capability::DisplayHdrFacts;
-using capability::MfAacRuntimeFacts;
 using capability::MfWebcamRuntimeFacts;
 using capability::NvidiaRuntimeFacts;
 using capability::OsRuntimeFacts;
@@ -110,11 +109,6 @@ QJsonObject SnapshotToJson(const RuntimeCapabilitySnapshot& s) {
     nvidia[QStringLiteral("nvenc_adv_hevc")] = adv_to_json(s.nvidia.nvenc_adv_hevc);
     nvidia[QStringLiteral("nvenc_adv_av1")] = adv_to_json(s.nvidia.nvenc_adv_av1);
 
-    QJsonObject mf_aac;
-    mf_aac[QStringLiteral("mftenum_found")] = s.mf_aac.mftenum_found;
-    mf_aac[QStringLiteral("clsid_instantiable")] = s.mf_aac.clsid_instantiable;
-    mf_aac[QStringLiteral("failure_detail")] = QString::fromStdString(s.mf_aac.failure_detail);
-
     QJsonObject mf_webcam;
     mf_webcam[QStringLiteral("available")] = s.mf_webcam.available;
     mf_webcam[QStringLiteral("failure_detail")] = QString::fromStdString(s.mf_webcam.failure_detail);
@@ -130,7 +124,6 @@ QJsonObject SnapshotToJson(const RuntimeCapabilitySnapshot& s) {
 
     QJsonObject snapshot;
     snapshot[QStringLiteral("nvidia")] = nvidia;
-    snapshot[QStringLiteral("mf_aac")] = mf_aac;
     snapshot[QStringLiteral("mf_webcam")] = mf_webcam;
     snapshot[QStringLiteral("os")] = os;
     snapshot[QStringLiteral("displays")] = displays;
@@ -141,8 +134,8 @@ QJsonObject SnapshotToJson(const RuntimeCapabilitySnapshot& s) {
 // sub-objects) — the caller treats that identically to a key mismatch: no
 // crash, cache discarded silently.
 bool SnapshotFromJson(const QJsonObject& obj, RuntimeCapabilitySnapshot& out) {
-    if (!obj.value(QStringLiteral("nvidia")).isObject() || !obj.value(QStringLiteral("mf_aac")).isObject() ||
-        !obj.value(QStringLiteral("mf_webcam")).isObject() || !obj.value(QStringLiteral("os")).isObject())
+    if (!obj.value(QStringLiteral("nvidia")).isObject() || !obj.value(QStringLiteral("mf_webcam")).isObject() ||
+        !obj.value(QStringLiteral("os")).isObject())
         return false;
 
     const QJsonObject nvidia = obj.value(QStringLiteral("nvidia")).toObject();
@@ -170,11 +163,6 @@ bool SnapshotFromJson(const QJsonObject& obj, RuntimeCapabilitySnapshot& out) {
     out.nvidia.nvenc_adv_h264 = adv_from_json(nvidia, "nvenc_adv_h264");
     out.nvidia.nvenc_adv_hevc = adv_from_json(nvidia, "nvenc_adv_hevc");
     out.nvidia.nvenc_adv_av1 = adv_from_json(nvidia, "nvenc_adv_av1");
-
-    const QJsonObject mf_aac = obj.value(QStringLiteral("mf_aac")).toObject();
-    out.mf_aac.mftenum_found = mf_aac.value(QStringLiteral("mftenum_found")).toBool(false);
-    out.mf_aac.clsid_instantiable = mf_aac.value(QStringLiteral("clsid_instantiable")).toBool(false);
-    out.mf_aac.failure_detail = mf_aac.value(QStringLiteral("failure_detail")).toString().toStdString();
 
     const QJsonObject mf_webcam = obj.value(QStringLiteral("mf_webcam")).toObject();
     out.mf_webcam.available = mf_webcam.value(QStringLiteral("available")).toBool(false);
