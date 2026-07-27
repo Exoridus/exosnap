@@ -698,7 +698,20 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // must run after, or the tail would sit behind an already-flushed encoder.
     if (output_format_src_ != nullptr && !failed) {
         RawAudioBuffer tail{};
-        const uint32_t tail_frames = output_format_src_->DrainResampler(tail);
+        int64_t undrained_frames = 0;
+        const uint32_t tail_frames = output_format_src_->DrainResampler(tail, &undrained_frames);
+        if (undrained_frames > 0) {
+            // The flush loop gave up at its iteration bound with the context
+            // still holding audio. Not reachable with libswresample's real flush
+            // behaviour; log it rather than lose the remainder silently.
+            logging::LogField f[] = {{"track", std::to_string(track_id_)},
+                                     {"iteration_bound", std::to_string(OutputFormatAudioSrc::kMaxDrainIterations)},
+                                     {"drained_frames", std::to_string(tail_frames)},
+                                     {"undrained_frames", std::to_string(undrained_frames)}};
+            logging::log(logging::LogLevel::Warn, "audio.resampler_drain",
+                         "resampler drain hit its iteration bound; the remaining tail was dropped",
+                         std::span<const logging::LogField>(f, std::size(f)));
+        }
         if (tail_frames > 0 && tail.bytes != nullptr) {
             std::vector<EncodedAudioPacket> tailPkts;
             enc.FeedFloat32(reinterpret_cast<const float*>(tail.bytes),

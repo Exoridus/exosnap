@@ -311,8 +311,11 @@ bool OutputFormatAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& o
     return true;
 }
 
-uint32_t OutputFormatAudioSrc::DrainResampler(RawAudioBuffer& out_buf) {
+uint32_t OutputFormatAudioSrc::DrainResampler(RawAudioBuffer& out_buf, int64_t* out_undrained_frames) {
     out_buf = {};
+    if (out_undrained_frames != nullptr) {
+        *out_undrained_frames = 0;
+    }
     if (passthrough_ || swr_ == nullptr) {
         // Fast path: whole buffers are forwarded (or converted) 1:1 and no
         // filter state is retained, so end-of-stream has nothing to flush.
@@ -331,8 +334,8 @@ uint32_t OutputFormatAudioSrc::DrainResampler(RawAudioBuffer& out_buf) {
     // libswresample empties its delay line in one call (two with an odd
     // compensation phase); the bound keeps a pathological context from spinning
     // the stop path forever.
-    constexpr int kMaxIterations = 16;
-    for (int iter = 0; iter < kMaxIterations; ++iter) {
+    bool emptied = false;
+    for (int iter = 0; iter < kMaxDrainIterations; ++iter) {
         const int64_t delay = swr_get_delay(swr_, static_cast<int64_t>(target_sample_rate_));
         const int chunk = (delay > 0 ? static_cast<int>(delay) : 0) + kMinChunkFrames;
         const size_t base = resample_buf_.size();
@@ -341,10 +344,19 @@ uint32_t OutputFormatAudioSrc::DrainResampler(RawAudioBuffer& out_buf) {
         const int produced = swr_convert(swr_, &out_ptr, chunk, nullptr, 0);
         if (produced <= 0) {
             resample_buf_.resize(base);
+            emptied = true;
             break;
         }
         resample_buf_.resize(base + static_cast<size_t>(produced) * target_channels_);
         total_frames += static_cast<uint32_t>(produced);
+    }
+
+    if (!emptied && out_undrained_frames != nullptr) {
+        // The bound was reached while the context was still producing, so the
+        // remainder is dropped. Unreachable with libswresample's actual flush
+        // behaviour, but report what was left instead of losing it silently —
+        // the caller has the track context to log it against.
+        *out_undrained_frames = swr_get_delay(swr_, static_cast<int64_t>(target_sample_rate_));
     }
 
     if (total_frames == 0) {
