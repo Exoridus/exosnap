@@ -121,11 +121,15 @@ CI runs on GPU-less runners and cannot exercise a real swap. Run these against t
 instead: currently that means `v0.9.0-rc2` → `v0.9.0-rc3`. The test install must be on the
 **Preview** update channel to see the RC at all:
 
-- [ ] **Portable happy-path swap (0.8.1 → RC).** From a user-writable portable install, click Update;
-      the dedicated updater downloads, verifies, closes the app, does the staged-rename swap, verifies,
-      and relaunches on the RC. No UAC. Backup is discarded on the healthy start.
-- [ ] **MSI happy-path via UAC.** From the MSI-installed build, click Update; accept the single UAC
-      prompt; `msiexec /qn` applies the upgrade and the app relaunches on the RC.
+- [ ] **Portable happy-path swap (rc2 → rc3).** From a user-writable portable `v0.9.0-rc2` install
+      on the Preview channel, confirm `rc3` is offered, then click Update; the dedicated updater
+      downloads, verifies signature + hash, closes the app, does the staged-rename swap, verifies,
+      and relaunches on the RC. No UAC. Backup is discarded on the healthy start. (`v0.8.1` does not
+      ship the swap updater, so an 0.8.1 → RC run proves nothing about the swap path — a manual
+      install-over comparison from 0.8.1 may still be done separately, but it is not this check.)
+- [ ] **MSI happy-path via UAC (rc2 → rc3).** From the rc2 MSI-installed build on Preview, click
+      Update; accept the **single** UAC prompt; `msiexec /qn` applies the upgrade and the app
+      relaunches on rc3.
 - [ ] **UAC-decline (case C1).** MSI path, decline the UAC prompt: the current version stays intact
       and the failure card is amber/retryable, naming the current version as safe to run.
 - [ ] **Unplugged-network download failure (case A1).** Disconnect the network mid-download: the
@@ -214,13 +218,62 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
       per-app audio is present in the file. Switch back to a display target: the row stays
       configured (rendered receded), and a new recording carries no app track.
 - [ ] **Five-tier quality + free frame rate record/playback.** Record one clip at `CQ 16 · Ultra`
-      and one with an Expert free frame rate (e.g. 48 fps): both play back correctly and the
-      container reports the chosen rate. Leaving Expert shows the nearest list entry in the combo
-      while the "Current format" footer keeps the true stored rate.
+      and one with an Expert free frame rate (e.g. 73 fps): both play back correctly and the
+      container reports the chosen rate. Leaving Expert keeps the truth visible: the frame-rate
+      combo grows a dynamic `73 fps (Custom)` entry showing the actually configured value — it never
+      snaps to (or claims) a standard value like 60 fps while a custom rate is stored — and the
+      "Current format" footer shows the same stored rate.
 - [ ] **Reworked Settings page visual walkthrough.** One pass in both modes: rebalanced columns
       (left Container/Quality/Webcam/Notifications/Hotkeys, right Output/Audio/Updates/Appearance/
       Developer), uniform 46 px rows, webcam card with full-width live preview and key-color picker,
       "Split by time"/"Split by size" rows, Developer card visible without Expert.
+
+### RC3 regression live checks
+
+Targeted regressions for defects fixed in the rc3 cycle (drop truthfulness, WGC frame copies,
+webcam fps negotiation, audio-timing, VFR epoch clamping). Run against the RC build on real
+hardware:
+
+- [ ] **A. Solo-SYS silence + late audio start.** Monitor capture, only `SYS` enabled (`MIC`/`APP`
+      off). Start recording, play **no** system audio for 10–15 s, then start a video/test tone with
+      a visible cue; keep recording a while, stop. In the file: the initial silent stretch is
+      preserved as real silence, the late audio is **not** pulled forward by the silent span, A/V
+      sync is correct from the first audible sound on, and there is no doubled silence-fill stretch.
+      Repeat once with a pause/resume inside the run.
+- [ ] **B. WGC window capture: motion + resize.** Record a moving/scrolling window with several
+      seconds of continuous motion: no tearing, no held frames that mutate after the fact, no stale
+      frames or visible jumps backwards (WGC pool surfaces must be copied out, never encoded in
+      place). Then resize the window sharply mid-recording: the recording ends with a clear,
+      explicit error message (no corner content, no uninitialized/stale pixel borders), and the
+      partial file survives per the existing recovery policy.
+- [ ] **C. Webcam fps truth.** Pick a webcam mode with a clearly different frame rate than the
+      default (e.g. 1080p60 instead of 1080p30) and record. The UI-selected mode is actually
+      handed to Media Foundation — the engine no longer hard-codes 30 fps — and the displayed vs.
+      actually negotiated rate do not contradict each other (if the camera lacks the exact mode,
+      note the nearest native mode chosen). No redundant re-uploads of the same webcam sample at a
+      higher CFR output rate.
+- [ ] **D. High-refresh/VRR source → CFR 60 drop truthfulness.** On a 120/144/165 Hz display,
+      record CFR 60 with phase-correct pacing. Normal source-frame selection and coalescing are
+      **not** surfaced as real drops anywhere: no drop toast, Post-Flight Report Card reports no
+      frame loss, Edit/Review matches Diagnostics, Pipeline Health stays healthy. The session
+      report may show high `coalesced`/`cfr` pacing counters, but
+      `frames_dropped.backpressure == 0` and `frames_dropped.processing_failure == 0`, and the
+      recording plays with a stable CFR timeline.
+- [ ] **E. VFR start after a static source.** Leave the desktop/window fully static for several
+      seconds, start a **VFR** recording, create motion after a few seconds, stop. The container
+      duration matches the real recording time (no artificially long lead-in from a stale
+      pre-recording present timestamp), the first video PTS is at/near 0, the timeline is never
+      negative, and audio and video stay aligned.
+- [ ] **F. Processing-failure drop surfaces agree.** A real GPU processing failure is hard to
+      provoke on healthy hardware — unit/integration tests remain the primary gate for the failure
+      path itself. In the normal RC3 run, verify instead that **all surfaces show the same drop
+      numbers** (live drop indicator, Diagnostics, Pipeline Health, Post-Flight Report Card,
+      Edit/Review, toast, session report, soak metrics), and that a healthy recording shows
+      `processing_failure == 0`, `backpressure == 0`, no real-drop toast, and no warning caused by
+      benign pacing. Use an existing fault-injection path if one is available; do not build new
+      debug infrastructure for this right before RC3.
+- [ ] **G. Updater rc2 → rc3.** Covered by §5 (portable + MSI, UAC decline, network failure,
+      mid-swap close refusal, temp cleanup) — run §5 exactly as written against rc2 → rc3.
 
 ### Long-duration soak (clock slaving)
 
@@ -245,12 +298,18 @@ Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2
       **only `drift` (offset_end − offset_start) is pass/fail**, budgeted at ≤ 20 ms here.
 - [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
       (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
-- [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track;
-      spot-listen at start/middle/end plus a waveform scan for crackles/discontinuities. Confirm the
-      session report written at stop — `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
+- [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track —
+      real stream durations must be plausible against the wall-clock recording time; spot-listen at
+      start/middle/end plus a waveform scan for crackles/discontinuities. Confirm the session report
+      written at stop — `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
       (newest of the last 10 kept) — shows sane `counters.av_drift_ms` / `counters.peak_av_drift_ms`
       / `counters.duration_skew_ms`, `counters.audio_discontinuities` and `counters.mux_failures`
-      both at 0, and every entry in `segments` marked `finalized`.
+      both at 0, and every entry in `segments` marked `finalized`. Additionally assert:
+  - `audio.resampler_drain[*].undrained_frames == 0` (every track that drained),
+  - `audio.degraded_occurred == false`,
+  - `counters.frames_dropped.processing_failure == 0`,
+  - `counters.frames_dropped.backpressure == 0`,
+  - `counters.encoder_keyframe_prediction_mismatches == 0`.
 
 ## 8. Downstream package managers
 
