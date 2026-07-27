@@ -566,9 +566,9 @@ never retargeted onto a *different* device; the engine only holds or reacquires 
   are untouched — while the engine reactivates the source with the same identity every 500 ms. In a
   merged track only the dead source's contribution falls silent; the others keep mixing. If *every*
   source of a merged track is lost at once, the track keeps running on exact-length silence for as long
-  as the outage lasts — its duration still matches wall time, so it never slides against the video — and
-  the first source to come back re-enters at the track's current position (no repeated audio, no
-  backwards timestamp). A fixed-device microphone reacquires that exact device; the default microphone
+  as the outage lasts — reopening the endpoint included — so its duration still matches wall time and it
+  never slides against the video, and the first source to come back re-enters at the track's current
+  position (no repeated audio, no backwards timestamp). A fixed-device microphone reacquires that exact device; the default microphone
   and the system-output capture follow the *current* Windows default (they represent "the system
   default", not one pinned device); an app/window audio capture keyed on a process reacquires only
   while that same process is still running (it never grabs a different process that reused the PID)

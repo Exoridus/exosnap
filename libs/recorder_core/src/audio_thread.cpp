@@ -491,7 +491,15 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     clock_controller = ClockSlavingController{};
                     clock_slaving_logged_engage = false;
                     clock_slaving_logged_saturation = false;
-                    lastAccountedQpcNs = QpcNowNs();
+                    // The reacquire itself takes wall-clock time (opening a WASAPI
+                    // endpoint is not instant) and no audio was captured during it,
+                    // so it is part of the outage: fill it rather than rebasing the
+                    // silence clock over it, which would leave the track short by
+                    // that much for the rest of the recording.
+                    if (!emitSilenceForElapsed()) {
+                        failed = true;
+                        break;
+                    }
                     m_state.diagnostics.OnAudioSourceHealth(track_id_, 0, 1);
                 }
             }
@@ -547,7 +555,13 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                         clock_controller = ClockSlavingController{};
                         clock_slaving_logged_engage = false;
                         clock_slaving_logged_saturation = false;
-                        lastAccountedQpcNs = QpcNowNs();
+                        // The reacquire itself is part of the outage (see the bare
+                        // branch): fill the time it took instead of rebasing the
+                        // silence clock over it.
+                        if (!emitSilenceForElapsed()) {
+                            failed = true;
+                            break;
+                        }
                         m_state.diagnostics.OnAudioSourceHealth(track_id_, source_->DegradedSourceCount(),
                                                                 total_sources);
                     }

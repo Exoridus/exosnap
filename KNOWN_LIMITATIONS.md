@@ -299,12 +299,15 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   than grab a stranger.
   - Every audio track keeps exact-length silence through an outage, including a
     merged one: when *every* inner source of a merged track is lost at once the
-    track switches from source-driven to clock-driven and fills the outage with
-    exact silence on its own timeline, so its duration still matches wall time.
-    A returning source re-enters at the track's current position, and the drift
-    baseline and clock slaving re-align on the reacquired stream instead of
-    reading its restarted device position as drift. Video-only recording
-    continues if all audio is lost.
+    track switches from source-driven to clock-driven and fills the outage —
+    including the time the reacquire itself takes — with exact silence on its own
+    timeline, so its duration still matches wall time. A returning source
+    re-enters at the track's current position. Where the track is clock-slaved at
+    all (a single gain-adjusted source, which is wrapped in the mixer — a true
+    multi-source merge has no attributable device clock and is never slaved), the
+    drift baseline and the slaving controller restart on the reacquired stream
+    instead of reading its restarted device position as drift. Video-only
+    recording continues if all audio is lost.
   - The degraded state is surfaced in Diagnostics, the post-flight report, and a
     standing notification that stays up for as long as a source is silenced,
     updates in place if the degraded set changes, and clears the moment every
