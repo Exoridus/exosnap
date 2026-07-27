@@ -387,18 +387,33 @@ void MuxThread::Run() {
         mp.pts_ns = local;
         mp.track_num = 1;
         mp.is_key = payload.keyframe;
+        // H.264/HEVC samples must be length-prefixed to match the avcC/hvcC
+        // CodecPrivate written into the Tracks element. A failed conversion used
+        // to fall back to the raw Annex-B bytes, which produces a file whose
+        // samples do not match its own track header — a structurally invalid
+        // track that players reject, reported to the user as a success. Treat it
+        // as a mux failure instead, so the recording fails loudly and the partial
+        // file goes down the recovery path like any other mux error.
         if (is_h264) {
             std::vector<uint8_t> avcc;
-            if (annexb::ConvertAnnexBToAvcc(payload.bytes.data(), payload.bytes.size(), avcc))
-                mp.bytes = std::move(avcc);
-            else
-                mp.bytes = std::move(payload.bytes);
+            if (!annexb::ConvertAnnexBToAvcc(payload.bytes.data(), payload.bytes.size(), avcc)) {
+                write_error = true;
+                m_state.diagnostics.OnMuxFailure();
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
+                                      "Failed to convert H.264 Annex-B packet to AVCC for Matroska");
+                return;
+            }
+            mp.bytes = std::move(avcc);
         } else if (is_hevc) {
             std::vector<uint8_t> hvcc_sample;
-            if (annexb::ConvertAnnexBToHevcSample(payload.bytes.data(), payload.bytes.size(), hvcc_sample))
-                mp.bytes = std::move(hvcc_sample);
-            else
-                mp.bytes = std::move(payload.bytes);
+            if (!annexb::ConvertAnnexBToHevcSample(payload.bytes.data(), payload.bytes.size(), hvcc_sample)) {
+                write_error = true;
+                m_state.diagnostics.OnMuxFailure();
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
+                                      "Failed to convert HEVC Annex-B packet to hvcC sample for Matroska");
+                return;
+            }
+            mp.bytes = std::move(hvcc_sample);
         } else {
             mp.bytes = std::move(payload.bytes);
         }

@@ -659,6 +659,15 @@ not benign coalescing/CFR drops), a caution toast ("Frames dropped") appears alo
 saved", with a "View diagnostics" action. (The fuller post-flight integrity review is the content of
 the Edit/Output/Save "Review" step.)
 
+**Reported duration.** Everywhere a *finished* recording's length is shown — the completed-state
+timer and result card on the Record page, the recording-history entries, and the length of the
+editor's trim timeline — the number is the **media duration of the file**, i.e. what a player
+reports. Paused time and the stop/finalize tail are not part of the media and are therefore not
+counted, so a 60 s recording paused for 30 s reads as 1:00, not 1:35. For a split recording the
+reported total is the sum of the segments' media durations. The **live timer during recording** is a
+separate readout with its own semantics: it counts the running session and keeps advancing while
+paused, so the user can see how long ago they started.
+
 **Automatic split (time + size).** Two independent auto-split axes — **maximum duration** and
 **maximum file size** — with "whichever comes first" behavior. Size is reported honestly as
 "approximately N GB" and measured from committed container bytes (no file-size polling); split

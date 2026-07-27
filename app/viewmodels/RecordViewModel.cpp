@@ -448,7 +448,8 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_hresult_text = result.hresult_text;
     result_error_detail = result.error_detail;
     result_output_file_bytes = result.output_file_bytes;
-    result_elapsed_seconds = result.elapsed_seconds;
+    const double duration_seconds = ResultDurationSeconds(result);
+    result_duration_seconds = duration_seconds;
     result_source_width = result.source_width;
     result_source_height = result.source_height;
     result_output_width = result.output_width;
@@ -470,8 +471,7 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_action_hint = msg.action_hint;
 
     if (result.succeeded) {
-        const std::wstring elapsed_display =
-            result.elapsed_seconds > 0.0 ? FormatElapsed(result.elapsed_seconds) : elapsed_text;
+        const std::wstring elapsed_display = duration_seconds > 0.0 ? FormatElapsed(duration_seconds) : elapsed_text;
         const std::wstring size_display =
             result.output_file_bytes > 0 ? FormatBytes(result.output_file_bytes) : output_size_text;
         const std::wstring output_display =
@@ -512,7 +512,7 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
         cr.file_path = QString::fromStdWString(result.output_path);
         cr.display_name = QString::fromStdWString(p.filename().wstring());
         cr.file_size_bytes = static_cast<qint64>(result.output_file_bytes);
-        cr.duration_seconds = result.elapsed_seconds;
+        cr.duration_seconds = duration_seconds;
         cr.source_width = result.source_width;
         cr.source_height = result.source_height;
         cr.output_width = result.output_width;
@@ -861,7 +861,7 @@ void RecordViewModel::ClearCompletedResult() {
     result_destination_text.clear();
     result_stats_text.clear();
     result_output_file_bytes = 0;
-    result_elapsed_seconds = 0.0;
+    result_duration_seconds = 0.0;
 }
 
 void RecordViewModel::AddToRecentRecordings(const CompletedRecording& recording) {

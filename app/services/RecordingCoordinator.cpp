@@ -1666,6 +1666,22 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
             ui_result.segments.push_back(std::move(out));
         }
     }
+
+    // The duration the user is shown for a finished recording is the MEDIA
+    // duration, not the session wall clock: elapsed_seconds runs across paused
+    // time and the stop/finalize tail, neither of which is in the file. Prefer the
+    // finalized segments' own durations (they match the container's Duration
+    // element, trailing frame included, and sum correctly across a split); fall
+    // back to the last encoded video PTS when no segment was reported.
+    {
+        double media_seconds = 0.0;
+        for (const auto& seg : ui_result.segments)
+            media_seconds += seg.duration_seconds;
+        if (media_seconds <= 0.0)
+            media_seconds = static_cast<double>(result.stats.video_duration_ns) / 1e9;
+        ui_result.media_duration_seconds = media_seconds;
+    }
+
     split_pending_.store(false);
 
     // Single-file recordings keep the legacy base sidecar. For multi-segment

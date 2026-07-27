@@ -4580,7 +4580,7 @@ QString RecordPage::buildTimerText(bool recording) const {
     const bool completed_success =
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
     if (completed_success) {
-        return clockFromSeconds(view_model_.result_elapsed_seconds);
+        return clockFromSeconds(view_model_.result_duration_seconds);
     }
 
     if (!recording) {

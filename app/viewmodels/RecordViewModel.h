@@ -83,7 +83,16 @@ struct UiRecordingResult {
     std::wstring hresult_text;
     std::wstring error_detail;
     uint64_t output_file_bytes = 0;
+    // Wall-clock length of the whole session, from start to the end of teardown.
+    // It includes paused time and the stop/finalize tail, so it is NOT the length
+    // of the produced media — use media_duration_seconds for anything the user
+    // reads as "how long is this recording".
     double elapsed_seconds = 0.0;
+    // Media duration of the recording — what a player reports for the file (for a
+    // split recording, the sum over its segments). Paused time never enters the
+    // media timeline and finalize happens after the last frame, so neither is
+    // counted here. 0 when unknown (no media was written).
+    double media_duration_seconds = 0.0;
     uint32_t source_width = 0;
     uint32_t source_height = 0;
     uint32_t output_width = 0;
@@ -108,6 +117,15 @@ struct UiRecordingResult {
     // single-file recording (the scalar output_path/file fields describe it).
     std::vector<CompletedRecordingSegment> segments;
 };
+
+// The duration to report for a finished recording — everywhere the user reads a
+// recording's length (result panel, recording history, the editor's trim
+// timeline). Prefers the engine's media duration; falls back to the session wall
+// clock only when the engine reported no media duration at all (no encoded video
+// frames), where an approximate number still beats showing nothing.
+[[nodiscard]] inline double ResultDurationSeconds(const UiRecordingResult& result) noexcept {
+    return result.media_duration_seconds > 0.0 ? result.media_duration_seconds : result.elapsed_seconds;
+}
 
 // ---------------------------------------------------------------------------
 // RecordViewModel
@@ -140,7 +158,9 @@ class RecordViewModel {
     std::wstring result_action_hint;
     std::wstring result_stats_text;
     uint64_t result_output_file_bytes = 0;
-    double result_elapsed_seconds = 0.0;
+    // Media duration of the finished recording (see ResultDurationSeconds) — the
+    // number the completed-state timer shows. Not the session wall clock.
+    double result_duration_seconds = 0.0;
     std::wstring result_destination_text;
     uint32_t result_source_width = 0;
     uint32_t result_source_height = 0;
