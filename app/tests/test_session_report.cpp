@@ -231,6 +231,31 @@ TEST(SessionReport, CarriesVideoPacing) {
     EXPECT_EQ(counters[QStringLiteral("frames_dropped")].toObject()[QStringLiteral("cfr")].toInt(), 3);
 }
 
+TEST(SessionReport, KeyframePredictionMismatchesAreReported) {
+    // Warn-only during the recording, so the end-of-session total is the only
+    // place a soak run can see the enforced keyframe cadence diverged at all.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.video_encoder.keyframe_prediction_mismatches = 7;
+    const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("encoder_keyframe_prediction_mismatches")].toInt(), 7);
+}
+
+TEST(SessionReport, CleanSessionReportsZeroKeyframePredictionMismatches) {
+    // A clean session must print an explicit 0, not omit the key: a missing key
+    // is indistinguishable from an older report that never carried the counter.
+    const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    ASSERT_TRUE(counters.contains(QStringLiteral("encoder_keyframe_prediction_mismatches")));
+    EXPECT_EQ(counters[QStringLiteral("encoder_keyframe_prediction_mismatches")].toInt(), 0);
+}
+
+TEST(SessionReport, OutputTsMismatchesAreNotReported) {
+    // The outputTimeStamp check aborts the encode instead of emitting a packet,
+    // so its counter can never be non-zero. Reporting it would advertise a
+    // check that had a chance to fire; pin the deliberate omission.
+    const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    EXPECT_FALSE(counters.contains(QStringLiteral("encoder_output_ts_mismatches")));
+}
+
 TEST(SessionReport, PacingAverageIsUnavailableWithoutElapsedTime) {
     // An immediate failure has no elapsed time to divide by — no fabricated 0 fps.
     SessionReportInputs in = MakeInputs();
