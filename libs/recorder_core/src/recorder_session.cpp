@@ -566,6 +566,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.encode_width = 0;
         st.encode_height = 0;
         st.video_epoch_qpc_100ns.store(0);
+        for (auto& epoch : st.audio_epoch_qpc_100ns) {
+            epoch.store(0); // a previous session's measured audio zero point must not leak in
+        }
         st.split_request_seq.store(0);
         st.split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::ManualButton));
         // An "armed but unconsumed" size-split from a session that ended before

@@ -19,10 +19,34 @@
 
 namespace recorder_core {
 
-// frames_rendered: cumulative audio frames written to the render endpoint.
+// frames_played: cumulative audio frames the endpoint has actually PLAYED.
 // sample_rate_hz: the render format's sample rate. Returns 0 if
 // sample_rate_hz is 0 (defensive -- never divides by zero).
-int64_t AudioClockMs(uint64_t frames_rendered, uint32_t sample_rate_hz) noexcept;
+int64_t AudioClockMs(uint64_t frames_played, uint32_t sample_rate_hz) noexcept;
+
+// --- IAudioClock conversion (used by WasapiAudioRenderer) ------------------
+//
+// The playback clock must count what has been HEARD, not what has been handed
+// to the endpoint: a shared-mode render buffer holds up to 200 ms, so a clock
+// that advanced on every write ran that far ahead of the sound and made video
+// lead audio by the whole buffer depth. IAudioClock::GetPosition is the
+// documented play cursor. Its unit is whatever GetFrequency reports (bytes/s
+// for a shared-mode stream, frames/s for exclusive mode), so position is only
+// meaningful as position/frequency seconds -- these helpers do that conversion
+// without assuming either case.
+
+// Frames at target_rate_hz corresponding to `position` device-clock units.
+// Returns 0 when frequency or target_rate_hz is 0 (never divides by zero).
+uint64_t ClockPositionToFrames(uint64_t position, uint64_t frequency, uint32_t target_rate_hz) noexcept;
+
+// IAudioClock::GetPosition reports the position as of `qpc_position_100ns`,
+// which can be up to one device period old. Extrapolate it to `qpc_now_100ns`
+// so the clock reads smoothly between device updates instead of stepping.
+// The extrapolation is clamped to max_extrapolation_100ns (and never runs
+// backwards) so a stale or bogus QPC pair can never push the clock forward
+// without bound.
+uint64_t InterpolateClockPosition(uint64_t position, uint64_t frequency, uint64_t qpc_position_100ns,
+                                  uint64_t qpc_now_100ns, uint64_t max_extrapolation_100ns) noexcept;
 
 struct FrameSelection {
     // Index into the caller's available_pts_ms of the frame to display, or

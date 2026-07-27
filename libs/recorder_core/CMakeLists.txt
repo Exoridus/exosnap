@@ -1039,6 +1039,35 @@ exosnap_add_gtest(
 target_include_directories(test_audio_thread_device_loss PRIVATE src)
 target_compile_definitions(test_audio_thread_device_loss PRIVATE NOMINMAX)
 
+# Silent-stall fill: a healthy source that stops delivering packets (WASAPI
+# loopback while nothing is playing) must not freeze the encoder timeline, and
+# a stall the device also reports must not be filled twice. No audio hardware.
+exosnap_add_gtest(
+    NAME test_audio_thread_silence_fill
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_thread_silence_fill.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_thread_silence_fill PRIVATE src)
+target_compile_definitions(test_audio_thread_silence_fill PRIVATE NOMINMAX)
+
+# Wall-clock silence-fill arithmetic (audio_silence_fill.h) — pure policy.
+exosnap_add_gtest(
+    NAME test_audio_silence_fill
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_silence_fill.cpp
+)
+target_include_directories(test_audio_silence_fill PRIVATE src)
+
+# A/V epoch alignment (av_epoch_align.h): where an audio track starts relative
+# to video, and how that shifts its packet timestamps — pure policy.
+exosnap_add_gtest(
+    NAME test_av_epoch_align
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_av_epoch_align.cpp
+)
+target_include_directories(test_av_epoch_align PRIVATE src)
+
 # Capture drain selection: the frame loop must never drain the backend it does not
 # own. Pins that an OD capture mid-reopen drains nothing rather than the null WGC pool.
 exosnap_add_gtest(

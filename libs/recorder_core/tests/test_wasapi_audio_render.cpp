@@ -18,9 +18,20 @@ TEST(WasapiAudioRenderer, ConstructDestructWithoutInitIsSafe) {
     SUCCEED();
 }
 
-TEST(WasapiAudioRenderer, FramesRenderedStartsAtZero) {
+TEST(WasapiAudioRenderer, FramesPlayedStartsAtZero) {
     WasapiAudioRenderer renderer;
-    EXPECT_EQ(renderer.FramesRendered(), 0u);
+    EXPECT_EQ(renderer.FramesPlayed(), 0u);
+}
+
+// Without a device the play cursor is unavailable and the clock degrades to
+// the written-frame fallback -- which, with nothing ever written, is 0. The
+// point is that reading the clock on an un-Init()ed renderer is safe.
+TEST(WasapiAudioRenderer, FramesPlayedWithoutInitIsSafe) {
+    WasapiAudioRenderer renderer;
+    renderer.Start();
+    EXPECT_EQ(renderer.FramesPlayed(), 0u);
+    renderer.Stop();
+    EXPECT_EQ(renderer.FramesPlayed(), 0u);
 }
 
 TEST(WasapiAudioRenderer, PushSamplesWithoutInitIsSafeNoOp) {

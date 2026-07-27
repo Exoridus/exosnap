@@ -348,6 +348,14 @@ struct SessionState {
     uint64_t session_start_qpc_100ns = 0;
     std::atomic<uint64_t> video_epoch_qpc_100ns{0};
 
+    // Measured audio epoch per track (100 ns QPC units, same basis as the two
+    // above): the instant the endpoint recorded the first captured sample of
+    // that track at, published by AudioThread from the device timing WASAPI
+    // attributes to a capture packet. 0 == never measured (a merged track mixes
+    // several device clocks and attributes none); the muxer then falls back to
+    // the session baseline, which is what it always used before.
+    std::array<std::atomic<uint64_t>, CodecPrivateData::kMaxAudioTracks> audio_epoch_qpc_100ns{};
+
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
+#include "av_epoch_align.h"
 #include "matroska_stream_writer.h"
 #include "session_internal.h"
 
@@ -326,7 +327,7 @@ void MuxThread::Run() {
 
     // --- A/V timestamp alignment, resolved incrementally (see header note) ---
     bool epoch_resolved = false;
-    uint64_t head_start_ns = 0;
+    uint64_t video_epoch_100ns = 0;
     std::deque<EncodedAudioPacket> pending_audio;
 
     auto resolve_epoch = [&]() {
@@ -335,9 +336,36 @@ void MuxThread::Run() {
         const uint64_t video_epoch = m_state.video_epoch_qpc_100ns.load();
         if (video_epoch == 0)
             return;
-        const uint64_t session_start = m_state.session_start_qpc_100ns;
-        head_start_ns = (video_epoch > session_start) ? (video_epoch - session_start) * 100ULL : 0ULL;
+        video_epoch_100ns = video_epoch;
         epoch_resolved = true;
+    };
+
+    // Per-track shift that puts an audio track's session PTS on the video
+    // timeline (av_epoch_align.h). Resolved lazily on that track's first packet,
+    // because AudioThread publishes its measured zero point from the first
+    // capture packet that carries device timing — which is always before that
+    // packet's audio reaches the muxer. A track whose source attributes no
+    // device clock (a multi-source merged track) reports no epoch and falls back
+    // to the session baseline: exactly the alignment used before this existed.
+    std::array<int64_t, CodecPrivateData::kMaxAudioTracks> audio_shift_ns{};
+    std::array<bool, CodecPrivateData::kMaxAudioTracks> audio_shift_resolved{};
+    auto audio_shift_for = [&](uint32_t track) -> int64_t {
+        if (!epoch_resolved)
+            return 0; // no video at all: audio is written un-rebased (see the tail flush)
+        if (track >= CodecPrivateData::kMaxAudioTracks)
+            return 0;
+        if (!audio_shift_resolved[track]) {
+            const uint64_t measured = m_state.audio_epoch_qpc_100ns[track].load();
+            const uint64_t audio_epoch = (measured != 0) ? measured : m_state.session_start_qpc_100ns;
+            audio_shift_ns[track] = AudioTimelineShiftNs(audio_epoch, video_epoch_100ns);
+            audio_shift_resolved[track] = true;
+            logging::LogField fields[] = {{"track", std::to_string(track)},
+                                          {"measured", measured != 0 ? "1" : "0"},
+                                          {"shift_ms", std::to_string(audio_shift_ns[track] / 1000000LL)}};
+            logging::log(logging::LogLevel::Debug, "mux_thread", "audio track aligned to the video epoch",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
+        return audio_shift_ns[track];
     };
 
     // Rebase a session PTS to the current segment's local timeline (>= 0).
@@ -355,11 +383,11 @@ void MuxThread::Run() {
                          payload.track_id, track_count);
             return;
         }
-        if (head_start_ns > 0) {
-            if (payload.pts_ns < head_start_ns)
-                return;
-            payload.pts_ns -= head_start_ns;
+        uint64_t shifted_pts_ns = payload.pts_ns;
+        if (!ShiftAudioPts(payload.pts_ns, audio_shift_for(payload.track_id), shifted_pts_ns)) {
+            return; // this audio predates the first video frame — trimmed, not written at 0
         }
+        payload.pts_ns = shifted_pts_ns;
         const uint64_t local = to_segment_local(payload.pts_ns);
         MuxPacket mp;
         mp.pts_ns = local;

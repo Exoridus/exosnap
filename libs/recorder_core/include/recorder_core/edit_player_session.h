@@ -89,8 +89,8 @@ class EditPlayerSession {
     // Current playback position derived from the audio master clock (0 if no
     // audio stream). While paused, holds steady at the position playback
     // was paused at -- the underlying audio clock (WasapiAudioRenderer::
-    // FramesRendered()) stops advancing once Stop() is called, so this
-    // naturally freezes rather than needing a separate "not playing" check.
+    // FramesPlayed()) freezes at the paused position once Stop() is called, so
+    // this naturally holds rather than needing a separate "not playing" check.
     // Kept separate from PollFrame() because the caller needs to advance the
     // displayed position on every tick, even the ones where PollFrame()
     // itself returns nullopt (clock hasn't reached the next frame yet).

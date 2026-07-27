@@ -17,7 +17,7 @@ struct EditPlayerSession::Impl {
     bool has_audio = false;
     bool playing = false;
 
-    // WasapiAudioRenderer::FramesRendered() (and therefore AudioClockMs())
+    // WasapiAudioRenderer::FramesPlayed() (and therefore AudioClockMs())
     // resets to 0 on every Start() -- it measures time-since-resume, not
     // absolute clip position. Frame PTS values from the engine, and the
     // start_us a caller passes to Play(), are both absolute media time. This
@@ -198,7 +198,7 @@ std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
         return std::nullopt; // caller must drive the no-audio fallback via SeekTo() instead
 
     const int64_t clock_ms =
-        impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesRendered(), impl_->audio.SampleRate());
+        impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesPlayed(), impl_->audio.SampleRate());
 
     std::lock_guard<std::mutex> lock(impl_->video_queue_mutex);
     if (impl_->video_queue.empty())
@@ -227,7 +227,7 @@ std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
     if (!impl_->has_audio)
         return 0;
-    return impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesRendered(), impl_->audio.SampleRate());
+    return impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesPlayed(), impl_->audio.SampleRate());
 }
 
 } // namespace recorder_core

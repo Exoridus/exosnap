@@ -2,6 +2,7 @@
 
 #include "audio_clock_drift.h"
 #include "audio_device_loss_policy.h"
+#include "audio_silence_fill.h"
 #include "clock_slaving.h"
 #include "codec_private.h"
 #include "ffmpeg_aac_encoder.h"
@@ -379,28 +380,32 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     uint64_t lastAccountedQpcNs = QpcNowNs();
     auto lastReinitAttempt = std::chrono::steady_clock::now();
 
+    // --- Silent-stall state (audio_silence_fill.h) ---
+    // silent_stalled: a healthy source has stopped delivering packets entirely
+    // (WASAPI loopback while nothing is playing). While set, the timeline is
+    // clock-driven exactly like a degraded one.
+    // silenceFilledFramesSincePacket: how much silence the wall clock has
+    // already contributed since the last real packet, so a device-reported
+    // discontinuity gap covering the SAME stretch is not filled a second time.
+    bool silent_stalled = false;
+    uint64_t silenceFilledFramesSincePacket = 0;
+
     // Feed encoder-cadence silence covering the wall-clock elapsed since the last
     // accounted audio, keeping PTS continuous across a source outage. Returns
     // false only if routing the produced packets failed (a genuine mux failure).
     auto emitSilenceForElapsed = [&]() -> bool {
-        const uint64_t now = QpcNowNs();
-        if (now <= lastAccountedQpcNs) {
-            return true;
-        }
-        const uint64_t elapsedNs = now - lastAccountedQpcNs;
-        uint64_t framesToFill = (elapsedNs * sample_rate) / 1000000000ULL;
-        if (framesToFill == 0) {
-            return true;
-        }
         // Bound a single fill so a long stall never allocates/encodes a huge
         // block at once; the remainder is filled on the next iterations.
         constexpr uint64_t kMaxFillPerIter = 48000ULL * 5; // 5 s of frames
-        if (framesToFill > kMaxFillPerIter) {
-            framesToFill = kMaxFillPerIter;
+        const uint64_t now = QpcNowNs();
+        const uint64_t framesToFill = SilenceFillFrames(now, lastAccountedQpcNs, sample_rate, kMaxFillPerIter);
+        if (framesToFill == 0) {
+            return true;
         }
         std::vector<EncodedAudioPacket> pkts;
         feedGapSilence(static_cast<uint32_t>(framesToFill), encoderAccumulatedFrames, pkts);
         lastAccountedQpcNs += (framesToFill * 1000000000ULL) / sample_rate;
+        silenceFilledFramesSincePacket += framesToFill;
         {
             std::lock_guard slk(m_state.stats_mutex);
             for (const auto& p : pkts) {
@@ -459,6 +464,13 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                     break;
                 }
             }
+            // A pause produces no audio by design, so the paused stretch is not a
+            // gap in the timeline: keep the silence clock anchored at now, or the
+            // first clock-driven fill after the resume would try to cover the
+            // whole pause and push the track permanently late.
+            lastAccountedQpcNs = QpcNowNs();
+            silent_stalled = false;
+            silenceFilledFramesSincePacket = 0;
             Sleep(1);
             continue;
         }
@@ -572,6 +584,23 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         uint32_t pendingFrames = source_->PendingFrameCount();
         m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
         if (pendingFrames == 0) {
+            // A healthy source that hands over nothing at all still occupies
+            // wall-clock time. WASAPI loopback on a render endpoint is the
+            // everyday case: while nothing is playing there are no packets —
+            // not silent ones, none — so a solo loopback track would freeze its
+            // frame counter for the whole quiet stretch and stamp every later
+            // sample that much too early (audio_silence_fill.h). Hold the
+            // timeline with wall-clock silence, the same way a degraded source
+            // is held, once the quiet has lasted past ordinary packet cadence.
+            // Once stalled, keep filling every iteration so the anchor tracks
+            // the clock closely and the resume loses at most one poll.
+            if (silent_stalled || IsSilentStall(QpcNowNs(), lastAccountedQpcNs)) {
+                silent_stalled = true;
+                if (!emitSilenceForElapsed()) {
+                    failed = true;
+                    break;
+                }
+            }
             waitForCaptureWork();
             continue;
         }
@@ -606,6 +635,21 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             {
                 AudioDeviceTiming timing{};
                 if (source_->LastBufferDeviceTiming(timing)) {
+                    // Measured audio zero point: the QPC instant the endpoint
+                    // recorded the FIRST frame of this packet at, walked back
+                    // over everything already on the encoder timeline. That is
+                    // where audio PTS 0 really sits on the wall clock, and the
+                    // muxer needs it to place the track against video — assuming
+                    // it started when Record() was called makes the whole track
+                    // lead the picture by however long the device took to open.
+                    if (!audio_epoch_published_ && raw.num_frames > 0) {
+                        const uint64_t frames_before_packet = encoderAccumulatedFrames + raw.gap_frames;
+                        const uint64_t elapsed_ns = (frames_before_packet * 1000000000ULL) / sample_rate;
+                        if (timing.qpc_position_ns > elapsed_ns) {
+                            m_state.audio_epoch_qpc_100ns[track_id_].store((timing.qpc_position_ns - elapsed_ns) / 100);
+                            audio_epoch_published_ = true;
+                        }
+                    }
                     drift_estimator.AddObservation(timing.device_position_ns, timing.qpc_position_ns);
                     const double raw_drift = drift_estimator.DriftMs();
                     double residual = raw_drift; // no slaving => residual is the raw drift
@@ -653,7 +697,14 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             std::vector<EncodedAudioPacket> pkts;
             float new_rms = 0.0f;
             if (raw.gap_frames > 0) {
-                feedGapSilence(raw.gap_frames, encoderAccumulatedFrames, pkts);
+                // A stall the wall clock already covered can also come back as a
+                // device-position jump on the resuming packet. Fill only what the
+                // silence did not already account for, or the same outage lands on
+                // the timeline twice and the track runs permanently late.
+                const uint32_t remaining = RemainingGapFrames(raw.gap_frames, silenceFilledFramesSincePacket);
+                if (remaining > 0) {
+                    feedGapSilence(remaining, encoderAccumulatedFrames, pkts);
+                }
             }
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(channels);
             if (raw.silent) {
@@ -687,6 +738,8 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
             // fills exactly the gap after this last real audio (ADR 0046).
             if (raw.num_frames > 0) {
                 lastAccountedQpcNs = QpcNowNs();
+                silent_stalled = false;
+                silenceFilledFramesSincePacket = 0;
             }
 
             // Update stats

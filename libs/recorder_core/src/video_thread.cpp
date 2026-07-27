@@ -3337,7 +3337,23 @@ void VideoThread::Run() {
                 if (!videoEpochSet) {
                     videoEpochTicks100ns = latestFrameTicks100ns;
                     videoEpochSet = true;
-                    m_state.video_epoch_qpc_100ns.store(Qpc100ns(qpcFreq));
+                    // Publish the epoch the PTS timeline is actually built on,
+                    // not the moment this frame happened to be processed. VFR
+                    // PTS is `frame timestamp - videoEpochTicks100ns`, and both
+                    // WGC SystemRelativeTime and DXGI LastPresentTime are QPC
+                    // readings in 100 ns units — the same axis as
+                    // session_start_qpc_100ns — so publishing "now" instead put
+                    // the A/V alignment out by the capture-to-process latency.
+                    // (The CFR path has no such split: it derives PTS from the
+                    // same epoch value it publishes.) Never earlier than the
+                    // session start: a first frame can carry a present time from
+                    // before recording began, and an epoch in the past would
+                    // shift the audio track away from the picture by that much.
+                    const auto epoch100ns = static_cast<uint64_t>(videoEpochTicks100ns);
+                    // Explicit template arg: windows.h's min/max function-like
+                    // macros are live in this target (no NOMINMAX).
+                    m_state.video_epoch_qpc_100ns.store(
+                        std::max<uint64_t>(epoch100ns, m_state.session_start_qpc_100ns));
                 }
 
                 int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
