@@ -18,9 +18,17 @@
     -Base restricts that set to what a change actually affects: the changed
     translation units themselves, plus every translation unit that includes a
     changed header (resolved from Ninja's recorded dependency graph, so a header
-    edit still reaches its consumers). A full-tree pass measures ~5.6 CPU-hours,
-    nearly all of it clang re-parsing Qt headers, which is why CI runs the
-    change-scoped form and the full form is a local / on-demand operation.
+    edit still reaches its consumers), plus the canary units below when the
+    analysis configuration itself is what changed. A full-tree pass measures
+    ~5.6 CPU-hours, nearly all of it clang re-parsing Qt headers, which is why CI
+    runs the change-scoped form and the full form is a local / on-demand
+    operation.
+
+    What -Base does NOT cover: a change that alters how the code is compiled
+    without touching a source file, a header, or one of $CanaryTriggers -- new
+    compiler flags in a CMakeLists, a different toolchain, a preset edit. Those
+    can move findings in units this run never looks at. Re-run the full pass by
+    hand after such a change.
 
     Analyser note. clang-tidy registers the entire clang-analyzer core package as
     soon as any clang-analyzer-* check is requested; -clang-analyzer-core.X cannot
@@ -32,7 +40,8 @@
 
 .PARAMETER Base
     Git revision to diff against. When given, only the affected translation units
-    are analysed. Omit for a full-tree pass.
+    are analysed. Omit for a full-tree pass. A missing Ninja dependency graph is a
+    hard error in this mode, not a reason to analyse less.
 
 .PARAMETER ClangTidy
     Explicit path to clang-tidy.exe. Autodetected from the Visual Studio LLVM
@@ -67,6 +76,7 @@ $ErrorActionPreference = 'Stop'
 # re-running the full pass (no -Base) and confirming a clean result.
 # ---------------------------------------------------------------------------
 $BlockingChecks = @(
+    'bugprone-use-after-move'
     'bugprone-dangling-handle'
     'clang-analyzer-core.CallAndMessage'
     'clang-analyzer-core.uninitialized.*'
@@ -77,6 +87,24 @@ if ($ListChecks) {
     $BlockingChecks | ForEach-Object { Write-Host $_ }
     exit 0
 }
+
+# ---------------------------------------------------------------------------
+# Canary translation units, analysed whenever the analysis configuration itself
+# changes rather than the code it inspects. A change to .clang-tidy or to this
+# script alters what every future run means, but touches no .cpp and no header,
+# so the change-scoped selection below would pick nothing and report green. One
+# representative unit per compilation flavour keeps that class of change honest
+# at a cost of a couple of minutes:
+#   * engine, no Qt, heavy Win32/D3D interop
+#   * Qt widget code, the expensive parse
+#   * a gtest unit, where the test-only idioms live
+# ---------------------------------------------------------------------------
+$CanaryTriggers = @('.clang-tidy', 'scripts/run-clang-tidy-blocking.ps1')
+$CanarySources = @(
+    'libs/recorder_core/src/audio_thread.cpp'
+    'app/ui/widgets/AudioSourceToggle.cpp'
+    'libs/recorder_core/tests/test_split_sentinel_policy.cpp'
+)
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not [System.IO.Path]::IsPathRooted($BuildDir)) {
@@ -117,6 +145,19 @@ $normalizedBuild = $BuildDir.Replace('\', '/').TrimEnd('/')
 # case-insensitive.
 $ic = [System.StringComparison]::OrdinalIgnoreCase
 
+# Both Ninja's dependency lists and clang-tidy's diagnostics can name a file
+# relative to the build directory (`../../libs/x.h`). Those have to be resolved
+# before any prefix test, or a real finding in a repository header would be
+# mistaken for a third-party one and dropped.
+function Resolve-AgainstBuildDir {
+    param([string]$Path)
+    $p = $Path.Replace('\', '/')
+    if (-not [System.IO.Path]::IsPathRooted($p)) {
+        $p = [System.IO.Path]::GetFullPath((Join-Path $BuildDir $p)).Replace('\', '/')
+    }
+    return $p
+}
+
 function Test-InRepo {
     param([string]$Path)
     return $Path.StartsWith("$normalizedRoot/", $ic) -and
@@ -141,24 +182,45 @@ $sources = $allSources
 $scope = 'full tree'
 
 if ($Base) {
-    $changed = @(git -C $repoRoot diff --name-only --diff-filter=ACMR "$Base" -- . 2>$null)
+    $changedAll = @(git -C $repoRoot diff --name-only --diff-filter=ACMR "$Base" -- . 2>$null)
     if ($LASTEXITCODE -ne 0) {
         Write-Host "::error::git diff against '$Base' failed - is the base revision fetched?"
         exit 1
     }
-    $changed = @($changed | Where-Object { $_ -match '\.(cpp|cxx|cc|c|h|hpp|hxx|inl)$' })
+    $changedAll = @($changedAll | ForEach-Object { $_.Replace('\', '/') })
+    $changed = @($changedAll | Where-Object { $_ -match '(?i)\.(cpp|cxx|cc|c|h|hpp|hxx|inl)$' })
 
-    if (-not $changed) {
+    $canaryHit = @($changedAll | Where-Object { $CanaryTriggers -contains $_ })
+
+    if (-not $changed -and -not $canaryHit) {
         Write-Host "No C/C++ sources or headers changed since $Base - nothing to analyse."
         exit 0
     }
 
     $changedAbs = [System.Collections.Generic.HashSet[string]]::new(
-        [string[]]($changed | ForEach-Object { "$normalizedRoot/$($_.Replace('\','/'))" }),
+        [string[]]($changed | ForEach-Object { "$normalizedRoot/$_" }),
         [System.StringComparer]::OrdinalIgnoreCase)
 
     $affected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($s in $allSources) { if ($changedAbs.Contains($s)) { [void]$affected.Add($s) } }
+
+    # The analysis configuration changed, so pull in the canaries (see the list
+    # near the top for why). A canary that is missing from the compile database
+    # is a stale list, not a reason to quietly analyse less.
+    if ($canaryHit) {
+        Write-Host "Analysis configuration changed ($($canaryHit -join ', ')) - adding canary translation units."
+        foreach ($c in $CanarySources) {
+            $abs = "$normalizedRoot/$c"
+            if ($allSources -contains $abs) {
+                [void]$affected.Add($abs)
+            }
+            else {
+                Write-Host "::error::Canary translation unit '$c' is not in the compile database."
+                Write-Host "Update `$CanarySources in this script to name files that still exist."
+                exit 1
+            }
+        }
+    }
 
     # A changed header must reach the translation units that include it. Ninja
     # recorded exactly that during the build (/showIncludes -> .ninja_deps), so
@@ -177,26 +239,32 @@ if ($Base) {
         $depLines = @()
         Push-Location $BuildDir
         try { $depLines = @(& ninja -t deps 2>$null) } catch { $depLines = @() } finally { Pop-Location }
+
+        # Fail closed. Without the dependency graph the consumers of a changed
+        # header are unknown, and a header-only change would then analyse nothing
+        # and report green - the gate would be silently absent exactly where it
+        # matters most. An unavailable graph is an infrastructure fault, so it
+        # goes red rather than quietly narrowing the scope.
         if (-not $depLines) {
-            Write-Host "::warning::'ninja -t deps' produced nothing - consumers of the changed headers are not analysed."
+            Write-Host "::error::'ninja -t deps' returned nothing for $BuildDir."
+            Write-Host "The changed headers ($($changedHeaders.Count)) cannot be mapped to the translation"
+            Write-Host "units that include them, so this run cannot prove anything. Rebuild the Ninja"
+            Write-Host "preset so .ninja_deps exists, or run the full pass without -Base."
+            exit 1
         }
-        else {
-            $currentSource = $null
-            foreach ($line in $depLines) {
-                if ($line -match '^(\S.*?):\s+#deps ') {
-                    $obj = $Matches[1].Replace('\', '/')
-                    $currentSource = $objToSource[$obj]
-                    continue
-                }
-                if (-not $currentSource) { continue }
-                if ($line -match '^\s+(\S.*)$') {
-                    $dep = $Matches[1].Replace('\', '/')
-                    if (-not [System.IO.Path]::IsPathRooted($dep)) {
-                        $dep = [System.IO.Path]::GetFullPath((Join-Path $BuildDir $dep)).Replace('\', '/')
-                    }
-                    if ($changedAbs.Contains($dep) -and (Test-ProjectSource $currentSource)) {
-                        [void]$affected.Add($currentSource)
-                    }
+
+        $currentSource = $null
+        foreach ($line in $depLines) {
+            if ($line -match '^(\S.*?):\s+#deps ') {
+                $obj = $Matches[1].Replace('\', '/')
+                $currentSource = $objToSource[$obj]
+                continue
+            }
+            if (-not $currentSource) { continue }
+            if ($line -match '^\s+(\S.*)$') {
+                $dep = Resolve-AgainstBuildDir $Matches[1]
+                if ($changedAbs.Contains($dep) -and (Test-ProjectSource $currentSource)) {
+                    [void]$affected.Add($currentSource)
                 }
             }
         }
@@ -255,7 +323,7 @@ foreach ($r in $results) {
         if ($line -notmatch $diagPattern) { continue }
         # Copy every capture out before anything else runs a regex: the next
         # -match/-notmatch replaces $Matches wholesale.
-        $where = $Matches[1].Replace('\', '/')
+        $where = Resolve-AgainstBuildDir $Matches[1]
         $row = $Matches[2]
         $col = $Matches[3]
         $message = $Matches[4]

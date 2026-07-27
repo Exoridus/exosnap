@@ -31,11 +31,12 @@ jobs:
   # violations, so the broad pass stays advisory in advisory-unused-checks below.
   #
   # A small curated subset DOES block, as the "clang-tidy blocking check set" step
-  # inside build-test: bugprone-dangling-handle, clang-analyzer-core.CallAndMessage,
-  # clang-analyzer-core.uninitialized.*, clang-analyzer-cplusplus.NewDelete*. Each
-  # was measured at zero findings in repository-owned files across all 509 project
-  # translation units before it was promoted; see .clang-tidy for the candidates
-  # that did not qualify, and scripts/run-clang-tidy-blocking.ps1 for the runner.)
+  # inside build-test: bugprone-use-after-move, bugprone-dangling-handle,
+  # clang-analyzer-core.CallAndMessage, clang-analyzer-core.uninitialized.*,
+  # clang-analyzer-cplusplus.NewDelete*. Each was measured at zero findings in
+  # repository-owned files across all 509 project translation units before it was
+  # promoted; see .clang-tidy for the candidates that did not qualify, and
+  # scripts/run-clang-tidy-blocking.ps1 for the runner.)
   lint:
     name: lint
     runs-on: windows-2022

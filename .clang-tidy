@@ -38,11 +38,12 @@
 # All five are informational only — do NOT promote to blocking without a human triage pass.
 #
 # Blocking check set (enforced in CI by scripts/run-clang-tidy-blocking.ps1):
+#   bugprone-use-after-move
 #   bugprone-dangling-handle
 #   clang-analyzer-core.CallAndMessage
 #   clang-analyzer-core.uninitialized.*
 #   clang-analyzer-cplusplus.NewDelete*
-# These four were measured at zero findings in repository-owned files across all
+# These five were measured at zero findings in repository-owned files across all
 # 509 project translation units, which is the only reason they may fail a build.
 # Two consequences worth knowing:
 #   * Requesting any clang-analyzer-* check makes clang-tidy register the entire
@@ -60,12 +61,13 @@
 #   bugprone-integer-division                                                   5
 #                                 deliberate integer pixel math (4:2:0 chroma
 #                                 viewport, Matroska timescale)
-#   bugprone-use-after-move                                                     3
-#                                 one intentional moved-from assertion in a test,
-#                                 two loop-carried winrt::com_ptr uses in
-#                                 VideoThread::Run that need a human verdict
 #   clang-diagnostic-switch (enum-exhaustiveness)                               2
 #                                 see the note under HeaderFilterRegex below
+# bugprone-use-after-move had three findings on the same pass and is now blocking:
+# all three were false positives on winrt::com_ptr and a deliberate moved-from
+# assertion in a test, and were resolved at the source rather than suppressed
+# wholesale - the two loop-carried handles in VideoThread::Run are cleared
+# explicitly after the move, the test carries a NOLINT that names its reason.
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
@@ -99,6 +101,7 @@ Checks: >
   misc-unused-parameters,
   misc-unused-alias-decls,
   readability-redundant-declaration,
+  bugprone-use-after-move,
   bugprone-dangling-handle,
   clang-analyzer-core.CallAndMessage,
   clang-analyzer-core.uninitialized.*,
@@ -129,6 +132,7 @@ WarningsAsErrors: >
   -misc-unused-parameters,
   -misc-unused-alias-decls,
   -readability-redundant-declaration,
+  bugprone-use-after-move,
   bugprone-dangling-handle,
   clang-analyzer-core.CallAndMessage,
   clang-analyzer-core.uninitialized.*,
