@@ -582,6 +582,34 @@ TEST_F(EditExportPageTest, ReviewReportUsesEmDashForMissingValuesNotUnavailable)
     }
 }
 
+// Regression: a healthy 144 Hz display recorded at 60 fps CFR deliberately
+// discards a large fraction of source frames via coalescing/pacing to hit the
+// target rate -- none of that is a real drop. The report must count only
+// encoder-backpressure drops, not the coalesced/CFR-pacing categories.
+TEST_F(EditExportPageTest, ReviewReportCountsOnlyBackpressureDrops_NotCoalescedPacing) {
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.duration_seconds = 100.0;
+    ctx.completed_snapshot.valid = true;
+    ctx.completed_snapshot.capture.frames_emitted = 6000;           // 100 s @ 60 fps
+    ctx.completed_snapshot.capture.frames_dropped_coalesced = 4000; // benign pacing
+    ctx.completed_snapshot.capture.frames_dropped_cfr = 100;        // benign
+    ctx.completed_snapshot.capture.frames_dropped_backpressure = 3; // the only real drops
+    page.setEditContext(ctx);
+    page.setPhase(EditExportPage::Phase::Review);
+
+    QLabel* drops = nullptr;
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        if (lbl->text().startsWith(QStringLiteral("Frame drops:")))
+            drops = lbl;
+    }
+    ASSERT_NE(drops, nullptr);
+    // 3 / (6000 + 3) * 100 rounds to 0.0%; a coalesced-inclusive total (4103
+    // dropped of 10103) would have shown roughly 40%.
+    EXPECT_EQ(drops->text(), QStringLiteral("Frame drops: 0.0%")) << drops->text().toStdString();
+}
+
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {
     // EditExportPage has no navPageRequested signal — it only emits backRequested
     // and exportCompleted. Verify there is no navPageRequested signal by checking

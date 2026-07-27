@@ -9,6 +9,8 @@
 #include <QSlider>
 #include <QWidget>
 
+#include <vector>
+
 #include "models/WebcamSettings.h"
 #include "ui/widgets/CameraPreview.h"
 #include "ui/widgets/ExoToggle.h"
@@ -415,6 +417,71 @@ TEST_F(WebcamSetupPanelTest, RescanButton_PinnedBottomRightOfPreview) {
     EXPECT_EQ(preview_rect2.bottom() - btn_geom2.bottom(), kMargin);
 
     panel.hide();
+}
+
+// ---------------------------------------------------------------------------
+// Webcam fps was requested but never applied: collectSettings() used to
+// hardcode WebcamSettings::fps = 30 regardless of which "@ N fps" resolution
+// row was actually selected, and the row's item data only carried
+// width/height. Both are fixed: the row now carries its real fps, and
+// selecting it must be reflected in the emitted settings.
+// ---------------------------------------------------------------------------
+
+TEST_F(WebcamSetupPanelTest, ResolutionSelection_CarriesRealFpsIntoSettings) {
+    ui::widgets::WebcamSetupPanel panel;
+
+    auto* combo = panel.findChild<QComboBox*>(QStringLiteral("webcamPanelResolutionCombo"));
+    ASSERT_NE(combo, nullptr);
+    combo->clear();
+    combo->addItem(QStringLiteral("1920\xC3\x97"
+                                  "1080 @ 30 fps"),
+                   QVariantList{1920, 1080, 30});
+    combo->addItem(QStringLiteral("1920\xC3\x97"
+                                  "1080 @ 60 fps"),
+                   QVariantList{1920, 1080, 60});
+    combo->setCurrentIndex(0);
+
+    WebcamSettings last;
+    QObject::connect(&panel, &ui::widgets::WebcamSetupPanel::settingsChanged,
+                     [&](const WebcamSettings& s) { last = s; });
+
+    combo->setCurrentIndex(1); // pick the "@ 60 fps" row
+    EXPECT_EQ(last.fps, 60) << "Selecting a different fps row at the same resolution must carry that fps "
+                               "through -- it must not stay hardcoded at 30";
+}
+
+// FindResolutionRowIndex is the pure policy behind restoring a previously
+// selected format (applySettings() / onWebcamDevicesChanged()): prefer an
+// exact (width, height, fps) match; fall back to the first width/height match
+// when the exact fps is no longer offered (a different camera, or a preset
+// saved against a wider-format device).
+TEST_F(WebcamSetupPanelTest, FindResolutionRowIndex_PrefersExactFpsMatch) {
+    using Row = ui::widgets::WebcamSetupPanel::ResolutionRow;
+    const std::vector<Row> rows = {
+        {1920, 1080, 30},
+        {1920, 1080, 60},
+        {1280, 720, 30},
+    };
+    EXPECT_EQ(ui::widgets::WebcamSetupPanel::FindResolutionRowIndex(rows, 1920, 1080, 60), 1);
+}
+
+TEST_F(WebcamSetupPanelTest, FindResolutionRowIndex_FallsBackToWidthHeightOnly) {
+    using Row = ui::widgets::WebcamSetupPanel::ResolutionRow;
+    const std::vector<Row> rows = {
+        {1920, 1080, 30},
+        {1920, 1080, 60},
+    };
+    // No row offers 1920x1080 @ 24 fps (e.g. a different camera): fall back to
+    // the first row at that resolution rather than matching nothing.
+    EXPECT_EQ(ui::widgets::WebcamSetupPanel::FindResolutionRowIndex(rows, 1920, 1080, 24), 0);
+}
+
+TEST_F(WebcamSetupPanelTest, FindResolutionRowIndex_NoWidthHeightMatchReturnsNegativeOne) {
+    using Row = ui::widgets::WebcamSetupPanel::ResolutionRow;
+    const std::vector<Row> rows = {
+        {1280, 720, 30},
+    };
+    EXPECT_EQ(ui::widgets::WebcamSetupPanel::FindResolutionRowIndex(rows, 1920, 1080, 30), -1);
 }
 
 TEST_F(WebcamSetupPanelTest, KeyColorLabel_UsesAmericanSpelling) {

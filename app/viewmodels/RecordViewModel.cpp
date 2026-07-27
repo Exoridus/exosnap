@@ -428,11 +428,13 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
     video_bytes = stats.video_bytes;
     audio_bytes = stats.audio_bytes;
     output_file_bytes = stats.output_file_bytes;
-    dropped_frames = stats.dropped_or_skipped_video_frames;
-    // av_drift_ms is deliberately NOT fed from stats here: duration_skew_ms is
-    // the difference of the two pipelines' emitted durations (a queue/latency
-    // number), not clock drift. The measured drift arrives with the
-    // diagnostics snapshot (see RecordPage's diagnostics callback).
+    // dropped_frames is deliberately NOT fed from stats.dropped_or_skipped_video_frames
+    // here: that counter mixes real encoder-backpressure drops together with
+    // deliberate CFR pacing/coalescing (frames intentionally discarded to hit
+    // the target rate, e.g. a 144 Hz source recorded at 60 fps CFR), which is
+    // not a drop. The real-drops-only count arrives with the diagnostics
+    // snapshot (see RecordPage's diagnostics callback), same as av_drift_ms
+    // below.
     output_size_text = FormatBytes(stats.output_file_bytes);
     live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
                            (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);

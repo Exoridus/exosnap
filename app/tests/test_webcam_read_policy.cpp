@@ -138,6 +138,78 @@ TEST(ShouldOpenWebcamPreviewTest, DisabledAndNoDeviceDoesNotOpen) {
     EXPECT_FALSE(ShouldOpenWebcamPreview(/*enabled=*/false, /*has_device=*/false));
 }
 
+// ---------------------------------------------------------------------------
+// SelectBestWebcamNativeFormat (webcam fps was requested but never applied --
+// OpenReader used to take the FIRST width/height match regardless of frame
+// rate; now it picks the native entry whose fps is closest to what was asked).
+// ---------------------------------------------------------------------------
+
+TEST(SelectBestWebcamNativeFormatTest, NoWidthHeightMatchReturnsNegativeOne) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1280, 720, 30, 1},
+        {1920, 1080, 30, 1},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 640, 480, 30), -1);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, ExactFpsMatchWins) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 30, 1},
+        {1920, 1080, 60, 1},
+        {1920, 1080, 15, 1},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 60), 1);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, NoExactFpsPicksClosestAvailable) {
+    // A 1080p60 request against a device that only offers 1080p30/1080p24 at
+    // that resolution must land on 30 (closest), not silently on whichever the
+    // enumeration happens to list first.
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 24, 1},
+        {1920, 1080, 30, 1},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 60), 1);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, IgnoresEntriesAtOtherResolutions) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1280, 720, 60, 1}, // wrong resolution, exact fps -- must be ignored
+        {1920, 1080, 30, 1},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 60), 1);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, NonPositiveWantFpsTakesFirstWidthHeightMatch) {
+    // want_fps <= 0 means "no frame-rate preference" -- preserves the pre-fix
+    // behavior for any caller that does not care about frame rate.
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 60, 1},
+        {1920, 1080, 30, 1},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 0), 0);
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, -1), 0);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, TieBreaksToFirstEnumeratedEntry) {
+    // Equidistant from 45 fps (30 and 60): the first-enumerated entry wins.
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 30, 1},
+        {1920, 1080, 60, 1},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 45), 0);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, HandlesFractionalNtscFrameRates) {
+    // 30000/1001 (~29.97 fps) must be distinguishable from a plain 30/1 entry
+    // and correctly recognised as the closer match to a 30 fps request only
+    // when it is actually closer -- here it is the only entry at all.
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 30000, 1001},
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 30), 0);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------

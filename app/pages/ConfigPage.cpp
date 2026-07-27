@@ -68,6 +68,7 @@
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
 #include <recorder_core/audio_track_model.h>
+#include <recorder_core/codec_types.h>
 
 #include <algorithm>
 #include <cmath>
@@ -3986,9 +3987,21 @@ void ConfigPage::updateAudioFormatControlVisibility() {
             flac_compression_spin_->setEnabled(!locked);
     }
 
-    // Audio bitrate: meaningful only for Opus/AAC (lossy codecs).
+    // Audio bitrate: meaningful only for Opus/AAC (lossy codecs). The valid
+    // range is codec-specific -- Opus accepts [kOpusBitrateKbpsMin,
+    // kOpusBitrateKbpsMax], AAC's native FFmpeg encoder is clamped to
+    // [kAacBitrateKbpsMin, kAacBitrateKbpsMax] (FfmpegAacEncoder::ResolveBitrateKbps)
+    // -- so the spinbox range must track the active codec; otherwise a value the
+    // UI accepts can still be silently overridden by the encoder. Only touched
+    // while the control is actually in use (PCM/FLAC don't use bitrate at all,
+    // so switching to them must not clamp -- and lose -- a stored Opus/AAC value).
     if (audio_bitrate_kbps_spin_) {
         const bool bitrate_active = !is_pcm && !is_flac;
+        if (bitrate_active) {
+            const uint32_t lo = is_opus ? recorder_core::kOpusBitrateKbpsMin : recorder_core::kAacBitrateKbpsMin;
+            const uint32_t hi = is_opus ? recorder_core::kOpusBitrateKbpsMax : recorder_core::kAacBitrateKbpsMax;
+            audio_bitrate_kbps_spin_->setRange(static_cast<int>(lo), static_cast<int>(hi));
+        }
         audio_bitrate_kbps_spin_->setEnabled(bitrate_active && !locked);
         if (!bitrate_active) {
             audio_bitrate_kbps_spin_->setToolTip(
@@ -4151,7 +4164,10 @@ void ConfigPage::buildAudioDefaultSettingsSection() {
         hl->addStretch(1);
         audio_bitrate_kbps_spin_ = new QSpinBox(row);
         audio_bitrate_kbps_spin_->setObjectName(QStringLiteral("audioBitrateKbpsSpin"));
-        audio_bitrate_kbps_spin_->setRange(32, 510);
+        // Placeholder range at construction time; updateAudioFormatControlVisibility()
+        // narrows this to the active codec's real range (Opus vs. AAC) below.
+        audio_bitrate_kbps_spin_->setRange(static_cast<int>(recorder_core::kOpusBitrateKbpsMin),
+                                           static_cast<int>(recorder_core::kOpusBitrateKbpsMax));
         audio_bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
         audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
         audio_bitrate_kbps_spin_->setFixedWidth(160);

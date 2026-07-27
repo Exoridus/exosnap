@@ -2242,6 +2242,85 @@ TEST_F(ConfigPageTest, Mp4DisablesAutomaticSplitControlsWithHonestSummary) {
     EXPECT_FALSE(summary->text().contains(QStringLiteral("Manual splits")));
 }
 
+// ---- Audio bitrate range tracks the active codec (Opus vs. AAC) ----------
+//
+// The bitrate spinbox used to show a single [32, 510] kbps range regardless of
+// codec, but AAC's encoder (FfmpegAacEncoder::ResolveBitrateKbps) silently
+// clamps to [64, 320] -- so a value the UI accepted for AAC could still be
+// overridden without any visible feedback. The range must track the codec.
+
+TEST_F(ConfigPageTest, AudioBitrateSpin_MatchesOpusRangeWhenOpusSelected) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.audio_codec = capability::AudioCodec::Opus;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin"));
+    ASSERT_NE(spin, nullptr);
+    EXPECT_EQ(spin->minimum(), 32);
+    EXPECT_EQ(spin->maximum(), 510);
+}
+
+TEST_F(ConfigPageTest, AudioBitrateSpin_MatchesAacRangeWhenAacSelected) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.audio_codec = capability::AudioCodec::Aac;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin"));
+    ASSERT_NE(spin, nullptr);
+    EXPECT_EQ(spin->minimum(), 64);
+    EXPECT_EQ(spin->maximum(), 320);
+}
+
+TEST_F(ConfigPageTest, AudioBitrateSpin_RangeNarrowsWhenSwitchingOpusToAac) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    OutputSettingsModel opus_settings = output_defaults_;
+    opus_settings.container = capability::Container::Matroska;
+    opus_settings.audio_codec = capability::AudioCodec::Opus;
+    page.setOutputSettings(opus_settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin"));
+    ASSERT_NE(spin, nullptr);
+    spin->setValue(450); // valid for Opus, out of range for AAC
+
+    OutputSettingsModel aac_settings = opus_settings;
+    aac_settings.audio_codec = capability::AudioCodec::Aac;
+    page.setOutputSettings(aac_settings);
+
+    EXPECT_EQ(spin->maximum(), 320);
+    // The stored value must be visibly clamped into the new range, not left
+    // showing a number the encoder will silently override.
+    EXPECT_LE(spin->value(), 320);
+}
+
+// A codec that does not use bitrate at all (PCM/FLAC) must not clamp -- and so
+// lose -- a stored Opus/AAC bitrate value while the control is disabled.
+TEST_F(ConfigPageTest, AudioBitrateSpin_SwitchingToPcmPreservesStoredValueForLaterReuse) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    OutputSettingsModel opus_settings = output_defaults_;
+    opus_settings.container = capability::Container::Matroska;
+    opus_settings.audio_codec = capability::AudioCodec::Opus;
+    page.setOutputSettings(opus_settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin"));
+    ASSERT_NE(spin, nullptr);
+    spin->setValue(450); // valid for Opus, out of AAC's range
+
+    OutputSettingsModel pcm_settings = opus_settings;
+    pcm_settings.audio_codec = capability::AudioCodec::Pcm;
+    page.setOutputSettings(pcm_settings);
+
+    EXPECT_FALSE(spin->isEnabled()) << "Bitrate does not apply to PCM";
+    EXPECT_EQ(spin->value(), 450) << "Switching to a lossless codec must not clamp the stored bitrate";
+}
+
 TEST_F(ConfigPageTest, SplitModeSurvivesContainerRoundTripThroughMp4) {
     OutputSettingsModel settings = output_defaults_;
     settings.container = capability::Container::Matroska;

@@ -87,6 +87,33 @@ struct WebcamFormat {
     int fps_den = 1;
 };
 
+// One native media type Media Foundation enumerated for a device (as returned
+// by IMFSourceReader::GetNativeMediaType), reduced to the fields the selection
+// policy below needs. Same shape as WebcamFormat; kept as a separate type so
+// this header has no MF dependency for callers that only need the pure policy.
+struct WebcamNativeFormat {
+    int width = 0;
+    int height = 0;
+    int fps_num = 0;
+    int fps_den = 1;
+};
+
+// Selects which entry of `formats` (a device's native types, in MF enumeration
+// order) the reader should negotiate for a request of (want_w, want_h,
+// want_fps). Requires an exact width/height match -- MF native types are not
+// scaled. Among the width/height matches, the entry whose frame rate is
+// closest to want_fps wins: an exact match if the camera offers one at that
+// resolution, otherwise the nearest available rate (a camera's native type
+// list is a fixed discrete set -- e.g. a UVC device offering 1080p only at
+// 30/60 fps cannot produce 1080p50). Ties keep the first (lowest-index) match,
+// mirroring MF's own enumeration order. want_fps <= 0 means "no frame-rate
+// preference": the first width/height match wins outright, same as when the
+// caller does not care about frame rate. Returns -1 when no entry matches
+// (want_w, want_h) at all. Pure/MF-call-free so the selection policy is
+// unit-pinned, like ClassifyWebcamReadResult above.
+[[nodiscard]] int SelectBestWebcamNativeFormat(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
+                                               int want_fps) noexcept;
+
 // Captures from a webcam via Media Foundation IMFSourceReader.
 // Also implements WebcamFrameProvider so VideoThread can composite frames.
 class WebcamService : public recorder_core::WebcamFrameProvider {

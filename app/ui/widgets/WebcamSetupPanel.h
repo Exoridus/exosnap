@@ -70,6 +70,26 @@ class WebcamSetupPanel : public QWidget {
                           const QString& chroma_color_mode = QString());
 #endif
 
+    // One resolution_combo_ row, reduced to the fields the selection policy
+    // below needs (widget-free so it is unit-testable without a live combo or
+    // a real camera).
+    struct ResolutionRow {
+        int width = 0;
+        int height = 0;
+        int fps = 0;
+    };
+
+    // Selects which row of `rows` (in combo order) best matches a request of
+    // (width, height, fps): an exact match on all three if one exists,
+    // otherwise the first row matching just width/height -- a stored fps the
+    // device no longer offers at that resolution (a different camera, or a
+    // preset saved against a wider-format device) still resolves to *a* row
+    // instead of leaving the combo on whatever it last had. Returns -1 when no
+    // row matches even on width/height. Exposed static + public for unit
+    // testing; findResolutionComboIndexFor() adapts this to the live combo.
+    [[nodiscard]] static int FindResolutionRowIndex(const std::vector<ResolutionRow>& rows, int width, int height,
+                                                    int fps) noexcept;
+
   signals:
     void settingsChanged(WebcamSettings settings);
     // Emitted when the user presses ↺ Rescan so MainWindow can route through
@@ -118,6 +138,9 @@ class WebcamSetupPanel : public QWidget {
     // floating, non-layout child of the preview, not the device row).
     void positionRescanButton();
     WebcamSettings collectSettings() const;
+    // Adapts resolution_combo_'s current items to FindResolutionRowIndex() (see
+    // the public declaration above for the matching policy).
+    int findResolutionComboIndexFor(int width, int height, int fps) const;
 
     std::vector<WebcamDeviceInfo> devices_;
     std::vector<WebcamFormat> formats_;

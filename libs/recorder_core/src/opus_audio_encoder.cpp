@@ -31,8 +31,10 @@ void OpusAudioEncoder::SetEncodingParams(uint32_t bitrate_kbps, OpusFrameDuratio
     if (kbps == 0) {
         return 0; // 0 = use libopus auto default
     }
-    // Opus valid range is 6-510 kbps; we use a practical minimum of 32 kbps.
-    return std::clamp(kbps, 32u, 510u);
+    // Opus's own valid range is 6-510 kbps; kOpusBitrateKbpsMin (32) is a
+    // practical floor above that. See codec_types.h -- shared with the Settings
+    // UI's bitrate spinbox range.
+    return std::clamp(kbps, kOpusBitrateKbpsMin, kOpusBitrateKbpsMax);
 }
 
 // ---------------------------------------------------------------------------
