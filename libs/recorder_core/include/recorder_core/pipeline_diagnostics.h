@@ -126,6 +126,18 @@ struct CaptureDiagnostics {
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;
     }
+
+    // "Problematic" drops for internal bottleneck/health classification: excludes
+    // frames_dropped_coalesced (benign -- the source is simply faster than the CFR
+    // target, e.g. a 144 Hz display recorded at 60 fps). Deliberately NOT the same
+    // as "real" drops (frames_dropped_backpressure alone, what the user-facing
+    // drop count/notification uses) -- frames_dropped_cfr can also fire for a
+    // genuine compositor/VideoProcessorBlt failure, not just benign pacing, so
+    // this stays a broader signal for stage-health scoring. Single source of
+    // truth for the formula previously duplicated at each call site.
+    [[nodiscard]] uint64_t frames_dropped_problem() const noexcept {
+        return frames_dropped_cfr + frames_dropped_backpressure;
+    }
 };
 
 struct CompositorDiagnostics {

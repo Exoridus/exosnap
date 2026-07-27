@@ -188,6 +188,11 @@ class RecordViewModel {
     uint64_t audio_bytes = 0;
     uint64_t output_file_bytes = 0;
     double elapsed_seconds = 0.0;
+    // REAL frame drops only (encoder backpressure) -- never deliberate CFR
+    // pacing/coalescing (e.g. downsampling a 144 Hz source to 60 fps target,
+    // which is normal and not a drop). Sourced from the diagnostics snapshot's
+    // capture.frames_dropped_backpressure, not SessionStats -- see the comment
+    // by av_drift_ms below and RecordPage's diagnostics callback.
     uint64_t dropped_frames = 0;
     // Measured A/V clock drift from the diagnostics snapshot (audio device
     // clock vs the QPC timeline video is paced on; positive = audio leads).

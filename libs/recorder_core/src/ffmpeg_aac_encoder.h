@@ -20,6 +20,7 @@
 //     AudioSpecificConfig from AVCodecContext::extradata, matching what the
 //     Matroska A_AAC writer and the MP4 remux path already expect.
 
+#include <recorder_core/codec_types.h>
 #include <recorder_core/interfaces/IAudioEncoder.h>
 
 #include <cstdint>
@@ -44,11 +45,12 @@ class FfmpegAacEncoder : public IAudioEncoder {
     FfmpegAacEncoder& operator=(const FfmpegAacEncoder&) = delete;
 
     // Set AAC bitrate before Init(). bitrate_kbps=0 keeps the default (192 kbps).
-    // Valid range [64, 320] kbps; values outside are clamped.
+    // Valid range [kAacBitrateKbpsMin, kAacBitrateKbpsMax] kbps; values outside
+    // are clamped.
     void SetBitrateKbps(uint32_t bitrate_kbps) noexcept;
 
-    // Clamp to the valid range [64, 320] kbps; 0 maps to the 192 kbps default.
-    // Exposed public for unit testing.
+    // Clamp to the valid [kAacBitrateKbpsMin, kAacBitrateKbpsMax] kbps range;
+    // 0 maps to the 192 kbps default. Exposed public for unit testing.
     static uint32_t ResolveBitrateKbps(uint32_t kbps) noexcept;
 
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error) override;

@@ -87,6 +87,56 @@ struct WebcamFormat {
     int fps_den = 1;
 };
 
+// One native media type Media Foundation enumerated for a device (as returned
+// by IMFSourceReader::GetNativeMediaType), reduced to the fields the selection
+// policy below needs. Same shape as WebcamFormat; kept as a separate type so
+// this header has no MF dependency for callers that only need the pure policy.
+struct WebcamNativeFormat {
+    int width = 0;
+    int height = 0;
+    int fps_num = 0;
+    int fps_den = 1;
+};
+
+// Selects which entry of `formats` (a device's native types, in MF enumeration
+// order) the reader should negotiate for a request of (want_w, want_h,
+// want_fps). Requires an exact width/height match -- MF native types are not
+// scaled. Among the width/height matches, the entry whose frame rate is
+// closest to want_fps wins: an exact match if the camera offers one at that
+// resolution, otherwise the nearest available rate (a camera's native type
+// list is a fixed discrete set -- e.g. a UVC device offering 1080p only at
+// 30/60 fps cannot produce 1080p50). Ties keep the first (lowest-index) match,
+// mirroring MF's own enumeration order. want_fps <= 0 means "no frame-rate
+// preference": the first width/height match wins outright, same as when the
+// caller does not care about frame rate. Returns -1 when no entry matches
+// (want_w, want_h) at all. Pure/MF-call-free so the selection policy is
+// unit-pinned, like ClassifyWebcamReadResult above.
+[[nodiscard]] int SelectBestWebcamNativeFormat(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
+                                               int want_fps) noexcept;
+
+// Same width/height match + fps-closeness policy as SelectBestWebcamNativeFormat,
+// but returns every matching index ordered from closest to farthest from
+// want_fps (ties keep the earlier/lower index), instead of only the single
+// best one. want_fps <= 0 returns every width/height match in original
+// enumeration order (no fps preference). Used to retry SetCurrentMediaType
+// against progressively-less-ideal candidates: the closest-fps native type can
+// fail to negotiate for a reason unrelated to frame rate (e.g. a pixel format
+// this particular native type advertises that the reader can't convert), even
+// though a same-resolution neighbor a little further from the requested fps
+// would succeed. SelectBestWebcamNativeFormat(formats, w, h, fps) is exactly
+// RankWebcamNativeFormats(formats, w, h, fps).front() (or -1 if empty).
+[[nodiscard]] std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& formats, int want_w,
+                                                       int want_h, int want_fps) noexcept;
+
+// Rounds a rational frame rate (fps_num/fps_den) to the nearest whole fps --
+// never truncates. Common NTSC rates are the reason this matters: 30000/1001
+// (~29.97 fps) must round to 30, not truncate to 29 (a plain fps_num/fps_den
+// integer division). fps_den <= 0 is treated as 1. Shared by every place that
+// turns a native MF frame rate into the plain-int fps WebcamFormat/
+// WebcamSettings/the negotiated-fps report use, so the resolution combo's
+// label, the stored setting, and the log field always agree with each other.
+[[nodiscard]] int RoundWebcamFps(int fps_num, int fps_den) noexcept;
+
 // Captures from a webcam via Media Foundation IMFSourceReader.
 // Also implements WebcamFrameProvider so VideoThread can composite frames.
 class WebcamService : public recorder_core::WebcamFrameProvider {

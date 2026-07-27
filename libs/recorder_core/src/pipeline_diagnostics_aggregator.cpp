@@ -934,7 +934,7 @@ PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
 PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagnosticsSnapshot& s, bool recording,
                                                            std::string& reason, PipelineHealth& health) {
     // Problematic drops exclude benign capture coalescing (source faster than target).
-    const uint64_t problem_drops = s.capture.frames_dropped_cfr + s.capture.frames_dropped_backpressure;
+    const uint64_t problem_drops = s.capture.frames_dropped_problem();
 
     if (!recording) {
         sustain_capture_ = sustain_compositor_ = sustain_encoder_ = 0;

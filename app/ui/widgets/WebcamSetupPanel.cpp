@@ -371,11 +371,18 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
 
     refreshFormats();
 
-    for (int i = 0; i < resolution_combo_->count(); ++i) {
-        const auto d = resolution_combo_->itemData(i).toList();
-        if (d.size() == 2 && d[0].toInt() == s.width && d[1].toInt() == s.height) {
-            resolution_combo_->setCurrentIndex(i);
-            break;
+    {
+        const int idx = findResolutionComboIndexFor(s.width, s.height, s.fps);
+        if (idx >= 0) {
+            resolution_combo_->setCurrentIndex(idx);
+            // A width/height-only fallback match (the requested fps is no
+            // longer offered at this resolution) leaves current_settings_
+            // holding the requested-but-unavailable fps while the combo now
+            // shows the fallback row's real one -- re-sync so a subsequent
+            // capture_changed comparison (onResolutionChanged) or restore
+            // search (onWebcamDevicesChanged) is not chasing a value nothing
+            // actually offers.
+            resyncCurrentSettingsFromResolutionCombo();
         }
     }
 
@@ -582,7 +589,11 @@ void WebcamSetupPanel::onResolutionChanged(int) {
     if (suppress_signals_)
         return;
     const WebcamSettings s = SanitizeWebcamSettings(collectSettings());
-    const bool capture_changed = s.width != current_settings_.width || s.height != current_settings_.height;
+    // fps is part of the capture format now (see collectSettings()): picking a
+    // different fps entry at the same resolution must reopen the reader too,
+    // exactly like a width/height change.
+    const bool capture_changed =
+        s.width != current_settings_.width || s.height != current_settings_.height || s.fps != current_settings_.fps;
     current_settings_ = s;
     emit settingsChanged(current_settings_);
     if (isVisible() && capture_changed)
@@ -656,12 +667,16 @@ void WebcamSetupPanel::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapsho
         suppress_signals_ = true;
         refreshFormats();
         // Restore format selection.
-        for (int i = 0; i < resolution_combo_->count(); ++i) {
-            const auto d = resolution_combo_->itemData(i).toList();
-            if (d.size() == 2 && d[0].toInt() == current_settings_.width && d[1].toInt() == current_settings_.height) {
+        {
+            const int idx =
+                findResolutionComboIndexFor(current_settings_.width, current_settings_.height, current_settings_.fps);
+            if (idx >= 0) {
                 const QSignalBlocker resb(resolution_combo_);
-                resolution_combo_->setCurrentIndex(i);
-                break;
+                resolution_combo_->setCurrentIndex(idx);
+                // Same fallback re-sync as applySettings(): a width/height-only
+                // match must not leave current_settings_ still holding an fps
+                // this device doesn't offer at that resolution.
+                resyncCurrentSettingsFromResolutionCombo();
             }
         }
         suppress_signals_ = false;
@@ -700,6 +715,50 @@ void WebcamSetupPanel::refreshDevices() {
     refreshFormats();
 }
 
+// static
+int WebcamSetupPanel::FindResolutionRowIndex(const std::vector<ResolutionRow>& rows, int width, int height,
+                                             int fps) noexcept {
+    int width_height_only = -1;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const ResolutionRow& r = rows[i];
+        if (r.width != width || r.height != height)
+            continue;
+        if (width_height_only < 0)
+            width_height_only = static_cast<int>(i); // fallback if no exact fps match turns up
+        if (r.fps == fps)
+            return static_cast<int>(i); // exact (width, height, fps) match
+    }
+    return width_height_only;
+}
+
+void WebcamSetupPanel::resyncCurrentSettingsFromResolutionCombo() {
+    const auto d = resolution_combo_->itemData(resolution_combo_->currentIndex()).toList();
+    if (d.size() < 2)
+        return; // e.g. the "(no camera)" placeholder -- nothing to sync
+    current_settings_.width = d[0].toInt();
+    current_settings_.height = d[1].toInt();
+    current_settings_.fps = (d.size() >= 3) ? d[2].toInt() : current_settings_.fps;
+}
+
+int WebcamSetupPanel::findResolutionComboIndexFor(int width, int height, int fps) const {
+    std::vector<ResolutionRow> rows;
+    rows.reserve(static_cast<size_t>(resolution_combo_->count()));
+    for (int i = 0; i < resolution_combo_->count(); ++i) {
+        const auto d = resolution_combo_->itemData(i).toList();
+        // Sentinel (never matches a real request) for a row without usable data
+        // (e.g. the "(no camera)" placeholder) -- keeps `rows` index-aligned
+        // with the combo instead of shifting positions by skipping the entry.
+        ResolutionRow row{-1, -1, -1};
+        if (d.size() >= 2) {
+            row.width = d[0].toInt();
+            row.height = d[1].toInt();
+            row.fps = (d.size() >= 3) ? d[2].toInt() : -1;
+        }
+        rows.push_back(row);
+    }
+    return FindResolutionRowIndex(rows, width, height, fps);
+}
+
 void WebcamSetupPanel::refreshFormats() {
     // Preserve the caller's suppression state instead of hard-resetting it: when
     // called from applySettings() (already suppressing for the whole call), a
@@ -714,9 +773,14 @@ void WebcamSetupPanel::refreshFormats() {
     if (!dev_id.isEmpty()) {
         formats_ = WebcamService::EnumerateFormats(dev_id.toStdString());
         for (const auto& f : formats_) {
-            const QString label =
-                QStringLiteral("%1×%2 @ %3 fps").arg(f.width).arg(f.height).arg(f.fps_num / (std::max)(1, f.fps_den));
-            QVariantList res_data = {f.width, f.height};
+            // Round, don't truncate: a common NTSC rate like 30000/1001
+            // (~29.97 fps) must show and store as 30, not 29 -- consistent
+            // with WebcamService::OpenReader's negotiated-fps rounding.
+            const int fps = RoundWebcamFps(f.fps_num, f.fps_den);
+            const QString label = QStringLiteral("%1×%2 @ %3 fps").arg(f.width).arg(f.height).arg(fps);
+            // fps is carried in the item data (not just the label) so selecting
+            // a row actually changes WebcamSettings::fps -- see collectSettings().
+            QVariantList res_data = {f.width, f.height, fps};
             resolution_combo_->addItem(label, res_data);
         }
         // #08: camera present — enable resolution combo.
@@ -820,7 +884,7 @@ void WebcamSetupPanel::applyVisualState(bool available, bool mirror, bool chroma
 
     if (available) {
         device_combo_->addItem(QStringLiteral("Visual Test Camera"), QStringLiteral("visual-test-camera"));
-        resolution_combo_->addItem(QStringLiteral("1280×720 @ 30 fps"), QVariantList{1280, 720});
+        resolution_combo_->addItem(QStringLiteral("1280×720 @ 30 fps"), QVariantList{1280, 720, 30});
         enable_toggle_->setChecked(true);
         if (camera_preview_) {
             // Asymmetric left/right halves so the mirror flip is visibly verifiable.
@@ -860,7 +924,10 @@ WebcamSettings WebcamSetupPanel::collectSettings() const {
     const auto res = resolution_combo_->currentData().toList();
     s.width = (res.size() >= 2) ? res[0].toInt() : 1280;
     s.height = (res.size() >= 2) ? res[1].toInt() : 720;
-    s.fps = 30;
+    // fps comes from the selected row's real native rate (res_data[2], set in
+    // refreshFormats()) instead of a hardcoded 30 -- previously every selection
+    // silently recorded 30 fps regardless of which "@ N fps" row was picked.
+    s.fps = (res.size() >= 3) ? res[2].toInt() : 30;
 
     s.mirror = mirror_toggle_->isChecked();
 

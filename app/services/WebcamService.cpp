@@ -148,6 +148,7 @@ struct ReaderContext {
     winrt::com_ptr<IMFSourceReader> reader;
     int width = 0;
     int height = 0;
+    int fps = 0;         // negotiated frame rate (rounded), 0 if unknown
     bool is_bgra = true; // false = YUY2
 };
 
@@ -159,7 +160,7 @@ struct ReaderContext {
 // a single undifferentiated "open_reader.failed" — this is what found the
 // 2026-07-15 NV12-only-camera bug (see MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING
 // below) and is worth keeping for the next camera-specific failure.
-std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w, int want_h, int /*want_fps*/,
+std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w, int want_h, int want_fps,
                                         std::string* fail_reason = nullptr) {
     const auto fail = [&](const char* step, HRESULT hr) {
         if (fail_reason) {
@@ -241,9 +242,17 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
     std::string native_match_fourcc;
     UINT32 native_enum_count = 0;
     HRESULT native_set_hr = S_OK;
+    int negotiated_fps = 0;
 
-    // Try to set desired resolution on the native media type first.
-    // Enumerate and pick the best matching format.
+    // Enumerate every native type this device offers, collecting (width, height,
+    // frame rate) so the requested frame rate can actually be honoured. A
+    // resolution is typically exposed at more than one native frame rate (that is
+    // exactly what EnumerateFormats/the Settings resolution combo lists), so
+    // taking the FIRST width/height match -- as this used to do -- picks whatever
+    // rate MF's enumeration order happens to put first, not the one the caller
+    // (and the UI) asked for.
+    std::vector<WebcamNativeFormat> native_formats;
+    std::vector<std::string> native_fourccs; // parallel to native_formats; diagnostics only
     for (DWORD i = 0;; ++i) {
         winrt::com_ptr<IMFMediaType> native;
         if (FAILED(reader->GetNativeMediaType(kFirstVideoStream, i, native.put())))
@@ -253,14 +262,45 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         native->GetGUID(MF_MT_SUBTYPE, &sub);
         UINT64 sz = 0;
         native->GetUINT64(MF_MT_FRAME_SIZE, &sz);
-        const UINT32 nw = static_cast<UINT32>(sz >> 32);
-        const UINT32 nh = static_cast<UINT32>(sz & 0xFFFFFFFF);
-        if (static_cast<int>(nw) == want_w && static_cast<int>(nh) == want_h) {
-            native_match_found = true;
-            native_match_fourcc = SubtypeFourCc(sub);
-            native_set_hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, native.get());
-            break;
+        UINT64 fr = 0;
+        native->GetUINT64(MF_MT_FRAME_RATE, &fr);
+        WebcamNativeFormat fmt;
+        fmt.width = static_cast<int>(sz >> 32);
+        fmt.height = static_cast<int>(sz & 0xFFFFFFFF);
+        fmt.fps_num = static_cast<int>(fr >> 32);
+        fmt.fps_den = static_cast<int>(fr & 0xFFFFFFFF);
+        native_formats.push_back(fmt);
+        native_fourccs.push_back(SubtypeFourCc(sub));
+    }
+
+    // Try every width/height match in closest-fps-first order: the single
+    // closest candidate can fail to negotiate for a reason unrelated to frame
+    // rate (e.g. a pixel format this particular native type advertises that
+    // the reader can't convert), even though a same-resolution neighbor a
+    // little further from the requested fps would succeed. A single-shot
+    // attempt on only the closest match would then silently fall through to
+    // whatever the reader's default native type already was -- possibly the
+    // wrong resolution entirely -- instead of the next-best candidate that
+    // would have worked.
+    const std::vector<int> ranked = RankWebcamNativeFormats(native_formats, want_w, want_h, want_fps);
+    for (const int candidate_index : ranked) {
+        native_match_found = true;
+        native_match_fourcc = native_fourccs[static_cast<size_t>(candidate_index)];
+        winrt::com_ptr<IMFMediaType> chosen;
+        native_set_hr =
+            reader->GetNativeMediaType(kFirstVideoStream, static_cast<DWORD>(candidate_index), chosen.put());
+        if (FAILED(native_set_hr))
+            continue;
+        native_set_hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, chosen.get());
+        if (SUCCEEDED(native_set_hr)) {
+            const auto& picked = native_formats[static_cast<size_t>(candidate_index)];
+            negotiated_fps = RoundWebcamFps(picked.fps_num, picked.fps_den);
+            break; // this candidate's native type is now current; stop retrying
         }
+        // This candidate failed to negotiate: native_set_hr/native_match_fourcc
+        // above already reflect it for the failure diagnostic below (in case
+        // every candidate fails and BGRA/YUY2 negotiation also fails); try the
+        // next-closest candidate.
     }
 
     // Set output type to BGRA or YUY2.
@@ -297,11 +337,68 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
     ctx.reader = std::move(reader);
     ctx.width = actual_w;
     ctx.height = actual_h;
+    ctx.fps = negotiated_fps;
     ctx.is_bgra = is_bgra;
     return ctx;
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Native webcam format selection — pure, MF-call-free
+// ---------------------------------------------------------------------------
+
+int SelectBestWebcamNativeFormat(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
+                                 int want_fps) noexcept {
+    const std::vector<int> ranked = RankWebcamNativeFormats(formats, want_w, want_h, want_fps);
+    return ranked.empty() ? -1 : ranked.front();
+}
+
+std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
+                                         int want_fps) noexcept {
+    struct Candidate {
+        int index;
+        long long distance;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(formats.size());
+    for (size_t i = 0; i < formats.size(); ++i) {
+        const WebcamNativeFormat& f = formats[i];
+        if (f.width != want_w || f.height != want_h)
+            continue;
+
+        long long distance = 0;
+        if (want_fps > 0) {
+            // Compare in milli-fps units so integer division loses no precision
+            // (e.g. 30000/1001 ~= 29.97 fps must stay distinguishable from 30 fps).
+            const long long den = (f.fps_den > 0) ? f.fps_den : 1;
+            const long long native_milli_fps = (static_cast<long long>(f.fps_num) * 1000) / den;
+            const long long want_milli_fps = static_cast<long long>(want_fps) * 1000;
+            const long long diff = native_milli_fps - want_milli_fps;
+            distance = (diff < 0) ? -diff : diff;
+        }
+        // want_fps <= 0: every candidate's distance stays 0, so the stable
+        // sort below leaves them in original enumeration order (first
+        // width/height match first) -- "no frame-rate preference".
+        candidates.push_back({static_cast<int>(i), distance});
+    }
+
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
+
+    std::vector<int> result;
+    result.reserve(candidates.size());
+    for (const auto& c : candidates)
+        result.push_back(c.index);
+    return result;
+}
+
+int RoundWebcamFps(int fps_num, int fps_den) noexcept {
+    const int den = (fps_den > 0) ? fps_den : 1;
+    // Round-to-nearest via the standard (num + den/2) / den trick; fps_num is
+    // always >= 0 in practice (an MF frame-rate ratio), so no sign handling.
+    return (fps_num + den / 2) / den;
+}
 
 // ---------------------------------------------------------------------------
 // Webcam read-result classification (loss detection) — pure, MF-call-free
@@ -656,9 +753,10 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         const bool recovered = open_failure_logged || first_open;
         open_failure_logged = false;
         first_open = false;
-        diagnostics::logEvent(
-            diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
-            {{"negotiated_width", std::to_string(ctx->width)}, {"negotiated_height", std::to_string(ctx->height)}});
+        diagnostics::logEvent(diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
+                              {{"negotiated_width", std::to_string(ctx->width)},
+                               {"negotiated_height", std::to_string(ctx->height)},
+                               {"negotiated_fps", std::to_string(ctx->fps)}});
         if (recovered)
             PostStatus(true, {});
         last_delivered_ts = -1; // fresh reader: its first sample always passes.

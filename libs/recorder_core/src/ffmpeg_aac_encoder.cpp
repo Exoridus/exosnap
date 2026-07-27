@@ -38,7 +38,7 @@ void LogWarn(const std::string& msg) {
 
 // ---------------------------------------------------------------------------
 // Bitrate resolution (unchanged by the ADR 0052 encoder swap: default
-// 192 kbps, clamped to [64, 320]).
+// 192 kbps, clamped to [kAacBitrateKbpsMin, kAacBitrateKbpsMax]).
 // ---------------------------------------------------------------------------
 
 void FfmpegAacEncoder::SetBitrateKbps(uint32_t bitrate_kbps) noexcept {
@@ -49,7 +49,7 @@ void FfmpegAacEncoder::SetBitrateKbps(uint32_t bitrate_kbps) noexcept {
     if (kbps == 0) {
         return kDefaultBitrateKbps;
     }
-    return std::clamp(kbps, 64u, 320u);
+    return std::clamp(kbps, kAacBitrateKbpsMin, kAacBitrateKbpsMax);
 }
 
 FfmpegAacEncoder::~FfmpegAacEncoder() {

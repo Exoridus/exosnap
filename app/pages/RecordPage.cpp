@@ -3066,6 +3066,13 @@ void RecordPage::initCoordinator() {
         view_model_.av_drift_available =
             (snapshot.av_drift_availability == recorder_core::MetricAvailability::Available);
         view_model_.av_drift_ms = view_model_.av_drift_available ? snapshot.av_drift_ms : 0.0;
+        // Live drop count for the preview/overlay tile: REAL drops only
+        // (encoder backpressure). Deliberate CFR pacing/coalescing (e.g.
+        // downsampling a 144 Hz source to a 60 fps CFR target) is intentional
+        // frame selection, not a drop, and must not inflate this counter --
+        // see PipelineDiagnosticsAggregator's frames_dropped_coalesced/
+        // frames_dropped_cfr vs. frames_dropped_backpressure.
+        view_model_.dropped_frames = snapshot.capture.frames_dropped_backpressure;
         // Peak A/V drift is accumulated in the engine aggregator now (one source of
         // truth shared with the session report); mirror the snapshot's value here
         // instead of re-deriving it.
@@ -5271,11 +5278,18 @@ void RecordPage::updateReportCard() {
     }
     stats_row->setVisible(true);
 
-    // Frame drop %
+    // Frame drop %: REAL drops only (encoder backpressure), not deliberate CFR
+    // pacing/coalescing -- see the diagnostics-callback comment above. Using
+    // frames_dropped_total() here used to inflate this figure (and, at a source
+    // rate well above the target, could even push it past 100%) on every
+    // recording that simply downsamples a faster source to the CFR target.
+    // Denominator matches EditExportPage's review panel (frames_emitted +
+    // dropped, i.e. "of every frame that should have existed") so the two
+    // "Frame drops %" surfaces never disagree on the same session.
     if (drop_label) {
-        const uint64_t dropped = snap.capture.frames_dropped_total();
-        const uint64_t emitted = (std::max)(static_cast<uint64_t>(1), snap.capture.frames_emitted);
-        const double drop_pct = static_cast<double>(dropped) * 100.0 / static_cast<double>(emitted);
+        const uint64_t dropped = snap.capture.frames_dropped_backpressure;
+        const uint64_t total_frames = (std::max)(static_cast<uint64_t>(1), snap.capture.frames_emitted + dropped);
+        const double drop_pct = static_cast<double>(dropped) * 100.0 / static_cast<double>(total_frames);
         if (dropped == 0) {
             drop_label->setText(QStringLiteral("No frames dropped"));
         } else {

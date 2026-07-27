@@ -3,6 +3,7 @@
 #include <capability/container_compat_registry.h>
 #include <capability/resolver.h>
 #include <recorder_core/audio_track_model.h>
+#include <recorder_core/codec_types.h>
 
 #include <algorithm>
 #include <cctype>
@@ -325,10 +326,12 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     }
 
     // Audio encoding params (ADR 0019):
-    // audio_bitrate_kbps: 0 is valid (auto default); non-zero clamped to broadest safe range.
-    // Codec-specific clamping ([32,510] Opus / [64,320] AAC) happens in the engine.
-    if (config.audio.audio_bitrate_kbps > 510u) {
-        config.audio.audio_bitrate_kbps = 510u;
+    // audio_bitrate_kbps: 0 is valid (auto default); non-zero clamped to the
+    // broadest safe range (Opus's, the wider of the two -- see codec_types.h).
+    // Codec-specific clamping (kOpusBitrateKbpsMin/Max vs. kAacBitrateKbpsMin/Max)
+    // happens in the engine/UI.
+    if (config.audio.audio_bitrate_kbps > recorder_core::kOpusBitrateKbpsMax) {
+        config.audio.audio_bitrate_kbps = recorder_core::kOpusBitrateKbpsMax;
     }
     // opus_complexity: clamp to [0, 10].
     if (config.audio.opus_complexity < 0) {

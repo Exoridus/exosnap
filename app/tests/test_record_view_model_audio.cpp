@@ -243,6 +243,23 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSour
     EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.0f);
 }
 
+// Regression: UpdateStats() used to set dropped_frames straight from
+// SessionStats::dropped_or_skipped_video_frames, a counter that mixes real
+// encoder-backpressure drops together with deliberate CFR pacing/coalescing
+// (e.g. downsampling a 144 Hz source to a 60 fps CFR target -- not a drop).
+// dropped_frames is now only ever set from the diagnostics snapshot's
+// capture.frames_dropped_backpressure (see RecordPage's diagnostics
+// callback), so a plain stats update must leave it untouched.
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_DoesNotSetDroppedFramesFromRawStat) {
+    RecordViewModel vm;
+
+    recorder_core::SessionStats stats;
+    stats.dropped_or_skipped_video_frames = 5000; // e.g. 144 Hz -> 60 fps CFR pacing
+    vm.UpdateStats(stats);
+
+    EXPECT_EQ(vm.dropped_frames, 0u) << "dropped_frames must not be sourced from the raw combined stats counter";
+}
+
 TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsMicRms) {
     RecordViewModel vm;
 

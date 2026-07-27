@@ -50,6 +50,20 @@ enum class QualityPreset { High, Balanced, Efficient, Draft, Ultra };
 inline constexpr uint32_t kCqMin = 1;
 inline constexpr uint32_t kCqMax = 51;
 
+// Valid audio bitrate ranges, in kbps, one per lossy audio codec. Single source
+// of truth for both the Settings UI's bitrate spinbox range (ConfigPage,
+// codec-conditional) and each encoder's own clamp
+// (OpusAudioEncoder::ClampOpusBitrateKbps / FfmpegAacEncoder::ResolveBitrateKbps)
+// so a value the UI accepts is never silently overridden by the encoder.
+// AAC's ceiling is a deliberate product choice, not FFmpeg's native AAC-LC
+// encoder's raw mechanical limit (it silently caps around 288 kbps/channel --
+// 576 kbps for stereo -- confirmed empirically against the vendored r5 build);
+// 320 kbps matches common AAC-LC practice, where quality has already plateaued.
+inline constexpr uint32_t kOpusBitrateKbpsMin = 32;
+inline constexpr uint32_t kOpusBitrateKbpsMax = 510;
+inline constexpr uint32_t kAacBitrateKbpsMin = 64;
+inline constexpr uint32_t kAacBitrateKbpsMax = 320;
+
 // The canonical CQ value a named preset stands for. Single source of truth for
 // preset -> CQ; nothing else may hardcode 16/19/24/30/35.
 inline constexpr uint32_t CanonicalCq(QualityPreset preset) noexcept {

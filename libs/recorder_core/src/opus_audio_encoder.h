@@ -1,5 +1,6 @@
 #pragma once
 
+#include <recorder_core/codec_types.h>
 #include <recorder_core/interfaces/IAudioEncoder.h>
 #include <recorder_core/recorder_session.h>
 

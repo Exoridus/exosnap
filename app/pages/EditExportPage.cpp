@@ -668,7 +668,10 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     const bool has_snap = snap.valid || snap.session_generation > 0;
 
     if (review_drop_label_) {
-        const uint64_t total_dropped = snap.capture.frames_dropped_total();
+        // REAL drops only (encoder backpressure) -- not deliberate CFR
+        // pacing/coalescing, which is intentional frame selection (e.g.
+        // downsampling a 144 Hz source to a 60 fps CFR target), not a drop.
+        const uint64_t total_dropped = snap.capture.frames_dropped_backpressure;
         const uint64_t total_frames = snap.capture.frames_emitted + total_dropped;
         if (has_snap && total_frames > 0) {
             const double pct = 100.0 * static_cast<double>(total_dropped) / static_cast<double>(total_frames);
