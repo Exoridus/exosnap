@@ -13,6 +13,7 @@
 
 #include "codec_types.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -233,6 +234,21 @@ struct AudioDiagnostics {
     // measured live notice — never a blocker.
     uint32_t degraded_sources = 0;
     bool source_degraded = false;
+    // Latched post-flight fact: at least one audio capture source was lost
+    // mid-recording and degraded to honest silence at some point this session,
+    // even if every source is healthy again by the final snapshot. Passed through
+    // from SessionStats; there is no per-event history behind it.
+    bool source_degraded_occurred = false;
+    // Resampler tail flushed at stop, per track (index = audio track id, bounded
+    // by CodecPrivateData::kMaxAudioTracks). Passed through from SessionStats and
+    // therefore only populated on the terminal snapshot, after the audio workers
+    // have drained. undrained > 0 means captured audio was dropped. The counters
+    // are meaningful only where resampler_drain_recorded is true — a track that
+    // never reached its drain (failed session, join timeout, no resample context)
+    // leaves them at 0, which is not a measurement.
+    std::array<bool, 3> resampler_drain_recorded{};
+    std::array<uint64_t, 3> resampler_drained_frames{};
+    std::array<uint64_t, 3> resampler_undrained_frames{};
 };
 
 struct QueueDiagnostics {
