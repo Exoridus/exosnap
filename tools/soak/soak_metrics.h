@@ -39,6 +39,7 @@ struct SoakSample {
     uint64_t frames_dropped_coalesced = 0;
     uint64_t frames_dropped_cfr = 0;
     uint64_t frames_dropped_backpressure = 0;
+    uint64_t frames_dropped_processing_failure = 0;
     uint64_t frames_duplicated = 0;
     uint64_t audio_discontinuities = 0;
 
@@ -55,9 +56,10 @@ struct SoakSample {
     bool recorder_failed = false; // a RecorderResult failure was observed
     std::string bottleneck;       // advisory, human-readable
 
-    // Sum of the three drop counters (a convenience; not serialized separately).
+    // Sum of the drop counters (a convenience; not serialized separately).
     [[nodiscard]] uint64_t total_dropped() const {
-        return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;
+        return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure +
+               frames_dropped_processing_failure;
     }
 };
 

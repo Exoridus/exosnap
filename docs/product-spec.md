@@ -666,10 +666,19 @@ toggle turns it off for byte-exact archival capture. A multi-source merged track
 mixes several device clocks).
 
 **Post-flight report card.** After each recording, a report card surfaces frame-drop %, peak A/V
-drift, and overall pipeline health. When a recording had **real** frame drops (encoder backpressure,
-not benign coalescing/CFR drops), a caution toast ("Frames dropped") appears alongside "Recording
-saved", with a "View diagnostics" action. (The fuller post-flight integrity review is the content of
-the Edit/Output/Save "Review" step.)
+drift, and overall pipeline health. When a recording had **real** frame drops, a caution toast
+("Frames dropped") appears alongside "Recording saved", with a "View diagnostics" action. (The
+fuller post-flight integrity review is the content of the Edit/Output/Save "Review" step.)
+
+A drop counts as **real** when the recording lost picture it should have had: the encoder could not
+keep up (backpressure), or a captured frame failed to be processed into an encodable frame. Two
+other categories are **benign** and never count towards the reported drop figure, the toast, or the
+pipeline-health readout: *coalescing*, where the source produces frames faster than the recording's
+frame rate and the surplus is deliberately discarded (a 144 Hz display recorded at 60 fps), and
+*CFR pacing*, where a scheduled frame slot passes before the first frame has been captured at all.
+Every surface that reports drops — the report card, the "Review" panel, the live counter, the toast,
+and the Diagnostics capture card — uses this same definition, so they can never disagree about
+whether a recording dropped frames. Diagnostics additionally breaks the total down by category.
 
 **Reported duration.** Everywhere a *finished* recording's length is shown — the completed-state
 timer and result card on the Record page, the recording-history entries, and the length of the

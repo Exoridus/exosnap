@@ -247,11 +247,62 @@ TEST(PipelineDiagnostics, DropCategoriesRemainDistinct) {
     agg.OnFrameDroppedBackpressure();
     agg.OnFrameDroppedBackpressure();
     agg.OnFrameDroppedBackpressure();
+    agg.OnFrameDroppedProcessingFailure();
+    agg.OnFrameDroppedProcessingFailure();
+    agg.OnFrameDroppedProcessingFailure();
+    agg.OnFrameDroppedProcessingFailure();
     const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
     EXPECT_EQ(s.capture.frames_dropped_coalesced, 2u);
     EXPECT_EQ(s.capture.frames_dropped_cfr, 1u);
     EXPECT_EQ(s.capture.frames_dropped_backpressure, 3u);
-    EXPECT_EQ(s.capture.frames_dropped_total(), 6u);
+    EXPECT_EQ(s.capture.frames_dropped_processing_failure, 4u);
+    EXPECT_EQ(s.capture.frames_dropped_total(), 10u);
+}
+
+// A frame-processing failure (VideoProcessorBlt / input-view) costs real picture and
+// used to be counted as CFR pacing, which the spec calls benign. That made the report
+// card ("no real drops") and the Diagnostics stage health disagree on the same
+// session. Only backpressure and processing failures are "problem" drops now.
+TEST(PipelineDiagnostics, ProcessingFailuresAreProblemDropsAndCfrPacingIsNot) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDroppedCoalesced();
+    agg.OnFrameDroppedCfr();
+    agg.OnFrameDroppedCfr();
+    const auto benign = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(benign.capture.frames_dropped_problem(), 0u);
+
+    agg.OnFrameDroppedProcessingFailure();
+    const auto failed = agg.BuildSnapshot(At(1), MakeStats(), DiagnosticsLifecycle::Recording, 0.001);
+    EXPECT_EQ(failed.capture.frames_dropped_problem(), 1u);
+
+    agg.OnFrameDroppedBackpressure();
+    const auto both = agg.BuildSnapshot(At(2), MakeStats(), DiagnosticsLifecycle::Recording, 0.002);
+    EXPECT_EQ(both.capture.frames_dropped_problem(), 2u);
+}
+
+// The perf window and the end-of-session summary carry the new bucket too, so the
+// structured session log can attribute a drop instead of just counting it.
+TEST(PipelineDiagnostics, ProcessingFailuresReachPerfWindowAndSessionSummary) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDroppedProcessingFailure();
+    agg.OnFrameDroppedProcessingFailure();
+    agg.OnFrameDroppedCfr();
+    EXPECT_EQ(agg.SamplePerfWindow(At(0)).dropped_processing_failure, 2u);
+    EXPECT_EQ(agg.BuildPerfSummary().dropped_processing_failure, 2u);
+    EXPECT_EQ(agg.BuildPerfSummary().dropped_cfr, 1u);
+}
+
+// A session's counters must not leak into the next one.
+TEST(PipelineDiagnostics, ResetClearsProcessingFailureDrops) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnFrameDroppedProcessingFailure();
+    agg.Reset(2, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.capture.frames_dropped_processing_failure, 0u);
+    EXPECT_EQ(s.capture.frames_dropped_problem(), 0u);
 }
 
 TEST(PipelineDiagnostics, CfrFrameIntervalIsTargetDerivedAndMarkedUnavailable) {
@@ -675,6 +726,28 @@ TEST(PipelineDiagnosticsClassifier, HealthyPipelineReturnsNone) {
     const auto s = DriveHealthy(agg, 5);
     EXPECT_EQ(s.bottleneck, PipelineBottleneck::None);
     EXPECT_EQ(s.health, PipelineHealth::Good);
+}
+
+// Benign pacing must never colour the health readout: a session whose only CFR
+// drops are the start-up ticks before the first frame stays Good, while a single
+// frame lost to a processing failure raises the same Warning that backpressure does.
+TEST(PipelineDiagnosticsClassifier, CfrPacingStaysGoodButProcessingFailureWarns) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    DriveHealthy(agg, 5);
+    agg.OnFrameDroppedCoalesced();
+    agg.OnFrameDroppedCfr();
+    auto stats = MakeStats();
+    stats.video_frames_captured = 12 * 6;
+    stats.encoded_video_packets = 12 * 6;
+    const auto benign = agg.BuildSnapshot(At(200 * 5), stats, DiagnosticsLifecycle::Recording, 3.0);
+    EXPECT_EQ(benign.health, PipelineHealth::Good);
+
+    agg.OnFrameDroppedProcessingFailure();
+    stats.video_frames_captured = 12 * 7;
+    stats.encoded_video_packets = 12 * 7;
+    const auto failed = agg.BuildSnapshot(At(200 * 6), stats, DiagnosticsLifecycle::Recording, 3.2);
+    EXPECT_EQ(failed.health, PipelineHealth::Warning);
 }
 
 TEST(PipelineDiagnosticsClassifier, InsufficientEvidenceReturnsUnknown) {

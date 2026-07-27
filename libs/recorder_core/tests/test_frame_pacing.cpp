@@ -177,3 +177,39 @@ TEST(HeldScreenRecomposite, HoldingDominatesEveryOtherInput) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// ClassifyCfrTickDrop — a lost frame must never be filed as benign pacing.
+// ---------------------------------------------------------------------------
+using recorder_core::CfrTickDropCause;
+using recorder_core::ClassifyCfrTickDrop;
+
+// The bug this classifier exists for: a VideoProcessorBlt (or input-view) failure
+// happens with a source frame in hand, and used to be counted as CFR pacing.
+TEST(CfrTickDrop, ConversionFailureWithASourceFrameIsAProcessingFailure) {
+    EXPECT_EQ(ClassifyCfrTickDrop(/*had_source_frame=*/true, /*reference_storage_available=*/true),
+              CfrTickDropCause::ProcessingFailure);
+}
+
+// Session start: nothing captured yet and nothing to hold. Genuinely benign.
+TEST(CfrTickDrop, NoFrameYetIsBenignPacing) {
+    EXPECT_EQ(ClassifyCfrTickDrop(/*had_source_frame=*/false, /*reference_storage_available=*/true),
+              CfrTickDropCause::Pacing);
+}
+
+// The reference texture failed to allocate: every still-source tick loses a frame
+// for the rest of the session, which is a failure, not pacing.
+TEST(CfrTickDrop, MissingReferenceStorageIsAProcessingFailure) {
+    EXPECT_EQ(ClassifyCfrTickDrop(/*had_source_frame=*/false, /*reference_storage_available=*/false),
+              CfrTickDropCause::ProcessingFailure);
+}
+
+// Only one combination may ever be benign.
+TEST(CfrTickDrop, PacingIsTheSoleBenignCombination) {
+    for (const bool had_source : {false, true}) {
+        for (const bool have_ref : {false, true}) {
+            const bool benign = ClassifyCfrTickDrop(had_source, have_ref) == CfrTickDropCause::Pacing;
+            EXPECT_EQ(benign, !had_source && have_ref);
+        }
+    }
+}

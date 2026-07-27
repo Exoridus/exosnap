@@ -74,7 +74,7 @@ yields a spread of samples.
 
 Each JSONL row: `t_s`, `av_drift_ms` (+ `_available`), `duration_skew_ms`
 (+ `_available`), `frames_captured/emitted`, `frames_dropped_{coalesced,cfr,
-backpressure}`, `frames_duplicated`, `audio_discontinuities`, `mux_queue_depth`,
+backpressure,processing_failure}`, `frames_duplicated`, `audio_discontinuities`, `mux_queue_depth`,
 `disk_fill_eta_s`, `rss_bytes`, `private_bytes`, `handle_count`, `gdi_objects`,
 `user_objects`, `health_critical`, `bottleneck`. The report aggregates
 min/max/mean/p99 per metric, the least-squares **leak slope** for RSS/handles,

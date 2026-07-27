@@ -531,11 +531,11 @@ class MainWindow : public QMainWindow {
     // schema); reused by onRuntimeCapsReady() to write back the freshly probed snapshot.
     capability::CapabilityCacheKey capability_cache_key_;
     QString record_status_label_ = QStringLiteral("READY");
-    // DROP-NOTIFY: latest encoder-backpressure drop count observed on the live
-    // diagnostics stream during the current recording (teed in initNotificationToasts).
-    // Read on the result-ready edge to decide whether to raise a "frames dropped"
-    // toast; reset to 0 on the recording-start edge.
-    uint64_t last_backpressure_drops_ = 0;
+    // DROP-NOTIFY: latest REAL drop count (CaptureDiagnostics::frames_dropped_problem)
+    // observed on the live diagnostics stream during the current recording (teed in
+    // initNotificationToasts). Read on the result-ready edge to decide whether to raise
+    // a "frames dropped" toast; reset to 0 on the recording-start edge.
+    uint64_t last_real_drops_ = 0;
 
     // AUDIO-DEGRADED-NOTIFY-R1: sequence of the currently-visible standing "audio
     // source went silent" toast, or 0 when none is active. Lets the diagnostics-tee

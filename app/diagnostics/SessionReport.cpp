@@ -129,6 +129,7 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         drops[QStringLiteral("coalesced")] = static_cast<double>(s.capture.frames_dropped_coalesced);
         drops[QStringLiteral("cfr")] = static_cast<double>(s.capture.frames_dropped_cfr);
         drops[QStringLiteral("backpressure")] = static_cast<double>(s.capture.frames_dropped_backpressure);
+        drops[QStringLiteral("processing_failure")] = static_cast<double>(s.capture.frames_dropped_processing_failure);
         counters[QStringLiteral("frames_dropped")] = drops;
         counters[QStringLiteral("frames_duplicated")] = static_cast<double>(s.capture.frames_duplicated);
         counters[QStringLiteral("frames_captured")] = static_cast<double>(s.capture.frames_captured);
