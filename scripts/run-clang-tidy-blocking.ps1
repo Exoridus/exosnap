@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     The repository-wide .clang-tidy configuration enables a broad check set that is
-    still advisory (see the advisory-unused-checks job in .github/workflows/ci.yml).
+    still advisory (see the advisory-unused-checks job in .github/workflows/advisory-checks.yml).
     This script runs only the small curated subset listed in $BlockingChecks below.
     Each of those was measured at zero findings in repository-owned files across
     all 509 project translation units, which is what makes it safe to fail a pull
