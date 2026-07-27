@@ -63,6 +63,7 @@ SessionReportInputs MakeInputs() {
     s.audio.degraded_sources = 1;
     s.audio.source_degraded = true;
     s.audio.source_degraded_occurred = true;
+    s.audio.resampler_drain_recorded = {true, true, false};
     s.audio.resampler_drained_frames = {441, 0, 0};
     s.audio.resampler_undrained_frames = {0, 0, 0};
     s.encoder_init.valid = true;
@@ -162,6 +163,36 @@ TEST(SessionReport, CarriesAudioDegradationAndResamplerDrain) {
     EXPECT_EQ(drain[0].toObject()[QStringLiteral("drained_frames")].toInt(), 441);
     EXPECT_EQ(drain[0].toObject()[QStringLiteral("undrained_frames")].toInt(), 0);
     EXPECT_EQ(drain[1].toObject()[QStringLiteral("drained_frames")].toInt(), 0);
+}
+
+TEST(SessionReport, ResamplerDrainIsUnavailableWhenTheDrainNeverRan) {
+    // A failed session (or a worker that missed its join) never reaches the drain,
+    // so its counters sit at their initial 0. Printing 0/0 would claim a clean
+    // drain that never happened — same honest-diagnostics rule as the metrics above.
+    SessionReportInputs in = MakeInputs();
+    in.result.succeeded = false;
+    in.snapshot.audio.resampler_drain_recorded = {false, false, false};
+    const QJsonArray drain = Parse(BuildSessionReportJson(in))[QStringLiteral("audio")]
+                                 .toObject()[QStringLiteral("resampler_drain")]
+                                 .toArray();
+    ASSERT_EQ(drain.size(), 2);
+    for (const auto& entry : drain) {
+        EXPECT_EQ(entry.toObject()[QStringLiteral("drained_frames")].toString(), QStringLiteral("unavailable"));
+        EXPECT_EQ(entry.toObject()[QStringLiteral("undrained_frames")].toString(), QStringLiteral("unavailable"));
+    }
+}
+
+TEST(SessionReport, ResamplerDrainIsPerTrackAvailable) {
+    // One track drained, the other died before its drain: the healthy track keeps
+    // its figure instead of being suppressed with the broken one.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.audio.resampler_drain_recorded = {true, false, false};
+    const QJsonArray drain = Parse(BuildSessionReportJson(in))[QStringLiteral("audio")]
+                                 .toObject()[QStringLiteral("resampler_drain")]
+                                 .toArray();
+    ASSERT_EQ(drain.size(), 2);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("drained_frames")].toInt(), 441);
+    EXPECT_EQ(drain[1].toObject()[QStringLiteral("drained_frames")].toString(), QStringLiteral("unavailable"));
 }
 
 TEST(SessionReport, ResamplerDrainReportsUndrainedTail) {

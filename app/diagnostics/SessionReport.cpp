@@ -178,17 +178,24 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
             audio[QStringLiteral("degraded_occurred")] = s.audio.source_degraded_occurred;
 
             // Resampler tail flushed at stop, per track. undrained > 0 means captured
-            // audio was dropped instead of encoded.
+            // audio was dropped instead of encoded. A track that never reached its
+            // drain (failed session, join timeout, no resample context) reports
+            // "unavailable" — its counters sit at their initial 0, and printing that
+            // would claim a clean drain that never happened.
             QJsonArray drain;
             const int tracks = std::min<int>(static_cast<int>(s.audio.resampler_drained_frames.size()),
                                              std::max<int>(0, static_cast<int>(s.audio.track_count)));
             for (int i = 0; i < tracks; ++i) {
+                const auto idx = static_cast<std::size_t>(i);
+                const MetricAvailability drained = s.audio.resampler_drain_recorded[idx]
+                                                       ? MetricAvailability::Available
+                                                       : MetricAvailability::Unavailable;
                 QJsonObject t;
                 t[QStringLiteral("track")] = i;
                 t[QStringLiteral("drained_frames")] =
-                    static_cast<double>(s.audio.resampler_drained_frames[static_cast<std::size_t>(i)]);
+                    MetricOrUnavailable(static_cast<double>(s.audio.resampler_drained_frames[idx]), drained);
                 t[QStringLiteral("undrained_frames")] =
-                    static_cast<double>(s.audio.resampler_undrained_frames[static_cast<std::size_t>(i)]);
+                    MetricOrUnavailable(static_cast<double>(s.audio.resampler_undrained_frames[idx]), drained);
                 drain.append(t);
             }
             audio[QStringLiteral("resampler_drain")] = drain;
@@ -200,9 +207,13 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         // session. Deliberately NOT capture.actual_fps: that is an instantaneous rate
         // over the last publish window, and on the terminal snapshot (built after the
         // workers joined) it measures the finalize gap, not the recording. The session
-        // average is the honest whole-run answer. The pacing *outcome* stays where it
-        // already lives: counters.frames_duplicated (CFR holds) and
-        // counters.frames_dropped.cfr (ticks that produced no frame).
+        // average is the honest whole-run answer. Caveat: the denominator is the session's
+        // elapsed time, which includes paused and finalize time — a session paused for half
+        // its length averages ~30 where it paced 60. Renormalizing onto recording-active
+        // time needs a paused-time accumulator the engine does not keep; for an unpaused
+        // soak run the average is exact. The pacing *outcome* stays where it already lives:
+        // counters.frames_duplicated (CFR holds) and counters.frames_dropped.cfr (ticks
+        // that produced no frame).
         {
             QJsonObject pacing;
             pacing[QStringLiteral("cfr")] = inputs.result.cfr;
@@ -211,7 +222,9 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
                 (s.elapsed_seconds > 0.0)
                     ? QJsonValue(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds)
                     : QJsonValue(QStringLiteral("unavailable"));
-            // Only measured on VFR capture; on CFR it is the nominal target interval.
+            // Only observed on VFR capture. On CFR the snapshot field holds the nominal
+            // interval derived from the target rate, which is not a measurement — so the
+            // report publishes "unavailable" there rather than echoing 1000/target_fps.
             pacing[QStringLiteral("frame_interval_ms")] =
                 MetricOrUnavailable(s.capture.frame_interval_ms, s.capture.interval_observed);
             root[QStringLiteral("video_pacing")] = pacing;

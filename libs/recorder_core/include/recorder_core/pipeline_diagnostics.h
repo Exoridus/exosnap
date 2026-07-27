@@ -242,7 +242,11 @@ struct AudioDiagnostics {
     // Resampler tail flushed at stop, per track (index = audio track id, bounded
     // by CodecPrivateData::kMaxAudioTracks). Passed through from SessionStats and
     // therefore only populated on the terminal snapshot, after the audio workers
-    // have drained. undrained > 0 means captured audio was dropped.
+    // have drained. undrained > 0 means captured audio was dropped. The counters
+    // are meaningful only where resampler_drain_recorded is true — a track that
+    // never reached its drain (failed session, join timeout, no resample context)
+    // leaves them at 0, which is not a measurement.
+    std::array<bool, 3> resampler_drain_recorded{};
     std::array<uint64_t, 3> resampler_drained_frames{};
     std::array<uint64_t, 3> resampler_undrained_frames{};
 };

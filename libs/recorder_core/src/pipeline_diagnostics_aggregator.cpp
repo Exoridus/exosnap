@@ -696,6 +696,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // drain figures (written at end of stream, so only the terminal snapshot — built
     // after the workers joined — carries non-zero values).
     au.source_degraded_occurred = stats.audio_degraded_occurred;
+    au.resampler_drain_recorded = stats.per_track_resampler_drain_recorded;
     au.resampler_drained_frames = stats.per_track_resampler_drained_frames;
     au.resampler_undrained_frames = stats.per_track_resampler_undrained_frames;
 

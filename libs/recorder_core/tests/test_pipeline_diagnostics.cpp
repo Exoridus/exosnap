@@ -169,13 +169,19 @@ TEST(PipelineDiagnostics, AudioPostFlightFactsArePassedThroughFromStats) {
     agg.Reset(1, MakeConfig());
 
     SessionStats stats = MakeStats();
-    EXPECT_FALSE(agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0).audio.source_degraded_occurred);
+    const auto before = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_FALSE(before.audio.source_degraded_occurred);
+    EXPECT_FALSE(before.audio.resampler_drain_recorded[0]); // no drain has run yet
 
     stats.audio_degraded_occurred = true;
+    stats.per_track_resampler_drain_recorded = {true, true, false};
     stats.per_track_resampler_drained_frames = {441, 7, 0};
     stats.per_track_resampler_undrained_frames = {0, 3, 0};
     const auto s = agg.BuildSnapshot(At(200), stats, DiagnosticsLifecycle::Completed, 0.2);
     EXPECT_TRUE(s.audio.source_degraded_occurred);
+    EXPECT_TRUE(s.audio.resampler_drain_recorded[0]);
+    EXPECT_TRUE(s.audio.resampler_drain_recorded[1]);
+    EXPECT_FALSE(s.audio.resampler_drain_recorded[2]); // never drained: counters mean nothing
     EXPECT_EQ(s.audio.resampler_drained_frames[0], 441u);
     EXPECT_EQ(s.audio.resampler_drained_frames[1], 7u);
     EXPECT_EQ(s.audio.resampler_undrained_frames[1], 3u);

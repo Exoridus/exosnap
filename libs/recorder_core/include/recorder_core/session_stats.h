@@ -40,6 +40,12 @@ struct SessionStats {
     // the flush loop left behind at its iteration bound (expected 0 — a non-zero
     // value means that much captured audio never reached the file). Written once
     // per track at end of stream, so a session report reads a final figure.
+    // The drain only runs on a track that reached end of stream cleanly, so a
+    // failed or timed-out session leaves the two counters below at their initial
+    // 0 — which is not a measurement of "nothing was left behind". This bit says
+    // whether the drain actually ran for that track; without it the counters mean
+    // nothing and must not be reported as a figure.
+    std::array<bool, 3> per_track_resampler_drain_recorded{};
     std::array<uint64_t, 3> per_track_resampler_drained_frames{};
     std::array<uint64_t, 3> per_track_resampler_undrained_frames{};
     bool source_loss = false;

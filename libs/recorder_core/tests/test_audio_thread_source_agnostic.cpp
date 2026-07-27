@@ -351,8 +351,12 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_ResampledTrack_DrainsResamplerTa
     // report): the tail was recovered, and nothing was left behind.
     {
         std::lock_guard lk(state.stats_mutex);
+        EXPECT_TRUE(state.stats.per_track_resampler_drain_recorded[0]);
         EXPECT_GT(state.stats.per_track_resampler_drained_frames[0], 0u);
         EXPECT_EQ(state.stats.per_track_resampler_undrained_frames[0], 0u);
+        // A track that never ran stays unrecorded, so its zeros are never mistaken
+        // for a measured clean drain.
+        EXPECT_FALSE(state.stats.per_track_resampler_drain_recorded[1]);
     }
 }
 
