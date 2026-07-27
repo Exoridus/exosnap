@@ -1246,6 +1246,16 @@ exosnap_add_gtest(
 )
 target_include_directories(test_pipeline_diagnostics PRIVATE src)
 
+# A failed per-packet Annex-B -> avcC/hvcC conversion must fail the recording
+# instead of writing samples that contradict the track's CodecPrivate.
+exosnap_add_gtest(
+    NAME test_mux_annexb_conversion_failure
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mux_annexb_conversion_failure.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mux_annexb_conversion_failure PRIVATE src)
+
 # Pure GPU-timestamp resolution math (tick->ms, disjoint / wrap / uncalibrated
 # handling) behind the real-GPU-time pipeline stages. No D3D11 dependency.
 exosnap_add_gtest(

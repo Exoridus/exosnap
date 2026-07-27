@@ -363,6 +363,76 @@ TEST_F(CompletedResultTest, SetResult_MultiSegment_CarriesSegmentsAndSummary) {
     EXPECT_NE(vm.result_destination_text.find(L"2 segments"), std::wstring::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Reported duration is the media duration, not the session wall clock
+//
+// elapsed_seconds runs from session start to the end of teardown: it counts
+// paused time and the stop/finalize tail, neither of which is in the file. Every
+// place the user reads a recording's length must report the engine's media
+// duration instead.
+// ---------------------------------------------------------------------------
+
+TEST_F(CompletedResultTest, ResultDuration_PrefersMediaDurationOverWallClock) {
+    UiRecordingResult result;
+    result.elapsed_seconds = 95.0; // 60 s recorded + 30 s paused + 5 s finalize
+    result.media_duration_seconds = 60.0;
+    EXPECT_DOUBLE_EQ(ResultDurationSeconds(result), 60.0);
+}
+
+TEST_F(CompletedResultTest, ResultDuration_FallsBackToWallClockWhenMediaDurationUnknown) {
+    UiRecordingResult result;
+    result.elapsed_seconds = 42.0;
+    result.media_duration_seconds = 0.0; // no encoded video frames
+    EXPECT_DOUBLE_EQ(ResultDurationSeconds(result), 42.0);
+}
+
+TEST_F(CompletedResultTest, SetResult_UsesMediaDurationForDisplayAndHistory) {
+    RecordViewModel vm;
+    QString path = createDummyFile(QStringLiteral("paused.mkv"));
+    auto result = MakeSuccessResult(path.toStdWString());
+    result.elapsed_seconds = 95.0;
+    result.media_duration_seconds = 60.0;
+
+    vm.SetResult(result);
+    vm.SetState(UiRecordingState::Completed);
+
+    // Completed-state timer / stats readout.
+    EXPECT_DOUBLE_EQ(vm.result_duration_seconds, 60.0);
+    EXPECT_NE(vm.result_stats_text.find(RecordViewModel::FormatElapsed(60.0)), std::wstring::npos);
+    EXPECT_EQ(vm.result_stats_text.find(RecordViewModel::FormatElapsed(95.0)), std::wstring::npos);
+
+    // History entry.
+    EXPECT_DOUBLE_EQ(vm.current_completed_recording.duration_seconds, 60.0);
+    ASSERT_EQ(vm.recent_recordings.size(), 1);
+    EXPECT_DOUBLE_EQ(vm.recent_recordings[0].duration_seconds, 60.0);
+
+    // Editor trim-timeline length (built from totalDurationSeconds()).
+    EXPECT_DOUBLE_EQ(vm.current_completed_recording.totalDurationSeconds(), 60.0);
+}
+
+TEST_F(CompletedResultTest, SetResult_MultiSegmentTrimLengthSumsSegmentMediaDurations) {
+    RecordViewModel vm;
+    QString path = createDummyFile(QStringLiteral("split.mkv"));
+    auto result = MakeSuccessResult(path.toStdWString());
+    result.elapsed_seconds = 95.0;
+    result.media_duration_seconds = 60.0;
+    CompletedRecordingSegment a;
+    a.file_path = path;
+    a.index = 0;
+    a.duration_seconds = 40.0;
+    a.succeeded = true;
+    CompletedRecordingSegment b;
+    b.file_path = QStringLiteral("C:/videos/split_part-002.mkv");
+    b.index = 1;
+    b.duration_seconds = 20.0;
+    b.succeeded = true;
+    result.segments = {a, b};
+
+    vm.SetResult(result);
+
+    EXPECT_DOUBLE_EQ(vm.current_completed_recording.totalDurationSeconds(), 60.0);
+}
+
 TEST_F(CompletedResultTest, SetResult_Failure_DoesNotCreateCompletedRecording) {
     RecordViewModel vm;
     auto result = MakeFailedResult();
