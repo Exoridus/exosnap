@@ -1,0 +1,171 @@
+name: Advisory Checks
+
+# ---------------------------------------------------------------------------
+# Advisory unused-code / import checks (PHASE B — NEVER blocks anything)
+#
+# Surfaces stale functions, unused includes, and redundant declarations for
+# human review. Heavy Qt false-positive risk: Qt signals/slots invoked via
+# QMetaObject / connect() string form, moc-generated headers. Do NOT promote
+# any finding to blocking without a triage pass that filters Qt noise.
+#
+# Uses: clang-tidy misc-include-cleaner / misc-unused-* /
+#       readability-redundant-declaration  (advisory only, not in WarningsAsErrors)
+#     + cppcheck --enable=unusedFunction (whole-program, no --error-exitcode)
+#
+# WHY THIS IS ITS OWN WORKFLOW FILE
+#
+# This job used to live in ci.yml and ran on every push to main, where it cost
+# up to 45 min of Windows runner time to re-derive a finding list that changes
+# on the scale of weeks, not commits. It is now nightly instead. It could not
+# simply gain a `schedule:` trigger inside ci.yml, for two reasons:
+#
+#   1. The README CI badge reads
+#      img.shields.io/github/actions/workflow/status/.../ci.yml?branch=main,
+#      which reports the conclusion of the most recent ci.yml run on main. A
+#      `schedule:` event always runs on the default branch, so every nightly
+#      would become the newest main run of ci.yml and would drive the badge.
+#      A nightly that times out or trips over a toolchain hiccup would then
+#      paint the CI badge red even though main builds fine. Keeping the nightly
+#      in a separate workflow file keeps it out of ci.yml's history entirely.
+#   2. A `schedule:` trigger on ci.yml would also start the quick checks and,
+#      via their own conditions, potentially the heavy build legs — a scheduled
+#      run is not a pull_request, so any `github.event_name != 'pull_request'`
+#      style clause would let it through. One trigger, one purpose is cheaper
+#      to reason about.
+#
+# The pull_request trigger is unchanged from what this job had in ci.yml: it
+# still runs on every PR and still never blocks it (continue-on-error).
+# ---------------------------------------------------------------------------
+
+on:
+  # Nightly on the default branch. 03:00 UTC is off-peak for GitHub's hosted
+  # Windows pool, and a run that starts then has finished long before the
+  # working day. schedule events always run on the default branch (main).
+  schedule:
+    - cron: '0 3 * * *'
+  pull_request:
+  workflow_dispatch:
+
+# No workflow-level `concurrency:` and no per-job group either — see the job's
+# own comment below. Cancelling this job mid-run reports conclusion "cancelled",
+# which GitHub renders as a failed check on an otherwise-green commit.
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  advisory-unused-checks:
+    name: advisory-unused-checks
+    runs-on: windows-2022
+    continue-on-error: true  # NEVER block the PR — informational only
+    # No job here had an explicit timeout, so a hang (observed: some step stalls
+    # indefinitely rather than failing) ran to GitHub's default 6h job ceiling —
+    # eating runner time and, worse, blocking `gh pr merge --auto` the whole time
+    # (an in-progress check blocks auto-merge regardless of continue-on-error,
+    # which only governs how a *completed* failure is treated). 45 min is generous
+    # for a full Qt+Ninja debug build plus the clang-tidy/cppcheck advisory passes.
+    timeout-minutes: 45
+    # Deliberately NOT given a `concurrency:` group: this job is slow, so it was
+    # routinely still in flight when the next push's run started, and the
+    # workflow-level concurrency group it used to sit under cancelled it mid-run
+    # — reported as conclusion "cancelled", which reads as a failed check on an
+    # otherwise-green commit. Leaving it ungrouped means every trigger gets its
+    # own independent run that always reaches a real conclusion; the tradeoff is
+    # it can run more than one instance in parallel on rapid pushes to a PR,
+    # which is acceptable for an advisory, continue-on-error, time-boxed job.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          archives: 'qtbase qtsvg'
+          cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      # Configure the Ninja debug preset with CMAKE_EXPORT_COMPILE_COMMANDS=ON
+      # (already set in CMakePresets.json for windows-x64-ninja-debug).
+      # compile_commands.json is required by misc-include-cleaner.
+      - name: Configure (windows-x64-ninja-debug)
+        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
+
+      - name: Build (windows-x64-ninja-debug)
+        run: cmake --build --preset windows-x64-ninja-debug
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      # clang-tidy advisory pass: misc-include-cleaner, misc-unused-*, readability-redundant-declaration.
+      # These checks are in .clang-tidy Checks but excluded from WarningsAsErrors, so they
+      # produce warnings (exit 0) not errors. The step is informational.
+      - name: clang-tidy advisory checks
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $clangTidy = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022" `
+            -Recurse -Filter 'clang-tidy.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\Llvm\\x64\\bin\\' } |
+            Select-Object -ExpandProperty FullName -First 1
+          if (-not $clangTidy) {
+            Write-Host "clang-tidy not found in VS LLVM; falling back to PATH"
+            $clangTidy = (Get-Command clang-tidy -ErrorAction SilentlyContinue)?.Source
+          }
+          if (-not $clangTidy) {
+            Write-Host "::warning::clang-tidy not available — advisory unused-code check skipped"
+            exit 0
+          }
+          $srcFiles = @(git ls-files -- 'libs/' 'app/' 'tests/' | Where-Object { $_ -match '\.(cpp|h)$' })
+          if (-not $srcFiles) { Write-Host "No tracked C++ source files found."; exit 0 }
+          Write-Host "Running advisory clang-tidy on $($srcFiles.Count) source files..."
+          # Run with -p pointing at the Ninja debug compile_commands.json.
+          # WarningsAsErrors in .clang-tidy excludes misc-* and readability-redundant-declaration
+          # so only the advisory checks produce warnings (not errors) — exit code stays 0.
+          # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser checks for the
+          # blocking gate in build-test. They are irrelevant to this unused-code pass and would
+          # multiply the cost of an already long serial run, so they are switched back off here.
+          & $clangTidy -p build/windows-x64-ninja-debug --checks=-clang-analyzer-* @srcFiles 2>&1 |
+            Tee-Object -Variable tidyOutput | Out-String | Write-Host
+          $advisoryCounts = @($tidyOutput -join "`n" | Select-String -Pattern '(misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration)' -AllMatches).Matches.Count
+          Write-Host "::notice::clang-tidy advisory findings: $advisoryCounts (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
+
+      # cppcheck --enable=unusedFunction: whole-program, no --error-exitcode.
+      - name: cppcheck unusedFunction (advisory)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
+            -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName -First 1
+          if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
+          if (-not $cppcheck) {
+            # Install cppcheck via winget if not present on the runner
+            winget install --id Cppcheck.Cppcheck --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+            $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
+              -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName -First 1
+          }
+          if (-not $cppcheck) {
+            Write-Host "::warning::cppcheck not available — advisory unusedFunction check skipped"
+            exit 0
+          }
+          Write-Host "Running cppcheck --enable=unusedFunction (advisory, no --error-exitcode)..."
+          $findings = & $cppcheck `
+            --enable=unusedFunction --std=c++20 --inline-suppr `
+            --suppressions-list=.cppcheck-suppress --library=windows --library=qt -q `
+            -I libs/recorder_core/include -I libs/capability/include `
+            -i libs/update/third_party libs app 2>&1 |
+            Where-Object { $_ -match '\(unusedFunction\)' }
+          $count = @($findings).Count
+          Write-Host "::notice::cppcheck unusedFunction candidates: $count (advisory — review Qt slots/callbacks before acting)"
+          if ($count -gt 0) {
+            $findings | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+            if ($count -gt 40) { Write-Host "  ... ($($count - 40) more)" }
+          }
