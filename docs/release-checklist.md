@@ -42,7 +42,7 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
       signature re-verification — and then publishes the Release **as a prerelease**. A failure
       leaves a hidden draft, same as for a final release.
 - [ ] **Confirm the RC page shows the "Pre-release" badge** and carries `update-manifest.json` +
-      `update-manifest.json.sig` next to the ZIP + MSI.
+      `update-manifest.json.sig` + `toolchain-manifest.json` next to the ZIP + MSI.
 - [ ] **Run §5, §6 and §7 against this RC build.** Set the test install's update channel to
       **Preview** (Settings → updates card, Stable/Preview toggle) before the updater checks — a
       Stable-channel client will not see a prerelease at all.
@@ -77,8 +77,10 @@ this deterministically — there is no manual asset upload and no `sign-manifest
      and `toolchain-manifest.json` (an informational record of the exact runner image, MSVC, CMake,
      Qt, WiX, and pinned FFmpeg prebuilt that produced the build — not signed, not part of the
      integrity gate);
-  5. re-downloads those assets and re-hashes them, cross-checks the manifest's embedded SHA-256s
-     against the shipped bytes, and re-verifies the signature against the embedded public key;
+  5. re-downloads the ZIP, MSI and manifest and re-hashes them, cross-checks the manifest's embedded
+     SHA-256s against the shipped bytes, and re-verifies the signature against the embedded public key
+     (`toolchain-manifest.json` is uploaded alongside but is informational only and is not part of this
+     re-hash/signature check);
   6. only then **un-drafts (publishes)** the Release.
       If any step fails the Release stays a hidden draft, so it is never visible to users or the
       in-app updater in a half-published state.

@@ -348,7 +348,14 @@ jobs:
             $qtVersion = $Matches[1]
           }
 
-          $clVersionLine = ((cl 2>&1 | Select-Object -First 1) -join ' ').Trim()
+          # cl.exe writes its version banner to stderr and a usage line to stdout;
+          # merging both streams with `2>&1` and taking the first line is a race
+          # between them (observed picking the usage line in a fraction of runs).
+          # Collect everything first, then pick the line that actually looks like
+          # a version banner.
+          $clVersionLine = ((cl 2>&1) | Out-String) -split "`r?`n" |
+                            Where-Object { $_ -match 'Version \d+\.\d+' } | Select-Object -First 1
+          $clVersionLine = if ($clVersionLine) { $clVersionLine.Trim() } else { '' }
           $cmakeVersionLine = (cmake --version | Select-Object -First 1).Trim()
           $wixVersionLine = (wix --version).Trim()
 
