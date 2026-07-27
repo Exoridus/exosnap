@@ -36,9 +36,9 @@ opt-in network features; see [`PRIVACY.md`](PRIVACY.md)).
 ### Reliability & recovery
 
 - **Crash recovery** — a recovery manifest is written before each session; a startup overlay offers
-  the finish/continue/discard actions still available for each interrupted recording on the next
-  launch. Already-finalized split segments are always recoverable; the active segment interrupted
-  by the crash itself may not be — see [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md).
+  Finish / Continue / Delete for each interrupted recording on the next launch. For MKV/WebM split
+  recordings, segments that were already finalized before an interruption remain usable; an
+  interrupted active segment may not be — see [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md).
 - **MKV-first recording** with on-stop MP4 remux (progressive, faststart) via libavformat
   stream-copy; MKV and WebM are also available as direct output formats.
 - **Low-disk guard** — warns at a configurable soft threshold and hard-stops at a lower one,

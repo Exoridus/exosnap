@@ -50,7 +50,7 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
       running `v0.9.0-rc2` install on the Preview channel, confirm it is **offered** `v0.9.0-rc3`
       in-app (rc2 is the first build carrying the SemVer prerelease-ordering fix, so rc2 → rc3 is
       the first pair that can prove it live) and complete that in-app update end to end.
-- [ ] **If anything fails:** fix it, and cut the next candidate (`v0.9.0-rc2`) from the new commit.
+- [ ] **If anything fails:** fix it, and cut the next candidate (`rc_N+1`) from the new commit.
       A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
       already-published Release.
 - [ ] **Once every check passes, push the final `vX.Y.Z` tag from the *same commit* the passing RC
@@ -219,22 +219,33 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 
 ### Long-duration soak (clock slaving)
 
+Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2 (`exosnap-soak`,
+`av-sync-check.py`). This checklist adopts one of that runbook's advisory numbers as an explicit
+0.9 gate — see the note in that doc.
+
 - [ ] **2–3 h soak recording, default profile (MKV + AV1 + Opus, CFR 60), monitor capture, `SYS` +
       `MIC` enabled as separate tracks, clock slaving at its default (on).** Continuous real system
       audio for the whole run (e.g. a music/video playlist). Machine must not sleep; displays stay
       on; display settings unchanged during the run.
-- [ ] **A/V sync marker at start AND end.** Play `scripts/play-av-sync-marker.ps1` (generates a
-      beep + frame-flash clip locally via ffmpeg and plays it back; `-Screen N` targets a monitor
-      under mpv) shortly after start and again shortly before stop; with webcam PiP enabled,
-      additionally clap hands in view for a `MIC`-track marker. Afterwards, measure flash-to-beep
-      offset at both markers (frame-step in mpv or similar); the start→end difference is the
-      accumulated drift and must stay under one video frame (~16 ms at 60 fps).
+- [ ] **A/V sync marker at start AND end.** Immediately after recording starts, run
+      `exosnap-soak --clapper --seconds <soak duration>`: it blocks for that span and emits a
+      full-frame flash + beep at start, then automatically again at the end — no manual replay
+      needed. Markers appear on the **primary monitor only**, so the soak must capture the primary
+      monitor. With webcam PiP enabled, additionally clap hands in view at both markers for a
+      `MIC`-track cue.
+- [ ] **Analyze.** Run `python scripts/dev/av-sync-check.py <recorded-file> --max-drift-ms 20`
+      (exit `0` = within budget, `2` = over budget, `3` = unmeasurable). The reported absolute
+      `offset_start`/`offset_end` carry a device-dependent emission skew (flash via display capture
+      vs. beep via SYS loopback, ~10–50 ms) that is not an ExoSnap error and is advisory only —
+      **only `drift` (offset_end − offset_start) is pass/fail**, budgeted at ≤ 20 ms here.
 - [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
       (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
 - [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track;
-      spot-listen at start/middle/end plus a waveform scan for crackles/discontinuities; confirm the
-      end-of-session report (session stats log written at stop) shows the expected drift/compensation
-      numbers and no unexplained device events.
+      spot-listen at start/middle/end plus a waveform scan for crackles/discontinuities. Confirm the
+      session report written at stop — `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
+      (newest of the last 10 kept) — shows sane `counters.av_drift_ms` / `counters.peak_av_drift_ms`
+      / `counters.duration_skew_ms`, `counters.audio_discontinuities` and `counters.mux_failures`
+      both at 0, and every entry in `segments` marked `finalized`.
 
 ## 8. Downstream package managers
 
