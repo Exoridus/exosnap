@@ -44,18 +44,34 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
 - [ ] **Confirm the RC page shows the "Pre-release" badge** and carries `update-manifest.json` +
       `update-manifest.json.sig` + `toolchain-manifest.json` next to the ZIP + MSI.
 - [ ] **Run §5, §6 and §7 against this RC build.** Set the test install's update channel to
-      **Preview** (Settings → updates card, Stable/Preview toggle) before the updater checks — a
-      Stable-channel client will not see a prerelease at all.
-- [ ] **If anything fails:** fix it, and cut the next candidate (`v0.9.0-rc2`) from the new commit.
+      **Preview** (Settings → Updates card → "Update channel" dropdown) before the updater checks —
+      a Stable-channel client will not see a prerelease at all.
+- [ ] **In-app RC→RC update offer (first live proof of the prerelease-ordering fix).** With a
+      running `v0.9.0-rc2` install on the Preview channel, confirm it is **offered** `v0.9.0-rc3`
+      in-app (rc2 is the first build carrying the SemVer prerelease-ordering fix, so rc2 → rc3 is
+      the first pair that can prove it live) and complete that in-app update end to end.
+- [ ] **If anything fails:** fix it, and cut the next candidate (`rc_N+1`) from the new commit.
       A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
       already-published Release.
 - [ ] **Once every check passes, push the final `vX.Y.Z` tag from the *same commit* the passing RC
       was built from** and continue with §4. Re-cut an RC if that commit moved.
 
-> The RC prerelease stays on the releases page as a normal, visible prerelease. Note that an
-> RC and its eventual final release compare as the *same* version number (`0.9.0-rc1` → `0.9.0`),
-> so a machine left on the RC build will not be offered the final release as an in-app update —
-> install the final build there by hand (or delete the RC prerelease once the release is out).
+> The RC prerelease stays on the releases page as a normal, visible prerelease. As of the
+> SemVer prerelease-ordering fix (first shipped in `v0.9.0-rc2`), a running RC correctly detects a
+> later RC or the eventual final release of the same `X.Y.Z` as a newer, available update (`rc1 <
+> rc2 < ... < the final X.Y.Z`) — **but only if the running build itself already contains this fix**.
+> `v0.9.0-rc1` predates it and still compares every `0.9.0`-family tag as equal, so a machine left on
+> rc1 will not be offered rc2/rc3/the final release in-app; install by hand there (or delete the rc1
+> prerelease once a newer one is out).
+>
+> **§5's live checks need the *previous shipped version* to already contain the in-app swap-updater
+> client** (the code that does the actual download/verify/staged-rename — not just the version
+> *check*). `v0.8.1` does not: the swap updater (`26f7760`) landed six days after the `v0.8.1` tag,
+> so its "Update to X" button unconditionally opens a browser tab and can never exercise §5's UAC/
+> network-fail/close-refusal/temp-cleanup mechanics, no matter which RC it's pointed at. Before
+> relying on "the previous shipped version" for §5, confirm it actually ships `exosnap-updater.exe`
+> (portable ZIP) — if not, cut two RCs from the current cycle instead (rc_N as the swap-capable
+> baseline, rc_N+1 as the target) to get a real swap test.
 
 ## 4. Publish the GitHub release
 
@@ -100,8 +116,10 @@ this deterministically — there is no manual asset upload and no `sign-manifest
 ## 5. Updater RC live-check (manual, on real hardware)
 
 CI runs on GPU-less runners and cannot exercise a real swap. Run these against the RC prerelease from
-§3, by hand, from the previous shipped version (currently 0.8.1) to the RC build — the test install
-must be on the **Preview** update channel to see the RC at all:
+§3, by hand, from the previous shipped version to the RC build — but while the last shipped version
+(0.8.1) predates the swap updater (see the §3 note), use the newest swap-capable RC as the baseline
+instead: currently that means `v0.9.0-rc2` → `v0.9.0-rc3`. The test install must be on the
+**Preview** update channel to see the RC at all:
 
 - [ ] **Portable happy-path swap (0.8.1 → RC).** From a user-writable portable install, click Update;
       the dedicated updater downloads, verifies, closes the app, does the staged-rename swap, verifies,
@@ -191,6 +209,48 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 - [ ] **Trim keeps the keyframe at or before the cut.** In the Edit overlay, drag the start handle
       into the middle of a multi-GOP clip and Save; the exported file starts cleanly (no black or
       frozen lead-in, no overshoot past the end), with duration matching the trimmed range.
+- [ ] **APP audio row arming across targets (settings rework).** On a display target, enable the
+      receded `APP` row in Settings; switch the capture target to a specific window and record —
+      per-app audio is present in the file. Switch back to a display target: the row stays
+      configured (rendered receded), and a new recording carries no app track.
+- [ ] **Five-tier quality + free frame rate record/playback.** Record one clip at `CQ 16 · Ultra`
+      and one with an Expert free frame rate (e.g. 48 fps): both play back correctly and the
+      container reports the chosen rate. Leaving Expert shows the nearest list entry in the combo
+      while the "Current format" footer keeps the true stored rate.
+- [ ] **Reworked Settings page visual walkthrough.** One pass in both modes: rebalanced columns
+      (left Container/Quality/Webcam/Notifications/Hotkeys, right Output/Audio/Updates/Appearance/
+      Developer), uniform 46 px rows, webcam card with full-width live preview and key-color picker,
+      "Split by time"/"Split by size" rows, Developer card visible without Expert.
+
+### Long-duration soak (clock slaving)
+
+Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2 (`exosnap-soak`,
+`av-sync-check.py`). This checklist adopts one of that runbook's advisory numbers as an explicit
+0.9 gate — see the note in that doc.
+
+- [ ] **2–3 h soak recording, default profile (MKV + AV1 + Opus, CFR 60), monitor capture, `SYS` +
+      `MIC` enabled as separate tracks, clock slaving at its default (on).** Continuous real system
+      audio for the whole run (e.g. a music/video playlist). Machine must not sleep; displays stay
+      on; display settings unchanged during the run.
+- [ ] **A/V sync marker at start AND end.** Immediately after recording starts, run
+      `exosnap-soak --clapper --seconds <soak duration>`: it blocks for that span and emits a
+      full-frame flash + beep at start, then automatically again at the end — no manual replay
+      needed. Markers appear on the **primary monitor only**, so the soak must capture the primary
+      monitor. With webcam PiP enabled, additionally clap hands in view at both markers for a
+      `MIC`-track cue.
+- [ ] **Analyze.** Run `python scripts/dev/av-sync-check.py <recorded-file> --max-drift-ms 20`
+      (exit `0` = within budget, `2` = over budget, `3` = unmeasurable). The reported absolute
+      `offset_start`/`offset_end` carry a device-dependent emission skew (flash via display capture
+      vs. beep via SYS loopback, ~10–50 ms) that is not an ExoSnap error and is advisory only —
+      **only `drift` (offset_end − offset_start) is pass/fail**, budgeted at ≤ 20 ms here.
+- [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
+      (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
+- [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track;
+      spot-listen at start/middle/end plus a waveform scan for crackles/discontinuities. Confirm the
+      session report written at stop — `%LOCALAPPDATA%\ExoSnap\logs\reports\session-<recording_session_id>.json`
+      (newest of the last 10 kept) — shows sane `counters.av_drift_ms` / `counters.peak_av_drift_ms`
+      / `counters.duration_skew_ms`, `counters.audio_discontinuities` and `counters.mux_failures`
+      both at 0, and every entry in `segments` marked `finalized`.
 
 ## 8. Downstream package managers
 

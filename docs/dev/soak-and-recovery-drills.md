@@ -6,10 +6,12 @@ dev/test infrastructure — nothing here changes user-visible behaviour, so it i
 not in `docs/product-spec.md`. The recovery/durability promises it exercises are
 already specified there (§ Crash recovery).
 
-> **All thresholds here are advisory for 0.10 — not a release gate.** The
+> **All thresholds here are advisory for 0.10 — not a release gate** — except
+> where `docs/release-checklist.md` §7 adopts a threshold as an explicit gate
+> (the 0.9 clock-slaving soak uses A/V drift ≤ 20 ms / 2 h as its pass bar). The
 > *infrastructure* is the deliverable; the *numbers* (A/V drift ≤ 20 ms/2 h, the
 > leak slope, the powerloss window) are starting values that surface regressions,
-> not pass/fail bars. Tighten them once real soak data exists.
+> not pass/fail bars otherwise. Tighten them once real soak data exists.
 
 The split is deliberate: everything deterministic and GPU-free runs in CI; the
 real GPU/display/audio/powerloss runs are **user-live on the developer machine**.

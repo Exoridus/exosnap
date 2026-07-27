@@ -10,7 +10,9 @@
 A diagnostics-first, Windows-native screen/application/region recorder. MKV-first capture with
 on-stop MP4 remux, a native NVENC pipeline, multi-track audio routing, HDR10 monitor capture,
 and a pre-flight readiness gate that blocks recording before a misconfiguration ruins it —
-no telemetry, no account, no cloud.
+no account, no analytics telemetry, and recordings are never uploaded or processed in the cloud
+(update checks against public GitHub Releases and consent-gated crash reports are the only
+opt-in network features; see [`PRIVACY.md`](PRIVACY.md)).
 
 **[Releases](https://github.com/Exoridus/exosnap/releases)** · **[Roadmap](docs/roadmap.md)** · **[Known limitations](KNOWN_LIMITATIONS.md)** · **[Privacy](PRIVACY.md)**
 
@@ -33,8 +35,10 @@ no telemetry, no account, no cloud.
 
 ### Reliability & recovery
 
-- **Crash recovery** — a recovery manifest is written before each session; a startup overlay lets
-  you finish, continue, or discard every interrupted recording on the next launch.
+- **Crash recovery** — a recovery manifest is written before each session; a startup overlay offers
+  Finish / Continue / Delete for each interrupted recording on the next launch. For MKV/WebM split
+  recordings, segments that were already finalized before an interruption remain usable; an
+  interrupted active segment may not be — see [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md).
 - **MKV-first recording** with on-stop MP4 remux (progressive, faststart) via libavformat
   stream-copy; MKV and WebM are also available as direct output formats.
 - **Low-disk guard** — warns at a configurable soft threshold and hard-stops at a lower one,
@@ -73,8 +77,8 @@ no telemetry, no account, no cloud.
 - **HDR displays are detected automatically.** By default an HDR desktop records as tone-mapped
   SDR (BT.709) for universal playability. An expert "HDR handling" setting switches to **native
   HDR10 recording** — PQ/BT.2020, P010 10-bit, limited range, with mastering-display metadata
-  carried into remuxed MP4. Native HDR10 requires HEVC or AV1 and currently covers **monitor
-  capture only** (window capture stays SDR); see
+  carried into remuxed MP4. Native HDR10 requires HEVC or AV1 and covers **both monitor and
+  window/game capture** (the latter via a scRGB FP16 frame pool); see
   [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the exact boundary.
 - Webcam PiP overlay with live mirrored preview, DXGI-composited.
 
@@ -133,7 +137,7 @@ expected (see [Code signing](#code-signing)).
 
 ## Building from source
 
-**Prerequisites:** Visual Studio 2022 (Desktop development with C++ workload), CMake 3.25+, Git.
+**Prerequisites:** Visual Studio 2022 (Desktop development with C++ workload), CMake 3.27+, Git.
 
 Fast local development loop:
 
