@@ -273,19 +273,34 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
         native_fourccs.push_back(SubtypeFourCc(sub));
     }
 
-    const int best = SelectBestWebcamNativeFormat(native_formats, want_w, want_h, want_fps);
-    if (best >= 0) {
+    // Try every width/height match in closest-fps-first order: the single
+    // closest candidate can fail to negotiate for a reason unrelated to frame
+    // rate (e.g. a pixel format this particular native type advertises that
+    // the reader can't convert), even though a same-resolution neighbor a
+    // little further from the requested fps would succeed. A single-shot
+    // attempt on only the closest match would then silently fall through to
+    // whatever the reader's default native type already was -- possibly the
+    // wrong resolution entirely -- instead of the next-best candidate that
+    // would have worked.
+    const std::vector<int> ranked = RankWebcamNativeFormats(native_formats, want_w, want_h, want_fps);
+    for (const int candidate_index : ranked) {
         native_match_found = true;
-        native_match_fourcc = native_fourccs[static_cast<size_t>(best)];
+        native_match_fourcc = native_fourccs[static_cast<size_t>(candidate_index)];
         winrt::com_ptr<IMFMediaType> chosen;
-        native_set_hr = reader->GetNativeMediaType(kFirstVideoStream, static_cast<DWORD>(best), chosen.put());
+        native_set_hr =
+            reader->GetNativeMediaType(kFirstVideoStream, static_cast<DWORD>(candidate_index), chosen.put());
+        if (FAILED(native_set_hr))
+            continue;
+        native_set_hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, chosen.get());
         if (SUCCEEDED(native_set_hr)) {
-            native_set_hr = reader->SetCurrentMediaType(kFirstVideoStream, nullptr, chosen.get());
-            if (SUCCEEDED(native_set_hr)) {
-                const auto& picked = native_formats[static_cast<size_t>(best)];
-                negotiated_fps = (picked.fps_den > 0) ? (picked.fps_num / picked.fps_den) : picked.fps_num;
-            }
+            const auto& picked = native_formats[static_cast<size_t>(candidate_index)];
+            negotiated_fps = RoundWebcamFps(picked.fps_num, picked.fps_den);
+            break; // this candidate's native type is now current; stop retrying
         }
+        // This candidate failed to negotiate: native_set_hr/native_match_fourcc
+        // above already reflect it for the failure diagnostic below (in case
+        // every candidate fails and BGRA/YUY2 negotiation also fails); try the
+        // next-closest candidate.
     }
 
     // Set output type to BGRA or YUY2.
@@ -335,28 +350,54 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
 
 int SelectBestWebcamNativeFormat(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
                                  int want_fps) noexcept {
-    int best_index = -1;
-    long long best_distance = -1;
+    const std::vector<int> ranked = RankWebcamNativeFormats(formats, want_w, want_h, want_fps);
+    return ranked.empty() ? -1 : ranked.front();
+}
+
+std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
+                                         int want_fps) noexcept {
+    struct Candidate {
+        int index;
+        long long distance;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(formats.size());
     for (size_t i = 0; i < formats.size(); ++i) {
         const WebcamNativeFormat& f = formats[i];
         if (f.width != want_w || f.height != want_h)
             continue;
-        if (want_fps <= 0)
-            return static_cast<int>(i); // no fps preference: first width/height match wins
 
-        // Compare in milli-fps units so integer division loses no precision
-        // (e.g. 30000/1001 ~= 29.97 fps must stay distinguishable from 30 fps).
-        const long long den = (f.fps_den > 0) ? f.fps_den : 1;
-        const long long native_milli_fps = (static_cast<long long>(f.fps_num) * 1000) / den;
-        const long long want_milli_fps = static_cast<long long>(want_fps) * 1000;
-        const long long diff = native_milli_fps - want_milli_fps;
-        const long long distance = (diff < 0) ? -diff : diff;
-        if (best_index < 0 || distance < best_distance) {
-            best_index = static_cast<int>(i);
-            best_distance = distance;
+        long long distance = 0;
+        if (want_fps > 0) {
+            // Compare in milli-fps units so integer division loses no precision
+            // (e.g. 30000/1001 ~= 29.97 fps must stay distinguishable from 30 fps).
+            const long long den = (f.fps_den > 0) ? f.fps_den : 1;
+            const long long native_milli_fps = (static_cast<long long>(f.fps_num) * 1000) / den;
+            const long long want_milli_fps = static_cast<long long>(want_fps) * 1000;
+            const long long diff = native_milli_fps - want_milli_fps;
+            distance = (diff < 0) ? -diff : diff;
         }
+        // want_fps <= 0: every candidate's distance stays 0, so the stable
+        // sort below leaves them in original enumeration order (first
+        // width/height match first) -- "no frame-rate preference".
+        candidates.push_back({static_cast<int>(i), distance});
     }
-    return best_index;
+
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.distance < b.distance; });
+
+    std::vector<int> result;
+    result.reserve(candidates.size());
+    for (const auto& c : candidates)
+        result.push_back(c.index);
+    return result;
+}
+
+int RoundWebcamFps(int fps_num, int fps_den) noexcept {
+    const int den = (fps_den > 0) ? fps_den : 1;
+    // Round-to-nearest via the standard (num + den/2) / den trick; fps_num is
+    // always >= 0 in practice (an MF frame-rate ratio), so no sign handling.
+    return (fps_num + den / 2) / den;
 }
 
 // ---------------------------------------------------------------------------

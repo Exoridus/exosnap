@@ -375,6 +375,14 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
         const int idx = findResolutionComboIndexFor(s.width, s.height, s.fps);
         if (idx >= 0) {
             resolution_combo_->setCurrentIndex(idx);
+            // A width/height-only fallback match (the requested fps is no
+            // longer offered at this resolution) leaves current_settings_
+            // holding the requested-but-unavailable fps while the combo now
+            // shows the fallback row's real one -- re-sync so a subsequent
+            // capture_changed comparison (onResolutionChanged) or restore
+            // search (onWebcamDevicesChanged) is not chasing a value nothing
+            // actually offers.
+            resyncCurrentSettingsFromResolutionCombo();
         }
     }
 
@@ -665,6 +673,10 @@ void WebcamSetupPanel::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapsho
             if (idx >= 0) {
                 const QSignalBlocker resb(resolution_combo_);
                 resolution_combo_->setCurrentIndex(idx);
+                // Same fallback re-sync as applySettings(): a width/height-only
+                // match must not leave current_settings_ still holding an fps
+                // this device doesn't offer at that resolution.
+                resyncCurrentSettingsFromResolutionCombo();
             }
         }
         suppress_signals_ = false;
@@ -719,6 +731,15 @@ int WebcamSetupPanel::FindResolutionRowIndex(const std::vector<ResolutionRow>& r
     return width_height_only;
 }
 
+void WebcamSetupPanel::resyncCurrentSettingsFromResolutionCombo() {
+    const auto d = resolution_combo_->itemData(resolution_combo_->currentIndex()).toList();
+    if (d.size() < 2)
+        return; // e.g. the "(no camera)" placeholder -- nothing to sync
+    current_settings_.width = d[0].toInt();
+    current_settings_.height = d[1].toInt();
+    current_settings_.fps = (d.size() >= 3) ? d[2].toInt() : current_settings_.fps;
+}
+
 int WebcamSetupPanel::findResolutionComboIndexFor(int width, int height, int fps) const {
     std::vector<ResolutionRow> rows;
     rows.reserve(static_cast<size_t>(resolution_combo_->count()));
@@ -752,7 +773,10 @@ void WebcamSetupPanel::refreshFormats() {
     if (!dev_id.isEmpty()) {
         formats_ = WebcamService::EnumerateFormats(dev_id.toStdString());
         for (const auto& f : formats_) {
-            const int fps = f.fps_num / (std::max)(1, f.fps_den);
+            // Round, don't truncate: a common NTSC rate like 30000/1001
+            // (~29.97 fps) must show and store as 30, not 29 -- consistent
+            // with WebcamService::OpenReader's negotiated-fps rounding.
+            const int fps = RoundWebcamFps(f.fps_num, f.fps_den);
             const QString label = QStringLiteral("%1×%2 @ %3 fps").arg(f.width).arg(f.height).arg(fps);
             // fps is carried in the item data (not just the label) so selecting
             // a row actually changes WebcamSettings::fps -- see collectSettings().

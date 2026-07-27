@@ -4001,6 +4001,24 @@ void ConfigPage::updateAudioFormatControlVisibility() {
             const uint32_t lo = is_opus ? recorder_core::kOpusBitrateKbpsMin : recorder_core::kAacBitrateKbpsMin;
             const uint32_t hi = is_opus ? recorder_core::kOpusBitrateKbpsMax : recorder_core::kAacBitrateKbpsMax;
             audio_bitrate_kbps_spin_->setRange(static_cast<int>(lo), static_cast<int>(hi));
+            // Clamp the model into the same effective range explicitly, rather
+            // than relying on QSpinBox::setRange() to self-correct it via
+            // valueChanged: the persisted-load path (setAudioUiState ->
+            // seedAudioControlsFromState) sets the spinbox's value under a
+            // QSignalBlocker *before* this function narrows the range, and a
+            // signal-blocked setValue() never reaches the valueChanged handler
+            // that would otherwise write the clamped value back into
+            // audio_ui_state_. Without this, a persisted out-of-range value
+            // (e.g. an AAC bitrate saved before this range existed) displays
+            // clamped while audio_ui_state_ -- what the engine actually uses --
+            // keeps the untruthful original value. Then re-sync the widget from
+            // the (now-clamped) model under a blocker so display and model can
+            // never diverge, regardless of Qt's internal setRange() behavior.
+            audio_ui_state_.audio_bitrate_kbps = std::clamp(audio_ui_state_.audio_bitrate_kbps, lo, hi);
+            if (static_cast<uint32_t>(audio_bitrate_kbps_spin_->value()) != audio_ui_state_.audio_bitrate_kbps) {
+                const QSignalBlocker b(audio_bitrate_kbps_spin_);
+                audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
+            }
         }
         audio_bitrate_kbps_spin_->setEnabled(bitrate_active && !locked);
         if (!bitrate_active) {

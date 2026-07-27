@@ -201,13 +201,111 @@ TEST(SelectBestWebcamNativeFormatTest, TieBreaksToFirstEnumeratedEntry) {
 }
 
 TEST(SelectBestWebcamNativeFormatTest, HandlesFractionalNtscFrameRates) {
-    // 30000/1001 (~29.97 fps) must be distinguishable from a plain 30/1 entry
-    // and correctly recognised as the closer match to a 30 fps request only
-    // when it is actually closer -- here it is the only entry at all.
+    // 30000/1001 (~29.97 fps) must be distinguishable from a plain 30/1 entry.
+    // A single-candidate list can't actually discriminate anything (it would
+    // "win" no matter how the distance is computed); this list forces a real
+    // choice between three candidates so a naive fps_num/fps_den truncation
+    // (~29 fps) or an unreduced-fraction bug would visibly pick the wrong one.
     const std::vector<WebcamNativeFormat> formats = {
-        {1920, 1080, 30000, 1001},
+        {1920, 1080, 24, 1},       // 24 fps -- clearly farther from 30 than NTSC 29.97
+        {1920, 1080, 30000, 1001}, // ~29.97 fps -- the closest real candidate
+        {1920, 1080, 60, 1},       // 60 fps -- farther than either of the above
+    };
+    EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 30), 1);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, EmptyCandidateListReturnsNegativeOne) {
+    EXPECT_EQ(SelectBestWebcamNativeFormat({}, 1920, 1080, 30), -1);
+}
+
+TEST(SelectBestWebcamNativeFormatTest, ZeroFpsDenIsTreatedAsOne) {
+    // A malformed/degenerate MF_MT_FRAME_RATE ratio (den == 0) must not divide
+    // by zero; it is treated as fps_num/1, same as a plain integer fps.
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 30, 0},
     };
     EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 30), 0);
+}
+
+// ---------------------------------------------------------------------------
+// RankWebcamNativeFormats (the retry-order policy behind OpenReader's
+// multi-candidate SetCurrentMediaType loop: the single closest-fps candidate
+// can fail to negotiate for a reason unrelated to frame rate, so the reader
+// retries progressively-less-ideal same-resolution candidates instead of
+// giving up after one attempt).
+// ---------------------------------------------------------------------------
+
+TEST(RankWebcamNativeFormatsTest, OrdersByClosenessToWantFps) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 15, 1}, // index 0: farthest from 60
+        {1920, 1080, 60, 1}, // index 1: exact match
+        {1920, 1080, 30, 1}, // index 2: second-closest
+    };
+    const std::vector<int> ranked = RankWebcamNativeFormats(formats, 1920, 1080, 60);
+    ASSERT_EQ(ranked.size(), 3u);
+    EXPECT_EQ(ranked[0], 1);
+    EXPECT_EQ(ranked[1], 2);
+    EXPECT_EQ(ranked[2], 0);
+}
+
+TEST(RankWebcamNativeFormatsTest, FirstElementMatchesSelectBestWebcamNativeFormat) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 24, 1},
+        {1920, 1080, 30000, 1001},
+        {1920, 1080, 60, 1},
+    };
+    const std::vector<int> ranked = RankWebcamNativeFormats(formats, 1920, 1080, 30);
+    ASSERT_FALSE(ranked.empty());
+    EXPECT_EQ(ranked.front(), SelectBestWebcamNativeFormat(formats, 1920, 1080, 30));
+}
+
+TEST(RankWebcamNativeFormatsTest, NoWidthHeightMatchReturnsEmpty) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1280, 720, 30, 1},
+    };
+    EXPECT_TRUE(RankWebcamNativeFormats(formats, 1920, 1080, 30).empty());
+}
+
+TEST(RankWebcamNativeFormatsTest, EmptyCandidateListReturnsEmpty) {
+    EXPECT_TRUE(RankWebcamNativeFormats({}, 1920, 1080, 30).empty());
+}
+
+TEST(RankWebcamNativeFormatsTest, NonPositiveWantFpsKeepsEnumerationOrder) {
+    const std::vector<WebcamNativeFormat> formats = {
+        {1920, 1080, 60, 1}, {1920, 1080, 30, 1}, {1280, 720, 30, 1}, // different resolution -- excluded
+    };
+    const std::vector<int> ranked = RankWebcamNativeFormats(formats, 1920, 1080, 0);
+    ASSERT_EQ(ranked.size(), 2u);
+    EXPECT_EQ(ranked[0], 0);
+    EXPECT_EQ(ranked[1], 1);
+}
+
+// ---------------------------------------------------------------------------
+// RoundWebcamFps (the resolution combo label and the negotiated-fps report
+// used to truncate a rational frame rate instead of rounding it -- e.g.
+// 30000/1001, ~29.97 fps, displayed and stored as 29 instead of 30).
+// ---------------------------------------------------------------------------
+
+TEST(RoundWebcamFpsTest, RoundsNtscRateToNearestWholeFps) {
+    EXPECT_EQ(RoundWebcamFps(30000, 1001), 30);
+    EXPECT_EQ(RoundWebcamFps(60000, 1001), 60);
+    EXPECT_EQ(RoundWebcamFps(24000, 1001), 24);
+}
+
+TEST(RoundWebcamFpsTest, PlainIntegerRatesAreUnaffected) {
+    EXPECT_EQ(RoundWebcamFps(30, 1), 30);
+    EXPECT_EQ(RoundWebcamFps(60, 1), 60);
+}
+
+TEST(RoundWebcamFpsTest, ZeroDenIsTreatedAsOne) {
+    EXPECT_EQ(RoundWebcamFps(30, 0), 30);
+}
+
+TEST(RoundWebcamFpsTest, RoundsDownBelowHalf) {
+    // 29 + 0.4 -> still rounds to 29, not 30 (exercises the "round", not
+    // "always round up", direction).
+    EXPECT_EQ(RoundWebcamFps(147, 5), 29); // 29.4 -> 29
+    EXPECT_EQ(RoundWebcamFps(148, 5), 30); // 29.6 -> 30
 }
 
 } // namespace

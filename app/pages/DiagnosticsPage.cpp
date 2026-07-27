@@ -730,7 +730,7 @@ void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnost
     const QString dash = QString::fromUtf8("\xE2\x80\x94");
     const double budget_ms = (s.capture.target_fps > 0.0) ? 1000.0 / s.capture.target_fps : (1000.0 / 60.0);
 
-    const uint64_t problem_drops = s.capture.frames_dropped_cfr + s.capture.frames_dropped_backpressure;
+    const uint64_t problem_drops = s.capture.frames_dropped_problem();
     if (s.session_generation != cards_last_generation_) {
         cards_last_generation_ = s.session_generation;
         cards_last_problem_drops_ = problem_drops;

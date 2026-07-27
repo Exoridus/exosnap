@@ -114,6 +114,29 @@ struct WebcamNativeFormat {
 [[nodiscard]] int SelectBestWebcamNativeFormat(const std::vector<WebcamNativeFormat>& formats, int want_w, int want_h,
                                                int want_fps) noexcept;
 
+// Same width/height match + fps-closeness policy as SelectBestWebcamNativeFormat,
+// but returns every matching index ordered from closest to farthest from
+// want_fps (ties keep the earlier/lower index), instead of only the single
+// best one. want_fps <= 0 returns every width/height match in original
+// enumeration order (no fps preference). Used to retry SetCurrentMediaType
+// against progressively-less-ideal candidates: the closest-fps native type can
+// fail to negotiate for a reason unrelated to frame rate (e.g. a pixel format
+// this particular native type advertises that the reader can't convert), even
+// though a same-resolution neighbor a little further from the requested fps
+// would succeed. SelectBestWebcamNativeFormat(formats, w, h, fps) is exactly
+// RankWebcamNativeFormats(formats, w, h, fps).front() (or -1 if empty).
+[[nodiscard]] std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& formats, int want_w,
+                                                       int want_h, int want_fps) noexcept;
+
+// Rounds a rational frame rate (fps_num/fps_den) to the nearest whole fps --
+// never truncates. Common NTSC rates are the reason this matters: 30000/1001
+// (~29.97 fps) must round to 30, not truncate to 29 (a plain fps_num/fps_den
+// integer division). fps_den <= 0 is treated as 1. Shared by every place that
+// turns a native MF frame rate into the plain-int fps WebcamFormat/
+// WebcamSettings/the negotiated-fps report use, so the resolution combo's
+// label, the stored setting, and the log field always agree with each other.
+[[nodiscard]] int RoundWebcamFps(int fps_num, int fps_den) noexcept;
+
 // Captures from a webcam via Media Foundation IMFSourceReader.
 // Also implements WebcamFrameProvider so VideoThread can composite frames.
 class WebcamService : public recorder_core::WebcamFrameProvider {

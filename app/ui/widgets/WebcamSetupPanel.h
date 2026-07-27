@@ -141,6 +141,14 @@ class WebcamSetupPanel : public QWidget {
     // Adapts resolution_combo_'s current items to FindResolutionRowIndex() (see
     // the public declaration above for the matching policy).
     int findResolutionComboIndexFor(int width, int height, int fps) const;
+    // Re-reads resolution_combo_'s currently selected row into
+    // current_settings_.width/height/fps. Needed after setCurrentIndex() is
+    // called under signal suppression (applySettings() / onWebcamDevicesChanged()):
+    // when FindResolutionRowIndex() falls back to a width/height-only match (the
+    // exact fps is no longer offered), the combo now shows a different fps than
+    // current_settings_ still holds, and nothing else re-syncs it while signals
+    // stay suppressed.
+    void resyncCurrentSettingsFromResolutionCombo();
 
     std::vector<WebcamDeviceInfo> devices_;
     std::vector<WebcamFormat> formats_;
