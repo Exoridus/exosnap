@@ -193,16 +193,18 @@ GopKeyframePhase NextGopKeyframePhase(uint32_t frame_in_gop, uint32_t gop_length
 
 // ---------------------------------------------------------------------------
 // ResyncGopPhaseFromActual — pure order/keyframe hardening (warn-first).
-// NextGopKeyframePhase predicts IDR placement at submission time; the actual
-// pictureType observed when a bitstream is consumed is the ground truth. A
-// real IDR always restarts the GOP regardless of what was predicted for that
-// submission (self-healing: any drift accumulated under buffered presets is
-// corrected the next time an actual IDR is observed). A non-IDR output leaves
-// the counter untouched — the submission side is already advancing it
-// independently, and a single non-keyframe mismatch is not evidence the whole
+// Since keyframe cadence is enforced at submission time via FORCEIDR, the
+// submission-side counter is authoritative whenever the completed packet's
+// actual pictureType confirms the prediction — under async buffering it is
+// already several frames ahead of the packet being consumed, and rewinding it
+// from that delayed viewpoint stretched every GOP by the in-flight depth
+// (~13 % at 0.5 s / 60 fps). Only an UNPREDICTED real IDR resyncs the phase
+// to 1 (emergency self-healing; live-verified as never occurring, counted via
+// keyframe_prediction_mismatches). A predicted-but-missing IDR leaves the
+// counter untouched — warn-only, a single miss is not evidence the whole
 // cadence has shifted. No GPU/NVENC session.
 // ---------------------------------------------------------------------------
-uint32_t ResyncGopPhaseFromActual(bool actual_is_idr, uint32_t frame_in_gop) noexcept;
+uint32_t ResyncGopPhaseFromActual(bool predicted_keyframe, bool actual_is_idr, uint32_t frame_in_gop) noexcept;
 
 // ---------------------------------------------------------------------------
 // Pure message formatters for the encoder's two output-order validations.
