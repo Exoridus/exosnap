@@ -75,6 +75,25 @@ inline int64_t AudioTimelineShiftNs(uint64_t audio_epoch_100ns, uint64_t video_e
     return shift;
 }
 
+// The VFR video epoch: the instant video PTS 0 is derived from. The first
+// captured frame can carry a present timestamp from BEFORE recording began — a
+// desktop that sat static for seconds reports its last real present — and
+// deriving PTS from that origin inflates every later frame's PTS by the idle
+// gap, stretching the file beyond the real recording time. Clamp the origin to
+// the session start so the timeline never begins before the recording did. A
+// non-positive frame timestamp is a bad clock reading and falls back to the
+// session start alone.
+inline int64_t ClampedVfrVideoEpochTicks100ns(int64_t first_frame_ticks_100ns,
+                                              uint64_t session_start_qpc_100ns) noexcept {
+    const int64_t session_start = session_start_qpc_100ns > static_cast<uint64_t>(INT64_MAX)
+                                      ? INT64_MAX
+                                      : static_cast<int64_t>(session_start_qpc_100ns);
+    if (first_frame_ticks_100ns <= session_start) {
+        return session_start;
+    }
+    return first_frame_ticks_100ns;
+}
+
 // Apply a shift to a session PTS. Returns false when the packet falls before
 // the video epoch entirely and must be dropped rather than written at 0.
 inline bool ShiftAudioPts(uint64_t pts_ns, int64_t shift_ns, uint64_t& out_pts_ns) noexcept {
