@@ -27,7 +27,6 @@ struct BundleCapability {
     bool nvenc_444 = false;
     QString os_version_string;
     QString os_build_number;
-    bool mf_aac = false;
     bool mf_webcam = false;
 };
 

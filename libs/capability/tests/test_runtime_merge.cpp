@@ -18,9 +18,7 @@ RuntimeCapabilitySnapshot MakeFavorableSnapshot() {
     snap.nvidia.nvenc_api_version_valid = true;
     snap.nvidia.nvenc_api_version = 0x000D0000u; // dummy version
     snap.nvidia.adapter_name = "NVIDIA GeForce RTX 9999 (synthetic)";
-    snap.mf_aac.mftenum_found = true;
-    snap.mf_aac.clsid_instantiable = false; // mftenum_found alone is sufficient
-    snap.mf_webcam.available = true;        // S4: MF present in favorable snapshot
+    snap.mf_webcam.available = true; // S4: MF present in favorable snapshot
     snap.os.build_number = 26100u;
     snap.os.version_string = "10.0.26100";
     return snap;
@@ -75,6 +73,12 @@ TEST(RuntimeMergeTest, TC2_NvencDllMissingBlocksAv1Path) {
         (av1.reason.find("NVENC") != std::string::npos) || (combo.reason.find("NVENC") != std::string::npos);
     EXPECT_TRUE(mentions_nvenc) << "Downgrade reason should mention NVENC. av1.reason='" << av1.reason
                                 << "' combo.reason='" << combo.reason << "'";
+
+    // AAC has no runtime probe to fail: it must stay Available regardless of
+    // the NVENC/DXGI snapshot state (see the retired TC-4/TC-5 note above).
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac)))
+        << "AudioCodec::Aac must remain selectable even when NVENC is absent — it has no "
+           "snapshot-dependent downgrade path.";
 }
 
 // -------------------------------------------------------------------------
@@ -103,54 +107,13 @@ TEST(RuntimeMergeTest, TC3_NvencApiVersionUnavailableBlocksAv1Path) {
 }
 
 // -------------------------------------------------------------------------
-// TC-4: AAC unavailable blocks AAC path
+// TC-4/TC-5: retired. AAC used to have a Media Foundation runtime probe
+// (MFTEnumEx + CLSID_AACMFTEncoder fallback) that could report AAC
+// unavailable; these covered that downgrade and its CLSID fallback. Since
+// ADR 0052, AAC is encoded by FFmpeg's bundled native AAC-LC encoder, which
+// has no runtime-probeable failure mode — see TC-1, which now covers AAC
+// staying Available unconditionally.
 // -------------------------------------------------------------------------
-TEST(RuntimeMergeTest, TC4_AacUnavailableBlocksAacPath) {
-    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
-    snap.mf_aac.mftenum_found = false;
-    snap.mf_aac.clsid_instantiable = false;
-
-    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
-
-    // Aac dimension must not be selectable.
-    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::Aac);
-    EXPECT_FALSE(IsSelectable(aac)) << "AudioCodec::Aac must not be selectable when MF AAC is unavailable.";
-
-    // M3.2 primary combo must not be selectable.
-    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
-    EXPECT_FALSE(IsSelectable(combo)) << "M3.2 combo must not be selectable when MF AAC is unavailable.";
-
-    // Reason must mention AAC or Media Foundation.
-    const bool mentions_aac =
-        (aac.reason.find("AAC") != std::string::npos) || (aac.reason.find("Media Foundation") != std::string::npos) ||
-        (combo.reason.find("AAC") != std::string::npos) || (combo.reason.find("Media Foundation") != std::string::npos);
-    EXPECT_TRUE(mentions_aac) << "Downgrade reason should mention AAC or Media Foundation. aac.reason='" << aac.reason
-                              << "' combo.reason='" << combo.reason << "'";
-}
-
-// -------------------------------------------------------------------------
-// TC-5: Direct AAC CLSID fallback is sufficient (mirrors M2.7 discovery)
-// -------------------------------------------------------------------------
-TEST(RuntimeMergeTest, TC5_DirectAacClsidFallbackIsSufficient) {
-    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
-    snap.mf_aac.mftenum_found = false;     // enumeration returns 0
-    snap.mf_aac.clsid_instantiable = true; // but direct instantiation succeeds
-
-    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
-
-    // available() must return true when only clsid_instantiable is true.
-    EXPECT_TRUE(snap.mf_aac.available())
-        << "MfAacRuntimeFacts::available() must be true when clsid_instantiable is true.";
-
-    // Aac must remain selectable.
-    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac)))
-        << "AudioCodec::Aac should remain selectable when CLSID fallback succeeds.";
-
-    // M3.2 combo must remain Available.
-    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
-    EXPECT_EQ(combo.level, SupportLevel::Available)
-        << "M3.2 combo should remain Available when CLSID AAC fallback succeeds. reason: " << combo.reason;
-}
 
 // -------------------------------------------------------------------------
 // TC-6: H.264 is Available when NVENC is present (Phase 23E)
@@ -239,8 +202,6 @@ TEST(RuntimeMergeTest, TC8_RuntimeSnapshotPreserved) {
     EXPECT_EQ(caps.runtime.nvidia.nvenc_api_version_valid, snap.nvidia.nvenc_api_version_valid);
     EXPECT_EQ(caps.runtime.nvidia.nvenc_api_version, snap.nvidia.nvenc_api_version);
     EXPECT_EQ(caps.runtime.nvidia.adapter_name, snap.nvidia.adapter_name);
-    EXPECT_EQ(caps.runtime.mf_aac.mftenum_found, snap.mf_aac.mftenum_found);
-    EXPECT_EQ(caps.runtime.mf_aac.clsid_instantiable, snap.mf_aac.clsid_instantiable);
     EXPECT_EQ(caps.runtime.os.build_number, snap.os.build_number);
     EXPECT_EQ(caps.runtime.os.version_string, snap.os.version_string);
 }
@@ -303,22 +264,11 @@ TEST(RuntimeMergeTest, TC10_NvencDowngradeReason_IsUserFacing) {
 }
 
 // -------------------------------------------------------------------------
-// TC-11: AAC downgrade reason is user-facing — no internal COM/MF symbols
+// TC-11: retired along with TC-4/TC-5 (see note above) — there is no AAC
+// downgrade reason left to assert on. AAC's Available annotation (asserted
+// in TC-1) does still mention "AAC" (BuildStaticValidatedBaseline), which
+// covers the "actionable and mentions AAC" half of the old assertion.
 // -------------------------------------------------------------------------
-TEST(RuntimeMergeTest, TC11_AacDowngradeReason_IsUserFacing) {
-    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
-    snap.mf_aac.mftenum_found = false;
-    snap.mf_aac.clsid_instantiable = false;
-
-    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
-    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::Aac);
-
-    // Must not expose internal COM/MF API identifiers.
-    EXPECT_EQ(aac.reason.find("MFTEnumEx"), std::string::npos) << "reason: " << aac.reason;
-    EXPECT_EQ(aac.reason.find("CLSID_AACMFTEncoder"), std::string::npos) << "reason: " << aac.reason;
-    // Must be actionable and mention AAC.
-    EXPECT_NE(aac.reason.find("AAC"), std::string::npos) << "reason: " << aac.reason;
-}
 
 // -------------------------------------------------------------------------
 // S4: MF webcam capability gate tests

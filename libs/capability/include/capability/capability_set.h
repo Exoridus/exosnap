@@ -40,7 +40,6 @@ struct BFrameCapability {
 struct CapabilitySet {
     std::string gpu_adapter_name;
     bool nvenc_dll_present = false;
-    bool mf_aac_available = false;
     bool mf_webcam_available = false; // S4: true when mfplat.dll is present (webcam subsystem usable)
 
     // True only when this set was produced by a real, just-completed hardware

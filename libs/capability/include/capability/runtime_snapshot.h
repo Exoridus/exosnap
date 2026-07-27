@@ -107,16 +107,6 @@ struct NvidiaRuntimeFacts {
     NvencAdvancedEncodeFacts nvenc_adv_av1;
 };
 
-struct MfAacRuntimeFacts {
-    bool mftenum_found = false;
-    bool clsid_instantiable = false;
-    std::string failure_detail;
-
-    bool available() const noexcept {
-        return mftenum_found || clsid_instantiable;
-    }
-};
-
 struct OsRuntimeFacts {
     uint32_t build_number = 0;
     std::string version_string;
@@ -133,7 +123,6 @@ struct MfWebcamRuntimeFacts {
 
 struct RuntimeCapabilitySnapshot {
     NvidiaRuntimeFacts nvidia;
-    MfAacRuntimeFacts mf_aac;
     MfWebcamRuntimeFacts mf_webcam; // S4: webcam MF probe
     OsRuntimeFacts os;
     std::vector<DisplayHdrFacts> displays;

@@ -1280,7 +1280,7 @@ TEST(BlockedScenarioTest, ActiveOutputConfig_WebmAv1Opus_ValidatesSuccessfullyOn
     EXPECT_TRUE(result.invalidity.empty());
 }
 
-TEST(BlockedScenarioTest, ActiveOutputConfig_Av1NvencUnavailable_ValidateFails_VideoCodecBlocker) {
+TEST(BlockedScenarioTest, ActiveOutputConfig_Av1WhenNvencUnavailable_ValidateFails_VideoCodecBlocker) {
     // When AV1 (NVENC) is selected but NVENC is unavailable, UserConfigFromSettings +
     // ValidateConfig must fail and report video_codec as the blocker.
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
@@ -1376,7 +1376,7 @@ TEST(DisplayNameTest, VideoCodecDisplayNames) {
 
 TEST(DisplayNameTest, AudioCodecDisplayNames) {
     EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Opus), "Opus");
-    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Aac), "AAC (Media Foundation)");
+    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Aac), "AAC");
     EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Pcm), "PCM");
 }
 
@@ -1491,7 +1491,7 @@ TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_InvalidityDisplayMapsTo
     EXPECT_EQ(result.invalidity.front().message, nvenc_reason);
 }
 
-TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVideoCodecBlocker) {
+TEST(BlockedScenarioTest, RecommendationEngine_H264WhenNvencUnavailable_ProducesVideoCodecBlocker) {
     // When H264 is not selectable, DiagnosticsPage's RecommendationEngine should
     // produce a rec.003 (video codec unavailable) Blocker that appears in Top Issues.
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();

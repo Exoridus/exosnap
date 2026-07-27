@@ -7,8 +7,12 @@
 //   A2. NVENC per-GPU codec GUIDs: open a frameless NVENC session on an NVIDIA D3D11
 //       device and enumerate EncodeGUIDs (best-effort, dev-verify-only — see below)
 //   B.  DXGI:  IDXGIFactory -> EnumAdapters -> adapter description string
-//   C.  Media Foundation AAC: MFTEnumEx + direct CLSID_AACMFTEncoder instantiation
 //   D.  OS: RtlGetVersion via ntdll.dll
+//
+// AAC audio capability is not probed here: since ADR 0052, AAC is encoded by
+// FFmpeg's bundled native AAC-LC encoder (libs/recorder_core/src/ffmpeg_aac_encoder.cpp),
+// which ships with every build and requires no Media Foundation component. It
+// is therefore always available; see CapabilityBuilder::BuildStaticValidatedBaseline().
 //
 // Probe A2 opens a real NVENC session (no frames are ever encoded). It is best-effort:
 // any failure (no NVENC DLL, no NVIDIA device, no session, header missing in a headless
@@ -27,11 +31,6 @@
 #include <dxgi1_6.h> // IDXGIOutput6::GetDesc1 (per-display HDR facts)
 
 #include <recorder_core/hdr_color_space.h> // one definition of "HDR is on"
-
-// Media Foundation
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mftransform.h>
 
 // COM smart pointer support
 #include <wrl/client.h>
@@ -466,7 +465,7 @@ void ProbeAdapterIdentity(AdapterIdentity& identity) {
 }
 
 // -------------------------------------------------------------------------
-// C0. Media Foundation presence pre-check (shared by C and Cw below)
+// C0. Media Foundation presence pre-check (used by Cw below)
 // -------------------------------------------------------------------------
 
 // Check whether mfplat.dll is loadable without triggering a delay-load
@@ -497,99 +496,6 @@ void ProbeMfWebcam(MfWebcamRuntimeFacts& mf_webcam) {
                       static_cast<unsigned long>(GetLastError()));
         mf_webcam.failure_detail = buf;
         mf_webcam.available = false;
-    }
-}
-
-// -------------------------------------------------------------------------
-// C. Media Foundation AAC runtime query
-// -------------------------------------------------------------------------
-
-void ProbeMfAac(MfAacRuntimeFacts& mf_aac) {
-    // Pre-check: if mfplat.dll is absent we must not attempt any MF API call —
-    // the delay-load stub would raise a VcppException (SEH) instead of returning
-    // a graceful HRESULT. Return early with the same "unavailable" result.
-    if (!IsMfPlatPresent()) {
-        mf_aac.failure_detail = "mfplat.dll not found — Media Foundation not installed on this system.";
-        return;
-    }
-    // Initialize COM on this thread in a multi-threaded apartment.
-    //
-    // CoInitializeEx return value semantics:
-    //   S_OK              — COM was not yet initialized on this thread; this call
-    //                       initialized it and incremented the reference count.
-    //   S_FALSE           — COM was already initialized in a compatible apartment;
-    //                       the reference count was still incremented.
-    //   RPC_E_CHANGED_MODE — COM was already initialized in an incompatible apartment;
-    //                        the reference count was NOT incremented.
-    //   Other failure     — initialization failed entirely; count not incremented.
-    //
-    // CoUninitialize must be called if and only if CoInitializeEx returned S_OK or
-    // S_FALSE (i.e., SUCCEEDED(co_hr)).  Using SUCCEEDED rather than (co_hr == S_OK)
-    // is deliberate: both success codes leave a reference that must be released.
-    const HRESULT co_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool co_initialized = SUCCEEDED(co_hr);
-
-    // Start Media Foundation (safe to call multiple times; internally ref-counted).
-    const HRESULT mf_hr = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
-    const bool mf_started = SUCCEEDED(mf_hr);
-
-    // --- Step 1: MFTEnumEx query ---
-    if (mf_started) {
-        // Target: audio encoder outputting AAC (MFAudioFormat_AAC).
-        MFT_REGISTER_TYPE_INFO output_type{};
-        output_type.guidMajorType = MFMediaType_Audio;
-        output_type.guidSubtype = MFAudioFormat_AAC;
-
-        IMFActivate** activate_array = nullptr;
-        UINT32 count = 0;
-
-        const HRESULT enum_hr = MFTEnumEx(MFT_CATEGORY_AUDIO_ENCODER, MFT_ENUM_FLAG_ALL,
-                                          nullptr, // any input type
-                                          &output_type, &activate_array, &count);
-
-        if (SUCCEEDED(enum_hr)) {
-            mf_aac.mftenum_found = (count > 0);
-            // Release each IMFActivate and free the array.
-            for (UINT32 i = 0; i < count; ++i) {
-                if (activate_array[i]) {
-                    activate_array[i]->Release();
-                }
-            }
-            if (activate_array) {
-                CoTaskMemFree(activate_array);
-            }
-        }
-        // If MFTEnumEx itself fails, mftenum_found stays false — non-fatal.
-    }
-
-    // --- Step 2: Direct CLSID_AACMFTEncoder instantiation ---
-    // This is the M2.7 fallback: enumeration may return zero even when the
-    // encoder is present; direct CoCreateInstance succeeds in that scenario.
-    {
-        // CLSID_AACMFTEncoder = {32D186A7-218F-4C75-8876-DD77273A8999}
-        static const CLSID kClsidAacMftEncoder = {
-            0x32D186A7u, 0x218Fu, 0x4C75u, {0x88u, 0x76u, 0xDDu, 0x77u, 0x27u, 0x3Au, 0x89u, 0x99u}};
-
-        Microsoft::WRL::ComPtr<IUnknown> aac_encoder;
-        const HRESULT clsid_hr = CoCreateInstance(kClsidAacMftEncoder, nullptr, CLSCTX_INPROC_SERVER, IID_IUnknown,
-                                                  reinterpret_cast<void**>(aac_encoder.GetAddressOf()));
-
-        mf_aac.clsid_instantiable = SUCCEEDED(clsid_hr);
-    }
-
-    // Populate failure_detail only when both paths fail.
-    if (!mf_aac.available()) {
-        mf_aac.failure_detail = "MFTEnumEx found no AAC encoders and direct CLSID_AACMFTEncoder "
-                                "instantiation failed. Media Foundation AAC encoder is not available "
-                                "on this system.";
-    }
-
-    // Shutdown in reverse order.
-    if (mf_started) {
-        MFShutdown();
-    }
-    if (co_initialized) {
-        CoUninitialize();
     }
 }
 
@@ -646,7 +552,7 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     ProbeNvencCodecs(snapshot.nvidia); // A2: per-GPU codec GUIDs (best-effort; needs a real NVIDIA GPU)
     ProbeAdapterName(snapshot.nvidia);
     ProbeMfWebcam(snapshot.mf_webcam); // S4: webcam MF presence probe (safe, LoadLibraryW-based)
-    ProbeMfAac(snapshot.mf_aac);       // guarded internally by IsMfPlatPresent()
+    // No AAC probe: FFmpeg's bundled native AAC-LC encoder is always available (ADR 0052).
     ProbeOs(snapshot.os);
     ProbeDisplays(snapshot.displays);
 

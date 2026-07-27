@@ -48,8 +48,6 @@ capability::RuntimeCapabilitySnapshot MakeSnapshot() {
     snap.nvidia.nvenc_adv_h264 = {2, 1, true, true}; // max_bframes, bframe_ref_mode, lookahead, temporal_aq
     snap.nvidia.nvenc_adv_hevc = {3, 2, true, false};
     snap.nvidia.nvenc_adv_av1 = {0, 0, false, false}; // GPU advertises AV1 but with no B-frame/lookahead support
-    snap.mf_aac.mftenum_found = true;
-    snap.mf_aac.clsid_instantiable = false;
     snap.mf_webcam.available = true;
     snap.os.build_number = 26100u;
     snap.os.version_string = "10.0.26100";
@@ -107,7 +105,6 @@ TEST(CapabilityCacheStoreTest, RoundtripWithMatchingKey) {
     EXPECT_FALSE(loaded->nvidia.nvenc_adv_hevc.temporal_aq);
     EXPECT_EQ(loaded->nvidia.nvenc_adv_av1.max_bframes, 0);
     EXPECT_FALSE(loaded->nvidia.nvenc_adv_av1.lookahead);
-    EXPECT_TRUE(loaded->mf_aac.mftenum_found);
     EXPECT_TRUE(loaded->mf_webcam.available);
     EXPECT_EQ(loaded->os.build_number, snapshot.os.build_number);
     ASSERT_EQ(loaded->displays.size(), 1u);

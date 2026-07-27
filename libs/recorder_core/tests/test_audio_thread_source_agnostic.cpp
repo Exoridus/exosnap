@@ -548,7 +548,7 @@ class IdleGapMockSource : public IAudioCaptureSource {
 };
 
 TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsStepMatchesFrameDuration_SmallChunks) {
-    // Deliver back-to-back 480-sample chunks through the real MF AAC encoder.
+    // Deliver back-to-back 480-sample chunks through the real FFmpeg AAC encoder.
     // 100 chunks x 480 = 48000 frames (~1 s) -> ~46 AAC packets, each spaced by
     // one AAC frame duration (21.333 ms).
     auto state_ptr = std::make_shared<SessionState>();
@@ -562,12 +562,12 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsStepMatchesFrameDuration_S
     ASSERT_TRUE(thread->Join(10000));
 
     if (state.HasFailure()) {
-        GTEST_SKIP() << "MF AAC encoder unavailable on this host";
+        GTEST_SKIP() << "FFmpeg AAC encoder unavailable on this host";
     }
 
     const auto packets = GatherQueuedAudioPackets(state);
     if (packets.size() < 5) {
-        GTEST_SKIP() << "MF AAC encoder produced too few packets (" << packets.size() << ")";
+        GTEST_SKIP() << "FFmpeg AAC encoder produced too few packets (" << packets.size() << ")";
     }
 
     for (size_t i = 1; i < packets.size(); ++i) {
@@ -596,12 +596,12 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_AacPtsNotInflatedByIdleGaps) {
     ASSERT_TRUE(thread->Join(15000));
 
     if (state.HasFailure()) {
-        GTEST_SKIP() << "MF AAC encoder unavailable on this host";
+        GTEST_SKIP() << "FFmpeg AAC encoder unavailable on this host";
     }
 
     const auto packets = GatherQueuedAudioPackets(state);
     if (packets.size() < 5) {
-        GTEST_SKIP() << "MF AAC encoder produced too few packets (" << packets.size() << ")";
+        GTEST_SKIP() << "FFmpeg AAC encoder produced too few packets (" << packets.size() << ")";
     }
 
     for (size_t i = 1; i < packets.size(); ++i) {

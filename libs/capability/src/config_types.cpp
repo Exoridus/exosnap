@@ -31,7 +31,7 @@ std::string_view ToString(AudioCodec value) noexcept {
     case AudioCodec::Opus:
         return "Opus";
     case AudioCodec::Aac:
-        return "AAC (Media Foundation)";
+        return "AAC";
     case AudioCodec::Pcm:
         return "PCM";
     case AudioCodec::Flac:
