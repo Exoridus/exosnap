@@ -876,9 +876,9 @@ const QVector<VisualScenario> kScenarios = {
      .frame_rate_den = 1,
      .cfr = true,
      .settings_expert_mode = true},
-    // Same off-ladder value back in the Default tier: the combo must report the
-    // real frame rate through a dynamic "73 fps (Custom)" entry rather than
-    // snapping the label to the nearest listed value (60 fps).
+    // An off-ladder value in the Default tier: the combo must report the real frame
+    // rate through a dynamic "73 fps (Custom)" entry rather than snapping the label
+    // to the nearest listed value (60 fps).
     {.id = QStringLiteral("settings-format-custom-fps"),
      .title = QStringLiteral("Settings / Format / Custom fps (Default tier)"),
      .page = VisualPage::Settings,

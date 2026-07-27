@@ -293,14 +293,25 @@ takes effect from the next recording.
 list — **15 / 30 / 60 fps** (the older 24 fps cinema and 25 fps PAL entries are dropped) plus
 **120 fps**, present but shown disabled ("unavailable") until a hardware-proven path exists. Expert
 mode replaces the list with a **free-entry fps field**, not capability-checked at entry. Its maximum
-is **the highest refresh rate of any attached monitor, rounded to whole fps** (fallback **60** when no
-refresh rate can be read); the minimum is 1. Capture never delivers more frames than the
-compositor/monitor rate, so a CFR target above it is pure frame duplication. Rounding is to the
-*nearest* whole fps on purpose: recording 144 CFR from a 143.96 Hz source duplicates roughly one frame
-every 25 s and never drifts, whereas rounding down to 143 would drop about one frame per second and
-show as micro-judder. The ceiling is re-evaluated whenever a display is attached, removed, or changes
-its refresh rate; a configured rate above the new ceiling is **clamped down** in both the model and the
-UI. When
+is **the highest refresh rate of any attached monitor, rounded to whole fps, but never below 60**; the
+minimum is 1. Capture never delivers more frames than the compositor/monitor rate, so a CFR target
+above it is pure frame duplication. Rounding is to the *nearest* whole fps on purpose: recording 144
+CFR from a 143.96 Hz source duplicates roughly one frame every 25 s and never drifts, whereas rounding
+down to 143 would drop about one frame per second and show as micro-judder. The **60 floor** applies
+both when no refresh rate can be read at all (headless host, remote session, a driver reporting 0 Hz)
+and when every attached display genuinely reports something slower — a 30 Hz-only setup still gets a
+maximum of 60, because the shipped default profile is CFR 60 fps and must stay expressible everywhere.
+
+The ceiling is re-evaluated whenever a display is attached, removed, or changes its refresh rate; a
+configured rate above the new ceiling is then **clamped down** in both the model and the UI, and the
+clamped value is published like any other change. A user edit is likewise always accepted into the
+enforced range. Clamping happens **only** on those two occasions: a rate that arrives from outside —
+persisted settings or a loaded preset carrying a rate from a faster display — stays in effect and is
+**displayed truthfully** (the Expert field widens its maximum far enough to show it, rather than
+silently displaying the ceiling). It is brought into range at the next display change or the next
+manual edit, whichever comes first.
+
+When
 the configured rate is not one of **15 / 30 / 60 fps** — after leaving Expert mode, or after loading a
 preset that carries such a rate — the Default combo grows an extra entry labelled
 **"`<n>` fps (Custom)"** carrying the real value, placed in numeric order among the fixed entries and

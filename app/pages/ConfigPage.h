@@ -306,9 +306,11 @@ class ConfigPage : public QWidget {
     void onCursorChanged();
     void updateQualitySegmentSelection();
     void updateFrameRateSelection();
-    // Re-derives the Expert frame-rate ceiling from the attached displays and
-    // applies it. Called at construction and on every screen add/remove/refresh-rate
-    // change.
+    // Computes the Expert frame-rate ceiling from the attached displays.
+    [[nodiscard]] int deriveMaxFrameRate() const;
+    // Re-derives that ceiling and applies it (including the clamp). Called on every
+    // screen add/remove/refresh-rate change — not at construction, where only the
+    // ceiling itself is established.
     void updateFrameRateLimit();
     void updateTimingSelection();
     void updateOutputResolutionSelection();

@@ -2204,7 +2204,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         });
         connect(gui, &QGuiApplication::screenRemoved, this, [this](QScreen*) { updateFrameRateLimit(); });
     }
-    updateFrameRateLimit();
+    // Construction establishes the ceiling itself, but deliberately does not clamp:
+    // rewriting the caller's frame rate belongs to a real re-evaluation (a display
+    // change) or a user edit. The constructed value is still displayed truthfully,
+    // because updateFrameRateSelection() widens the spinbox maximum to fit it.
+    max_frame_rate_ = deriveMaxFrameRate();
+    updateFrameRateSelection();
 
     QPointer<ConfigPage> safe = this;
     QTimer::singleShot(0, this, [safe]() {
@@ -2341,8 +2346,14 @@ void ConfigPage::onFrameRateChanged(int index) {
 void ConfigPage::onFrameRateSpinChanged(int fps) {
     if (fps <= 0)
         return;
-    video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
+    // A user edit always lands inside the enforced range. The widened maximum in
+    // updateFrameRateSelection() exists only to display an over-ceiling value
+    // seeded from outside, never to let one be typed in.
+    video_settings_.frame_rate_num = ClampFrameRate(static_cast<uint32_t>(fps), max_frame_rate_);
     video_settings_.frame_rate_den = 1;
+    // Re-seeds the spinbox from the (possibly clamped) model, which also narrows a
+    // previously widened maximum back to the ceiling.
+    updateFrameRateSelection();
     updateQualitySegmentSelection();
     updateFormatDisplay();
     emitCurrentVideoSettings();
@@ -3212,11 +3223,18 @@ void ConfigPage::updateQualitySegmentSelection() {
 }
 
 void ConfigPage::updateFrameRateSelection() {
-    // The Expert spinbox always mirrors the model's exact value, regardless of
-    // whether it is currently visible.
+    // The Expert spinbox mirrors the model's exact value, regardless of whether it
+    // is currently visible -- including a value above the current ceiling, which a
+    // persisted or preset-carried rate from a faster display legitimately produces.
+    // QSpinBox would silently clamp such a value to its maximum and display a rate
+    // the recorder is not using, so the maximum is widened just far enough to show
+    // it. The enforced ceiling is unchanged: the next re-evaluation or any user edit
+    // still pulls the value (and the maximum) back down.
     if (frame_rate_spin_) {
         const QSignalBlocker sblocker(frame_rate_spin_);
-        frame_rate_spin_->setValue(static_cast<int>(video_settings_.frame_rate_num));
+        const int fps = static_cast<int>(video_settings_.frame_rate_num);
+        frame_rate_spin_->setMaximum((std::max)(max_frame_rate_, fps));
+        frame_rate_spin_->setValue(fps);
     }
 
     if (!frame_rate_combo_)
@@ -3262,7 +3280,7 @@ void ConfigPage::updateFrameRateSelection() {
     }
 }
 
-void ConfigPage::updateFrameRateLimit() {
+int ConfigPage::deriveMaxFrameRate() const {
     QList<qreal> refresh_rates;
     if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
         for (const QScreen* screen : gui->screens()) {
@@ -3270,18 +3288,15 @@ void ConfigPage::updateFrameRateLimit() {
                 refresh_rates.append(screen->refreshRate());
         }
     }
-    applyMaxFrameRate(MaxFrameRateForRefreshRates(refresh_rates));
+    return MaxFrameRateForRefreshRates(refresh_rates);
+}
+
+void ConfigPage::updateFrameRateLimit() {
+    applyMaxFrameRate(deriveMaxFrameRate());
 }
 
 void ConfigPage::applyMaxFrameRate(int max_fps) {
     max_frame_rate_ = (std::max)(1, max_fps);
-
-    if (frame_rate_spin_) {
-        // setMaximum() clamps the spinbox's own value; the model is clamped right
-        // below, so the two stay in agreement.
-        const QSignalBlocker blocker(frame_rate_spin_);
-        frame_rate_spin_->setMaximum(max_frame_rate_);
-    }
 
     const uint32_t clamped = ClampFrameRate(video_settings_.frame_rate_num, max_frame_rate_);
     if (clamped == video_settings_.frame_rate_num) {

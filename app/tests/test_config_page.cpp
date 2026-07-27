@@ -568,6 +568,75 @@ TEST_F(ConfigPageTest, FrameRateCeiling_ClampOntoListedValueDropsCustomEntry) {
     EXPECT_EQ(combo->currentData().toInt(), 60);
 }
 
+// A rate that arrives from outside (persisted settings, a preset carrying a rate
+// from a faster display) must be shown as itself. QSpinBox clamps its displayed
+// value to maximum(), so the maximum has to widen -- otherwise the field would
+// read 144 while the recorder uses 240.
+TEST_F(ConfigPageTest, FrameRateCeiling_SpinboxShowsAnOverCeilingModelValue) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("frameRateSpin"));
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(combo, nullptr);
+
+    page.applyMaxFrameRate(144);
+    VideoSettingsModel persisted = video_defaults_;
+    persisted.frame_rate_num = 240;
+    persisted.frame_rate_den = 1;
+    page.setVideoSettings(persisted);
+
+    EXPECT_EQ(spin->value(), 240);
+    EXPECT_GE(spin->maximum(), 240);
+    EXPECT_EQ(page.maxFrameRate(), 144) << "the enforced ceiling itself must not move";
+    EXPECT_EQ(combo->currentText(), QStringLiteral("240 fps (Custom)"));
+}
+
+// The widened maximum is display-only: any user edit lands inside the ceiling and
+// narrows the field back.
+TEST_F(ConfigPageTest, FrameRateCeiling_UserEditIsClampedIntoTheEnforcedRange) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("frameRateSpin"));
+    ASSERT_NE(spin, nullptr);
+
+    page.applyMaxFrameRate(144);
+    VideoSettingsModel persisted = video_defaults_;
+    persisted.frame_rate_num = 240;
+    page.setVideoSettings(persisted);
+    ASSERT_EQ(spin->maximum(), 240);
+
+    VideoSettingsModel changed;
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& settings) {
+        emitted = true;
+        changed = settings;
+    });
+
+    spin->setValue(200);
+
+    EXPECT_TRUE(emitted);
+    EXPECT_EQ(changed.frame_rate_num, 144u);
+    EXPECT_EQ(spin->value(), 144);
+    EXPECT_EQ(spin->maximum(), 144);
+}
+
+// Construction establishes the ceiling but must not rewrite the caller's settings:
+// clamping belongs to a display change or a user edit.
+TEST_F(ConfigPageTest, FrameRateCeiling_ConstructionDoesNotClampTheSeededValue) {
+    VideoSettingsModel seeded = video_defaults_;
+    seeded.frame_rate_num = 240;
+    seeded.frame_rate_den = 1;
+
+    ConfigPage page(output_defaults_, seeded);
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("frameRateSpin"));
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(combo, nullptr);
+
+    EXPECT_EQ(spin->value(), 240);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("240 fps (Custom)"));
+    EXPECT_GE(page.maxFrameRate(), kFallbackMaxFrameRate);
+}
+
 // A configured rate already inside the ceiling is left alone.
 TEST_F(ConfigPageTest, FrameRateCeiling_LeavesInRangeValueUntouched) {
     ConfigPage page(output_defaults_, video_defaults_);
