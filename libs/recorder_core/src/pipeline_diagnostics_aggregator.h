@@ -251,6 +251,7 @@ struct PerfWindowSample {
     uint64_t dropped_coalesced = 0;
     uint64_t dropped_cfr = 0;
     uint64_t dropped_backpressure = 0;
+    uint64_t dropped_processing_failure = 0;
     uint64_t duplicated_frames = 0;       // CFR duplicate output frames
     uint64_t slot_stalls = 0;             // subset of backpressure
     uint64_t queue_saturation_events = 0; // rising-edge crossings of a queue's critical threshold
@@ -278,6 +279,7 @@ struct PerfSessionSummary {
     uint64_t dropped_coalesced = 0;
     uint64_t dropped_cfr = 0;
     uint64_t dropped_backpressure = 0;
+    uint64_t dropped_processing_failure = 0;
     uint64_t duplicated_frames = 0;
     uint64_t slot_stalls = 0;
     uint64_t queue_saturation_events = 0;
@@ -310,8 +312,9 @@ class PipelineDiagnosticsAggregator {
     // Capture (VideoThread)
     void OnFrameCaptured() noexcept;                                  // a frame the backend actually produced
     void OnFrameDroppedCoalesced() noexcept;                          // newer frame replaced an unconsumed one
-    void OnFrameDroppedCfr() noexcept;                                // scheduled tick produced no frame
+    void OnFrameDroppedCfr() noexcept;                                // scheduled tick had nothing to encode yet
     void OnFrameDroppedBackpressure() noexcept;                       // encoder input slots all in flight
+    void OnFrameDroppedProcessingFailure() noexcept;                  // a frame was there and its conversion failed
     void OnObservedFrameInterval(time_point now, double ms) noexcept; // VFR only
     // Present cadence (DXGI OD only): inter-present interval (ms) from LastPresentTime QPC
     // deltas plus the coalesced-update count (AccumulatedFrames). O(1), allocation-free.
@@ -441,6 +444,7 @@ class PipelineDiagnosticsAggregator {
     uint64_t dropped_coalesced_ = 0;
     uint64_t dropped_cfr_ = 0;
     uint64_t dropped_backpressure_ = 0;
+    uint64_t dropped_processing_failure_ = 0;
     bool interval_observed_ = false;
     RollingTimeWindow interval_window_{256, std::chrono::milliseconds(2000)};
 

@@ -215,6 +215,7 @@ void SessionStatsCollector::Run() {
                 fields.push_back({"dropped_coalesced", U64(p.dropped_coalesced)});
                 fields.push_back({"dropped_cfr", U64(p.dropped_cfr)});
                 fields.push_back({"dropped_backpressure", U64(p.dropped_backpressure)});
+                fields.push_back({"dropped_processing_failure", U64(p.dropped_processing_failure)});
                 fields.push_back({"duplicated_frames", U64(p.duplicated_frames)});
                 fields.push_back({"slot_stalls", U64(p.slot_stalls)});
                 fields.push_back({"queue_saturation_events", U64(p.queue_saturation_events)});
@@ -309,6 +310,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     fields.push_back({"dropped_coalesced", U64(sum.dropped_coalesced)});
     fields.push_back({"dropped_cfr", U64(sum.dropped_cfr)});
     fields.push_back({"dropped_backpressure", U64(sum.dropped_backpressure)});
+    fields.push_back({"dropped_processing_failure", U64(sum.dropped_processing_failure)});
     fields.push_back({"slot_stalls", U64(sum.slot_stalls)});
     fields.push_back({"queue_saturation_events", U64(sum.queue_saturation_events)});
     fields.push_back({"duration_skew_ms", Num(duration_skew_ms)});

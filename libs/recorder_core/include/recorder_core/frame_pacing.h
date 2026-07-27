@@ -84,4 +84,39 @@ struct PacingDecision {
     return dynamic_overlay_changed;
 }
 
+// ---------------------------------------------------------------------------
+// Why a scheduled CFR tick emitted no frame
+//
+// A CFR tick can end without a frame for two fundamentally different reasons,
+// and conflating them makes the drop counters lie: one is ordinary pacing, the
+// other is a genuine processing failure that costs the user picture.
+//
+// Pacing: the capture backend produced nothing for this tick and there is no
+// reference frame to hold. That is the session's own start — the encode loop has
+// not composited a first frame yet — and it resolves itself as soon as one
+// arrives. Benign.
+//
+// Processing failure: either a source frame WAS available for this tick and its
+// GPU conversion (input-view creation / VideoProcessorBlt) failed, or the
+// reference texture could not be allocated at all, in which case every held tick
+// on a still source drops for the rest of the session. Both lose real picture and
+// must never be filed under benign pacing.
+// ---------------------------------------------------------------------------
+enum class CfrTickDropCause : uint8_t {
+    Pacing = 0,           // benign: nothing to encode yet
+    ProcessingFailure = 1 // real: a frame was there (or should have been held) and was lost
+};
+
+// had_source_frame: a source texture was selected for this tick (fresh capture or
+//   held screen re-composition), so the drop can only come from the conversion path.
+// reference_storage_available: the reference texture used to hold the last composited
+//   frame exists. False only when its allocation failed at session start, which turns
+//   every no-fresh-frame tick into a lost frame rather than a startup gap.
+[[nodiscard]] constexpr CfrTickDropCause ClassifyCfrTickDrop(bool had_source_frame,
+                                                             bool reference_storage_available) noexcept {
+    if (had_source_frame)
+        return CfrTickDropCause::ProcessingFailure;
+    return reference_storage_available ? CfrTickDropCause::Pacing : CfrTickDropCause::ProcessingFailure;
+}
+
 } // namespace recorder_core

@@ -193,6 +193,7 @@ std::string SampleToJsonLine(const SoakSample& s) {
     j["frames_dropped_coalesced"] = s.frames_dropped_coalesced;
     j["frames_dropped_cfr"] = s.frames_dropped_cfr;
     j["frames_dropped_backpressure"] = s.frames_dropped_backpressure;
+    j["frames_dropped_processing_failure"] = s.frames_dropped_processing_failure;
     j["frames_duplicated"] = s.frames_duplicated;
     j["audio_discontinuities"] = s.audio_discontinuities;
     j["mux_queue_depth"] = s.mux_queue_depth;

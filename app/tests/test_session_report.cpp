@@ -42,6 +42,7 @@ SessionReportInputs MakeInputs() {
     in.has_snapshot = true;
     auto& s = in.snapshot;
     s.capture.frames_dropped_cfr = 3;
+    s.capture.frames_dropped_processing_failure = 7;
     s.capture.frames_duplicated = 5;
     s.video_encoder.frames_submitted = 2540;
     s.video_encoder.frames_encoded = 2540;
@@ -229,6 +230,9 @@ TEST(SessionReport, CarriesVideoPacing) {
     const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
     EXPECT_EQ(counters[QStringLiteral("frames_duplicated")].toInt(), 5);
     EXPECT_EQ(counters[QStringLiteral("frames_dropped")].toObject()[QStringLiteral("cfr")].toInt(), 3);
+    // Frames lost to a failed conversion are their own bucket, so a report can tell
+    // benign pacing apart from picture the session actually lost.
+    EXPECT_EQ(counters[QStringLiteral("frames_dropped")].toObject()[QStringLiteral("processing_failure")].toInt(), 7);
 }
 
 TEST(SessionReport, KeyframePredictionMismatchesAreReported) {

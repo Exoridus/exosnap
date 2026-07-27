@@ -1931,9 +1931,9 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     // mid-recording carries the live encoder/output context.
     if (recording && !was_recording) {
         refreshCrashSessionContext();
-        // DROP-NOTIFY: start a fresh per-recording backpressure-drop accounting so a
-        // prior recording's drops can never leak into this one's "frames dropped" toast.
-        last_backpressure_drops_ = 0;
+        // DROP-NOTIFY: start a fresh per-recording real-drop accounting so a prior
+        // recording's drops can never leak into this one's "frames dropped" toast.
+        last_real_drops_ = 0;
         // ADR 0033 extra-checks: scope present diagnostics to the recorded window's process
         // (0 for Monitor/Region = global), so discard/flip/mode stats reflect the captured
         // source rather than whatever last presented.
@@ -3872,34 +3872,35 @@ void MainWindow::initNotificationToasts() {
                     notification_manager_->Enqueue(std::move(event));
 
                 // DROP-NOTIFY: on a successful save, raise a separate caution toast when
-                // REAL frame drops occurred — encoder backpressure only. Benign drops
-                // (capture coalescing / intentional CFR downsampling) are excluded by
-                // design, so this fires only when the encoder genuinely fell behind. The
-                // toast links to the Diagnostics page, which renders the full per-stage
-                // breakdown. A separate event (not folded into "Recording saved") because
-                // that toast's two action slots — Edit + Show in folder — are both taken.
-                if (succeeded && last_backpressure_drops_ > 0) {
+                // REAL frame drops occurred — encoder backpressure or a frame-processing
+                // failure. Benign drops (capture coalescing / intentional CFR
+                // downsampling) are excluded by design, so this fires only when the
+                // recording genuinely lost picture. The body names no single cause
+                // because two can produce it; the toast links to the Diagnostics page,
+                // which renders the full per-stage breakdown. A separate event (not
+                // folded into "Recording saved") because that toast's two action slots —
+                // Edit + Show in folder — are both taken.
+                if (succeeded && last_real_drops_ > 0) {
                     notifications::NotificationEvent drop_event;
                     drop_event.type = notifications::NotificationType::FramesDropped;
                     drop_event.title = QStringLiteral("Frames dropped");
                     drop_event.body =
-                        last_backpressure_drops_ == 1
-                            ? QStringLiteral("1 frame was dropped because the encoder couldn't keep up.")
-                            : QStringLiteral("%1 frames were dropped because the encoder couldn't keep up.")
-                                  .arg(last_backpressure_drops_);
+                        last_real_drops_ == 1
+                            ? QStringLiteral("1 frame did not make it into the recording.")
+                            : QStringLiteral("%1 frames did not make it into the recording.").arg(last_real_drops_);
                     drop_event.action = notifications::NotificationAction::OpenDiagnostics;
                     notification_manager_->Enqueue(std::move(drop_event));
                 }
             });
 
-    // DROP-NOTIFY: tee the live diagnostics stream to track the running encoder-
-    // backpressure drop count. This is independent of the (lazy) DiagnosticsPage, which
-    // owns its OWN direct connect — so drop tracking works even if the user never opens
-    // that page. The count is monotonic within a recording and reset on the start edge;
-    // the result-ready handler above reads it to decide whether to raise the toast.
+    // DROP-NOTIFY: tee the live diagnostics stream to track the running real-drop
+    // count. This is independent of the (lazy) DiagnosticsPage, which owns its OWN
+    // direct connect — so drop tracking works even if the user never opens that page.
+    // The count is monotonic within a recording and reset on the start edge; the
+    // result-ready handler above reads it to decide whether to raise the toast.
     connect(record_page_, &RecordPage::diagnosticsUpdated, this,
             [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
-                last_backpressure_drops_ = snapshot.capture.frames_dropped_backpressure;
+                last_real_drops_ = snapshot.capture.frames_dropped_problem();
             });
 
     // FinalizingOverlay: MP4 remux progress ticks, only meaningful while the

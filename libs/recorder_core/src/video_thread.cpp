@@ -3156,10 +3156,19 @@ void VideoThread::Run() {
                 }
 
                 if (!frameWritten) {
-                    // VideoProcessorBlt failed or no reference yet — release slot and skip tick
+                    // Release the slot and skip the tick. Two very different causes end
+                    // up here and must not share a counter: a source frame was available
+                    // and its conversion (input view / VideoProcessorBlt) failed, which
+                    // costs real picture, versus nothing to encode yet at session start,
+                    // which is benign pacing. See ClassifyCfrTickDrop.
                     nvenc.ReleaseSlot(slot);
                     ++droppedFrames;
-                    m_state.diagnostics.OnFrameDroppedCfr();
+                    if (ClassifyCfrTickDrop(rawSourceTex != nullptr, refNv12 != nullptr) ==
+                        CfrTickDropCause::ProcessingFailure) {
+                        m_state.diagnostics.OnFrameDroppedProcessingFailure();
+                    } else {
+                        m_state.diagnostics.OnFrameDroppedCfr();
+                    }
                     cfr_frame_idx++;
                     next_tick_100ns += frame_interval_100ns;
                     anyWork = true;

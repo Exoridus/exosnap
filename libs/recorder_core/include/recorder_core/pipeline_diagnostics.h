@@ -88,13 +88,14 @@ enum class DiagnosticsSplitTrigger : uint8_t {
 
 struct CaptureDiagnostics {
     double target_fps = 0.0;
-    double actual_fps = 0.0;                  // emitted frames Δ / elapsed Δ between publishes
-    uint64_t frames_captured = 0;             // frames the capture backend produced (true)
-    uint64_t frames_emitted = 0;              // frames handed to the encoder (CFR output rate)
-    uint64_t frames_dropped_coalesced = 0;    // a newer frame replaced an unconsumed one
-    uint64_t frames_dropped_cfr = 0;          // a scheduled tick produced no frame
-    uint64_t frames_dropped_backpressure = 0; // encoder input slots were all in flight
-    uint64_t frames_duplicated = 0;           // CFR hold of the last real frame
+    double actual_fps = 0.0;                        // emitted frames Δ / elapsed Δ between publishes
+    uint64_t frames_captured = 0;                   // frames the capture backend produced (true)
+    uint64_t frames_emitted = 0;                    // frames handed to the encoder (CFR output rate)
+    uint64_t frames_dropped_coalesced = 0;          // a newer frame replaced an unconsumed one
+    uint64_t frames_dropped_cfr = 0;                // a scheduled tick had nothing to encode yet (benign pacing)
+    uint64_t frames_dropped_backpressure = 0;       // encoder input slots were all in flight
+    uint64_t frames_dropped_processing_failure = 0; // a frame was available and its conversion failed
+    uint64_t frames_duplicated = 0;                 // CFR hold of the last real frame
     double frame_interval_ms = 0.0;
     MetricAvailability interval_observed = MetricAvailability::Unavailable; // true only on VFR
     CaptureSourceType source_type = CaptureSourceType::Unknown;
@@ -124,19 +125,21 @@ struct CaptureDiagnostics {
     MetricAvailability acquire_availability = MetricAvailability::Unavailable;
 
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
-        return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;
+        return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure +
+               frames_dropped_processing_failure;
     }
 
-    // "Problematic" drops for internal bottleneck/health classification: excludes
-    // frames_dropped_coalesced (benign -- the source is simply faster than the CFR
-    // target, e.g. a 144 Hz display recorded at 60 fps). Deliberately NOT the same
-    // as "real" drops (frames_dropped_backpressure alone, what the user-facing
-    // drop count/notification uses) -- frames_dropped_cfr can also fire for a
-    // genuine compositor/VideoProcessorBlt failure, not just benign pacing, so
-    // this stays a broader signal for stage-health scoring. Single source of
-    // truth for the formula previously duplicated at each call site.
+    // "Problematic" drops: the drops that cost real picture. Excludes the two benign
+    // categories -- frames_dropped_coalesced (the source is simply faster than the CFR
+    // target, e.g. a 144 Hz display recorded at 60 fps) and frames_dropped_cfr (a
+    // scheduled tick before the first frame exists, which resolves itself).
+    //
+    // This is the single definition of a "real" drop, shared by the internal
+    // bottleneck/health classification AND every user-facing drop surface (report
+    // card, review panel, live tile, dropped-frames notification), so the two can
+    // never disagree about whether a session dropped frames.
     [[nodiscard]] uint64_t frames_dropped_problem() const noexcept {
-        return frames_dropped_cfr + frames_dropped_backpressure;
+        return frames_dropped_processing_failure + frames_dropped_backpressure;
     }
 };
 

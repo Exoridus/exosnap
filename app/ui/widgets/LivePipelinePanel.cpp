@@ -335,10 +335,12 @@ void LivePipelinePanel::applySnapshot(const RecordingDiagnosticsSnapshot& s) {
                                                       .arg(cap.frames_captured)
                                                       .arg(cap.frames_emitted)
                                                       .arg(cap.frames_duplicated));
-    setValue(QStringLiteral("liveCaptureDrops"), QStringLiteral("coalesce %1 · cfr %2 · backpressure %3")
-                                                     .arg(cap.frames_dropped_coalesced)
-                                                     .arg(cap.frames_dropped_cfr)
-                                                     .arg(cap.frames_dropped_backpressure));
+    setValue(QStringLiteral("liveCaptureDrops"),
+             QStringLiteral("coalesce %1 · cfr %2 · backpressure %3 · processing %4")
+                 .arg(cap.frames_dropped_coalesced)
+                 .arg(cap.frames_dropped_cfr)
+                 .arg(cap.frames_dropped_backpressure)
+                 .arg(cap.frames_dropped_processing_failure));
 
     // ---- Compositor / Encoder ----
     const CompositorDiagnostics& comp = s.compositor;

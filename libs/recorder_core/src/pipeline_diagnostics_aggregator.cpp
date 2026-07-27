@@ -70,6 +70,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     dropped_coalesced_ = 0;
     dropped_cfr_ = 0;
     dropped_backpressure_ = 0;
+    dropped_processing_failure_ = 0;
     interval_observed_ = false;
     interval_window_.Clear();
 
@@ -223,6 +224,11 @@ void PipelineDiagnosticsAggregator::OnFrameDroppedCfr() noexcept {
 void PipelineDiagnosticsAggregator::OnFrameDroppedBackpressure() noexcept {
     std::lock_guard lk(mutex_);
     ++dropped_backpressure_;
+}
+
+void PipelineDiagnosticsAggregator::OnFrameDroppedProcessingFailure() noexcept {
+    std::lock_guard lk(mutex_);
+    ++dropped_processing_failure_;
 }
 
 void PipelineDiagnosticsAggregator::OnObservedFrameInterval(time_point now, double ms) noexcept {
@@ -581,6 +587,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     cap.frames_dropped_coalesced = dropped_coalesced_;
     cap.frames_dropped_cfr = dropped_cfr_;
     cap.frames_dropped_backpressure = dropped_backpressure_;
+    cap.frames_dropped_processing_failure = dropped_processing_failure_;
     cap.frames_duplicated = stats.duplicated_video_frames;
     cap.source_type = cfg_.source_type;
     cap.source_loss = stats.source_loss;
@@ -897,6 +904,7 @@ PerfWindowSample PipelineDiagnosticsAggregator::SamplePerfWindow(time_point now)
     p.dropped_coalesced = dropped_coalesced_;
     p.dropped_cfr = dropped_cfr_;
     p.dropped_backpressure = dropped_backpressure_;
+    p.dropped_processing_failure = dropped_processing_failure_;
     p.duplicated_frames = frames_duplicated_;
     p.slot_stalls = slot_stalls_;
     p.queue_saturation_events = queue_saturation_events_;
@@ -924,6 +932,7 @@ PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
     s.dropped_coalesced = dropped_coalesced_;
     s.dropped_cfr = dropped_cfr_;
     s.dropped_backpressure = dropped_backpressure_;
+    s.dropped_processing_failure = dropped_processing_failure_;
     s.duplicated_frames = frames_duplicated_;
     s.slot_stalls = slot_stalls_;
     s.queue_saturation_events = queue_saturation_events_;
@@ -933,7 +942,8 @@ PerfSessionSummary PipelineDiagnosticsAggregator::BuildPerfSummary() const {
 
 PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagnosticsSnapshot& s, bool recording,
                                                            std::string& reason, PipelineHealth& health) {
-    // Problematic drops exclude benign capture coalescing (source faster than target).
+    // Problematic drops exclude the benign categories: capture coalescing (source
+    // faster than target) and CFR pacing before the first frame exists.
     const uint64_t problem_drops = s.capture.frames_dropped_problem();
 
     if (!recording) {

@@ -586,7 +586,7 @@ TEST_F(EditExportPageTest, ReviewReportUsesEmDashForMissingValuesNotUnavailable)
 // discards a large fraction of source frames via coalescing/pacing to hit the
 // target rate -- none of that is a real drop. The report must count only
 // encoder-backpressure drops, not the coalesced/CFR-pacing categories.
-TEST_F(EditExportPageTest, ReviewReportCountsOnlyBackpressureDrops_NotCoalescedPacing) {
+TEST_F(EditExportPageTest, ReviewReportCountsOnlyRealDrops_NotCoalescedPacing) {
     EditExportPage page;
     EditContext ctx;
     ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
@@ -608,6 +608,32 @@ TEST_F(EditExportPageTest, ReviewReportCountsOnlyBackpressureDrops_NotCoalescedP
     // 3 / (6000 + 3) * 100 rounds to 0.0%; a coalesced-inclusive total (4103
     // dropped of 10103) would have shown roughly 40%.
     EXPECT_EQ(drops->text(), QStringLiteral("Frame drops: 0.0%")) << drops->text().toStdString();
+}
+
+// The mirror image of the test above: a frame whose GPU conversion failed is picture
+// the recording lost, and it used to be filed under benign CFR pacing. The review
+// panel then read 0.0% while the Diagnostics capture card flagged the same session.
+TEST_F(EditExportPageTest, ReviewReportCountsProcessingFailuresAsRealDrops) {
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.duration_seconds = 15.0;
+    ctx.completed_snapshot.valid = true;
+    ctx.completed_snapshot.capture.frames_emitted = 900;
+    ctx.completed_snapshot.capture.frames_dropped_coalesced = 4000;         // benign
+    ctx.completed_snapshot.capture.frames_dropped_cfr = 50;                 // benign start-up pacing
+    ctx.completed_snapshot.capture.frames_dropped_processing_failure = 100; // real: picture lost
+    page.setEditContext(ctx);
+    page.setPhase(EditExportPage::Phase::Review);
+
+    QLabel* drops = nullptr;
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        if (lbl->text().startsWith(QStringLiteral("Frame drops:")))
+            drops = lbl;
+    }
+    ASSERT_NE(drops, nullptr);
+    // 100 / (900 + 100) = 10.0%. Before the fix this read 0.0%.
+    EXPECT_EQ(drops->text(), QStringLiteral("Frame drops: 10.0%")) << drops->text().toStdString();
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {

@@ -248,8 +248,8 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSour
 // encoder-backpressure drops together with deliberate CFR pacing/coalescing
 // (e.g. downsampling a 144 Hz source to a 60 fps CFR target -- not a drop).
 // dropped_frames is now only ever set from the diagnostics snapshot's
-// capture.frames_dropped_backpressure (see RecordPage's diagnostics
-// callback), so a plain stats update must leave it untouched.
+// capture.frames_dropped_problem() (see RecordPage's diagnostics callback),
+// so a plain stats update must leave it untouched.
 TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_DoesNotSetDroppedFramesFromRawStat) {
     RecordViewModel vm;
 

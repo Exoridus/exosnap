@@ -79,6 +79,7 @@ void SoakRunner::SampleOnce() {
             s.frames_dropped_coalesced = d.capture.frames_dropped_coalesced;
             s.frames_dropped_cfr = d.capture.frames_dropped_cfr;
             s.frames_dropped_backpressure = d.capture.frames_dropped_backpressure;
+            s.frames_dropped_processing_failure = d.capture.frames_dropped_processing_failure;
             s.frames_duplicated = d.capture.frames_duplicated;
             s.audio_discontinuities = d.audio.discontinuities;
             s.mux_queue_depth = d.video_queue.current_depth;
