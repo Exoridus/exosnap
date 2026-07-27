@@ -32,23 +32,23 @@ TEST(CodecLabelsTest, ContainerCanonCasingAgreesAcrossEnumFamilies) {
 }
 
 TEST(CodecLabelsTest, VideoCodecCanonCasing) {
-    EXPECT_EQ(videoCodecLabel(capability::VideoCodec::H264Nvenc), QStringLiteral("H.264"));
-    EXPECT_EQ(videoCodecLabel(capability::VideoCodec::HevcNvenc), QStringLiteral("HEVC"));
-    EXPECT_EQ(videoCodecLabel(capability::VideoCodec::Av1Nvenc), QStringLiteral("AV1"));
+    EXPECT_EQ(videoCodecLabel(capability::VideoCodec::H264), QStringLiteral("H.264"));
+    EXPECT_EQ(videoCodecLabel(capability::VideoCodec::Hevc), QStringLiteral("HEVC"));
+    EXPECT_EQ(videoCodecLabel(capability::VideoCodec::Av1), QStringLiteral("AV1"));
 
-    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::H264Nvenc), QStringLiteral("H.264"));
-    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::HevcNvenc), QStringLiteral("HEVC"));
-    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::Av1Nvenc), QStringLiteral("AV1"));
+    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::H264), QStringLiteral("H.264"));
+    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::Hevc), QStringLiteral("HEVC"));
+    EXPECT_EQ(videoCodecLabel(recorder_core::VideoCodec::Av1), QStringLiteral("AV1"));
 }
 
 TEST(CodecLabelsTest, AudioCodecCanonCasingNeverUppercaseOpus) {
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Opus), QStringLiteral("Opus"));
-    EXPECT_EQ(audioCodecLabel(capability::AudioCodec::AacMf), QStringLiteral("AAC"));
+    EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Aac), QStringLiteral("AAC"));
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Pcm), QStringLiteral("PCM"));
     EXPECT_EQ(audioCodecLabel(capability::AudioCodec::Flac), QStringLiteral("FLAC"));
 
     EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Opus), QStringLiteral("Opus"));
-    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::AacMf), QStringLiteral("AAC"));
+    EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Aac), QStringLiteral("AAC"));
     EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Pcm), QStringLiteral("PCM"));
     EXPECT_EQ(audioCodecLabel(recorder_core::AudioCodec::Flac), QStringLiteral("FLAC"));
 }

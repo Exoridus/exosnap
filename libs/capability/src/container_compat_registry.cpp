@@ -102,10 +102,10 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCodec video, AudioCodec audio) noexcept {
     // --- MKV ---
     if (container == Container::Matroska) {
-        if (video == VideoCodec::Av1Nvenc) {
+        if (video == VideoCodec::Av1) {
             if (audio == AudioCodec::Opus)
                 return {ContainerCompatLevel::Recommended, "Primary validated MKV path: AV1 NVENC + Opus."};
-            if (audio == AudioCodec::AacMf)
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Recommended, "Validated MKV path: AV1 NVENC + AAC (M3.2)."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Allowed,
@@ -116,8 +116,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "MKV + AV1 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
                         "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2)."};
         }
-        if (video == VideoCodec::H264Nvenc) {
-            if (audio == AudioCodec::AacMf)
+        if (video == VideoCodec::H264) {
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Recommended, "Validated MKV path: H.264 NVENC + AAC."};
             if (audio == AudioCodec::Opus)
                 return {ContainerCompatLevel::Allowed,
@@ -133,8 +133,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "MKV + H.264 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
                         "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2)."};
         }
-        if (video == VideoCodec::HevcNvenc) {
-            if (audio == AudioCodec::AacMf)
+        if (video == VideoCodec::Hevc) {
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Allowed,
                         "MKV + HEVC + AAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
                         "length-prefixed samples). Implemented in 0.7.0."};
@@ -161,8 +161,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
             return {ContainerCompatLevel::Prohibited, "Opus audio is not supported in MP4. "
                                                       "Select AAC for MP4 recordings (ADR 0010)."};
 
-        if (video == VideoCodec::H264Nvenc) {
-            if (audio == AudioCodec::AacMf)
+        if (video == VideoCodec::H264) {
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Recommended,
                         "Primary validated MP4 path: H.264 NVENC + AAC via remux-on-stop (ADR 0014)."};
             if (audio == AudioCodec::Pcm)
@@ -176,8 +176,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + H.264 + FLAC: FLAC-in-MP4 not specified in this build (use MKV for FLAC)."};
         }
-        if (video == VideoCodec::HevcNvenc) {
-            if (audio == AudioCodec::AacMf)
+        if (video == VideoCodec::Hevc) {
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Allowed,
                         "MP4 + HEVC + AAC: HEVC recorded to a transient MKV and remuxed to MP4 with the "
                         "'hvc1' sample-entry FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/"
@@ -189,8 +189,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + HEVC + FLAC: not implemented (MP4 audio is AAC-only)."};
         }
-        if (video == VideoCodec::Av1Nvenc) {
-            if (audio == AudioCodec::AacMf)
+        if (video == VideoCodec::Av1) {
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + AV1 + AAC: deferred; AV1-in-MP4 container support not yet validated."};
             if (audio == AudioCodec::Pcm)
@@ -204,14 +204,14 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
     // --- WebM ---
     if (container == Container::WebM) {
         // H.264 and HEVC are unconditionally Prohibited in WebM (ADR 0010).
-        if (video == VideoCodec::H264Nvenc || video == VideoCodec::HevcNvenc)
+        if (video == VideoCodec::H264 || video == VideoCodec::Hevc)
             return {ContainerCompatLevel::Prohibited, "WebM supports only AV1 in ExoSnap's product matrix. "
                                                       "H.264 and HEVC are prohibited in WebM (ADR 0010)."};
 
-        if (video == VideoCodec::Av1Nvenc) {
+        if (video == VideoCodec::Av1) {
             if (audio == AudioCodec::Opus)
                 return {ContainerCompatLevel::Recommended, "Primary validated WebM path: AV1 NVENC + Opus."};
-            if (audio == AudioCodec::AacMf)
+            if (audio == AudioCodec::Aac)
                 return {ContainerCompatLevel::Prohibited,
                         "WebM does not support AAC. Use Opus for WebM recordings (ADR 0010)."};
             if (audio == AudioCodec::Pcm)
@@ -234,11 +234,11 @@ AudioCodec ContainerCompatRegistry::PreferredAudioCodec(Container container) noe
     case Container::Matroska:
         return AudioCodec::Opus;
     case Container::Mp4:
-        return AudioCodec::AacMf;
+        return AudioCodec::Aac;
     case Container::WebM:
         return AudioCodec::Opus;
     }
-    return AudioCodec::AacMf;
+    return AudioCodec::Aac;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,13 +248,13 @@ AudioCodec ContainerCompatRegistry::PreferredAudioCodec(Container container) noe
 VideoCodec ContainerCompatRegistry::PreferredVideoCodec(Container container) noexcept {
     switch (container) {
     case Container::Matroska:
-        return VideoCodec::Av1Nvenc;
+        return VideoCodec::Av1;
     case Container::Mp4:
-        return VideoCodec::H264Nvenc;
+        return VideoCodec::H264;
     case Container::WebM:
-        return VideoCodec::Av1Nvenc;
+        return VideoCodec::Av1;
     }
-    return VideoCodec::H264Nvenc;
+    return VideoCodec::H264;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +282,7 @@ void ContainerCompatRegistry::ReconcileCodecs(Container container, VideoCodec& v
     // preferring Opus → AAC → PCM for MKV/WebM, and AAC → Opus → PCM for MP4.
     // This preserves the video codec whenever possible (e.g. MKV + H264 + Opus
     // → MKV + H264 + AAC rather than falling all the way to AV1 + Opus).
-    const std::array<AudioCodec, 4> audio_candidates = {AudioCodec::AacMf, AudioCodec::Opus, AudioCodec::Pcm,
+    const std::array<AudioCodec, 4> audio_candidates = {AudioCodec::Aac, AudioCodec::Opus, AudioCodec::Pcm,
                                                         AudioCodec::Flac};
     for (const AudioCodec candidate_audio : audio_candidates) {
         if (candidate_audio == audio) {

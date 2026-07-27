@@ -193,7 +193,7 @@ TEST_F(SessionE2ETest, RealPipeline_H264Aac_ProducesPlayableMkvAndMp4) {
     constexpr double kSeconds = 2.0;
 
     std::string err;
-    ASSERT_TRUE(RunRealPipelineToMkv(VideoCodec::H264Nvenc, AudioCodec::AacMf, mkv, kSeconds, err))
+    ASSERT_TRUE(RunRealPipelineToMkv(VideoCodec::H264, AudioCodec::Aac, mkv, kSeconds, err))
         << "pipeline failed: " << err;
 
     // --- Foreign-player validation of the MKV ---
@@ -236,7 +236,7 @@ TEST_F(SessionE2ETest, RealPipeline_Av1Opus_ProducesPlayableMkv) {
     constexpr double kSeconds = 2.0;
 
     std::string err;
-    ASSERT_TRUE(RunRealPipelineToMkv(VideoCodec::Av1Nvenc, AudioCodec::Opus, mkv, kSeconds, err))
+    ASSERT_TRUE(RunRealPipelineToMkv(VideoCodec::Av1, AudioCodec::Opus, mkv, kSeconds, err))
         << "pipeline failed: " << err;
 
     const DemuxFacts f = DemuxAndInspect(mkv);

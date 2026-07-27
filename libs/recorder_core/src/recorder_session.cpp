@@ -217,23 +217,22 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         // MKV as V_MPEGH/ISO/HEVC and remuxed to MP4 with the 'hvc1' sample-entry
         // FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/NLE
         // compatibility (0.7.0; container compat registry → Allowed, ADR 0010/0014).
-        if (config.video_codec != VideoCodec::H264Nvenc && config.video_codec != VideoCodec::HevcNvenc) {
-            return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "Container::Mp4 requires VideoCodec::H264Nvenc or VideoCodec::HevcNvenc");
+        if (config.video_codec != VideoCodec::H264 && config.video_codec != VideoCodec::Hevc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::Mp4 requires VideoCodec::H264 or VideoCodec::Hevc");
         }
     } else if (config.container == Container::WebM) {
-        if (config.video_codec != VideoCodec::Av1Nvenc) {
-            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::WebM requires VideoCodec::Av1Nvenc");
+        if (config.video_codec != VideoCodec::Av1) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::WebM requires VideoCodec::Av1");
         }
     } else {
         // Container::Matroska: AV1, H.264, and HEVC are supported. HEVC NVENC is
         // muxed as V_MPEGH/ISO/HEVC with an hvcC codec-private blob and
         // length-prefixed samples (0.7.0; container compat registry → Allowed).
-        if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc &&
-            config.video_codec != VideoCodec::HevcNvenc) {
+        if (config.video_codec != VideoCodec::Av1 && config.video_codec != VideoCodec::H264 &&
+            config.video_codec != VideoCodec::Hevc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc, "
-                        "or VideoCodec::HevcNvenc");
+                        "Container::Matroska requires VideoCodec::Av1, VideoCodec::H264, "
+                        "or VideoCodec::Hevc");
         }
     }
 
@@ -242,18 +241,18 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         // MP4 audio is AAC only. PCM is deferred (libavformat emits ipcm which has
         // limited player support); FLAC and Opus are also rejected for MP4 (ADR 0010,
         // ADR 0028, ADR 0030). Use MKV for PCM or FLAC.
-        if (config.audio_codec != AudioCodec::AacMf) {
+        if (config.audio_codec != AudioCodec::Aac) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "Container::Mp4 requires AudioCodec::AacMf; "
+                        "Container::Mp4 requires AudioCodec::Aac; "
                         "PCM is deferred (ipcm sample entry, limited player support), "
                         "Opus and FLAC are not valid for MP4");
         }
     } else if (config.audio_codec == AudioCodec::Opus) {
         // Opus: valid for WebM and Matroska
-    } else if (config.audio_codec == AudioCodec::AacMf) {
+    } else if (config.audio_codec == AudioCodec::Aac) {
         if (config.container == Container::WebM) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "AudioCodec::AacMf is not valid for Container::WebM; use AudioCodec::Opus");
+                        "AudioCodec::Aac is not valid for Container::WebM; use AudioCodec::Opus");
         }
     } else if (config.audio_codec == AudioCodec::Pcm) {
         // PCM (A_PCM/INT/LIT): Matroska only.
@@ -271,7 +270,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         }
     } else {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, "
+                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::Aac, "
                     "AudioCodec::Pcm, AudioCodec::Flac");
     }
 
@@ -329,9 +328,9 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_NOTIMPL, ErrorPhase::Prepare, "Unsupported ChromaSubsampling; supported: Cs420, Cs444");
     }
     if (config.chroma == ChromaSubsampling::Cs444) {
-        if (config.video_codec != VideoCodec::H264Nvenc && config.video_codec != VideoCodec::HevcNvenc) {
+        if (config.video_codec != VideoCodec::H264 && config.video_codec != VideoCodec::Hevc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "ChromaSubsampling::Cs444 requires VideoCodec::H264Nvenc or VideoCodec::HevcNvenc "
+                        "ChromaSubsampling::Cs444 requires VideoCodec::H264 or VideoCodec::Hevc "
                         "(AV1 NVENC is 4:2:0 only)");
         }
         if (config.bit_depth != BitDepth::Bit8) {
@@ -340,16 +339,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
 
     // Bit depth: Bit8 is universal. Bit10 (P010 → HEVC Main10 / AV1 10-bit, SDR BT.709,
-    // ADR 0032) is valid only for HevcNvenc and Av1Nvenc — H.264 stays 8-bit only. The
+    // ADR 0032) is valid only for Hevc and Av1 — H.264 stays 8-bit only. The
     // container constraints are identical to the 8-bit path for the same codec (already
     // enforced above): HEVC → MKV/MP4, AV1 → MKV/WebM.
     if (config.bit_depth != BitDepth::Bit8 && config.bit_depth != BitDepth::Bit10) {
         return fail(E_NOTIMPL, ErrorPhase::Prepare, "Unsupported BitDepth; supported: Bit8, Bit10");
     }
-    if (config.bit_depth == BitDepth::Bit10 && config.video_codec != VideoCodec::HevcNvenc &&
-        config.video_codec != VideoCodec::Av1Nvenc) {
+    if (config.bit_depth == BitDepth::Bit10 && config.video_codec != VideoCodec::Hevc &&
+        config.video_codec != VideoCodec::Av1) {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "BitDepth::Bit10 requires VideoCodec::HevcNvenc or VideoCodec::Av1Nvenc "
+                    "BitDepth::Bit10 requires VideoCodec::Hevc or VideoCodec::Av1 "
                     "(H.264 is 8-bit only)");
     }
 

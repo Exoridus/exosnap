@@ -56,11 +56,11 @@ inline QString videoCodecLabel(capability::VideoCodec codec) {
 
 inline QString videoCodecLabel(recorder_core::VideoCodec codec) {
     switch (codec) {
-    case recorder_core::VideoCodec::H264Nvenc:
+    case recorder_core::VideoCodec::H264:
         return QStringLiteral("H.264");
-    case recorder_core::VideoCodec::HevcNvenc:
+    case recorder_core::VideoCodec::Hevc:
         return QStringLiteral("HEVC");
-    case recorder_core::VideoCodec::Av1Nvenc:
+    case recorder_core::VideoCodec::Av1:
         return QStringLiteral("AV1");
     }
     return QStringLiteral("AV1");
@@ -70,7 +70,7 @@ inline QString audioCodecLabel(capability::AudioCodec codec) {
     switch (codec) {
     case capability::AudioCodec::Opus:
         return QStringLiteral("Opus");
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return QStringLiteral("AAC");
     case capability::AudioCodec::Pcm:
         return QStringLiteral("PCM");
@@ -84,7 +84,7 @@ inline QString audioCodecLabel(recorder_core::AudioCodec codec) {
     switch (codec) {
     case recorder_core::AudioCodec::Opus:
         return QStringLiteral("Opus");
-    case recorder_core::AudioCodec::AacMf:
+    case recorder_core::AudioCodec::Aac:
         return QStringLiteral("AAC");
     case recorder_core::AudioCodec::Pcm:
         return QStringLiteral("PCM");

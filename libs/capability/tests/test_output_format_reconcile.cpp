@@ -22,7 +22,7 @@ TEST(ReconcileOutputFormatTest, DefaultProfileIsUntouched) {
     const OutputFormatReconciliation outcome = ReconcileOutputFormat({});
 
     EXPECT_EQ(outcome.resolved.container, Container::Matroska);
-    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::Av1);
     EXPECT_EQ(outcome.resolved.audio_codec, AudioCodec::Opus);
     EXPECT_EQ(outcome.resolved.bit_depth, BitDepth::Bit8);
     EXPECT_EQ(outcome.resolved.chroma, ChromaSubsampling::Cs420);
@@ -36,40 +36,40 @@ TEST(ReconcileOutputFormatTest, DefaultProfileIsUntouched) {
 TEST(ReconcileOutputFormatTest, Mp4ForcesH264AacFromAv1Opus) {
     OutputFormatRequest request;
     request.container = Container::Mp4;
-    request.video_codec = VideoCodec::Av1Nvenc;
+    request.video_codec = VideoCodec::Av1;
     request.audio_codec = AudioCodec::Opus;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
 
     EXPECT_EQ(outcome.resolved.container, Container::Mp4);
-    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::H264Nvenc);
-    EXPECT_EQ(outcome.resolved.audio_codec, AudioCodec::AacMf);
+    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::H264);
+    EXPECT_EQ(outcome.resolved.audio_codec, AudioCodec::Aac);
     EXPECT_TRUE(outcome.codecs_adjusted);
 }
 
 TEST(ReconcileOutputFormatTest, Mp4KeepsHevcAndFixesOnlyAudio) {
     OutputFormatRequest request;
     request.container = Container::Mp4;
-    request.video_codec = VideoCodec::HevcNvenc;
+    request.video_codec = VideoCodec::Hevc;
     request.audio_codec = AudioCodec::Opus;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
 
     // MP4 + HEVC + AAC is a working combination — the video codec survives.
-    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::HevcNvenc);
-    EXPECT_EQ(outcome.resolved.audio_codec, AudioCodec::AacMf);
+    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::Hevc);
+    EXPECT_EQ(outcome.resolved.audio_codec, AudioCodec::Aac);
     EXPECT_TRUE(outcome.codecs_adjusted);
 }
 
 TEST(ReconcileOutputFormatTest, WebMForcesAv1OpusFromH264Aac) {
     OutputFormatRequest request;
     request.container = Container::WebM;
-    request.video_codec = VideoCodec::H264Nvenc;
-    request.audio_codec = AudioCodec::AacMf;
+    request.video_codec = VideoCodec::H264;
+    request.audio_codec = AudioCodec::Aac;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
 
-    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::Av1);
     EXPECT_EQ(outcome.resolved.audio_codec, AudioCodec::Opus);
     EXPECT_TRUE(outcome.codecs_adjusted);
 }
@@ -80,8 +80,8 @@ TEST(ReconcileOutputFormatTest, WebMForcesAv1OpusFromH264Aac) {
 
 TEST(ReconcileOutputFormatTest, TenBitH264DemotesToEightBit) {
     OutputFormatRequest request;
-    request.video_codec = VideoCodec::H264Nvenc;
-    request.audio_codec = AudioCodec::AacMf;
+    request.video_codec = VideoCodec::H264;
+    request.audio_codec = AudioCodec::Aac;
     request.bit_depth = BitDepth::Bit10;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
@@ -91,7 +91,7 @@ TEST(ReconcileOutputFormatTest, TenBitH264DemotesToEightBit) {
 }
 
 TEST(ReconcileOutputFormatTest, TenBitSurvivesForHevcAndAv1) {
-    for (const VideoCodec codec : {VideoCodec::HevcNvenc, VideoCodec::Av1Nvenc}) {
+    for (const VideoCodec codec : {VideoCodec::Hevc, VideoCodec::Av1}) {
         OutputFormatRequest request;
         request.video_codec = codec;
         request.audio_codec = AudioCodec::Opus;
@@ -110,13 +110,13 @@ TEST(ReconcileOutputFormatTest, ContainerForcedH264AlsoDemotesTenBit) {
     // rule order the preset sanitizer and the settings intake always used.
     OutputFormatRequest request;
     request.container = Container::Mp4;
-    request.video_codec = VideoCodec::Av1Nvenc;
+    request.video_codec = VideoCodec::Av1;
     request.audio_codec = AudioCodec::Opus;
     request.bit_depth = BitDepth::Bit10;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
 
-    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::H264Nvenc);
+    EXPECT_EQ(outcome.resolved.video_codec, VideoCodec::H264);
     EXPECT_EQ(outcome.resolved.bit_depth, BitDepth::Bit8);
     EXPECT_TRUE(outcome.bit_depth_demoted);
 }
@@ -127,7 +127,7 @@ TEST(ReconcileOutputFormatTest, ContainerForcedH264AlsoDemotesTenBit) {
 
 TEST(ReconcileOutputFormatTest, Chroma444SnapsToCs420ForAv1) {
     OutputFormatRequest request;
-    request.video_codec = VideoCodec::Av1Nvenc;
+    request.video_codec = VideoCodec::Av1;
     request.chroma = ChromaSubsampling::Cs444;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
@@ -137,10 +137,10 @@ TEST(ReconcileOutputFormatTest, Chroma444SnapsToCs420ForAv1) {
 }
 
 TEST(ReconcileOutputFormatTest, Chroma444SurvivesForEightBitH264AndHevc) {
-    for (const VideoCodec codec : {VideoCodec::H264Nvenc, VideoCodec::HevcNvenc}) {
+    for (const VideoCodec codec : {VideoCodec::H264, VideoCodec::Hevc}) {
         OutputFormatRequest request;
         request.video_codec = codec;
-        request.audio_codec = AudioCodec::AacMf;
+        request.audio_codec = AudioCodec::Aac;
         request.bit_depth = BitDepth::Bit8;
         request.chroma = ChromaSubsampling::Cs444;
 
@@ -155,8 +155,8 @@ TEST(ReconcileOutputFormatTest, Chroma444SnapsWhenTenBitSurvives) {
     // HEVC keeps 10-bit, and 4:4:4 is 8-bit only — the chroma gives way, not
     // the bit depth.
     OutputFormatRequest request;
-    request.video_codec = VideoCodec::HevcNvenc;
-    request.audio_codec = AudioCodec::AacMf;
+    request.video_codec = VideoCodec::Hevc;
+    request.audio_codec = AudioCodec::Aac;
     request.bit_depth = BitDepth::Bit10;
     request.chroma = ChromaSubsampling::Cs444;
 
@@ -173,8 +173,8 @@ TEST(ReconcileOutputFormatTest, Chroma444SurvivesTheTenBitDemotionOnH264) {
     // now-8-bit H.264 selection keeps its expert 4:4:4 — the deliberate rule
     // order both prior rule copies documented and applied.
     OutputFormatRequest request;
-    request.video_codec = VideoCodec::H264Nvenc;
-    request.audio_codec = AudioCodec::AacMf;
+    request.video_codec = VideoCodec::H264;
+    request.audio_codec = AudioCodec::Aac;
     request.bit_depth = BitDepth::Bit10;
     request.chroma = ChromaSubsampling::Cs444;
 
@@ -193,8 +193,8 @@ TEST(ReconcileOutputFormatTest, Chroma444SurvivesTheTenBitDemotionOnH264) {
 TEST(ReconcileOutputFormatTest, Mp4ForcesCfrFromVfr) {
     OutputFormatRequest request;
     request.container = Container::Mp4;
-    request.video_codec = VideoCodec::H264Nvenc;
-    request.audio_codec = AudioCodec::AacMf;
+    request.video_codec = VideoCodec::H264;
+    request.audio_codec = AudioCodec::Aac;
     request.cfr = false;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
@@ -206,8 +206,8 @@ TEST(ReconcileOutputFormatTest, Mp4ForcesCfrFromVfr) {
 TEST(ReconcileOutputFormatTest, Mp4WithCfrAlreadyOnReportsNoForce) {
     OutputFormatRequest request;
     request.container = Container::Mp4;
-    request.video_codec = VideoCodec::H264Nvenc;
-    request.audio_codec = AudioCodec::AacMf;
+    request.video_codec = VideoCodec::H264;
+    request.audio_codec = AudioCodec::Aac;
     request.cfr = true;
 
     const OutputFormatReconciliation outcome = ReconcileOutputFormat(request);
@@ -236,7 +236,7 @@ TEST(ReconcileOutputFormatTest, MatroskaAndWebMKeepVfr) {
 TEST(ReconcileOutputFormatTest, ReconciliationIsIdempotent) {
     OutputFormatRequest request;
     request.container = Container::Mp4;
-    request.video_codec = VideoCodec::Av1Nvenc;
+    request.video_codec = VideoCodec::Av1;
     request.audio_codec = AudioCodec::Opus;
     request.bit_depth = BitDepth::Bit10;
     request.chroma = ChromaSubsampling::Cs444;

@@ -92,7 +92,7 @@ class NvencVideoEncoder : public IVideoEncoder {
 
   private:
     NvencEncoder m_nvenc;
-    VideoCodec m_codec = VideoCodec::Av1Nvenc;
+    VideoCodec m_codec = VideoCodec::Av1;
 };
 
 } // namespace recorder_core

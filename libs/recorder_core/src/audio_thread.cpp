@@ -96,7 +96,7 @@ EncoderSetup MakeEncoderSetup(const RecorderConfig& config) {
         setup.empty_codec_private_error = "FLAC codec private is empty after Init";
         break;
     }
-    case AudioCodec::AacMf: {
+    case AudioCodec::Aac: {
         // FFmpeg's native AAC-LC encoder (ADR 0052, cut over once
         // exosnap-ffmpeg-build r5 shipped an encoder-enabled avcodec DLL).
         auto enc = std::make_unique<FfmpegAacEncoder>();

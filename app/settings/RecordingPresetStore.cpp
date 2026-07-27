@@ -50,11 +50,11 @@ std::optional<capability::Container> ContainerFromString(QStringView s) {
 
 QString VideoCodecToString(capability::VideoCodec v) {
     switch (v) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return QStringLiteral("h264");
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return QStringLiteral("hevc");
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return QStringLiteral("av1");
     }
     return QStringLiteral("h264");
@@ -63,11 +63,11 @@ QString VideoCodecToString(capability::VideoCodec v) {
 std::optional<capability::VideoCodec> VideoCodecFromString(QStringView s) {
     const QString n = s.trimmed().toString().toLower();
     if (n == QStringLiteral("h264"))
-        return capability::VideoCodec::H264Nvenc;
+        return capability::VideoCodec::H264;
     if (n == QStringLiteral("hevc"))
-        return capability::VideoCodec::HevcNvenc;
+        return capability::VideoCodec::Hevc;
     if (n == QStringLiteral("av1"))
-        return capability::VideoCodec::Av1Nvenc;
+        return capability::VideoCodec::Av1;
     return std::nullopt;
 }
 
@@ -134,7 +134,7 @@ std::optional<capability::ColorRange> ColorRangeFromString(QStringView s) {
 
 QString AudioCodecToString(capability::AudioCodec v) {
     switch (v) {
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return QStringLiteral("aac");
     case capability::AudioCodec::Opus:
         return QStringLiteral("opus");
@@ -151,7 +151,7 @@ std::optional<capability::AudioCodec> AudioCodecFromString(QStringView s) {
     if (n == QStringLiteral("opus"))
         return capability::AudioCodec::Opus;
     if (n == QStringLiteral("aac"))
-        return capability::AudioCodec::AacMf;
+        return capability::AudioCodec::Aac;
     if (n == QStringLiteral("pcm"))
         return capability::AudioCodec::Pcm;
     if (n == QStringLiteral("flac"))
@@ -838,7 +838,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     auto& vid = config.video;
     {
         const int64_t cq = TomlInt(tbl["video"]["cq"], static_cast<int64_t>(vid.cq));
-        if (cq >= recorder_core::kNvencCqMin && cq <= recorder_core::kNvencCqMax)
+        if (cq >= recorder_core::kCqMin && cq <= recorder_core::kCqMax)
             vid.cq = static_cast<uint32_t>(cq);
     }
     {

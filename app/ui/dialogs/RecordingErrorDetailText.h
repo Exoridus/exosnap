@@ -8,8 +8,8 @@
 // Humanize a raw engine error-detail string for on-screen display.
 //
 // Engine validation/mux failures surface strings that embed C++ enum tokens —
-// e.g. "Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc,
-// or VideoCodec::HevcNvenc" or "... for Matroska". Those leak internal spelling
+// e.g. "Container::Matroska requires VideoCodec::Av1, VideoCodec::H264,
+// or VideoCodec::Hevc" or "... for Matroska". Those leak internal spelling
 // into a user-facing panel. This maps every known enum token (qualified
 // `Family::Token` or bare `Token`) to the canonical user-facing label.
 //
@@ -39,11 +39,11 @@ inline QString HumanizeEngineDetail(const QString& detail) {
         {"Mp4", "MP4"},
         {"WebM", "WebM"},
         // Video codecs
-        {"Av1Nvenc", "AV1"},
-        {"H264Nvenc", "H.264"},
-        {"HevcNvenc", "HEVC"},
+        {"Av1", "AV1"},
+        {"H264", "H.264"},
+        {"Hevc", "HEVC"},
         // Audio codecs
-        {"AacMf", "AAC"},
+        {"Aac", "AAC"},
         {"Opus", "Opus"},
         {"Pcm", "PCM"},
         {"Flac", "FLAC"},

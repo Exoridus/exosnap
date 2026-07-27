@@ -28,8 +28,8 @@ RuntimeCapabilitySnapshot MakeFavorableSnapshot() {
 
 // Shorthand for the primary M3.2 combo key.
 constexpr Container kC = Container::Matroska;
-constexpr VideoCodec kV = VideoCodec::Av1Nvenc;
-constexpr AudioCodec kA = AudioCodec::AacMf;
+constexpr VideoCodec kV = VideoCodec::Av1;
+constexpr AudioCodec kA = AudioCodec::Aac;
 constexpr ChromaSubsampling kCS = ChromaSubsampling::Cs420;
 constexpr BitDepth kBD = BitDepth::Bit8;
 
@@ -46,11 +46,10 @@ TEST(RuntimeMergeTest, TC1_AllPrerequisitesPresentKeepM32ComboAvailable) {
         << "M3.2 combo should be Available when NVENC and AAC are both present. reason: " << combo.reason;
 
     // AV1/NVENC dimension must be selectable.
-    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)))
-        << "VideoCodec::Av1Nvenc should be selectable.";
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1))) << "VideoCodec::Av1 should be selectable.";
 
-    // AacMf dimension must be selectable.
-    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::AacMf))) << "AudioCodec::AacMf should be selectable.";
+    // Aac dimension must be selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac))) << "AudioCodec::Aac should be selectable.";
 }
 
 // -------------------------------------------------------------------------
@@ -64,8 +63,8 @@ TEST(RuntimeMergeTest, TC2_NvencDllMissingBlocksAv1Path) {
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
     // AV1 dimension must not be selectable.
-    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1Nvenc);
-    EXPECT_FALSE(IsSelectable(av1)) << "VideoCodec::Av1Nvenc must not be selectable when NVENC DLL is absent.";
+    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1);
+    EXPECT_FALSE(IsSelectable(av1)) << "VideoCodec::Av1 must not be selectable when NVENC DLL is absent.";
 
     // M3.2 primary combo must not be selectable.
     const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
@@ -89,8 +88,8 @@ TEST(RuntimeMergeTest, TC3_NvencApiVersionUnavailableBlocksAv1Path) {
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
     // AV1 dimension must not be selectable.
-    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1Nvenc);
-    EXPECT_FALSE(IsSelectable(av1)) << "VideoCodec::Av1Nvenc must not be selectable when NVENC API version is invalid.";
+    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1);
+    EXPECT_FALSE(IsSelectable(av1)) << "VideoCodec::Av1 must not be selectable when NVENC API version is invalid.";
 
     // M3.2 combo must not be selectable.
     const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
@@ -113,9 +112,9 @@ TEST(RuntimeMergeTest, TC4_AacUnavailableBlocksAacPath) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    // AacMf dimension must not be selectable.
-    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::AacMf);
-    EXPECT_FALSE(IsSelectable(aac)) << "AudioCodec::AacMf must not be selectable when MF AAC is unavailable.";
+    // Aac dimension must not be selectable.
+    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::Aac);
+    EXPECT_FALSE(IsSelectable(aac)) << "AudioCodec::Aac must not be selectable when MF AAC is unavailable.";
 
     // M3.2 primary combo must not be selectable.
     const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
@@ -143,9 +142,9 @@ TEST(RuntimeMergeTest, TC5_DirectAacClsidFallbackIsSufficient) {
     EXPECT_TRUE(snap.mf_aac.available())
         << "MfAacRuntimeFacts::available() must be true when clsid_instantiable is true.";
 
-    // AacMf must remain selectable.
-    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::AacMf)))
-        << "AudioCodec::AacMf should remain selectable when CLSID fallback succeeds.";
+    // Aac must remain selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac)))
+        << "AudioCodec::Aac should remain selectable when CLSID fallback succeeds.";
 
     // M3.2 combo must remain Available.
     const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
@@ -160,14 +159,14 @@ TEST(RuntimeMergeTest, TC6_H264Available_WhenNvencPresent) {
     const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264);
     EXPECT_EQ(h264.level, SupportLevel::Available)
         << "H.264 must be Available when NVENC is present. reason: " << h264.reason;
     EXPECT_TRUE(IsSelectable(h264)) << "H.264 must be selectable when NVENC is present.";
 
     // MP4+H264+AAC primary combo must also be Available.
-    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
-                                                        ChromaSubsampling::Cs420, BitDepth::Bit8);
+    const SupportAnnotation mp4_combo =
+        caps.QueryCombo(Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420, BitDepth::Bit8);
     EXPECT_EQ(mp4_combo.level, SupportLevel::Available)
         << "MP4+H264+AAC must be Available when NVENC and AAC are present. reason: " << mp4_combo.reason;
 }
@@ -178,12 +177,12 @@ TEST(RuntimeMergeTest, TC6b_H264NotImplemented_WhenNvencAbsent) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264);
     EXPECT_EQ(h264.level, SupportLevel::NotImplemented) << "H.264 must be NotImplemented when NVENC DLL is absent.";
     EXPECT_FALSE(IsSelectable(h264));
 
-    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
-                                                        ChromaSubsampling::Cs420, BitDepth::Bit8);
+    const SupportAnnotation mp4_combo =
+        caps.QueryCombo(Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420, BitDepth::Bit8);
     EXPECT_FALSE(IsSelectable(mp4_combo)) << "MP4+H264+AAC must not be selectable when NVENC is absent.";
 }
 
@@ -195,14 +194,14 @@ TEST(RuntimeMergeTest, TC7_HevcValidUnvalidatedWhenNvencPresent) {
     const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
+    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::Hevc);
     EXPECT_EQ(hevc.level, SupportLevel::ValidUnvalidated)
         << "HEVC must be ValidUnvalidated when NVENC is present (implemented, not hw-validated).";
     EXPECT_TRUE(IsSelectable(hevc)) << "HEVC must be selectable (with caveat) when NVENC is present.";
 
     // The MKV + HEVC combo must be selectable end-to-end (registry Allowed +
     // dimension ValidUnvalidated must not be force-downgraded by the combine logic).
-    const SupportAnnotation combo = caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::Opus,
+    const SupportAnnotation combo = caps.QueryCombo(Container::Matroska, VideoCodec::Hevc, AudioCodec::Opus,
                                                     ChromaSubsampling::Cs420, BitDepth::Bit8);
     EXPECT_EQ(combo.level, SupportLevel::ValidUnvalidated)
         << "MKV+HEVC+Opus combo must be ValidUnvalidated. reason: " << combo.reason;
@@ -219,7 +218,7 @@ TEST(RuntimeMergeTest, TC7b_HevcNotImplemented_WhenNvencAbsent) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
+    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::Hevc);
     EXPECT_EQ(hevc.level, SupportLevel::NotImplemented) << "HEVC must be NotImplemented when NVENC DLL is absent.";
     EXPECT_FALSE(IsSelectable(hevc)) << "HEVC must not be selectable when NVENC is absent.";
     EXPECT_NE(hevc.reason.find("NVENC"), std::string::npos) << "HEVC downgrade reason must mention NVENC.";
@@ -269,13 +268,13 @@ TEST(RuntimeMergeTest, TC9_BuildFromHardwareQueryCallable) {
     (void)combo;
 
     // H.264 availability depends on NVENC presence; just verify it's queryable.
-    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264);
     (void)h264;
 
     // HEVC availability is now hardware-dependent (ValidUnvalidated when NVENC is
     // present, NotImplemented when absent) — just verify it's queryable and never
     // hard-Invalid.
-    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
+    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::Hevc);
     EXPECT_FALSE(IsHardInvalid(hevc)) << "HEVC must be queryable (never hard-Invalid) after real hardware query.";
 }
 
@@ -289,8 +288,8 @@ TEST(RuntimeMergeTest, TC10_NvencDowngradeReason_IsUserFacing) {
     snap.nvidia.failure_detail = "LoadLibraryW(nvEncodeAPI64.dll) failed, GetLastError=2";
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
-    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1Nvenc);
-    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1);
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264);
 
     for (const SupportAnnotation* ann : {&av1, &h264}) {
         // Must not expose raw Win32 API names.
@@ -312,7 +311,7 @@ TEST(RuntimeMergeTest, TC11_AacDowngradeReason_IsUserFacing) {
     snap.mf_aac.clsid_instantiable = false;
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
-    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::AacMf);
+    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::Aac);
 
     // Must not expose internal COM/MF API identifiers.
     EXPECT_EQ(aac.reason.find("MFTEnumEx"), std::string::npos) << "reason: " << aac.reason;
@@ -389,13 +388,13 @@ TEST(NvencCodecSupportTest, ProbedAv1Unsupported_DowngradesOnlyAv1) {
 
     ApplyNvencCodecSupport(caps, facts);
 
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Av1Nvenc).level, SupportLevel::NotImplemented);
-    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)));
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Av1).level, SupportLevel::NotImplemented);
+    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1)));
     // HEVC stays ValidUnvalidated, H264 stays Available (baseline unchanged).
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::ValidUnvalidated);
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264Nvenc).level, SupportLevel::Available);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Hevc).level, SupportLevel::ValidUnvalidated);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264).level, SupportLevel::Available);
     // The downgrade reason is user-facing and names the requirement.
-    EXPECT_NE(caps.QueryVideoCodec(VideoCodec::Av1Nvenc).reason.find("AV1"), std::string::npos);
+    EXPECT_NE(caps.QueryVideoCodec(VideoCodec::Av1).reason.find("AV1"), std::string::npos);
 }
 
 // Probe did not run -> no change at all (graceful degrade keeps the baseline).
@@ -412,9 +411,9 @@ TEST(NvencCodecSupportTest, NotProbed_LeavesBaselineUntouched) {
 
     ApplyNvencCodecSupport(caps, facts);
 
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Av1Nvenc).level, SupportLevel::Available);
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::ValidUnvalidated);
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264Nvenc).level, SupportLevel::Available);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Av1).level, SupportLevel::Available);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Hevc).level, SupportLevel::ValidUnvalidated);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264).level, SupportLevel::Available);
 }
 
 // All codecs supported -> nothing downgraded.
@@ -429,9 +428,9 @@ TEST(NvencCodecSupportTest, ProbedAllSupported_NoDowngrade) {
 
     ApplyNvencCodecSupport(caps, facts);
 
-    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)));
-    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::HevcNvenc)));
-    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Hevc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264)));
 }
 
 // 4:4:4: baseline advertises H.264/HEVC as ValidUnvalidated and AV1 as
@@ -449,10 +448,10 @@ TEST(NvencYuv444SupportTest, ProbedHevc444Unsupported_DowngradesOnlyHevc) {
 
     ApplyNvencYuv444Support(caps, facts);
 
-    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264Nvenc)));
-    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264)));
+    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::Hevc)));
     // AV1 is never selectable for 4:4:4.
-    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::Av1Nvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryChroma444(VideoCodec::Av1)));
 }
 
 // Probe did not run -> keep the ValidUnvalidated 4:4:4 baseline (H.264/HEVC).
@@ -466,8 +465,8 @@ TEST(NvencYuv444SupportTest, NotProbed_Keeps444Baseline) {
 
     ApplyNvencYuv444Support(caps, facts);
 
-    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264Nvenc)));
-    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::H264)));
+    EXPECT_TRUE(IsSelectable(caps.QueryChroma444(VideoCodec::Hevc)));
 }
 
 // End-to-end: a probe reporting no 4:4:4 support at all makes every 4:4:4 combo
@@ -483,12 +482,12 @@ TEST(NvencYuv444SupportTest, BuildEffective_NoYuv444_Blocks444KeepsCs420) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+    EXPECT_FALSE(IsSelectable(
+        caps.QueryCombo(Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs444, BitDepth::Bit8)));
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Matroska, VideoCodec::Hevc, AudioCodec::Aac,
                                               ChromaSubsampling::Cs444, BitDepth::Bit8)));
-    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf,
-                                              ChromaSubsampling::Cs444, BitDepth::Bit8)));
-    EXPECT_TRUE(IsSelectable(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
-                                             ChromaSubsampling::Cs420, BitDepth::Bit8)));
+    EXPECT_TRUE(IsSelectable(
+        caps.QueryCombo(Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420, BitDepth::Bit8)));
 }
 
 // Advanced-encode (B-frames/Lookahead/Temporal-AQ) baseline is fail-closed:
@@ -498,11 +497,11 @@ TEST(NvencYuv444SupportTest, BuildEffective_NoYuv444_Blocks444KeepsCs420) {
 TEST(NvencAdvancedEncodeSupportTest, StaticBaselineIsNotImplementedForEveryCodec) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
-    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::H264Nvenc).annotation));
-    EXPECT_EQ(caps.QueryBFrames(VideoCodec::H264Nvenc).max_bframes, 0);
-    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Av1Nvenc).annotation));
-    EXPECT_FALSE(IsSelectable(caps.QueryLookahead(VideoCodec::HevcNvenc)));
-    EXPECT_FALSE(IsSelectable(caps.QueryTemporalAq(VideoCodec::HevcNvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::H264).annotation));
+    EXPECT_EQ(caps.QueryBFrames(VideoCodec::H264).max_bframes, 0);
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Av1).annotation));
+    EXPECT_FALSE(IsSelectable(caps.QueryLookahead(VideoCodec::Hevc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryTemporalAq(VideoCodec::Hevc)));
 }
 
 // A real probe that advertises H.264 with 2 max B-frames and lookahead, but
@@ -521,15 +520,15 @@ TEST(NvencAdvancedEncodeSupportTest, ProbedFacts_UpgradeOnlyWhatGpuAdvertised) {
 
     ApplyNvencAdvancedEncodeSupport(caps, facts);
 
-    const auto h264 = caps.QueryBFrames(VideoCodec::H264Nvenc);
+    const auto h264 = caps.QueryBFrames(VideoCodec::H264);
     EXPECT_TRUE(IsSelectable(h264.annotation));
     EXPECT_EQ(h264.max_bframes, 2);
     EXPECT_EQ(h264.bframe_ref_mode, 1);
-    EXPECT_TRUE(IsSelectable(caps.QueryLookahead(VideoCodec::H264Nvenc)));
-    EXPECT_TRUE(IsSelectable(caps.QueryTemporalAq(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryLookahead(VideoCodec::H264)));
+    EXPECT_TRUE(IsSelectable(caps.QueryTemporalAq(VideoCodec::H264)));
 
-    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Av1Nvenc).annotation));
-    EXPECT_EQ(caps.QueryBFrames(VideoCodec::Av1Nvenc).max_bframes, 0);
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Av1).annotation));
+    EXPECT_EQ(caps.QueryBFrames(VideoCodec::Av1).max_bframes, 0);
 }
 
 // A codec the GPU never advertised at all (HEVC absent here) is left at the
@@ -545,8 +544,8 @@ TEST(NvencAdvancedEncodeSupportTest, CodecNotAdvertised_StaysAtBaseline) {
 
     ApplyNvencAdvancedEncodeSupport(caps, facts);
 
-    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::HevcNvenc).annotation));
-    EXPECT_EQ(caps.QueryBFrames(VideoCodec::HevcNvenc).max_bframes, 0);
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::Hevc).annotation));
+    EXPECT_EQ(caps.QueryBFrames(VideoCodec::Hevc).max_bframes, 0);
 }
 
 // Probe did not run -> the fail-closed baseline stands untouched.
@@ -560,7 +559,7 @@ TEST(NvencAdvancedEncodeSupportTest, NotProbed_KeepsFailClosedBaseline) {
 
     ApplyNvencAdvancedEncodeSupport(caps, facts);
 
-    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::H264Nvenc).annotation));
+    EXPECT_FALSE(IsSelectable(caps.QueryBFrames(VideoCodec::H264).annotation));
 }
 
 // BuildEffectiveCapabilities wires the probe through end-to-end: a favorable
@@ -575,10 +574,10 @@ TEST(NvencCodecSupportTest, BuildEffective_HonorsProbeFlags) {
 
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)))
+    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1)))
         << "AV1 must be downgraded when the GPU probe reports it unsupported.";
-    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::HevcNvenc)));
-    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Hevc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264)));
 }
 
 // -------------------------------------------------------------------------
@@ -589,14 +588,14 @@ TEST(NvencCodecSupportTest, BuildEffective_HonorsProbeFlags) {
 TEST(Hdr10CapabilityTest, HevcAndAv1AreHdr10Native_H264IsNot) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
-    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1Nvenc)))
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1)))
         << "AV1 must be annotated HDR10-native (10-bit/P010).";
-    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::HevcNvenc)))
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)))
         << "HEVC must be annotated HDR10-native (10-bit/P010).";
-    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264Nvenc)))
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264)))
         << "H.264 must NOT be annotated HDR10-native (8-bit only).";
     // The H.264 reason must be user-facing and point at the capable codecs.
-    const SupportAnnotation h264 = caps.QueryHdr10Native(VideoCodec::H264Nvenc);
+    const SupportAnnotation h264 = caps.QueryHdr10Native(VideoCodec::H264);
     EXPECT_NE(h264.reason.find("HEVC"), std::string::npos) << "reason: " << h264.reason;
     EXPECT_NE(h264.reason.find("AV1"), std::string::npos) << "reason: " << h264.reason;
 }
@@ -611,11 +610,11 @@ TEST(Hdr10CapabilityTest, Hdr10NativeIsIndependentOfNvencPresence) {
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
     // Encode availability is gone (rec.003 territory) …
-    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1)));
     // … but the format-capability annotation is unchanged.
-    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1Nvenc)));
-    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::HevcNvenc)));
-    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1)));
+    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264)));
 }
 
 // -------------------------------------------------------------------------

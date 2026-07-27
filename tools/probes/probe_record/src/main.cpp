@@ -81,15 +81,15 @@ bool ParseContainer(const std::string& s, Container& out) {
 
 bool ParseVideo(const std::string& s, VideoCodec& out) {
     if (s == "av1") {
-        out = VideoCodec::Av1Nvenc;
+        out = VideoCodec::Av1;
         return true;
     }
     if (s == "h264" || s == "avc") {
-        out = VideoCodec::H264Nvenc;
+        out = VideoCodec::H264;
         return true;
     }
     if (s == "hevc" || s == "h265") {
-        out = VideoCodec::HevcNvenc;
+        out = VideoCodec::Hevc;
         return true;
     }
     return false;
@@ -198,7 +198,7 @@ bool ParseAudio(const std::string& s, AudioCodec& out, bool& record_audio) {
         return true;
     }
     if (s == "aac") {
-        out = AudioCodec::AacMf;
+        out = AudioCodec::Aac;
         return true;
     }
     if (s == "pcm") {

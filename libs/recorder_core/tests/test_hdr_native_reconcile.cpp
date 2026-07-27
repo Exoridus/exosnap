@@ -35,7 +35,7 @@ RecorderConfig MakeHevc444Hdr10Config() {
     RecorderConfig cfg{};
     cfg.output_path = std::filesystem::temp_directory_path() / "exosnap_hdr_reconcile_test.mkv";
     cfg.container = Container::Matroska;
-    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.video_codec = VideoCodec::Hevc;
     cfg.audio_codec = AudioCodec::Opus;
     cfg.audio_sample_rate = 48000;
     cfg.audio_channels = 2;
@@ -68,8 +68,7 @@ HdrDisplayFacts MakeActiveHdrFacts() {
 // and the session config then passes Validate() (recording start no longer fails).
 TEST(HdrNativeReconcileTest, Hdr10With444SnapsToCs420AndValidates) {
     // Gate the coordinator checks before applying the reconcile.
-    ASSERT_TRUE(
-        recorder_core::IsHdr10NativeEffective(HdrMode::Hdr10, /*display_hdr_active=*/true, VideoCodec::HevcNvenc));
+    ASSERT_TRUE(recorder_core::IsHdr10NativeEffective(HdrMode::Hdr10, /*display_hdr_active=*/true, VideoCodec::Hevc));
 
     RecorderConfig cfg = MakeHevc444Hdr10Config();
     const bool chroma_snapped = recorder_core::ApplyHdr10NativeEncode(cfg, MakeActiveHdrFacts());

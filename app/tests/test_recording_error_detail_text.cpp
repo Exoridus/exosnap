@@ -11,8 +11,8 @@ namespace exosnap::ui::dialogs {
 namespace {
 
 TEST(RecordingErrorDetailText, MapsQualifiedContainerAndVideoTokens) {
-    const QString in = QStringLiteral(
-        "Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc, or VideoCodec::HevcNvenc");
+    const QString in =
+        QStringLiteral("Container::Matroska requires VideoCodec::Av1, VideoCodec::H264, or VideoCodec::Hevc");
     const QString out = HumanizeEngineDetail(in);
     EXPECT_EQ(out, QStringLiteral("MKV requires AV1, H.264, or HEVC"));
 }
@@ -23,7 +23,7 @@ TEST(RecordingErrorDetailText, MapsBareContainerName) {
 }
 
 TEST(RecordingErrorDetailText, MapsAudioTokens) {
-    EXPECT_EQ(HumanizeEngineDetail(QStringLiteral("AudioCodec::AacMf not allowed with Container::WebM")),
+    EXPECT_EQ(HumanizeEngineDetail(QStringLiteral("AudioCodec::Aac not allowed with Container::WebM")),
               QStringLiteral("AAC not allowed with WebM"));
     EXPECT_EQ(HumanizeEngineDetail(QStringLiteral("AudioCodec::Pcm and AudioCodec::Flac are Matroska-only")),
               QStringLiteral("PCM and FLAC are MKV-only"));

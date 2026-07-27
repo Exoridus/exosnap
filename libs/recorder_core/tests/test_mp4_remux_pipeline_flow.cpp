@@ -43,8 +43,8 @@ static RecorderConfig MakeMp4Config() {
     RecorderConfig cfg{};
     cfg.output_path = std::filesystem::temp_directory_path() / "exosnap_test.mp4";
     cfg.container = Container::Mp4;
-    cfg.video_codec = VideoCodec::H264Nvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.video_codec = VideoCodec::H264;
+    cfg.audio_codec = AudioCodec::Aac;
     cfg.record_audio = false;
     cfg.target.kind = CaptureTarget::Kind::Window;
     cfg.target.native_id = 1;
@@ -123,7 +123,7 @@ TEST(Mp4RemuxPipelineFlowTest, OpusMp4GatingAfterMfRemoval) {
 
 TEST(Mp4RemuxPipelineFlowTest, Mp4ValidatesWithAacH264) {
     RecorderSession session;
-    const auto cfg = MakeMp4Config(); // H264 + AacMf, audio off
+    const auto cfg = MakeMp4Config(); // H264 + Aac, audio off
 
     RecorderResult result{};
     EXPECT_TRUE(session.Validate(cfg, &result));
@@ -133,7 +133,7 @@ TEST(Mp4RemuxPipelineFlowTest, Mp4ValidatesWithAacH264) {
 TEST(Mp4RemuxPipelineFlowTest, Mp4RejectsAv1) {
     RecorderSession session;
     auto cfg = MakeMp4Config();
-    cfg.video_codec = VideoCodec::Av1Nvenc;
+    cfg.video_codec = VideoCodec::Av1;
 
     RecorderResult result{};
     EXPECT_FALSE(session.Validate(cfg, &result));
@@ -144,7 +144,7 @@ TEST(Mp4RemuxPipelineFlowTest, WebMWithH264RemainsRejected) {
     RecorderSession session;
     auto cfg = MakeMp4Config();
     cfg.container = Container::WebM;
-    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.video_codec = VideoCodec::H264;
 
     RecorderResult result{};
     EXPECT_FALSE(session.Validate(cfg, &result));

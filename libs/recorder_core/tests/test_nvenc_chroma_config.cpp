@@ -45,15 +45,15 @@ TEST(NvencChromaConfig, Cs444ChromaFormatIdcIsThree) {
 // --- 4:4:4 profile GUIDs ------------------------------------------------------
 
 TEST(NvencChromaConfig, H264Uses444Profile) {
-    EXPECT_TRUE(IsEqualGUID(Nvenc444ProfileGuid(VideoCodec::H264Nvenc), NV_ENC_H264_PROFILE_HIGH_444_GUID) != 0);
+    EXPECT_TRUE(IsEqualGUID(Nvenc444ProfileGuid(VideoCodec::H264), NV_ENC_H264_PROFILE_HIGH_444_GUID) != 0);
 }
 
 TEST(NvencChromaConfig, HevcUsesFrextProfile) {
-    EXPECT_TRUE(IsEqualGUID(Nvenc444ProfileGuid(VideoCodec::HevcNvenc), NV_ENC_HEVC_PROFILE_FREXT_GUID) != 0);
+    EXPECT_TRUE(IsEqualGUID(Nvenc444ProfileGuid(VideoCodec::Hevc), NV_ENC_HEVC_PROFILE_FREXT_GUID) != 0);
 }
 
 TEST(NvencChromaConfig, Av1HasNo444Profile) {
-    EXPECT_TRUE(IsZeroGuid(Nvenc444ProfileGuid(VideoCodec::Av1Nvenc)));
+    EXPECT_TRUE(IsZeroGuid(Nvenc444ProfileGuid(VideoCodec::Av1)));
 }
 
 } // namespace

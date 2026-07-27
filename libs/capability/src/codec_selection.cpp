@@ -9,8 +9,7 @@ namespace exosnap::capability {
 
 std::optional<VideoCodec> BestAvailableVideoCodec(const CapabilitySet& caps, Container container) noexcept {
     // Preference order: best quality/efficiency first.
-    static constexpr std::array<VideoCodec, 3> kPreference = {VideoCodec::Av1Nvenc, VideoCodec::HevcNvenc,
-                                                              VideoCodec::H264Nvenc};
+    static constexpr std::array<VideoCodec, 3> kPreference = {VideoCodec::Av1, VideoCodec::Hevc, VideoCodec::H264};
 
     const AudioCodec audio = ContainerCompatRegistry::PreferredAudioCodec(container);
 
@@ -31,11 +30,11 @@ std::optional<VideoCodec> BestAvailableVideoCodec(const CapabilitySet& caps, Con
 
 std::string_view VisibleVideoCodecLabel(VideoCodec codec) noexcept {
     switch (codec) {
-    case VideoCodec::Av1Nvenc:
+    case VideoCodec::Av1:
         return "AV1";
-    case VideoCodec::HevcNvenc:
+    case VideoCodec::Hevc:
         return "HEVC";
-    case VideoCodec::H264Nvenc:
+    case VideoCodec::H264:
         return "H.264";
     }
     return "AV1";

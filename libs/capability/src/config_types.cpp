@@ -16,11 +16,11 @@ std::string_view ToString(Container value) noexcept {
 
 std::string_view ToString(VideoCodec value) noexcept {
     switch (value) {
-    case VideoCodec::Av1Nvenc:
+    case VideoCodec::Av1:
         return "AV1 NVENC";
-    case VideoCodec::HevcNvenc:
+    case VideoCodec::Hevc:
         return "HEVC NVENC";
-    case VideoCodec::H264Nvenc:
+    case VideoCodec::H264:
         return "H.264 NVENC";
     }
     return "UnknownVideoCodec";
@@ -30,7 +30,7 @@ std::string_view ToString(AudioCodec value) noexcept {
     switch (value) {
     case AudioCodec::Opus:
         return "Opus";
-    case AudioCodec::AacMf:
+    case AudioCodec::Aac:
         return "AAC (Media Foundation)";
     case AudioCodec::Pcm:
         return "PCM";

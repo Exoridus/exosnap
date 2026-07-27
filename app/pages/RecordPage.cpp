@@ -296,8 +296,8 @@ QString logSafeTargetLabel(const recorder_core::CaptureTarget& target) {
 capability::UserRecorderConfig primaryRecorderConfig() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
-    config.video_codec = capability::VideoCodec::H264Nvenc;
-    config.audio_codec = capability::AudioCodec::AacMf;
+    config.video_codec = capability::VideoCodec::H264;
+    config.audio_codec = capability::AudioCodec::Aac;
     config.chroma = capability::ChromaSubsampling::Cs420;
     config.bit_depth = capability::BitDepth::Bit8;
     config.frame_rate_num = 60;
@@ -340,9 +340,9 @@ struct WindowPresentation {
 
 MinimumCaptureSize WindowMinimumForCodec(capability::VideoCodec codec) {
     switch (codec) {
-    case capability::VideoCodec::Av1Nvenc:
-    case capability::VideoCodec::HevcNvenc:
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::Av1:
+    case capability::VideoCodec::Hevc:
+    case capability::VideoCodec::H264:
     default:
         // Conservative minimum that avoids known WGC + NVENC tiny-window failures.
         return {192, 128};
@@ -2306,19 +2306,19 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
             break;
         }
         switch (scenario.video_codec) {
-        case capability::VideoCodec::H264Nvenc:
-            result.video_codec = recorder_core::VideoCodec::H264Nvenc;
+        case capability::VideoCodec::H264:
+            result.video_codec = recorder_core::VideoCodec::H264;
             break;
-        case capability::VideoCodec::HevcNvenc:
-            result.video_codec = recorder_core::VideoCodec::H264Nvenc;
+        case capability::VideoCodec::Hevc:
+            result.video_codec = recorder_core::VideoCodec::H264;
             break;
-        case capability::VideoCodec::Av1Nvenc:
-            result.video_codec = recorder_core::VideoCodec::Av1Nvenc;
+        case capability::VideoCodec::Av1:
+            result.video_codec = recorder_core::VideoCodec::Av1;
             break;
         }
         switch (scenario.audio_codec) {
-        case capability::AudioCodec::AacMf:
-            result.audio_codec = recorder_core::AudioCodec::AacMf;
+        case capability::AudioCodec::Aac:
+            result.audio_codec = recorder_core::AudioCodec::Aac;
             break;
         case capability::AudioCodec::Opus:
             result.audio_codec = recorder_core::AudioCodec::Opus;
@@ -2370,8 +2370,8 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
                 hist_rec.frame_rate_den = 1;
                 hist_rec.cfr = true;
                 hist_rec.container = recorder_core::Container::Matroska;
-                hist_rec.video_codec = recorder_core::VideoCodec::H264Nvenc;
-                hist_rec.audio_codec = recorder_core::AudioCodec::AacMf;
+                hist_rec.video_codec = recorder_core::VideoCodec::H264;
+                hist_rec.audio_codec = recorder_core::AudioCodec::Aac;
                 hist_rec.completed_at = QDateTime::currentDateTime().addSecs(-(i * 120));
                 view_model_.recent_recordings.append(hist_rec);
             }

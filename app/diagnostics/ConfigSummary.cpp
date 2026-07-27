@@ -22,11 +22,11 @@ std::string ContainerName(capability::Container c) {
 
 std::string VideoCodecName(capability::VideoCodec v) {
     switch (v) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return "H.264 (NVENC)";
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return "HEVC (NVENC)";
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return "AV1 (NVENC)";
     }
     return "Unknown";
@@ -36,7 +36,7 @@ std::string AudioCodecName(capability::AudioCodec a) {
     switch (a) {
     case capability::AudioCodec::Opus:
         return "Opus";
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return "AAC";
     case capability::AudioCodec::Pcm:
         return "PCM";
@@ -76,17 +76,17 @@ std::string MicChannelModeName(recorder_core::MicChannelMode m) {
     return "Auto";
 }
 
-std::string NvencQualityName(recorder_core::NvencQualityPreset q) {
+std::string QualityPresetName(recorder_core::QualityPreset q) {
     switch (q) {
-    case recorder_core::NvencQualityPreset::Ultra:
+    case recorder_core::QualityPreset::Ultra:
         return "Ultra";
-    case recorder_core::NvencQualityPreset::High:
+    case recorder_core::QualityPreset::High:
         return "High";
-    case recorder_core::NvencQualityPreset::Balanced:
+    case recorder_core::QualityPreset::Balanced:
         return "Balanced";
-    case recorder_core::NvencQualityPreset::Efficient:
+    case recorder_core::QualityPreset::Efficient:
         return "Efficient";
-    case recorder_core::NvencQualityPreset::Draft:
+    case recorder_core::QualityPreset::Draft:
         return "Draft";
     }
     return "Balanced";
@@ -94,7 +94,7 @@ std::string NvencQualityName(recorder_core::NvencQualityPreset q) {
 
 // "CQ 24 (Balanced)" for a canonical value, "CQ 22 (~High)" for anything between.
 std::string QualityName(uint32_t cq) {
-    const std::string tier = NvencQualityName(recorder_core::NearestQualityPreset(cq));
+    const std::string tier = QualityPresetName(recorder_core::NearestQualityPreset(cq));
     const std::string approx = recorder_core::IsCanonicalCq(cq) ? "" : "~";
     return "CQ " + std::to_string(cq) + " (" + approx + tier + ")";
 }

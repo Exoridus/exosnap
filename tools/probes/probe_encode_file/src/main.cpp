@@ -54,7 +54,7 @@ namespace {
 struct Options {
     std::string y4m_path;
     std::string out_path;
-    VideoCodec vcodec = VideoCodec::Av1Nvenc;
+    VideoCodec vcodec = VideoCodec::Av1;
     NvencPreset preset = NvencPreset::P4;
     RateControlMode rc = RateControlMode::ConstantQuality;
     uint32_t cq = 24;
@@ -67,15 +67,15 @@ struct Options {
 
 bool ParseVideoCodec(const std::string& s, VideoCodec& out) {
     if (s == "av1") {
-        out = VideoCodec::Av1Nvenc;
+        out = VideoCodec::Av1;
         return true;
     }
     if (s == "h264") {
-        out = VideoCodec::H264Nvenc;
+        out = VideoCodec::H264;
         return true;
     }
     if (s == "hevc" || s == "h265") {
-        out = VideoCodec::HevcNvenc;
+        out = VideoCodec::Hevc;
         return true;
     }
     return false;
@@ -380,7 +380,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (opt.vcodec == VideoCodec::Av1Nvenc) {
+    if (opt.vcodec == VideoCodec::Av1) {
         const auto fileHeader = BuildIvfFileHeader(header->width, header->height, header->fps_num, header->fps_den,
                                                     static_cast<uint32_t>(allPackets.size()));
         out.write(reinterpret_cast<const char*>(fileHeader.data()), static_cast<std::streamsize>(fileHeader.size()));

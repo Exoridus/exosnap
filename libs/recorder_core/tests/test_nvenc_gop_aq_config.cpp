@@ -66,33 +66,33 @@ TEST(ComputeGopLength, NeverReturnsZero) {
 
 TEST(ApplyGopToNvenc, H264_SetsGopLengthAndIdrPeriod) {
     NV_ENC_CONFIG cfg{};
-    ApplyGopToNvenc(cfg, VideoCodec::H264Nvenc, 60u);
+    ApplyGopToNvenc(cfg, VideoCodec::H264, 60u);
     EXPECT_EQ(cfg.gopLength, 60u);
     EXPECT_EQ(cfg.encodeCodecConfig.h264Config.idrPeriod, 60u);
 }
 
 TEST(ApplyGopToNvenc, Hevc_SetsGopLengthAndIdrPeriod) {
     NV_ENC_CONFIG cfg{};
-    ApplyGopToNvenc(cfg, VideoCodec::HevcNvenc, 30u);
+    ApplyGopToNvenc(cfg, VideoCodec::Hevc, 30u);
     EXPECT_EQ(cfg.gopLength, 30u);
     EXPECT_EQ(cfg.encodeCodecConfig.hevcConfig.idrPeriod, 30u);
 }
 
 TEST(ApplyGopToNvenc, Av1_SetsGopLengthAndIdrPeriod) {
     NV_ENC_CONFIG cfg{};
-    ApplyGopToNvenc(cfg, VideoCodec::Av1Nvenc, 120u);
+    ApplyGopToNvenc(cfg, VideoCodec::Av1, 120u);
     EXPECT_EQ(cfg.gopLength, 120u);
     EXPECT_EQ(cfg.encodeCodecConfig.av1Config.idrPeriod, 120u);
 }
 
 TEST(ApplyGopToNvenc, IdrPeriodEqualsGopLengthForEveryCodec) {
-    for (const VideoCodec codec : {VideoCodec::H264Nvenc, VideoCodec::HevcNvenc, VideoCodec::Av1Nvenc}) {
+    for (const VideoCodec codec : {VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Av1}) {
         NV_ENC_CONFIG cfg{};
         ApplyGopToNvenc(cfg, codec, 45u);
         EXPECT_EQ(cfg.gopLength, 45u);
-        const uint32_t idr = (codec == VideoCodec::H264Nvenc)   ? cfg.encodeCodecConfig.h264Config.idrPeriod
-                             : (codec == VideoCodec::HevcNvenc) ? cfg.encodeCodecConfig.hevcConfig.idrPeriod
-                                                                : cfg.encodeCodecConfig.av1Config.idrPeriod;
+        const uint32_t idr = (codec == VideoCodec::H264)   ? cfg.encodeCodecConfig.h264Config.idrPeriod
+                             : (codec == VideoCodec::Hevc) ? cfg.encodeCodecConfig.hevcConfig.idrPeriod
+                                                           : cfg.encodeCodecConfig.av1Config.idrPeriod;
         EXPECT_EQ(idr, cfg.gopLength);
     }
 }

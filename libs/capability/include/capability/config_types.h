@@ -7,8 +7,8 @@
 namespace exosnap::capability {
 
 enum class Container { Matroska, Mp4, WebM };
-enum class VideoCodec { Av1Nvenc, HevcNvenc, H264Nvenc };
-enum class AudioCodec { Opus, AacMf, Pcm, Flac };
+enum class VideoCodec { Av1, Hevc, H264 };
+enum class AudioCodec { Opus, Aac, Pcm, Flac };
 enum class ChromaSubsampling { Cs420, Cs422, Cs444 };
 enum class BitDepth { Bit8, Bit10 };
 // Y'CbCr quantization range tagged on the video track (0.7.0). Full (0-255) is the
@@ -28,11 +28,11 @@ constexpr auto AllContainers() noexcept -> std::array<Container, 3> {
 }
 
 constexpr auto AllVideoCodecs() noexcept -> std::array<VideoCodec, 3> {
-    return {VideoCodec::Av1Nvenc, VideoCodec::HevcNvenc, VideoCodec::H264Nvenc};
+    return {VideoCodec::Av1, VideoCodec::Hevc, VideoCodec::H264};
 }
 
 constexpr auto AllAudioCodecs() noexcept -> std::array<AudioCodec, 4> {
-    return {AudioCodec::Opus, AudioCodec::AacMf, AudioCodec::Pcm, AudioCodec::Flac};
+    return {AudioCodec::Opus, AudioCodec::Aac, AudioCodec::Pcm, AudioCodec::Flac};
 }
 
 constexpr auto AllChromaModes() noexcept -> std::array<ChromaSubsampling, 3> {

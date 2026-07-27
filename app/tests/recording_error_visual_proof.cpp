@@ -129,8 +129,8 @@ class RecordingErrorVisualProofTest : public ::testing::Test {
         m.summary = QStringLiteral("ExoSnap couldn't start this recording. The details below may help identify why.");
         m.phase = QStringLiteral("Validate");
         m.code = QStringLiteral("0x80004001");
-        m.detail = QStringLiteral("Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc, "
-                                  "or VideoCodec::HevcNvenc");
+        m.detail = QStringLiteral("Container::Matroska requires VideoCodec::Av1, VideoCodec::H264, "
+                                  "or VideoCodec::Hevc");
         m.container = QStringLiteral("MKV");
         m.video_codec = QStringLiteral("HEVC");
         m.audio_codec = QStringLiteral("Opus");

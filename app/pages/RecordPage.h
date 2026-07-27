@@ -493,8 +493,8 @@ class RecordPage : public QWidget {
     std::filesystem::path last_output_folder_;
     OutputSettingsModel current_output_settings_;
     capability::Container current_container_ = capability::Container::Matroska;
-    capability::VideoCodec current_video_codec_ = capability::VideoCodec::H264Nvenc;
-    capability::AudioCodec current_audio_codec_ = capability::AudioCodec::AacMf;
+    capability::VideoCodec current_video_codec_ = capability::VideoCodec::H264;
+    capability::AudioCodec current_audio_codec_ = capability::AudioCodec::Aac;
     OutputResolutionSettings current_output_resolution_{};
     uint32_t current_frame_rate_num_ = 60;
     uint32_t current_frame_rate_den_ = 1;

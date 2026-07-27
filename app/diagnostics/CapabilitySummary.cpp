@@ -20,11 +20,11 @@ std::string SupportLevelString(capability::SupportLevel level) {
 
 std::string VideoCodecDisplayName(capability::VideoCodec v) {
     switch (v) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return "H.264 (NVENC)";
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return "HEVC (NVENC)";
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return "AV1 (NVENC)";
     }
     return "Unknown";
@@ -34,7 +34,7 @@ std::string AudioCodecDisplayName(capability::AudioCodec a) {
     switch (a) {
     case capability::AudioCodec::Opus:
         return "Opus";
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return "AAC (Media Foundation)";
     case capability::AudioCodec::Pcm:
         return "PCM";
@@ -109,8 +109,7 @@ CapabilitySummary CapabilitySummary::FromCapabilitySet(const capability::Capabil
     }
 
     // Video codecs
-    for (const auto& v :
-         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+    for (const auto& v : {capability::VideoCodec::H264, capability::VideoCodec::Hevc, capability::VideoCodec::Av1}) {
         const auto& ann = caps.QueryVideoCodec(v);
         summary.entries.push_back({VideoCodecDisplayName(v), SupportLevelString(ann.level),
                                    capability::IsSelectable(ann.level) ? "available" : "unavailable",
@@ -121,7 +120,7 @@ CapabilitySummary CapabilitySummary::FromCapabilitySet(const capability::Capabil
     summary.entries.push_back({"VP9", "Not probed", "unavailable", false});
 
     // Audio codecs
-    for (const auto& a : {capability::AudioCodec::Opus, capability::AudioCodec::AacMf, capability::AudioCodec::Pcm,
+    for (const auto& a : {capability::AudioCodec::Opus, capability::AudioCodec::Aac, capability::AudioCodec::Pcm,
                           capability::AudioCodec::Flac}) {
         const auto& ann = caps.QueryAudioCodec(a);
         summary.entries.push_back({AudioCodecDisplayName(a), SupportLevelString(ann.level),

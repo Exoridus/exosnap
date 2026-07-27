@@ -271,7 +271,7 @@ struct RecorderConfig {
     // Format — WebM (AV1+Opus) and Matroska (AV1+AAC or AV1+Opus) are supported.
     // Validate() rejects unsupported combinations.
     Container container = Container::WebM;
-    VideoCodec video_codec = VideoCodec::Av1Nvenc;
+    VideoCodec video_codec = VideoCodec::Av1;
     AudioCodec audio_codec = AudioCodec::Opus;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
@@ -291,10 +291,10 @@ struct RecorderConfig {
     // runtime display facts, still to be wired up).
     HdrMode hdr_mode = HdrMode::TonemapSdr;
 
-    // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
-    // Constant-quality target (CQP). 1 = best, 51 = worst. Only used when
-    // rate_control == ConstantQuality.
-    uint32_t nvenc_cq = CanonicalCq(NvencQualityPreset::Balanced);
+    // Constant-quality target. 1 = best, 51 = worst. Only used when the rate
+    // control mode is ConstantQuality; the encoder backend maps it onto its own
+    // quality parameter (NVENC: CQP).
+    uint32_t cq = CanonicalCq(QualityPreset::Balanced);
 
     // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
     RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;

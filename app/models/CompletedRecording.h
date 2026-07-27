@@ -76,7 +76,7 @@ struct CompletedRecording {
     bool cfr = true;
 
     recorder_core::Container container = recorder_core::Container::WebM;
-    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1;
     recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
 
     bool is_display_target = false;

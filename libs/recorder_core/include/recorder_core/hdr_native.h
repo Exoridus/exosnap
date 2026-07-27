@@ -37,7 +37,7 @@ struct HdrDisplayFacts {
 // excluded (matches the pre-flight rec.hdr.h264 blocker and the 8-bit-only
 // H.264 encode path).
 [[nodiscard]] inline bool CodecSupportsHdr10Native(VideoCodec codec) noexcept {
-    return codec == VideoCodec::HevcNvenc || codec == VideoCodec::Av1Nvenc;
+    return codec == VideoCodec::Hevc || codec == VideoCodec::Av1;
 }
 
 // The native HDR10 output path engages only when the user asked for it

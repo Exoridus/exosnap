@@ -78,7 +78,7 @@ RecordingPreset MakeCustomPreset(const std::string& name, capability::Container 
 
 TEST(PresetExportImport, SinglePreset_ExportImport_ConfigEqual) {
     const RecordingPreset original = MakeCustomPreset("Test MKV Preset", capability::Container::Matroska,
-                                                      capability::VideoCodec::Av1Nvenc, capability::AudioCodec::Opus);
+                                                      capability::VideoCodec::Av1, capability::AudioCodec::Opus);
 
     const QString path = UniqueTempPath();
 
@@ -142,7 +142,7 @@ TEST(PresetExportImport, MultiItemFile_ImportAll_ReturnsBothPresets) {
 
 TEST(PresetExportImport, IdCollision_NewIdAssigned_ConfigPreserved) {
     RecordingPreset original = MakeCustomPreset("Colliding Preset", capability::Container::Matroska,
-                                                capability::VideoCodec::Av1Nvenc, capability::AudioCodec::Opus);
+                                                capability::VideoCodec::Av1, capability::AudioCodec::Opus);
 
     const QString path = UniqueTempPath();
 
@@ -341,7 +341,7 @@ TEST(PresetExportImport, Registry_ImportPreset_DeduplicatesName) {
 
 TEST(PresetExportImport, FullPipeline_ExportImportRegistry_ConfigEqual) {
     RecordingPreset source = MakeCustomPreset("Pipeline Preset", capability::Container::Matroska,
-                                              capability::VideoCodec::Av1Nvenc, capability::AudioCodec::Opus);
+                                              capability::VideoCodec::Av1, capability::AudioCodec::Opus);
     source.config.countdown_seconds = 5;
     source.config.video.frame_rate_num = 30;
     source.config.video.frame_rate_den = 1;

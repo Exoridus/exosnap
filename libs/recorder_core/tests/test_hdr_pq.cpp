@@ -19,22 +19,22 @@ namespace {
 TEST(HdrNative, EffectiveOnlyWhenHdr10AndActiveAndCapable) {
     // The full truth table: native engages only for Hdr10 + HDR-active display +
     // an HDR10-capable codec (HEVC/AV1).
-    EXPECT_TRUE(IsHdr10NativeEffective(HdrMode::Hdr10, true, VideoCodec::HevcNvenc));
-    EXPECT_TRUE(IsHdr10NativeEffective(HdrMode::Hdr10, true, VideoCodec::Av1Nvenc));
+    EXPECT_TRUE(IsHdr10NativeEffective(HdrMode::Hdr10, true, VideoCodec::Hevc));
+    EXPECT_TRUE(IsHdr10NativeEffective(HdrMode::Hdr10, true, VideoCodec::Av1));
 
     // Wrong mode.
-    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::TonemapSdr, true, VideoCodec::Av1Nvenc));
-    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::Off, true, VideoCodec::Av1Nvenc));
+    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::TonemapSdr, true, VideoCodec::Av1));
+    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::Off, true, VideoCodec::Av1));
     // SDR display (not HDR-active) — never native even in Hdr10.
-    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::Hdr10, false, VideoCodec::Av1Nvenc));
+    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::Hdr10, false, VideoCodec::Av1));
     // H.264 cannot encode HDR10.
-    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::Hdr10, true, VideoCodec::H264Nvenc));
+    EXPECT_FALSE(IsHdr10NativeEffective(HdrMode::Hdr10, true, VideoCodec::H264));
 }
 
 TEST(HdrNative, CodecCapability) {
-    EXPECT_TRUE(CodecSupportsHdr10Native(VideoCodec::HevcNvenc));
-    EXPECT_TRUE(CodecSupportsHdr10Native(VideoCodec::Av1Nvenc));
-    EXPECT_FALSE(CodecSupportsHdr10Native(VideoCodec::H264Nvenc));
+    EXPECT_TRUE(CodecSupportsHdr10Native(VideoCodec::Hevc));
+    EXPECT_TRUE(CodecSupportsHdr10Native(VideoCodec::Av1));
+    EXPECT_FALSE(CodecSupportsHdr10Native(VideoCodec::H264));
 }
 
 // ---- HDR10 colour-metadata assembly ----------------------------------------

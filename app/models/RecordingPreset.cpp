@@ -108,11 +108,11 @@ RecordingPreset MakeDefaultPreset() {
     // MKV + AV1 + Opus is a valid combination; do NOT call ReconcileContainerCodecs.
     preset.config.output = OutputSettingsModel::Defaults();
     preset.config.output.container = capability::Container::Matroska;
-    preset.config.output.video_codec = capability::VideoCodec::Av1Nvenc;
+    preset.config.output.video_codec = capability::VideoCodec::Av1;
     preset.config.output.audio_codec = capability::AudioCodec::Opus;
 
     // Video
-    preset.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High);
+    preset.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::High);
     preset.config.video.cfr = true;
     preset.config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;
     preset.config.video.capture_cursor = true;
@@ -186,7 +186,7 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     RecordingPreset efficiency = MakeDefaultPreset();
     efficiency.id = std::string(kEfficiencyPresetId);
     efficiency.name = "Efficiency";
-    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient);
+    efficiency.config.video.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient);
     efficiency.config.output.nvenc_preset = recorder_core::NvencPreset::P6;
     result.push_back(std::move(efficiency));
 
@@ -195,8 +195,8 @@ std::vector<RecordingPreset> MakeBuiltInPresets() {
     compatibility.id = std::string(kCompatibilityPresetId);
     compatibility.name = "Compatibility";
     compatibility.config.output.container = capability::Container::Mp4;
-    compatibility.config.output.video_codec = capability::VideoCodec::H264Nvenc;
-    compatibility.config.output.audio_codec = capability::AudioCodec::AacMf;
+    compatibility.config.output.video_codec = capability::VideoCodec::H264;
+    compatibility.config.output.audio_codec = capability::AudioCodec::Aac;
     result.push_back(std::move(compatibility));
 
     return result;
@@ -1101,11 +1101,11 @@ std::wstring ContainerToken(capability::Container container) {
 
 std::wstring CodecToken(capability::VideoCodec codec) {
     switch (codec) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return L"h264";
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return L"hevc";
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return L"av1";
     }
     return L"h264";
@@ -1113,7 +1113,7 @@ std::wstring CodecToken(capability::VideoCodec codec) {
 
 std::wstring CodecToken(capability::AudioCodec codec) {
     switch (codec) {
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return L"aac";
     case capability::AudioCodec::Opus:
         return L"opus";

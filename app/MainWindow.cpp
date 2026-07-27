@@ -1377,11 +1377,11 @@ std::string CrashContainerToken(capability::Container c) {
 
 std::string CrashVideoCodecToken(capability::VideoCodec v) {
     switch (v) {
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return "AV1";
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return "HEVC";
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return "H.264";
     }
     return "AV1";
@@ -1391,7 +1391,7 @@ std::string CrashAudioCodecToken(capability::AudioCodec a) {
     switch (a) {
     case capability::AudioCodec::Opus:
         return "Opus";
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return "AAC";
     case capability::AudioCodec::Pcm:
         return "PCM";
@@ -3198,7 +3198,7 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
 
     OutputSettingsModel output;
     output.container = capability::Container::Matroska; // shipped default (MKV + AV1 + Opus)
-    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.video_codec = capability::VideoCodec::Av1;
     output.audio_codec = capability::AudioCodec::Opus;
     output.output_folder = std::filesystem::path(L"C:\\Users\\User\\Videos\\ExoSnap");
     output.naming_pattern = L"visual-test_{datetime}_{title}";
@@ -3444,7 +3444,7 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
     s.video_encoder.output_fps = 60.0;
     s.video_encoder.frames_submitted = 2520;
     s.video_encoder.frames_encoded = 2520;
-    s.video_encoder.codec = VideoCodec::Av1Nvenc;
+    s.video_encoder.codec = VideoCodec::Av1;
     s.video_encoder.width = 1920;
     s.video_encoder.height = 1080;
     s.video_encoder.cfr = true;
@@ -5134,7 +5134,7 @@ void MainWindow::buildDiagnosticsPage() {
                 // H.264 only as the last-resort default.
                 output_settings_.video_codec =
                     capability::BestAvailableVideoCodec(runtime_caps_, output_settings_.container)
-                        .value_or(capability::VideoCodec::H264Nvenc);
+                        .value_or(capability::VideoCodec::H264);
             } else if (fix_id == QStringLiteral("fix.profile.codec.best")) {
                 // rec.profile.codec: switch to the recommended best GPU-supported codec
                 // (shared resolver — identical pick to the recommendation), then reconcile
@@ -5143,10 +5143,10 @@ void MainWindow::buildDiagnosticsPage() {
                     output_settings_.video_codec = *best;
                 ReconcileContainerCodecs(output_settings_);
             } else if (fix_id == QStringLiteral("fix.codec.audio.default")) {
-                output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                output_settings_.audio_codec = capability::AudioCodec::Aac;
             } else if (fix_id == QStringLiteral("fix.audio.opus_to_aac")) {
                 // rec.009 Notice (Opus-in-MP4): switch audio to AAC and reconcile.
-                output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                output_settings_.audio_codec = capability::AudioCodec::Aac;
                 ReconcileContainerCodecs(output_settings_);
             } else if (fix_id == QStringLiteral("fix.color.range")) {
                 // rec.color.range Notice: Full range is crushed/too dark in players that ignore
@@ -5159,8 +5159,8 @@ void MainWindow::buildDiagnosticsPage() {
                 // RecommendationEngine::checkHdrH264Blocker) and keys the fix id off that choice
                 // so this handler applies the exact codec the FixAction proposed, never a blind AV1.
                 output_settings_.video_codec = fix_id == QStringLiteral("fix.hdr.codec.av1")
-                                                   ? capability::VideoCodec::Av1Nvenc
-                                                   : capability::VideoCodec::HevcNvenc;
+                                                   ? capability::VideoCodec::Av1
+                                                   : capability::VideoCodec::Hevc;
                 ReconcileContainerCodecs(output_settings_);
             } else {
                 return; // unknown auto fix — no-op

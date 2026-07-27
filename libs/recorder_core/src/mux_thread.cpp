@@ -118,12 +118,12 @@ void MuxThread::Run() {
     std::array<AudioCodecPrivateSlot, CodecPrivateData::kMaxAudioTracks> audioCp{};
     {
         std::lock_guard lk(m_state.premux_mutex);
-        if (m_state.config.video_codec == VideoCodec::H264Nvenc) {
+        if (m_state.config.video_codec == VideoCodec::H264) {
             if (!annexb::BuildAvccFromAnnexBSpsAndPps(m_state.codec_private.h264_sps_pps, video_codec_private)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Failed to build AVCC from H.264 SPS/PPS for Matroska");
                 return;
             }
-        } else if (m_state.config.video_codec == VideoCodec::HevcNvenc) {
+        } else if (m_state.config.video_codec == VideoCodec::Hevc) {
             if (!annexb::BuildHvccFromAnnexBVpsSpsPps(m_state.codec_private.hevc_vps_sps_pps, video_codec_private)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
                                       "Failed to build hvcC from HEVC VPS/SPS/PPS for Matroska");
@@ -145,8 +145,8 @@ void MuxThread::Run() {
         encH = m_state.encode_height;
     }
 
-    const bool is_h264 = (m_state.config.video_codec == VideoCodec::H264Nvenc);
-    const bool is_hevc = (m_state.config.video_codec == VideoCodec::HevcNvenc);
+    const bool is_h264 = (m_state.config.video_codec == VideoCodec::H264);
+    const bool is_hevc = (m_state.config.video_codec == VideoCodec::Hevc);
     const std::filesystem::path base_output_path = m_state.config.output_path;
 
     // Build a reusable writer config; only output_path changes per segment.
@@ -172,7 +172,7 @@ void MuxThread::Run() {
     case AudioCodec::Flac:
         sw_config_template.audio_codec = StreamAudioCodec::Flac;
         break;
-    case AudioCodec::AacMf:
+    case AudioCodec::Aac:
     default:
         sw_config_template.audio_codec = StreamAudioCodec::Aac;
         break;

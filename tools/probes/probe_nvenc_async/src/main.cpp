@@ -52,15 +52,15 @@ bool CreateDevice(ComPtr<ID3D11Device>& device, ComPtr<ID3D11DeviceContext>& con
 } // namespace
 
 int main(int argc, char** argv) {
-    VideoCodec codec = VideoCodec::Av1Nvenc;
+    VideoCodec codec = VideoCodec::Av1;
     const char* codecName = "AV1";
     if (argc > 1) {
         const std::string arg = argv[1];
         if (arg == "h264") {
-            codec = VideoCodec::H264Nvenc;
+            codec = VideoCodec::H264;
             codecName = "H264";
         } else if (arg == "hevc") {
-            codec = VideoCodec::HevcNvenc;
+            codec = VideoCodec::Hevc;
             codecName = "HEVC";
         }
     }

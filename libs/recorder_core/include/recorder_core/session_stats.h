@@ -29,7 +29,7 @@ struct SessionStats {
     uint32_t frame_rate_den = 1;
     bool cfr = true;
     Container container = Container::WebM;
-    VideoCodec video_codec = VideoCodec::Av1Nvenc;
+    VideoCodec video_codec = VideoCodec::Av1;
     AudioCodec audio_codec = AudioCodec::Opus;
     // Smoothed linear RMS level [0..1] per audio track.
     // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.

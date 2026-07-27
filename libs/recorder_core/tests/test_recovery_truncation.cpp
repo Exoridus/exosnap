@@ -83,8 +83,8 @@ class RecoveryTruncationTest : public ::testing::Test {
 TEST_F(RecoveryTruncationTest, RepairRemuxSurvivesTailTruncationAtManyOffsets) {
     const std::string full = TempPath("trunc_full.mkv");
     recorder_core::testutil::SyntheticSessionConfig cfg;
-    cfg.video_codec = recorder_core::VideoCodec::H264Nvenc;
-    cfg.audio_codec = recorder_core::AudioCodec::AacMf;
+    cfg.video_codec = recorder_core::VideoCodec::H264;
+    cfg.audio_codec = recorder_core::AudioCodec::Aac;
     cfg.output_path = full;
     cfg.target_seconds = 4.0;
     const auto run = recorder_core::testutil::SyntheticSession(cfg).Run();

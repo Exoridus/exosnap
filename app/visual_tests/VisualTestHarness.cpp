@@ -67,11 +67,11 @@ QString ContainerName(capability::Container container) {
 
 QString VideoCodecName(capability::VideoCodec codec) {
     switch (codec) {
-    case capability::VideoCodec::H264Nvenc:
+    case capability::VideoCodec::H264:
         return QStringLiteral("h264");
-    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::Hevc:
         return QStringLiteral("hevc");
-    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::Av1:
         return QStringLiteral("av1");
     }
     return QStringLiteral("av1");
@@ -79,7 +79,7 @@ QString VideoCodecName(capability::VideoCodec codec) {
 
 QString AudioCodecName(capability::AudioCodec codec) {
     switch (codec) {
-    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Aac:
         return QStringLiteral("aac");
     case capability::AudioCodec::Opus:
         return QStringLiteral("opus");

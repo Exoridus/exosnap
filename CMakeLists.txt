@@ -86,7 +86,8 @@ option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics pro
 # third_party must come before static analysis so its targets are not analyzed.
 add_subdirectory(third_party)
 
-# FFmpeg lgpl-shared prebuilt (BtbN pinned).
+# FFmpeg lgpl-shared prebuilt, built and pinned from our own
+# Exoridus/exosnap-ffmpeg-build repository (FFmpeg 8.1.1, LGPL-only, release r5).
 # Provides FFmpeg::avformat, FFmpeg::avcodec, FFmpeg::avutil, FFmpeg::swresample,
 # and the convenience bundle FFmpeg::mux.
 include(cmake/VendorFFmpeg.cmake)
@@ -118,7 +119,6 @@ endif()
 
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
-add_subdirectory(libs/recorder_facade)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
 add_subdirectory(app)

@@ -19,19 +19,18 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.containers.emplace(Container::WebM,
                             SupportAnnotation{SupportLevel::Available, "Primary validated WebM container."});
 
-    caps.video_codecs.emplace(VideoCodec::Av1Nvenc,
-                              SupportAnnotation{SupportLevel::Available, "Validated NVENC AV1 path."});
-    caps.video_codecs.emplace(VideoCodec::HevcNvenc,
+    caps.video_codecs.emplace(VideoCodec::Av1, SupportAnnotation{SupportLevel::Available, "Validated NVENC AV1 path."});
+    caps.video_codecs.emplace(VideoCodec::Hevc,
                               SupportAnnotation{SupportLevel::ValidUnvalidated,
                                                 "HEVC NVENC + Matroska V_MPEGH/ISO/HEVC implemented in 0.7.0; "
                                                 "not yet validated on recording hardware."});
-    caps.video_codecs.emplace(VideoCodec::H264Nvenc,
+    caps.video_codecs.emplace(VideoCodec::H264,
                               SupportAnnotation{SupportLevel::Available, "Validated NVENC H.264 path."});
 
     caps.audio_codecs.emplace(
         AudioCodec::Opus,
         SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
-    caps.audio_codecs.emplace(AudioCodec::AacMf,
+    caps.audio_codecs.emplace(AudioCodec::Aac,
                               SupportAnnotation{SupportLevel::Available, "Validated AAC-LC Media Foundation path."});
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
@@ -59,16 +58,15 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     // NotImplemented for AV1; a real per-GPU probe downgrades H.264/HEVC when the
     // specific GPU cannot do it (ApplyNvencYuv444Support).
     caps.chroma444.emplace(
-        VideoCodec::H264Nvenc,
+        VideoCodec::H264,
         SupportAnnotation{SupportLevel::ValidUnvalidated,
                           "H.264 High 4:4:4 Predictive (8-bit); not yet validated on recording hardware."});
     caps.chroma444.emplace(
-        VideoCodec::HevcNvenc,
+        VideoCodec::Hevc,
         SupportAnnotation{SupportLevel::ValidUnvalidated,
                           "HEVC Range Extensions 4:4:4 (8-bit); not yet validated on recording hardware."});
-    caps.chroma444.emplace(
-        VideoCodec::Av1Nvenc,
-        SupportAnnotation{SupportLevel::NotImplemented, "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."});
+    caps.chroma444.emplace(VideoCodec::Av1, SupportAnnotation{SupportLevel::NotImplemented,
+                                                              "AV1 NVENC is 4:2:0 only; use H.264 or HEVC for 4:4:4."});
 
     for (VideoCodec codec : AllVideoCodecs()) {
         caps.bframe_capability.emplace(
@@ -98,15 +96,14 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     // NVENC-absence downgrade below: encode availability is a separate concern
     // owned by video_codecs / the codec-availability blocker.
     caps.hdr10_native.emplace(
-        VideoCodec::Av1Nvenc,
+        VideoCodec::Av1,
         SupportAnnotation{SupportLevel::Available, "AV1 carries native HDR10 (10-bit/P010, PQ/BT.2020)."});
     caps.hdr10_native.emplace(
-        VideoCodec::HevcNvenc,
+        VideoCodec::Hevc,
         SupportAnnotation{SupportLevel::Available, "HEVC Main10 carries native HDR10 (10-bit/P010, PQ/BT.2020)."});
     caps.hdr10_native.emplace(
-        VideoCodec::H264Nvenc,
-        SupportAnnotation{SupportLevel::NotImplemented,
-                          "H.264 has no 10-bit/HDR10 path (8-bit only). Use HEVC or AV1 for HDR10."});
+        VideoCodec::H264, SupportAnnotation{SupportLevel::NotImplemented,
+                                            "H.264 has no 10-bit/HDR10 path (8-bit only). Use HEVC or AV1 for HDR10."});
 
     caps.resolution_constraint.max_width = 0;
     caps.resolution_constraint.max_height = 0;
@@ -133,24 +130,24 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
             "Install a supported NVIDIA driver or switch to a non-NVENC recording profile.";
 
         // Lower the dimension-level annotation for all NVENC codecs.
-        caps.video_codecs[VideoCodec::Av1Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
-        caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
-        caps.video_codecs[VideoCodec::HevcNvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+        caps.video_codecs[VideoCodec::Av1] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+        caps.video_codecs[VideoCodec::H264] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+        caps.video_codecs[VideoCodec::Hevc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         // 10-bit requires NVENC (HEVC Main10 / AV1 10-bit). Without NVENC it cannot be
         // produced at all, so downgrade it to NotImplemented mirroring the HEVC codec.
         caps.bit_depths[BitDepth::Bit10] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         // Force primary combos to non-selectable via combo_override.
-        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
-                                   ChromaSubsampling::Cs420, BitDepth::Bit8};
+        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                                   BitDepth::Bit8};
         caps.combo_overrides[mkv_av1_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
-        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
-                                    ChromaSubsampling::Cs420, BitDepth::Bit8};
+        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                                    BitDepth::Bit8};
         caps.combo_overrides[mkv_h264_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
-        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
         caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
     }
@@ -161,23 +158,23 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
             "AAC audio encoding (Media Foundation) is not available on this system. "
             "Switch to an Opus recording profile or ensure Media Foundation components are installed.";
 
-        // Lower the dimension-level annotation for AacMf.
-        caps.audio_codecs[AudioCodec::AacMf] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
+        // Lower the dimension-level annotation for Aac.
+        caps.audio_codecs[AudioCodec::Aac] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
 
         // Force primary AAC combos to non-selectable via combo_override.
-        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
-                                   ChromaSubsampling::Cs420, BitDepth::Bit8};
+        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                                   BitDepth::Bit8};
         if (caps.combo_overrides.find(mkv_av1_key) == caps.combo_overrides.end()) {
             caps.combo_overrides.try_emplace(mkv_av1_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
         }
 
-        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
-                                    ChromaSubsampling::Cs420, BitDepth::Bit8};
+        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                                    BitDepth::Bit8};
         if (caps.combo_overrides.find(mkv_h264_key) == caps.combo_overrides.end()) {
             caps.combo_overrides.try_emplace(mkv_h264_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
         }
 
-        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
         if (caps.combo_overrides.find(mp4_key) == caps.combo_overrides.end()) {
             caps.combo_overrides.try_emplace(mp4_key, SupportAnnotation{SupportLevel::NotImplemented, aac_reason});
@@ -185,7 +182,7 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     }
 
     // --- HEVC (0.7.0) ---
-    // The static baseline sets HevcNvenc to ValidUnvalidated (implemented engine path,
+    // The static baseline sets Hevc to ValidUnvalidated (implemented engine path,
     // not yet validated on recording hardware). Downgrade rule A above lowers it to
     // NotImplemented when NVENC is absent, mirroring AV1/H.264. A live GPU smoke test is
     // required before promoting HEVC to Available.
@@ -223,13 +220,12 @@ void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts
         }
     };
 
-    downgrade_if_unsupported(VideoCodec::Av1Nvenc, facts.nvenc_av1,
+    downgrade_if_unsupported(VideoCodec::Av1, facts.nvenc_av1,
                              "This GPU does not support AV1 NVENC encoding "
                              "(NVIDIA Ada Lovelace / RTX 40 series or newer is required).");
-    downgrade_if_unsupported(VideoCodec::HevcNvenc, facts.nvenc_hevc,
+    downgrade_if_unsupported(VideoCodec::Hevc, facts.nvenc_hevc,
                              "This GPU does not support HEVC (H.265) NVENC encoding.");
-    downgrade_if_unsupported(VideoCodec::H264Nvenc, facts.nvenc_h264,
-                             "This GPU does not support H.264 NVENC encoding.");
+    downgrade_if_unsupported(VideoCodec::H264, facts.nvenc_h264, "This GPU does not support H.264 NVENC encoding.");
 }
 
 void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {
@@ -249,9 +245,9 @@ void ApplyNvencYuv444Support(CapabilitySet& caps, const NvidiaRuntimeFacts& fact
         }
     };
 
-    downgrade_if_unsupported(VideoCodec::H264Nvenc, facts.nvenc_yuv444_h264,
+    downgrade_if_unsupported(VideoCodec::H264, facts.nvenc_yuv444_h264,
                              "This GPU does not support H.264 4:4:4 (YUV444) NVENC encoding.");
-    downgrade_if_unsupported(VideoCodec::HevcNvenc, facts.nvenc_yuv444_hevc,
+    downgrade_if_unsupported(VideoCodec::Hevc, facts.nvenc_yuv444_hevc,
                              "This GPU does not support HEVC 4:4:4 (YUV444) NVENC encoding.");
     // AV1 is not probed for 4:4:4 — it has no NVENC 4:4:4 path and stays
     // NotImplemented from the baseline.
@@ -280,9 +276,9 @@ void ApplyNvencAdvancedEncodeSupport(CapabilitySet& caps, const NvidiaRuntimeFac
             adv.temporal_aq ? "Probed on this GPU/driver; not yet validated by ExoSnap's own encode path."
                             : "GPU/driver does not report Temporal-AQ support for this codec."};
     };
-    apply(VideoCodec::H264Nvenc, facts.nvenc_h264, facts.nvenc_adv_h264);
-    apply(VideoCodec::HevcNvenc, facts.nvenc_hevc, facts.nvenc_adv_hevc);
-    apply(VideoCodec::Av1Nvenc, facts.nvenc_av1, facts.nvenc_adv_av1);
+    apply(VideoCodec::H264, facts.nvenc_h264, facts.nvenc_adv_h264);
+    apply(VideoCodec::Hevc, facts.nvenc_hevc, facts.nvenc_adv_hevc);
+    apply(VideoCodec::Av1, facts.nvenc_av1, facts.nvenc_adv_av1);
 }
 
 CapabilitySet CapabilityBuilder::BuildFromHardwareQuery() {

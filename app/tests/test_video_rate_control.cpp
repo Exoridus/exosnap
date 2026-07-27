@@ -20,7 +20,7 @@ namespace exosnap {
 
 TEST(VideoSettingsModel, Defaults_QualityIsBalanced) {
     const VideoSettingsModel m = VideoSettingsModel::Defaults();
-    EXPECT_EQ(m.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
+    EXPECT_EQ(m.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced));
 }
 
 TEST(VideoSettingsModel, Defaults_RateControlIsConstantQuality) {

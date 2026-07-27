@@ -152,11 +152,11 @@ TEST(AudioPlanValidateTest, Validate_AcceptsPcmFloatWithBitDepth32) {
     EXPECT_TRUE(validation.succeeded);
 }
 
-TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithNonPcmCodec_AacMf) {
+TEST(AudioPlanValidateTest, Validate_RejectsPcmFloatWithNonPcmCodec_Aac) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidBaseConfig();
-    cfg.container = recorder_core::Container::Matroska; // valid for AacMf, isolates the pcm_float check
-    cfg.audio_codec = recorder_core::AudioCodec::AacMf;
+    cfg.container = recorder_core::Container::Matroska; // valid for Aac, isolates the pcm_float check
+    cfg.audio_codec = recorder_core::AudioCodec::Aac;
     cfg.audio_bit_depth = 32;
     cfg.audio_pcm_float = true;
 

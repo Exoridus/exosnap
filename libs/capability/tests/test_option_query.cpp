@@ -25,13 +25,13 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
 
     UserRecorderConfig current{};
     current.container = Container::Matroska;
-    current.video_codec = VideoCodec::Av1Nvenc;
-    current.audio_codec = AudioCodec::AacMf;
+    current.video_codec = VideoCodec::Av1;
+    current.audio_codec = AudioCodec::Aac;
 
     const std::vector<OptionEntry> options = query.GetAudioCodecOptions(current);
     ASSERT_EQ(options.size(), AllAudioCodecs().size());
 
-    const OptionEntry* aac = FindOptionByLabel(options, std::string(ToString(AudioCodec::AacMf)));
+    const OptionEntry* aac = FindOptionByLabel(options, std::string(ToString(AudioCodec::Aac)));
     const OptionEntry* opus = FindOptionByLabel(options, std::string(ToString(AudioCodec::Opus)));
     const OptionEntry* pcm = FindOptionByLabel(options, std::string(ToString(AudioCodec::Pcm)));
     const OptionEntry* flac = FindOptionByLabel(options, std::string(ToString(AudioCodec::Flac)));
@@ -63,12 +63,12 @@ TEST(OptionQueryTest, WebMAv1AudioOptionsMatchBaseline) {
 
     UserRecorderConfig current;
     current.container = Container::WebM;
-    current.video_codec = VideoCodec::Av1Nvenc;
+    current.video_codec = VideoCodec::Av1;
 
     const std::vector<OptionEntry> options = query.GetAudioCodecOptions(current);
     ASSERT_EQ(options.size(), AllAudioCodecs().size());
 
-    const OptionEntry* aac = FindOptionByLabel(options, std::string(ToString(AudioCodec::AacMf)));
+    const OptionEntry* aac = FindOptionByLabel(options, std::string(ToString(AudioCodec::Aac)));
     const OptionEntry* opus = FindOptionByLabel(options, std::string(ToString(AudioCodec::Opus)));
 
     ASSERT_NE(aac, nullptr);

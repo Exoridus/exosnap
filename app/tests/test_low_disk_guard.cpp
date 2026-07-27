@@ -42,7 +42,7 @@ class StubDiskSpaceProvider final : public IDiskSpaceProvider {
 
 static capability::CapabilitySet MakeBasicCaps() {
     capability::CapabilitySet caps;
-    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Available, ""};
     caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
     return caps;
 }
@@ -50,7 +50,7 @@ static capability::CapabilitySet MakeBasicCaps() {
 static capability::UserRecorderConfig MakeBasicConfig() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
-    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.video_codec = capability::VideoCodec::Av1;
     config.audio_codec = capability::AudioCodec::Opus;
     // Explicit: keep the disk-guard fixtures isolated from rec.color.range
     // (a Full range would add an unrelated Notice and taint has_notice checks).
@@ -273,7 +273,7 @@ TEST(LowDiskGuardRecommendationTest, AboveWarnThreshold_NoDiskResults) {
 TEST(LowDiskGuardRecommendationTest, BlockerTier_DoesNotSuppressCodecBlocker) {
     // Both a codec blocker (rec.003) and a disk blocker (rec.007) can coexist.
     capability::CapabilitySet caps = MakeBasicCaps();
-    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Invalid, "no GPU"};
+    caps.video_codecs[capability::VideoCodec::Av1] = {capability::SupportLevel::Invalid, "no GPU"};
 
     capability::UserRecorderConfig config = MakeBasicConfig();
 

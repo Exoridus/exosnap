@@ -951,12 +951,12 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
 
     // The seam combo is kept in sync with the model, whose default preset is
     // Balanced — so re-selecting it is a no-op.
-    const int balanced_idx = combo->findData(static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
+    const int balanced_idx = combo->findData(static_cast<int>(recorder_core::QualityPreset::Balanced));
     ASSERT_GE(balanced_idx, 0);
     combo->setCurrentIndex(balanced_idx);
     EXPECT_FALSE(emitted);
 
-    const int ultra_idx = combo->findData(static_cast<int>(recorder_core::NvencQualityPreset::Ultra));
+    const int ultra_idx = combo->findData(static_cast<int>(recorder_core::QualityPreset::Ultra));
     ASSERT_GE(ultra_idx, 0);
     combo->setCurrentIndex(ultra_idx);
     EXPECT_TRUE(emitted);
@@ -985,28 +985,28 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
 
     // Default quality is Balanced, so each click below is a real change and emits.
     draft_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Draft));
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Draft));
     EXPECT_TRUE(draft_segment->isChecked());
     EXPECT_TRUE(draft_segment->property("qualitySegmentSelected").toBool());
     EXPECT_FALSE(balanced_segment->isChecked());
 
     efficient_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Efficient));
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Efficient));
     EXPECT_TRUE(efficient_segment->isChecked());
     EXPECT_FALSE(draft_segment->isChecked());
 
     balanced_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced));
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced));
     EXPECT_TRUE(balanced_segment->isChecked());
     EXPECT_FALSE(efficient_segment->isChecked());
 
     high_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::High));
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::High));
     EXPECT_TRUE(high_segment->isChecked());
     EXPECT_FALSE(balanced_segment->isChecked());
 
     ultra_segment->click();
-    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Ultra));
+    EXPECT_EQ(changed.cq, recorder_core::CanonicalCq(recorder_core::QualityPreset::Ultra));
     EXPECT_TRUE(ultra_segment->isChecked());
     EXPECT_FALSE(high_segment->isChecked());
 
@@ -1017,7 +1017,7 @@ TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     VideoSettingsModel balanced = video_defaults_;
-    balanced.cq = recorder_core::CanonicalCq(recorder_core::NvencQualityPreset::Balanced);
+    balanced.cq = recorder_core::CanonicalCq(recorder_core::QualityPreset::Balanced);
     page.setVideoSettings(balanced);
 
     auto* draft_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentDraft"));
@@ -2815,14 +2815,14 @@ TEST_F(ConfigPageTest, S7_VideoCodecCombo_IncludesHevcNonDebug) {
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
     ASSERT_NE(combo, nullptr);
 
-    const int hevc_idx = combo->findData(static_cast<int>(capability::VideoCodec::HevcNvenc));
+    const int hevc_idx = combo->findData(static_cast<int>(capability::VideoCodec::Hevc));
     ASSERT_GE(hevc_idx, 0) << "HEVC must be present in the video codec list";
     EXPECT_EQ(combo->itemText(hevc_idx), QStringLiteral("HEVC"))
         << "HEVC entry must be labelled \"HEVC\" (no \"(debug)\" suffix)";
 
     // AV1 and H.264 must also still be present.
-    EXPECT_GE(combo->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)), 0);
-    EXPECT_GE(combo->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(capability::VideoCodec::Av1)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(capability::VideoCodec::H264)), 0);
 }
 
 // The superseded roadmap mockups for HEVC codec + bit depth must be gone; the real
@@ -2861,15 +2861,15 @@ TEST_F(ConfigPageTest, S7_TenBit_DisabledForH264_EnabledForHevcAv1) {
     };
 
     // Select H.264 → 10-bit disabled.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_FALSE(ten_item_enabled());
 
     // Select HEVC → 10-bit enabled.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     EXPECT_TRUE(ten_item_enabled());
 
     // Select AV1 → 10-bit enabled.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     EXPECT_TRUE(ten_item_enabled());
 }
 
@@ -2889,12 +2889,12 @@ TEST_F(ConfigPageTest, S7_CodecChangeToH264_ResetsTenBitToEight) {
     ASSERT_NE(depth, nullptr);
 
     // HEVC + 10-bit.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     depth->setCurrentIndex(depth->findData(static_cast<int>(capability::BitDepth::Bit10)));
     EXPECT_EQ(emitted.bit_depth, capability::BitDepth::Bit10);
 
     // Switch to H.264 → bit depth must reset to 8-bit.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_EQ(emitted.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(depth->currentData().toInt(), static_cast<int>(capability::BitDepth::Bit8));
 }
@@ -2945,19 +2945,19 @@ TEST_F(ConfigPageTest, Chroma444_GatedPerCodecAndBitDepth_SnapsBack) {
     };
 
     // H.264 8-bit → 4:4:4 selectable; selecting it reaches the model.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_TRUE(item444_enabled());
     chroma->setCurrentIndex(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)));
     EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs444);
 
     // Switch to AV1 → item disabled and the selection snaps back to 4:2:0.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     EXPECT_FALSE(item444_enabled());
     EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs420);
     EXPECT_EQ(chroma->currentData().toInt(), static_cast<int>(capability::ChromaSubsampling::Cs420));
 
     // HEVC 8-bit → selectable again; then 10-bit disables it and snaps back.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     EXPECT_TRUE(item444_enabled());
     chroma->setCurrentIndex(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)));
     EXPECT_EQ(emitted.chroma_subsampling, capability::ChromaSubsampling::Cs444);
@@ -2985,14 +2985,14 @@ TEST_F(ConfigPageTest, Chroma444_GatedByProbedGpuSupport_SnapsBackWithGpuReason)
     const auto item444 = [&]() { return model->item(idx444); };
 
     // H.264 8-bit: 4:4:4 selectable under the static rule; select it.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_TRUE(item444()->isEnabled());
     chroma->setCurrentIndex(chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444)));
     EXPECT_EQ(chroma->currentData().toInt(), static_cast<int>(capability::ChromaSubsampling::Cs444));
 
     // Probe result: this GPU cannot encode H.264 4:4:4.
     auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.chroma444[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, "GPU lacks YUV444"};
+    caps.chroma444[capability::VideoCodec::H264] = {capability::SupportLevel::NotImplemented, "GPU lacks YUV444"};
     page.setRuntimeCapabilities(caps);
 
     // Item is disabled, the tooltip names the GPU, and the selection snapped back.
@@ -3016,7 +3016,7 @@ TEST_F(ConfigPageTest, Chroma444_EnabledWhenProbedGpuSupportsIt) {
     const int idx444 = chroma->findData(static_cast<int>(capability::ChromaSubsampling::Cs444));
     ASSERT_GE(idx444, 0);
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
 
     // Baseline advertises HEVC 4:4:4 as ValidUnvalidated → IsSelectable → enabled.
     auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
@@ -3040,7 +3040,7 @@ TEST_F(ConfigPageTest, Chroma444_StaticRuleAppliesBeforeProbe) {
     ASSERT_GE(idx444, 0);
 
     // No setRuntimeCapabilities() call — pre-probe behavior.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_TRUE(model->item(idx444)->isEnabled());
 }
 
@@ -3093,7 +3093,7 @@ TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
     ASSERT_NE(range, nullptr);
 
     // Even with H.264 (no 10-bit), colour range remains fully selectable.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     range->setCurrentIndex(range->findData(static_cast<int>(capability::ColorRange::Limited)));
     EXPECT_EQ(emitted.color_range, capability::ColorRange::Limited);
     EXPECT_TRUE(range->isEnabled());
@@ -3141,7 +3141,7 @@ TEST_F(ConfigPageTest, EncoderPreset_SelectingP7_EmitsModel_NotGated) {
     ASSERT_NE(preset, nullptr);
 
     // Even with H.264 (previously hardcoded to P6), the preset remains fully selectable.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     preset->setCurrentIndex(preset->findData(static_cast<int>(recorder_core::NvencPreset::P7)));
     EXPECT_EQ(emitted.nvenc_preset, recorder_core::NvencPreset::P7);
     EXPECT_TRUE(preset->isEnabled());
@@ -3230,13 +3230,13 @@ TEST_F(ConfigPageTest, HdrMode_DisabledForH264_EnabledForHevcAv1) {
         return model->item(idx)->isEnabled();
     };
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_FALSE(hdr10_item_enabled());
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     EXPECT_TRUE(hdr10_item_enabled());
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     EXPECT_TRUE(hdr10_item_enabled());
 }
 
@@ -3254,7 +3254,7 @@ TEST_F(ConfigPageTest, HdrMode_SelectingHdr10WithAv1_EmitsModel) {
     ASSERT_NE(codec, nullptr);
     ASSERT_NE(hdr, nullptr);
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     hdr->setCurrentIndex(hdr->findData(static_cast<int>(recorder_core::HdrMode::Hdr10)));
     EXPECT_EQ(emitted.hdr_mode, recorder_core::HdrMode::Hdr10);
 
@@ -3279,11 +3279,11 @@ TEST_F(ConfigPageTest, HdrMode_CodecChangeToH264_DoesNotResetHdr10) {
     ASSERT_NE(codec, nullptr);
     ASSERT_NE(hdr, nullptr);
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     hdr->setCurrentIndex(hdr->findData(static_cast<int>(recorder_core::HdrMode::Hdr10)));
     ASSERT_EQ(emitted.hdr_mode, recorder_core::HdrMode::Hdr10);
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_EQ(emitted.hdr_mode, recorder_core::HdrMode::Hdr10)
         << "HDR mode must survive a codec change to H.264 -- the pre-flight blocker "
            "handles the conflict, the UI must not silently discard the choice";
@@ -3320,13 +3320,13 @@ TEST_F(ConfigPageTest, HdrMode_H264Hint_VisibleOnlyWhenDisabled) {
         return false;
     };
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     EXPECT_FALSE(hint_visible());
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_TRUE(hint_visible());
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     EXPECT_FALSE(hint_visible());
 }
 
@@ -3335,7 +3335,7 @@ TEST_F(ConfigPageTest, HdrMode_H264Hint_VisibleOnlyWhenDisabled) {
 // colour-range/encoder-preset hydration-bug class.
 TEST_F(ConfigPageTest, HdrMode_HydratesFromConstructorSettings) {
     OutputSettingsModel initial = output_defaults_;
-    initial.video_codec = capability::VideoCodec::Av1Nvenc;
+    initial.video_codec = capability::VideoCodec::Av1;
     initial.hdr_mode = recorder_core::HdrMode::Hdr10;
 
     ConfigPage page(initial, video_defaults_);
@@ -3358,7 +3358,7 @@ TEST_F(ConfigPageTest, HdrMode_SetOutputSettings_HydratesWithoutEmitting) {
                      [&emit_count](const OutputSettingsModel&) { ++emit_count; });
 
     OutputSettingsModel incoming = output_defaults_;
-    incoming.video_codec = capability::VideoCodec::HevcNvenc;
+    incoming.video_codec = capability::VideoCodec::Hevc;
     incoming.hdr_mode = recorder_core::HdrMode::Hdr10;
     page.setOutputSettings(incoming);
 
@@ -3422,7 +3422,7 @@ TEST_F(ConfigPageTest, HdrRow_GatedOut_TakesTheH264HintWithIt) {
 
     auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
     ASSERT_NE(codec, nullptr);
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
 
     // No HDR display known → neither the row nor the hint may show.
     for (const auto* label : page.findChildren<QLabel*>()) {
@@ -3443,13 +3443,13 @@ TEST_F(ConfigPageTest, BitDepthRow_HiddenForH264_ShownForHevcAv1) {
     ASSERT_NE(codec, nullptr);
     ASSERT_NE(row, nullptr);
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264)));
     EXPECT_TRUE(row->isHidden()) << "Bit depth row must be hidden for 8-bit-only H.264";
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     EXPECT_FALSE(row->isHidden()) << "Bit depth row must be shown for HEVC";
 
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     EXPECT_FALSE(row->isHidden()) << "Bit depth row must be shown for AV1";
 }
 
@@ -3470,11 +3470,11 @@ TEST_F(ConfigPageTest, ChromaRow_HiddenForAv1AndGpuWithout444_VisibleFor10BitCon
     ASSERT_NE(row, nullptr);
 
     // AV1 (default) → no 4:4:4 path at all → row hidden.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1)));
     EXPECT_TRUE(row->isHidden()) << "Chroma row must be hidden for AV1 (4:2:0 only)";
 
     // HEVC 8-bit → row shown.
-    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Hevc)));
     EXPECT_FALSE(row->isHidden()) << "Chroma row must be shown for HEVC on a capable GPU";
 
     // HEVC 10-bit → conflict is user-fixable (switch bit depth) → row stays.
@@ -3484,7 +3484,7 @@ TEST_F(ConfigPageTest, ChromaRow_HiddenForAv1AndGpuWithout444_VisibleFor10BitCon
 
     // Probe says this GPU has no YUV444 encode for HEVC → row hidden.
     auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.chroma444[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::NotImplemented, "GPU lacks YUV444"};
+    caps.chroma444[capability::VideoCodec::Hevc] = {capability::SupportLevel::NotImplemented, "GPU lacks YUV444"};
     page.setRuntimeCapabilities(caps);
     EXPECT_TRUE(row->isHidden()) << "Chroma row must be hidden when the active GPU cannot encode 4:4:4";
 }
@@ -3571,19 +3571,19 @@ TEST_F(ConfigPageTest, CqSpinBox_SegmentSelectionFollowsNearestPreset) {
     ASSERT_NE(draft_segment, nullptr);
 
     spin->setValue(17); // nearest canonical tier is Ultra (16)
-    EXPECT_EQ(recorder_core::NearestQualityPreset(17), recorder_core::NvencQualityPreset::Ultra);
+    EXPECT_EQ(recorder_core::NearestQualityPreset(17), recorder_core::QualityPreset::Ultra);
     EXPECT_TRUE(ultra_segment->property("qualitySegmentSelected").toBool());
 
     spin->setValue(20); // nearest canonical tier is High (19)
-    EXPECT_EQ(recorder_core::NearestQualityPreset(20), recorder_core::NvencQualityPreset::High);
+    EXPECT_EQ(recorder_core::NearestQualityPreset(20), recorder_core::QualityPreset::High);
     EXPECT_TRUE(high_segment->property("qualitySegmentSelected").toBool());
 
     spin->setValue(29); // nearest canonical tier is Efficient (30)
-    EXPECT_EQ(recorder_core::NearestQualityPreset(29), recorder_core::NvencQualityPreset::Efficient);
+    EXPECT_EQ(recorder_core::NearestQualityPreset(29), recorder_core::QualityPreset::Efficient);
     EXPECT_TRUE(efficient_segment->property("qualitySegmentSelected").toBool());
 
     spin->setValue(33); // nearest canonical tier is Draft (35)
-    EXPECT_EQ(recorder_core::NearestQualityPreset(33), recorder_core::NvencQualityPreset::Draft);
+    EXPECT_EQ(recorder_core::NearestQualityPreset(33), recorder_core::QualityPreset::Draft);
     EXPECT_TRUE(draft_segment->property("qualitySegmentSelected").toBool());
 }
 
