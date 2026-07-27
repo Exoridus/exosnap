@@ -258,14 +258,25 @@ jobs:
   #     still works — only needs to run on a PR when something that could
   #     plausibly break it changed (CMake config, packaging, workflow files, or
   #     the release build script).
-  # Runs on pull_request only; push triggers (main, tags) always run both
-  # build-test legs and are covered by the full RC pipeline for packaging
-  # instead (release-candidate.yml runs on tags and release/** branches).
+  #
+  # This job runs on EVERY trigger, not just pull_request, even though its
+  # outputs are only consulted on pull_request (see build-test-release and
+  # packaging-smoke below). That is deliberate: build-test-release has
+  # `needs: changes`, and a job-level `if:` has an implicit `success()` guard
+  # unless it names a status-check function. If `changes` were skipped (as it
+  # would be on push/tag/dispatch under a plain
+  # `if: github.event_name == 'pull_request'`), `needs.changes` would report
+  # skipped rather than success, and build-test-release would be skipped too —
+  # silently, since a skipped required check still shows green. Keeping this
+  # job unconditional means it always reports success outside pull_request (an
+  # ~8s ubuntu-latest job), so `needs.changes` is satisfied and the consumers'
+  # own `github.event_name != 'pull_request' ||` clause is the only thing that
+  # decides push/tag/dispatch behavior. The filter outputs themselves are
+  # simply not consulted outside pull_request.
   # ---------------------------------------------------------------------------
   changes:
     name: detect packaging changes
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     concurrency:
       group: ci-${{ github.workflow }}-changes-${{ github.head_ref || github.ref }}
       cancel-in-progress: true
@@ -292,6 +303,7 @@ jobs:
               - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
               - '**/*.cmake'
+              - 'CMakePresets.json'
               - 'cmake/**'
               - 'packaging/**'
               - '.github/workflows/**'
@@ -397,10 +409,11 @@ jobs:
     # still works, so on a PR it only runs when the `changes` job flags a
     # build/packaging/tooling-relevant path (see the `changes` job above for
     # the filter). It always runs on push (main) and tags, matching current
-    # behavior there exactly. `changes` legitimately reports a skipped
-    # conclusion outside pull_request (see its own `if:` above), so the
-    # event_name clause must be checked before falling back to
-    # needs.changes.outputs.build.
+    # behavior there exactly: the event_name clause short-circuits before
+    # needs.changes.outputs.build is ever consulted. This only works because
+    # `changes` (above) runs unconditionally and therefore always succeeds
+    # outside pull_request — a skipped `needs` job would otherwise skip this
+    # job too via the implicit success() guard on job-level `if:`.
     if: >-
       github.event_name != 'pull_request' ||
       needs.changes.outputs.build == 'true'
@@ -486,7 +499,15 @@ jobs:
   packaging-smoke:
     name: packaging-smoke
     needs: changes
-    if: needs.changes.outputs.packaging == 'true'
+    # PR-CI only (see the comment above). Now that `changes` runs on every
+    # trigger (not just pull_request — see its own comment above), its
+    # `packaging` output reflects a real push/tag diff outside pull_request
+    # too, so this needs its own explicit event_name guard to stay PR-only;
+    # without it, a push to main that happens to touch a packaging-relevant
+    # path would start running this job there as well, which is not the
+    # intended behavior (release-candidate.yml is the packaging gate for
+    # tags/release branches instead).
+    if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
     runs-on: windows-2022
     concurrency:
       group: ci-${{ github.workflow }}-packaging-smoke-${{ github.head_ref || github.ref }}

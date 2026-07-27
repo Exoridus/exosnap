@@ -37,12 +37,24 @@ jobs:
   # elsewhere that a human suspects might affect the strand); this adds an
   # automatic path so a PR that actually touches the crash-capture code, its
   # CMake wiring, or this workflow file doesn't rely on someone remembering to
-  # apply the label. Runs on pull_request only; push to main always runs the
-  # real job below regardless of this output.
+  # apply the label.
+  #
+  # This job runs on EVERY trigger, not just pull_request, even though its
+  # output is only consulted on pull_request (see crash-capture-build below).
+  # crash-capture-build has `needs: changes`, and a job-level `if:` has an
+  # implicit `success()` guard unless it names a status-check function; if
+  # `changes` were skipped (as it would be on push/dispatch under a plain
+  # `if: github.event_name == 'pull_request'`), `needs.changes` would report
+  # skipped rather than success and crash-capture-build would be skipped too —
+  # silently, matching green. Keeping this job unconditional means it always
+  # reports success outside pull_request (an ubuntu-latest paths-filter job),
+  # so `needs.changes` is satisfied and crash-capture-build's own
+  # `github.event_name != 'pull_request' ||` clause is the only thing that
+  # decides push/dispatch behavior; the filter output itself is simply not
+  # consulted outside pull_request.
   changes:
     name: detect crash-capture changes
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     outputs:
       crash_capture: ${{ steps.filter.outputs.crash_capture }}
     steps:
@@ -65,9 +77,12 @@ jobs:
     needs: changes
     # On PRs, run when the `crash-capture` label is present OR the `changes`
     # job flags a crash-capture-relevant path. Push to main and manual
-    # dispatch always run (github.event.label is null there and `changes` is
-    # skipped outside pull_request, so both clauses short-circuit via the
-    # event_name check on the first line).
+    # dispatch always run: the event_name clause on the first line
+    # short-circuits before either label or `changes` output is consulted.
+    # This only works because `changes` (above) runs unconditionally and
+    # therefore always succeeds outside pull_request — a skipped `needs` job
+    # would otherwise skip this job too via the implicit success() guard on
+    # job-level `if:`.
     if: >-
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'crash-capture') ||
