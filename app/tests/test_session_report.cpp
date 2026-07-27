@@ -51,6 +51,20 @@ SessionReportInputs MakeInputs() {
     s.av_drift_availability = recorder_core::MetricAvailability::Available;
     s.peak_av_drift_ms = 9.0;
     s.peak_av_drift_availability = recorder_core::MetricAvailability::Available;
+    s.av_drift_raw_ms = -14.0;
+    s.clock_slaving_ppm = 120.0;
+    s.clock_slaving_active = true;
+    s.elapsed_seconds = 42.5;
+    s.capture.target_fps = 60.0;
+    s.capture.frames_emitted = 2540;
+    s.capture.frame_interval_ms = 16.7;
+    s.capture.interval_observed = recorder_core::MetricAvailability::Unavailable;
+    s.audio.track_count = 2;
+    s.audio.degraded_sources = 1;
+    s.audio.source_degraded = true;
+    s.audio.source_degraded_occurred = true;
+    s.audio.resampler_drained_frames = {441, 0, 0};
+    s.audio.resampler_undrained_frames = {0, 0, 0};
     s.encoder_init.valid = true;
     s.encoder_init.codec = recorder_core::VideoCodec::Av1Nvenc;
     s.encoder_init.preset = recorder_core::NvencPreset::P5;
@@ -108,6 +122,97 @@ TEST(SessionReport, NoSnapshotYieldsUnavailableSections) {
     const QJsonObject o = Parse(BuildSessionReportJson(in));
     EXPECT_EQ(o[QStringLiteral("counters")].toString(), QStringLiteral("unavailable"));
     EXPECT_EQ(o[QStringLiteral("encoder_init")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(o[QStringLiteral("audio")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(o[QStringLiteral("video_pacing")].toString(), QStringLiteral("unavailable"));
+}
+
+TEST(SessionReport, CarriesRawDriftAndClockSlaving) {
+    // A soak run has to be able to tell "slaving corrected a lot, little residual
+    // remained" from "nothing was corrected": raw drift, the ppm the controller
+    // ended on, and the applied compensation (raw - residual) are all reported.
+    const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("av_drift_raw_ms")].toDouble(), -14.0);
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("clock_slaving_ppm")].toDouble(), 120.0);
+    EXPECT_DOUBLE_EQ(counters[QStringLiteral("clock_slaving_compensation_ms")].toDouble(), -10.0); // -14 - (-4)
+    EXPECT_TRUE(counters[QStringLiteral("clock_slaving_active")].toBool());
+}
+
+TEST(SessionReport, ClockSlavingFollowsDriftAvailability) {
+    // Raw drift and ppm come from the same track av_drift_ms is taken from, so an
+    // unmeasured drift must not be published as a fabricated 0 ppm.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.av_drift_availability = recorder_core::MetricAvailability::Unavailable;
+    const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("av_drift_ms")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(counters[QStringLiteral("av_drift_raw_ms")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(counters[QStringLiteral("clock_slaving_ppm")].toString(), QStringLiteral("unavailable"));
+    EXPECT_EQ(counters[QStringLiteral("clock_slaving_compensation_ms")].toString(), QStringLiteral("unavailable"));
+}
+
+TEST(SessionReport, CarriesAudioDegradationAndResamplerDrain) {
+    const QJsonObject audio = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("audio")].toObject();
+    EXPECT_EQ(audio[QStringLiteral("track_count")].toInt(), 2);
+    EXPECT_EQ(audio[QStringLiteral("degraded_sources_at_end")].toInt(), 1);
+    EXPECT_TRUE(audio[QStringLiteral("degraded_occurred")].toBool());
+
+    // One entry per configured track, never per array slot.
+    const QJsonArray drain = audio[QStringLiteral("resampler_drain")].toArray();
+    ASSERT_EQ(drain.size(), 2);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("track")].toInt(), 0);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("drained_frames")].toInt(), 441);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("undrained_frames")].toInt(), 0);
+    EXPECT_EQ(drain[1].toObject()[QStringLiteral("drained_frames")].toInt(), 0);
+}
+
+TEST(SessionReport, ResamplerDrainReportsUndrainedTail) {
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.audio.resampler_undrained_frames = {17, 0, 0};
+    const QJsonArray drain = Parse(BuildSessionReportJson(in))[QStringLiteral("audio")]
+                                 .toObject()[QStringLiteral("resampler_drain")]
+                                 .toArray();
+    ASSERT_GE(drain.size(), 1);
+    EXPECT_EQ(drain[0].toObject()[QStringLiteral("undrained_frames")].toInt(), 17);
+}
+
+TEST(SessionReport, AudioSectionSurvivesAnUnconfiguredTrackCount) {
+    // A failure before the audio plan reached the engine leaves track_count 0 —
+    // the section must then be empty, not a fabricated three-track list.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.audio.track_count = 0;
+    const QJsonObject audio = Parse(BuildSessionReportJson(in))[QStringLiteral("audio")].toObject();
+    EXPECT_EQ(audio[QStringLiteral("track_count")].toInt(), 0);
+    EXPECT_TRUE(audio[QStringLiteral("resampler_drain")].toArray().isEmpty());
+}
+
+TEST(SessionReport, CarriesVideoPacing) {
+    const QJsonObject pacing = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("video_pacing")].toObject();
+    EXPECT_TRUE(pacing[QStringLiteral("cfr")].toBool());
+    EXPECT_DOUBLE_EQ(pacing[QStringLiteral("target_fps")].toDouble(), 60.0);
+    // Whole-session average (2540 emitted / 42.5 s), not the terminal snapshot's
+    // instantaneous rate — that one would measure the finalize gap.
+    EXPECT_NEAR(pacing[QStringLiteral("average_emitted_fps")].toDouble(), 2540.0 / 42.5, 1e-9);
+    // CFR capture observes no interval; it must say so instead of echoing the target.
+    EXPECT_EQ(pacing[QStringLiteral("frame_interval_ms")].toString(), QStringLiteral("unavailable"));
+
+    // The pacing outcome keeps its existing home (no renames, no duplication).
+    const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("frames_duplicated")].toInt(), 5);
+    EXPECT_EQ(counters[QStringLiteral("frames_dropped")].toObject()[QStringLiteral("cfr")].toInt(), 3);
+}
+
+TEST(SessionReport, PacingAverageIsUnavailableWithoutElapsedTime) {
+    // An immediate failure has no elapsed time to divide by — no fabricated 0 fps.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.elapsed_seconds = 0.0;
+    const QJsonObject pacing = Parse(BuildSessionReportJson(in))[QStringLiteral("video_pacing")].toObject();
+    EXPECT_EQ(pacing[QStringLiteral("average_emitted_fps")].toString(), QStringLiteral("unavailable"));
+}
+
+TEST(SessionReport, ObservedFrameIntervalIsReportedOnVfr) {
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.capture.interval_observed = recorder_core::MetricAvailability::Available;
+    const QJsonObject pacing = Parse(BuildSessionReportJson(in))[QStringLiteral("video_pacing")].toObject();
+    EXPECT_DOUBLE_EQ(pacing[QStringLiteral("frame_interval_ms")].toDouble(), 16.7);
 }
 
 TEST(SessionReport, SegmentsAndErrorPhase) {

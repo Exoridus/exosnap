@@ -346,6 +346,14 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_ResampledTrack_DrainsResamplerTa
     // file; tolerance is the single frame swresample may round by.
     EXPECT_GE(out_frames, kExpectedFrames - 1);
     EXPECT_LE(out_frames, kExpectedFrames + 1);
+
+    // The drain figures are recorded as a post-flight fact (they feed the session
+    // report): the tail was recovered, and nothing was left behind.
+    {
+        std::lock_guard lk(state.stats_mutex);
+        EXPECT_GT(state.stats.per_track_resampler_drained_frames[0], 0u);
+        EXPECT_EQ(state.stats.per_track_resampler_undrained_frames[0], 0u);
+    }
 }
 
 // Mock source that delivers kFramesPerPacket-sample chunks and signals stop after all packets.

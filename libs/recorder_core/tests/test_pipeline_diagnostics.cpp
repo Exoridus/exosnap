@@ -160,6 +160,28 @@ TEST(PipelineDiagnostics, AudioSourceHealthSumsAcrossTracks) {
     EXPECT_TRUE(s.audio.source_degraded);
 }
 
+TEST(PipelineDiagnostics, AudioPostFlightFactsArePassedThroughFromStats) {
+    // The latched degradation bit and the per-track resampler drain figures are
+    // owned by the audio workers and only written at end of stream. The aggregator
+    // must pass them through verbatim (no accumulation, no rounding) so the
+    // terminal snapshot — the one the session report reads — carries them.
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+
+    SessionStats stats = MakeStats();
+    EXPECT_FALSE(agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0).audio.source_degraded_occurred);
+
+    stats.audio_degraded_occurred = true;
+    stats.per_track_resampler_drained_frames = {441, 7, 0};
+    stats.per_track_resampler_undrained_frames = {0, 3, 0};
+    const auto s = agg.BuildSnapshot(At(200), stats, DiagnosticsLifecycle::Completed, 0.2);
+    EXPECT_TRUE(s.audio.source_degraded_occurred);
+    EXPECT_EQ(s.audio.resampler_drained_frames[0], 441u);
+    EXPECT_EQ(s.audio.resampler_drained_frames[1], 7u);
+    EXPECT_EQ(s.audio.resampler_undrained_frames[1], 3u);
+    EXPECT_EQ(s.audio.resampler_undrained_frames[0], 0u);
+}
+
 TEST(PipelineDiagnostics, DefaultGenerationZeroAndIdleInvalid) {
     PipelineDiagnosticsAggregator agg;
     EXPECT_EQ(agg.generation(), 0u);

@@ -700,6 +700,16 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
         RawAudioBuffer tail{};
         int64_t undrained_frames = 0;
         const uint32_t tail_frames = output_format_src_->DrainResampler(tail, &undrained_frames);
+        // Post-flight fact for the session report: how much tail the drain
+        // recovered, and what (if anything) it had to leave behind.
+        {
+            std::lock_guard slk(m_state.stats_mutex);
+            if (track_id_ < m_state.stats.per_track_resampler_drained_frames.size()) {
+                m_state.stats.per_track_resampler_drained_frames[track_id_] = tail_frames;
+                m_state.stats.per_track_resampler_undrained_frames[track_id_] =
+                    undrained_frames > 0 ? static_cast<uint64_t>(undrained_frames) : 0;
+            }
+        }
         if (undrained_frames > 0) {
             // The flush loop gave up at its iteration bound with the context
             // still holding audio. Not reachable with libswresample's real flush

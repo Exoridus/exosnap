@@ -10,6 +10,7 @@
 #include <QSaveFile>
 
 #include <algorithm>
+#include <cstddef>
 #include <vector>
 
 namespace exosnap::diagnostics {
@@ -148,11 +149,77 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         counters[QStringLiteral("peak_av_drift_ms")] =
             MetricOrUnavailable(s.peak_av_drift_ms, s.peak_av_drift_availability);
 
+        // Clock slaving, from the same track av_drift_ms is taken from and therefore
+        // gated on the same availability: the raw device-vs-QPC drift before
+        // compensation, the compensation rate the controller ended on, and how far it
+        // had shifted the timeline at the end (raw - residual). A soak run reads these
+        // together with peak_av_drift_ms: a large correction with a small residual is
+        // slaving working, not a defect.
+        counters[QStringLiteral("av_drift_raw_ms")] = MetricOrUnavailable(s.av_drift_raw_ms, s.av_drift_availability);
+        counters[QStringLiteral("clock_slaving_ppm")] =
+            MetricOrUnavailable(s.clock_slaving_ppm, s.av_drift_availability);
+        counters[QStringLiteral("clock_slaving_compensation_ms")] =
+            MetricOrUnavailable(s.av_drift_raw_ms - s.av_drift_ms, s.av_drift_availability);
+        counters[QStringLiteral("clock_slaving_active")] = s.clock_slaving_active;
+
         root[QStringLiteral("counters")] = counters;
         root[QStringLiteral("pipeline_health")] = QString::fromUtf8(recorder_core::ToString(s.health));
         root[QStringLiteral("bottleneck")] = QString::fromUtf8(recorder_core::ToString(s.bottleneck));
+
+        // ---- Audio end-of-session facts ----
+        // degraded_sources is the count still lost when the recording ended;
+        // degraded_occurred is the latched "it happened at least once" bit. The
+        // engine keeps no timestamped device-event history, so neither the moment
+        // of a loss nor the number of loss episodes can be reported here.
+        {
+            QJsonObject audio;
+            audio[QStringLiteral("track_count")] = static_cast<double>(s.audio.track_count);
+            audio[QStringLiteral("degraded_sources_at_end")] = static_cast<double>(s.audio.degraded_sources);
+            audio[QStringLiteral("degraded_occurred")] = s.audio.source_degraded_occurred;
+
+            // Resampler tail flushed at stop, per track. undrained > 0 means captured
+            // audio was dropped instead of encoded.
+            QJsonArray drain;
+            const int tracks = std::min<int>(static_cast<int>(s.audio.resampler_drained_frames.size()),
+                                             std::max<int>(0, static_cast<int>(s.audio.track_count)));
+            for (int i = 0; i < tracks; ++i) {
+                QJsonObject t;
+                t[QStringLiteral("track")] = i;
+                t[QStringLiteral("drained_frames")] =
+                    static_cast<double>(s.audio.resampler_drained_frames[static_cast<std::size_t>(i)]);
+                t[QStringLiteral("undrained_frames")] =
+                    static_cast<double>(s.audio.resampler_undrained_frames[static_cast<std::size_t>(i)]);
+                drain.append(t);
+            }
+            audio[QStringLiteral("resampler_drain")] = drain;
+            root[QStringLiteral("audio")] = audio;
+        }
+
+        // ---- Video pacing ----
+        // The CFR target the pipeline paced to, and whether it held it over the whole
+        // session. Deliberately NOT capture.actual_fps: that is an instantaneous rate
+        // over the last publish window, and on the terminal snapshot (built after the
+        // workers joined) it measures the finalize gap, not the recording. The session
+        // average is the honest whole-run answer. The pacing *outcome* stays where it
+        // already lives: counters.frames_duplicated (CFR holds) and
+        // counters.frames_dropped.cfr (ticks that produced no frame).
+        {
+            QJsonObject pacing;
+            pacing[QStringLiteral("cfr")] = inputs.result.cfr;
+            pacing[QStringLiteral("target_fps")] = s.capture.target_fps;
+            pacing[QStringLiteral("average_emitted_fps")] =
+                (s.elapsed_seconds > 0.0)
+                    ? QJsonValue(static_cast<double>(s.capture.frames_emitted) / s.elapsed_seconds)
+                    : QJsonValue(QStringLiteral("unavailable"));
+            // Only measured on VFR capture; on CFR it is the nominal target interval.
+            pacing[QStringLiteral("frame_interval_ms")] =
+                MetricOrUnavailable(s.capture.frame_interval_ms, s.capture.interval_observed);
+            root[QStringLiteral("video_pacing")] = pacing;
+        }
     } else {
         root[QStringLiteral("counters")] = QStringLiteral("unavailable");
+        root[QStringLiteral("audio")] = QStringLiteral("unavailable");
+        root[QStringLiteral("video_pacing")] = QStringLiteral("unavailable");
     }
 
     // ---- Segment list (from the recording result) ----

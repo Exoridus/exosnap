@@ -691,6 +691,13 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     }
     au.degraded_sources = degraded_total;
     au.source_degraded = degraded_total > 0;
+    // Post-flight audio facts owned by the audio workers, passed through unchanged:
+    // the latched "a source was lost at some point" bit and the per-track resampler
+    // drain figures (written at end of stream, so only the terminal snapshot — built
+    // after the workers joined — carries non-zero values).
+    au.source_degraded_occurred = stats.audio_degraded_occurred;
+    au.resampler_drained_frames = stats.per_track_resampler_drained_frames;
+    au.resampler_undrained_frames = stats.per_track_resampler_undrained_frames;
 
     // ---- Queues ----
     s.video_queue.current_depth = video_queue_depth_;
