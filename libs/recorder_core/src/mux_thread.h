@@ -12,8 +12,9 @@
 //      NOT O(entire session) — this is the fix for the previous batch-collect
 //      muxer which retained the whole recording in memory (latent OOM on long
 //      recordings).
-//   4. A/V epoch alignment (audio rebased to the video epoch) is resolved early
-//      and applied per packet; H.264 Annex-B -> AVCC conversion is per packet.
+//   4. A/V epoch alignment (each audio track rebased from its own measured
+//      capture zero point onto the video epoch — av_epoch_align.h) is resolved
+//      early and applied per packet; H.264 Annex-B -> AVCC is per packet.
 //   5. On EOS, finalizes: drains the window, writes Cues, back-patches Duration
 //      and the Segment size, and replaces the SeekHead placeholder.
 

@@ -59,6 +59,11 @@ class AudioThread : public std::enable_shared_from_this<AudioThread> {
     // downcast. Valid for the lifetime of source_.
     OutputFormatAudioSrc* output_format_src_ = nullptr;
     uint32_t track_id_ = 0;
+    // Set once the measured audio zero point (the QPC instant of the first
+    // captured sample) has been published for this track. A source that never
+    // attributes device timing to its packets — a multi-source merged track —
+    // leaves it false, and the muxer falls back to the session clock.
+    bool audio_epoch_published_ = false;
     float m_smoothed_rms_ = 0.0f;
     std::thread m_thread;
 };

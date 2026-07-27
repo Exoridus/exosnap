@@ -4,10 +4,35 @@
 
 namespace recorder_core {
 
-int64_t AudioClockMs(uint64_t frames_rendered, uint32_t sample_rate_hz) noexcept {
+int64_t AudioClockMs(uint64_t frames_played, uint32_t sample_rate_hz) noexcept {
     if (sample_rate_hz == 0)
         return 0;
-    return static_cast<int64_t>((frames_rendered * 1000ull) / sample_rate_hz);
+    return static_cast<int64_t>((frames_played * 1000ull) / sample_rate_hz);
+}
+
+uint64_t ClockPositionToFrames(uint64_t position, uint64_t frequency, uint32_t target_rate_hz) noexcept {
+    if (frequency == 0 || target_rate_hz == 0)
+        return 0;
+    // Divide first so a long clip cannot overflow position * target_rate_hz
+    // (a shared-mode position counts BYTES, so it grows ~192 kB per second).
+    const uint64_t whole = position / frequency;
+    const uint64_t rem = position % frequency;
+    return whole * target_rate_hz + (rem * target_rate_hz) / frequency;
+}
+
+uint64_t InterpolateClockPosition(uint64_t position, uint64_t frequency, uint64_t qpc_position_100ns,
+                                  uint64_t qpc_now_100ns, uint64_t max_extrapolation_100ns) noexcept {
+    if (frequency == 0 || qpc_position_100ns == 0 || qpc_now_100ns <= qpc_position_100ns)
+        return position;
+    uint64_t delta_100ns = qpc_now_100ns - qpc_position_100ns;
+    if (delta_100ns > max_extrapolation_100ns)
+        delta_100ns = max_extrapolation_100ns;
+    // delta seconds * frequency, in the position's own units. 10^7 100 ns
+    // ticks per second; divide first for the same overflow reason as above.
+    constexpr uint64_t kTicksPerSecond = 10000000ull;
+    const uint64_t advance =
+        (delta_100ns / kTicksPerSecond) * frequency + ((delta_100ns % kTicksPerSecond) * frequency) / kTicksPerSecond;
+    return position + advance;
 }
 
 FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, int64_t clock_ms) noexcept {

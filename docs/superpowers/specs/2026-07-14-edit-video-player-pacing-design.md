@@ -70,7 +70,7 @@ playback run available for selection.
 ### New pull method: `EditPlayerSession::PollFrame()`
 
 ```cpp
-// Valid only while HasAudioStream() == true. Reads FramesRendered() as the
+// Valid only while HasAudioStream() == true. Reads FramesPlayed() as the
 // pacing clock, uses SelectFrameForClock to pick the best-matching frame
 // from the video queue, and drops any older frames as real, honest drops.
 // Returns nullopt if the clock hasn't reached the next queued frame yet.
@@ -188,3 +188,26 @@ should not have to reconstruct the reasoning from a diff:
    `false` — nothing left to wake it, reintroducing the exact join-hang the `Pause()` ordering was
    designed to prevent. The reset now happens in `Start()` instead (at the beginning of the *next*
    playback run), not at the end of `Stop()`.
+
+## Correction found later: the clock counted writes, not playback
+
+The master clock originally advanced by the frame count each render callback wrote into the endpoint
+buffer (`FramesRendered()`). That buffer is 200 ms deep, so the clock ran ahead of the sound by
+whatever was still queued in it — up to the full buffer depth — and video was paced to that early
+clock, making picture lead audio by a fixed offset for the whole playback run.
+
+The clock is now `WasapiAudioRenderer::FramesPlayed()`, read from `IAudioClock::GetPosition` — the
+endpoint's own play cursor, i.e. what has actually been heard. Its unit is whatever
+`IAudioClock::GetFrequency` reports (bytes/second in shared mode, frames/second in exclusive mode), so
+the position is converted through `ClockPositionToFrames` rather than assumed to be frames, and
+extrapolated to "now" through `InterpolateClockPosition` (clamped to 20 ms) because `GetPosition`
+reports where the cursor was as of its companion QPC timestamp. If the clock service is unavailable at
+`Init()`, the old written-frame count remains as the fallback.
+
+Two consequences of using the real cursor:
+
+- `Stop()` now also calls `IAudioClient::Reset()`, flushing the endpoint buffer. Without it, up to
+  200 ms of audio queued before a pause would play on the next `Start()` (audible after a seek) and
+  the play cursor would resume mid-clip.
+- Because that flush rewinds the cursor, `Stop()` latches the last live reading, so
+  `CurrentPositionMs()` still holds at the paused position instead of snapping back to the start.

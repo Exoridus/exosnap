@@ -1,5 +1,6 @@
 #include "recorder_core/wasapi_audio_render.h"
 
+#include "playback_clock.h"
 #include "recorder_core/logging/logging.h"
 
 #include <Audioclient.h>
@@ -25,6 +26,25 @@ constexpr const char* kLogComponent = "wasapi_audio_render";
 constexpr uint32_t kEngineSampleRate = 48000;
 constexpr uint32_t kEngineChannels = 2;
 constexpr REFERENCE_TIME kBufferDurationHns = 2000000; // 200 ms shared-mode buffer
+
+// Upper bound on how far an IAudioClock reading may be extrapolated past the
+// QPC instant it was taken at. One device period is the real gap; 20 ms leaves
+// room for a slow poll without ever letting a stale pair run the clock away.
+constexpr uint64_t kMaxClockExtrapolation100ns = 200000; // 20 ms
+
+// QPC "now" in 100 ns units -- the same axis IAudioClock::GetPosition reports
+// its companion timestamp on.
+uint64_t QpcNow100ns() noexcept {
+    LARGE_INTEGER freq{};
+    LARGE_INTEGER counter{};
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    if (freq.QuadPart <= 0)
+        return 0;
+    const auto c = static_cast<uint64_t>(counter.QuadPart);
+    const auto f = static_cast<uint64_t>(freq.QuadPart);
+    return (c / f) * 10000000ull + ((c % f) * 10000000ull) / f;
+}
 
 void LogError(const char* msg) {
     logging::log(logging::LogLevel::Error, kLogComponent, msg);
@@ -162,6 +182,26 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     if (FAILED(hr) || render_client_ == nullptr)
         return fail("IAudioClient::GetService(IAudioRenderClient) failed");
 
+    // Play cursor for the playback clock. Not fatal if unavailable: the clock
+    // degrades to counting written frames (the old, buffer-depth-early
+    // behaviour) rather than failing the whole Edit-page player.
+    hr = audio_client_->GetService(__uuidof(IAudioClock), reinterpret_cast<void**>(&audio_clock_));
+    if (FAILED(hr) || audio_clock_ == nullptr) {
+        audio_clock_ = nullptr;
+        clock_frequency_ = 0;
+        LogWarn("IAudioClock unavailable -- playback clock falls back to written frames");
+    } else {
+        UINT64 frequency = 0;
+        if (FAILED(audio_clock_->GetFrequency(&frequency)) || frequency == 0) {
+            audio_clock_->Release();
+            audio_clock_ = nullptr;
+            clock_frequency_ = 0;
+            LogWarn("IAudioClock::GetFrequency failed -- playback clock falls back to written frames");
+        } else {
+            clock_frequency_ = frequency;
+        }
+    }
+
     initialized_ = true;
     return true;
 }
@@ -170,6 +210,7 @@ void WasapiAudioRenderer::Start() {
     if (!initialized_ || running_.load())
         return;
     frames_rendered_.store(0);
+    frames_played_latched_.store(0);
     {
         // Reset here, not at the end of Stop(): the decode thread that was
         // pushing into this ring is not guaranteed to have stopped yet when
@@ -190,11 +231,27 @@ void WasapiAudioRenderer::Start() {
         LogError("IAudioClient::Start failed -- render thread not started");
         return;
     }
+    // Baseline the play cursor for this run. Stop() resets the stream, so this
+    // is normally 0; reading it anyway keeps the "clock starts at 0 on every
+    // Start()" contract even if that reset did not take effect.
+    {
+        UINT64 position = 0;
+        if (audio_clock_ != nullptr && SUCCEEDED(audio_clock_->GetPosition(&position, nullptr)))
+            clock_baseline_.store(position);
+        else
+            clock_baseline_.store(0);
+    }
     running_.store(true);
     render_thread_ = std::thread(&WasapiAudioRenderer::RenderThreadMain, this);
 }
 
 void WasapiAudioRenderer::Stop() {
+    // Freeze the play position BEFORE anything tears the stream down: the
+    // flush below rewinds the live cursor, and CurrentPositionMs() has to keep
+    // reporting where playback was paused.
+    if (running_.load())
+        frames_played_latched_.store(ReadPlayedFramesLive());
+
     // Always wake anything blocked in PushSamples(), even if the render
     // thread was never started (Init() succeeded but Start() wasn't called
     // yet, or this is a second Stop() call) -- a caller further up the stack
@@ -211,8 +268,15 @@ void WasapiAudioRenderer::Stop() {
         SetEvent(static_cast<HANDLE>(buffer_event_)); // wake the render thread so it can observe running_==false
     if (render_thread_.joinable())
         render_thread_.join();
-    if (initialized_ && audio_client_ != nullptr)
+    if (initialized_ && audio_client_ != nullptr) {
         audio_client_->Stop();
+        // Flush the endpoint buffer and rewind the stream position. Without
+        // this, up to 200 ms of already-queued audio from before the pause
+        // would play on the next Start() (audible after a seek), and the play
+        // cursor would resume mid-clip. Safe here: the render thread has
+        // joined, so no buffer is outstanding.
+        audio_client_->Reset();
+    }
     // Deliberately do NOT reset stop_requested_ or clear the ring here --
     // see the comment in Start(), which does both instead.
 }
@@ -244,8 +308,30 @@ void WasapiAudioRenderer::PushSamples(const float* interleaved_stereo, uint32_t 
     }
 }
 
-uint64_t WasapiAudioRenderer::FramesRendered() const noexcept {
-    return frames_rendered_.load();
+uint64_t WasapiAudioRenderer::FramesPlayed() const noexcept {
+    if (!running_.load())
+        return frames_played_latched_.load();
+    return ReadPlayedFramesLive();
+}
+
+uint64_t WasapiAudioRenderer::ReadPlayedFramesLive() const noexcept {
+    if (audio_clock_ == nullptr || clock_frequency_ == 0)
+        return frames_rendered_.load(); // no clock service: the old written-frames fallback
+
+    UINT64 position = 0;
+    UINT64 qpc_position_100ns = 0;
+    if (FAILED(audio_clock_->GetPosition(&position, &qpc_position_100ns)))
+        return frames_rendered_.load();
+
+    const uint64_t baseline = clock_baseline_.load();
+    if (position <= baseline)
+        return 0; // nothing played yet in this run
+
+    // Extrapolate to now: GetPosition reports where the cursor was as of
+    // qpc_position_100ns, which lags by up to one device period.
+    const uint64_t interpolated = InterpolateClockPosition(position, clock_frequency_, qpc_position_100ns,
+                                                           QpcNow100ns(), kMaxClockExtrapolation100ns);
+    return ClockPositionToFrames(interpolated - baseline, clock_frequency_, device_sample_rate_);
 }
 
 uint32_t WasapiAudioRenderer::SampleRate() const noexcept {
@@ -372,6 +458,13 @@ void WasapiAudioRenderer::Shutdown() {
         swr_free(&resampler_);
         resampler_ = nullptr;
     }
+    if (audio_clock_ != nullptr) {
+        audio_clock_->Release();
+        audio_clock_ = nullptr;
+    }
+    clock_frequency_ = 0;
+    clock_baseline_.store(0);
+    frames_played_latched_.store(0);
     if (render_client_ != nullptr) {
         render_client_->Release();
         render_client_ = nullptr;
