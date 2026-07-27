@@ -564,15 +564,18 @@ never retargeted onto a *different* device; the engine only holds or reacquires 
   system output changed, the audio service restarted) **no longer ends the recording**. The affected
   source goes to honest silence and the recording keeps running — video and every other audio source
   are untouched — while the engine reactivates the source with the same identity every 500 ms. In a
-  merged track only the dead source's contribution falls silent; the others keep mixing. A fixed-device
-  microphone reacquires that exact device; the default microphone and the system-output capture follow
-  the *current* Windows default (they represent "the system default", not one pinned device); an
-  app/window audio capture keyed on a process reacquires only while that same process is still running
-  (it never grabs a different process that reused the PID) and otherwise stays silent. The silence gap
-  is real and shown: a calm live notice in Diagnostics while a source is degraded, a standing
-  notification for the duration of the outage (updates in place if the degraded set changes, clears the
-  moment every source reactivates or the recording ends), and the post-flight report notes that the
-  recording contains a silence gap.
+  merged track only the dead source's contribution falls silent; the others keep mixing. If *every*
+  source of a merged track is lost at once, the track keeps running on exact-length silence for as long
+  as the outage lasts — reopening the endpoint included — so its duration still matches wall time and it
+  never slides against the video, and the first source to come back re-enters at the track's current
+  position (no repeated audio, no backwards timestamp). A fixed-device microphone reacquires that exact device; the default microphone
+  and the system-output capture follow the *current* Windows default (they represent "the system
+  default", not one pinned device); an app/window audio capture keyed on a process reacquires only
+  while that same process is still running (it never grabs a different process that reused the PID)
+  and otherwise stays silent. The silence gap is real and shown: a calm live notice in Diagnostics
+  while a source is degraded, a standing notification for the duration of the outage (updates in place
+  if the degraded set changes, clears the moment every source reactivates or the recording ends), and
+  the post-flight report notes that the recording contains a silence gap.
 - **Webcam.** Losing the camera freezes the last picture-in-picture frame and reopens the same device,
   indefinitely; the recording continues.
 
