@@ -43,7 +43,13 @@ though the entire core recording path needs no MF.
 - The legacy `MfAacEncoder` (and its unused `IAudioEncoder` adapter,
   `MfAacAudioEncoder`) has since been deleted along with `test_mf_aac_encoder` — it was
   never instantiated on any production code path. The `mf_aac` capability probe
-  (`ProbeMfAac`) is unrelated: it queries the OS for MF AAC MFT presence directly via
-  `MFTEnumEx`/`CoCreateInstance` and does not depend on the removed wrapper class.
+  (`ProbeMfAac`) was unrelated at the time: it queried the OS for MF AAC MFT presence
+  directly via `MFTEnumEx`/`CoCreateInstance` and did not depend on the removed wrapper
+  class.
+- Amendment: `ProbeMfAac` itself has since been removed. AAC is encoded by FFmpeg's
+  bundled native AAC-LC encoder (ADR 0052), which has no Media Foundation dependency and
+  is always available, so there is nothing left to probe. Media Foundation's only
+  remaining runtime consumer in `exosnap.exe` is the webcam overlay (`ProbeMfWebcam`,
+  `WebcamService`) — the gate this ADR describes now applies to webcam only.
 - Possible UX follow-up: the gate disables the UI and reports it; it does not offer to
   install the Media Feature Pack or deep-link to Windows settings.

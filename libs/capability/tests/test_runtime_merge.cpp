@@ -73,6 +73,12 @@ TEST(RuntimeMergeTest, TC2_NvencDllMissingBlocksAv1Path) {
         (av1.reason.find("NVENC") != std::string::npos) || (combo.reason.find("NVENC") != std::string::npos);
     EXPECT_TRUE(mentions_nvenc) << "Downgrade reason should mention NVENC. av1.reason='" << av1.reason
                                 << "' combo.reason='" << combo.reason << "'";
+
+    // AAC has no runtime probe to fail: it must stay Available regardless of
+    // the NVENC/DXGI snapshot state (see the retired TC-4/TC-5 note above).
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::Aac)))
+        << "AudioCodec::Aac must remain selectable even when NVENC is absent — it has no "
+           "snapshot-dependent downgrade path.";
 }
 
 // -------------------------------------------------------------------------

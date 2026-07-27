@@ -104,9 +104,11 @@ alarmistisch**, Engine UI-agnostisch, Policy im Resolver, keine versteckte MVP-E
   `probed`, `runtime`, Support-Maps. MainWindow hält `runtime_caps_` (`MainWindow.h:459`) plus
   `CapabilityCacheStore` (`settings/CapabilityCacheStore.h`).
 - `RuntimeCapabilitySnapshot` (`capability/runtime_snapshot.h:107-113`): `nvidia`
-  (`NvidiaRuntimeFacts`: nvenc-DLL/API-Version, adapter_name, per-Codec-/4:4:4-Probes), `mf_aac`,
+  (`NvidiaRuntimeFacts`: nvenc-DLL/API-Version, adapter_name, per-Codec-/4:4:4-Probes),
   `mf_webcam`, `os` (`build_number`, `version_string`), `displays[]` (`DisplayHdrFacts`: name,
-  hdr_active, bits_per_color, Primaries, Luminanz).
+  hdr_active, bits_per_color, Primaries, Luminanz). (Stand dieser Spec: `mf_aac` gab es noch —
+  inzwischen entfernt, AAC läuft über den gebündelten FFmpeg-Encoder ohne Media-Foundation-Probe,
+  siehe ADR 0052.)
 - `EnumerateAdapters()` (`capability/adapter_enum.h:56-64`) → `AdapterInfo[]` (name, vendor, kind,
   vendor_id, device_id, luid, VRAM); `AdapterIdentity` (`runtime_snapshot.h:120-127`): adapter_luid +
   `driver_version` „A.B.C.D". Genutzt von `DevicePage.cpp:424-428`.
