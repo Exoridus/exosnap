@@ -2450,6 +2450,10 @@ void VideoThread::Run() {
         // Seed the first WGC frame from the wait loop so a static window still
         // encodes from t=0 (WGC only delivers frames on repaint).
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex = std::move(seedWgcTex);
+        // The seed is consumed. The drain path below tests seedWgcTex against
+        // nullptr to decide whether it still has to be picked up, so say so
+        // explicitly rather than leaning on the moved-from state.
+        seedWgcTex = nullptr;
         // The last screen frame that was encoded, kept alive after it was consumed.
         // A still desktop produces no new frames, but the webcam keeps moving; the
         // held screen is what the live webcam gets composited onto. The OD path needs
@@ -2916,6 +2920,10 @@ void VideoThread::Run() {
                         odCapturedTexValid = false;
                     } else {
                         heldWgcTex = std::move(pendingWgcTex);
+                        // Consumed. The next iteration tests pendingWgcTex against
+                        // nullptr to detect a fresh frame, so clear it explicitly
+                        // instead of relying on the moved-from state.
+                        pendingWgcTex = nullptr;
                     }
 
                     // Live WYSIWYG preview tap: share the composited (or raw) FP16
@@ -2966,6 +2974,10 @@ void VideoThread::Run() {
                         odCapturedTexValid = false;
                     } else {
                         heldWgcTex = std::move(pendingWgcTex);
+                        // Consumed. The next iteration tests pendingWgcTex against
+                        // nullptr to detect a fresh frame, so clear it explicitly
+                        // instead of relying on the moved-from state.
+                        pendingWgcTex = nullptr;
                     }
 
                     // Live WYSIWYG preview tap: share the composited pre-encode frame.
@@ -3295,6 +3307,11 @@ void VideoThread::Run() {
                 // delivers frames on repaint).
                 if (latestTex == nullptr && seedWgcTex != nullptr) {
                     latestTex = std::move(seedWgcTex);
+                    // The seed is a one-shot. This drain runs once per iteration
+                    // and the guard above is what stops it from firing again, so
+                    // clear the handle explicitly rather than relying on the
+                    // moved-from state to keep the guard false.
+                    seedWgcTex = nullptr;
                     latestFrameTicks100ns = static_cast<int64_t>(Qpc100ns(qpcFreq));
                 }
             }

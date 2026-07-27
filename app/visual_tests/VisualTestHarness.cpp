@@ -85,6 +85,8 @@ QString AudioCodecName(capability::AudioCodec codec) {
         return QStringLiteral("opus");
     case capability::AudioCodec::Pcm:
         return QStringLiteral("pcm");
+    case capability::AudioCodec::Flac:
+        return QStringLiteral("flac");
     }
     return QStringLiteral("opus");
 }
