@@ -1855,6 +1855,7 @@ bool RecordPage::canApplyPresetNow() const {
     case UiRecordingState::Completed:
     case UiRecordingState::Failed:
         return true;
+    case UiRecordingState::ArmedFromRecovery:
     case UiRecordingState::Countdown:
     case UiRecordingState::Preparing:
     case UiRecordingState::RegionSelecting:

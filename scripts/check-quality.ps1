@@ -175,7 +175,12 @@ if (Test-Path -Path $compDb -PathType Leaf) {
     }
 
     if ($srcFiles) {
-        Invoke-QuietNative -Name 'clang-tidy' -FilePath $clangTidy -Arguments (@('-p', 'build/windows-x64-debug') + $srcFiles)
+        # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser
+        # checks for the blocking CI gate, and the analyser turns this serial
+        # whole-tree pass from a ~45 s pre-push check into a multi-hour one.
+        # scripts/run-clang-tidy-blocking.ps1 is what runs those checks.
+        Invoke-QuietNative -Name 'clang-tidy' -FilePath $clangTidy -Arguments (
+            @('-p', 'build/windows-x64-debug', '--checks=-clang-analyzer-*') + $srcFiles)
     }
     else {
         Write-Host "clang-tidy: SKIP (no tracked C++ source files)"

@@ -273,6 +273,9 @@ TEST(CaptureHubRegistry, MovingASubscriptionDoesNotUnsubscribeTwice) {
     auto b = f.SubscribeIgnoring(kWindowA);
     {
         CaptureSubscription moved = std::move(a);
+        // Inspecting the moved-from subscription is the point of this test: it
+        // must be disarmed, not merely unusable.
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_FALSE(static_cast<bool>(a));
         EXPECT_TRUE(static_cast<bool>(moved));
     }
