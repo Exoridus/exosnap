@@ -10,10 +10,20 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel an in-progress run when a newer commit is pushed to the same PR/branch.
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+# NOTE: concurrency is intentionally set per-JOB below, not at the workflow
+# level. A workflow-level `concurrency:` cancels the entire run — every job in
+# it — the instant a newer commit lands on the same ref, regardless of that
+# job's own continue-on-error setting. advisory-unused-checks is the slowest
+# job here (full Ninja debug build + clang-tidy + cppcheck, up to 45 min) and
+# is advisory-only; on a fast sequence of pushes to main it was routinely still
+# running when the next commit's workflow run started, so the whole run
+# (including advisory-unused-checks) got torn down and it reported conclusion
+# "cancelled" — which GitHub renders as a failed/incomplete check on an
+# otherwise-green commit ("Some checks were not successful"). Per-job
+# concurrency groups (below) preserve the "cancel stale runs on the same
+# PR/branch" behavior for the jobs that benefit from it, while leaving
+# advisory-unused-checks out of any cancelling group so it always reaches a
+# real conclusion (success, or a genuine failure caught by continue-on-error).
 
 # Use sccache (GitHub Actions cache backend) as the MSVC compiler launcher to
 # cache compilation across runs. This requires the Ninja generator — the Visual
@@ -40,6 +50,9 @@ jobs:
   lint:
     name: lint
     runs-on: windows-2022
+    concurrency:
+      group: ci-${{ github.workflow }}-lint-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -77,6 +90,9 @@ jobs:
   dev-scripts:
     name: dev-scripts
     runs-on: windows-2022
+    concurrency:
+      group: ci-${{ github.workflow }}-dev-scripts-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -124,6 +140,15 @@ jobs:
     # which only governs how a *completed* failure is treated). 45 min is generous
     # for a full Qt+Ninja debug build plus the clang-tidy/cppcheck advisory passes.
     timeout-minutes: 45
+    # Deliberately NOT given a `concurrency:` group (see the note at the top of
+    # this file): this job is the slowest in the workflow, so it was routinely
+    # still in flight when the next push's run started, and a workflow-level
+    # concurrency group used to cancel it mid-run — reported as conclusion
+    # "cancelled", which reads as a failed check on an otherwise-green commit.
+    # Leaving it ungrouped means every push gets its own independent run that
+    # always reaches a real conclusion; the tradeoff is it can run more than
+    # one instance in parallel on rapid pushes, which is acceptable for an
+    # advisory, continue-on-error, time-boxed job.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -222,18 +247,42 @@ jobs:
           }
 
   # ---------------------------------------------------------------------------
-  # Detect whether this PR touches packaging-relevant paths, so the packaging
-  # smoke below (a scoped-down slice of the release-candidate pipeline, ADR
-  # 0037) only runs when it can actually catch something. Runs on pull_request
-  # only; push triggers (main, tags) are covered by the full RC pipeline
-  # instead (release-candidate.yml runs on tags and release/** branches).
+  # Detect whether this PR touches packaging-relevant or build/tooling-relevant
+  # paths.
+  #   - `packaging` gates the packaging-smoke job below (a scoped-down slice of
+  #     the release-candidate pipeline, ADR 0037) so it only runs when it can
+  #     actually catch something.
+  #   - `build` gates the windows-x64-release leg of build-test on PRs (PR-CI
+  #     tiering): the debug leg always runs and carries the test suite, so the
+  #     release leg — which mainly proves the Release configure/build/link
+  #     still works — only needs to run on a PR when something that could
+  #     plausibly break it changed (CMake config, packaging, workflow files, or
+  #     the release build script).
+  #
+  # This job runs on EVERY trigger, not just pull_request, even though its
+  # outputs are only consulted on pull_request (see build-test-release and
+  # packaging-smoke below). That is deliberate: build-test-release has
+  # `needs: changes`, and a job-level `if:` has an implicit `success()` guard
+  # unless it names a status-check function. If `changes` were skipped (as it
+  # would be on push/tag/dispatch under a plain
+  # `if: github.event_name == 'pull_request'`), `needs.changes` would report
+  # skipped rather than success, and build-test-release would be skipped too —
+  # silently, since a skipped required check still shows green. Keeping this
+  # job unconditional means it always reports success outside pull_request (an
+  # ~8s ubuntu-latest job), so `needs.changes` is satisfied and the consumers'
+  # own `github.event_name != 'pull_request' ||` clause is the only thing that
+  # decides push/tag/dispatch behavior. The filter outputs themselves are
+  # simply not consulted outside pull_request.
   # ---------------------------------------------------------------------------
   changes:
     name: detect packaging changes
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    concurrency:
+      group: ci-${{ github.workflow }}-changes-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
+      build: ${{ steps.filter.outputs.build }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -250,23 +299,33 @@ jobs:
               - 'apps/updater/CMakeLists.txt'
               - 'third_party/CMakeLists.txt'
               - 'THIRD_PARTY_NOTICES.md'
+            build:
+              - 'CMakeLists.txt'
+              - '**/CMakeLists.txt'
+              - '**/*.cmake'
+              - 'CMakePresets.json'
+              - 'cmake/**'
+              - 'packaging/**'
+              - '.github/workflows/**'
+              - 'scripts/build-*'
 
-  build-test:
-    # The job name is kept stable (windows-x64-debug / -release) so the required
-    # status checks keep matching; the Ninja preset is selected via matrix.preset.
-    name: build-test (${{ matrix.label }})
+  # ---------------------------------------------------------------------------
+  # build-test was a single job with a 2-way (debug/release) matrix. It is now
+  # split into two explicit jobs so the release leg can be gated on PRs via a
+  # normal job-level `if:` (the `matrix` context is NOT available in
+  # `jobs.<job_id>.if` — only in `name`/`runs-on`/`env`/step-level `if`, per
+  # https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
+  # — actionlint flags it, and it silently would not have worked). Each job's
+  # `name:` is hardcoded to the exact matrix-expanded string GitHub previously
+  # showed ("build-test (windows-x64-debug)" / "build-test (windows-x64-release)")
+  # so required-status-check matching is unaffected.
+  # ---------------------------------------------------------------------------
+  build-test-debug:
+    name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    strategy:
-      matrix:
-        include:
-          - label: windows-x64-debug
-            preset: windows-x64-ninja-debug
-            config: Debug
-          - label: windows-x64-release
-            preset: windows-x64-ninja-release
-            config: Release
-      fail-fast: false
-
+    concurrency:
+      group: ci-${{ github.workflow }}-build-test-debug-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -291,11 +350,11 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
-      - name: Configure (${{ matrix.preset }})
-        run: cmake --preset ${{ matrix.preset }} -DEXOSNAP_USE_SCCACHE=ON
+      - name: Configure (windows-x64-ninja-debug)
+        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
 
-      - name: Build (${{ matrix.preset }})
-        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Build (windows-x64-ninja-debug)
+        run: cmake --build --preset windows-x64-ninja-debug
 
       # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
       # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
@@ -305,41 +364,109 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
-      - name: Test (${{ matrix.preset }})
+      - name: Test (windows-x64-ninja-debug)
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
-          -BuildDir build/${{ matrix.preset }} -Config ${{ matrix.config }}
+          -BuildDir build/windows-x64-ninja-debug -Config Debug
           -ExcludeLabel live
 
-      # Blocking static analysis. Deliberately a step inside build-test rather
-      # than a job of its own: build-test is already a required check, so the
-      # required status-check set does not change (a brand-new job would have to
-      # be added to branch protection to block anything at all, and an unrequired
-      # one that fails is just noise — the same trap advisory-unused-checks
-      # documents above). It also reuses the compile_commands.json the Ninja debug
-      # configure already wrote; the Release preset exports none, hence the guard.
+      # Blocking static analysis. Deliberately a step inside build-test-debug
+      # rather than a job of its own: build-test-debug is already a required
+      # check, so the required status-check set does not change (a brand-new
+      # job would have to be added to branch protection to block anything at
+      # all, and an unrequired one that fails is just noise — the same trap
+      # advisory-unused-checks documents above). It also reuses the
+      # compile_commands.json the Ninja debug configure already wrote — the
+      # Release preset exports none, which is why this step lives in
+      # build-test-debug and not build-test-release.
       #
       # Scope is what the change touches: the changed translation units plus every
       # translation unit that includes a changed header, resolved from Ninja's own
       # recorded dependency graph. A full-tree pass of this check set measures
       # ~5.6 CPU-hours — nearly all of it clang re-parsing Qt headers — so the full
       # form stays a local / on-demand operation and CI runs the scoped one.
-      - name: clang-tidy blocking check set (${{ matrix.preset }})
-        if: matrix.config == 'Debug'
+      - name: clang-tidy blocking check set (windows-x64-ninja-debug)
         run: >-
           pwsh -NonInteractive -File scripts/run-clang-tidy-blocking.ps1
-          -BuildDir build/${{ matrix.preset }} -Base HEAD^
+          -BuildDir build/windows-x64-ninja-debug -Base HEAD^
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
 
-      - name: Upload test logs (${{ matrix.preset }})
+      - name: Upload test logs (windows-x64-ninja-debug)
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ctest-logs-${{ matrix.preset }}
-          path: build/${{ matrix.preset }}/Testing/Temporary/
+          name: ctest-logs-windows-x64-ninja-debug
+          path: build/windows-x64-ninja-debug/Testing/Temporary/
+
+  build-test-release:
+    name: build-test (windows-x64-release)
+    runs-on: windows-2022
+    needs: changes
+    # PR-CI tiering: this leg mainly proves the Release configure/build/link
+    # still works, so on a PR it only runs when the `changes` job flags a
+    # build/packaging/tooling-relevant path (see the `changes` job above for
+    # the filter). It always runs on push (main) and tags, matching current
+    # behavior there exactly: the event_name clause short-circuits before
+    # needs.changes.outputs.build is ever consulted. This only works because
+    # `changes` (above) runs unconditionally and therefore always succeeds
+    # outside pull_request — a skipped `needs` job would otherwise skip this
+    # job too via the implicit success() guard on job-level `if:`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      needs.changes.outputs.build == 'true'
+    concurrency:
+      group: ci-${{ github.workflow }}-build-test-release-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          archives: 'qtbase qtsvg'
+          cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure (windows-x64-ninja-release)
+        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+
+      - name: Build (windows-x64-ninja-release)
+        run: cmake --build --preset windows-x64-ninja-release
+
+      # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
+      # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
+      # -ExcludeLabel mechanism as local dev instead of relying solely on the
+      # "live" binaries' own GTEST_SKIP self-guard. Two capability test binaries
+      # carry LABELS live (real DXGI/GPU queries); this runner has no GPU, so
+      # they are excluded here rather than trusted to skip themselves — a future
+      # runner-image change (or a new live test that forgets the self-skip)
+      # would otherwise fail silently past this gate.
+      - name: Test (windows-x64-ninja-release)
+        run: >-
+          pwsh -NonInteractive -File scripts/run-tests.ps1
+          -BuildDir build/windows-x64-ninja-release -Config Release
+          -ExcludeLabel live
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload test logs (windows-x64-ninja-release)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ctest-logs-windows-x64-ninja-release
+          path: build/windows-x64-ninja-release/Testing/Temporary/
 
   # ---------------------------------------------------------------------------
   # Packaging smoke (PR-CI only; gated on packaging-relevant path changes,
@@ -372,8 +499,19 @@ jobs:
   packaging-smoke:
     name: packaging-smoke
     needs: changes
-    if: needs.changes.outputs.packaging == 'true'
+    # PR-CI only (see the comment above). Now that `changes` runs on every
+    # trigger (not just pull_request — see its own comment above), its
+    # `packaging` output reflects a real push/tag diff outside pull_request
+    # too, so this needs its own explicit event_name guard to stay PR-only;
+    # without it, a push to main that happens to touch a packaging-relevant
+    # path would start running this job there as well, which is not the
+    # intended behavior (release-candidate.yml is the packaging gate for
+    # tags/release branches instead).
+    if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
     runs-on: windows-2022
+    concurrency:
+      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
