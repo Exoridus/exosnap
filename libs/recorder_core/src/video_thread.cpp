@@ -567,6 +567,12 @@ void VideoThread::Run() {
         // this the encoder silently stays at its 2 s default and the selector has
         // no effect.
         nvenc.SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
+        // Submission regime. The keyframe cadence is media-time based either way;
+        // this only decides whether NVENC's frame-counting gopLength/idrPeriod
+        // backstop stays armed. Under VFR the loop below submits every frame the
+        // source produces, so a source faster than the configured rate would trip
+        // that counter before the media-time boundary — see ComputeNvencGopBackstop.
+        nvenc.SetConstantFrameRate(m_state.config.cfr);
         // Color signaling (fix for color-range-signaling bug): the encoded
         // bitstream itself must carry the same color description as the
         // VideoProcessor conversion below and the Matroska Colour element
@@ -1536,6 +1542,60 @@ void VideoThread::Run() {
         }
     } // end if (!useOdCapture) — WGC session init
 
+    // The WGC frame pool RECYCLES its surfaces: once a frame object is
+    // released, WGC renders future frames into the same texture. Anything the
+    // encode loop keeps beyond the lifetime of the frame object must therefore
+    // be a copy into an engine-owned texture — the same invariant the preview
+    // producer follows (WgcSourceProducer, ADR 0041). One persistent texture is
+    // enough for seed/pending/held alike: they only ever mean "the latest
+    // captured frame", exactly like the OD path's persistent odCapturedTex.
+    // Sized from the SESSION's source size (the pool was created at exactly that
+    // size and its surfaces never change size — a resize is reported by
+    // ContentSize instead) and created lazily from the first frame's format;
+    // returns nullptr after recording the failure.
+    winrt::com_ptr<ID3D11Texture2D> wgcCapturedTex;
+    auto copyWgcFrame = [&](ID3D11Texture2D* rawTex) -> ID3D11Texture2D* {
+        D3D11_TEXTURE2D_DESC rawDesc{};
+        rawTex->GetDesc(&rawDesc);
+        // The pool surface must be the session's source size, or CopyResource
+        // below would silently no-op (mismatched dimensions) and the compositor
+        // would read a stale/empty texture. Kept as an explicit check — the same
+        // one the OD path applies to every acquired frame — so any divergence
+        // surfaces as the honest size failure instead of an opaque black frame.
+        if (rawDesc.Width != sourceWidth || rawDesc.Height != sourceHeight) {
+            std::ostringstream err;
+            err << "capture source size changed during session from " << sourceWidth << "x" << sourceHeight << " to "
+                << rawDesc.Width << "x" << rawDesc.Height << "; restart recording to reconfigure encoder";
+            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+            return nullptr;
+        }
+        if (wgcCapturedTex == nullptr) {
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = sourceWidth;
+            desc.Height = sourceHeight;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = rawDesc.Format;
+            desc.SampleDesc = {1, 0};
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            // Same bind rule as odCapturedTex: tone-map / native-HDR shader
+            // passes sample the capture as an SRV; the plain SDR path feeds
+            // the VideoProcessor from a render-target texture.
+            desc.BindFlags =
+                (hdrToneMapActive || hdrNativeActive) ? D3D11_BIND_SHADER_RESOURCE : D3D11_BIND_RENDER_TARGET;
+            const HRESULT copyHr = d3dDevice->CreateTexture2D(&desc, nullptr, wgcCapturedTex.put());
+            if (FAILED(copyHr)) {
+                char buf[80];
+                snprintf(buf, sizeof(buf), "CreateTexture2D(wgcCapturedTex) failed 0x%08lX",
+                         static_cast<unsigned long>(copyHr));
+                m_state.RecordFailure(copyHr, ErrorPhase::VideoCapture, buf);
+                return nullptr;
+            }
+        }
+        d3dContext->CopyResource(wgcCapturedTex.get(), rawTex);
+        return wgcCapturedTex.get();
+    };
+
     // First WGC frame captured by the wait loop below. WGC (like OD) only
     // delivers further frames when the source repaints, so the first frame
     // must be kept and seeded into the encode loop — discarding it starved a
@@ -1689,22 +1749,33 @@ void VideoThread::Run() {
                 try {
                     auto frame = framePool.TryGetNextFrame();
                     if (frame != nullptr) {
-                        // Keep the texture as the encode-loop seed (see
-                        // seedWgcTex above). Same borrow pattern as the drain
-                        // loops: the texture outlives the frame object. Only a
-                        // frame matching the configured capture size may seed
-                        // the encoder (mirrors the drain loop's size check);
-                        // on mismatch the drain loop reports the honest
-                        // size-changed failure on the next frame.
-                        auto surface = frame.Surface();
-                        auto access =
-                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                        winrt::com_ptr<ID3D11Texture2D> tex;
-                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                            D3D11_TEXTURE2D_DESC frameDesc{};
-                            tex->GetDesc(&frameDesc);
-                            if (frameDesc.Width == sourceWidth && frameDesc.Height == sourceHeight) {
-                                seedWgcTex = tex;
+                        // Copy the frame out of the pool as the encode-loop
+                        // seed (see seedWgcTex above) — the pool recycles the
+                        // surface, so borrowing it would let WGC render future
+                        // frames into the held seed. Only a frame whose visible
+                        // content matches the configured capture size may seed
+                        // the encoder (the pool surface itself never changes
+                        // size — ContentSize is the real signal); on mismatch
+                        // the drain loop reports the honest size-changed
+                        // failure on the next frame.
+                        const auto seedContent = frame.ContentSize();
+                        if (seedContent.Width == static_cast<int32_t>(sourceWidth) &&
+                            seedContent.Height == static_cast<int32_t>(sourceHeight)) {
+                            auto surface = frame.Surface();
+                            auto access =
+                                surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                            winrt::com_ptr<ID3D11Texture2D> tex;
+                            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                if (copied == nullptr) {
+                                    // copyWgcFrame already recorded the failure.
+                                    if (captureSession != nullptr)
+                                        captureSession.Close();
+                                    if (framePool != nullptr)
+                                        framePool.Close();
+                                    return;
+                                }
+                                seedWgcTex.copy_from(copied);
                             }
                         }
                         gotFirst = true;
@@ -2362,8 +2433,8 @@ void VideoThread::Run() {
     // persistent capture texture — so recreating the input view per frame was pure
     // churn. The view is a light wrapper that reads the texture's current contents at
     // Blt time, so reusing it across re-blts is correct. Keyed by the texture pointer;
-    // a new pointer (a phase-correct ring entry, a fresh WGC frame, or a format/size
-    // change — all of which are distinct texture objects) rebuilds it. Returns nullptr
+    // a new pointer (a phase-correct ring entry or a format/size change — distinct
+    // texture objects; WGC frames land in one persistent copy texture) rebuilds it. Returns nullptr
     // if the view cannot be created (the caller then skips the tick, as before).
     winrt::com_ptr<ID3D11VideoProcessorInputView> cachedInputView;
     ID3D11Texture2D* cachedInputViewTex = nullptr;
@@ -2670,35 +2741,64 @@ void VideoThread::Run() {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
                 const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
-                    while (true) {
-                        auto frame = framePool.TryGetNextFrame();
-                        if (frame == nullptr)
+                    // TryGetNextFrame hands back the OLDEST queued frame, and
+                    // only the newest is ever encoded. Walk to the newest first
+                    // and copy that one — copying every queued frame would burn
+                    // a full-surface GPU copy per coalesced frame (the preview
+                    // producer drains the same way, WgcSourceProducer::PollFrame).
+                    // Every frame walked past still counts as captured and, if
+                    // it displaced an unencoded one, as a coalesce drop.
+                    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    for (;;) {
+                        auto next = framePool.TryGetNextFrame();
+                        if (next == nullptr)
                             break;
-                        auto surface = frame.Surface();
-                        auto access =
-                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                        winrt::com_ptr<ID3D11Texture2D> tex;
-                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                            D3D11_TEXTURE2D_DESC frameDesc{};
-                            tex->GetDesc(&frameDesc);
-                            if (frameDesc.Width != sourceWidth || frameDesc.Height != sourceHeight) {
-                                std::ostringstream err;
-                                err << "capture source size changed during session from " << sourceWidth << "x"
-                                    << sourceHeight << " to " << frameDesc.Width << "x" << frameDesc.Height
-                                    << "; restart recording to reconfigure encoder";
-                                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
-                                sourceLost = true;
-                                break;
-                            }
-                            const bool diag_recording = !m_state.pause_requested.load();
+                        const bool diag_recording = !m_state.pause_requested.load();
+                        if (diag_recording)
+                            m_state.diagnostics.OnFrameCaptured();
+                        if (frame != nullptr || pendingWgcTex != nullptr) {
+                            ++droppedFrames;
                             if (diag_recording)
-                                m_state.diagnostics.OnFrameCaptured();
-                            if (pendingWgcTex != nullptr) {
-                                ++droppedFrames;
-                                if (diag_recording)
-                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        frame = next;
+                    }
+                    if (frame != nullptr) {
+                        // A window resize does NOT resize the pool's surfaces:
+                        // WGC keeps rendering the (new-size) content into a
+                        // corner of the old-size surface, so the texture
+                        // descriptor always matches the pool and can never
+                        // signal the resize. The frame's ContentSize is what
+                        // actually changes. The encoder and compositor are
+                        // fixed at the session's source size, so a real change
+                        // is an explicit failure (same contract as the OD
+                        // path), never silent corner content.
+                        const auto content = frame.ContentSize();
+                        if (content.Width != static_cast<int32_t>(sourceWidth) ||
+                            content.Height != static_cast<int32_t>(sourceHeight)) {
+                            std::ostringstream err;
+                            err << "capture source size changed during session from " << sourceWidth << "x"
+                                << sourceHeight << " to " << content.Width << "x" << content.Height
+                                << "; restart recording to reconfigure encoder";
+                            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                            sourceLost = true;
+                        } else {
+                            auto surface = frame.Surface();
+                            auto access =
+                                surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                            winrt::com_ptr<ID3D11Texture2D> tex;
+                            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                // Copy out of the pool while the frame object is
+                                // still alive — the pool recycles this surface as
+                                // soon as the frame is released (see wgcCapturedTex).
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                if (copied == nullptr) {
+                                    // copyWgcFrame already recorded the failure.
+                                    sourceLost = true;
+                                } else {
+                                    pendingWgcTex.copy_from(copied);
+                                }
                             }
-                            pendingWgcTex = tex;
                         }
                     }
                 } catch (...) {
@@ -3267,37 +3367,54 @@ void VideoThread::Run() {
             } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
                 try {
-                    while (true) {
-                        auto frame = framePool.TryGetNextFrame();
-                        if (frame == nullptr)
+                    // Drain to the newest queued frame before copying — see the
+                    // CFR drain above (and WgcSourceProducer::PollFrame): only
+                    // the newest is encoded, so only the newest is worth a
+                    // full-surface GPU copy.
+                    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
+                    for (;;) {
+                        auto next = framePool.TryGetNextFrame();
+                        if (next == nullptr)
                             break;
-
-                        auto surface = frame.Surface();
-                        auto access =
-                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                        winrt::com_ptr<ID3D11Texture2D> tex;
-                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                            D3D11_TEXTURE2D_DESC frameDesc{};
-                            tex->GetDesc(&frameDesc);
-                            if (frameDesc.Width != sourceWidth || frameDesc.Height != sourceHeight) {
-                                std::ostringstream err;
-                                err << "capture source size changed during session from " << sourceWidth << "x"
-                                    << sourceHeight << " to " << frameDesc.Width << "x" << frameDesc.Height
-                                    << "; restart recording to reconfigure encoder";
-                                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
-                                sourceLost = true;
-                                break;
-                            }
-                            const bool diag_recording = !m_state.pause_requested.load();
+                        const bool diag_recording = !m_state.pause_requested.load();
+                        if (diag_recording)
+                            m_state.diagnostics.OnFrameCaptured();
+                        if (frame != nullptr || latestTex != nullptr) {
+                            ++droppedFrames;
                             if (diag_recording)
-                                m_state.diagnostics.OnFrameCaptured();
-                            if (latestTex != nullptr) {
-                                ++droppedFrames;
-                                if (diag_recording)
-                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        frame = next;
+                    }
+                    if (frame != nullptr) {
+                        // Same as the CFR drain: the pool surface never changes
+                        // size on a window resize — ContentSize is the real
+                        // signal — and the surface is recycled by the pool, so
+                        // the kept frame must be a copy (see wgcCapturedTex).
+                        const auto content = frame.ContentSize();
+                        if (content.Width != static_cast<int32_t>(sourceWidth) ||
+                            content.Height != static_cast<int32_t>(sourceHeight)) {
+                            std::ostringstream err;
+                            err << "capture source size changed during session from " << sourceWidth << "x"
+                                << sourceHeight << " to " << content.Width << "x" << content.Height
+                                << "; restart recording to reconfigure encoder";
+                            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                            sourceLost = true;
+                        } else {
+                            auto surface = frame.Surface();
+                            auto access =
+                                surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                            winrt::com_ptr<ID3D11Texture2D> tex;
+                            if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                                ID3D11Texture2D* const copied = copyWgcFrame(tex.get());
+                                if (copied == nullptr) {
+                                    // copyWgcFrame already recorded the failure.
+                                    sourceLost = true;
+                                } else {
+                                    latestTex.copy_from(copied);
+                                    latestFrameTicks100ns = frame.SystemRelativeTime().count();
+                                }
                             }
-                            latestTex = tex;
-                            latestFrameTicks100ns = frame.SystemRelativeTime().count();
                         }
                     }
                 } catch (...) {

@@ -582,6 +582,18 @@ never retargeted onto a *different* device; the engine only holds or reacquires 
 If every audio source is lost at once, the recording continues **video-only** (the picture is the
 primary source). The engine never auto-switches an audio source to a freely-chosen *other* device.
 
+**The captured source changing size mid-recording ends the recording.** The encoder, the compositor
+and the colour pipeline are all fixed at the source size resolved when the recording started, so a
+source that changes its own pixel dimensions mid-session cannot be followed. The recording ends with
+the explicit error `capture source size changed during session from <old> to <new>; restart recording
+to reconfigure encoder`, and the file written up to that point stays valid and playable. Resizing the
+captured **window** is the everyday case — including dragging it onto a display with a different
+scaling factor, which changes its captured size; a **display** whose mode change alters its
+resolution ends the recording the same way (a mode change that keeps the resolution, like a refresh
+rate switch or sleep/wake, is the hold-and-reopen case above). Recording again picks up the new size.
+Recording a moving or resizing window is not otherwise restricted: the recording follows the window
+around the desktop for as long as its size stays the same.
+
 **Displays are numbered sequentially everywhere.** The internal GDI names skip numbers after
 plug/unplug cycles (`\\.\DISPLAY6`, `\\.\DISPLAY7` on a two-display desktop); the user-facing
 "Display N" label re-sequences the attached displays to 1, 2, 3… and the source picker, the Record

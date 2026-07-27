@@ -59,6 +59,13 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetKeyframeIntervalSecs(secs);
     }
 
+    // Declare the caller's submission regime before Configure(). Only affects the
+    // hardware GOP backstop programmed into NVENC (see ComputeNvencGopBackstop);
+    // the keyframe cadence is media-time based in both regimes.
+    void SetConstantFrameRate(bool cfr) noexcept {
+        m_nvenc.SetConstantFrameRate(cfr);
+    }
+
     // Resolved encoder init parameters, valid after Configure(). hdr_mode is left
     // at its default; the caller fills it from the session config.
     [[nodiscard]] EncoderInitInfo GetInitInfo() const noexcept {
