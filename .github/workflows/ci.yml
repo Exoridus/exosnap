@@ -21,11 +21,14 @@ on:
 #
 # So the heavy legs are gated to where they can still catch something new:
 #
-#   pull_request      lint, dev-scripts, changes, build-test (debug),
-#                     build-test (release) when the `build` filter matches,
-#                     packaging-smoke when the `packaging` filter matches
+#   pull_request      lint, dev-scripts, changes, build-test (debug, full
+#                     suite), build-test (release, configure/build/link only)
+#                     when the `build` filter matches (any C++ or build
+#                     machinery), packaging-smoke when the `packaging` filter
+#                     matches
 #   push → main       lint, dev-scripts, changes            (quick checks only)
-#   push → v* tag     everything except packaging-smoke     (release gate)
+#   push → v* tag     everything except packaging-smoke, with the Release
+#                     test suite included                   (release gate)
 #   workflow_dispatch everything except packaging-smoke     (manual full run)
 #
 # Accepted trade-off: a semantic merge skew — two PRs that are each green alone
@@ -37,8 +40,9 @@ on:
 #
 # The broad advisory static-analysis pass used to live here as
 # `advisory-unused-checks` and ran on every push to main. It now lives in
-# .github/workflows/advisory-checks.yml on a nightly schedule (plus the same
-# pull_request trigger it always had) — see that file's header for why it is a
+# .github/workflows/advisory-checks.yml on a nightly schedule (plus
+# workflow_dispatch; no pull_request trigger — an in-progress 45 min advisory
+# job delayed auto-merge on every PR) — see that file's header for why it is a
 # separate workflow rather than a `schedule:` trigger on this one.
 # ---------------------------------------------------------------------------
 
@@ -49,7 +53,19 @@ on:
 # "cancelled", which GitHub renders as a failed/incomplete check on an
 # otherwise-green commit ("Some checks were not successful"). Per-job
 # concurrency groups (below) preserve the "cancel stale runs on the same
-# PR/branch" behavior without that cross-job blast radius.
+# PR" behavior without that cross-job blast radius.
+#
+# Cancellation is scoped to pull_request events ONLY. "skipped" and "cancelled"
+# are not the same thing: a skipped job leaves the run green, a cancelled one
+# does not. On a PR, a newer commit makes the older run's result worthless, so
+# cancelling is pure savings. Everywhere else a cancelled run can do damage:
+# two quick main merges in close succession must BOTH reach a real conclusion
+# (the newest ci.yml run on main drives the README badge), and a tag or manual
+# release-gate run must never be torn down by a racing event. So the group key
+# is the PR number when there is one and the unique run id otherwise — non-PR
+# runs each sit alone in their own group and can never collide — and
+# cancel-in-progress is simply always-on, which by construction only ever
+# cancels a stale run of the same PR.
 
 # Use sccache (GitHub Actions cache backend) as the MSVC compiler launcher to
 # cache compilation across runs. This requires the Ninja generator — the Visual
@@ -78,7 +94,7 @@ jobs:
     name: lint
     runs-on: windows-2022
     concurrency:
-      group: ci-${{ github.workflow }}-lint-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-lint-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -118,7 +134,7 @@ jobs:
     name: dev-scripts
     runs-on: windows-2022
     concurrency:
-      group: ci-${{ github.workflow }}-dev-scripts-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-dev-scripts-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -152,10 +168,13 @@ jobs:
   #     actually catch something.
   #   - `build` gates the windows-x64-release leg of build-test on PRs (PR-CI
   #     tiering): the debug leg always runs and carries the test suite, so the
-  #     release leg — which mainly proves the Release configure/build/link
-  #     still works — only needs to run on a PR when something that could
-  #     plausibly break it changed (CMake config, packaging, workflow files, or
-  #     the release build script).
+  #     release leg — which proves the Release configure/build/link still works
+  #     — runs on a PR when anything that can plausibly diverge between Debug
+  #     and Release changed. That includes ordinary C++ code, not just build
+  #     config: NDEBUG, debug-only assertions, optimization/inlining, and
+  #     conditional compilation all produce Release-only breaks that the debug
+  #     leg cannot see. Only changes that touch no C++ and no build machinery
+  #     (docs, screenshots, packaging-unrelated scripts) skip the release leg.
   #
   # This job runs on EVERY trigger, not just pull_request, even though its
   # outputs are only consulted on pull_request (see build-test-release and
@@ -180,7 +199,7 @@ jobs:
     name: detect packaging changes
     runs-on: ubuntu-latest
     concurrency:
-      group: ci-${{ github.workflow }}-changes-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-changes-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
@@ -202,6 +221,11 @@ jobs:
               - 'third_party/CMakeLists.txt'
               - 'THIRD_PARTY_NOTICES.md'
             build:
+              - 'app/**'
+              - 'apps/**'
+              - 'libs/**'
+              - 'tools/**'
+              - 'tests/**'
               - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
               - '**/*.cmake'
@@ -240,7 +264,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.ref, 'refs/tags/v')
     concurrency:
-      group: ci-${{ github.workflow }}-build-test-debug-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-build-test-debug-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -321,13 +345,16 @@ jobs:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
     needs: changes
-    # PR-CI tiering: this leg mainly proves the Release configure/build/link
-    # still works, so on a PR it only runs when the `changes` job flags a
-    # build/packaging/tooling-relevant path (see the `changes` job above for
-    # the filter). Like build-test-debug it does NOT run on a push to main —
-    # that commit is the squash of a PR this job already vetted — but it does
-    # run in full on a v* tag and on workflow_dispatch, where the filter output
-    # is irrelevant and never consulted.
+    # PR-CI tiering: this leg proves the Release configure/build/link still
+    # works, so on a PR it runs when the `changes` job flags a C++/build/
+    # packaging/tooling-relevant path (see the `changes` job above for the
+    # filter) — and on a PR it stops after the build (see the Test step's own
+    # condition): the debug leg already ran the full suite, and Debug/Release
+    # divergence is overwhelmingly a compile/link phenomenon. Like
+    # build-test-debug it does NOT run on a push to main — that commit is the
+    # squash of a PR this job already vetted — but it does run in full,
+    # including tests, on a v* tag and on workflow_dispatch, where the filter
+    # output is irrelevant and never consulted.
     #
     #   pull_request          -> first clause, and only when `build` matched
     #   workflow_dispatch     -> second clause
@@ -344,7 +371,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.ref, 'refs/tags/v')
     concurrency:
-      group: ci-${{ github.workflow }}-build-test-release-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-build-test-release-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -377,7 +404,13 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
+      #
+      # Not on pull_request: the debug leg already carried the full suite, and
+      # this leg's PR-tier job is configure/compile/link (see the job comment).
+      # Tags and manual dispatches are the release gate and run the Release
+      # suite in full.
       - name: Test (windows-x64-ninja-release)
+        if: github.event_name != 'pull_request'
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-release -Config Release
@@ -436,7 +469,7 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
     runs-on: windows-2022
     concurrency:
-      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

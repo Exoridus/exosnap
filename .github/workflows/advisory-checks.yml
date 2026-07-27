@@ -33,8 +33,12 @@ name: Advisory Checks
 #      style clause would let it through. One trigger, one purpose is cheaper
 #      to reason about.
 #
-# The pull_request trigger is unchanged from what this job had in ci.yml: it
-# still runs on every PR and still never blocks it (continue-on-error).
+# There is deliberately NO pull_request trigger. This job takes up to 45 min,
+# and an in-progress check blocks `gh pr merge --auto` regardless of
+# continue-on-error (which only governs how a *completed* failure is treated)
+# — so on a PR it added latency without ever being able to block on findings.
+# Findings change on the scale of weeks; the nightly is the right cadence.
+# Run it on demand via workflow_dispatch when a PR warrants the broad pass.
 # ---------------------------------------------------------------------------
 
 on:
@@ -43,7 +47,6 @@ on:
   # working day. schedule events always run on the default branch (main).
   schedule:
     - cron: '0 3 * * *'
-  pull_request:
   workflow_dispatch:
 
 # No workflow-level `concurrency:` and no per-job group either — see the job's
@@ -57,22 +60,24 @@ jobs:
   advisory-unused-checks:
     name: advisory-unused-checks
     runs-on: windows-2022
-    continue-on-error: true  # NEVER block the PR — informational only
+    # NO job-level continue-on-error: only the FINDINGS must never block (their
+    # steps carry their own continue-on-error below). If the toolchain setup,
+    # configure, or build breaks, this nightly must go visibly red — a job-level
+    # continue-on-error would report an overall success over a run that never
+    # actually analyzed anything. Being its own workflow file, a red nightly
+    # never touches the ci.yml badge (see the header above).
+    #
     # No job here had an explicit timeout, so a hang (observed: some step stalls
-    # indefinitely rather than failing) ran to GitHub's default 6h job ceiling —
-    # eating runner time and, worse, blocking `gh pr merge --auto` the whole time
-    # (an in-progress check blocks auto-merge regardless of continue-on-error,
-    # which only governs how a *completed* failure is treated). 45 min is generous
-    # for a full Qt+Ninja debug build plus the clang-tidy/cppcheck advisory passes.
+    # indefinitely rather than failing) ran to GitHub's default 6h job ceiling,
+    # eating runner time. 45 min is generous for a full Qt+Ninja debug build
+    # plus the clang-tidy/cppcheck advisory passes.
     timeout-minutes: 45
-    # Deliberately NOT given a `concurrency:` group: this job is slow, so it was
-    # routinely still in flight when the next push's run started, and the
-    # workflow-level concurrency group it used to sit under cancelled it mid-run
-    # — reported as conclusion "cancelled", which reads as a failed check on an
-    # otherwise-green commit. Leaving it ungrouped means every trigger gets its
-    # own independent run that always reaches a real conclusion; the tradeoff is
-    # it can run more than one instance in parallel on rapid pushes to a PR,
-    # which is acceptable for an advisory, continue-on-error, time-boxed job.
+    # Deliberately NOT given a `concurrency:` group: cancelling a slow job
+    # mid-run reports conclusion "cancelled", which reads as a failed check on
+    # an otherwise-green commit. Ungrouped, every trigger gets its own
+    # independent run that always reaches a real conclusion — and with only
+    # schedule + workflow_dispatch as triggers, parallel instances require a
+    # deliberate manual dispatch during the nightly window.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
