@@ -233,6 +233,7 @@ qt_add_executable(exosnap WIN32
     pages/RecordPage.cpp
     pages/ConfigPage.h
     pages/ConfigPage.cpp
+    pages/FrameRateLimits.h
     pages/DiagnosticsPage.h
     pages/DiagnosticsPage.cpp
     pages/LogsPage.h

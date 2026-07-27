@@ -102,6 +102,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("settings-format-60-cfr"),
         QStringLiteral("settings-format-120-unavailable"),
         QStringLiteral("settings-format-expert-free-fps"),
+        QStringLiteral("settings-format-custom-fps"),
         QStringLiteral("settings-format-vfr"),
         QStringLiteral("settings-format-container-mkv"),
         QStringLiteral("settings-format-container-mp4"),

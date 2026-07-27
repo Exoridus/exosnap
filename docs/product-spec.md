@@ -91,7 +91,7 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Container | MKV |
 | Video codec | AV1 (NVENC) |
 | Audio codec | Opus |
-| Frame rate | CFR 60 fps (Default list: 15/30/60 fps, plus 120 fps shown disabled; Expert mode swaps the list for a free-entry 1–240 fps field — see §6) |
+| Frame rate | CFR 60 fps (Default list: 15/30/60 fps, plus 120 fps shown disabled; Expert mode swaps the list for a free-entry field capped at the fastest monitor's refresh rate; an off-list rate gets its own "`<n>` fps (Custom)" entry — see §6) |
 | Rate control | Constant quality (CQ), quality "High" |
 | NVENC encoder preset | P4 (all codecs) |
 | Frame pacing | Phase-correct |
@@ -292,11 +292,34 @@ takes effect from the next recording.
 **Frame rate and pacing.** The default is **CFR 60 fps**. The Default frame-rate control is a fixed
 list — **15 / 30 / 60 fps** (the older 24 fps cinema and 25 fps PAL entries are dropped) plus
 **120 fps**, present but shown disabled ("unavailable") until a hardware-proven path exists. Expert
-mode replaces the list with a **free-entry fps field (1–240)**, not capability-checked at entry. When
-Expert leaves a configured rate that is not in the Default list, the value is kept and the Default
-combo displays the **nearest list entry** — the same nearest-match rule already used when a custom
-CQ value doesn't match a quality tier — while the current-format footer always shows the true
-configured value. An expert **"Frame pacing"** control offers
+mode replaces the list with a **free-entry fps field**, not capability-checked at entry. Its maximum
+is **the highest refresh rate of any attached monitor, rounded to whole fps, but never below 60**; the
+minimum is 1. Capture never delivers more frames than the compositor/monitor rate, so a CFR target
+above it is pure frame duplication. Rounding is to the *nearest* whole fps on purpose: recording 144
+CFR from a 143.96 Hz source duplicates roughly one frame every 25 s and never drifts, whereas rounding
+down to 143 would drop about one frame per second and show as micro-judder. The **60 floor** applies
+both when no refresh rate can be read at all (headless host, remote session, a driver reporting 0 Hz)
+and when every attached display genuinely reports something slower — a 30 Hz-only setup still gets a
+maximum of 60, because the shipped default profile is CFR 60 fps and must stay expressible everywhere.
+
+The ceiling is re-evaluated whenever a display is attached, removed, or changes its refresh rate; a
+configured rate above the new ceiling is then **clamped down** in both the model and the UI, and the
+clamped value is published like any other change. A user edit is likewise always accepted into the
+enforced range. Clamping happens **only** on those two occasions: a rate that arrives from outside —
+persisted settings or a loaded preset carrying a rate from a faster display — stays in effect and is
+**displayed truthfully** (the Expert field widens its maximum far enough to show it, rather than
+silently displaying the ceiling). It is brought into range at the next display change or the next
+manual edit, whichever comes first.
+
+When
+the configured rate is not one of **15 / 30 / 60 fps** — after leaving Expert mode, or after loading a
+preset that carries such a rate — the Default combo grows an extra entry labelled
+**"`<n>` fps (Custom)"** carrying the real value, placed in numeric order among the fixed entries and
+selected. The combo therefore never claims a frame rate the recorder is not using. The custom entry
+disappears as soon as the configured rate is back on a listed value, whether because the user picked a
+listed entry or because a preset set one; selecting the custom entry itself changes nothing. The
+disabled 120 fps entry is unaffected. The current-format footer always shows the true configured
+value. An expert **"Frame pacing"** control offers
 **"Phase-correct"** (default) and **"Lowest latency"**. Phase-correct selects frames by
 present time (it does not blend), so uncapped VRR / high-refresh sources record to smooth,
 judder-free 60 fps; it does not make 60 fps look like 144 Hz. It is GPU-only and requires no
@@ -896,7 +919,8 @@ toggle is a single global state shared with the Diagnostics page.
 Expert mode adds, in place within their existing section: **Bit depth**, **Color range**, **NVENC
 encoder preset**, **Keyframe interval**, and **Chroma subsampling** (Container & codecs); the
 **Rate control** selector (CQ/VBR/CBR) with its **CQ** or **bitrate** spinbox, the free-entry **frame
-rate** field (1–240 fps), and **Frame pacing** (Quality & timing); **Opus frame duration**, **Opus
+rate** field (1 fps up to the fastest monitor's refresh rate), and **Frame pacing** (Quality &
+timing); **Opus frame duration**, **Opus
 complexity**, **Sample rate**, and **Audio clock slaving** (Audio).
 
 **HDR handling** is Default, not Expert: HDR-capable displays are mainstream, the row is already
