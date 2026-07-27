@@ -141,6 +141,18 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         counters[QStringLiteral("encoder_encoded")] = static_cast<double>(s.video_encoder.frames_encoded);
         counters[QStringLiteral("encoder_backlog")] = static_cast<double>(s.video_encoder.backlog);
         counters[QStringLiteral("encoder_forced_keyframes")] = static_cast<double>(s.video_encoder.forced_keyframes);
+        // How often the driver's actual pictureType disagreed with the
+        // submission-side GOP-phase prediction. Warn-only during the recording,
+        // so a soak run needs the end-of-session total to see it happened at
+        // all: non-zero means the enforced FORCEIDR cadence and the picture
+        // types NVENC actually produced diverged, which is what to look at
+        // first when keyframe spacing (and therefore seek granularity or a
+        // split's cut point) looks wrong. The sibling outputTimeStamp check is
+        // deliberately not reported here — it aborts the encode instead of
+        // producing a packet, so its counter can never be anything but 0 and
+        // printing it would suggest a check that had a chance to fire.
+        counters[QStringLiteral("encoder_keyframe_prediction_mismatches")] =
+            static_cast<double>(s.video_encoder.keyframe_prediction_mismatches);
         counters[QStringLiteral("mux_failures")] = static_cast<double>(s.mux.failures);
 
         counters[QStringLiteral("duration_skew_ms")] =

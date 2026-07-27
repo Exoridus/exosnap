@@ -231,6 +231,37 @@ TEST(SessionReport, CarriesVideoPacing) {
     EXPECT_EQ(counters[QStringLiteral("frames_dropped")].toObject()[QStringLiteral("cfr")].toInt(), 3);
 }
 
+TEST(SessionReport, KeyframePredictionMismatchesAreReported) {
+    // Warn-only during the recording, so the end-of-session total is the only
+    // place a soak run can see the enforced keyframe cadence diverged at all.
+    SessionReportInputs in = MakeInputs();
+    in.snapshot.video_encoder.keyframe_prediction_mismatches = 7;
+    const QJsonObject counters = Parse(BuildSessionReportJson(in))[QStringLiteral("counters")].toObject();
+    EXPECT_EQ(counters[QStringLiteral("encoder_keyframe_prediction_mismatches")].toInt(), 7);
+}
+
+TEST(SessionReport, CleanSessionReportsZeroKeyframePredictionMismatches) {
+    // A clean session must print an explicit 0, not omit the key: a missing key
+    // is indistinguishable from an older report that never carried the counter.
+    const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    ASSERT_TRUE(counters.contains(QStringLiteral("encoder_keyframe_prediction_mismatches")));
+    EXPECT_EQ(counters[QStringLiteral("encoder_keyframe_prediction_mismatches")].toInt(), 0);
+}
+
+TEST(SessionReport, OutputTsMismatchesAreNotReportedUnderAnyName) {
+    // The outputTimeStamp check aborts the encode before the packet is filled
+    // in, so its counter is structurally always 0. Reporting it would advertise
+    // a check that had a chance to fire. Scan every counter key rather than
+    // guessing one spelling, so the omission holds however it gets named.
+    const QJsonObject counters = Parse(BuildSessionReportJson(MakeInputs()))[QStringLiteral("counters")].toObject();
+    for (auto it = counters.begin(); it != counters.end(); ++it) {
+        EXPECT_FALSE(it.key().contains(QStringLiteral("output_ts"), Qt::CaseInsensitive))
+            << "counters key '" << it.key().toStdString()
+            << "' reports the outputTimeStamp mismatch counter, which can never be non-zero "
+               "(the mismatch aborts the encode). See ADR 0053.";
+    }
+}
+
 TEST(SessionReport, PacingAverageIsUnavailableWithoutElapsedTime) {
     // An immediate failure has no elapsed time to divide by — no fabricated 0 fps.
     SessionReportInputs in = MakeInputs();

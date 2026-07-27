@@ -60,5 +60,10 @@ metadata is attached (legal either way), not which packets are treated as keyfra
 - There is no setting to relax this back to a warning. If evidence surfaces that this was the
   wrong call — e.g. real users hitting this abort on hardware that is otherwise recording
   correctly — the fix is to revisit this decision, not to add a runtime escape hatch.
-- The mismatch counter in engine diagnostics can in practice never read above 1 for a given
-  session, since the encode aborts the first time it fires.
+- The mismatch counter in engine diagnostics is structurally always 0, not "at most 1": the
+  abort happens before the encoded packet is filled in, and the counter is fed from a flag on
+  that packet, so the increment is never reached. The encode failure itself — with both
+  timestamps in the message — is the only report that a mismatch occurred. The counter stays
+  wired so it would start working again if this decision were ever revisited, and the session
+  report deliberately omits it rather than printing a 0 that would suggest a check with a
+  chance to fire.

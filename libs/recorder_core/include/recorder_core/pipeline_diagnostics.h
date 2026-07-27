@@ -168,8 +168,16 @@ struct EncoderDiagnostics {
     // Order/keyframe validation mismatch counters. Non-zero indicates the
     // driver's actual outputTimeStamp echo / pictureType diverged from the
     // submission-side FIFO assignment / GOP-phase prediction at least once.
-    // A keyframe-prediction mismatch is warn-only; an output-timestamp
-    // mismatch is fatal and aborts the encode, so it never exceeds 1.
+    //
+    // keyframe_prediction_mismatches is warn-only and counts every occurrence.
+    //
+    // output_ts_mismatches is structurally always 0: an output-timestamp
+    // mismatch aborts the encode before the packet is filled in, so the
+    // EncodedVideoPacket flag this counter is fed from never reaches the video
+    // thread as true. The counter is kept for symmetry with the packet flag and
+    // so the wiring is already in place should the check ever be relaxed back to
+    // a warning — read the encode failure, not this counter, to find out that a
+    // mismatch happened.
     uint64_t output_ts_mismatches = 0;
     uint64_t keyframe_prediction_mismatches = 0;
     VideoCodec codec = VideoCodec::Av1;
