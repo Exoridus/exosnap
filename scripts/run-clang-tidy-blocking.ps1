@@ -197,9 +197,12 @@ if ($Base) {
         exit 0
     }
 
-    $changedAbs = [System.Collections.Generic.HashSet[string]]::new(
-        [string[]]($changed | ForEach-Object { "$normalizedRoot/$_" }),
-        [System.StringComparer]::OrdinalIgnoreCase)
+    # Built element-wise: when only a canary changed, $changed is empty, and an
+    # empty pipeline casts to $null — the HashSet collection constructor throws
+    # on that ("Value cannot be null"), killing exactly the runs the canary
+    # list exists to protect.
+    $changedAbs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($c in $changed) { [void]$changedAbs.Add("$normalizedRoot/$c") }
 
     $affected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($s in $allSources) { if ($changedAbs.Contains($s)) { [void]$affected.Add($s) } }
