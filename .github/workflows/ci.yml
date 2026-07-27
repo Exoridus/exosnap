@@ -178,7 +178,10 @@ jobs:
           # Run with -p pointing at the Ninja debug compile_commands.json.
           # WarningsAsErrors in .clang-tidy excludes misc-* and readability-redundant-declaration
           # so only the advisory checks produce warnings (not errors) — exit code stays 0.
-          & $clangTidy -p build/windows-x64-ninja-debug @srcFiles 2>&1 |
+          # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser checks for the
+          # blocking gate in build-test. They are irrelevant to this unused-code pass and would
+          # multiply the cost of an already long serial run, so they are switched back off here.
+          & $clangTidy -p build/windows-x64-ninja-debug --checks=-clang-analyzer-* @srcFiles 2>&1 |
             Tee-Object -Variable tidyOutput | Out-String | Write-Host
           $advisoryCounts = @($tidyOutput -join "`n" | Select-String -Pattern '(misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration)' -AllMatches).Matches.Count
           Write-Host "::notice::clang-tidy advisory findings: $advisoryCounts (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
