@@ -157,8 +157,11 @@ Invalid combinations are not offered.
   - **Multi-source merged tracks are not slaved** (they mix several independent
     device clocks); the per-source FIFO drift relief bounds their inter-source
     skew instead. A single gain-adjusted source is slaved normally.
-  - **Not yet live-validated** over a multi-hour soak (net drift ≤ threshold,
-    audibly artifact-free); pending the 0.10 soak-gate check.
+  - **Live validation is narrow, not absent**: a 2–3 h live soak on the release
+    system (net drift ≤ budget, audibly artifact-free) is a mandatory v0.9
+    release gate (`docs/release-checklist.md` §7). Broad validation across many
+    audio devices, drivers, and hardware configurations remains limited — one
+    passing soak on one machine does not generalize to every device clock.
 - **FLAC compression level** (0–8, default 5) is configurable; lossless at every
   level (level only trades encode CPU vs. file size).
 - The RNNoise model weights are fetched at **configure (build) time** from a

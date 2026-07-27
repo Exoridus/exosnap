@@ -110,4 +110,85 @@ TEST(ShiftAudioPts, ZeroShiftIsAPassthrough) {
     EXPECT_EQ(out, 12345u);
 }
 
+// VFR video epoch clamping (VfrVideoEpoch): the PTS origin must never precede
+// the session start. VFR PTS is `frame ticks - epoch`, with a negative delta
+// clamped to 0 by the caller — these tests derive PTS the same way.
+
+using recorder_core::ClampedVfrVideoEpochTicks100ns;
+
+constexpr uint64_t kSessionStart100ns = 50000 * kMs100ns; // 50 s of machine uptime
+
+int64_t VfrPtsMs(int64_t frameTicks100ns, int64_t epochTicks100ns) {
+    int64_t delta = frameTicks100ns - epochTicks100ns;
+    if (delta < 0) {
+        delta = 0;
+    }
+    return delta / static_cast<int64_t>(kMs100ns);
+}
+
+TEST(VfrVideoEpoch, FirstFrameBeforeSessionStartIsClampedToSessionStart) {
+    // Static desktop: the last real present was 5 s before Record() was called.
+    const int64_t staleFrame = static_cast<int64_t>(kSessionStart100ns) - 5000 * static_cast<int64_t>(kMs100ns);
+    EXPECT_EQ(ClampedVfrVideoEpochTicks100ns(staleFrame, kSessionStart100ns), static_cast<int64_t>(kSessionStart100ns));
+}
+
+TEST(VfrVideoEpoch, FirstFrameExactlyAtSessionStartIsTheEpoch) {
+    EXPECT_EQ(ClampedVfrVideoEpochTicks100ns(static_cast<int64_t>(kSessionStart100ns), kSessionStart100ns),
+              static_cast<int64_t>(kSessionStart100ns));
+}
+
+TEST(VfrVideoEpoch, FirstFrameAfterSessionStartIsUnchanged) {
+    const int64_t frame = static_cast<int64_t>(kSessionStart100ns) + 200 * static_cast<int64_t>(kMs100ns);
+    EXPECT_EQ(ClampedVfrVideoEpochTicks100ns(frame, kSessionStart100ns), frame);
+}
+
+TEST(VfrVideoEpoch, InvalidTimestampsFallBackToSessionStart) {
+    EXPECT_EQ(ClampedVfrVideoEpochTicks100ns(0, kSessionStart100ns), static_cast<int64_t>(kSessionStart100ns));
+    EXPECT_EQ(ClampedVfrVideoEpochTicks100ns(-1, kSessionStart100ns), static_cast<int64_t>(kSessionStart100ns));
+    EXPECT_EQ(ClampedVfrVideoEpochTicks100ns(INT64_MIN, kSessionStart100ns), static_cast<int64_t>(kSessionStart100ns));
+}
+
+TEST(VfrVideoEpoch, StaleFirstFrameDoesNotInflateTheTimeline) {
+    // The regression: desktop static for 5 s, first frame carries the stale
+    // present time, second frame arrives 100 ms after recording start. With an
+    // unclamped origin the second frame lands at 5100 ms and the file claims
+    // 5 s of footage that never happened; with the clamp it lands at 100 ms.
+    const int64_t staleFrame = static_cast<int64_t>(kSessionStart100ns) - 5000 * static_cast<int64_t>(kMs100ns);
+    const int64_t epoch = ClampedVfrVideoEpochTicks100ns(staleFrame, kSessionStart100ns);
+    EXPECT_EQ(VfrPtsMs(staleFrame, epoch), 0); // first frame: negative delta clamps to PTS 0
+    const int64_t second = static_cast<int64_t>(kSessionStart100ns) + 100 * static_cast<int64_t>(kMs100ns);
+    EXPECT_EQ(VfrPtsMs(second, epoch), 100);
+}
+
+TEST(VfrVideoEpoch, FollowUpFramesStayMonotone) {
+    // First frame is the stale pre-session one (negative delta, PTS 0), then
+    // strictly increasing post-session frames — the whole sequence must come
+    // out non-negative and non-decreasing from the clamped origin alone.
+    const int64_t staleFrame = static_cast<int64_t>(kSessionStart100ns) - 3000 * static_cast<int64_t>(kMs100ns);
+    const int64_t epoch = ClampedVfrVideoEpochTicks100ns(staleFrame, kSessionStart100ns);
+    int64_t lastPtsMs = -1;
+    EXPECT_EQ(VfrPtsMs(staleFrame, epoch), 0);
+    for (int i = 1; i <= 5; ++i) {
+        const int64_t frame = static_cast<int64_t>(kSessionStart100ns) + (i * 17) * static_cast<int64_t>(kMs100ns);
+        const int64_t ptsMs = VfrPtsMs(frame, epoch);
+        EXPECT_GT(ptsMs, lastPtsMs);
+        EXPECT_GE(ptsMs, 0);
+        lastPtsMs = ptsMs;
+    }
+}
+
+TEST(VfrVideoEpoch, PauseBeforeFirstFrameAdvancesTheFloor) {
+    // Pause served before the epoch exists: the caller advances the floor by
+    // the paused span. A stale first frame then clamps to the advanced floor,
+    // so the pause is excluded from the timeline instead of becoming a
+    // lead-in; the first post-resume frame lands at/near PTS 0.
+    const uint64_t paused = 2000 * kMs100ns;
+    const uint64_t floor100ns = kSessionStart100ns + paused;
+    const int64_t staleFrame = static_cast<int64_t>(kSessionStart100ns) - 1000 * static_cast<int64_t>(kMs100ns);
+    const int64_t epoch = ClampedVfrVideoEpochTicks100ns(staleFrame, floor100ns);
+    EXPECT_EQ(epoch, static_cast<int64_t>(floor100ns));
+    const int64_t firstAfterResume = static_cast<int64_t>(floor100ns) + 16 * static_cast<int64_t>(kMs100ns);
+    EXPECT_EQ(VfrPtsMs(firstAfterResume, epoch), 16);
+}
+
 } // namespace

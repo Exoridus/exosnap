@@ -278,7 +278,7 @@ TEST_F(NotificationToastTest, PaintEvent_AllTypes_WithActions_NoFatalFailure) {
         {NotificationType::RecoveryAvailable, NotificationAction::OpenRecovery, "Recover last session?",
          "A recording from 14:02 wasn't finalized."},
         {NotificationType::FramesDropped, NotificationAction::OpenDiagnostics, "Frames dropped",
-         "42 frames were dropped because the encoder couldn't keep up."},
+         "42 frames did not make it into the recording."},
         {NotificationType::PresetSwitched, NotificationAction::UndoPresetSwitch, "Switched to 'Quality'", ""},
         {NotificationType::AudioSourceDegraded, NotificationAction::OpenDiagnostics, "Audio source went silent",
          "An audio source lost its device. Recording continues — ExoSnap keeps retrying the connection."},
