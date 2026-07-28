@@ -65,7 +65,6 @@ class TrayPresence;
 } // namespace ui::tray
 
 namespace ui::dialogs {
-class AboutOverlay;
 class CrashReportOverlay;
 class EditExportOverlay;
 class FinalizingOverlay;
@@ -128,6 +127,12 @@ class MainWindow : public QMainWindow {
     // named nav page and, if requested, re-enable + persist the present-diagnostics
     // opt-in (only applied once the elevated instance is actually running).
     void applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag);
+
+    // ADR 0055: arm the verification-reinstall mode for this run (set by main()
+    // from --verify-update-reinstall BEFORE show). Nothing is persisted; the mode
+    // is gone after a restart. While on, the updates card can offer the running
+    // version as a reinstall and the staged updater is handed its matching gate.
+    void applyVerifyUpdateReinstallMode(bool enabled);
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
@@ -379,7 +384,6 @@ class MainWindow : public QMainWindow {
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
-    ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
@@ -417,6 +421,9 @@ class MainWindow : public QMainWindow {
     // ADR 0034 Phase A: true while a user-initiated check is in flight, so an
     // available result updates the Settings card but does NOT also raise a toast.
     bool manual_update_check_ = false;
+    // ADR 0055: verification reinstall armed for this run only (CLI flag, never
+    // persisted). Drives the card state and the support-bundle manifest note.
+    bool verify_update_reinstall_ = false;
     // Last known monitor rect from RecordPage for overlay positioning.
     QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;

@@ -13,9 +13,6 @@
 //                              (green "recording secured" banner visible).
 //   03-crash-details.png     — next-launch model + populated scrubbed report
 //                              fields, with the details section expanded.
-//   04-update-available.png  — UpdateSettingsPanel, Available state with What's new.
-//   05-update-uptodate.png   — UpdateSettingsPanel, UpToDate state.
-//   06-update-error.png      — UpdateSettingsPanel, Error state with caution banner.
 //
 // All renders are composited onto a neutral mid-gray backdrop (#606060) at a
 // devicePixelRatio of 2 so text is crisp when judged at full resolution.
@@ -43,7 +40,6 @@
 
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/CrashReportPanel.h"
-#include "ui/dialogs/UpdateSettingsPanel.h"
 #include "ui/theme/ExoSnapTheme.h"
 
 namespace exosnap {
@@ -51,9 +47,6 @@ namespace {
 
 using ui::dialogs::CrashReportModel;
 using ui::dialogs::CrashReportPanel;
-using ui::dialogs::UpdateSettingsPanel;
-using ui::dialogs::UpdateUiModel;
-using ui::dialogs::UpdateUiState;
 
 // Supersampling factor for crisp text in the saved PNGs.
 constexpr qreal kDpr = 2.0;
@@ -169,20 +162,6 @@ class CrashUpdateVisualProofTest : public ::testing::Test {
         return m;
     }
 
-    static UpdateUiModel availableModel() {
-        UpdateUiModel m;
-        m.current_version = QStringLiteral("0.4.0");
-        m.available_version = QStringLiteral("0.5.0");
-        m.last_checked = QStringLiteral("just now");
-        m.whats_new = {QStringLiteral("Faster AV1 NVENC frame submission"),
-                       QStringLiteral("Fix: rare crash on encoder restart"),
-                       QStringLiteral("Per-monitor HDR capture (preview)")};
-        m.release_url = QStringLiteral("https://github.com/Exoridus/exosnap/releases");
-        m.release_notes_url = QStringLiteral("https://github.com/Exoridus/exosnap/releases/tag/v0.5.0");
-        m.channel = QStringLiteral("Stable");
-        return m;
-    }
-
     static QString output_dir_;
 };
 
@@ -281,49 +260,6 @@ TEST_F(CrashUpdateVisualProofTest, Crash_DetailsExpanded) {
     QCoreApplication::processEvents();
 
     const bool saved = renderAndSave(panel, QStringLiteral("03-crash-details.png"));
-    EXPECT_TRUE(saved);
-}
-
-// ── Update panel proofs ──────────────────────────────────────────────────────
-
-TEST_F(CrashUpdateVisualProofTest, Update_Available) {
-    UpdateSettingsPanel panel;
-    panel.setModel(availableModel());
-    panel.setState(UpdateUiState::Available);
-    QCoreApplication::processEvents();
-
-    const bool saved = renderAndSave(panel, QStringLiteral("04-update-available.png"));
-    EXPECT_TRUE(saved);
-}
-
-TEST_F(CrashUpdateVisualProofTest, Update_UpToDate) {
-    UpdateUiModel m;
-    m.current_version = QStringLiteral("0.4.0");
-    m.last_checked = QStringLiteral("just now");
-    m.channel = QStringLiteral("Stable");
-
-    UpdateSettingsPanel panel;
-    panel.setModel(m);
-    panel.setState(UpdateUiState::UpToDate);
-    QCoreApplication::processEvents();
-
-    const bool saved = renderAndSave(panel, QStringLiteral("05-update-uptodate.png"));
-    EXPECT_TRUE(saved);
-}
-
-TEST_F(CrashUpdateVisualProofTest, Update_Error) {
-    UpdateUiModel m;
-    m.current_version = QStringLiteral("0.4.0");
-    m.last_checked = QStringLiteral("just now");
-    m.channel = QStringLiteral("Stable");
-    m.error_message = QStringLiteral("Couldn't reach the update server. Check your connection and try again.");
-
-    UpdateSettingsPanel panel;
-    panel.setModel(m);
-    panel.setState(UpdateUiState::Error);
-    QCoreApplication::processEvents();
-
-    const bool saved = renderAndSave(panel, QStringLiteral("06-update-error.png"));
     EXPECT_TRUE(saved);
 }
 

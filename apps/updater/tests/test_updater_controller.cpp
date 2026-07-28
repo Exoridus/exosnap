@@ -171,4 +171,39 @@ TEST(UpdaterController, MsiFailedEmbedsCodeAndHasNoSecondary) {
     EXPECT_TRUE(s.footer_text.contains(QStringLiteral("1603")));
 }
 
+// ── Verification reinstall (ADR 0055) ───────────────────────────────────────
+
+TEST(UpdaterController, VerificationReinstallIsOffByDefault) {
+    UpdaterController c = MakeController();
+    EXPECT_FALSE(c.state().verification_reinstall);
+    c.onStepStarted(UpStep::Install);
+    EXPECT_TRUE(c.state().status_line.contains(QStringLiteral("Swapping in version")));
+}
+
+TEST(UpdaterController, VerificationReinstallRewordsTheWorkingLines) {
+    UpdaterController c = MakeController();
+    c.setVerificationReinstall(true);
+    EXPECT_TRUE(c.state().verification_reinstall);
+
+    c.onStepStarted(UpStep::Download);
+    EXPECT_TRUE(c.state().status_line.contains(QStringLiteral("again")))
+        << "a same-version run must not claim to download an update";
+
+    c.onStepStarted(UpStep::Install);
+    EXPECT_TRUE(c.state().status_line.contains(QStringLiteral("Reinstalling version")));
+}
+
+TEST(UpdaterController, VerifyReinstallMismatchIsRedAndOffersNoRetry) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::VerifyReinstallMismatch, QStringLiteral("0.9.1"));
+    const UpdaterUiState& s = c.state();
+    EXPECT_EQ(s.variant, TerminalVariant::Red);
+    EXPECT_EQ(s.steps[size_t(UpStep::Download)], StepStatus::Failed);
+    EXPECT_EQ(s.primary_action, QStringLiteral("Close"));
+    EXPECT_TRUE(s.secondary_action.isEmpty()) << "re-fetching the same manifest cannot help";
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("identical version")));
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("0.9.1")));
+    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("Nothing was installed")));
+}
+
 } // namespace

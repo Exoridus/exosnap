@@ -34,6 +34,20 @@ TEST(ManifestParse, ValidManifest) {
     EXPECT_EQ(m.packages[1].kind, PackageKind::Portable);
 }
 
+// The raw "version" string is kept alongside the parsed SemVer: the
+// verification reinstall gate (ADR 0055) compares it byte-for-byte against
+// --current-version, which SemVer equality cannot do for foreign labels.
+TEST(ManifestParse, KeepsTheRawVersionString) {
+    const std::string json = R"({
+        "version": "0.9.0-rc4",
+        "minimum_accepted_version": "0.8.0",
+        "packages": []
+    })";
+    auto result = ParseManifest(json);
+    ASSERT_TRUE(std::holds_alternative<UpdateManifest>(result));
+    EXPECT_EQ(std::get<UpdateManifest>(result).version_raw, "0.9.0-rc4");
+}
+
 TEST(ManifestParse, MissingVersionField) {
     const std::string json = R"({
         "minimum_accepted_version": "1.0.0",

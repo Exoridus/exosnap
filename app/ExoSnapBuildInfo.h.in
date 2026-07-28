@@ -2,7 +2,28 @@
 
 namespace exosnap::build {
 
-constexpr const char* kVersion   = "@EXOSNAP_VERSION@";
-constexpr const char* kGitCommit = "@EXOSNAP_GIT_SHA@";
+// Full release version ("0.9.0-rc4"; developer builds report "0.9.0-dev").
+constexpr const char* kVersion = "@EXOSNAP_VERSION@";
+
+// Numeric base version from the canonical root project(... VERSION ...).
+constexpr const char* kBaseVersion = "@EXOSNAP_BASE_VERSION@";
+
+// Git identity of the built source, or "Unavailable" outside a work tree.
+constexpr const char* kGitCommit     = "@EXOSNAP_GIT_SHA@";
+constexpr const char* kGitCommitFull = "@EXOSNAP_GIT_SHA_FULL@";
+
+// Deterministic source-date timestamp (SOURCE_DATE_EPOCH convention: the
+// commit time of the built source, or a CI-provided override), ISO 8601 UTC.
+constexpr const char* kBuildTimestampUtc = "@EXOSNAP_BUILD_TIMESTAMP_UTC@";
+
+// CI run identifier for official builds; empty for local builds.
+constexpr const char* kBuildId = "@EXOSNAP_BUILD_ID@";
+
+// True only for builds produced by the official release pipeline
+// (EXOSNAP_OFFICIAL_BUILD=ON with a declared release identity).
+constexpr bool kOfficialBuild = @EXOSNAP_OFFICIAL_BOOL@;
+
+// True when tracked files were modified at generation time.
+constexpr bool kDirtySourceTree = @EXOSNAP_DIRTY_BOOL@;
 
 } // namespace exosnap::build

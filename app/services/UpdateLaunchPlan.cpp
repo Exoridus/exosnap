@@ -25,7 +25,7 @@ QStringList UpdaterStagingFileList() {
 }
 
 QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir, quint32 pid,
-                             const QString& current_version) {
+                             const QString& current_version, bool verify_reinstall) {
     using exosnap::update::InstallMode;
     using exosnap::update::UpdateChannel;
 
@@ -37,15 +37,24 @@ QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QStri
     args << QStringLiteral("--install-dir") << install_dir;
     args << QStringLiteral("--app-pid") << QString::number(pid);
     args << QStringLiteral("--current-version") << current_version;
+    // ADR 0055: the updater's own same-version gate. Only ever added for a run
+    // the user explicitly started with --verify-update-reinstall.
+    if (verify_reinstall)
+        args << QStringLiteral("--verify-reinstall");
     return args;
 }
 
 QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
-                               const QString& available_version) {
+                               const QString& available_version, bool verify_reinstall_mode,
+                               const QString& current_version) {
     if (!update_available)
         return QStringLiteral("uptodate");
     if (is_scoop)
         return QStringLiteral("scoop");
+    // Verification reinstall (ADR 0055): the offered version IS the running one.
+    // Exact string equality — the engine granted the offer on the same basis.
+    if (verify_reinstall_mode && !available_version.isEmpty() && available_version == current_version)
+        return QStringLiteral("verify-reinstall");
     // Loop guard: the updater already ran for this version (a stale releases-API
     // cache is re-offering it). A manual check clears applied_version upstream so a
     // still-applicable version re-arms to "available".

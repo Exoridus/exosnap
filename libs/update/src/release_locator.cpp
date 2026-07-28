@@ -73,6 +73,7 @@ std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, Updat
 
             if (!have_best || *sv > best.version) {
                 best.version = *sv;
+                best.version_tag = (!tag.empty() && tag[0] == 'v') ? tag.substr(1) : tag;
                 best.manifest_url = std::move(manifest_url);
                 best.signature_url = std::move(signature_url);
                 best.portable_url = std::move(portable_url);

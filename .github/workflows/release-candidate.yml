@@ -43,6 +43,20 @@ on:
 # released, whether the run is official, and whether it is a prerelease (purely
 # from the pushed tag's own shape — no dispatch input involved).
 #
+# VERSION IDENTITY (ADR 0054). The tag is the sole source of the release version, and
+# the FULL version — suffix included — is carried end to end: resolve-identity exports
+# it, the configure step compiles it into the binaries via -DEXOSNAP_RELEASE_VERSION,
+# a dedicated step reads it back out of the built executables and fails the job if it
+# disagrees with the tag, the packaging script names the ZIP/MSI for it, and the signed
+# update manifest announces it. So tag == embedded == package name == manifest, proven
+# rather than assumed.
+#
+# The practical consequence, and it is intentional: pushing v0.9.0 after v0.9.0-rc4
+# rebuilds the same commit rather than re-labelling the RC's binaries, because those
+# bytes say "0.9.0-rc4" and the embedded-version check would reject them under the
+# final tag. Same source, different artifacts — see ADR 0054 for why that trade is the
+# right one.
+#
 # Fail-closed: an official release build (either shape) with the update key MISSING
 # hard-fails the build job (see "Configure Release tree") rather than silently
 # degrading to an unofficial artifact. Non-release builds (PRs via release/**
@@ -58,9 +72,22 @@ jobs:
   #   release_tag  — the tag the GitHub Release lives under ('' = publish nothing)
   #   is_official  — 'true' when this run must be treated as an official release build
   #   prerelease   — 'true' when the Release must be marked as a GitHub prerelease (RC)
+  #   full_version — the FULL release identity ('0.9.0-rc4'), tag with the leading 'v'
+  #                  stripped and NOTHING else removed. This is the single value the
+  #                  whole pipeline names artifacts, compiles into the binaries, and
+  #                  writes into the signed update manifest from.
+  #   base_version — the numeric X.Y.Z base ('0.9.0'), for the places that are
+  #                  structurally incapable of carrying a prerelease suffix (Windows
+  #                  VERSIONINFO's numeric fields, the MSI ProductVersion property).
+  #
+  # Deriving both HERE, once, is the point: before this job owned them, four separate
+  # places re-parsed project(VERSION) out of CMakeLists.txt with four copies of the same
+  # regex, and every one of them produced the BASE version — which is exactly how an RC
+  # ended up publishing artifacts named, and binaries stamped, "0.9.0" (see ADR 0054).
   #
   # Runs on every trigger (it is seconds of work) so the branch/PR path keeps building
-  # UNOFFICIAL artifacts exactly as before, just with release_tag = ''.
+  # UNOFFICIAL artifacts exactly as before, just with release_tag = '' and the honest
+  # '<base>-dev' identity the root CMakeLists.txt gives an unofficial build.
   resolve-identity:
     name: Resolve Release Identity
     runs-on: ubuntu-latest
@@ -68,6 +95,8 @@ jobs:
       release_tag: ${{ steps.id.outputs.release_tag }}
       is_official: ${{ steps.id.outputs.is_official }}
       prerelease: ${{ steps.id.outputs.prerelease }}
+      full_version: ${{ steps.id.outputs.full_version }}
+      base_version: ${{ steps.id.outputs.base_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -83,52 +112,109 @@ jobs:
       #
       # Validated BEFORE the ~30-minute Release build so a malformed tag fails in
       # seconds rather than after a full build. Two guards, both fail-closed:
-      #   (a) shape must be exactly vX.Y.Z (final) or vX.Y.Z-<suffix> (RC) — catches
-      #       a mistyped tag (vfoo) or stray extra dots/segments.
-      #   (b) its X.Y.Z must equal the version in CMakeLists.txt (the single source of
-      #       truth the artifact filenames are built from), so a tag can never claim a
-      #       version the artifacts inside it do not carry.
+      #   (a) shape must be exactly vX.Y.Z (final) or vX.Y.Z-rcN (RC). The runtime
+      #       gives ordered prerelease semantics specifically to rcN, so the release
+      #       pipeline must not publish a broader label language than clients understand.
+      #   (b) its X.Y.Z BASE must equal the version in CMakeLists.txt, so a tag can never
+      #       claim a base version the source tree does not declare.
+      # The tag is then the sole source of the FULL release identity: everything after
+      # the leading 'v' — suffix INCLUDED — becomes full_version, which is what gets
+      # compiled into the binaries, printed on the packages, and signed into the update
+      # manifest. Only the base-equality COMPARISON strips the suffix; the exported
+      # value never does.
       - name: Resolve release tag / official-ness
         id: id
         run: |
           set -euo pipefail
           release_tag=""
           prerelease="false"
+          full_version=""
+
+          # The base version is read once, here, and exported. project(VERSION) is the
+          # only place in the repo that declares it.
+          base_version=$(sed -nE 's/^[[:space:]]*project\([[:space:]]*exosnap[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
+          if [ -z "$base_version" ]; then
+            echo "::error::Could not parse project(exosnap VERSION x.y.z) from CMakeLists.txt."
+            exit 1
+          fi
+
           if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
             if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               prerelease="false"
-            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*$ ]]; then
               prerelease="true"
             else
-              echo "::error::Tag '$GITHUB_REF_NAME' is not a valid release tag. Expected vX.Y.Z (final, e.g. v0.9.0) or vX.Y.Z-<suffix> (release candidate, e.g. v0.9.0-rc1)."
+              echo "::error::Tag '$GITHUB_REF_NAME' is not a valid release tag. Expected vX.Y.Z (final, e.g. v0.9.0) or vX.Y.Z-rcN with N >= 1 (release candidate, e.g. v0.9.0-rc4)."
               exit 1
             fi
-            cmake_version=$(sed -nE 's/^[[:space:]]*project\([[:space:]]*exosnap[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
-            tag_version="${GITHUB_REF_NAME#v}"; tag_version="${tag_version%%-*}"
-            if [ "$tag_version" != "$cmake_version" ]; then
-              echo "::error::Tag '$GITHUB_REF_NAME' targets version $tag_version, but CMakeLists.txt declares $cmake_version. The artifacts this run builds would be named ExoSnap-$cmake_version-*, not matching the tag. Bump the version first (release-checklist §1) or fix the tag."
+            # Strip ONLY the leading 'v'. Any prerelease suffix is part of the identity.
+            full_version="${GITHUB_REF_NAME#v}"
+            tag_base="${full_version%%-*}"
+            if [ "$tag_base" != "$base_version" ]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' targets base version $tag_base, but CMakeLists.txt declares $base_version. The artifacts this run builds would be named ExoSnap-$base_version-*, not matching the tag. Bump the version first (release-checklist §1) or fix the tag."
+              exit 1
+            fi
+            # '-dev' is reserved by the root CMakeLists.txt as the marker for an
+            # UNOFFICIAL developer build; a release tag must never claim it. CMake
+            # would FATAL_ERROR on it anyway — catching it here fails in seconds
+            # instead of after the Qt install and MSVC setup.
+            if [ "$full_version" = "$base_version-dev" ]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' uses the reserved '-dev' prerelease label, which marks unofficial developer builds. Pick a real candidate label (e.g. v$base_version-rc1)."
               exit 1
             fi
             release_tag="$GITHUB_REF_NAME"
+          else
+            # Not a release: this run must build (and name) an honest dev artifact, and
+            # this value must match what the root CMakeLists.txt produces when it is
+            # configured WITHOUT -DEXOSNAP_RELEASE_VERSION. Kept in sync with it.
+            full_version="$base_version-dev"
           fi
+
           is_official=$([ -n "$release_tag" ] && echo true || echo false)
           {
             echo "release_tag=$release_tag"
             echo "is_official=$is_official"
             echo "prerelease=$prerelease"
+            echo "full_version=$full_version"
+            echo "base_version=$base_version"
           } >> "$GITHUB_OUTPUT"
-          echo "release_tag='$release_tag' is_official=$is_official prerelease=$prerelease"
+          echo "release_tag='$release_tag' is_official=$is_official prerelease=$prerelease full_version=$full_version base_version=$base_version"
 
   build:
     name: Build Release Artifacts
     needs: resolve-identity
     runs-on: windows-2022
+    # The version is NOT a build-job output: resolve-identity owns it, and every step
+    # here (and every downstream job) reads it from there. Re-exporting it would just
+    # recreate the duplicate-source problem ADR 0054 removed.
     outputs:
-      version: ${{ steps.artifact.outputs.version }}
       portable_sha256: ${{ steps.shas.outputs.portable_sha256 }}
       msi_sha256: ${{ steps.shas.outputs.msi_sha256 }}
+    env:
+      FULL_VERSION: ${{ needs.resolve-identity.outputs.full_version }}
+      BASE_VERSION: ${{ needs.resolve-identity.outputs.base_version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Deterministic build timestamp. app/GenerateBuildInfo.cmake honours
+      # SOURCE_DATE_EPOCH (the reproducible-builds convention) for the timestamp it
+      # bakes into ExoSnapBuildInfo.h; pinning it to the COMMIT time means two builds
+      # of the same commit produce the same embedded timestamp, so "did this artifact
+      # come from that commit?" is answerable from the binary rather than from CI logs.
+      # The cmake script would fall back to the same `git log -1 --format=%ct` on its
+      # own, but stating it explicitly here makes the value visible in the run log and
+      # keeps it identical across every step of the job.
+      - name: Pin deterministic build timestamp (SOURCE_DATE_EPOCH)
+        shell: bash
+        run: |
+          set -euo pipefail
+          epoch=$(git log -1 --format=%ct)
+          if ! [[ "$epoch" =~ ^[0-9]+$ ]]; then
+            echo "::error::git log -1 --format=%ct returned '$epoch', not a Unix timestamp."
+            exit 1
+          fi
+          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$epoch (commit $GITHUB_SHA)"
 
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
@@ -226,14 +312,29 @@ jobs:
               exit 1
             }
             Write-Host "Official build: crash capture (Sentry DSN) + update checking ENABLED."
+            Write-Host "Release identity compiled in: $($env:FULL_VERSION) (base $($env:BASE_VERSION))."
+            # THE injection point for the release identity. Without it the root
+            # CMakeLists.txt hard-fails an EXOSNAP_OFFICIAL_BUILD=ON configure (it
+            # refuses to let an official build ship without declaring what it is), and
+            # with it every downstream version form -- kVersion, the VERSIONINFO
+            # ProductVersion string of exosnap.exe and exosnap-updater.exe -- is
+            # derived from the tag rather than from project(VERSION). This is what
+            # makes "the tag and the binary agree" a provable statement instead of a
+            # convention; the "Verify embedded release version" step below proves it.
             $cfgArgs += @(
               '-DEXOSNAP_ENABLE_CRASH_CAPTURE=ON',
               '-DEXOSNAP_OFFICIAL_BUILD=ON',
+              "-DEXOSNAP_RELEASE_VERSION=$($env:FULL_VERSION)",
               "-DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=$($env:PUBKEY)",
               '-DFETCHCONTENT_BASE_DIR=C:/es'
             )
           } else {
-            Write-Host "::warning::Building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime) -- this run releases nothing, regardless of whether EXOSNAP_UPDATE_PUBLIC_KEY_HEX happens to be set repo-wide."
+            # EXOSNAP_RELEASE_VERSION is deliberately NOT passed: an unofficial build
+            # must not be able to claim a release identity. CMake gives it
+            # "<base>-dev", which is exactly what resolve-identity exported as
+            # full_version for this path, so the packaging step's names and the
+            # embedded ProductVersion still agree.
+            Write-Host "::warning::Building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime) -- this run releases nothing, regardless of whether EXOSNAP_UPDATE_PUBLIC_KEY_HEX happens to be set repo-wide. Identity: $($env:FULL_VERSION)."
           }
           cmake @cfgArgs
 
@@ -269,8 +370,69 @@ jobs:
           $extraArgs = @{}
           $isOfficialRelease = ($env:IS_OFFICIAL -eq 'true')
           if ($env:PUBKEY -and $isOfficialRelease) { $extraArgs['FailOnInconclusive'] = $true }
-          & scripts/build-release-artifacts.ps1 -SkipConfigure @extraArgs
+          # -ReleaseVersion is what the packages are NAMED for. The script cross-checks
+          # it against the ProductVersion string embedded in the installed exosnap.exe
+          # and exosnap-updater.exe BEFORE it writes the ZIP or the MSI, so passing a
+          # value that disagrees with the configure above aborts packaging rather than
+          # producing a mislabelled artifact.
+          & scripts/build-release-artifacts.ps1 -SkipConfigure -ReleaseVersion $env:FULL_VERSION @extraArgs
           exit $LASTEXITCODE
+
+      # THE tag-to-binary proof, and the reason a released RC can never be silently
+      # re-labelled as its final.
+      #
+      # The step above proves the PACKAGE matches the BINARIES (the script compares the
+      # name it was given against the embedded ProductVersion). This step closes the
+      # remaining link: that the binaries match the TAG. It reads the ProductVersion
+      # string straight out of the built executables and compares it to the value
+      # resolve-identity derived from the pushed git tag — a path that never touches
+      # the packaging script, so a bug in that script's own version handling cannot
+      # make this check pass.
+      #
+      # Why the ProductVersion STRING and not the numeric FileVersion: Windows
+      # VERSIONINFO's numeric fields cannot express a prerelease suffix, so a 0.9.0-rc4
+      # build and a 0.9.0 build are numerically identical there (both 0.9.0.0). The
+      # string field is the only place the distinction survives into the binary, which
+      # is precisely why it is the field the release identity lives in.
+      #
+      # Practical consequence: taking the RC4 binaries and re-publishing them under the
+      # final v0.9.0 tag is not possible without this step failing, because those bytes
+      # still say "0.9.0-rc4". A final release must be its own build of the same commit.
+      - name: Verify embedded release version matches the tag
+        shell: pwsh
+        run: |
+          $expected = $env:FULL_VERSION
+          $buildDir = 'build/windows-x64-release'
+          # Exact target output locations, not a recursive search: a recursive match
+          # could silently pick up some other exosnap.exe in the tree and "prove" the
+          # version of a binary that is not the one being shipped. The VS generator
+          # (this preset) writes to the Release/ subdir; the single-config layout is
+          # listed too so the check survives a preset change. apps/updater is built
+          # because add_dependencies(exosnap exosnap_updater) pulls it in.
+          $exeCandidates = [ordered]@{
+            'exosnap.exe'         = @("$buildDir/app/Release/exosnap.exe", "$buildDir/app/exosnap.exe")
+            'exosnap-updater.exe' = @("$buildDir/apps/updater/Release/exosnap-updater.exe", "$buildDir/apps/updater/exosnap-updater.exe")
+          }
+          $failed = $false
+          foreach ($exeName in $exeCandidates.Keys) {
+            $exe = $exeCandidates[$exeName] | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if (-not $exe) {
+              Write-Host "::error::$exeName was not found at any of: $($exeCandidates[$exeName] -join ', '). Cannot prove the release identity of an artifact that does not exist."
+              $failed = $true
+              continue
+            }
+            $actual = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+            if ($actual -ne $expected) {
+              Write-Host "::error::$exeName carries ProductVersion '$actual' but this run releases '$expected' (from tag '$($env:RELEASE_TAG)'). The tag and the binary disagree, so the artifact would misrepresent which release it is. Never re-tag an existing build: a release of '$expected' must be built with -DEXOSNAP_RELEASE_VERSION=$expected."
+              $failed = $true
+            } else {
+              Write-Host "  OK  $exeName ProductVersion = $actual  ($exe)"
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "Embedded release identity proven: tag '$($env:RELEASE_TAG)' == ProductVersion '$expected' in both shipped executables."
+        env:
+          RELEASE_TAG: ${{ needs.resolve-identity.outputs.release_tag }}
 
       # Archive the Release PDBs for offline symbolication of crash minidumps
       # (ADR 0017 § Symbol pipeline). Keyed by version + run id so a given build's
@@ -287,8 +449,6 @@ jobs:
           PUBKEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
           IS_OFFICIAL: ${{ needs.resolve-identity.outputs.is_official }}
         run: |
-          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           $stage = Join-Path $env:RUNNER_TEMP "exosnap-pdbs"
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
           $found = Get-ChildItem -Path build/windows-x64-release -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue
@@ -317,16 +477,18 @@ jobs:
       - name: Upload Release PDBs (symbol archive)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ExoSnap-${{ steps.pdbs.outputs.version }}-windows-x64-pdb-${{ github.run_id }}
+          name: ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64-pdb-${{ github.run_id }}
           path: ${{ steps.pdbs.outputs.dir }}/*.pdb
           if-no-files-found: warn
 
+      # Only the output directory is resolved here; the version comes from
+      # resolve-identity. build-release-artifacts.ps1 keys its output directory on the
+      # FULL version for exactly the reason ADR 0054 exists: an RC and the final build
+      # of the same commit are different artifacts and must not share a staging tree.
       - name: Resolve artifact paths
         id: artifact
         run: |
-          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "dir=.workspace/release/$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "dir=.workspace/release/$($env:FULL_VERSION)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         shell: pwsh
 
       # Archives the exact toolchain that produced this release's artifacts —
@@ -365,7 +527,7 @@ jobs:
 
           $manifest = [ordered]@{
             product     = 'ExoSnap'
-            version     = '${{ steps.artifact.outputs.version }}'
+            version     = '${{ needs.resolve-identity.outputs.full_version }}'
             sourceCommit = (& git rev-parse HEAD).Trim()
             generatedAt = (Get-Date).ToUniversalTime().ToString('o')
             runner = [ordered]@{
@@ -404,7 +566,7 @@ jobs:
         id: shas
         run: |
           $dir = "${{ steps.artifact.outputs.dir }}"
-          $ver = "${{ steps.artifact.outputs.version }}"
+          $ver = "${{ needs.resolve-identity.outputs.full_version }}"
           $portableSha = (Get-Content -LiteralPath (Join-Path $dir "ExoSnap-$ver-windows-x64-portable.sha256") -Raw).Trim().Split(' ')[0]
           $msiShaFile = Join-Path $dir "ExoSnap-$ver-windows-x64.msi.sha256"
           $msiSha = if (Test-Path -LiteralPath $msiShaFile) { (Get-Content -LiteralPath $msiShaFile -Raw).Trim().Split(' ')[0] } else { '' }
@@ -417,12 +579,12 @@ jobs:
       - name: Upload all release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64
+          name: ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64
           path: |
-            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable.zip
-            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable.sha256
-            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.msi
-            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.msi.sha256
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64-portable.zip
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64-portable.sha256
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64.msi
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64.msi.sha256
             ${{ steps.artifact.outputs.dir }}/artifact-manifest.json
             ${{ steps.artifact.outputs.dir }}/validation-report.md
             ${{ steps.artifact.outputs.dir }}/toolchain-manifest.json
@@ -446,6 +608,15 @@ jobs:
   # downstream publish-release job owns the Release creation + upload so the ordering
   # is deterministic (create draft → upload → re-hash → publish) instead of racing a
   # Release that may not exist yet.
+  #
+  # `version` is the FULL release identity, and that is load-bearing rather than
+  # cosmetic. It becomes both the manifest's `version` and its
+  # `minimum_accepted_version`, which the client compares by SemVer precedence: with
+  # the base version there, 0.9.0-rc4's manifest announced plain "0.9.0", so a client
+  # already on 0.9.0-rc4 saw no newer version and could never discover 0.9.0-rc5 —
+  # RC-to-RC updating, the one thing an RC exists to exercise, was untestable
+  # (ADR 0054). It also makes the manifest agree with what the binaries report about
+  # themselves, which the "Verify embedded release version" step above has proven.
   sign-manifest:
     name: Sign Update Manifest
     needs: [resolve-identity, build]
@@ -457,11 +628,11 @@ jobs:
       contents: write
     uses: ./.github/workflows/sign-manifest.yml
     with:
-      version: ${{ needs.build.outputs.version }}
+      version: ${{ needs.resolve-identity.outputs.full_version }}
       installer_sha256: ${{ needs.build.outputs.msi_sha256 }}
       portable_sha256: ${{ needs.build.outputs.portable_sha256 }}
-      installer_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.resolve-identity.outputs.release_tag }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64.msi
-      portable_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.resolve-identity.outputs.release_tag }}/ExoSnap-${{ needs.build.outputs.version }}-windows-x64-portable.zip
+      installer_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.resolve-identity.outputs.release_tag }}/ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64.msi
+      portable_url: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ needs.resolve-identity.outputs.release_tag }}/ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64-portable.zip
       attach_to_release: false
       # Unused while attach_to_release is false (publish-release owns the upload), but
       # passed so the called workflow never has to guess the tag — resolve-identity's
@@ -497,14 +668,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.resolve-identity.outputs.release_tag }}
       PRERELEASE: ${{ needs.resolve-identity.outputs.prerelease }}
-      VERSION: ${{ needs.build.outputs.version }}
+      VERSION: ${{ needs.resolve-identity.outputs.full_version }}
       EXPECTED_PORTABLE_SHA: ${{ needs.build.outputs.portable_sha256 }}
       EXPECTED_MSI_SHA: ${{ needs.build.outputs.msi_sha256 }}
     steps:
       - name: Download release artifacts (ZIP + MSI + sidecars)
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: ExoSnap-${{ needs.build.outputs.version }}-windows-x64
+          name: ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64
           path: release-assets
 
       - name: Download signed manifest
@@ -535,8 +706,10 @@ jobs:
           set -euo pipefail
           if [ "$PRERELEASE" = "true" ]; then
             kind_args=(--prerelease)
-            title="ExoSnap $VERSION ($TAG)"
-            notes="Release CANDIDATE for ExoSnap $VERSION, built from ${GITHUB_SHA}. Marked as a prerelease, so only the Preview update channel offers it; Stable users are unaffected. Artifacts and the signed update manifest are attached and verified by CI. This exists to run the manual live checks in docs/release-checklist.md §5/§6/§7 (including the end-to-end updater round trip) against real official artifacts before the final tag is pushed. Not a shipped release — do not announce."
+            # $VERSION is the full identity now, so it already reads "0.9.0-rc4" and
+            # repeating the tag after it would be redundant.
+            title="ExoSnap $VERSION"
+            notes="Release CANDIDATE for ExoSnap $VERSION, built from ${GITHUB_SHA}. Marked as a prerelease, so only the Preview update channel offers it; Stable users are unaffected. The artifacts carry $VERSION as their compiled-in ProductVersion — CI proved that against this tag before publishing — so this candidate is a distinct version to the updater and can be updated FROM, not just to. Artifacts and the signed update manifest are attached and verified by CI. This exists to run the manual live checks in docs/release-checklist.md §5/§6/§7 (including the end-to-end updater round trip) against real official artifacts before the final tag is pushed. Not a shipped release — do not announce."
           else
             kind_args=()
             title="ExoSnap $VERSION"
@@ -614,6 +787,14 @@ jobs:
           import nacl.signing
           v = os.environ["VERSION"]
           m = json.load(open("verify/update-manifest.json"))
+          errs = []
+          # The published manifest must announce the same full release identity the tag
+          # resolved to and the binaries carry. Checked against what was actually
+          # DOWNLOADED from the Release, so it also catches a stale manifest left behind
+          # by an earlier attempt on this tag.
+          for field in ("version", "minimum_accepted_version"):
+              if m.get(field) != v:
+                  errs.append(f"published manifest {field}='{m.get(field)}' != release version '{v}'")
           def sha(path):
               h = hashlib.sha256()
               with open(path, "rb") as f:
@@ -624,7 +805,6 @@ jobs:
               "installer": f"verify/ExoSnap-{v}-windows-x64.msi",
               "portable":  f"verify/ExoSnap-{v}-windows-x64-portable.zip",
           }
-          errs = []
           for pkg in m["packages"]:
               kind = pkg["kind"]; want = pkg["sha256"].lower()
               path = files.get(kind)
@@ -646,6 +826,11 @@ jobs:
       # the Stable-vs-Preview split the client makes (libs/update/src/release_locator.cpp)
       # keys off exactly this flag, so an RC that lost it would be offered to every Stable
       # user, and a final release that gained it would be invisible to them.
+      #
+      # Both places that set the flag (the `gh release create` above and this
+      # `gh release edit`) read the same $PRERELEASE job env, which is
+      # resolve-identity's `prerelease` output and nothing else — derived purely from
+      # the pushed tag's shape. There is no second opinion to drift out of sync with.
       - name: Publish (un-draft) the release
         run: |
           set -euo pipefail

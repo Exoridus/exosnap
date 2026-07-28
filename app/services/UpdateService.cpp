@@ -12,6 +12,8 @@
 #include "RecordingCoordinator.h"
 #include "WhatsNewPayload.h"
 
+#include "../diagnostics/AppLog.h"
+
 #include "../viewmodels/RecordViewModel.h" // for UiRecordingState
 
 #include <QCoreApplication>
@@ -44,6 +46,8 @@ class UpdateService::Impl {
     exosnap::update::InstallMode install_mode{};
     exosnap::update::UpdateState state{};
     std::atomic<bool> checking{false};
+    // ADR 0055. Atomic because the check worker thread reads it.
+    std::atomic<bool> verify_reinstall{false};
     mutable QMutex mutex;
 
     // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
@@ -103,6 +107,20 @@ void UpdateService::SetChannel(exosnap::update::UpdateChannel ch) {
     impl_->state.channel = ch;
 }
 
+void UpdateService::SetVerifyReinstallMode(bool on) {
+    impl_->verify_reinstall.store(on);
+    if (on)
+        diagnostics::AppLog::info(
+            QStringLiteral("update"),
+            QStringLiteral("Verification reinstall mode active — the running version %1 may be reinstalled "
+                           "through the normal update path (this run only; nothing was persisted)")
+                .arg(QString::fromLatin1(exosnap::build::kVersion)));
+}
+
+bool UpdateService::IsVerifyReinstallMode() const {
+    return impl_->verify_reinstall.load();
+}
+
 exosnap::update::UpdateBlockReason UpdateService::CurrentBlockReason() const {
     auto guard = impl_->MakeGuard();
     return guard ? guard() : exosnap::update::UpdateBlockReason::NotBlocked;
@@ -130,6 +148,12 @@ void UpdateService::RequestUpdateCheck() {
 
         upd::CheckParams params;
         params.current_version = upd::ParseSemVer(exosnap::build::kVersion).value_or(upd::SemVer{0, 0, 0});
+        // kVersion is treated as an opaque full version string ("0.9.0-rc4",
+        // "0.9.0-dev"): the verification gate compares it byte-for-byte, so a
+        // build whose identity does not match any release tag simply never
+        // qualifies — which is the safe direction.
+        params.current_version_raw = exosnap::build::kVersion;
+        params.allow_same_version_reinstall = impl->verify_reinstall.load();
         params.channel = impl->channel;
         params.recording_guard = impl->MakeGuard();
 
@@ -266,8 +290,14 @@ void UpdateService::LaunchUpdater() {
 
 #if defined(_WIN32)
     const quint32 pid = static_cast<quint32>(::GetCurrentProcessId());
+    const bool verify_reinstall = impl_->verify_reinstall.load();
+    if (verify_reinstall)
+        diagnostics::AppLog::info(QStringLiteral("update"),
+                                  QStringLiteral("Launching the updater in verification reinstall mode — it will "
+                                                 "refuse any version but %1")
+                                      .arg(QString::fromLatin1(exosnap::build::kVersion)));
     const QStringList flags =
-        BuildUpdaterArgs(impl_->state, app_dir, pid, QString::fromLatin1(exosnap::build::kVersion));
+        BuildUpdaterArgs(impl_->state, app_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall);
 
     // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
     // ready to swap. QProcess applies the correct Windows argument-quoting rules so

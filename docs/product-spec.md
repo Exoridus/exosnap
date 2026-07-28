@@ -61,7 +61,15 @@ Top-level navigation is **six items**, in order:
   elevation, blockers), plus a capability-matrix reference section.
 - **Logs** — runtime events and per-session recording diagnostics, a **Startup** latency table,
   and a **Create support bundle** action.
-- **About** — application identity, build metadata, and links.
+- **About** — application identity, build metadata, and links. The metadata table permanently
+  shows **Version** (the full release version, e.g. `0.9.0-rc4`; developer builds honestly report
+  `0.9.0-dev`), **Commit** (shortened, linking to the full SHA on GitHub), **Built** (the
+  deterministic source-date timestamp, `YYYY-MM-DD HH:MM UTC`), **Install** (Portable / MSI /
+  Scoop) and **Channel** (Stable / Preview). Deviations from an official release build appear only
+  when true, as conditional notices: *Unofficial build*, *Debug build*, *Dirty source tree*.
+  **Copy details** copies a full support block (version, tag, full commit SHA, build time, CI build
+  ID, architecture, configuration, official flag, install mode, channel, executable path and its
+  SHA-256 — the hash is computed lazily off the UI thread on first click).
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
 recording stops, the surface opens over Record on the Review step and is stepped
@@ -1015,7 +1023,32 @@ unimplemented behavior.
   GitHub token is used by the client. No update is performed during recording or finalization, and
   the app never restarts silently.
 - **UI home:** the update UI lives on the **Settings update card**, plus a **dedicated updater
-  window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded.
+  window** (per design canon `Updater.html`). The earlier About-overlay placement is superseded,
+  and the hidden legacy `UpdateSettingsPanel`/`AboutOverlay` compatibility shim has been removed —
+  the Settings card is the **only** update state model.
+- **Version identity.** The app knows its **full release version** (e.g. `0.9.0-rc4`) everywhere:
+  runtime `kVersion`, updater `--current-version`, manifest `version`, About page, update card,
+  support bundles and crash metadata. RC builds are therefore honestly older than the final of the
+  same base version, and an older RC naturally discovers a newer RC on the Preview channel.
+  Developer builds identify as `<base>-dev` and never impersonate a release.
+- **Update card states** (normative): **Up to date** (`✓ Up to date · <last checked>`, button
+  `Check for updates`) · **Checking** (`Checking for updates…`, action disabled; the click never
+  moves the page's scroll position or steals focus out of the card) · **Available**
+  (`Update available — <ver>`, button `Update to <ver>` launches the real external updater for
+  Portable and MSI) · **Scoop** (`Managed by Scoop — update with 'scoop update exosnap'`, button
+  `Open releases page`; the swap updater never touches a Scoop tree) · **Pending**
+  (`Restart pending… finishing the update`, button disabled) · **Error** (honest message, button
+  `Retry`).
+- **Verification reinstall mode.** Starting the app with `--verify-update-reinstall` enables a
+  **non-persistent** test mode that offers exactly one extra action: reinstalling the **identical**
+  full version (exact string match) through the complete production path — official feed, channel
+  selection, embedded key, signed manifest, package SHA-256, recording/finalizing guards, real
+  updater handoff, swap/install, verify, relaunch and cleanup. The card then shows
+  `Verification reinstall available — <ver>` with `Reinstall <ver>` and the notice
+  *Reinstalls the currently running signed version.* The mode can never offer a downgrade, never
+  relaxes signature/hash checks, is logged in the app log and support bundle while active, and is
+  visibly marked `UPDATER · VERIFY` throughout the external updater run. It is gone after the next
+  restart. Without the flag, the same version is never offered.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as

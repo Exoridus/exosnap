@@ -70,6 +70,11 @@ struct BundleInputs {
     QString launch_session_id;
     QString scrubber_version;
     QString created_at; // ISO 8601; a fixed value keeps tests deterministic
+
+    // ADR 0055: the app run was started with --verify-update-reinstall. Recorded
+    // in the manifest (and ONLY while it is on) so a bundle taken during such a
+    // run is never mistaken for one from a normal session.
+    bool verify_update_reinstall = false;
 };
 
 // Bundle-local redaction of capture-target identifiers. ScrubString only removes

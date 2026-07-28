@@ -178,13 +178,106 @@ std::optional<SemVer> ReadFileVersion(const std::wstring& exe_path) {
     return v;
 }
 
+std::optional<std::string> ReadProductVersionString(const std::wstring& exe_path) {
+    DWORD ignored = 0;
+    const DWORD size = ::GetFileVersionInfoSizeW(exe_path.c_str(), &ignored);
+    if (size == 0) {
+        return std::nullopt;
+    }
+
+    std::vector<uint8_t> buffer(size);
+    if (::GetFileVersionInfoW(exe_path.c_str(), 0, size, buffer.data()) == 0) {
+        return std::nullopt;
+    }
+
+    // Query the translation table instead of assuming a fixed language block so
+    // this also reads binaries whose StringFileInfo is not 040904b0.
+    struct LangCodepage {
+        WORD language;
+        WORD codepage;
+    };
+    LangCodepage* translations = nullptr;
+    UINT translations_len = 0;
+    if (::VerQueryValueW(buffer.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<LPVOID*>(&translations),
+                         &translations_len) == 0 ||
+        translations == nullptr || translations_len < sizeof(LangCodepage)) {
+        return std::nullopt;
+    }
+
+    const size_t count = translations_len / sizeof(LangCodepage);
+    for (size_t i = 0; i < count; ++i) {
+        wchar_t query[64];
+        ::swprintf_s(query, L"\\StringFileInfo\\%04x%04x\\ProductVersion", translations[i].language,
+                     translations[i].codepage);
+        wchar_t* value = nullptr;
+        UINT value_len = 0;
+        if (::VerQueryValueW(buffer.data(), query, reinterpret_cast<LPVOID*>(&value), &value_len) == 0 ||
+            value == nullptr || value_len == 0) {
+            continue;
+        }
+        // value_len counts wchar_t units including the terminator.
+        std::wstring wide(value, value + value_len);
+        while (!wide.empty() && wide.back() == L'\0') {
+            wide.pop_back();
+        }
+        if (wide.empty()) {
+            continue;
+        }
+        std::string narrow;
+        narrow.reserve(wide.size());
+        bool ascii = true;
+        for (wchar_t wc : wide) {
+            if (wc > 0x7f) {
+                ascii = false;
+                break;
+            }
+            narrow.push_back(static_cast<char>(wc));
+        }
+        if (ascii) {
+            return narrow;
+        }
+    }
+    return std::nullopt;
+}
+
+bool InstalledVersionMatches(const std::optional<SemVer>& file_version, const std::optional<SemVer>& product_version,
+                             const SemVer& target) {
+    // The ProductVersion string is the full release identity (prerelease-aware)
+    // and is authoritative whenever present: it is the only signal that can
+    // tell 0.9.0-rc4 apart from 0.9.0.
+    if (product_version.has_value()) {
+        return *product_version == target;
+    }
+
+    // A prerelease target can only be proven by the full ProductVersion string.
+    // Numeric VERSIONINFO fields collapse 0.9.0-rc4 and 0.9.0 onto the same
+    // 0.9.0 base, so accepting the fallback here would let a missing or malformed
+    // ProductVersion silently erase the release identity this check exists to prove.
+    if (target.is_prerelease) {
+        return false;
+    }
+
+    // Fallback for binaries without a parseable ProductVersion string: the
+    // numeric FIXEDFILEINFO is accepted only for a final target. The package
+    // SHA-256 was already verified before the swap; this remains a legacy sanity
+    // check, not the integrity gate.
+    if (!file_version.has_value()) {
+        return false;
+    }
+    return file_version->major == target.major && file_version->minor == target.minor &&
+           file_version->patch == target.patch;
+}
+
 bool VerifyInstalledVersion(const SwapPlan& plan) {
     const std::wstring exe = (fs::path(plan.install_dir) / kExeName).wstring();
     if (!FileExists(exe)) {
         return false;
     }
-    const std::optional<SemVer> found = ReadFileVersion(exe);
-    return found.has_value() && *found == plan.target_version;
+    std::optional<SemVer> product;
+    if (const std::optional<std::string> product_str = ReadProductVersionString(exe)) {
+        product = ParseSemVer(*product_str);
+    }
+    return InstalledVersionMatches(ReadFileVersion(exe), product, plan.target_version);
 }
 
 // ---------------------------------------------------------------------------

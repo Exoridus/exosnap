@@ -17,6 +17,7 @@
 #include "diagnostics/StartupTrace.h"
 #include "exosnap_resource.h"
 #include "services/ElevatedRelaunch.h"
+#include "services/VerifyReinstallMode.h"
 #include "ui/theme/ExoSnapTheme.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualTestHarness.h"
@@ -314,6 +315,10 @@ int main(int argc, char* argv[]) {
 
     exosnap::MainWindow win;
     win.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
+    // ADR 0055: verification reinstall, armed from argv for this run only. Nothing
+    // is written to settings, so a plain restart drops back to normal behavior.
+    win.applyVerifyUpdateReinstallMode(
+        exosnap::services::HasVerifyUpdateReinstallRequest(QCoreApplication::arguments()));
     if (!app_icon.isNull()) {
         win.setWindowIcon(app_icon);
         const QList<QSize> sizes = win.windowIcon().availableSizes();

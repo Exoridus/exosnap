@@ -38,6 +38,19 @@ TEST(ReleaseLocator, StableSkipsReleasesMissingManifestOrSignature) {
     EXPECT_EQ(r->installer_url, "https://dl/i090.msi");
 }
 
+// The raw tag (minus the leading "v") is carried through unparsed: the
+// verification reinstall gate compares version STRINGS, and SemVer would
+// collapse foreign prerelease labels onto ordinal 0.
+TEST(ReleaseLocator, KeepsTheRawVersionTagWithoutTheVPrefix) {
+    auto stable = LocateRelease(kReleases, UpdateChannel::Stable);
+    ASSERT_TRUE(stable.has_value());
+    EXPECT_EQ(stable->version_tag, "0.9.0");
+
+    auto preview = LocateRelease(kReleases, UpdateChannel::Preview);
+    ASSERT_TRUE(preview.has_value());
+    EXPECT_EQ(preview->version_tag, "0.10.0-rc.1");
+}
+
 TEST(ReleaseLocator, PreviewPicksPrerelease) {
     auto r = LocateRelease(kReleases, UpdateChannel::Preview);
     ASSERT_TRUE(r.has_value());

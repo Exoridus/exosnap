@@ -81,9 +81,25 @@ enum class SwapError : uint8_t {
 [[nodiscard]] SwapError StageRename(const SwapPlan& plan);
 
 // VERSIONINFO FileVersion (major.minor.patch) of an exe; nullopt when unreadable.
+// The numeric FIXEDFILEINFO can never carry a prerelease suffix, so this alone
+// cannot distinguish 0.9.0-rc4 from 0.9.0.
 [[nodiscard]] std::optional<SemVer> ReadFileVersion(const std::wstring& exe_path);
 
-// <install>\exosnap.exe exists and its version equals plan.target_version.
+// VERSIONINFO ProductVersion string (e.g. "0.9.0-rc4") of an exe; nullopt when
+// the StringFileInfo block or the value is missing. This is the full release
+// identity embedded by the build (exosnap_version.rc.in).
+[[nodiscard]] std::optional<std::string> ReadProductVersionString(const std::wstring& exe_path);
+
+// Pure decision helper for VerifyInstalledVersion, exposed for tests. The full
+// ProductVersion string is authoritative and mandatory for prerelease targets;
+// without it an RC identity cannot be proven and verification fails closed.
+// Final targets may fall back to the prerelease-blind numeric FileVersion for
+// foreign or legacy binaries that carry no parseable ProductVersion string.
+[[nodiscard]] bool InstalledVersionMatches(const std::optional<SemVer>& file_version,
+                                           const std::optional<SemVer>& product_version, const SemVer& target);
+
+// <install>\exosnap.exe exists and its version equals plan.target_version
+// (full release identity, prerelease-aware — see InstalledVersionMatches).
 [[nodiscard]] bool VerifyInstalledVersion(const SwapPlan& plan);
 
 // backup->install (undo of a completed swap, or recovery after verify failed).

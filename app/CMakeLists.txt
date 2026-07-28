@@ -51,9 +51,13 @@ if(_qt6_core_loc)
 endif()
 
 # ---- Build metadata ----
-# Single source of truth: derived from the root project(... VERSION ...) call.
-# Never hard-code the version string here.
-set(EXOSNAP_VERSION "${PROJECT_VERSION}")
+# Single source of truth: the root project(... VERSION ...) call plus the
+# release identity resolved into EXOSNAP_FULL_VERSION (root CMakeLists.txt).
+# Never hard-code a version string here. EXOSNAP_VERSION carries the FULL
+# release version (e.g. "0.9.0-rc4", dev builds "0.9.0-dev") and feeds the
+# runtime kVersion and the VERSIONINFO ProductVersion string; the numeric
+# fields below stay base-only because VERSIONINFO is numeric by design.
+set(EXOSNAP_VERSION "${EXOSNAP_FULL_VERSION}")
 
 # Windows VERSIONINFO requires a four-field numeric version. CMake leaves
 # PROJECT_VERSION_TWEAK empty for an X.Y.Z version, so default the tweak to 0.
@@ -68,12 +72,20 @@ set(EXOSNAP_VERSION_FILE_STR
 
 find_package(Git QUIET)
 
+if(EXOSNAP_OFFICIAL_BUILD)
+    set(_exosnap_official_flag 1)
+else()
+    set(_exosnap_official_flag 0)
+endif()
+
 set(EXOSNAP_BUILD_INFO_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ExoSnapBuildInfo.h")
 add_custom_target(exosnap_build_info
     ALL
     COMMAND
         ${CMAKE_COMMAND}
         -DEXOSNAP_VERSION=${EXOSNAP_VERSION}
+        -DEXOSNAP_BASE_VERSION=${PROJECT_VERSION}
+        -DEXOSNAP_OFFICIAL=${_exosnap_official_flag}
         -DEXOSNAP_SOURCE_DIR=${PROJECT_SOURCE_DIR}
         -DEXOSNAP_BUILD_INFO_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/ExoSnapBuildInfo.h.in
         -DEXOSNAP_BUILD_INFO_OUTPUT=${EXOSNAP_BUILD_INFO_HEADER}
@@ -108,10 +120,6 @@ qt_add_executable(exosnap WIN32
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
     ui/chrome/GlobalRecordingBar.cpp
-    ui/dialogs/AboutOverlay.h
-    ui/dialogs/AboutOverlay.cpp
-    ui/dialogs/UpdateSettingsPanel.h
-    ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
     ui/dialogs/RecoveryOverlay.cpp
     ui/dialogs/WhatsNewOverlay.h
@@ -294,6 +302,8 @@ qt_add_executable(exosnap WIN32
     services/UpdateService.h
     services/UpdateService.cpp
     services/UpdateLaunchPlan.cpp
+    services/VerifyReinstallMode.h
+    services/VerifyReinstallMode.cpp
     services/WhatsNewPayload.h
     services/WhatsNewPayload.cpp
     services/ElevatedRelaunch.h
@@ -601,9 +611,7 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/SettingsCardExpander.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
-    # UPDATE-WIRE-R1: ConfigPage now embeds the UpdateSettingsPanel, which pulls in
-    # the Lucide glyph renderer.
-    ui/dialogs/UpdateSettingsPanel.cpp
+    # v10: ConfigPage renders Lucide glyphs (card titles, row icons).
     ui/theme/LucideIcon.cpp
     # PS-PHASE-C: HotkeysSettingsPanel embedded in ConfigPage.
     ui/widgets/HotkeysSettingsPanel.cpp
@@ -1363,24 +1371,23 @@ target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HA
 set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
-    NAME about_overlay_tests
+    NAME about_page_tests
     TEST_PREFIX about.
     SOURCES
-        tests/test_about_overlay.cpp
+        tests/test_about_page.cpp
         pages/AboutPage.cpp
-        ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
-        # AboutOverlay keeps a hidden UpdateSettingsPanel for MainWindow wiring.
-        ui/dialogs/UpdateSettingsPanel.cpp
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+        # AboutPage resolves install mode (MSI/Portable/Scoop) via these pure helpers.
+        services/UpdateLaunchPlan.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap::update
 )
-target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
-add_dependencies(about_overlay_tests exosnap_build_info)
-set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
+target_include_directories(about_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(about_page_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(about_page_tests exosnap_build_info)
+set_target_properties(about_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME edit_export_page_tests
@@ -1489,19 +1496,6 @@ exosnap_add_gtest(
 target_include_directories(lucide_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(lucide_icon_tests PROPERTIES AUTOMOC ON)
 
-exosnap_add_gtest(
-    NAME update_settings_panel_tests
-    TEST_PREFIX update_ui.
-    SOURCES
-        tests/test_update_settings_panel.cpp
-        ui/dialogs/UpdateSettingsPanel.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(update_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(update_settings_panel_tests PROPERTIES AUTOMOC ON)
-
 # Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
 # argv (round-tripped through the updater's own parser), Scoop-path detection.
 exosnap_add_gtest(
@@ -1510,6 +1504,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_update_launch_plan.cpp
         services/UpdateLaunchPlan.cpp
+        services/VerifyReinstallMode.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
     LIBRARIES Qt6::Core exosnap::update
 )
@@ -1522,7 +1517,9 @@ exosnap_add_gtest(
         tests/test_version.cpp
 )
 target_include_directories(version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(version_tests PRIVATE EXOSNAP_EXPECTED_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(version_tests PRIVATE
+    EXOSNAP_EXPECTED_VERSION="${EXOSNAP_FULL_VERSION}"
+    EXOSNAP_EXPECTED_BASE_VERSION="${PROJECT_VERSION}")
 add_dependencies(version_tests exosnap_build_info)
 
 exosnap_add_gtest(
@@ -2132,7 +2129,6 @@ exosnap_add_gtest(
         tests/crash_update_visual_proof.cpp
         ui/dialogs/CrashReportOverlay.cpp
         ui/dialogs/CrashReportPanel.cpp
-        ui/dialogs/UpdateSettingsPanel.cpp
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
         ui/theme/ExoSnapTheme.cpp
@@ -2280,7 +2276,6 @@ exosnap_add_gtest(
     SOURCES
         tests/theme_switch_visual_proof.cpp
         ui/widgets/CompareHint.cpp
-        ui/dialogs/UpdateSettingsPanel.cpp
         models/SettingsCompareData.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp

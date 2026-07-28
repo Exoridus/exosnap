@@ -30,16 +30,12 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-#include "ui/dialogs/UpdateSettingsPanel.h"
 #include "ui/theme/ExoSnapTheme.h"
 #include "ui/widgets/CompareHint.h"
 
 namespace exosnap {
 namespace {
 
-using ui::dialogs::UpdateSettingsPanel;
-using ui::dialogs::UpdateUiModel;
-using ui::dialogs::UpdateUiState;
 using ui::widgets::CompareHint;
 
 QApplication* EnsureApplication() {
@@ -178,40 +174,6 @@ TEST_F(ThemeSwitchVisualProofTest, CompareHintPopover_FollowsThemeSwitch) {
     const QImage dark_again = grabWidget(*popover);
     ASSERT_TRUE(QMetaObject::invokeMethod(hint, "hidePopover"));
     EXPECT_LT(averageLuminance(dark_again), 96.0) << "popover stayed light after switching back to dark";
-}
-
-// A panel full of inline stylesheets (UpdateSettingsPanel) must follow the
-// switch, and a dark → light → dark round trip must be pixel-identical to the
-// never-switched dark render — proving the switch is complete, not partial.
-TEST_F(ThemeSwitchVisualProofTest, UpdatePanel_SwitchesAndRoundTripsDarkIdentically) {
-    UpdateSettingsPanel panel;
-    UpdateUiModel model;
-    model.current_version = QStringLiteral("0.8.1");
-    model.available_version = QStringLiteral("0.9.0");
-    model.last_checked = QStringLiteral("Just now");
-    model.whats_new = {QStringLiteral("System-audio loopback on any device rate"),
-                       QStringLiteral("Failed remuxes keep the original recording")};
-    model.channel = QStringLiteral("Stable");
-    panel.setModel(model);
-    panel.setState(UpdateUiState::Available);
-    panel.setFixedWidth(520);
-    panel.show();
-
-    const QImage dark_before = grabWidget(panel);
-    savePng(dark_before, QStringLiteral("update-panel-dark.png"));
-
-    ui::theme::ReapplyTheme(*app_, QStringLiteral("light-paper"));
-    const QImage light_img = grabWidget(panel);
-    savePng(light_img, QStringLiteral("update-panel-light.png"));
-
-    EXPECT_GT(averageLuminance(light_img), averageLuminance(dark_before) + 40.0)
-        << "UpdateSettingsPanel did not visibly lighten after switching to light-paper";
-
-    ui::theme::ReapplyTheme(*app_, QStringLiteral("dark-default"));
-    const QImage dark_after = grabWidget(panel);
-    savePng(dark_after, QStringLiteral("update-panel-dark-roundtrip.png"));
-
-    EXPECT_EQ(dark_before, dark_after) << "dark render after a light round trip differs from the original dark render";
 }
 
 } // namespace

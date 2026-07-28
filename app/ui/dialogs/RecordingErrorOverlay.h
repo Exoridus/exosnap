@@ -15,7 +15,7 @@ namespace exosnap::ui::dialogs {
 // In-window recording-error surface. Renders a translucent backdrop with a
 // centered RecordingErrorPanel *inside* the application window — no separate
 // native OS dialog, so nothing lingers as a focus-sticky child window after
-// closing. Mirrors CrashReportOverlay / AboutOverlay.
+// closing. Mirrors CrashReportOverlay / RecoveryOverlay.
 //
 // Parent it to the host whose client area it should cover (typically the central
 // widget); it tracks the parent's geometry and fills it. Open with

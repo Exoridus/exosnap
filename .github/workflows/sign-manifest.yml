@@ -38,6 +38,16 @@ on:
   workflow_call:
     inputs:
       version:
+        description: >-
+          The FULL release version, prerelease suffix INCLUDED (e.g. '0.9.0-rc4', or
+          '0.9.0' for a final). Never the bare base version of a prerelease: this value
+          becomes the manifest's `version` AND its `minimum_accepted_version`, both of
+          which the client compares by SemVer precedence, and it is what the asset file
+          names are built from. Announcing '0.9.0' for an rc4 build made every RC look
+          identical to the client, so no RC could ever discover its successor
+          (ADR 0054). release-candidate.yml passes resolve-identity's tag-derived
+          full_version, which its build job has proven matches the ProductVersion
+          string embedded in the shipped executables.
         required: true
         type: string
       installer_sha256:
@@ -76,7 +86,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, e.g. 0.4.0'
+        description: 'FULL release version incl. any prerelease suffix, e.g. 0.9.0 or 0.9.0-rc4. Must match the ProductVersion string of the shipped exosnap.exe.'
         required: true
         type: string
       installer_sha256:
@@ -127,15 +137,37 @@ jobs:
           PORTABLE_URL:     ${{ inputs.portable_url }}
         run: |
           python3 - <<'EOF'
-          import base64, json, os, nacl.signing
+          import base64, json, os, re, sys, nacl.signing
+
+          version = os.environ["VERSION"]
+
+          # Fail closed to the exact release language the client orders: a final
+          # X.Y.Z or an rcN candidate. Signing a broader prerelease label would let
+          # the pipeline publish identities the runtime intentionally collapses.
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(-rc[1-9][0-9]*)?", version):
+              print(f"::error::version '{version}' is not a valid SemVer release version "
+                    "(expected X.Y.Z or X.Y.Z-rcN with N >= 1).")
+              sys.exit(1)
+          # '-dev' is the root CMakeLists.txt marker for an UNOFFICIAL developer build.
+          # A signed manifest announcing one would offer users an artifact that was never
+          # an official release.
+          if version.endswith("-dev"):
+              print(f"::error::version '{version}' uses the reserved '-dev' label, which marks "
+                    "unofficial developer builds. Refusing to sign a manifest for it.")
+              sys.exit(1)
 
           seed_b64 = os.environ["SIGNING_KEY_B64"]
           seed = base64.b64decode(seed_b64)
           signing_key = nacl.signing.SigningKey(seed)
 
           manifest = {
-              "version":                  os.environ["VERSION"],
-              "minimum_accepted_version": os.environ["VERSION"],
+              # Both fields carry the FULL version, prerelease suffix included. The
+              # client orders releases by SemVer precedence, under which 0.9.0-rc4 < 0.9.0
+              # and 0.9.0-rc4 < 0.9.0-rc5, so an RC correctly sees both its successor RC
+              # and the eventual final as newer. Using the base version here collapsed
+              # every candidate of a base onto one indistinguishable value (ADR 0054).
+              "version":                  version,
+              "minimum_accepted_version": version,
               "packages": [
                   {
                       "kind":   "installer",
@@ -173,13 +205,28 @@ jobs:
       #   (b) the detached signature must actually verify over the manifest bytes.
       # Both are checked here against the embedded public key, not merely against the
       # key we just signed with, so a mismatched keypair hard-fails in CI.
+      #
+      # Plus (c): the manifest that actually got written must announce the version this
+      # job was asked to sign — read back off disk, not from the in-memory dict of the
+      # previous step. A manifest whose `version` drifted from the release identity would
+      # be a correctly signed lie, and the signature check alone cannot catch that.
       - name: Verify keypair + signature against the embedded public key
         env:
           SIGNING_KEY_B64:     ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
           EXPECTED_PUBKEY_HEX: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+          VERSION:             ${{ inputs.version }}
         run: |
           python3 - <<'EOF'
-          import base64, os, sys, nacl.signing, nacl.encoding
+          import base64, json, os, sys, nacl.signing, nacl.encoding
+
+          expected_version = os.environ["VERSION"]
+          written = json.load(open("update-manifest.json"))
+          for field in ("version", "minimum_accepted_version"):
+              if written.get(field) != expected_version:
+                  print(f"::error::update-manifest.json {field}='{written.get(field)}' does not match "
+                        f"the release version '{expected_version}' this job was asked to sign.")
+                  sys.exit(1)
+          print(f"Manifest announces version={expected_version} (also minimum_accepted_version).")
 
           seed = base64.b64decode(os.environ["SIGNING_KEY_B64"])
           sk = nacl.signing.SigningKey(seed)

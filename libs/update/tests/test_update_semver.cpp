@@ -152,6 +152,40 @@ TEST(SemVer, HigherCoreVersionOutranksPrereleaseRegardlessOfOrdinal) {
     EXPECT_GT(*next_rc1, *old_rc99);
 }
 
+// The complete RC4 ordering chain that release discovery depends on:
+// rc1 < rc2 < rc3 < rc4 < final, and final beats any rc ordinal.
+TEST(SemVer, FullReleaseCandidateChainOrdersStrictly) {
+    const auto rc1 = ParseSemVer("0.9.0-rc1");
+    const auto rc2 = ParseSemVer("0.9.0-rc2");
+    const auto rc3 = ParseSemVer("0.9.0-rc3");
+    const auto rc4 = ParseSemVer("0.9.0-rc4");
+    const auto final_release = ParseSemVer("0.9.0");
+    ASSERT_TRUE(rc1 && rc2 && rc3 && rc4 && final_release);
+    EXPECT_LT(*rc1, *rc2);
+    EXPECT_LT(*rc2, *rc3);
+    EXPECT_LT(*rc3, *rc4);
+    EXPECT_LT(*rc4, *final_release);
+}
+
+TEST(SemVer, FinalOutranksAnyRcOrdinalOfSameCoreVersion) {
+    const auto rc999 = ParseSemVer("0.9.0-rc999");
+    const auto final_release = ParseSemVer("0.9.0");
+    ASSERT_TRUE(rc999 && final_release);
+    EXPECT_GT(*final_release, *rc999);
+    EXPECT_FALSE(*final_release < *rc999);
+}
+
+// Developer builds report "<base>-dev"; the unnumbered label orders below every
+// numbered rc so a dev build would see any official rc as an upgrade.
+TEST(SemVer, DevLabelOrdersBelowAnyNumberedRc) {
+    const auto dev = ParseSemVer("0.9.0-dev");
+    const auto rc1 = ParseSemVer("0.9.0-rc1");
+    const auto final_release = ParseSemVer("0.9.0");
+    ASSERT_TRUE(dev && rc1 && final_release);
+    EXPECT_LT(*dev, *rc1);
+    EXPECT_LT(*dev, *final_release);
+}
+
 TEST(SemVer, ToStringIncludesPrereleaseSuffix) {
     SemVer v = *ParseSemVer("0.9.0-rc3");
     EXPECT_EQ(v.ToString(), "0.9.0-rc3");

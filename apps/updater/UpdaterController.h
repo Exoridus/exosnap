@@ -24,6 +24,7 @@ enum class TerminalVariant : uint8_t { None, Success, Amber, Red, Green, RebootR
 enum class FailureCase : uint8_t { // failure matrix cases
     DownloadFailed,                // A1     -> Amber
     VerifyDownloadFailed,          // A2     -> Red (security stop)
+    VerifyReinstallMismatch,       // A3     -> Red (verification reinstall gate; nothing installed)
     AppWontClose,                  // B1     -> Amber
     InstallFailed,                 // B2     -> Amber
     VerifyInstallFailed,           // B3     -> Red (portable: previous version restored)
@@ -43,11 +44,18 @@ struct UpdaterUiState {
     QString primary_action;   // "" = hidden
     QString secondary_action; // "" = hidden
     QString from_version, to_version;
+    // ADR 0055: this run reinstalls the IDENTICAL version on purpose. The window
+    // marks it (title tag) and the working status lines say "reinstall", so the
+    // user is never told a version changed when none did.
+    bool verification_reinstall = false;
 };
 
 class UpdaterController {
 public:
     UpdaterController(QString from_version, QString to_version);
+
+    // Mark this run as a verification reinstall (ADR 0055). Affects wording only.
+    void setVerificationReinstall(bool on);
 
     void onStepStarted(UpStep s);                        // marks Working + status line
     void onDownloadProgress(quint64 got, quint64 total); // ring within the download band
