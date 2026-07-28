@@ -16,6 +16,10 @@ namespace exosnap::update {
 
 struct ReleaseAssets {
     SemVer version;                // parsed from tag_name "vX.Y.Z"
+    std::string version_tag;       // tag_name verbatim, leading "v" stripped ("0.9.0-rc4").
+                                   // Kept unparsed because SemVer collapses foreign
+                                   // prerelease labels onto ordinal 0; the verification
+                                   // reinstall gate needs the exact string.
     std::string manifest_url;      // browser_download_url of "update-manifest.json"
     std::string signature_url;     // browser_download_url of "update-manifest.json.sig"
     std::string portable_url;      // asset ending "-portable.zip" ("" if absent)
