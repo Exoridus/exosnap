@@ -27,9 +27,13 @@ The live checks in §5, §6 and §7 have to run against **real official artifact
 updater round-trip in §7 needs a genuinely published GitHub Release to download from. Publishing the
 final `vX.Y.Z` tag first and testing afterwards is not an option: that tag is the release. So cut an
 RC first. It is built by the same pipeline, from the same commit, with the same signing key and the
-same gates as the final release; it differs only in which tag it lands on and in being marked as a
-GitHub **prerelease**, which the in-app update check reads from GitHub's own `prerelease` flag — so
-only users on the **Preview** channel are ever offered it, and Stable users are unaffected.
+same gates as the final release. It differs in which tag it lands on, in being marked as a GitHub
+**prerelease** (which the in-app update check reads from GitHub's own `prerelease` flag — so only
+users on the **Preview** channel are ever offered it, and Stable users are unaffected), **and in
+the embedded release version**: the full version (`0.9.0-rc4` vs `0.9.0`) is derived from the tag
+and compiled into the binaries, so the RC and the final are **separate builds, not the same bytes**
+— retagging RC artifacts as final is impossible (the pipeline's embedded-version gate would refuse
+a binary whose `ProductVersion` does not match the tag).
 
 - [ ] **Push a release-candidate tag yourself**, e.g. `v0.9.0-rc1` (`vX.Y.Z-<suffix>`, `X.Y.Z`
       matching `CMakeLists.txt` — both are validated in seconds, before the build starts). This
@@ -46,10 +50,13 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
 - [ ] **Run §5, §6 and §7 against this RC build.** Set the test install's update channel to
       **Preview** (Settings → Updates card → "Update channel" dropdown) before the updater checks —
       a Stable-channel client will not see a prerelease at all.
-- [ ] **In-app RC→RC update offer (first live proof of the prerelease-ordering fix).** With a
-      running `v0.9.0-rc2` install on the Preview channel, confirm it is **offered** `v0.9.0-rc3`
-      in-app (rc2 is the first build carrying the SemVer prerelease-ordering fix, so rc2 → rc3 is
-      the first pair that can prove it live) and complete that in-app update end to end.
+- [ ] **In-app RC→RC update offer.** Natural RC → RC discovery requires the **running** build to
+      embed its full RC version — that is true from `v0.9.0-rc4` on (see the RC2/RC3 defect note
+      below; rc2/rc3 misidentify as `0.9.0` and can never be offered a later `0.9.0`-family tag).
+      The first natural pair that can prove this live is therefore **rc4 → rc5** (if one is cut) or
+      **rc4 → the final `v0.9.0`** right after the final publishes. Until then, prove the full
+      app→updater→install→relaunch path against the published rc4 artifacts with the
+      **verification reinstall mode** (`--verify-update-reinstall`, §7a).
 - [ ] **If anything fails:** fix it, and cut the next candidate (`rc_N+1`) from the new commit.
       A published RC is never re-used or overwritten; the pipeline refuses to re-upload into an
       already-published Release.
@@ -63,6 +70,17 @@ only users on the **Preview** channel are ever offered it, and Stable users are 
 > `v0.9.0-rc1` predates it and still compares every `0.9.0`-family tag as equal, so a machine left on
 > rc1 will not be offered rc2/rc3/the final release in-app; install by hand there (or delete the rc1
 > prerelease once a newer one is out).
+>
+> **Known RC2/RC3 version-identity defect (fixed in rc4).** Natural RC2 → RC3 discovery failed
+> because RC2 embedded the final base version `0.9.0` instead of `0.9.0-rc2` (`project(VERSION)`
+> was the only version source and cannot carry a prerelease suffix), so SemVer correctly judged
+> `0.9.0-rc3` as *older* than the claimed `0.9.0`. The official updater mechanics were validated
+> separately using the released updater with a controlled lower `--current-version` argument:
+> download, signature verification, package hash verification, portable swap, relaunch and cleanup
+> all completed successfully. That controlled test does **not** count as a natural discovery test.
+> RC2 and RC3 installs will never be offered rc4 or the final in-app (they believe they already run
+> `0.9.0`); install rc4 by hand there. From rc4 on, the full release version is embedded
+> (`EXOSNAP_RELEASE_VERSION`, ADR 0054) and RC → RC discovery works naturally.
 >
 > **§5's live checks need the *previous shipped version* to already contain the in-app swap-updater
 > client** (the code that does the actual download/verify/staged-rename — not just the version
@@ -274,6 +292,51 @@ hardware:
       debug infrastructure for this right before RC3.
 - [ ] **G. Updater rc2 → rc3.** Covered by §5 (portable + MSI, UAC decline, network failure,
       mid-swap close refusal, temp cleanup) — run §5 exactly as written against rc2 → rc3.
+
+### §7a — RC4 acceptance live checks (version identity + verification reinstall)
+
+RC4 introduces the full embedded release version and the verification-reinstall mode
+(ADR 0054/0055). Run these against the **published** rc4 artifacts:
+
+**Identity**
+
+- [ ] The published portable ZIP's `exosnap.exe` reports `ProductVersion == 0.9.0-rc4`
+      (`(Get-Item exosnap.exe).VersionInfo.ProductVersion`), and the About page shows
+      **Version 0.9.0-rc4** with no *Unofficial build* / *Dirty source tree* notice.
+- [ ] `update-manifest.json` on the release carries `"version": "0.9.0-rc4"`, and **Copy details**
+      pastes the full commit SHA, build ID, install mode, channel and the executable SHA-256
+      matching the published artifact hash.
+
+**Natural discovery** (rc2/rc3 installs cannot prove this — they misidentify as `0.9.0`, see §3)
+
+- [ ] A Preview-channel rc4 install is **not** offered rc4 again in normal mode (`✓ Up to date`).
+- [ ] After the final `v0.9.0` publishes (or an rc5 is cut): the rc4 install **naturally** shows
+      `Update available — <ver>` and `Update to <ver>` launches the updater; complete it end to end
+      once for portable and once for MSI. A Stable-channel install never sees an rc.
+
+**Portable (verification reinstall, `--verify-update-reinstall`)**
+
+- [ ] Start rc4 portable with the flag: card shows `Verification reinstall available — 0.9.0-rc4` +
+      `Reinstall 0.9.0-rc4`; app log and support bundle record the active mode.
+- [ ] Full path runs: close → swap → verify → relaunch → cleanup; installed EXE hash equals the
+      published rc4 hash; backup and temp directory removed afterwards.
+- [ ] Interrupt the download once (kill network): old install intact, Retry works.
+- [ ] Updater refuses to close during the swap-critical steps.
+- [ ] Without the flag, the same rc4 is **not** offered (up to date); the flag does not survive a
+      restart.
+
+**MSI (verification reinstall)**
+
+- [ ] Same-version reinstall over MSI: UAC decline leaves a retryable amber state; retry installs;
+      rc4 relaunches; installed EXE matches the published hash.
+
+**Guards**
+
+- [ ] With a recording (or finalization) active, both the manual check and the Reinstall/Update
+      action are blocked with the honest message; Scoop-managed installs still show the Scoop card
+      and never launch the swap updater (also in verify mode).
+- [ ] Clicking `Check for updates` with the card scrolled into view does not move the scroll
+      position (regression check for the focus-steal fix).
 
 ### Long-duration soak (clock slaving)
 
