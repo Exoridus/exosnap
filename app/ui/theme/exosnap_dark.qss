@@ -2021,10 +2021,12 @@ QPushButton[role="quiet"]:disabled {
     color: ${text3};
 }
 
-/* v0.9 polish: overflow menu button is now a borderless "quiet" pill to match. */
+/* RC4: the overflow menu button carries a visible frame again. Borderless it
+   read as an accidentally unstyled glyph next to the framed ghost button
+   ("Save as new…"); the states mirror QPushButton[role="ghost"]. */
 QToolButton#presetManageButton {
     background: transparent;
-    border: none;
+    border: 1px solid ${line2};
     border-radius: ${radius-md}px;
     padding: 0 ${space-md}px;
     color: ${text1};
@@ -2034,7 +2036,23 @@ QToolButton#presetManageButton {
 
 QToolButton#presetManageButton:hover {
     background: ${bg3};
+    border-color: ${line3};
     color: ${text0};
+}
+
+QToolButton#presetManageButton:pressed {
+    background: ${bg2};
+}
+
+QToolButton#presetManageButton:focus {
+    border-color: ${accent};
+    color: ${text0};
+}
+
+QToolButton#presetManageButton:disabled {
+    background: transparent;
+    color: ${text3};
+    border-color: ${line1};
 }
 
 /* v0.9 polish: filename "tokens" disclosure — a flat inline chevron+text on the
