@@ -98,7 +98,7 @@ jobs:
       full_version: ${{ steps.id.outputs.full_version }}
       base_version: ${{ steps.id.outputs.base_version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # An earlier version of this workflow could create a release-candidate tag
       # itself from a workflow_dispatch input (gh release create --target
@@ -194,7 +194,7 @@ jobs:
       FULL_VERSION: ${{ needs.resolve-identity.outputs.full_version }}
       BASE_VERSION: ${{ needs.resolve-identity.outputs.base_version }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Deterministic build timestamp. app/GenerateBuildInfo.cmake honours
       # SOURCE_DATE_EPOCH (the reproducible-builds convention) for the timestamp it
@@ -237,7 +237,7 @@ jobs:
         shell: pwsh
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        uses: ./.github/actions/setup-msvc
 
       # Crashpad + mini_chromium nest extremely deep under FetchContent; the
       # default build-tree path blows past Windows MAX_PATH (260). Long-path
@@ -257,7 +257,7 @@ jobs:
       # Studio 17 2022 does not match the generator used previously: Ninja".
       # The `-vs2022-` namespace keeps the two generators' caches from crossing.
       - name: Cache FetchContent deps (sentry-native + Crashpad)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: C:/es
           key: es-fetchcontent-${{ runner.os }}-vs2022-${{ hashFiles('cmake/VendorSentry.cmake') }}
@@ -475,7 +475,7 @@ jobs:
         shell: pwsh
 
       - name: Upload Release PDBs (symbol archive)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64-pdb-${{ github.run_id }}
           path: ${{ steps.pdbs.outputs.dir }}/*.pdb
@@ -577,7 +577,7 @@ jobs:
         shell: pwsh
 
       - name: Upload all release artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ExoSnap-${{ needs.resolve-identity.outputs.full_version }}-windows-x64
           path: |
