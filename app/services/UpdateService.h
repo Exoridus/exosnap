@@ -49,6 +49,13 @@ class UpdateService final : public QObject {
     exosnap::update::UpdateChannel Channel() const;
     void SetChannel(exosnap::update::UpdateChannel ch);
 
+    // Verification reinstall (ADR 0055). Set once at startup from the
+    // --verify-update-reinstall CLI flag and never persisted: while on, the check
+    // additionally offers the byte-identical version and LaunchUpdater hands the
+    // updater its matching --verify-reinstall gate. Off is the shipping default.
+    void SetVerifyReinstallMode(bool on);
+    [[nodiscard]] bool IsVerifyReinstallMode() const;
+
     // Current block reason (re-queried each time a check is requested).
     exosnap::update::UpdateBlockReason CurrentBlockReason() const;
 
@@ -105,14 +112,19 @@ class UpdateService final : public QObject {
 [[nodiscard]] QStringList UpdaterStagingFileList();
 
 // The argv (flags only, excluding argv[0]) the app passes to the staged
-// updater. Round-trips through ParseUpdaterArgs.
+// updater. Round-trips through ParseUpdaterArgs. `verify_reinstall` adds
+// --verify-reinstall (ADR 0055), which makes the updater refuse every version
+// but the one named by `current_version`.
 [[nodiscard]] QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QString& install_dir,
-                                           quint32 pid, const QString& current_version);
+                                           quint32 pid, const QString& current_version, bool verify_reinstall = false);
 
 // Resolve the Settings updates-card state string from a completed check. Pure so
 // the loop-guard / recovery semantics can be unit-tested headless:
 //   * !update_available                        -> "uptodate"
 //   * is_scoop                                 -> "scoop"   (notify-only)
+//   * verify mode AND available == current     -> "verify-reinstall" (ADR 0055:
+//                                                 the offered version IS the
+//                                                 running one, on purpose)
 //   * available_version == applied_version     -> "pending" (loop guard: the
 //                                                 updater already ran for this
 //                                                 version; awaiting restart)
@@ -120,7 +132,14 @@ class UpdateService final : public QObject {
 // Recovery from a stuck "Restart pending": a user-initiated (manual) check clears
 // the persisted applied_version BEFORE the check, so applied_version is empty here
 // and the same still-applicable version resolves to "available" again.
+//
+// Order notes: Scoop wins over everything offerable — a Scoop tree is never
+// touched by the staged swap, verification mode included. The verification
+// reinstall outranks the loop guard because the whole point of that mode is to
+// re-run the swap for the version already installed; the mode itself is
+// non-persistent, so it cannot leave the card stuck.
 [[nodiscard]] QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
-                                             const QString& available_version);
+                                             const QString& available_version, bool verify_reinstall_mode = false,
+                                             const QString& current_version = QString());
 
 } // namespace exosnap

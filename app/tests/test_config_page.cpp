@@ -13,6 +13,8 @@
 #include <QMenu>
 #include <QObject>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QTimer>
@@ -3974,6 +3976,66 @@ TEST_F(ConfigPageTest, CrashReportsToggle_TurningOffEmitsSignalFalse) {
     toggle->setChecked(false);
     ASSERT_TRUE(got) << "turning the toggle off must emit autoSendCrashReportsToggled";
     EXPECT_FALSE(emitted_value);
+}
+
+// ── Updates card: verification reinstall (ADR 0055) ─────────────────────────
+
+TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallStateSaysReinstallNotUpdate) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
+
+    auto* status = page.findChild<QLabel*>(QStringLiteral("updatesStatusLabel"));
+    auto* action = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    auto* hint = page.findChild<QLabel*>(QStringLiteral("updatesVerifyReinstallHint"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(action, nullptr);
+    ASSERT_NE(hint, nullptr);
+
+    EXPECT_TRUE(status->text().contains(QStringLiteral("Verification reinstall available")));
+    EXPECT_TRUE(status->text().contains(QStringLiteral("0.9.0-rc4")));
+    EXPECT_FALSE(status->text().contains(QStringLiteral("Update available")))
+        << "nothing newer exists — the card must not claim an update";
+    EXPECT_EQ(action->text(), QStringLiteral("Reinstall 0.9.0-rc4"));
+    EXPECT_TRUE(action->isEnabled());
+    EXPECT_TRUE(action->property("updatesCta").toBool()) << "the reinstall action is a real CTA";
+    EXPECT_EQ(hint->text(), QStringLiteral("Reinstalls the currently running signed version."));
+    EXPECT_FALSE(hint->isHidden());
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallHintIsHiddenInEveryOtherState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* hint = page.findChild<QLabel*>(QStringLiteral("updatesVerifyReinstallHint"));
+    ASSERT_NE(hint, nullptr);
+    EXPECT_TRUE(hint->isHidden()) << "hidden before any status is pushed";
+
+    page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
+    ASSERT_FALSE(hint->isHidden());
+
+    for (const QString& state : {QStringLiteral("uptodate"), QStringLiteral("available"), QStringLiteral("checking"),
+                                 QStringLiteral("error"), QStringLiteral("scoop"), QStringLiteral("pending")}) {
+        page.setUpdateStatus(state, QStringLiteral("1.0.0"), QString());
+        EXPECT_TRUE(hint->isHidden()) << "hint leaked into state " << state.toStdString();
+    }
+}
+
+// The reinstall action must route to the primary action (launch the updater),
+// not back into another check — the version field is what decides that.
+TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallButtonRequestsThePrimaryAction) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
+
+    int primary = 0;
+    int checks = 0;
+    QObject::connect(&page, &ConfigPage::updatePrimaryActionRequested, [&]() { ++primary; });
+    QObject::connect(&page, &ConfigPage::checkForUpdatesRequested, [&]() { ++checks; });
+
+    auto* action = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    ASSERT_NE(action, nullptr);
+    action->click();
+
+    EXPECT_EQ(primary, 1);
+    EXPECT_EQ(checks, 0);
 }
 
 } // namespace

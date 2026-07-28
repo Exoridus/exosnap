@@ -543,13 +543,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // "Restart pending" state. The updater will send WM_CLOSE when it is ready to
     // swap; the app then closes normally.
     connect(update_service_, &UpdateService::updaterLaunched, this, [this]() {
-        persisted_settings_.applied_version = last_available_version_;
-        settings_store_.Save(persisted_settings_);
+        // ADR 0055: the verification-reinstall mode persists nothing, so it does
+        // not write the loop-guard stamp either — the version it "applies" is the
+        // one already installed, and the stamp would only be cleared again on the
+        // next launch. The card still shows the restart-pending state.
+        if (!verify_update_reinstall_) {
+            persisted_settings_.applied_version = last_available_version_;
+            settings_store_.Save(persisted_settings_);
+        }
         if (config_page_)
             config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
         diagnostics::AppLog::info(
             QStringLiteral("update"),
-            QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
+            verify_update_reinstall_
+                ? QStringLiteral("Updater launched to reinstall %1 — restart pending").arg(last_available_version_)
+                : QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
     });
     // Any staging/launch failure surfaces on the Settings card as an error.
     connect(update_service_, &UpdateService::updateError, this,
@@ -4362,6 +4370,16 @@ void MainWindow::applyStartupRelaunchHandoff(const QString& page_name, bool reen
     }
 }
 
+void MainWindow::applyVerifyUpdateReinstallMode(bool enabled) {
+    verify_update_reinstall_ = enabled;
+    if (!enabled)
+        return;
+    // The service owns the engine-side opt-in (check params + updater argv) and
+    // writes the "mode active" log line.
+    if (update_service_)
+        update_service_->SetVerifyReinstallMode(true);
+}
+
 // ---------------------------------------------------------------------------
 // PS-PHASE-E: hub bell unread count refresh
 // ---------------------------------------------------------------------------
@@ -4415,8 +4433,13 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
                                     ? QString::fromStdString(*result.releases_page_url)
                                     : QStringLiteral("https://github.com/Exoridus/exosnap/releases");
 
+    // A verification reinstall was granted on byte-identical version STRINGS, so
+    // the running version string is the truthful label for it — SemVer::ToString
+    // would re-render a foreign prerelease label as "-rc0".
     const QString available_version =
-        result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString();
+        result.verification_reinstall
+            ? current_version
+            : (result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString());
     last_available_version_ = available_version;
 
     ui::dialogs::UpdateUiModel model;
@@ -4460,23 +4483,30 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         // stuck "Restart pending" re-arms to "available" for a still-applicable
         // version; automatic checks keep available==applied pinned to "pending".
         const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
-        const QString card_state = exosnap::ResolveUpdateCardState(
-            result.update_available, is_scoop, persisted_settings_.applied_version, available_version);
+        const QString card_state =
+            exosnap::ResolveUpdateCardState(result.update_available, is_scoop, persisted_settings_.applied_version,
+                                            available_version, verify_update_reinstall_, current_version);
         config_page_->setUpdateStatus(card_state, available_version, model.last_checked);
     }
 
     diagnostics::AppLog::info(
         QStringLiteral("update"),
-        result.update_available
-            ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
-            : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
+        result.verification_reinstall
+            // Never phrased as an available update: nothing newer exists here.
+            ? QStringLiteral("Verification reinstall offered for %1 (%2)").arg(available_version, channel)
+            : result.update_available
+                  ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
+                  : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
 
     // Notify-on-available: hub advisory (persistent) + a transient toast.
     // ADR 0034: the advisory deep-links to the Settings updates card.
     if (notification_hub_) {
         // Always clear stale advisory first (handles: up-to-date after was-available).
         notification_hub_->removeAdvisoryById(QStringLiteral("update-available"));
-        if (result.update_available) {
+        // A verification reinstall is not an available update and must not be
+        // advertised as one — the user asked for it explicitly and is looking at
+        // the card that offers it.
+        if (result.update_available && !result.verification_reinstall) {
             notification_hub_->addAdvisory(QStringLiteral("update-available"), QStringLiteral("info"),
                                            QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version),
                                            QStringLiteral("Signature verified. Open Settings to update."),
@@ -4489,7 +4519,7 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
 
     // Transient toast only on an *automatic* check — a manual check already has the
     // user looking at the Settings card, so a popup would be redundant (ADR 0034).
-    if (result.update_available && !manual_update_check_ && notification_manager_) {
+    if (result.update_available && !result.verification_reinstall && !manual_update_check_ && notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;
         event.title = QStringLiteral("Update available — %1").arg(available_version);
@@ -4983,6 +5013,7 @@ void MainWindow::createSupportBundle() {
     inputs.scrubber_version = QStringLiteral("1");
     inputs.app_version = QString::fromLatin1(build::kVersion);
     inputs.commit_sha = QString::fromLatin1(build::kGitCommit);
+    inputs.verify_update_reinstall = verify_update_reinstall_;
 
     const auto& rt = runtime_caps_.runtime;
     inputs.capability.gpu_adapter_name = QString::fromStdString(runtime_caps_.gpu_adapter_name);

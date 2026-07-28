@@ -1966,6 +1966,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 emit updatePrimaryActionRequested();
         });
 
+        // ADR 0055: the verification-reinstall explainer. Its own wrapped line
+        // (never folded into the status label) so the card stays readable when
+        // the mode is on, and hidden in every other state. wordWrap needs a
+        // one-line minimum height or the card clips it away.
+        updates_verify_hint_ = makeHint(QString(), updates_panel_);
+        updates_verify_hint_->setObjectName(QStringLiteral("updatesVerifyReinstallHint"));
+        updates_verify_hint_->setWordWrap(true);
+        updates_verify_hint_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+        updates_verify_hint_->setMinimumHeight(updates_verify_hint_->fontMetrics().height());
+        updates_verify_hint_->setVisible(false);
+        updates_layout->addWidget(updates_verify_hint_);
+
         // WHATS-NEW: "What's new in vX.Y" link — shown only in the available state
         // (setUpdateStatus toggles visibility). Opens the gap-aware notes overlay.
         updates_whats_new_link_ = new QPushButton(updates_panel_);
@@ -6208,8 +6220,10 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
     // The button's primary action (open releases vs. launch the swap updater) is
     // decided by MainWindow when updatePrimaryActionRequested fires; here it only
     // needs a non-empty version to route to that signal instead of a re-check.
-    updates_available_version_ =
-        (state == QStringLiteral("available") || state == QStringLiteral("scoop")) ? available_version : QString();
+    updates_available_version_ = (state == QStringLiteral("available") || state == QStringLiteral("scoop") ||
+                                  state == QStringLiteral("verify-reinstall"))
+                                     ? available_version
+                                     : QString();
 
     if (state == QStringLiteral("checking")) {
         updates_status_label_->setText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
@@ -6218,6 +6232,13 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
     } else if (state == QStringLiteral("available")) {
         updates_status_label_->setText(QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
         updates_action_btn_->setText(QStringLiteral("Update to %1").arg(available_version));
+        updates_action_intrinsically_enabled_ = true;
+    } else if (state == QStringLiteral("verify-reinstall")) {
+        // ADR 0055: same version on both sides, on purpose. Say so plainly —
+        // "Update available" would be a lie here.
+        updates_status_label_->setText(
+            QStringLiteral("Verification reinstall available \xe2\x80\x94 %1").arg(available_version));
+        updates_action_btn_->setText(QStringLiteral("Reinstall %1").arg(available_version));
         updates_action_intrinsically_enabled_ = true;
     } else if (state == QStringLiteral("scoop")) {
         // Notify-only: Scoop owns the update; we never run the staged swap here.
@@ -6256,8 +6277,18 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
             updates_whats_new_link_->setText(QStringLiteral("What's new in %1").arg(available_version));
     }
 
-    // Accent CTA styling only in the available state (QSS [updatesCta="true"]).
-    updates_action_btn_->setProperty("updatesCta", state == QStringLiteral("available"));
+    // ADR 0055: the reinstall explainer rides along with its own state only.
+    if (updates_verify_hint_) {
+        const bool show_verify_hint = (state == QStringLiteral("verify-reinstall"));
+        updates_verify_hint_->setVisible(show_verify_hint);
+        if (show_verify_hint)
+            updates_verify_hint_->setText(QStringLiteral("Reinstalls the currently running signed version."));
+    }
+
+    // Accent CTA styling in the available state and for a verification reinstall
+    // (both are a real primary action) — QSS [updatesCta="true"].
+    updates_action_btn_->setProperty("updatesCta", state == QStringLiteral("available") ||
+                                                       state == QStringLiteral("verify-reinstall"));
     updates_action_btn_->style()->unpolish(updates_action_btn_);
     updates_action_btn_->style()->polish(updates_action_btn_);
 }

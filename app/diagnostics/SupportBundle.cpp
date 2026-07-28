@@ -160,6 +160,9 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
         manifest[QStringLiteral("commit")] = inputs.commit_sha;
         manifest[QStringLiteral("launch_session_id")] = inputs.launch_session_id;
         manifest[QStringLiteral("scrubber_version")] = inputs.scrubber_version;
+        // Only present while the mode is on — a normal bundle carries no such key.
+        if (inputs.verify_update_reinstall)
+            manifest[QStringLiteral("verify_update_reinstall")] = true;
         manifest[QStringLiteral("note")] =
             QStringLiteral("No telemetry. Created locally on user action; not transmitted anywhere.");
         manifest[QStringLiteral("privacy")] =

@@ -294,6 +294,8 @@ qt_add_executable(exosnap WIN32
     services/UpdateService.h
     services/UpdateService.cpp
     services/UpdateLaunchPlan.cpp
+    services/VerifyReinstallMode.h
+    services/VerifyReinstallMode.cpp
     services/WhatsNewPayload.h
     services/WhatsNewPayload.cpp
     services/ElevatedRelaunch.h
@@ -1510,6 +1512,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_update_launch_plan.cpp
         services/UpdateLaunchPlan.cpp
+        services/VerifyReinstallMode.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
     LIBRARIES Qt6::Core exosnap::update
 )
