@@ -163,9 +163,23 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    if (args->verify_reinstall) {
+        // ADR 0055: a same-version reinstall over the full production path. Log it
+        // so an updater run in this mode is never mistaken for a real upgrade.
+        std::fprintf(stderr, "exosnap-updater: verification reinstall mode — only version \"%s\" is accepted\n",
+                     qPrintable(args->current_version));
+    }
+
     // The controller starts with a placeholder to-version (the release is not
     // resolved yet) and is rebuilt when the worker reports the real one.
-    auto controller = std::make_unique<UpdaterController>(args->current_version, args->current_version);
+    // MakeController keeps the verification-reinstall marking across the rebuilds
+    // (releaseResolved / Retry) instead of silently dropping it.
+    const auto MakeController = [&args](const QString& to_version) {
+        auto c = std::make_unique<UpdaterController>(args->current_version, to_version);
+        c->setVerificationReinstall(args->verify_reinstall);
+        return c;
+    };
+    auto controller = MakeController(args->current_version);
     QString to_version = args->current_version;
     FailureCase last_failure = FailureCase::DownloadFailed;
     // Reentrancy guard: true while a pipeline run is queued or running. A
@@ -215,7 +229,7 @@ int main(int argc, char** argv) {
         // Rebuild the controller with the real to-version and replay the only
         // event that can have happened by now (Download is in flight).
         to_version = version;
-        controller = std::make_unique<UpdaterController>(args->current_version, to_version);
+        controller = MakeController(to_version);
         controller->onStepStarted(UpStep::Download);
         render();
     });
@@ -248,7 +262,7 @@ int main(int argc, char** argv) {
         const UpStep entry = RetryEntryStep(last_failure);
         // Reset the UI to a clean in-progress state: steps before the re-entry
         // point are already done (their artifacts are kept by the worker).
-        controller = std::make_unique<UpdaterController>(args->current_version, to_version);
+        controller = MakeController(to_version);
         for (int i = 0; i < int(entry); ++i) {
             controller->onStepDone(static_cast<UpStep>(i));
         }

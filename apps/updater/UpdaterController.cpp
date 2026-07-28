@@ -15,14 +15,16 @@ constexpr std::array<double, size_t(UpStep::Count)> kStepEndWeight = {
     1.0,  // Launch
 };
 
-QString WorkingStatusLine(UpStep s, const QString& to_version) {
+QString WorkingStatusLine(UpStep s, const QString& to_version, bool verification_reinstall) {
     switch (s) {
     case UpStep::Download:
-        return QStringLiteral("Downloading update %1…").arg(to_version);
+        return verification_reinstall ? QStringLiteral("Downloading version %1 again…").arg(to_version)
+                                      : QStringLiteral("Downloading update %1…").arg(to_version);
     case UpStep::CloseApp:
         return QStringLiteral("Waiting for ExoSnap to close…");
     case UpStep::Install:
-        return QStringLiteral("Swapping in version %1…").arg(to_version);
+        return verification_reinstall ? QStringLiteral("Reinstalling version %1…").arg(to_version)
+                                      : QStringLiteral("Swapping in version %1…").arg(to_version);
     case UpStep::Verify:
         return QStringLiteral("Checking signatures & file hashes…");
     case UpStep::Launch:
@@ -38,6 +40,7 @@ UpStep FailedStepFor(FailureCase c) {
     switch (c) {
     case FailureCase::DownloadFailed:
     case FailureCase::VerifyDownloadFailed:
+    case FailureCase::VerifyReinstallMismatch:
         return UpStep::Download;
     case FailureCase::AppWontClose:
         return UpStep::CloseApp;
@@ -62,12 +65,16 @@ UpdaterController::UpdaterController(QString from_version, QString to_version) {
     state_.to_version = std::move(to_version);
 }
 
+void UpdaterController::setVerificationReinstall(bool on) {
+    state_.verification_reinstall = on;
+}
+
 void UpdaterController::onStepStarted(UpStep s) {
     if (s == UpStep::Count) {
         return;
     }
     state_.steps[size_t(s)] = StepStatus::Working;
-    state_.status_line = WorkingStatusLine(s, state_.to_version);
+    state_.status_line = WorkingStatusLine(s, state_.to_version, state_.verification_reinstall);
 }
 
 void UpdaterController::onDownloadProgress(quint64 got, quint64 total) {
@@ -118,6 +125,18 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
             "Nothing was installed.");
         state_.primary_action = QStringLiteral("Re-download");
         state_.secondary_action = QStringLiteral("Close");
+        break;
+    case FailureCase::VerifyReinstallMismatch: // A3 (verification reinstall gate)
+        // Nothing was downloaded into place and nothing was installed: the
+        // offered manifest simply is not the version this run demanded. Retry
+        // would re-fetch the same manifest, so only Close is offered.
+        state_.variant = TerminalVariant::Red;
+        state_.footer_text = QStringLiteral(
+            "Verification reinstall needs the identical version — the release offers %1 instead. "
+            "Nothing was installed.")
+                                 .arg(detail.isEmpty() ? QStringLiteral("another version") : detail);
+        state_.primary_action = QStringLiteral("Close");
+        state_.secondary_action.clear();
         break;
     case FailureCase::AppWontClose: // B1
         state_.variant = TerminalVariant::Amber;

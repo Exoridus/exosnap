@@ -172,12 +172,13 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     wordmark->setFont(ui(14, QFont::DemiBold));
     tbLayout->addWidget(wordmark);
 
-    auto* tag = new QLabel(QStringLiteral("UPDATER"), titleBar);
-    tag->setFont(mono(9, QFont::Medium));
-    tag->setStyleSheet(QStringLiteral("QLabel{color:%1;border:1px solid %2;border-radius:6px;"
-                                      "padding:2px 7px;letter-spacing:1px;}")
-                           .arg(dim().name(), rgba(line())));
-    tbLayout->addWidget(tag);
+    mode_tag_ = new QLabel(QStringLiteral("UPDATER"), titleBar);
+    mode_tag_->setObjectName(QStringLiteral("updaterModeTag"));
+    mode_tag_->setFont(mono(9, QFont::Medium));
+    mode_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;border:1px solid %2;border-radius:6px;"
+                                            "padding:2px 7px;letter-spacing:1px;}")
+                                 .arg(dim().name(), rgba(line())));
+    tbLayout->addWidget(mode_tag_);
 
     tbLayout->addStretch(1);
 
@@ -294,6 +295,14 @@ QStringList UpdaterWindow::footerButtonLabels() const {
 }
 
 void UpdaterWindow::render(const UpdaterUiState& state) {
+    // ADR 0055: a verification reinstall is marked in the title tag for the whole
+    // run, so the identical from/to version pills can never read as a stalled or
+    // mislabelled upgrade.
+    if (mode_tag_ != nullptr) {
+        mode_tag_->setText(state.verification_reinstall ? QStringLiteral("UPDATER \xc2\xb7 VERIFY")
+                                                        : QStringLiteral("UPDATER"));
+    }
+
     // Ring
     ring_->setValue(state.ring);
     ring_->setVariant(state.variant);
