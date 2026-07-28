@@ -83,8 +83,8 @@ ADVISORY ONLY — they must not fail the build or block PRs:
 `--enable=unusedFunction` (no `--error-exitcode`) is added after the blocking pass. It
 prints candidate counts to the console but never fails the script.
 
-**CI** (`ci.yml`): A new `advisory-unused-checks` job runs the advisory checks on every
-PR with `continue-on-error: true`. It configures with `windows-x64-ninja-debug`
+**CI** (`advisory-checks.yml`): A new `advisory-unused-checks` job runs the advisory checks
+on every PR (plus a nightly schedule) with `continue-on-error: true`. It configures with `windows-x64-ninja-debug`
 (which now has `CMAKE_EXPORT_COMPILE_COMMANDS=ON`) and runs both clang-tidy and
 cppcheck advisory passes. Findings are reported as GitHub Actions `::notice::` annotations
 — visible in the job summary but never blocking.

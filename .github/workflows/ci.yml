@@ -10,20 +10,62 @@ on:
   pull_request:
   workflow_dispatch:
 
+# ---------------------------------------------------------------------------
+# WHAT RUNS WHERE
+#
+# Every commit on main is the squash of a pull request that just proved these
+# exact builds green — main is protected, so there is no other way in. Re-running
+# the full Windows build/test matrix on the push is therefore a repeat of a
+# result that is at most minutes old, and it costs ~50 min of runner time and
+# ~50 min of latency on the "is main green?" signal.
+#
+# So the heavy legs are gated to where they can still catch something new:
+#
+#   pull_request      lint, dev-scripts, changes, build-test (debug, full
+#                     suite), build-test (release, configure/build/link only)
+#                     when the `build` filter matches (any C++ or build
+#                     machinery), packaging-smoke when the `packaging` filter
+#                     matches
+#   push → main       lint, dev-scripts, changes            (quick checks only)
+#   push → v* tag     everything except packaging-smoke, with the Release
+#                     test suite included                   (release gate)
+#   workflow_dispatch everything except packaging-smoke     (manual full run)
+#
+# Accepted trade-off: a semantic merge skew — two PRs that are each green alone
+# but broken together — is no longer caught by the main push itself. It surfaces
+# on the next PR's build (which branches off the merged main) or on the nightly
+# advisory run, i.e. hours rather than minutes later. That is the same class of
+# delay any merge queue would introduce, and cheap next to running the full
+# suite twice for every change.
+#
+# The broad advisory static-analysis pass used to live here as
+# `advisory-unused-checks` and ran on every push to main. It now lives in
+# .github/workflows/advisory-checks.yml on a nightly schedule (plus
+# workflow_dispatch; no pull_request trigger — an in-progress 45 min advisory
+# job delayed auto-merge on every PR) — see that file's header for why it is a
+# separate workflow rather than a `schedule:` trigger on this one.
+# ---------------------------------------------------------------------------
+
 # NOTE: concurrency is intentionally set per-JOB below, not at the workflow
 # level. A workflow-level `concurrency:` cancels the entire run — every job in
 # it — the instant a newer commit lands on the same ref, regardless of that
-# job's own continue-on-error setting. advisory-unused-checks is the slowest
-# job here (full Ninja debug build + clang-tidy + cppcheck, up to 45 min) and
-# is advisory-only; on a fast sequence of pushes to main it was routinely still
-# running when the next commit's workflow run started, so the whole run
-# (including advisory-unused-checks) got torn down and it reported conclusion
-# "cancelled" — which GitHub renders as a failed/incomplete check on an
+# job's own continue-on-error setting; the torn-down jobs then report conclusion
+# "cancelled", which GitHub renders as a failed/incomplete check on an
 # otherwise-green commit ("Some checks were not successful"). Per-job
 # concurrency groups (below) preserve the "cancel stale runs on the same
-# PR/branch" behavior for the jobs that benefit from it, while leaving
-# advisory-unused-checks out of any cancelling group so it always reaches a
-# real conclusion (success, or a genuine failure caught by continue-on-error).
+# PR" behavior without that cross-job blast radius.
+#
+# Cancellation is scoped to pull_request events ONLY. "skipped" and "cancelled"
+# are not the same thing: a skipped job leaves the run green, a cancelled one
+# does not. On a PR, a newer commit makes the older run's result worthless, so
+# cancelling is pure savings. Everywhere else a cancelled run can do damage:
+# two quick main merges in close succession must BOTH reach a real conclusion
+# (the newest ci.yml run on main drives the README badge), and a tag or manual
+# release-gate run must never be torn down by a racing event. So the group key
+# is the PR number when there is one and the unique run id otherwise — non-PR
+# runs each sit alone in their own group and can never collide — and
+# cancel-in-progress is simply always-on, which by construction only ever
+# cancels a stale run of the same PR.
 
 # Use sccache (GitHub Actions cache backend) as the MSVC compiler launcher to
 # cache compilation across runs. This requires the Ninja generator — the Visual
@@ -38,7 +80,8 @@ jobs:
   # here: the VS generator silently ignored CMAKE_CXX_CLANG_TIDY/CPPCHECK, so the
   # old "build with static analysis" step was a no-op duplicate of build-test's
   # debug build. Re-enabling real static analysis on Ninja surfaced a backlog of
-  # violations, so the broad pass stays advisory in advisory-unused-checks below.
+  # violations, so the broad pass stays advisory in the advisory-unused-checks job
+  # of .github/workflows/advisory-checks.yml.
   #
   # A small curated subset DOES block, as the "clang-tidy blocking check set" step
   # inside build-test: bugprone-use-after-move, bugprone-dangling-handle,
@@ -51,7 +94,7 @@ jobs:
     name: lint
     runs-on: windows-2022
     concurrency:
-      group: ci-${{ github.workflow }}-lint-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-lint-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -91,7 +134,7 @@ jobs:
     name: dev-scripts
     runs-on: windows-2022
     concurrency:
-      group: ci-${{ github.workflow }}-dev-scripts-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-dev-scripts-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -118,135 +161,6 @@ jobs:
         run: python scripts/dev/av-sync-check.py tests/fixtures/av-sync/clapper-golden.mp4 --max-drift-ms 45 --json
 
   # ---------------------------------------------------------------------------
-  # Advisory unused-code / import checks (PHASE B — NEVER blocks the PR)
-  #
-  # Surfaces stale functions, unused includes, and redundant declarations for
-  # human review. Heavy Qt false-positive risk: Qt signals/slots invoked via
-  # QMetaObject / connect() string form, moc-generated headers. Do NOT promote
-  # any finding to blocking without a triage pass that filters Qt noise.
-  #
-  # Uses: clang-tidy misc-include-cleaner / misc-unused-* /
-  #       readability-redundant-declaration  (advisory only, not in WarningsAsErrors)
-  #     + cppcheck --enable=unusedFunction (whole-program, no --error-exitcode)
-  # ---------------------------------------------------------------------------
-  advisory-unused-checks:
-    name: advisory-unused-checks
-    runs-on: windows-2022
-    continue-on-error: true  # NEVER block the PR — informational only
-    # No job here had an explicit timeout, so a hang (observed: some step stalls
-    # indefinitely rather than failing) ran to GitHub's default 6h job ceiling —
-    # eating runner time and, worse, blocking `gh pr merge --auto` the whole time
-    # (an in-progress check blocks auto-merge regardless of continue-on-error,
-    # which only governs how a *completed* failure is treated). 45 min is generous
-    # for a full Qt+Ninja debug build plus the clang-tidy/cppcheck advisory passes.
-    timeout-minutes: 45
-    # Deliberately NOT given a `concurrency:` group (see the note at the top of
-    # this file): this job is the slowest in the workflow, so it was routinely
-    # still in flight when the next push's run started, and a workflow-level
-    # concurrency group used to cancel it mid-run — reported as conclusion
-    # "cancelled", which reads as a failed check on an otherwise-green commit.
-    # Leaving it ungrouped means every push gets its own independent run that
-    # always reaches a real conclusion; the tradeoff is it can run more than
-    # one instance in parallel on rapid pushes, which is acceptable for an
-    # advisory, continue-on-error, time-boxed job.
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
-        with:
-          version: '6.9.0'
-          arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
-          cache: true
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-
-      # Configure the Ninja debug preset with CMAKE_EXPORT_COMPILE_COMMANDS=ON
-      # (already set in CMakePresets.json for windows-x64-ninja-debug).
-      # compile_commands.json is required by misc-include-cleaner.
-      - name: Configure (windows-x64-ninja-debug)
-        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
-
-      - name: Build (windows-x64-ninja-debug)
-        run: cmake --build --preset windows-x64-ninja-debug
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
-
-      # clang-tidy advisory pass: misc-include-cleaner, misc-unused-*, readability-redundant-declaration.
-      # These checks are in .clang-tidy Checks but excluded from WarningsAsErrors, so they
-      # produce warnings (exit 0) not errors. The step is informational.
-      - name: clang-tidy advisory checks
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $clangTidy = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022" `
-            -Recurse -Filter 'clang-tidy.exe' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\Llvm\\x64\\bin\\' } |
-            Select-Object -ExpandProperty FullName -First 1
-          if (-not $clangTidy) {
-            Write-Host "clang-tidy not found in VS LLVM; falling back to PATH"
-            $clangTidy = (Get-Command clang-tidy -ErrorAction SilentlyContinue)?.Source
-          }
-          if (-not $clangTidy) {
-            Write-Host "::warning::clang-tidy not available — advisory unused-code check skipped"
-            exit 0
-          }
-          $srcFiles = @(git ls-files -- 'libs/' 'app/' 'tests/' | Where-Object { $_ -match '\.(cpp|h)$' })
-          if (-not $srcFiles) { Write-Host "No tracked C++ source files found."; exit 0 }
-          Write-Host "Running advisory clang-tidy on $($srcFiles.Count) source files..."
-          # Run with -p pointing at the Ninja debug compile_commands.json.
-          # WarningsAsErrors in .clang-tidy excludes misc-* and readability-redundant-declaration
-          # so only the advisory checks produce warnings (not errors) — exit code stays 0.
-          # -clang-analyzer-*: .clang-tidy enables a few path-sensitive analyser checks for the
-          # blocking gate in build-test. They are irrelevant to this unused-code pass and would
-          # multiply the cost of an already long serial run, so they are switched back off here.
-          & $clangTidy -p build/windows-x64-ninja-debug --checks=-clang-analyzer-* @srcFiles 2>&1 |
-            Tee-Object -Variable tidyOutput | Out-String | Write-Host
-          $advisoryCounts = @($tidyOutput -join "`n" | Select-String -Pattern '(misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration)' -AllMatches).Matches.Count
-          Write-Host "::notice::clang-tidy advisory findings: $advisoryCounts (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
-
-      # cppcheck --enable=unusedFunction: whole-program, no --error-exitcode.
-      - name: cppcheck unusedFunction (advisory)
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
-            -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName -First 1
-          if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
-          if (-not $cppcheck) {
-            # Install cppcheck via winget if not present on the runner
-            winget install --id Cppcheck.Cppcheck --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
-            $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
-              -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName -First 1
-          }
-          if (-not $cppcheck) {
-            Write-Host "::warning::cppcheck not available — advisory unusedFunction check skipped"
-            exit 0
-          }
-          Write-Host "Running cppcheck --enable=unusedFunction (advisory, no --error-exitcode)..."
-          $findings = & $cppcheck `
-            --enable=unusedFunction --std=c++20 --inline-suppr `
-            --suppressions-list=.cppcheck-suppress --library=windows --library=qt -q `
-            -I libs/recorder_core/include -I libs/capability/include `
-            -i libs/update/third_party libs app 2>&1 |
-            Where-Object { $_ -match '\(unusedFunction\)' }
-          $count = @($findings).Count
-          Write-Host "::notice::cppcheck unusedFunction candidates: $count (advisory — review Qt slots/callbacks before acting)"
-          if ($count -gt 0) {
-            $findings | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
-            if ($count -gt 40) { Write-Host "  ... ($($count - 40) more)" }
-          }
-
-  # ---------------------------------------------------------------------------
   # Detect whether this PR touches packaging-relevant or build/tooling-relevant
   # paths.
   #   - `packaging` gates the packaging-smoke job below (a scoped-down slice of
@@ -254,10 +168,13 @@ jobs:
   #     actually catch something.
   #   - `build` gates the windows-x64-release leg of build-test on PRs (PR-CI
   #     tiering): the debug leg always runs and carries the test suite, so the
-  #     release leg — which mainly proves the Release configure/build/link
-  #     still works — only needs to run on a PR when something that could
-  #     plausibly break it changed (CMake config, packaging, workflow files, or
-  #     the release build script).
+  #     release leg — which proves the Release configure/build/link still works
+  #     — runs on a PR when anything that can plausibly diverge between Debug
+  #     and Release changed. That includes ordinary C++ code, not just build
+  #     config: NDEBUG, debug-only assertions, optimization/inlining, and
+  #     conditional compilation all produce Release-only breaks that the debug
+  #     leg cannot see. Only changes that touch no C++ and no build machinery
+  #     (docs, screenshots, packaging-unrelated scripts) skip the release leg.
   #
   # This job runs on EVERY trigger, not just pull_request, even though its
   # outputs are only consulted on pull_request (see build-test-release and
@@ -270,15 +187,19 @@ jobs:
   # silently, since a skipped required check still shows green. Keeping this
   # job unconditional means it always reports success outside pull_request (an
   # ~8s ubuntu-latest job), so `needs.changes` is satisfied and the consumers'
-  # own `github.event_name != 'pull_request' ||` clause is the only thing that
-  # decides push/tag/dispatch behavior. The filter outputs themselves are
-  # simply not consulted outside pull_request.
+  # own event_name clauses are the only thing that decides push/tag/dispatch
+  # behavior. The filter outputs themselves are simply not consulted outside
+  # pull_request.
+  #
+  # This job is also, together with lint and dev-scripts, the whole of what a
+  # push to main now runs — so it is deliberately left unconditional even though
+  # on main its outputs gate nothing.
   # ---------------------------------------------------------------------------
   changes:
     name: detect packaging changes
     runs-on: ubuntu-latest
     concurrency:
-      group: ci-${{ github.workflow }}-changes-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-changes-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
@@ -300,6 +221,11 @@ jobs:
               - 'third_party/CMakeLists.txt'
               - 'THIRD_PARTY_NOTICES.md'
             build:
+              - 'app/**'
+              - 'apps/**'
+              - 'libs/**'
+              - 'tools/**'
+              - 'tests/**'
               - 'CMakeLists.txt'
               - '**/CMakeLists.txt'
               - '**/*.cmake'
@@ -323,8 +249,22 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
+    # Not on a push to main: that commit is the squash of a PR whose own run of
+    # this exact job just went green (see "WHAT RUNS WHERE" at the top of this
+    # file). Written as a positive list over the events this workflow can see
+    # rather than as a negation, so each trigger is decided explicitly:
+    #   pull_request      -> first clause
+    #   workflow_dispatch -> second clause
+    #   push, refs/tags/v* -> third clause  (release gate: full suite)
+    #   push, refs/heads/main -> no clause matches -> skipped
+    # This job has no `needs:`, so there is no skipped-dependency interaction to
+    # worry about here — the condition is the only gate.
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v')
     concurrency:
-      group: ci-${{ github.workflow }}-build-test-debug-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-build-test-debug-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -375,7 +315,7 @@ jobs:
       # check, so the required status-check set does not change (a brand-new
       # job would have to be added to branch protection to block anything at
       # all, and an unrequired one that fails is just noise — the same trap
-      # advisory-unused-checks documents above). It also reuses the
+      # advisory-unused-checks documents in advisory-checks.yml). It also reuses the
       # compile_commands.json the Ninja debug configure already wrote — the
       # Release preset exports none, which is why this step lives in
       # build-test-debug and not build-test-release.
@@ -405,20 +345,33 @@ jobs:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
     needs: changes
-    # PR-CI tiering: this leg mainly proves the Release configure/build/link
-    # still works, so on a PR it only runs when the `changes` job flags a
-    # build/packaging/tooling-relevant path (see the `changes` job above for
-    # the filter). It always runs on push (main) and tags, matching current
-    # behavior there exactly: the event_name clause short-circuits before
-    # needs.changes.outputs.build is ever consulted. This only works because
-    # `changes` (above) runs unconditionally and therefore always succeeds
-    # outside pull_request — a skipped `needs` job would otherwise skip this
-    # job too via the implicit success() guard on job-level `if:`.
+    # PR-CI tiering: this leg proves the Release configure/build/link still
+    # works, so on a PR it runs when the `changes` job flags a C++/build/
+    # packaging/tooling-relevant path (see the `changes` job above for the
+    # filter) — and on a PR it stops after the build (see the Test step's own
+    # condition): the debug leg already ran the full suite, and Debug/Release
+    # divergence is overwhelmingly a compile/link phenomenon. Like
+    # build-test-debug it does NOT run on a push to main — that commit is the
+    # squash of a PR this job already vetted — but it does run in full,
+    # including tests, on a v* tag and on workflow_dispatch, where the filter
+    # output is irrelevant and never consulted.
+    #
+    #   pull_request          -> first clause, and only when `build` matched
+    #   workflow_dispatch     -> second clause
+    #   push, refs/tags/v*    -> third clause  (release gate: full suite)
+    #   push, refs/heads/main -> no clause matches -> skipped
+    #
+    # This job has `needs: changes`, and a job-level `if:` carries an implicit
+    # success() guard unless it names a status-check function — so a SKIPPED
+    # `changes` would skip this job silently regardless of what the expression
+    # below says. That is why `changes` runs unconditionally (see its own
+    # comment); do not re-narrow it.
     if: >-
-      github.event_name != 'pull_request' ||
-      needs.changes.outputs.build == 'true'
+      (github.event_name == 'pull_request' && needs.changes.outputs.build == 'true') ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v')
     concurrency:
-      group: ci-${{ github.workflow }}-build-test-release-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-build-test-release-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -451,7 +404,13 @@ jobs:
       # they are excluded here rather than trusted to skip themselves — a future
       # runner-image change (or a new live test that forgets the self-skip)
       # would otherwise fail silently past this gate.
+      #
+      # Not on pull_request: the debug leg already carried the full suite, and
+      # this leg's PR-tier job is configure/compile/link (see the job comment).
+      # Tags and manual dispatches are the release gate and run the Release
+      # suite in full.
       - name: Test (windows-x64-ninja-release)
+        if: github.event_name != 'pull_request'
         run: >-
           pwsh -NonInteractive -File scripts/run-tests.ps1
           -BuildDir build/windows-x64-ninja-release -Config Release
@@ -510,7 +469,7 @@ jobs:
     if: github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true'
     runs-on: windows-2022
     concurrency:
-      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.head_ref || github.ref }}
+      group: ci-${{ github.workflow }}-packaging-smoke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
