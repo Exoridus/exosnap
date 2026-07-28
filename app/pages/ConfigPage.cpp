@@ -1908,6 +1908,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     {
         updates_panel_ = makePanel(right_col);
         updates_panel_->setObjectName(QStringLiteral("settingsUpdatesCard"));
+        // Click-focus only: the card must be able to HOLD focus (see
+        // parkUpdatesFocusBeforeDisable) without becoming an extra Tab stop.
+        updates_panel_->setFocusPolicy(Qt::ClickFocus);
         auto* updates_layout = new QVBoxLayout(updates_panel_);
         updates_layout->setContentsMargins(18, 14, 18, 14);
         updates_layout->setSpacing(0);
@@ -6156,8 +6159,11 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     // The updates action (Check / Update to vX.Y / swap-launch) must not fire while a
     // recording or MP4 finalize is in flight. On unlock, restore the state-derived
     // enabled value so a "pending"/"checking" state stays correctly disabled.
-    if (updates_action_btn_)
-        updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && enabled);
+    if (updates_action_btn_) {
+        const bool updates_enabled = updates_action_intrinsically_enabled_ && enabled;
+        parkUpdatesFocusBeforeDisable(updates_enabled);
+        updates_action_btn_->setEnabled(updates_enabled);
+    }
 
     if (lock_note_label_)
         lock_note_label_->setVisible(locked);
@@ -6209,6 +6215,23 @@ void ConfigPage::setUpdateChannel(const QString& channel) {
     const int idx = updates_channel_combo_->findText(channel, Qt::MatchFixedString);
     QSignalBlocker block(updates_channel_combo_);
     updates_channel_combo_->setCurrentIndex(idx >= 0 ? idx : 0); // unknown value -> Stable
+}
+
+// Keep the Settings viewport still when the updates action button is disabled.
+//
+// QWidget::setEnabled(false) on the FOCUSED widget makes Qt hand focus to the
+// next widget in the focus chain all by itself, and QScrollArea::focusNextPrevChild
+// scrolls that widget into view — so clicking "Check for updates" (which gives the
+// button focus) and then entering the "checking" state used to throw the viewport
+// off to wherever the next focusable control happened to sit. Parking focus on the
+// card itself first leaves the disable nothing to relocate, and keeps the user's
+// focus context inside the card they were working in. The card takes focus by click
+// only, so this adds no extra Tab stop.
+void ConfigPage::parkUpdatesFocusBeforeDisable(bool will_be_enabled) {
+    if (will_be_enabled || !updates_action_btn_ || !updates_panel_)
+        return;
+    if (updates_action_btn_->hasFocus())
+        updates_panel_->setFocus(Qt::OtherFocusReason);
 }
 
 // ADR 0034 Phase A: render the live Updates-card state. Driven by MainWindow
@@ -6265,7 +6288,9 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
 
     // A recording/finalizing lock always wins: never allow the swap/check action to
     // fire while a recording is in flight (belt to the MainWindow handler guard).
-    updates_action_btn_->setEnabled(updates_action_intrinsically_enabled_ && !controls_locked_);
+    const bool action_enabled = updates_action_intrinsically_enabled_ && !controls_locked_;
+    parkUpdatesFocusBeforeDisable(action_enabled);
+    updates_action_btn_->setEnabled(action_enabled);
 
     // WHATS-NEW: the "What's new in vX.Y" link appears only in the available state.
     // The suppress setting never hides this link (it only gates the post-update

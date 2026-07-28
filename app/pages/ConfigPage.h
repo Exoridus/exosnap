@@ -632,7 +632,12 @@ class ConfigPage : public QWidget {
     QPushButton* updates_action_btn_ = nullptr;
     QPushButton* updates_whats_new_link_ = nullptr; // WHATS-NEW: "What's new in vX.Y" (available only)
     QLabel* updates_verify_hint_ = nullptr;         // ADR 0055 explainer (verify-reinstall state only)
-    QString updates_available_version_;             // last advertised "vX.Y" (Available state)
+
+    // Park focus on the updates card before the action button is disabled, so Qt
+    // does not relocate focus itself and scroll the viewport away. No-op when the
+    // button stays enabled or does not currently hold focus.
+    void parkUpdatesFocusBeforeDisable(bool will_be_enabled);
+    QString updates_available_version_; // last advertised "vX.Y" (Available state)
     // State-derived enabled value for the updates action button, independent of the
     // recording lock. The effective enabled state is (this && !controls_locked_) so a
     // recording lock disables the button without a later setUpdateStatus re-enabling it.
