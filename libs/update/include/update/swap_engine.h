@@ -90,10 +90,11 @@ enum class SwapError : uint8_t {
 // identity embedded by the build (exosnap_version.rc.in).
 [[nodiscard]] std::optional<std::string> ReadProductVersionString(const std::wstring& exe_path);
 
-// Pure decision helper for VerifyInstalledVersion, exposed for tests: prefers
-// the full ProductVersion string (prerelease-aware) and only falls back to the
-// prerelease-blind numeric FileVersion when no product string is readable
-// (foreign or legacy binaries).
+// Pure decision helper for VerifyInstalledVersion, exposed for tests. The full
+// ProductVersion string is authoritative and mandatory for prerelease targets;
+// without it an RC identity cannot be proven and verification fails closed.
+// Final targets may fall back to the prerelease-blind numeric FileVersion for
+// foreign or legacy binaries that carry no parseable ProductVersion string.
 [[nodiscard]] bool InstalledVersionMatches(const std::optional<SemVer>& file_version,
                                            const std::optional<SemVer>& product_version, const SemVer& target);
 

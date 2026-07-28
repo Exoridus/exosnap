@@ -203,12 +203,18 @@ TEST(ClassifyMsiExit, RealErrorCodesAreFailed) {
 // ---------------------------------------------------------------------------
 
 TEST(BuildMsiexecParams, QuotesPathAndAppendsSilentFlags) {
-    EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi"), L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart");
+    EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi", false), L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart");
 }
 
 TEST(BuildMsiexecParams, PathWithSpacesStaysOneArgument) {
-    EXPECT_EQ(BuildMsiexecParams(L"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi"),
-              L"/i \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi\" /qn /norestart");
+    EXPECT_EQ(
+        BuildMsiexecParams(L"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi", false),
+        L"/i \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi\" /qn /norestart");
+}
+
+TEST(BuildMsiexecParams, VerificationReinstallForcesIdenticalPackageReapplication) {
+    EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi", true),
+              L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart REINSTALL=ALL REINSTALLMODE=vomus");
 }
 
 // ---------------------------------------------------------------------------

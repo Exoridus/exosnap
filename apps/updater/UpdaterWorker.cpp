@@ -164,8 +164,14 @@ bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest
     return !manifest_version.isEmpty() && !current_version.isEmpty() && manifest_version == current_version;
 }
 
-std::wstring BuildMsiexecParams(const std::wstring& msi_path) {
-    return L"/i \"" + msi_path + L"\" /qn /norestart";
+std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall) {
+    std::wstring params = L"/i \"" + msi_path + L"\" /qn /norestart";
+    if (verification_reinstall) {
+        // Reapply every already-installed feature and recache the identical MSI.
+        // The normal upgrade path deliberately keeps its existing command line.
+        params += L" REINSTALL=ALL REINSTALLMODE=vomus";
+    }
+    return params;
 }
 
 MsiExitClass ClassifyMsiExit(unsigned long exit_code) {
@@ -613,7 +619,7 @@ bool UpdaterWorker::runInstallMsi() {
         }
     }
 
-    const std::wstring params = BuildMsiexecParams(package_path_);
+    const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall);
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;

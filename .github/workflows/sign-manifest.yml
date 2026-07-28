@@ -141,12 +141,12 @@ jobs:
 
           version = os.environ["VERSION"]
 
-          # Fail-closed shape guard. This manifest is signed, published, and then
-          # trusted by every client on the channel; a malformed or dishonest version
-          # string in it is not something a later step can undo.
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?", version):
+          # Fail closed to the exact release language the client orders: a final
+          # X.Y.Z or an rcN candidate. Signing a broader prerelease label would let
+          # the pipeline publish identities the runtime intentionally collapses.
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(-rc[1-9][0-9]*)?", version):
               print(f"::error::version '{version}' is not a valid SemVer release version "
-                    "(expected X.Y.Z or X.Y.Z-<prerelease>).")
+                    "(expected X.Y.Z or X.Y.Z-rcN with N >= 1).")
               sys.exit(1)
           # '-dev' is the root CMakeLists.txt marker for an UNOFFICIAL developer build.
           # A signed manifest announcing one would offer users an artifact that was never

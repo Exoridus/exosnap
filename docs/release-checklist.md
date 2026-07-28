@@ -290,8 +290,12 @@ hardware:
       `processing_failure == 0`, `backpressure == 0`, no real-drop toast, and no warning caused by
       benign pacing. Use an existing fault-injection path if one is available; do not build new
       debug infrastructure for this right before RC3.
-- [ ] **G. Updater rc2 → rc3.** Covered by §5 (portable + MSI, UAC decline, network failure,
-      mid-swap close refusal, temp cleanup) — run §5 exactly as written against rc2 → rc3.
+- [x] **G. Historical rc2 → rc3 updater mechanics.** Natural discovery is a known failed/waived
+      gate because rc2 embeds `0.9.0` and therefore cannot consider `0.9.0-rc3` newer. The released
+      updater mechanics were exercised separately with the controlled lower `--current-version`
+      injection documented in §3 (portable + MSI, UAC decline, network failure, close refusal and
+      cleanup). That proves the mechanics only; it does **not** count as natural discovery. RC4's
+      current acceptance gate is §7a below.
 
 ### §7a — RC4 acceptance live checks (version identity + verification reinstall)
 

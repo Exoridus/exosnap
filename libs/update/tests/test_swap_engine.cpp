@@ -162,13 +162,15 @@ TEST(SwapEngine, InstalledVersionMatchesPrefersProductVersionString) {
     EXPECT_FALSE(InstalledVersionMatches(base, rc4, base));
     EXPECT_TRUE(InstalledVersionMatches(base, base, base));
 
-    // No product string: prerelease-blind numeric fallback checks the base only.
-    EXPECT_TRUE(InstalledVersionMatches(base, std::nullopt, rc4));
+    // No product string: an RC must fail closed because the numeric base cannot
+    // distinguish rc4 from the final. A final target keeps the legacy fallback.
+    EXPECT_FALSE(InstalledVersionMatches(base, std::nullopt, rc4));
     EXPECT_TRUE(InstalledVersionMatches(base, std::nullopt, base));
     EXPECT_FALSE(InstalledVersionMatches(*ParseSemVer("0.8.1"), std::nullopt, rc4));
 
     // Nothing readable at all: never verified.
     EXPECT_FALSE(InstalledVersionMatches(std::nullopt, std::nullopt, rc4));
+    EXPECT_FALSE(InstalledVersionMatches(std::nullopt, std::nullopt, base));
 }
 
 TEST(SwapEngine, WaitForProcessExitHandlesGoneAndSelf) {

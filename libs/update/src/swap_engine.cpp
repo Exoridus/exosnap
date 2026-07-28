@@ -248,10 +248,19 @@ bool InstalledVersionMatches(const std::optional<SemVer>& file_version, const st
     if (product_version.has_value()) {
         return *product_version == target;
     }
+
+    // A prerelease target can only be proven by the full ProductVersion string.
+    // Numeric VERSIONINFO fields collapse 0.9.0-rc4 and 0.9.0 onto the same
+    // 0.9.0 base, so accepting the fallback here would let a missing or malformed
+    // ProductVersion silently erase the release identity this check exists to prove.
+    if (target.is_prerelease) {
+        return false;
+    }
+
     // Fallback for binaries without a parseable ProductVersion string: the
-    // numeric FIXEDFILEINFO is prerelease-blind, so only the base can be
-    // checked. The package SHA-256 was already verified before the swap; this
-    // is a sanity check, not the integrity gate.
+    // numeric FIXEDFILEINFO is accepted only for a final target. The package
+    // SHA-256 was already verified before the swap; this remains a legacy sanity
+    // check, not the integrity gate.
     if (!file_version.has_value()) {
         return false;
     }

@@ -112,8 +112,9 @@ jobs:
       #
       # Validated BEFORE the ~30-minute Release build so a malformed tag fails in
       # seconds rather than after a full build. Two guards, both fail-closed:
-      #   (a) shape must be exactly vX.Y.Z (final) or vX.Y.Z-<suffix> (RC) — catches
-      #       a mistyped tag (vfoo) or stray extra dots/segments.
+      #   (a) shape must be exactly vX.Y.Z (final) or vX.Y.Z-rcN (RC). The runtime
+      #       gives ordered prerelease semantics specifically to rcN, so the release
+      #       pipeline must not publish a broader label language than clients understand.
       #   (b) its X.Y.Z BASE must equal the version in CMakeLists.txt, so a tag can never
       #       claim a base version the source tree does not declare.
       # The tag is then the sole source of the FULL release identity: everything after
@@ -140,10 +141,10 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ] && [[ "$GITHUB_REF_NAME" == v* ]]; then
             if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               prerelease="false"
-            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+            elif [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[1-9][0-9]*$ ]]; then
               prerelease="true"
             else
-              echo "::error::Tag '$GITHUB_REF_NAME' is not a valid release tag. Expected vX.Y.Z (final, e.g. v0.9.0) or vX.Y.Z-<suffix> (release candidate, e.g. v0.9.0-rc1)."
+              echo "::error::Tag '$GITHUB_REF_NAME' is not a valid release tag. Expected vX.Y.Z (final, e.g. v0.9.0) or vX.Y.Z-rcN with N >= 1 (release candidate, e.g. v0.9.0-rc4)."
               exit 1
             fi
             # Strip ONLY the leading 'v'. Any prerelease suffix is part of the identity.

@@ -54,8 +54,11 @@
 [[nodiscard]] bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest_version,
                                                 const QString& current_version);
 
-// msiexec parameter string for a silent install: /i "<msi>" /qn /norestart.
-[[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path);
+// msiexec parameter string for a silent install. Normal upgrades use
+// /i "<msi>" /qn /norestart. Verification reinstall mode additionally sets
+// REINSTALL=ALL REINSTALLMODE=vomus so Windows Installer actually reapplies the
+// already-installed identical package instead of accepting a maintenance no-op.
+[[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall);
 
 // Terminal meaning of an msiexec process exit code for the silent
 // (/qn /norestart) install this app performs.

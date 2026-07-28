@@ -1046,8 +1046,9 @@ unimplemented behavior.
   updater handoff, swap/install, verify, relaunch and cleanup. The card then shows
   `Verification reinstall available — <ver>` with `Reinstall <ver>` and the notice
   *Reinstalls the currently running signed version.* The mode can never offer a downgrade, never
-  relaxes signature/hash checks, is logged in the app log, updater log and support bundle while
-  active, and is gone after the next restart. Without the flag, the same version is never offered.
+  relaxes signature/hash checks, is logged in the app log and support bundle while active, and is
+  visibly marked `UPDATER · VERIFY` throughout the external updater run. It is gone after the next
+  restart. Without the flag, the same version is never offered.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as
