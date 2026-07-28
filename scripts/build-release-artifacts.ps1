@@ -3,8 +3,9 @@
     Builds the canonical ExoSnap portable Windows x64 release artifact.
 
 .DESCRIPTION
-    Produces a deterministic, validated portable ZIP for the current canonical
-    project version (parsed from the root CMakeLists.txt project(VERSION)).
+    Produces a deterministic, validated portable ZIP for the release version
+    this build carries (-ReleaseVersion), cross-checked against the canonical
+    BASE version parsed from the root CMakeLists.txt project(VERSION).
 
     The CMake install tree is the sole authority for the package contents — this
     script never hand-copies runtime files. Steps:
@@ -25,6 +26,25 @@
 
     This script does NOT create a git tag, GitHub Release, or change repository
     visibility. Publication is a separate, manual, approved step.
+
+.PARAMETER ReleaseVersion
+    The FULL release version the build tree was configured to carry, including
+    any prerelease suffix (e.g. '0.9.0-rc4'). This is the identity every
+    user-visible artifact name is built from, and it is cross-checked against
+    the ProductVersion string actually compiled into exosnap.exe and
+    exosnap-updater.exe — a mismatch fails the gate, so an artifact can never be
+    named for a version its binaries do not carry.
+
+    Its X.Y.Z base MUST equal the root CMakeLists.txt project(VERSION); the
+    script re-parses that file and refuses to continue otherwise.
+
+    Defaults to '<base>-dev', which is exactly the identity the root
+    CMakeLists.txt gives a build that was configured WITHOUT
+    -DEXOSNAP_RELEASE_VERSION (i.e. every developer and PR-CI build). Release
+    CI must pass the tag-derived value explicitly; if it forgets, the default
+    disagrees with the embedded ProductVersion and the gate fails loudly rather
+    than shipping a mislabelled package. The default is derived from the parsed
+    base version so no caller ever has to hard-code a version number.
 
 .PARAMETER Preset
     CMake preset to build and package from. Defaults to the canonical
@@ -51,6 +71,7 @@
 #>
 [CmdletBinding()]
 param(
+    [string]$ReleaseVersion = '',
     [string]$Preset = 'windows-x64-release',
     [switch]$SkipConfigure,
     [switch]$SkipBuild,
@@ -85,17 +106,50 @@ $ReleaseExeMultiConfig = Join-Path $BuildDir 'app/Release/exosnap.exe'
 $ReleaseExeSingleConfig = Join-Path $BuildDir 'app/exosnap.exe'
 
 # ---------------------------------------------------------------------------
-# Canonical version — single source of truth is the root project(... VERSION ...)
+# Version identity — two distinct values, deliberately not interchangeable
+#
+#   $BaseVersion ("0.9.0")      numeric X.Y.Z from the root project(... VERSION ...).
+#                               The only form Windows VERSIONINFO's numeric fields
+#                               and the MSI ProductVersion property can express.
+#   $Version     ("0.9.0-rc4")  the FULL release identity this build carries, from
+#                               -ReleaseVersion. Everything a user sees — package
+#                               file names, the artifact manifest, the update
+#                               manifest, the exe's ProductVersion STRING — uses
+#                               this, so an RC is never mistakable for its final.
+#
+# The base parse below stays as a CONSISTENCY CHECK against the caller's input, not
+# as a second source of truth: CI derives the full version from the validated git
+# tag, and if that disagrees with project(VERSION) the release must not proceed.
 # ---------------------------------------------------------------------------
 $cmakeText = Get-Content -LiteralPath (Join-Path $RepoRoot 'CMakeLists.txt') -Raw
 if ($cmakeText -notmatch 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)') {
     throw "Could not parse project(exosnap VERSION x.y.z) from root CMakeLists.txt."
 }
-$Version = $Matches[1]
+$BaseVersion = $Matches[1]
+
+if (-not $ReleaseVersion) {
+    # Mirrors the root CMakeLists.txt fallback for a build configured without
+    # -DEXOSNAP_RELEASE_VERSION. Derived, never hard-coded.
+    $ReleaseVersion = "$BaseVersion-dev"
+}
+if ($ReleaseVersion -notmatch '^([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.-]+)?$') {
+    throw "-ReleaseVersion '$ReleaseVersion' is not a valid SemVer release version (expected X.Y.Z or X.Y.Z-<prerelease>)."
+}
+$releaseBase = $Matches[1]
+if ($releaseBase -ne $BaseVersion) {
+    throw ("-ReleaseVersion '$ReleaseVersion' has base version '$releaseBase', but the root " +
+           "CMakeLists.txt project(VERSION) declares '$BaseVersion'. The artifacts this build " +
+           "produces would be named for a version the source tree does not declare. Bump " +
+           "project(VERSION) or fix the release version input.")
+}
+$Version = $ReleaseVersion
+
 $PortablePackageName = "ExoSnap-$Version-$Platform-portable"
 $MsiPackageName = "ExoSnap-$Version-$Platform"
 
 $ReleaseRoot = Join-Path $RepoRoot '.workspace/release'
+# Keyed by the FULL version so an RC and its eventual final build — same commit,
+# different embedded identity — never share (and overwrite) a staging tree.
 $ReleaseDir = Join-Path $ReleaseRoot $Version
 $StagingDir = Join-Path $ReleaseDir 'staging'
 $PackageRoot = Join-Path $StagingDir $PortablePackageName
@@ -459,7 +513,7 @@ function Invoke-Heartbeat {
 
 Write-Host ""
 Write-Host "ExoSnap release artifact builder"
-Write-Host "  Version  : $Version"
+Write-Host "  Version  : $Version (base $BaseVersion)"
 Write-Host "  Portable : $PortablePackageName"
 Write-Host "  MSI      : $MsiPackageName"
 Write-Host "  Output   : $ReleaseDir"
@@ -611,16 +665,40 @@ foreach ($file in ($allFiles | Where-Object { $textExt -contains $_.Extension.To
     }
 }
 
-# Executable version metadata.
+# Executable version metadata — the EMBEDDED-VERSION PROOF, and the reason this
+# runs here: after the build+install, BEFORE anything is packaged.
+#
+# The ProductVersion STRING is the artifact's real identity. Windows VERSIONINFO's
+# numeric FILEVERSION/PRODUCTVERSION fields cannot express a prerelease suffix, so
+# they stay at the base "X.Y.Z.0" for every build of a given base — an RC and its
+# final are numerically indistinguishable there. Only the string field separates
+# them, so it is what the package name must agree with.
+#
+# Checking BOTH shipped executables matters: the updater is the binary that decides,
+# post-swap, whether the version it just installed is the one it was promised. An
+# updater built from a differently-versioned tree than the app would make that check
+# lie. Both are produced by the same configure, so a disagreement here means the
+# build tree is stale or was reconfigured mid-run.
+$expectedFileVersion = "$BaseVersion.0"
+foreach ($exeName in @('exosnap.exe', 'exosnap-updater.exe')) {
+    $exeVi = (Get-Item -LiteralPath (Join-Path $PackageRoot $exeName)).VersionInfo
+    if ($exeVi.ProductVersion -ne $Version) {
+        Add-Error ("$exeName ProductVersion '$($exeVi.ProductVersion)' != '$Version'. The build tree was " +
+                   "configured for a different release identity than this packaging run was told to " +
+                   "produce — reconfigure with -DEXOSNAP_RELEASE_VERSION=$Version (or omit it for a " +
+                   "'$BaseVersion-dev' build) and rebuild. Packaging aborted before any artifact was written.")
+    }
+    if ($exeVi.FileVersion -ne $expectedFileVersion) { Add-Error "$exeName FileVersion '$($exeVi.FileVersion)' != '$expectedFileVersion'" }
+    if ($exeVi.ProductName -ne 'ExoSnap') { Add-Error "$exeName ProductName '$($exeVi.ProductName)' != 'ExoSnap'" }
+}
+# Kept for the report section further down (app exe metadata).
 $vi = (Get-Item -LiteralPath (Join-Path $PackageRoot 'exosnap.exe')).VersionInfo
-$expectedFileVersion = "$Version.0"
-if ($vi.ProductVersion -ne $Version) { Add-Error "exe ProductVersion '$($vi.ProductVersion)' != '$Version'" }
-if ($vi.FileVersion -ne $expectedFileVersion) { Add-Error "exe FileVersion '$($vi.FileVersion)' != '$expectedFileVersion'" }
-if ($vi.ProductName -ne 'ExoSnap') { Add-Error "exe ProductName '$($vi.ProductName)' != 'ExoSnap'" }
 
 # Documentation must name the canonical version and not call the release 1.0.
+# Checked against the BASE version: KNOWN_LIMITATIONS.md documents limitations of
+# the 0.9.0 release line as prose, and is not re-edited per release candidate.
 $knownLimits = Get-Content -LiteralPath (Join-Path $PackageRoot 'KNOWN_LIMITATIONS.md') -Raw
-if ($knownLimits -notmatch [Regex]::Escape($Version)) { Add-Error "KNOWN_LIMITATIONS.md does not name version $Version" }
+if ($knownLimits -notmatch [Regex]::Escape($BaseVersion)) { Add-Error "KNOWN_LIMITATIONS.md does not name version $BaseVersion" }
 
 Write-Host "  Files in package : $($allFiles.Count)"
 
@@ -775,10 +853,25 @@ if (-not $SkipMsi) {
                 $harvestWxsPath = Join-Path $ReleaseDir '_harvest.wxs'
                 New-WixHarvestFragment -StagingRoot $PackageRoot -OutputPath $harvestWxsPath
 
+                # BASE version, deliberately — NOT $Version.
+                #
+                # Package/@Version is the Windows Installer ProductVersion property,
+                # which the MSI format defines as a numeric major.minor.build triple.
+                # WiX rejects a prerelease suffix outright ("0.9.0-rc4" is not a legal
+                # ProductVersion), so the MSI's INTERNAL version is always the base.
+                # The MSI FILE NAME still carries the full identity ($MsiPackageName),
+                # and the ProductVersion STRING inside the shipped exosnap.exe is the
+                # authoritative release identity either way.
+                #
+                # Consequence, and it is the behaviour we want: an RC MSI and the final
+                # MSI of the same base are the same Windows Installer version, so
+                # installing 0.9.0 over 0.9.0-rc4 is a same-version upgrade — already
+                # permitted by MajorUpgrade/@AllowSameVersionUpgrades in Package.wxs —
+                # rather than a blocked downgrade.
                 $msiArgs = @(
                     'build', '-arch', 'x64',
                     '-o', $MsiPath,
-                    '-d', "ProductVersion=$Version",
+                    '-d', "ProductVersion=$BaseVersion",
                     $wxsPath,
                     $harvestWxsPath
                 )
@@ -980,7 +1073,8 @@ $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
 }
 $manifest = [ordered]@{
     product         = 'ExoSnap'
-    version         = $Version
+    version         = $Version       # full release identity, e.g. 0.9.0-rc4
+    baseVersion     = $BaseVersion   # numeric base, e.g. 0.9.0 (MSI ProductVersion, VERSIONINFO)
     platform        = $Platform
     sourceCommit    = $sourceCommit
     portableArchive = "$PortablePackageName.zip"
@@ -1283,6 +1377,7 @@ Add-ReportLine ""
 Add-ReportLine "- Generated (local time): $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Add-ReportLine "- Source commit: $sourceCommit"
 Add-ReportLine "- Version: $Version"
+Add-ReportLine "- Base version: $BaseVersion (numeric VERSIONINFO / MSI ProductVersion)"
 Add-ReportLine "- Build preset: $Preset (Release)"
 Add-ReportLine "- Portable archive: $PortablePackageName.zip"
 Add-ReportLine "- Portable SHA-256: $sha"
