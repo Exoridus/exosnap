@@ -1375,24 +1375,23 @@ target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HA
 set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
-    NAME about_overlay_tests
+    NAME about_page_tests
     TEST_PREFIX about.
     SOURCES
-        tests/test_about_overlay.cpp
+        tests/test_about_page.cpp
         pages/AboutPage.cpp
-        ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
-        # AboutOverlay keeps a hidden UpdateSettingsPanel for MainWindow wiring.
-        ui/dialogs/UpdateSettingsPanel.cpp
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+        # AboutPage resolves install mode (MSI/Portable/Scoop) via these pure helpers.
+        services/UpdateLaunchPlan.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap::update
 )
-target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
-add_dependencies(about_overlay_tests exosnap_build_info)
-set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
+target_include_directories(about_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(about_page_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(about_page_tests exosnap_build_info)
+set_target_properties(about_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME edit_export_page_tests
