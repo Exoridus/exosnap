@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -134,8 +135,9 @@ std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir) {
 
 UpStep RetryEntryStep(FailureCase c) {
     switch (c) {
-    case FailureCase::DownloadFailed:       // A1
-    case FailureCase::VerifyDownloadFailed: // A2 (file already deleted)
+    case FailureCase::DownloadFailed:          // A1
+    case FailureCase::VerifyDownloadFailed:    // A2 (file already deleted)
+    case FailureCase::VerifyReinstallMismatch: // A3 (nothing downloaded into place)
         return UpStep::Download;
     case FailureCase::AppWontClose: // B1 (download kept)
         return UpStep::CloseApp;
@@ -150,6 +152,16 @@ UpStep RetryEntryStep(FailureCase c) {
         return UpStep::Launch;
     }
     return UpStep::Download;
+}
+
+bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest_version,
+                                  const QString& current_version) {
+    if (!verify_reinstall) {
+        return true;
+    }
+    // Exact string equality, and never against an empty string on either side --
+    // an unknown version must fail closed, not match everything.
+    return !manifest_version.isEmpty() && !current_version.isEmpty() && manifest_version == current_version;
 }
 
 std::wstring BuildMsiexecParams(const std::wstring& msi_path) {
@@ -362,6 +374,20 @@ bool UpdaterWorker::runDownload() {
         emit failed(FailureCase::VerifyDownloadFailed, // A2 -- blocked, nothing installed
                     QStringLiteral("The offered version %1 is below the installed version - downgrade blocked.")
                         .arg(QString::fromStdString(manifest.version.ToString())));
+        return false;
+    }
+
+    // Verification reinstall gate (ADR 0055), AFTER the signature check and ON TOP
+    // of the downgrade guard: this run was started to reinstall one exact version,
+    // so anything else -- including a legitimately newer release -- is refused
+    // before a single package byte is fetched. Nothing is installed here.
+    const QString manifest_version = QString::fromStdString(manifest.version_raw);
+    if (!VerificationReinstallAccepts(args_.verify_reinstall, manifest_version, args_.current_version)) {
+        std::fprintf(stderr,
+                     "exosnap-updater: verification reinstall requires the identical version "
+                     "(expected \"%s\", manifest offers \"%s\") -- nothing installed\n",
+                     qPrintable(args_.current_version), qPrintable(manifest_version));
+        emit failed(FailureCase::VerifyReinstallMismatch, manifest_version); // A3
         return false;
     }
 

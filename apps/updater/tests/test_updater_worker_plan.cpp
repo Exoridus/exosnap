@@ -120,8 +120,40 @@ TEST_F(ResolveStagedRootTest, TopLevelExeWinsOverSingleDir) {
 // ---------------------------------------------------------------------------
 
 TEST(RetryEntryStep, DownloadFailuresReenterDownload) {
-    EXPECT_EQ(RetryEntryStep(FailureCase::DownloadFailed), UpStep::Download);       // A1
-    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyDownloadFailed), UpStep::Download); // A2
+    EXPECT_EQ(RetryEntryStep(FailureCase::DownloadFailed), UpStep::Download);          // A1
+    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyDownloadFailed), UpStep::Download);    // A2
+    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyReinstallMismatch), UpStep::Download); // A3
+}
+
+// ---------------------------------------------------------------------------
+// VerificationReinstallAccepts -- ADR 0055 same-version gate
+// ---------------------------------------------------------------------------
+
+TEST(VerificationReinstallAccepts, WithoutTheFlagEveryVersionPasses) {
+    EXPECT_TRUE(VerificationReinstallAccepts(false, QStringLiteral("0.9.1"), QStringLiteral("0.9.0-rc4")));
+    EXPECT_TRUE(VerificationReinstallAccepts(false, QString(), QString()));
+}
+
+TEST(VerificationReinstallAccepts, IdenticalVersionPasses) {
+    EXPECT_TRUE(VerificationReinstallAccepts(true, QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc4")));
+}
+
+TEST(VerificationReinstallAccepts, ANewerVersionIsRefusedInThisMode) {
+    // The run exists to reinstall ONE version; even a legitimate upgrade is not
+    // what was asked for and must stop before anything is installed.
+    EXPECT_FALSE(VerificationReinstallAccepts(true, QStringLiteral("0.9.0"), QStringLiteral("0.9.0-rc4")));
+}
+
+TEST(VerificationReinstallAccepts, ADifferentPrereleaseLabelIsRefused) {
+    // SemVer would compare these equal (foreign labels collapse to ordinal 0);
+    // exact string equality is what keeps them apart.
+    EXPECT_FALSE(VerificationReinstallAccepts(true, QStringLiteral("0.9.0-alpha7"), QStringLiteral("0.9.0-beta1")));
+}
+
+TEST(VerificationReinstallAccepts, AnEmptyVersionFailsClosed) {
+    EXPECT_FALSE(VerificationReinstallAccepts(true, QString(), QStringLiteral("0.9.0-rc4")));
+    EXPECT_FALSE(VerificationReinstallAccepts(true, QStringLiteral("0.9.0-rc4"), QString()));
+    EXPECT_FALSE(VerificationReinstallAccepts(true, QString(), QString()));
 }
 
 TEST(RetryEntryStep, AppWontCloseReentersCloseApp) {

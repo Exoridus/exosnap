@@ -104,6 +104,40 @@ TEST(UpdaterArgs, MissingValueForFlagIsRejected) {
     EXPECT_FALSE(a.has_value());
 }
 
+// ── Verification reinstall (ADR 0055) ───────────────────────────────────────
+
+TEST(UpdaterArgs, VerifyReinstallDefaultsOff) {
+    auto args = ParseUpdaterArgs(FullArgLine());
+    ASSERT_TRUE(args.has_value());
+    EXPECT_FALSE(args->verify_reinstall);
+}
+
+TEST(UpdaterArgs, VerifyReinstallIsABooleanFlagAndConsumesNoValue) {
+    QStringList argv{
+        QStringLiteral("u"),
+        QStringLiteral("--verify-reinstall"),
+        QStringLiteral("--install-mode"),
+        QStringLiteral("installed"),
+        QStringLiteral("--current-version"),
+        QStringLiteral("0.9.0-rc4"),
+    };
+    auto a = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(a.has_value());
+    EXPECT_TRUE(a->verify_reinstall);
+    EXPECT_EQ(a->install_mode, InstallMode::Installed) << "--verify-reinstall must not swallow the next flag";
+    EXPECT_EQ(a->current_version, QStringLiteral("0.9.0-rc4"));
+}
+
+TEST(UpdaterArgs, VerifyReinstallWithoutCurrentVersionIsRejected) {
+    QStringList argv{
+        QStringLiteral("u"),
+        QStringLiteral("--verify-reinstall"),
+        QStringLiteral("--install-mode"),
+        QStringLiteral("installed"),
+    };
+    EXPECT_FALSE(ParseUpdaterArgs(argv).has_value());
+}
+
 TEST(UpdaterArgs, InvalidPreviewStateIsRejected) {
     QStringList argv{QStringLiteral("u"), QStringLiteral("--install-mode"),
                      QStringLiteral("installed"), QStringLiteral("--preview-state"),

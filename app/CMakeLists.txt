@@ -120,10 +120,6 @@ qt_add_executable(exosnap WIN32
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
     ui/chrome/GlobalRecordingBar.cpp
-    ui/dialogs/AboutOverlay.h
-    ui/dialogs/AboutOverlay.cpp
-    ui/dialogs/UpdateSettingsPanel.h
-    ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
     ui/dialogs/RecoveryOverlay.cpp
     ui/dialogs/WhatsNewOverlay.h
@@ -306,6 +302,8 @@ qt_add_executable(exosnap WIN32
     services/UpdateService.h
     services/UpdateService.cpp
     services/UpdateLaunchPlan.cpp
+    services/VerifyReinstallMode.h
+    services/VerifyReinstallMode.cpp
     services/WhatsNewPayload.h
     services/WhatsNewPayload.cpp
     services/ElevatedRelaunch.h
@@ -613,9 +611,7 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/SettingsCardExpander.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
-    # UPDATE-WIRE-R1: ConfigPage now embeds the UpdateSettingsPanel, which pulls in
-    # the Lucide glyph renderer.
-    ui/dialogs/UpdateSettingsPanel.cpp
+    # v10: ConfigPage renders Lucide glyphs (card titles, row icons).
     ui/theme/LucideIcon.cpp
     # PS-PHASE-C: HotkeysSettingsPanel embedded in ConfigPage.
     ui/widgets/HotkeysSettingsPanel.cpp
@@ -1500,19 +1496,6 @@ exosnap_add_gtest(
 target_include_directories(lucide_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(lucide_icon_tests PROPERTIES AUTOMOC ON)
 
-exosnap_add_gtest(
-    NAME update_settings_panel_tests
-    TEST_PREFIX update_ui.
-    SOURCES
-        tests/test_update_settings_panel.cpp
-        ui/dialogs/UpdateSettingsPanel.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(update_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(update_settings_panel_tests PROPERTIES AUTOMOC ON)
-
 # Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
 # argv (round-tripped through the updater's own parser), Scoop-path detection.
 exosnap_add_gtest(
@@ -1521,6 +1504,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_update_launch_plan.cpp
         services/UpdateLaunchPlan.cpp
+        services/VerifyReinstallMode.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/updater/UpdaterArgs.cpp
     LIBRARIES Qt6::Core exosnap::update
 )
@@ -2145,7 +2129,6 @@ exosnap_add_gtest(
         tests/crash_update_visual_proof.cpp
         ui/dialogs/CrashReportOverlay.cpp
         ui/dialogs/CrashReportPanel.cpp
-        ui/dialogs/UpdateSettingsPanel.cpp
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
         ui/theme/ExoSnapTheme.cpp
@@ -2293,7 +2276,6 @@ exosnap_add_gtest(
     SOURCES
         tests/theme_switch_visual_proof.cpp
         ui/widgets/CompareHint.cpp
-        ui/dialogs/UpdateSettingsPanel.cpp
         models/SettingsCompareData.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp

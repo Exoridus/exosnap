@@ -90,6 +90,21 @@ TEST(SupportBundle, ProducesExpectedEntries) {
     EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("No telemetry")));
 }
 
+// ADR 0055: a bundle taken during a verification-reinstall run says so; a normal
+// bundle carries no such key at all.
+TEST(SupportBundle, ManifestNotesTheVerificationReinstallModeOnlyWhileItIsOn) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    WriteText(tmp.path() + QStringLiteral("/exosnap.log"), QStringLiteral("hello\n"));
+
+    EXPECT_FALSE(
+        AnyEntryContains(CollectBundleEntries(MakeInputs(tmp.path())), QStringLiteral("verify_update_reinstall")));
+
+    BundleInputs on = MakeInputs(tmp.path());
+    on.verify_update_reinstall = true;
+    EXPECT_TRUE(AnyEntryContains(CollectBundleEntries(on), QStringLiteral("verify_update_reinstall")));
+}
+
 TEST(SupportBundle, NoPersonalDataOrWindowTitleSurvives) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());

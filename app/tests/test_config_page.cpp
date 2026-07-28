@@ -13,6 +13,8 @@
 #include <QMenu>
 #include <QObject>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QTimer>
@@ -3974,6 +3976,166 @@ TEST_F(ConfigPageTest, CrashReportsToggle_TurningOffEmitsSignalFalse) {
     toggle->setChecked(false);
     ASSERT_TRUE(got) << "turning the toggle off must emit autoSendCrashReportsToggled";
     EXPECT_FALSE(emitted_value);
+}
+
+// ── Updates card: verification reinstall (ADR 0055) ─────────────────────────
+
+TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallStateSaysReinstallNotUpdate) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
+
+    auto* status = page.findChild<QLabel*>(QStringLiteral("updatesStatusLabel"));
+    auto* action = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    auto* hint = page.findChild<QLabel*>(QStringLiteral("updatesVerifyReinstallHint"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(action, nullptr);
+    ASSERT_NE(hint, nullptr);
+
+    EXPECT_TRUE(status->text().contains(QStringLiteral("Verification reinstall available")));
+    EXPECT_TRUE(status->text().contains(QStringLiteral("0.9.0-rc4")));
+    EXPECT_FALSE(status->text().contains(QStringLiteral("Update available")))
+        << "nothing newer exists — the card must not claim an update";
+    EXPECT_EQ(action->text(), QStringLiteral("Reinstall 0.9.0-rc4"));
+    EXPECT_TRUE(action->isEnabled());
+    EXPECT_TRUE(action->property("updatesCta").toBool()) << "the reinstall action is a real CTA";
+    EXPECT_EQ(hint->text(), QStringLiteral("Reinstalls the currently running signed version."));
+    EXPECT_FALSE(hint->isHidden());
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallHintIsHiddenInEveryOtherState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* hint = page.findChild<QLabel*>(QStringLiteral("updatesVerifyReinstallHint"));
+    ASSERT_NE(hint, nullptr);
+    EXPECT_TRUE(hint->isHidden()) << "hidden before any status is pushed";
+
+    page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
+    ASSERT_FALSE(hint->isHidden());
+
+    for (const QString& state : {QStringLiteral("uptodate"), QStringLiteral("available"), QStringLiteral("checking"),
+                                 QStringLiteral("error"), QStringLiteral("scoop"), QStringLiteral("pending")}) {
+        page.setUpdateStatus(state, QStringLiteral("1.0.0"), QString());
+        EXPECT_TRUE(hint->isHidden()) << "hint leaked into state " << state.toStdString();
+    }
+}
+
+// The reinstall action must route to the primary action (launch the updater),
+// not back into another check — the version field is what decides that.
+TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallButtonRequestsThePrimaryAction) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
+
+    int primary = 0;
+    int checks = 0;
+    QObject::connect(&page, &ConfigPage::updatePrimaryActionRequested, [&]() { ++primary; });
+    QObject::connect(&page, &ConfigPage::checkForUpdatesRequested, [&]() { ++checks; });
+
+    auto* action = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    ASSERT_NE(action, nullptr);
+    action->click();
+
+    EXPECT_EQ(primary, 1);
+    EXPECT_EQ(checks, 0);
+}
+
+// ── Updates card: the scroll position must survive a status change ──────────
+//
+// Repro of the reported jump: with the Settings page scrolled down to the
+// Updates card, pressing "Check for updates" scrolled the view back to the top.
+// The button carries focus from the click and the "checking" state disables it;
+// a disabled widget cannot keep focus, so Qt hands focus to the next focusable
+// widget in the chain — which lives at the top of the page — and QScrollArea
+// scrolls that one into view.
+
+class ConfigPageScrollTest : public ConfigPageTest {
+  protected:
+    void SetUp() override {
+        page_ = std::make_unique<ConfigPage>(output_defaults_, video_defaults_);
+        page_->resize(1120, 700); // real window size: the page must actually overflow
+        page_->show();
+        QApplication::processEvents();
+
+        scroll_ = page_->findChild<QScrollArea*>();
+        ASSERT_NE(scroll_, nullptr) << "the settings page must scroll";
+        card_ = page_->findChild<QWidget*>(QStringLiteral("settingsUpdatesCard"));
+        ASSERT_NE(card_, nullptr);
+        button_ = page_->findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+        ASSERT_NE(button_, nullptr);
+    }
+
+    void TearDown() override {
+        page_.reset();
+    }
+
+    // Scroll the updates card into view and give its button the focus a click
+    // would have given it.
+    int ScrollToCardAndFocusButton() {
+        scroll_->ensureWidgetVisible(card_);
+        QApplication::processEvents();
+        button_->setFocus(Qt::MouseFocusReason);
+        QApplication::processEvents();
+        return scroll_->verticalScrollBar()->value();
+    }
+
+    std::unique_ptr<ConfigPage> page_;
+    QScrollArea* scroll_ = nullptr;
+    QWidget* card_ = nullptr;
+    QPushButton* button_ = nullptr;
+};
+
+TEST_F(ConfigPageScrollTest, CheckingStateDoesNotScrollThePageBackToTheTop) {
+    const int before = ScrollToCardAndFocusButton();
+    ASSERT_GT(before, 0) << "precondition: the page is actually scrolled away from the top";
+
+    page_->setUpdateStatus(QStringLiteral("checking"), QString(), QString());
+    QApplication::processEvents();
+
+    EXPECT_EQ(scroll_->verticalScrollBar()->value(), before)
+        << "disabling the focused action button must not move the viewport";
+}
+
+TEST_F(ConfigPageScrollTest, EveryStatusTransitionKeepsTheScrollPosition) {
+    // uptodate -> checking -> available/error, and error -> checking again: each
+    // transition flips the button's enabled state at least once.
+    const QVector<QPair<QString, QString>> sequence = {
+        {QStringLiteral("uptodate"), QString()},
+        {QStringLiteral("checking"), QString()},
+        {QStringLiteral("available"), QStringLiteral("1.0.0")},
+        {QStringLiteral("checking"), QString()},
+        {QStringLiteral("error"), QString()},
+        {QStringLiteral("checking"), QString()},
+        {QStringLiteral("uptodate"), QString()},
+    };
+
+    const int before = ScrollToCardAndFocusButton();
+    ASSERT_GT(before, 0);
+
+    for (const auto& [state, version] : sequence) {
+        page_->setUpdateStatus(state, version, QString());
+        QApplication::processEvents();
+        EXPECT_EQ(scroll_->verticalScrollBar()->value(), before)
+            << "transition to " << state.toStdString() << " moved the viewport";
+    }
+}
+
+// Focus must stay inside the card across the disable, so a keyboard user is not
+// teleported to the top of the page either — and the button takes focus back
+// once it is enabled again.
+TEST_F(ConfigPageScrollTest, FocusStaysInsideTheUpdatesCardAcrossTheDisable) {
+    ScrollToCardAndFocusButton();
+
+    page_->setUpdateStatus(QStringLiteral("checking"), QString(), QString());
+    QApplication::processEvents();
+
+    QWidget* focused = QApplication::focusWidget();
+    ASSERT_NE(focused, nullptr);
+    EXPECT_TRUE(card_->isAncestorOf(focused) || focused == card_)
+        << "focus left the updates card while the action button was disabled; it landed on "
+        << focused->metaObject()->className() << " '" << focused->objectName().toStdString() << "'";
+
+    page_->setUpdateStatus(QStringLiteral("uptodate"), QString(), QString());
+    QApplication::processEvents();
+    EXPECT_TRUE(button_->isEnabled()) << "the action is focusable again once the check finished";
 }
 
 } // namespace

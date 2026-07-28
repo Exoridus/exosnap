@@ -13,6 +13,7 @@
 
 #include "../apps/updater/UpdaterArgs.h"
 #include "services/UpdateService.h"
+#include "services/VerifyReinstallMode.h"
 
 namespace {
 
@@ -78,6 +79,53 @@ TEST(BuildUpdaterArgs, RoundTripsPortable) {
     EXPECT_EQ(parsed->install_dir, QStringLiteral("D:/Tools/ExoSnap"));
     EXPECT_EQ(parsed->app_pid, 7u);
     EXPECT_EQ(parsed->current_version, QStringLiteral("1.2.3"));
+}
+
+// A normal update run must never hand the updater the verification gate.
+TEST(BuildUpdaterArgs, OmitsVerifyReinstallByDefault) {
+    upd::UpdateState st;
+    st.install_mode = upd::InstallMode::Installed;
+    const QStringList flags = exosnap::BuildUpdaterArgs(st, QStringLiteral("C:/x"), 1u, QStringLiteral("0.9.0"));
+    EXPECT_FALSE(flags.contains(QStringLiteral("--verify-reinstall")));
+}
+
+TEST(BuildUpdaterArgs, VerifyReinstallRoundTripsAsABooleanFlag) {
+    upd::UpdateState st;
+    st.channel = upd::UpdateChannel::Preview;
+    st.install_mode = upd::InstallMode::Portable;
+
+    QStringList argv;
+    argv << QStringLiteral("exosnap-updater.exe");
+    argv += exosnap::BuildUpdaterArgs(st, QStringLiteral("D:/Tools/ExoSnap"), 11u, QStringLiteral("0.9.0-rc4"),
+                                      /*verify_reinstall=*/true);
+
+    const auto parsed = ParseUpdaterArgs(argv);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed->verify_reinstall);
+    EXPECT_EQ(parsed->current_version, QStringLiteral("0.9.0-rc4"));
+    EXPECT_EQ(parsed->install_dir, QStringLiteral("D:/Tools/ExoSnap")) << "the boolean flag must not eat a value";
+}
+
+// -- HasVerifyUpdateReinstallRequest ----------------------------------------
+
+TEST(VerifyUpdateReinstallFlag, AbsentByDefault) {
+    EXPECT_FALSE(exosnap::services::HasVerifyUpdateReinstallRequest(
+        QStringList{QStringLiteral("exosnap.exe"), QStringLiteral("--relaunch-page"), QStringLiteral("Settings")}));
+}
+
+TEST(VerifyUpdateReinstallFlag, RecognisedAnywhereInArgv) {
+    EXPECT_TRUE(exosnap::services::HasVerifyUpdateReinstallRequest(
+        QStringList{QStringLiteral("exosnap.exe"), QStringLiteral("--verify-update-reinstall")}));
+    EXPECT_TRUE(exosnap::services::HasVerifyUpdateReinstallRequest(QStringList{
+        QStringLiteral("exosnap.exe"), QStringLiteral("--verify-update-reinstall"), QStringLiteral("--other")}));
+}
+
+// A longer or differently-spelled flag must not switch the mode on.
+TEST(VerifyUpdateReinstallFlag, RequiresAnExactMatch) {
+    EXPECT_FALSE(exosnap::services::HasVerifyUpdateReinstallRequest(
+        QStringList{QStringLiteral("exosnap.exe"), QStringLiteral("--verify-update-reinstall-now")}));
+    EXPECT_FALSE(exosnap::services::HasVerifyUpdateReinstallRequest(
+        QStringList{QStringLiteral("exosnap.exe"), QStringLiteral("--verify-update-reinstall=1")}));
 }
 
 // -- IsScoopManagedInstall --------------------------------------------------
@@ -170,6 +218,64 @@ TEST(ResolveUpdateCardState, RearmsToAvailableAfterManualCheckClearsStamp) {
     // Manual check clears the stamp upstream; resolver now sees an empty stamp.
     EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
                                               QStringLiteral("2.0.0")),
+              QStringLiteral("available"));
+}
+
+// -- ResolveUpdateCardState: verification reinstall (ADR 0055) --------------
+
+TEST(ResolveUpdateCardState, VerifyReinstallWhenModeIsOnAndTheOfferIsTheRunningVersion) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
+                                              QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("verify-reinstall"));
+}
+
+// The mode does not turn every offer into a reinstall: a genuinely newer release
+// is still a normal update.
+TEST(ResolveUpdateCardState, AvailableWhenVerifyModeIsOnButTheOfferIsNewer) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("0.9.0"), /*verify_reinstall_mode=*/true,
+                                              QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("available"));
+}
+
+// Without the mode, an offer equal to the running version cannot reach the
+// reinstall state at all (the engine would not offer it in the first place).
+TEST(ResolveUpdateCardState, NoVerifyReinstallWhenTheModeIsOff) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/false,
+                                              QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("available"));
+}
+
+// Scoop trees are never touched by the staged swap — not even in verify mode.
+TEST(ResolveUpdateCardState, ScoopStillWinsInVerifyMode) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/true, QString(),
+                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
+                                              QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("scoop"));
+}
+
+TEST(ResolveUpdateCardState, UpToDateStillWinsInVerifyMode) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/false, /*is_scoop=*/false, QString(),
+                                              QStringLiteral("0.9.0-rc4"), /*verify_reinstall_mode=*/true,
+                                              QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("uptodate"));
+}
+
+// The loop guard exists to stop a stale cache from re-offering an update that is
+// already staged. Re-running the swap for the SAME version is exactly what
+// verification mode is for, so it outranks the guard.
+TEST(ResolveUpdateCardState, VerifyReinstallOutranksThePendingLoopGuard) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false,
+                                              QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc4"),
+                                              /*verify_reinstall_mode=*/true, QStringLiteral("0.9.0-rc4")),
+              QStringLiteral("verify-reinstall"));
+}
+
+TEST(ResolveUpdateCardState, VerifyModeWithoutAnOfferedVersionFallsBack) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QString(), QString(),
+                                              /*verify_reinstall_mode=*/true, QString()),
               QStringLiteral("available"));
 }
 

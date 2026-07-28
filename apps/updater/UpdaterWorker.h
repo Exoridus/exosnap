@@ -41,8 +41,18 @@
 [[nodiscard]] std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir);
 
 // Which pipeline step a Retry / Re-download press re-enters for a failure:
-// A1/A2 -> Download, B1 -> CloseApp, B2/B3/C1/C2 -> Install, B4 -> Launch.
+// A1/A2/A3 -> Download, B1 -> CloseApp, B2/B3/C1/C2 -> Install, B4 -> Launch.
 [[nodiscard]] UpStep RetryEntryStep(FailureCase c);
+
+// ADR 0055 verification reinstall gate. With --verify-reinstall the run may only
+// proceed when the signed manifest names EXACTLY the version the app handed over
+// in --current-version -- byte-for-byte, because SemVer equality collapses every
+// foreign prerelease label onto ordinal 0 and would let "0.9.0-beta1" pass for
+// "0.9.0-alpha7". Returns true when the pipeline may continue. Without the flag
+// it is always true (this gate is additive; the downgrade guard and every
+// signature/hash check stay exactly as they are).
+[[nodiscard]] bool VerificationReinstallAccepts(bool verify_reinstall, const QString& manifest_version,
+                                                const QString& current_version);
 
 // msiexec parameter string for a silent install: /i "<msi>" /qn /norestart.
 [[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path);

@@ -109,6 +109,10 @@ struct PackageEntry {
 
 struct UpdateManifest {
     SemVer version;
+    // The manifest's "version" field verbatim, unparsed ("0.9.0-rc4"). SemVer
+    // collapses foreign prerelease labels onto ordinal 0, so the verification
+    // reinstall gate (ADR 0055) compares this exact string instead.
+    std::string version_raw;
     SemVer minimum_accepted_version;
     std::vector<PackageEntry> packages;
     // The ed25519 signature is detached: it lives in a sibling `.sig` asset and
@@ -157,6 +161,10 @@ struct ReleaseNote {
 
 struct UpdateCheckResult {
     bool update_available = false;
+    // ADR 0055: true when update_available was granted by the verification
+    // reinstall rule (the offered version is byte-identical to the running one)
+    // rather than by a genuinely newer release.
+    bool verification_reinstall = false;
     std::optional<SemVer> available_version;
     std::optional<std::string> releases_page_url;
     std::optional<std::string> error_message;

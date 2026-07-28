@@ -10,7 +10,13 @@ the existing `UpdateService` (`RequestUpdateCheck`, `RequestDownloadAndVerify`,
 `packageReadyForInstall`, `HandoffToInstaller`, signature verification), `NotificationManager`
 (`NotificationType::UpdateAvailable`, `NotificationAction::OpenUpdate`), the Settings deep-link
 (`ConfigPage::scrollToSection("settings/updates")`), and `UpdateSettingsPanel`/`UpdateUiState`.
-Relates to [[0017-crash-reporting-architecture]].
+Relates to [[0017-crash-reporting-architecture]] and [[0055-verification-reinstall-mode]].
+
+> **Implementation note (RC4).** `UpdateSettingsPanel` and its `UpdateUiState` no longer exist. The
+> updates card in Settings (`ConfigPage::setUpdateStatus`) is the single UI state model; the panel had
+> stopped being rendered when the card moved into Settings and was deleted along with the hidden
+> `AboutOverlay` that only existed to hold it. Everything else in this ADR still describes the
+> shipped flow.
 
 ## Amendment (0.9.0 — shipped dual-swap updater)
 

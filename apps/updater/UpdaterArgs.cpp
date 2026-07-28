@@ -20,7 +20,7 @@ std::optional<UpdaterArgs> ParseUpdaterArgs(const QStringList& argv) {
     for (qsizetype i = 1; i < argv.size(); ++i) {
         const QString& flag = argv[i];
 
-        // Every recognised flag takes exactly one value.
+        // Every recognised flag except --verify-reinstall takes exactly one value.
         auto take_value = [&](QString& out) -> bool {
             if (i + 1 >= argv.size()) {
                 ArgError(QStringLiteral("missing value for %1").arg(flag));
@@ -31,7 +31,10 @@ std::optional<UpdaterArgs> ParseUpdaterArgs(const QStringList& argv) {
         };
 
         QString value;
-        if (flag == QStringLiteral("--channel")) {
+        if (flag == QStringLiteral("--verify-reinstall")) {
+            // The only boolean flag: it takes no value.
+            args.verify_reinstall = true;
+        } else if (flag == QStringLiteral("--channel")) {
             if (!take_value(value)) {
                 return std::nullopt;
             }
@@ -103,6 +106,14 @@ std::optional<UpdaterArgs> ParseUpdaterArgs(const QStringList& argv) {
 
     if (args.install_mode == exosnap::update::InstallMode::Portable && args.install_dir.isEmpty()) {
         ArgError(QStringLiteral("--install-dir is required in portable install mode"));
+        return std::nullopt;
+    }
+
+    // The verification reinstall gate compares the manifest version against
+    // --current-version. Without one there is nothing to compare, and silently
+    // degrading to "install whatever the channel offers" would defeat the gate.
+    if (args.verify_reinstall && args.current_version.isEmpty()) {
+        ArgError(QStringLiteral("--verify-reinstall requires --current-version"));
         return std::nullopt;
     }
 

@@ -52,6 +52,7 @@ class UpdaterWindow : public QWidget {
     void emitForAction(const QString& action);
 
     // Header
+    QLabel* mode_tag_ = nullptr; // "UPDATER" / "UPDATER · VERIFY" (ADR 0055)
     QPushButton* close_button_ = nullptr;
     // Mirrors the same "Install/Verify/Launch working" gate as the in-window
     // close X (see render()), but also refuses WM_CLOSE arriving through any

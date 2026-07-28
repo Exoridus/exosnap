@@ -11,9 +11,11 @@
 //     IsUpdateCheckEnabled() returns false and CheckForUpdate() returns a
 //     blocked result without making any network request.
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <update/update_types.h>
 
 namespace exosnap::update {
@@ -24,11 +26,40 @@ using RecordingGuardFn = std::function<UpdateBlockReason()>;
 
 struct CheckParams {
     SemVer current_version;
+    // The EXACT version string of the running build ("0.9.0-rc4"), unparsed.
+    // Only the verification-reinstall gate reads it: SemVer equality is too
+    // coarse there (every foreign prerelease label parses to ordinal 0, so
+    // "0.9.0-beta1" and "0.9.0-alpha7" compare equal), so that gate demands
+    // string equality against the release tag. Empty disables the gate.
+    std::string current_version_raw;
     UpdateChannel channel = UpdateChannel::Stable;
     RecordingGuardFn recording_guard{}; // may be nullptr (no guard)
     // Optional: override the API base URL for testing
     std::string api_base_url = "https://api.github.com/repos/Exoridus/exosnap/releases";
+    // ADR 0055 — verification reinstall. Non-persistent, opted into per app run
+    // via the --verify-update-reinstall CLI flag. When true, a release whose tag
+    // is byte-identical to current_version_raw is additionally offered, so the
+    // full production update path (download -> signature -> hash -> swap) can be
+    // exercised against the running build. NEVER relaxes the ordering rule: an
+    // older release stays invisible in this mode too.
+    bool allow_same_version_reinstall = false;
 };
+
+// What a located release may be offered as.
+enum class UpdateOffer : uint8_t {
+    None = 0,                  // not offered (same or older version)
+    Update = 1,                // a genuinely newer release
+    VerificationReinstall = 2, // the identical version, verification mode only
+};
+
+// Pure decision behind CheckForUpdate's "do we offer this release?" step.
+// `release_version_raw` is the release tag with any leading "v" stripped.
+//   * release_version > current                  -> Update (always, any mode)
+//   * verification mode AND the two version
+//     strings are non-empty and byte-identical   -> VerificationReinstall
+//   * anything else                              -> None
+[[nodiscard]] UpdateOffer DecideOffer(const SemVer& release_version, std::string_view release_version_raw,
+                                      const CheckParams& params) noexcept;
 
 // Synchronous blocking call; intended to be run on a background thread.
 // Never throws; always returns a populated UpdateCheckResult.

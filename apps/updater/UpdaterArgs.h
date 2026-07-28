@@ -18,6 +18,11 @@ struct UpdaterArgs {
     QString current_version; // --current-version "0.8.1" (left pill + downgrade guard)
     QString base_url;        // --base-url dev override ("" in official builds)
     QString preview_state;   // --preview-state <progress|amber|red|green> (dev only)
+    // ADR 0055 -- verification reinstall: the app was started with
+    // --verify-update-reinstall and is asking for the IDENTICAL version to be
+    // reinstalled through the full production path. Adds a hard gate (manifest
+    // version string must equal --current-version exactly); relaxes nothing.
+    bool verify_reinstall = false; // --verify-reinstall (boolean flag, no value)
 };
 
 // Parses updater arguments. Returns nullopt and writes a single error line to

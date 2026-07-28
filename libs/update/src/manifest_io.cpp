@@ -68,6 +68,7 @@ ParseResult ParseManifest(std::string_view json) noexcept {
         if (!ver)
             return std::string{"invalid version: "} + version_sv;
         m.version = *ver;
+        m.version_raw = version_sv;
 
         // minimum_accepted_version
         auto min_sv = j.at("minimum_accepted_version").get<std::string>();
