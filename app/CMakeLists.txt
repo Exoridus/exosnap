@@ -51,9 +51,13 @@ if(_qt6_core_loc)
 endif()
 
 # ---- Build metadata ----
-# Single source of truth: derived from the root project(... VERSION ...) call.
-# Never hard-code the version string here.
-set(EXOSNAP_VERSION "${PROJECT_VERSION}")
+# Single source of truth: the root project(... VERSION ...) call plus the
+# release identity resolved into EXOSNAP_FULL_VERSION (root CMakeLists.txt).
+# Never hard-code a version string here. EXOSNAP_VERSION carries the FULL
+# release version (e.g. "0.9.0-rc4", dev builds "0.9.0-dev") and feeds the
+# runtime kVersion and the VERSIONINFO ProductVersion string; the numeric
+# fields below stay base-only because VERSIONINFO is numeric by design.
+set(EXOSNAP_VERSION "${EXOSNAP_FULL_VERSION}")
 
 # Windows VERSIONINFO requires a four-field numeric version. CMake leaves
 # PROJECT_VERSION_TWEAK empty for an X.Y.Z version, so default the tweak to 0.
@@ -68,12 +72,20 @@ set(EXOSNAP_VERSION_FILE_STR
 
 find_package(Git QUIET)
 
+if(EXOSNAP_OFFICIAL_BUILD)
+    set(_exosnap_official_flag 1)
+else()
+    set(_exosnap_official_flag 0)
+endif()
+
 set(EXOSNAP_BUILD_INFO_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ExoSnapBuildInfo.h")
 add_custom_target(exosnap_build_info
     ALL
     COMMAND
         ${CMAKE_COMMAND}
         -DEXOSNAP_VERSION=${EXOSNAP_VERSION}
+        -DEXOSNAP_BASE_VERSION=${PROJECT_VERSION}
+        -DEXOSNAP_OFFICIAL=${_exosnap_official_flag}
         -DEXOSNAP_SOURCE_DIR=${PROJECT_SOURCE_DIR}
         -DEXOSNAP_BUILD_INFO_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/ExoSnapBuildInfo.h.in
         -DEXOSNAP_BUILD_INFO_OUTPUT=${EXOSNAP_BUILD_INFO_HEADER}
@@ -1522,7 +1534,9 @@ exosnap_add_gtest(
         tests/test_version.cpp
 )
 target_include_directories(version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(version_tests PRIVATE EXOSNAP_EXPECTED_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(version_tests PRIVATE
+    EXOSNAP_EXPECTED_VERSION="${EXOSNAP_FULL_VERSION}"
+    EXOSNAP_EXPECTED_BASE_VERSION="${PROJECT_VERSION}")
 add_dependencies(version_tests exosnap_build_info)
 
 exosnap_add_gtest(

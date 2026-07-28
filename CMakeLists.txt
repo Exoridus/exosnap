@@ -1,9 +1,46 @@
 cmake_minimum_required(VERSION 3.27)
 
-# Canonical version source of truth for the whole project. Every other version
-# form (application metadata, Windows VERSIONINFO, About surface, release
-# artifact name) is derived from PROJECT_VERSION — do not duplicate it elsewhere.
+# Canonical BASE version source of truth for the whole project. project(VERSION)
+# only accepts numeric X.Y.Z, so prerelease identity cannot live here. Every
+# other version form is derived from PROJECT_VERSION plus EXOSNAP_RELEASE_VERSION
+# below — do not duplicate either elsewhere.
 project(exosnap VERSION 0.9.0 LANGUAGES C CXX)
+
+# Full release identity. Official release builds pass the complete release
+# version (e.g. -DEXOSNAP_RELEASE_VERSION=0.9.0-rc4), derived from the validated
+# git tag in CI. Developer builds leave it empty and get an honest
+# "<PROJECT_VERSION>-dev" identity so they can never impersonate a release.
+set(EXOSNAP_RELEASE_VERSION "" CACHE STRING
+    "Full release version for official builds (e.g. 0.9.0-rc4). Empty = dev build (<PROJECT_VERSION>-dev).")
+if(EXOSNAP_RELEASE_VERSION STREQUAL "")
+    if(EXOSNAP_OFFICIAL_BUILD)
+        message(FATAL_ERROR
+            "EXOSNAP_OFFICIAL_BUILD=ON requires EXOSNAP_RELEASE_VERSION to be set "
+            "(e.g. 0.9.0-rc4); an official build must declare its full release identity.")
+    endif()
+    set(EXOSNAP_FULL_VERSION "${PROJECT_VERSION}-dev")
+else()
+    if(NOT EXOSNAP_RELEASE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$")
+        message(FATAL_ERROR
+            "EXOSNAP_RELEASE_VERSION '${EXOSNAP_RELEASE_VERSION}' is not a valid "
+            "SemVer release version (expected X.Y.Z or X.Y.Z-<prerelease>).")
+    endif()
+    string(REGEX REPLACE "^([0-9]+\\.[0-9]+\\.[0-9]+).*$" "\\1"
+        _exosnap_release_base "${EXOSNAP_RELEASE_VERSION}")
+    if(NOT _exosnap_release_base STREQUAL PROJECT_VERSION)
+        message(FATAL_ERROR
+            "EXOSNAP_RELEASE_VERSION '${EXOSNAP_RELEASE_VERSION}' does not match the "
+            "canonical base version '${PROJECT_VERSION}' from project(VERSION). "
+            "Bump project(VERSION) or fix the release version input.")
+    endif()
+    if(EXOSNAP_RELEASE_VERSION STREQUAL "${PROJECT_VERSION}-dev")
+        message(FATAL_ERROR
+            "EXOSNAP_RELEASE_VERSION must not use the reserved '-dev' prerelease label; "
+            "it is the marker for unofficial developer builds.")
+    endif()
+    set(EXOSNAP_FULL_VERSION "${EXOSNAP_RELEASE_VERSION}")
+endif()
+message(STATUS "ExoSnap release identity: ${EXOSNAP_FULL_VERSION} (base ${PROJECT_VERSION})")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

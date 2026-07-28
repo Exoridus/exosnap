@@ -137,6 +137,40 @@ TEST(SwapEngine, ReadFileVersionOnSystemDllAndGarbage) {
     fs::remove(txt);
 }
 
+TEST(SwapEngine, ReadProductVersionStringOnSystemDllAndGarbage) {
+    // kernel32 always carries a StringFileInfo ProductVersion.
+    EXPECT_TRUE(ReadProductVersionString(L"C:\\Windows\\System32\\kernel32.dll").has_value());
+    auto txt = fs::temp_directory_path() / "exosnap_notanexe2.txt";
+    std::ofstream(txt) << "hi";
+    EXPECT_FALSE(ReadProductVersionString(txt.wstring()).has_value());
+    fs::remove(txt);
+}
+
+// The installed-version check must be prerelease-aware: the numeric
+// FIXEDFILEINFO of an rc build reads 0.9.0, and only the ProductVersion string
+// can prove the rc identity. A prerelease target verified against a
+// base-only product string (or vice versa) must fail.
+TEST(SwapEngine, InstalledVersionMatchesPrefersProductVersionString) {
+    const SemVer rc4 = *ParseSemVer("0.9.0-rc4");
+    const SemVer rc3 = *ParseSemVer("0.9.0-rc3");
+    const SemVer base = *ParseSemVer("0.9.0");
+
+    // Product string present: authoritative, prerelease-aware.
+    EXPECT_TRUE(InstalledVersionMatches(base, rc4, rc4));
+    EXPECT_FALSE(InstalledVersionMatches(base, rc3, rc4));
+    EXPECT_FALSE(InstalledVersionMatches(base, base, rc4));
+    EXPECT_FALSE(InstalledVersionMatches(base, rc4, base));
+    EXPECT_TRUE(InstalledVersionMatches(base, base, base));
+
+    // No product string: prerelease-blind numeric fallback checks the base only.
+    EXPECT_TRUE(InstalledVersionMatches(base, std::nullopt, rc4));
+    EXPECT_TRUE(InstalledVersionMatches(base, std::nullopt, base));
+    EXPECT_FALSE(InstalledVersionMatches(*ParseSemVer("0.8.1"), std::nullopt, rc4));
+
+    // Nothing readable at all: never verified.
+    EXPECT_FALSE(InstalledVersionMatches(std::nullopt, std::nullopt, rc4));
+}
+
 TEST(SwapEngine, WaitForProcessExitHandlesGoneAndSelf) {
     EXPECT_TRUE(WaitForProcessExit(0, std::chrono::milliseconds(10))); // pid 0 = not running
     EXPECT_FALSE(WaitForProcessExit(::GetCurrentProcessId(), std::chrono::milliseconds(50)));

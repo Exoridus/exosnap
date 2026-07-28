@@ -16,8 +16,10 @@ if(NOT Qt6_FOUND)
 endif()
 
 # ---- Build metadata (mirrors app/CMakeLists.txt) ----
-# Single source of truth: derived from the root project(... VERSION ...) call.
-set(EXOSNAP_VERSION "${PROJECT_VERSION}")
+# Single source of truth: root project(... VERSION ...) + EXOSNAP_FULL_VERSION
+# (release identity resolved in the root CMakeLists.txt). The ProductVersion
+# string carries the full release version; numeric fields stay base-only.
+set(EXOSNAP_VERSION "${EXOSNAP_FULL_VERSION}")
 
 set(_updater_ver_tweak "${PROJECT_VERSION_TWEAK}")
 if(_updater_ver_tweak STREQUAL "")
