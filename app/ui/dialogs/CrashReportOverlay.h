@@ -15,7 +15,7 @@ namespace exosnap::ui::dialogs {
 // In-window crash-report surface. Renders as a translucent backdrop with a
 // centered CrashReportPanel *inside* the application window — there is no
 // separate native OS dialog, so nothing lingers as a focus-sticky child window
-// after closing. Mirrors AboutOverlay / SourcePickerOverlay.
+// after closing. Mirrors SourcePickerOverlay / RecoveryOverlay.
 //
 // Parent it to the host whose client area it should cover (typically the central
 // widget); it tracks the parent's geometry and fills it. Open with

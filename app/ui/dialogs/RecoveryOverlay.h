@@ -18,7 +18,7 @@ class QShowEvent;
 namespace exosnap::ui::dialogs {
 
 // In-window Recovery surface shown at startup when interrupted recordings are
-// found. Follows the AboutOverlay pattern exactly:
+// found. Follows the shared in-window overlay pattern exactly:
 //   - Plain QWidget (never a QDialog / OS window).
 //   - Parent = central widget; covers the full app window.
 //   - Scrim via paintEvent rgba(8,8,10,0.62).

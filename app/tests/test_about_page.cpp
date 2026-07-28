@@ -10,8 +10,6 @@
 
 #include "ExoSnapBuildInfo.h"
 #include "pages/AboutPage.h"
-#include "ui/dialogs/AboutOverlay.h"
-#include "ui/dialogs/UpdateSettingsPanel.h"
 
 #ifndef EXOSNAP_BUILD_CONFIG
 #define EXOSNAP_BUILD_CONFIG "Unknown"
@@ -25,7 +23,7 @@ QApplication* EnsureApplication() {
         return existing;
 
     static int argc = 1;
-    static char app_name[] = "about_overlay_tests";
+    static char app_name[] = "about_page_tests";
     static char* argv[] = {app_name, nullptr};
     static QApplication app(argc, argv);
     return &app;
@@ -160,34 +158,6 @@ TEST_F(AboutPageTest, NoPrimaryRoleButton) {
     pages::AboutPage page;
     for (auto* btn : page.findChildren<QPushButton*>())
         EXPECT_NE(btn->property("role").toString(), QStringLiteral("primary"));
-}
-
-// ── AboutOverlay shim tests ──────────────────────────────────────────────────
-// AboutOverlay is now a thin hidden-panel holder (no overlay behavior).
-
-class AboutOverlayShimTest : public ::testing::Test {
-  protected:
-    static void SetUpTestSuite() {
-        EnsureApplication();
-    }
-};
-
-TEST_F(AboutOverlayShimTest, HoldsUpdatePanel) {
-    ui::dialogs::AboutOverlay overlay;
-
-    auto* panel = overlay.updatePanel();
-    ASSERT_NE(panel, nullptr);
-
-    auto* found = overlay.findChild<ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("aboutUpdatePanel"));
-    EXPECT_EQ(found, panel);
-
-    // The panel must never be visible — it is an internal wiring node only.
-    EXPECT_FALSE(panel->isVisible());
-}
-
-TEST_F(AboutOverlayShimTest, IsHiddenByDefault) {
-    ui::dialogs::AboutOverlay overlay;
-    EXPECT_TRUE(overlay.isHidden());
 }
 
 } // namespace

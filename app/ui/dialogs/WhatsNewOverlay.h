@@ -2,7 +2,7 @@
 // WhatsNewOverlay.h -- in-window "What's new" surface listing the release notes
 // for every version in the gap (installed, target].
 //
-// Follows the RecoveryOverlay / AboutOverlay pattern exactly:
+// Follows the RecoveryOverlay pattern exactly:
 //   - Plain QWidget (never a QDialog / OS window).
 //   - Parent = central widget; covers the full app window.
 //   - Scrim via paintEvent (theme bg at ~0.62 alpha).

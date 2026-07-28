@@ -65,7 +65,6 @@ class TrayPresence;
 } // namespace ui::tray
 
 namespace ui::dialogs {
-class AboutOverlay;
 class CrashReportOverlay;
 class EditExportOverlay;
 class FinalizingOverlay;
@@ -385,7 +384,6 @@ class MainWindow : public QMainWindow {
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
-    ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;

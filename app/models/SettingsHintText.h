@@ -175,6 +175,6 @@ inline const QString kCrashReporting =
 // kAudioCodecFlac        — FLAC (0.6 wave)
 // kAutoOpenOutput        — auto-open Output page (Output-editor wave)
 // kCountdownOverlay      — countdown overlay (future wave)
-// kUpdateChannel         — update channel (0.4 wave, inside UpdateSettingsPanel, not in scope)
+// kUpdateChannel         — update channel (0.4 wave, Settings updates card, not in scope)
 
 } // namespace exosnap::ui::hints

@@ -23,14 +23,12 @@
 #include "ui/chrome/NotificationHubPanel.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
-#include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/EditExportOverlay.h"
 #include "ui/dialogs/FinalizingOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
-#include "ui/dialogs/UpdateSettingsPanel.h"
 #include "ui/dialogs/WhatsNewOverlay.h"
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
@@ -685,12 +683,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     main_layout->addWidget(stack_, 1);
 
-    // AboutOverlay is now a thin compatibility shim — it holds the hidden
-    // UpdateSettingsPanel so MainWindow update-service wiring compiles unchanged.
-    // The visible About surface is AboutPage, which lives in the nav stack.
-    about_overlay_ = new ui::dialogs::AboutOverlay(this);
-    about_overlay_->hide();
-
     // Source picker overlay — in-window, same accessibility-first parenting as About.
     source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(central);
     source_picker_overlay_->hide();
@@ -980,53 +972,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // NOTE: config_page_ audioRescanRequested, update-card setters/connects, presentDiagnosticsOptIn,
     // and WebcamSetupPanel rescanRequested are all wired in buildConfigPage().
 
-    // ---- Update panel (PS-PHASE-E: kept as hidden wiring via AboutOverlay shim) ----
-    // The visible About surface (AboutPage) shows no update status.
-    // The UpdateSettingsPanel lives in Settings (ConfigPage's updates card).
-    // AboutOverlay is a thin shim that holds the panel for wiring compatibility.
-    if (about_overlay_) {
-        auto* update_panel = about_overlay_->updatePanel();
-        // Seed the panel from the persisted channel + current version.
-        ui::dialogs::UpdateUiModel seed;
-        seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
-        seed.channel = persisted_settings_.update_channel;
-        update_panel->setModel(seed);
-        update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
-        // about_page_ is deferred: buildAboutPage() calls setChannelHint() with the
-        // persisted channel when about_overlay_ is present, so no call is needed here.
-
-        connect(about_overlay_, &ui::dialogs::AboutOverlay::checkForUpdatesRequested, this,
-                &MainWindow::triggerUpdateCheck);
-
-        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this, [this](const QString& channel) {
-            persisted_settings_.update_channel = channel;
-            settings_store_.Save(persisted_settings_);
-            if (update_service_)
-                update_service_->SetChannel(UpdateChannelFromString(channel));
-            // Keep channel metadata row in AboutPage in sync.
-            if (about_page_)
-                about_page_->setChannelHint(channel);
-            // Channel applies immediately: re-check on the new channel (guarded).
-            triggerUpdateCheck();
-        });
-
-        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
-            QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
-        });
-
-        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
-            const QString url = last_update_releases_url_.isEmpty()
-                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                    : last_update_releases_url_;
-            QDesktopServices::openUrl(QUrl(url));
-        });
-
-        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
-            diagnostics::AppLog::info(QStringLiteral("update"),
-                                      QStringLiteral("Update reminder dismissed (remind me later)"));
-        });
-    }
-
     // ---- Tray icon (TRAY-PRESENCE-R1) ----
     // TrayPresence is parented to this so it is torn down with MainWindow.
     // It must be created before rebroadcastChromeState() so the initial state
@@ -1241,7 +1186,7 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         notification_manager_->Enqueue(std::move(event));
     }
 
-    // Parent to the central widget (same pattern as about_overlay_ / source_picker_overlay_).
+    // Parent to the central widget (same pattern as source_picker_overlay_).
     // The overlay should survive page navigation (not closed by navigateToPage); it is
     // deliberately excluded from the navigateToPage close-list because recovery must
     // remain visible regardless of which settings page the user switches to.
@@ -1973,11 +1918,6 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
                              upper == QStringLiteral("STOPPING") || upper == QStringLiteral("CHECKING") ||
                              upper == QStringLiteral("STARTING") || upper == QStringLiteral("COUNTDOWN"));
         config_page_->setRecordingControlsLocked(locked);
-
-        // PS-PHASE-E: pause update checks (disable the Check button + show the
-        // paused banner) while capturing or finalizing. Panel is now in About overlay.
-        if (about_overlay_ && about_overlay_->updatePanel())
-            about_overlay_->updatePanel()->setRecordingActive(recording_active_ || remuxing_active_);
     }
 
     applyTitleBarStatus();
@@ -4398,30 +4338,21 @@ void MainWindow::triggerUpdateCheck() {
     if (update_service_ == nullptr)
         return;
 
-    // Update panel is held by the AboutOverlay shim; Settings hosts the visible panel.
-    auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
-
     // App-layer recording guard: never contact the update server while a recording
-    // or MP4 remux is in flight. The panel surfaces the paused banner instead.
+    // or MP4 remux is in flight. The Settings card's action is already disabled by
+    // setRecordingControlsLocked, so its state simply stays where it was.
     if (recording_active_ || remuxing_active_) {
-        if (update_panel)
-            update_panel->setRecordingActive(true);
         diagnostics::AppLog::info(QStringLiteral("update"),
                                   QStringLiteral("Update check skipped — recording/finalizing in progress"));
         return;
     }
 
-    if (update_panel)
-        update_panel->setState(ui::dialogs::UpdateUiState::Checking);
     if (config_page_)
         config_page_->setUpdateStatus(QStringLiteral("checking"), QString(), QString());
     update_service_->RequestUpdateCheck();
 }
 
 void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) {
-    // Update panel is held by the AboutOverlay shim; drive its state here.
-    auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
-
     const QString current_version = QString::fromLatin1(exosnap::build::kVersion);
     const QString channel =
         update_service_ ? UpdateChannelToString(update_service_->Channel()) : persisted_settings_.update_channel;
@@ -4442,41 +4373,26 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
             : (result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString());
     last_available_version_ = available_version;
 
-    ui::dialogs::UpdateUiModel model;
-    model.current_version = current_version;
-    model.available_version = available_version;
-    model.channel = channel;
-    model.last_checked = QDateTime::currentDateTime().toString(QStringLiteral("MMM d, h:mm AP"));
-    model.release_url = last_update_releases_url_;
-    model.release_notes_url = last_update_releases_url_;
+    const QString last_checked = QDateTime::currentDateTime().toString(QStringLiteral("MMM d, h:mm AP"));
 
     if (result.check_failed || result.error_message) {
-        model.error_message = result.error_message ? QString::fromStdString(*result.error_message)
-                                                   : QStringLiteral("Couldn't reach the update server.");
-        if (update_panel) {
-            update_panel->setModel(model);
-            update_panel->setState(ui::dialogs::UpdateUiState::Error);
-        }
+        const QString error_message = result.error_message ? QString::fromStdString(*result.error_message)
+                                                           : QStringLiteral("Couldn't reach the update server.");
         if (config_page_)
-            config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), model.error_message);
+            config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), error_message);
         // "Update checking disabled (unofficial build)" is an expected condition for
         // self/unofficial builds, not a failure — log it at info level so it doesn't
         // surface as a warning in the Logs view.
-        if (model.error_message.contains(QStringLiteral("disabled"), Qt::CaseInsensitive))
+        if (error_message.contains(QStringLiteral("disabled"), Qt::CaseInsensitive))
             diagnostics::AppLog::info(QStringLiteral("update"),
-                                      QStringLiteral("Update check skipped: %1").arg(model.error_message));
+                                      QStringLiteral("Update check skipped: %1").arg(error_message));
         else
             diagnostics::AppLog::warning(QStringLiteral("update"),
-                                         QStringLiteral("Update check failed: %1").arg(model.error_message));
+                                         QStringLiteral("Update check failed: %1").arg(error_message));
         manual_update_check_ = false;
         return;
     }
 
-    if (update_panel) {
-        update_panel->setModel(model);
-        update_panel->setState(result.update_available ? ui::dialogs::UpdateUiState::Available
-                                                       : ui::dialogs::UpdateUiState::UpToDate);
-    }
     if (config_page_) {
         // Loop-guard / recovery semantics live in the pure ResolveUpdateCardState
         // helper. A manual check clears applied_version before the check runs, so a
@@ -4486,7 +4402,7 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         const QString card_state =
             exosnap::ResolveUpdateCardState(result.update_available, is_scoop, persisted_settings_.applied_version,
                                             available_version, verify_update_reinstall_, current_version);
-        config_page_->setUpdateStatus(card_state, available_version, model.last_checked);
+        config_page_->setUpdateStatus(card_state, available_version, last_checked);
     }
 
     diagnostics::AppLog::info(
@@ -5263,13 +5179,11 @@ void MainWindow::buildAboutPage() {
     } else {
         stack_->addWidget(about_page_);
     }
-    // Apply conditional initial state that would have run in the ctor. Preserves the
-    // exact original conditions: non-default-theme refreshBrand, and channel hint when
-    // about_overlay_ is present (the shim that owns persisted_settings_.update_channel).
+    // Apply conditional initial state that would have run in the ctor:
+    // non-default-theme refreshBrand, plus the persisted channel metadata row.
     if (persisted_settings_.theme_id != QStringLiteral("dark-default"))
         about_page_->refreshBrand();
-    if (about_overlay_)
-        about_page_->setChannelHint(persisted_settings_.update_channel);
+    about_page_->setChannelHint(persisted_settings_.update_channel);
 }
 
 void MainWindow::buildDevicePage() {
