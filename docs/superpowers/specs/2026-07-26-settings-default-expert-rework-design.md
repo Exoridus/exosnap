@@ -206,7 +206,7 @@ Always visible in both modes — under the gating criterion its content is
 harmless (a logging level, one honest disabled "planned" row, the
 crash-report consent), so hiding the card was gating by "looks technical".
 Rows: Developer logging level · NVTX / profiling markers (planned,
-disabled) · Send crash reports automatically. With this, no card is
+disabled) · Crash reports (Ask every time / Send automatically / Never send). With this, no card is
 Expert-gated at all — Expert only reveals rows in place.
 
 ## Summary of behavior changes vs. shipped ConfigPage

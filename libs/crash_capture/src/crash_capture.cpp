@@ -313,6 +313,31 @@ void RevokeUserConsent() {
 #endif
 }
 
+void ResetUserConsent() {
+#if EXOSNAP_SENTRY_AVAILABLE
+    if (s_initialized)
+        sentry_user_consent_reset();
+#endif
+}
+
+bool SendPendingReportOnce() {
+    if (!s_initialized)
+        return false;
+#if EXOSNAP_SENTRY_AVAILABLE
+    // sentry-native 0.15 persists user consent and Give triggers a retry of
+    // cached envelopes. Give the transport a bounded opportunity to finish,
+    // then return to the neutral AskEveryTime state even on timeout so this
+    // one-shot decision can never become persistent consent.
+    sentry_user_consent_give();
+    constexpr uint64_t kFlushTimeoutMs = 5000;
+    const bool flushed = sentry_flush(kFlushTimeoutMs) == 0;
+    sentry_user_consent_reset();
+    return flushed;
+#else
+    return true;
+#endif
+}
+
 void SendTestEvent(std::string_view message) {
 #if EXOSNAP_SENTRY_AVAILABLE
     if (s_initialized) {

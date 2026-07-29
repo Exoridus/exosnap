@@ -28,6 +28,7 @@
 #include <QString>
 #include <QStringList>
 #include <QThread>
+#include <QWinEventNotifier>
 #include <atomic>
 
 #if defined(_WIN32)
@@ -52,6 +53,12 @@ class UpdateService::Impl {
 
     // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
     std::vector<exosnap::update::ReleaseNote> gap_notes;
+
+#if defined(_WIN32)
+    HANDLE updater_process = nullptr;
+    QWinEventNotifier* updater_exit_notifier = nullptr;
+    qint64 updater_pid = 0;
+#endif
 
     // Build the recording guard from the RecordingCoordinator's public API.
     // Reads `coordinator` under `mutex` since SetRecordingCoordinator() (called from
@@ -89,6 +96,12 @@ UpdateService::UpdateService(RecordingCoordinator* coordinator, QObject* parent)
 }
 
 UpdateService::~UpdateService() {
+#if defined(_WIN32)
+    if (impl_->updater_exit_notifier != nullptr)
+        impl_->updater_exit_notifier->setEnabled(false);
+    if (impl_->updater_process != nullptr)
+        ::CloseHandle(impl_->updater_process);
+#endif
     delete impl_;
 }
 
@@ -302,11 +315,43 @@ void UpdateService::LaunchUpdater() {
     // Launch detached: the app does not wait — the updater sends WM_CLOSE when it is
     // ready to swap. QProcess applies the correct Windows argument-quoting rules so
     // paths/args with spaces or quotes are passed through safely.
-    const bool ok =
-        QProcess::startDetached(QDir::toNativeSeparators(staged_exe), flags, QDir::toNativeSeparators(staging_dir));
+    qint64 updater_pid = 0;
+    const bool ok = QProcess::startDetached(QDir::toNativeSeparators(staged_exe), flags,
+                                            QDir::toNativeSeparators(staging_dir), &updater_pid);
     if (!ok) {
         emit updateError(upd::VerifyResult::PackageNotFound, QStringLiteral("Failed to launch the updater."));
         return;
+    }
+
+    // Keep an event-driven watch on the detached process while the old app is
+    // alive. If the user closes a failed/cancelled updater before the marked
+    // close handoff, MainWindow can immediately re-arm the card. This is process
+    // lifecycle ownership, not UI polling.
+    impl_->updater_pid = updater_pid;
+    impl_->updater_process =
+        ::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(updater_pid));
+    if (impl_->updater_process != nullptr) {
+        impl_->updater_exit_notifier = new QWinEventNotifier(impl_->updater_process, this);
+        connect(impl_->updater_exit_notifier, &QWinEventNotifier::activated, this, [this](HANDLE) {
+            DWORD exit_code = 0;
+            if (!::GetExitCodeProcess(impl_->updater_process, &exit_code))
+                exit_code = static_cast<DWORD>(-1);
+
+            impl_->updater_exit_notifier->setEnabled(false);
+            impl_->updater_exit_notifier->deleteLater();
+            impl_->updater_exit_notifier = nullptr;
+            ::CloseHandle(impl_->updater_process);
+            impl_->updater_process = nullptr;
+
+            const qint64 process_id = impl_->updater_pid;
+            impl_->updater_pid = 0;
+            emit updaterExited(process_id, static_cast<quint32>(exit_code));
+        });
+    } else {
+        diagnostics::AppLog::warning(
+            QStringLiteral("update"),
+            QStringLiteral("Updater launched, but its process lifetime could not be observed (pid %1).")
+                .arg(updater_pid));
     }
     emit updaterLaunched();
 #else

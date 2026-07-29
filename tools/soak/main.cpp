@@ -9,6 +9,8 @@
 //   exosnap-soak --minutes 120 [--vcodec av1 --acodec opus --container mkv] --out C:\tmp\soak.mkv
 //   exosnap-soak --synthetic --seconds 30 --realtime --out C:\tmp\syn.mkv
 //   exosnap-soak --clapper --seconds 120         (emit start/end flash+beep; live only)
+//   exosnap-soak --clapper --seconds 7200 --markers 3 --start-margin-seconds 10
+//                --end-margin-seconds 10         (emit start/middle/end markers)
 //
 // Runtime gate: the REAL path needs an NVIDIA GPU. With no capture target it fails
 // fast (non-zero exit) instead of hanging — a stray CI invocation dies deterministically.
@@ -26,6 +28,7 @@ extern "C" {
 #include <recorder_core/codec_types.h>
 #include <recorder_core/recorder_session.h>
 
+#include "clapper_schedule.h"
 #include "soak_metrics.h"
 #include "soak_process_sampler.h"
 #include "soak_runner.h"
@@ -38,6 +41,7 @@ extern "C" {
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <thread>
 
@@ -58,22 +62,52 @@ BOOL WINAPI CtrlHandler(DWORD type) {
 }
 
 bool ParseContainer(const std::string& s, Container& out) {
-    if (s == "mkv" || s == "matroska") { out = Container::Matroska; return true; }
-    if (s == "webm") { out = Container::WebM; return true; }
-    if (s == "mp4") { out = Container::Mp4; return true; }
+    if (s == "mkv" || s == "matroska") {
+        out = Container::Matroska;
+        return true;
+    }
+    if (s == "webm") {
+        out = Container::WebM;
+        return true;
+    }
+    if (s == "mp4") {
+        out = Container::Mp4;
+        return true;
+    }
     return false;
 }
 bool ParseVideo(const std::string& s, VideoCodec& out) {
-    if (s == "av1") { out = VideoCodec::Av1; return true; }
-    if (s == "h264" || s == "avc") { out = VideoCodec::H264; return true; }
-    if (s == "hevc" || s == "h265") { out = VideoCodec::Hevc; return true; }
+    if (s == "av1") {
+        out = VideoCodec::Av1;
+        return true;
+    }
+    if (s == "h264" || s == "avc") {
+        out = VideoCodec::H264;
+        return true;
+    }
+    if (s == "hevc" || s == "h265") {
+        out = VideoCodec::Hevc;
+        return true;
+    }
     return false;
 }
 bool ParseAudio(const std::string& s, AudioCodec& out) {
-    if (s == "opus") { out = AudioCodec::Opus; return true; }
-    if (s == "aac") { out = AudioCodec::Aac; return true; }
-    if (s == "flac") { out = AudioCodec::Flac; return true; }
-    if (s == "pcm") { out = AudioCodec::Pcm; return true; }
+    if (s == "opus") {
+        out = AudioCodec::Opus;
+        return true;
+    }
+    if (s == "aac") {
+        out = AudioCodec::Aac;
+        return true;
+    }
+    if (s == "flac") {
+        out = AudioCodec::Flac;
+        return true;
+    }
+    if (s == "pcm") {
+        out = AudioCodec::Pcm;
+        return true;
+    }
     return false;
 }
 
@@ -124,7 +158,7 @@ void WriteReport(const exosnap::soak::SoakSummary& summary, const std::string& r
     std::fprintf(stdout, "[soak] report: %s.json / .md\n", base.c_str());
 }
 
-// --- Clapper: full-frame white flash + loud beep at start and end (live only) ---
+// --- Clapper: full-frame white flash + loud beep on a fixed schedule (live only) ---
 void EmitFlash(int flash_ms) {
     const int sw = GetSystemMetrics(SM_CXSCREEN);
     const int sh = GetSystemMetrics(SM_CYSCREEN);
@@ -132,7 +166,8 @@ void EmitFlash(int flash_ms) {
                                 nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!hwnd)
         return;
-    SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(+[](HWND h, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
+    SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
+                      reinterpret_cast<LONG_PTR>(+[](HWND h, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
                           if (msg == WM_PAINT) {
                               PAINTSTRUCT ps;
                               HDC dc = BeginPaint(h, &ps);
@@ -149,14 +184,23 @@ void EmitFlash(int flash_ms) {
     DestroyWindow(hwnd);
 }
 
-int RunClapper(int seconds, int flash_ms) {
-    std::fprintf(stdout, "[soak] clapper: START flash+beep now, END in %d s. Point ExoSnap at this display.\n",
-                 seconds);
+int RunClapper(const exosnap::soak::ClapperSchedule& schedule, int flash_ms) {
+    std::fprintf(stdout, "[soak] clapper: %zu markers over %lld s at", schedule.marker_seconds.size(),
+                 static_cast<long long>(schedule.total_seconds));
+    for (const std::int64_t marker : schedule.marker_seconds)
+        std::fprintf(stdout, " +%llds", static_cast<long long>(marker));
+    std::fprintf(stdout, ". Point ExoSnap at the primary display.\n");
     std::fflush(stdout);
-    EmitFlash(flash_ms);
-    std::this_thread::sleep_for(std::chrono::seconds(seconds));
-    EmitFlash(flash_ms);
-    std::fprintf(stdout, "[soak] clapper: END flash+beep emitted. Analyze with scripts/dev/av-sync-check.py\n");
+
+    const auto epoch = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < schedule.marker_seconds.size(); ++i) {
+        std::this_thread::sleep_until(epoch + std::chrono::seconds(schedule.marker_seconds[i]));
+        std::fprintf(stdout, "[soak] clapper: marker %zu/%zu at +%llds\n", i + 1, schedule.marker_seconds.size(),
+                     static_cast<long long>(schedule.marker_seconds[i]));
+        std::fflush(stdout);
+        EmitFlash(flash_ms);
+    }
+    std::fprintf(stdout, "[soak] clapper: all markers emitted. Analyze with scripts/dev/av-sync-check.py\n");
     return 0;
 }
 
@@ -166,42 +210,118 @@ int main(int argc, char* argv[]) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-    bool synthetic = false, realtime = false, clapper = false;
-    int minutes = 0, seconds = 0, flash_ms = 120, sample_ms = 1000;
+    bool synthetic = false, realtime = false, clapper = false, print_clapper_schedule = false;
+    bool seconds_set = false, minutes_set = false;
+    std::int64_t minutes = 0, seconds = 0, start_margin_seconds = 0, end_margin_seconds = 0;
+    int marker_count = 2, flash_ms = 120, sample_ms = 1000;
     std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s, report_dir;
     exosnap::soak::SoakThresholds thresholds;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { return (i + 1 < argc) ? std::string(argv[++i]) : std::string(); };
-        if (a == "--synthetic") synthetic = true;
-        else if (a == "--realtime") realtime = true;
-        else if (a == "--clapper") clapper = true;
-        else if (a == "--minutes") minutes = std::atoi(next().c_str());
-        else if (a == "--seconds") seconds = std::atoi(next().c_str());
-        else if (a == "--flash-ms") flash_ms = std::atoi(next().c_str());
-        else if (a == "--sample-ms") sample_ms = std::atoi(next().c_str());
-        else if (a == "--container") container_s = next();
-        else if (a == "--vcodec") vcodec_s = next();
-        else if (a == "--acodec") acodec_s = next();
-        else if (a == "--out") out_s = next();
-        else if (a == "--report-dir") report_dir = next();
-        else if (a == "--max-drift-ms") thresholds.av_drift_abort_ms = std::atof(next().c_str());
-        else if (a == "--max-skew-ms") thresholds.duration_skew_abort_ms = std::atof(next().c_str());
+        if (a == "--synthetic")
+            synthetic = true;
+        else if (a == "--realtime")
+            realtime = true;
+        else if (a == "--clapper")
+            clapper = true;
+        else if (a == "--minutes" || a == "--seconds" || a == "--markers" || a == "--flash-ms" || a == "--sample-ms" ||
+                 a == "--start-margin-seconds" || a == "--end-margin-seconds") {
+            const std::string value = next();
+            std::int64_t parsed = 0;
+            std::string parse_error;
+            if (!exosnap::soak::ParsePositiveInt64(value, parsed, parse_error)) {
+                std::fprintf(stderr, "[soak] %s: %s\n", a.c_str(), parse_error.c_str());
+                return 64;
+            }
+            if (a == "--minutes") {
+                minutes = parsed;
+                minutes_set = true;
+            } else if (a == "--seconds") {
+                seconds = parsed;
+                seconds_set = true;
+            } else if (a == "--markers") {
+                if (parsed > std::numeric_limits<int>::max()) {
+                    std::fprintf(stderr, "[soak] --markers: value is out of range\n");
+                    return 64;
+                }
+                marker_count = static_cast<int>(parsed);
+            } else if (a == "--flash-ms") {
+                if (parsed > std::numeric_limits<int>::max()) {
+                    std::fprintf(stderr, "[soak] --flash-ms: value is out of range\n");
+                    return 64;
+                }
+                flash_ms = static_cast<int>(parsed);
+            } else if (a == "--sample-ms") {
+                if (parsed > std::numeric_limits<int>::max()) {
+                    std::fprintf(stderr, "[soak] --sample-ms: value is out of range\n");
+                    return 64;
+                }
+                sample_ms = static_cast<int>(parsed);
+            } else if (a == "--start-margin-seconds") {
+                start_margin_seconds = parsed;
+            } else {
+                end_margin_seconds = parsed;
+            }
+        } else if (a == "--print-clapper-schedule")
+            print_clapper_schedule = true;
+        else if (a == "--container")
+            container_s = next();
+        else if (a == "--vcodec")
+            vcodec_s = next();
+        else if (a == "--acodec")
+            acodec_s = next();
+        else if (a == "--out")
+            out_s = next();
+        else if (a == "--report-dir")
+            report_dir = next();
+        else if (a == "--max-drift-ms")
+            thresholds.av_drift_abort_ms = std::atof(next().c_str());
+        else if (a == "--max-skew-ms")
+            thresholds.duration_skew_abort_ms = std::atof(next().c_str());
         else {
             std::fprintf(stderr, "[soak] unknown arg: %s\n", a.c_str());
             return 64;
         }
     }
 
-    const double duration_s = (seconds > 0) ? seconds : (minutes > 0 ? minutes * 60.0 : 120.0);
+    if (seconds_set && minutes_set) {
+        std::fprintf(stderr, "[soak] choose exactly one of --seconds or --minutes\n");
+        return 64;
+    }
+    if (minutes > std::numeric_limits<std::int64_t>::max() / 60) {
+        std::fprintf(stderr, "[soak] --minutes: duration is out of range\n");
+        return 64;
+    }
+    const std::int64_t duration_seconds = seconds_set ? seconds : (minutes_set ? minutes * 60 : 120);
+    const double duration_s = static_cast<double>(duration_seconds);
     if (report_dir.empty())
         report_dir = out_s.empty() ? "." : std::filesystem::path(out_s).parent_path().string();
     if (report_dir.empty())
         report_dir = ".";
 
-    if (clapper)
-        return RunClapper(static_cast<int>(duration_s), flash_ms);
+    if (clapper) {
+        exosnap::soak::ClapperSchedule schedule;
+        std::string schedule_error;
+        if (!exosnap::soak::BuildClapperSchedule(duration_seconds, marker_count, start_margin_seconds,
+                                                 end_margin_seconds, schedule, schedule_error)) {
+            std::fprintf(stderr, "[soak] invalid clapper schedule: %s\n", schedule_error.c_str());
+            return 64;
+        }
+        if (print_clapper_schedule) {
+            std::fprintf(stdout, "clapper_schedule_seconds=");
+            for (std::size_t i = 0; i < schedule.marker_seconds.size(); ++i)
+                std::fprintf(stdout, "%s%lld", i == 0 ? "" : ",", static_cast<long long>(schedule.marker_seconds[i]));
+            std::fprintf(stdout, "\n");
+            return 0;
+        }
+        return RunClapper(schedule, flash_ms);
+    }
+    if (print_clapper_schedule) {
+        std::fprintf(stderr, "[soak] --print-clapper-schedule requires --clapper\n");
+        return 64;
+    }
 
     Container container{};
     VideoCodec vcodec{};

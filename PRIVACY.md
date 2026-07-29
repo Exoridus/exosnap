@@ -11,7 +11,7 @@ will be updated if data processing ever changes.
 ## Summary
 
 ExoSnap collects **no** telemetry or analytics, has **no** account system, and never transmits
-your recordings or personal data. By default it makes **no network connections**. As of 0.4.0,
+your recordings. By default it makes **no network connections**. As of 0.4.0,
 two strictly **opt-in** features can contact external services, and only when you act: an
 **update check** (public GitHub Releases) and **crash reporting** (consent-gated, to Sentry with
 EU data residency). Both are detailed below. Everything else stays on your computer.
@@ -36,10 +36,16 @@ ExoSnap 0.4.0 introduces opt-in crash reporting powered by **Sentry** (data proc
 is subject to the following guarantees:
 
 - **Opt-in and consent-gated.** Nothing is transmitted without your explicit consent. Upload is
-  off by default. A crash-report dialog shows you exactly what would be sent before you decide.
-- **Revisitable at any time.** Consent granted from the crash dialog is not permanent: **Settings →
-  Advanced → "Send crash reports automatically"** reflects and controls the same choice. Turning it
-  off revokes consent immediately, so the next crash asks again instead of auto-sending.
+  off by default. The next-launch dialog summarizes the local facts ExoSnap actually knows and
+  separately explains the structured-event and native-minidump channels.
+- **Three revisitable choices.** **Settings → Developer → Crash reports** offers `Ask every time`
+  (default), `Send automatically`, and `Never send`. `Never send` suppresses future report prompts
+  but never hides local recording recovery. The dialog's unchecked **Remember this choice for
+  future crashes** checkbox commits a policy only after Send report or Don't send is clicked;
+  closing or pressing Escape changes nothing.
+- **One-shot means one report.** Send report without Remember temporarily releases the pending
+  report, waits for sentry-native's transport flush, and then resets SDK consent to the unknown/ask
+  state. It does not silently authorize later reports in the same app session.
 - **Self-builds never upload.** Official builds compile in the Sentry ingest key
   (`EXOSNAP_OFFICIAL_BUILD`); self-built binaries do not include it and never phone home.
 - **What is sent (allowlist).** If you choose to send a report, only the structured tag keys
@@ -64,14 +70,13 @@ is subject to the following guarantees:
   **Today, only `encoder_backend`, `container`, `video_codec`, and `audio_codec` are actually set**
   on the Sentry path (`SetEncoderContext`). `os.*`, `gpu.*`, and `app.version` are allowlisted (so
   they would pass the scrubber if a future change sets them) but are not populated by app code
-  today — OS build and GPU model/driver currently reach you only through the local crash dialog
-  and the opt-in Stage-0 GitHub issue (see docs/product-spec.md §13), not the Sentry upload. This
-  table is kept in sync with the code by an automated check
+  today. This table is kept in sync with the code by an automated check
   (`scripts/validate-privacy-allowlist.ps1`, see `docs/privacy-review.md`).
-- **What is never sent.** Usernames, file paths (including your chosen output folder and
+- **What is not sent in the structured event.** Usernames, file paths (including your chosen output folder and
   recording filenames), and machine name are stripped from the **structured event** before it
   leaves the process. Breadcrumb logs are disabled (`enable_logs=0`). Recording content is never
-  captured.
+  captured. Recordings, output files, settings, presets and application logs are not crash-report
+  inputs.
 - **The minidump binary is a separate channel from the scrubbed event, and carries module
   paths.** A hard crash uploads (with consent) a Crashpad minidump out-of-process; the
   structured-event scrubber above does not run on it and cannot touch its binary contents. A
@@ -79,7 +84,7 @@ is subject to the following guarantees:
   Program-Files-style install this is not personal; for a **portable install run from under
   `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump. This
   is a real, narrower exception to "paths are stripped" — it applies only to the minidump binary,
-  never to the structured event, the Stage-0 GitHub issue, or the crash dialog you see beforehand.
+  never to the structured event or the crash dialog you see beforehand.
 - **No persistent identifier.** No stable device-level identifier is generated or stored. At
   most a per-report random correlation id may be attached for de-duplication within a single
   crash submission.

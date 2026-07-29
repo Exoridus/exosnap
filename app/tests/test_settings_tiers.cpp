@@ -99,7 +99,7 @@ TEST(AppSettingsTiersStoreTest, AudioSeparateExpanderExpanded_SaveAndLoad_True) 
 }
 
 // THEME-SLICE-1: renamed from BumpedTo15 → BumpedTo16.
-TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo19) {
+TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo20) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString path = QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini"));
@@ -110,7 +110,7 @@ TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo19) {
 
     QSettings raw(path, QSettings::IniFormat);
     // WHATS-NEW: version bumped 18 → 19 (whats_new_suppressed).
-    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 19);
+    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 20);
 }
 
 TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_DefaultIsDebug) {

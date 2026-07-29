@@ -15,7 +15,6 @@
 #include "pages/EditExportPage.h"
 #include "pages/LogsPage.h"
 #include "pages/RecordPage.h"
-#include "services/CrashIssueReport.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/GlobalHotkeyService.h"
 #include "services/UpdateService.h"
@@ -66,10 +65,10 @@
 #include <capability/user_config.h>
 #include <crash_capture/crash_capture.h>
 #include <crash_capture/crash_scrubber.h>
+#include <update/update_handoff.h>
 
 #include <QAbstractButton>
 #include <QApplication>
-#include <QClipboard>
 #include <QCloseEvent>
 #include <QColor>
 #include <QCoreApplication>
@@ -97,7 +96,6 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyle>
-#include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTextStream>
 #include <QThread>
@@ -512,6 +510,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // log-level now that it is known. AppLog::init() (above) already ran with the
     // "record everything" default, so early-startup entries are unaffected.
     diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(persisted_settings_.developer_log_level));
+    // Reconcile the SDK-wide persisted consent with the explicit app policy
+    // before any report UI is considered in this process.
+    switch (persisted_settings_.crash_report_policy) {
+    case CrashReportPolicy::AskEveryTime:
+        applyCrashConsentAction(CrashConsentAction::ResetToAsk);
+        break;
+    case CrashReportPolicy::AlwaysSend:
+        applyCrashConsentAction(CrashConsentAction::GrantPersistent);
+        break;
+    case CrashReportPolicy::NeverSend:
+        applyCrashConsentAction(CrashConsentAction::Revoke);
+        break;
+    }
     // ADR 0033: sync the present provider opt-in from the persisted setting now
     // that the settings store has been loaded. The provider was constructed with
     // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
@@ -536,41 +547,52 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
     connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
 
-    // The staged swap updater has been launched: stamp the loop guard so a stale
-    // releases-API cache can't re-offer the same version, and flip the card to the
-    // "Restart pending" state. The updater will send WM_CLOSE when it is ready to
-    // swap; the app then closes normally.
+    // Process launch and close handoff are separate states. Download/verification
+    // can still fail or be cancelled while the old app remains open, so spawning
+    // the detached updater must never persist the applied-version stamp or claim
+    // a restart is pending.
     connect(update_service_, &UpdateService::updaterLaunched, this, [this]() {
-        // ADR 0055: the verification-reinstall mode persists nothing, so it does
-        // not write the loop-guard stamp either — the version it "applies" is the
-        // one already installed, and the stamp would only be cleared again on the
-        // next launch. The card still shows the restart-pending state.
-        if (!verify_update_reinstall_) {
-            persisted_settings_.applied_version = last_available_version_;
-            settings_store_.Save(persisted_settings_);
-        }
+        update_handoff_phase_ = UpdateHandoffPhase::UpdaterRunning;
         if (config_page_)
-            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+            config_page_->setUpdateStatus(QStringLiteral("updater-running"), last_available_version_, QString());
         diagnostics::AppLog::info(
             QStringLiteral("update"),
             verify_update_reinstall_
-                ? QStringLiteral("Updater launched to reinstall %1 — restart pending").arg(last_available_version_)
-                : QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
+                ? QStringLiteral("Updater launched to verify-reinstall %1; waiting for close handoff")
+                      .arg(last_available_version_)
+                : QStringLiteral("Updater launched for %1; waiting for close handoff").arg(last_available_version_));
+    });
+    connect(update_service_, &UpdateService::updaterExited, this, [this](qint64 process_id, quint32 exit_code) {
+        if (update_handoff_phase_ != UpdateHandoffPhase::UpdaterRunning)
+            return;
+
+        update_handoff_phase_ = UpdateHandoffPhase::Idle;
+        const QString state =
+            verify_update_reinstall_ ? QStringLiteral("verify-reinstall") : QStringLiteral("available");
+        if (config_page_)
+            config_page_->setUpdateStatus(state, last_available_version_, QString());
+        diagnostics::AppLog::warning(
+            QStringLiteral("update"),
+            QStringLiteral("Updater process %1 exited before close handoff (code %2); update card re-armed")
+                .arg(process_id)
+                .arg(exit_code));
     });
     // Any staging/launch failure surfaces on the Settings card as an error.
     connect(update_service_, &UpdateService::updateError, this,
             [this](exosnap::update::VerifyResult /*result*/, const QString& detail) {
+                update_handoff_phase_ = UpdateHandoffPhase::Idle;
                 if (config_page_)
                     config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), detail);
                 diagnostics::AppLog::warning(QStringLiteral("update"),
                                              QStringLiteral("Updater launch failed: %1").arg(detail));
             });
 
-    // Loop guard: once the running build equals a pending applied_version, the swap
-    // completed — clear the stamp so future checks work normally.
-    if (!persisted_settings_.applied_version.isEmpty() &&
-        persisted_settings_.applied_version == QString::fromLatin1(exosnap::build::kVersion)) {
-        persisted_settings_.applied_version.clear();
+    // Handoff truth belongs to the process that accepted the updater's marked
+    // close request. A fresh process (whether the new version or a restored old
+    // one) must never reconstruct "Restart pending" from that stale UI stamp.
+    const QString reconciled_applied = ReconcileAppliedVersionOnStartup(persisted_settings_.applied_version);
+    if (persisted_settings_.applied_version != reconciled_applied) {
+        persisted_settings_.applied_version = reconciled_applied;
         settings_store_.Save(persisted_settings_);
     }
 
@@ -1379,13 +1401,16 @@ void MainWindow::checkAndShowCrashReportOverlay() {
     if (!pending_crash_)
         return;
 
-    // Auto-send path: the user previously opted into silent send. Grant consent
-    // (dormant w/o DSN) and skip the dialog entirely.
-    if (persisted_settings_.auto_send_crash_reports) {
-        crash_capture::GiveUserConsent();
+    const CrashPromptDisposition disposition = ResolveCrashPromptDisposition(persisted_settings_.crash_report_policy);
+    if (disposition == CrashPromptDisposition::SuppressAndSend) {
         diagnostics::AppLog::info(
             QStringLiteral("crash"),
             QStringLiteral("Auto-send enabled — consent granted silently; crash dialog suppressed"));
+        return;
+    }
+    if (disposition == CrashPromptDisposition::SuppressWithoutSend) {
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Crash-report policy is Never send; consent prompt suppressed"));
         return;
     }
 
@@ -1410,19 +1435,10 @@ void MainWindow::openCrashReportOverlay() {
     ui::dialogs::CrashReportModel model;
     model.recording_was_active = recording_was_active;
 
-    // Version: "<version> · build <sha>" when a short SHA is available.
-    const QString version = QString::fromUtf8(exosnap::build::kVersion);
-    const QString sha = QString::fromUtf8(exosnap::build::kGitCommit);
-    model.version =
-        (sha.isEmpty() || sha == QStringLiteral("Unavailable")) ? version : version + QStringLiteral(" · build ") + sha;
-
-    model.os = QSysInfo::prettyProductName() + QStringLiteral(" · ") + QSysInfo::kernelVersion();
-
-    // GPU: CapabilitySet exposes the adapter name only (no driver version).
-    if (runtime_caps_ready_ && !runtime_caps_.gpu_adapter_name.empty())
-        model.gpu = QString::fromStdString(runtime_caps_.gpu_adapter_name);
-    else
-        model.gpu = QStringLiteral("—");
+    // The sidecar identifies the previous session version. Do not substitute
+    // the currently running build or current-machine probe results as though
+    // they were facts captured at the abnormal shutdown.
+    model.version = QString::fromStdString(pending_crash_->app_version);
 
     // Encoder: "<BACKEND> <video> → <container>" e.g. "NVENC AV1 → MKV".
     const QString backend = QString::fromStdString(pending_crash_->encoder_backend).toUpper();
@@ -1454,41 +1470,35 @@ void MainWindow::openCrashReportOverlay() {
     crash_overlay_->hide();
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::sendReportRequested, this, [this]() {
-        crash_capture::GiveUserConsent();
-        if (crash_overlay_ && crash_overlay_->autoSendChecked()) {
-            persisted_settings_.auto_send_crash_reports = true;
+        const bool remember = crash_overlay_ && crash_overlay_->rememberChoiceChecked();
+        const CrashReportDecision decision = ResolveCrashReportDecision(CrashReportAction::SendReport, remember);
+        if (decision.persisted_policy.has_value()) {
+            persisted_settings_.crash_report_policy = *decision.persisted_policy;
             settings_store_.Save(persisted_settings_);
         }
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User granted crash-report consent (send)"));
+        const bool delivered = applyCrashConsentAction(decision.consent_action);
+        diagnostics::AppLog::info(
+            QStringLiteral("crash"),
+            delivered ? QStringLiteral("User granted crash-report consent; pending report released")
+                      : QStringLiteral("User granted one-shot crash-report consent, but the transport did not flush"));
         if (crash_overlay_)
             crash_overlay_->closeOverlay();
-    });
-
-    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::reportOnGitHubRequested, this, [this, model]() {
-        services::CrashIssueData data;
-        data.app_version = model.version;
-        data.os = model.os;
-        data.gpu = model.gpu;
-        data.encoder = model.encoder;
-        data.exception = model.exception;
-        data.correlation_id = QString::fromStdString(crash_capture::GenerateCorrelationId());
-        QDesktopServices::openUrl(QUrl(services::BuildCrashIssueUrl(data)));
-        if (auto* clipboard = QGuiApplication::clipboard())
-            clipboard->setText(services::BuildCrashMetadataBlock(data));
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("Opened GitHub crash issue form"));
     });
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::openCrashFolderRequested, this,
             [this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(crash_dir_))); });
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::dontSendRequested, this, [this]() {
-        // The overlay already dismisses itself on this signal; just log.
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User declined crash report (don't send)"));
-    });
-
-    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::autoSendToggled, this, [this](bool checked) {
-        persisted_settings_.auto_send_crash_reports = checked;
-        settings_store_.Save(persisted_settings_);
+        const bool remember = crash_overlay_ && crash_overlay_->rememberChoiceChecked();
+        const CrashReportDecision decision = ResolveCrashReportDecision(CrashReportAction::DontSend, remember);
+        if (decision.persisted_policy.has_value()) {
+            persisted_settings_.crash_report_policy = *decision.persisted_policy;
+            settings_store_.Save(persisted_settings_);
+        }
+        applyCrashConsentAction(decision.consent_action);
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  remember ? QStringLiteral("User declined and disabled future crash-report prompts")
+                                           : QStringLiteral("User declined this crash report"));
     });
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this, [this]() {
@@ -2037,6 +2047,21 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 return true;
             }
 
+            if (msg->hwnd == main_hwnd && msg->message == static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage) &&
+                msg->wParam == static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic)) {
+                // The updater has completed download verification and now owns
+                // the close/install/relaunch sequence. Mark the request, bypass
+                // close-to-tray, and let closeEvent commit the pending stamp only
+                // after its recording/finalization guards accept the close.
+                if (update_handoff_phase_ == UpdateHandoffPhase::UpdaterRunning) {
+                    update_handoff_phase_ = UpdateHandoffPhase::ClosingForHandoff;
+                    force_quit_ = true;
+                    QMetaObject::invokeMethod(this, [this] { close(); }, Qt::QueuedConnection);
+                }
+                *result = 0;
+                return true;
+            }
+
             if (msg->hwnd == main_hwnd &&
                 (msg->message == WM_NCACTIVATE || msg->message == WM_ACTIVATE || msg->message == WM_SETFOCUS)) {
                 const char* reason = "focus-transition";
@@ -2284,6 +2309,27 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
     saveWindowGeometry();
 
+    if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff) {
+        const bool export_active = edit_export_overlay_ && edit_export_overlay_->page() &&
+                                   edit_export_overlay_->page()->phase() == EditExportPage::Phase::Exporting;
+        const bool handoff_blocked = record_status_label_ == QStringLiteral("STOPPING") || remuxing_active_ ||
+                                     recording_active_ || export_active;
+        if (handoff_blocked) {
+            update_handoff_phase_ = UpdateHandoffPhase::Idle;
+            force_quit_ = false;
+            if (config_page_) {
+                const QString state =
+                    verify_update_reinstall_ ? QStringLiteral("verify-reinstall") : QStringLiteral("available");
+                config_page_->setUpdateStatus(state, last_available_version_, QString());
+            }
+            diagnostics::AppLog::warning(
+                QStringLiteral("update"),
+                QStringLiteral("Updater close handoff refused because recording or finalization became active"));
+            event->ignore();
+            return;
+        }
+    }
+
     // TRAY-CLOSE-TO-TRAY-R1: if close-to-tray is enabled and this is NOT a
     // force-quit (e.g. from the tray "Quit" action or recording guard accept),
     // hide the window to the tray instead of quitting.
@@ -2406,6 +2452,19 @@ void MainWindow::closeEvent(QCloseEvent* event) {
             event->ignore();
         }
         return;
+    }
+    if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff) {
+        persisted_settings_.applied_version =
+            AppliedVersionForCommittedHandoff(last_available_version_, verify_update_reinstall_);
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+        diagnostics::AppLog::info(
+            QStringLiteral("update"),
+            verify_update_reinstall_
+                ? QStringLiteral("Verification reinstall handoff committed for %1; no loop guard persisted")
+                      .arg(last_available_version_)
+                : QStringLiteral("Update handoff committed for %1; closing the old app").arg(last_available_version_));
     }
     QMainWindow::closeEvent(event);
 }
@@ -4135,22 +4194,41 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
     }
 }
 
-void MainWindow::onAutoSendCrashReportsToggled(bool enabled) {
-    persisted_settings_.auto_send_crash_reports = enabled;
+bool MainWindow::applyCrashConsentAction(CrashConsentAction action) {
+    switch (action) {
+    case CrashConsentAction::None:
+        return true;
+    case CrashConsentAction::SendPendingOnce:
+        return crash_capture::SendPendingReportOnce();
+    case CrashConsentAction::GrantPersistent:
+        crash_capture::GiveUserConsent();
+        return true;
+    case CrashConsentAction::ResetToAsk:
+        crash_capture::ResetUserConsent();
+        return true;
+    case CrashConsentAction::Revoke:
+        crash_capture::RevokeUserConsent();
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::onCrashReportPolicyChanged(CrashReportPolicy policy) {
+    persisted_settings_.crash_report_policy = policy;
     settings_store_.Save(persisted_settings_);
 
-    if (enabled) {
-        // Matches the crash dialog's silent-consent path (checkAndShowCrashReportOverlay):
-        // grant consent immediately rather than waiting for the next crash.
-        crash_capture::GiveUserConsent();
+    if (policy == CrashReportPolicy::AlwaysSend) {
+        applyCrashConsentAction(CrashConsentAction::GrantPersistent);
         diagnostics::AppLog::info(QStringLiteral("crash"),
-                                  QStringLiteral("Auto-send enabled from Settings — consent granted"));
+                                  QStringLiteral("Crash-report policy changed to Send automatically"));
+    } else if (policy == CrashReportPolicy::NeverSend) {
+        applyCrashConsentAction(CrashConsentAction::Revoke);
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Crash-report policy changed to Never send; consent revoked"));
     } else {
-        // Revoke so the next crash shows the consent dialog again instead of
-        // silently auto-sending.
-        crash_capture::RevokeUserConsent();
+        applyCrashConsentAction(CrashConsentAction::ResetToAsk);
         diagnostics::AppLog::info(QStringLiteral("crash"),
-                                  QStringLiteral("Auto-send disabled from Settings — consent revoked"));
+                                  QStringLiteral("Crash-report policy changed to Ask every time"));
     }
 }
 
@@ -4399,9 +4477,9 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         // stuck "Restart pending" re-arms to "available" for a still-applicable
         // version; automatic checks keep available==applied pinned to "pending".
         const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
-        const QString card_state =
-            exosnap::ResolveUpdateCardState(result.update_available, is_scoop, persisted_settings_.applied_version,
-                                            available_version, verify_update_reinstall_, current_version);
+        const QString card_state = exosnap::ResolveUpdateCardState(
+            result.update_available, is_scoop, persisted_settings_.applied_version, available_version,
+            verify_update_reinstall_, current_version, update_handoff_phase_);
         config_page_->setUpdateStatus(card_state, available_version, last_checked);
     }
 
@@ -4832,8 +4910,8 @@ void MainWindow::buildConfigPage() {
     config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
     connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
             &MainWindow::onPresentDiagnosticsOptInToggled);
-    config_page_->setAutoSendCrashReports(persisted_settings_.auto_send_crash_reports);
-    connect(config_page_, &ConfigPage::autoSendCrashReportsToggled, this, &MainWindow::onAutoSendCrashReportsToggled);
+    config_page_->setCrashReportPolicy(persisted_settings_.crash_report_policy);
+    connect(config_page_, &ConfigPage::crashReportPolicyChanged, this, &MainWindow::onCrashReportPolicyChanged);
     // Route Settings webcam panel Rescan through the webcam notifier.
     // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
     auto* setup_panel =

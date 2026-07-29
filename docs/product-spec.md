@@ -1036,9 +1036,13 @@ unimplemented behavior.
   moves the page's scroll position or steals focus out of the card) · **Available**
   (`Update available — <ver>`, button `Update to <ver>` launches the real external updater for
   Portable and MSI) · **Scoop** (`Managed by Scoop — update with 'scoop update exosnap'`, button
-  `Open releases page`; the swap updater never touches a Scoop tree) · **Pending**
-  (`Restart pending… finishing the update`, button disabled) · **Error** (honest message, button
-  `Retry`).
+  `Open releases page`; the swap updater never touches a Scoop tree) · **Updater running**
+  (`Updater running… follow the updater window`, action disabled, while the detached updater is
+  open and the app still owns its normal lifetime) · **Pending** (`Restart pending… finishing the
+  update`, button disabled, only after the updater's marked close/handoff request has been accepted)
+  · **Error** (honest message, button `Retry`). An updater that exits or fails before handoff
+  returns the card to an actionable Available/Verification-reinstall state. Pending is never
+  reconstructed from a persisted UI flag on a later normal launch.
 - **Verification reinstall mode.** Starting the app with `--verify-update-reinstall` enables a
   **non-persistent** test mode that offers exactly one extra action: reinstalling the **identical**
   full version (exact string match) through the complete production path — official feed, channel
@@ -1046,9 +1050,11 @@ unimplemented behavior.
   updater handoff, swap/install, verify, relaunch and cleanup. The card then shows
   `Verification reinstall available — <ver>` with `Reinstall <ver>` and the notice
   *Reinstalls the currently running signed version.* The mode can never offer a downgrade, never
-  relaxes signature/hash checks, is logged in the app log and support bundle while active, and is
-  visibly marked `UPDATER · VERIFY` throughout the external updater run. It is gone after the next
-  restart. Without the flag, the same version is never offered.
+  relaxes signature/hash checks, is logged in the app log and support bundle while active, and
+  remains explicit in the updater content through the reinstall-specific working copy (for example,
+  `Downloading version <ver> again…` and `Reinstalling version <ver>…`) rather than through a
+  title-bar badge. It is gone after the next restart. Without the flag, the same version is never
+  offered.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
   dedicated updater, a separate process that performs every step itself. Its step list (as
@@ -1064,15 +1070,36 @@ unimplemented behavior.
      is discarded.
 
   The swap is **staged and reversible** (dual-swap) and nothing is swapped until verification passes.
+  The updater uses one fixed, non-resizable **520 × 680 logical-pixel** window in every working and
+  terminal state. Its 56 px title bar follows the main ExoSnap window's geometry and identity:
+  the standard icon and two-tone **exosnap** wordmark at the same inset and scale, followed by a
+  stable, neutral **Updater** role label, plus 46 × 56 **Minimize** and **Close** controls with the
+  main window's hover/pressed treatment. A disabled maximize control is not shown. Phase, warning,
+  error, completion and verification-reinstall state are not duplicated in the title bar; they
+  remain in the progress/status and result content that explains them. Below the fixed step list,
+  every state uses the same 110 px three-row state panel and the same separate 36 px action row, so
+  status copy and buttons never move vertically. Result actions use the same compact button
+  component: retryable results
+  show **Retry/Re-download + Close**, a completed update that needs a manual launch shows
+  **Open ExoSnap + Close**, and non-retryable results show **Close** only. The ambiguous
+  **Open current version** label is not used.
+
+  During **Downloading** and **Closing previous version**, the normal title-bar close action safely
+  opens the same confirmation as the visible **Cancel update** action. The confirmation says that
+  download/preparation progress is discarded while the installed version remains unchanged; only
+  the explicit destructive confirmation cancels the worker and closes the updater.
   While the swap-critical steps (Installing, Verifying, Launching) are in flight the updater window
   **refuses to close** — the close control is disabled and Alt+F4, the taskbar close, and a Windows
-  logoff are all ignored — so the in-place rename cannot be torn apart mid-swap. If a forced kill
+  logoff are all ignored, while the fixed action row shows a disabled **Close** action and a concise
+  non-interruptible hint — so the in-place rename cannot be torn apart mid-swap. If a forced kill
   (or a power loss) does interrupt a portable swap between its two renames, the **next** update run
   detects the orphaned backup and restores the last-known-good install before proceeding. After a
   successful update the downloaded manifest, signature, and package are removed from the temp
   directory; a failed run keeps them so a retry can reuse them.
-  Failure is shown as one of three variants, each of which **always names the version that is safe to
-  run right now**:
+  Failure is shown as one of three variants. The headline, user-oriented detail, safety line, icon
+  and actions live inside one status-tinted result card; raw WinHTTP/MSI/path diagnostics stay in
+  logs rather than appearing as a second loose UI error. Retry/Re-download actions carry a refresh
+  icon. Each variant **always names the version that is safe to run right now**:
   - **Amber (retryable):** a pre-swap step failed (download, app would not close, install could not
     start) or elevation was declined; the **current** version is intact and the step is retryable.
   - **Red (hard stop):** the card names the safe state explicitly — a failed download verification
@@ -1102,20 +1129,35 @@ unimplemented behavior.
 **Crash reporting.**
 
 - **Opt-in and consent-gated**, local-first (out-of-process Crashpad). Nothing leaves the machine
-  without an explicit choice on the next-launch crash dialog.
+  without an explicit current or previously remembered choice.
 - **A crash always leaves a local minidump.** Official builds capture it out-of-process via
   Crashpad; builds without it fall back to an in-process handler. The dump stays on the machine
   and is never uploaded without consent.
 - **Next-launch only** — crashes are offered for reporting on the following launch.
-- **Two-stage delivery:** Stage 0 is an assisted GitHub issue (always available); Stage 1 is an
-  automated upload to **Sentry with EU data residency**, compiled in only for official builds — so
-  self-built binaries never upload.
-- Reports are privacy-scrubbed (see Privacy).
-- **Consent is revisitable from Settings.** The crash dialog's "Send reports automatically next
-  time" opt-in is not a one-way choice: **Settings → Advanced → "Send crash reports
-  automatically"** shows and controls the same consent state. Turning it on grants silent
-  auto-send immediately (no need to wait for the next crash); turning it off revokes consent, so
-  the next crash shows the consent dialog again instead of auto-sending.
+- **Single explicit delivery path:** automated upload to **Sentry with EU data residency** is
+  compiled in only for official builds and remains consent-gated — so self-built binaries never
+  upload. The crash dialog does not construct or open a prefilled GitHub issue.
+- **Crash-dialog actions:** `Send report` (when the official upload path is active), `Don't send`
+  and a directly visible tertiary `Open crash folder`. There is no overflow menu.
+- The dialog leads with the truthful next-launch fact ("the previous session did not shut down
+  normally"), recovery availability, dump availability, cause availability and the non-empty
+  version/encoder context from the previous-session sidecar. It does not render empty
+  exception/module/thread/stack rows or substitute current-machine OS/GPU probes as crash facts.
+- Privacy details are a collapsed, keyboard-accessible disclosure. They distinguish the
+  privacy-scrubbed structured event from the native minidump binary, including the dump's possible
+  loaded-module paths and IP transit to Sentry's EU ingest region.
+- **Persisted policy:** `Ask every time` (default), `Send automatically`, or `Never send`.
+  Migration maps legacy `auto_send_crash_reports=true` to `Send automatically`; false or a missing
+  key maps to `Ask every time`, never to `Never send`. `Never send` suppresses only the report
+  consent prompt; the independent local recording-recovery surface remains available.
+- The dialog checkbox is **Remember this choice for future crashes**, unchecked by default. It is
+  draft state only: Send + remember commits `Send automatically`; Don't send + remember commits
+  `Never send`; either action without remember leaves `Ask every time`; close, Escape and backdrop
+  dismissals never change policy. Settings → Developer → **Crash reports** exposes all three
+  choices and applies the corresponding consent state immediately.
+- A Send action without remember is one-shot consent. The app releases and flushes the pending
+  Sentry envelope, then resets sentry-native consent to unknown, so later reports in the same
+  session do not inherit that decision. Remembered automatic send remains persistent until changed.
 
 **Signing status.** Builds are **not yet code-signed** (portable ZIP and MSI); Windows SmartScreen
 may warn on first launch. ExoSnap participates in the SignPath Foundation free code-signing program;
@@ -1151,8 +1193,7 @@ release binaries will be signed once the certificate is issued.
 
   plus the crash stack/minidump — nothing else. Only `encoder_backend`/`container`/`video_codec`/
   `audio_codec` are populated on the Sentry path today; `os.*`/`gpu.*`/`app.version` are allowlisted
-  (so a future change could set them) but currently reach the user only via the local crash dialog
-  and the opt-in Stage-0 GitHub issue (§13), not the Sentry upload. Kept honest by
+  (so a future change could set them) but are not populated by current app code. Kept honest by
   `scripts/validate-privacy-allowlist.ps1` (see `docs/privacy-review.md`).
 - **Never sent (structured event):** usernames, file paths (including output folder and recording
   filenames), machine name, breadcrumb logs. Recording content is never captured. No persistent

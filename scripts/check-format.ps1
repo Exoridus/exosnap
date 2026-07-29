@@ -60,7 +60,7 @@ if ($Staged) {
 }
 else {
     $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'app/' 'tests/' |
-        Where-Object { $_ -match '\.(cpp|h)$' })
+        Where-Object { $_ -match '\.(cpp|h)$' -and (Test-Path -LiteralPath (Join-Path $repoRoot $_) -PathType Leaf) })
 }
 
 if (-not $srcFiles) {

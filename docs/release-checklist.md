@@ -352,17 +352,21 @@ Tooling and detailed reference: `docs/dev/soak-and-recovery-drills.md` §§1–2
       `MIC` enabled as separate tracks, clock slaving at its default (on).** Continuous real system
       audio for the whole run (e.g. a music/video playlist). Machine must not sleep; displays stay
       on; display settings unchanged during the run.
-- [ ] **A/V sync marker at start AND end.** Immediately after recording starts, run
-      `exosnap-soak --clapper --seconds <soak duration>`: it blocks for that span and emits a
-      full-frame flash + beep at start, then automatically again at the end — no manual replay
-      needed. Markers appear on the **primary monitor only**, so the soak must capture the primary
-      monitor. With webcam PiP enabled, additionally clap hands in view at both markers for a
-      `MIC`-track cue.
-- [ ] **Analyze.** Run `python scripts/dev/av-sync-check.py <recorded-file> --max-drift-ms 20`
+- [ ] **A/V sync markers at start, middle and end.** Start one process for the planned wall-clock
+      recording duration:
+      `exosnap-soak --clapper --seconds <duration> --markers 3 --start-margin-seconds 10
+      --end-margin-seconds 10`. It emits full-frame flash + beep markers at `+10 s`, the midpoint,
+      and `-10 s` with no manual replay. Markers appear on the **primary monitor only**, so the soak
+      must capture the primary monitor. With webcam PiP enabled, additionally clap hands in view
+      near the markers for a `MIC`-track cue.
+- [ ] **Analyze.** Run `python scripts/dev/av-sync-check.py <recorded-file> --max-drift-ms 20
+      --expected-markers 3 --marker-times-seconds <start,mid,end>`
       (exit `0` = within budget, `2` = over budget, `3` = unmeasurable). The reported absolute
-      `offset_start`/`offset_end` carry a device-dependent emission skew (flash via display capture
-      vs. beep via SYS loopback, ~10–50 ms) that is not an ExoSnap error and is advisory only —
-      **only `drift` (offset_end − offset_start) is pass/fail**, budgeted at ≤ 20 ms here.
+      offsets carry a device-dependent emission skew (flash via display capture vs. beep via SYS
+      loopback, ~10–50 ms) that is not an ExoSnap error and is advisory only — **only start→end
+      drift is the canonical pass/fail**, budgeted at ≤ 20 ms here. Record both segment drifts too;
+      large opposing segments that cancel at the endpoint are a reliability finding, not a clean
+      result.
 - [ ] **Second, shorter soak (30–60 min) with a 44.1 kHz endpoint as the only audio source**
       (covers the 44.1 kHz gate and exercises the resampler drain path end-to-end).
 - [ ] **Post-checks.** Compare audio vs. video stream durations (ffprobe) on every produced track —

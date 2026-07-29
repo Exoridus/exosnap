@@ -1,11 +1,13 @@
 #pragma once
 
 // UpdaterWindow -- the whole standalone updater window, rendered as a pure
-// function of an UpdaterUiState. A dedicated (frameless-look) title bar carries
-// the brand + a boxed UPDATER tag + a close X that refuses to interrupt a swap;
-// below it sit the version pills, the ProgressRing, a status line, the
-// five-step checklist and a state-dependent footer (reassurance while working,
-// a tinted result card with 1-2 actions on a terminal variant).
+// function of an UpdaterUiState. Its compact title bar carries the same ExoSnap
+// mark + wordmark identity and window-control geometry as the main application,
+// followed by a stable Updater label. Progress and failure state stay in the
+// content where they are explained. Below it sit the version pills, the
+// ProgressRing, a status line, the five-step checklist, one fixed-height state
+// panel and one fixed action row. Their geometry does not change between
+// working, warning, error and success states.
 
 #include <QList>
 #include <QString>
@@ -36,12 +38,12 @@ class UpdaterWindow : public QWidget {
     // Test / introspection seams.
     bool closeEnabled() const;
     QStringList footerButtonLabels() const;
+    bool cancelConfirmationVisible() const;
 
   signals:
     void retryRequested();
     void closeRequested();
-    void openCurrentRequested();
-    void openNewRequested();
+    void openExoSnapRequested();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -50,9 +52,12 @@ class UpdaterWindow : public QWidget {
   private:
     void buildFooter(const UpdaterUiState& state);
     void emitForAction(const QString& action);
+    void requestClose();
+    void showCancelConfirmation();
+    void confirmCancelAndClose();
 
     // Header
-    QLabel* mode_tag_ = nullptr; // "UPDATER" / "UPDATER · VERIFY" (ADR 0055)
+    QPushButton* minimize_button_ = nullptr;
     QPushButton* close_button_ = nullptr;
     // Mirrors the same "Install/Verify/Launch working" gate as the in-window
     // close X (see render()), but also refuses WM_CLOSE arriving through any
@@ -60,6 +65,8 @@ class UpdaterWindow : public QWidget {
     // custom close button being disabled does not stop the OS from sending
     // WM_CLOSE via those routes.
     bool close_blocked_ = false;
+    bool cancel_confirmation_required_ = false;
+    QWidget* cancel_overlay_ = nullptr;
 
     // Version transition
     QLabel* from_pill_ = nullptr;
@@ -67,6 +74,7 @@ class UpdaterWindow : public QWidget {
 
     // Ring + status
     ProgressRing* ring_ = nullptr;
+    QWidget* status_row_ = nullptr;
     QWidget* status_icon_ = nullptr;
     QLabel* status_text_ = nullptr;
 

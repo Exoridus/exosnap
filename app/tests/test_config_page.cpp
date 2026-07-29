@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
 
 #include <QAction>
 #include <QApplication>
@@ -3895,87 +3896,53 @@ TEST_F(ConfigPageTest, SettingsAudio_MergeToggleReflectsAndSetsMergeWithAbove) {
     EXPECT_TRUE(saw_mic) << "emitted state must carry the Mic row";
 }
 
-// ── Crash-report auto-send consent toggle (Developer/Advanced card) ────────────
+// ── Crash-report three-state policy (Developer card) ─────────────────────────
 
-TEST_F(ConfigPageTest, CrashReportsToggle_VisibleByDefault) {
+TEST_F(ConfigPageTest, CrashReportPolicyCombo_IsVisibleAndDefaultsToAsk) {
     ConfigPage page(output_defaults_, video_defaults_);
-
-    // The Developer card (and its crash-report toggle) is built eagerly in the
-    // constructor and is not expert-gated.
-    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    ASSERT_NE(toggle, nullptr) << "crashReportsAutoSendToggle must exist by default";
-    EXPECT_FALSE(toggle->isHidden());
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("crashReportPolicyCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_FALSE(combo->isHidden());
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Crash reports")));
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Ask every time"));
 }
 
-TEST_F(ConfigPageTest, CrashReportsToggle_VisibleAndLabeledWhenExpertModeEnabled) {
+TEST_F(ConfigPageTest, CrashReportPolicyCombo_ContainsAllThreePolicies) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true); // Developer card is lazily built on first expert-enable
-
-    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    ASSERT_NE(toggle, nullptr) << "crashReportsAutoSendToggle must exist once expert mode is enabled";
-    EXPECT_FALSE(toggle->isHidden());
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Send crash reports automatically")))
-        << "toggle row must carry the plain-language label";
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("crashReportPolicyCombo"));
+    ASSERT_NE(combo, nullptr);
+    ASSERT_EQ(combo->count(), 3);
+    EXPECT_EQ(combo->itemText(0), QStringLiteral("Ask every time"));
+    EXPECT_EQ(combo->itemText(1), QStringLiteral("Send automatically"));
+    EXPECT_EQ(combo->itemText(2), QStringLiteral("Never send"));
 }
 
-TEST_F(ConfigPageTest, CrashReportsToggle_DefaultsOff) {
+TEST_F(ConfigPageTest, CrashReportPolicyCombo_SetterRoundTripsWithoutSignal) {
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("crashReportPolicyCombo"));
+    ASSERT_NE(combo, nullptr);
+    int signal_count = 0;
+    QObject::connect(&page, &ConfigPage::crashReportPolicyChanged, [&](CrashReportPolicy) { ++signal_count; });
 
-    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    ASSERT_NE(toggle, nullptr);
-    EXPECT_FALSE(toggle->isChecked()) << "consent defaults to off, matching auto_send_crash_reports' default";
+    page.setCrashReportPolicy(CrashReportPolicy::AlwaysSend);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Send automatically"));
+    page.setCrashReportPolicy(CrashReportPolicy::NeverSend);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Never send"));
+    page.setCrashReportPolicy(CrashReportPolicy::AskEveryTime);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("Ask every time"));
+    EXPECT_EQ(signal_count, 0);
 }
 
-TEST_F(ConfigPageTest, CrashReportsToggle_SetterAppliesImmediately) {
+TEST_F(ConfigPageTest, CrashReportPolicyCombo_UserChangeEmitsTypedPolicy) {
     ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("crashReportPolicyCombo"));
+    ASSERT_NE(combo, nullptr);
+    std::optional<CrashReportPolicy> emitted;
+    QObject::connect(&page, &ConfigPage::crashReportPolicyChanged, [&](CrashReportPolicy policy) { emitted = policy; });
 
-    // The Developer card is built eagerly, so the setter applies to the toggle
-    // as soon as it is called -- no lazy-build handoff to verify anymore.
-    page.setAutoSendCrashReports(true);
-    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    ASSERT_NE(toggle, nullptr);
-    EXPECT_TRUE(toggle->isChecked());
-
-    page.setAutoSendCrashReports(false);
-    EXPECT_FALSE(toggle->isChecked());
-}
-
-TEST_F(ConfigPageTest, CrashReportsToggle_TurningOnEmitsSignalTrue) {
-    ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
-    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    ASSERT_NE(toggle, nullptr);
-    ASSERT_FALSE(toggle->isChecked());
-
-    bool got = false;
-    bool emitted_value = false;
-    QObject::connect(&page, &ConfigPage::autoSendCrashReportsToggled, [&](bool enabled) {
-        got = true;
-        emitted_value = enabled;
-    });
-    toggle->setChecked(true);
-    ASSERT_TRUE(got) << "turning the toggle on must emit autoSendCrashReportsToggled";
-    EXPECT_TRUE(emitted_value);
-}
-
-TEST_F(ConfigPageTest, CrashReportsToggle_TurningOffEmitsSignalFalse) {
-    ConfigPage page(output_defaults_, video_defaults_);
-    page.setAutoSendCrashReports(true);
-    page.setExpertModeEnabled(true);
-    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("crashReportsAutoSendToggle"));
-    ASSERT_NE(toggle, nullptr);
-    ASSERT_TRUE(toggle->isChecked());
-
-    bool got = false;
-    bool emitted_value = true;
-    QObject::connect(&page, &ConfigPage::autoSendCrashReportsToggled, [&](bool enabled) {
-        got = true;
-        emitted_value = enabled;
-    });
-    toggle->setChecked(false);
-    ASSERT_TRUE(got) << "turning the toggle off must emit autoSendCrashReportsToggled";
-    EXPECT_FALSE(emitted_value);
+    combo->setCurrentIndex(2);
+    ASSERT_TRUE(emitted.has_value());
+    EXPECT_EQ(*emitted, CrashReportPolicy::NeverSend);
 }
 
 // ── Updates card: verification reinstall (ADR 0055) ─────────────────────────
@@ -4012,8 +3979,9 @@ TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallHintIsHiddenInEveryOtherState)
     page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
     ASSERT_FALSE(hint->isHidden());
 
-    for (const QString& state : {QStringLiteral("uptodate"), QStringLiteral("available"), QStringLiteral("checking"),
-                                 QStringLiteral("error"), QStringLiteral("scoop"), QStringLiteral("pending")}) {
+    for (const QString& state :
+         {QStringLiteral("uptodate"), QStringLiteral("available"), QStringLiteral("checking"), QStringLiteral("error"),
+          QStringLiteral("scoop"), QStringLiteral("updater-running"), QStringLiteral("pending")}) {
         page.setUpdateStatus(state, QStringLiteral("1.0.0"), QString());
         EXPECT_TRUE(hint->isHidden()) << "hint leaked into state " << state.toStdString();
     }
@@ -4036,6 +4004,24 @@ TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallButtonRequestsThePrimaryAction
 
     EXPECT_EQ(primary, 1);
     EXPECT_EQ(checks, 0);
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_UpdaterRunningIsDistinctFromCommittedPending) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* status = page.findChild<QLabel*>(QStringLiteral("updatesStatusLabel"));
+    auto* action = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(action, nullptr);
+
+    page.setUpdateStatus(QStringLiteral("updater-running"), QStringLiteral("0.9.0-rc5"), QString());
+    EXPECT_EQ(status->text(), QStringLiteral("Updater running\xe2\x80\xa6 follow the updater window"));
+    EXPECT_EQ(action->text(), QStringLiteral("Updater running"));
+    EXPECT_FALSE(action->isEnabled());
+    EXPECT_FALSE(status->text().contains(QStringLiteral("Restart pending")));
+
+    page.setUpdateStatus(QStringLiteral("pending"), QStringLiteral("0.9.0-rc5"), QString());
+    EXPECT_EQ(status->text(), QStringLiteral("Restart pending\xe2\x80\xa6 finishing the update"));
+    EXPECT_FALSE(action->isEnabled());
 }
 
 // ── Updates card: the scroll position must survive a status change ──────────

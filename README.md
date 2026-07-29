@@ -63,8 +63,8 @@ opt-in network features; see [`PRIVACY.md`](PRIVACY.md)).
   every recording.
 - **Opt-in `PresentMon` provider** — elevation-gated tearing/game-present observation feeding the
   judder correlation, never a hard dependency.
-- **Recording-error dialog** — if a recording fails, a modal report explains why, with an opt-in,
-  privacy-scrubbed GitHub issue you can choose to file.
+- **Recording-error dialog** — if a recording fails, a modal report explains why and, in official
+  builds, offers the same consent-gated privacy-scrubbed crash-report channel.
 
 ### Video & HDR
 

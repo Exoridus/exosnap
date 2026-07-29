@@ -33,8 +33,8 @@
 
 namespace {
 
-constexpr char kPreviewFrom[] = "0.8.1";
-constexpr char kPreviewTo[] = "0.9.0";
+constexpr char kPreviewFrom[] = "0.9.0-rc4";
+constexpr char kPreviewTo[] = "0.9.0-rc5";
 
 // How long the Success footer ("this window closes automatically") lingers.
 constexpr int kSuccessAutoCloseMs = 1500;
@@ -44,6 +44,11 @@ constexpr int kSuccessAutoCloseMs = 1500;
 std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     UpdaterController c(QString::fromLatin1(kPreviewFrom), QString::fromLatin1(kPreviewTo));
 
+    if (which == QStringLiteral("download")) {
+        c.onStepStarted(UpStep::Download);
+        c.onDownloadProgress(38, 100);
+        return c.state();
+    }
     if (which == QStringLiteral("progress")) {
         c.onStepDone(UpStep::Download);
         c.onStepDone(UpStep::CloseApp);
@@ -127,13 +132,12 @@ int main(int argc, char** argv) {
     // Dev preview short-circuit: render a canned state and skip engine work.
     const int previewIdx = arguments.indexOf(QStringLiteral("--preview-state"));
     if (previewIdx >= 0) {
-        const QString which =
-            previewIdx + 1 < arguments.size() ? arguments.at(previewIdx + 1) : QString();
+        const QString which = previewIdx + 1 < arguments.size() ? arguments.at(previewIdx + 1) : QString();
         const std::optional<UpdaterUiState> state = MakePreviewState(which);
         if (!state.has_value()) {
             std::fprintf(stderr,
                          "exosnap-updater: invalid --preview-state '%s' "
-                         "(expected progress|amber|red|green|reboot)\n",
+                         "(expected download|progress|amber|red|green|reboot)\n",
                          qPrintable(which));
             return 2;
         }
@@ -189,18 +193,8 @@ int main(int argc, char** argv) {
 
     UpdaterWindow window;
 
-    // Terminal failures may carry a detail line the fixed footer copy does not
-    // cover (B3 RestoreFailed: both paths). Rendering appends it to a COPY of
-    // the state; the controller itself stays canonical.
     const auto render = [&] {
         UpdaterUiState s = controller->state();
-        window.render(s);
-    };
-    const auto renderWithDetail = [&](const QString& detail) {
-        UpdaterUiState s = controller->state();
-        if (!detail.isEmpty()) {
-            s.footer_text += QStringLiteral("\n") + detail;
-        }
         window.render(s);
     };
 
@@ -216,11 +210,10 @@ int main(int argc, char** argv) {
         controller->onStepStarted(step);
         render();
     });
-    QObject::connect(&worker, &UpdaterWorker::downloadProgress, &window,
-                     [&](quint64 received, quint64 total) {
-                         controller->onDownloadProgress(received, total);
-                         render();
-                     });
+    QObject::connect(&worker, &UpdaterWorker::downloadProgress, &window, [&](quint64 received, quint64 total) {
+        controller->onDownloadProgress(received, total);
+        render();
+    });
     QObject::connect(&worker, &UpdaterWorker::stepDone, &window, [&](UpStep step) {
         controller->onStepDone(step);
         render();
@@ -244,13 +237,11 @@ int main(int argc, char** argv) {
         in_flight = false;
         last_failure = c;
         controller->onFailure(c, detail);
-        // B3's fixed copy already says "restored"; a RestoreFailed detail line
-        // (both paths) must stay visible on top of it.
-        if (c == FailureCase::VerifyInstallFailed) {
-            renderWithDetail(detail);
-        } else {
-            render();
-        }
+        // Technical diagnostics remain reproducible evidence without becoming
+        // the primary UI copy (in particular raw WinHTTP and filesystem paths).
+        if (!detail.isEmpty())
+            std::fprintf(stderr, "exosnap-updater: failure %d: %s\n", static_cast<int>(c), qPrintable(detail));
+        render();
     });
 
     // ── Footer actions ───────────────────────────────────────────────────────
@@ -274,8 +265,7 @@ int main(int argc, char** argv) {
         (void)LaunchExoSnapFrom(ResolveOpenDir(*args));
         QCoreApplication::quit();
     };
-    QObject::connect(&window, &UpdaterWindow::openCurrentRequested, &window, openAndQuit);
-    QObject::connect(&window, &UpdaterWindow::openNewRequested, &window, openAndQuit);
+    QObject::connect(&window, &UpdaterWindow::openExoSnapRequested, &window, openAndQuit);
 
     // First paint mirrors the pipeline's first event so the window never shows
     // an all-queued limbo state.

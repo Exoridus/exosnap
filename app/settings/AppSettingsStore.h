@@ -4,6 +4,8 @@
 #include <array>
 #include <string>
 
+#include "../models/CrashReportPolicy.h"
+
 namespace exosnap {
 
 struct PersistedWindowGeometry {
@@ -59,10 +61,10 @@ struct PersistedAppSettings {
     // opt-in feature gated here.
     bool show_quick_controls = false;
 
-    // CRASH-WIRE-R1 (ADR 0017): when true, the next-launch crash dialog is
-    // suppressed and consent is granted silently so the (dormant w/o DSN) report
-    // is sent automatically. Opt-in only; default OFF.
-    bool auto_send_crash_reports = false;
+    // CRASH-POLICY-R2 (ADR 0017): explicit persisted report policy. AskEveryTime
+    // is the privacy-by-default state; NeverSend is an explicit refusal and
+    // suppresses only the report-consent prompt, never local recovery UI.
+    CrashReportPolicy crash_report_policy = CrashReportPolicy::AskEveryTime;
 
     // UPDATE-WIRE-R1 (ADR 0012): the selected update channel — "Stable" | "Preview".
     // Applied immediately on change (persist + re-check); default Stable.
@@ -80,12 +82,10 @@ struct PersistedAppSettings {
     // auto-show; the Settings update-card "What's new" link is never suppressed.
     bool whats_new_suppressed = false;
 
-    // Loop guard for the staged swap updater: the version we launched the updater
-    // for. Set when the updater is launched; cleared on the next startup once the
-    // running build (kVersion) equals it. While a target equals this stamp the
-    // Updates card shows "Restart pending" instead of the Update CTA so a stale
-    // releases-API cache right after an update can't re-offer the same version.
-    // Empty = no pending swap. Default empty.
+    // Process-handoff guard for the staged updater. Set only when the updater's
+    // marked close request is accepted (never on mere process launch), and
+    // discarded by every new app process. Verification reinstalls never write it.
+    // Empty = no committed handoff. Default empty.
     QString applied_version;
 
     // THEME-SLICE-1: accent_id renamed to theme_id. Pre-1.0: stale accent_id key in

@@ -36,12 +36,12 @@ CrashReportOverlay::CrashReportOverlay(const CrashReportModel& model, QWidget* p
 
     // Forward the panel's action signals so the host can connect to the overlay.
     connect(panel_, &CrashReportPanel::sendReportRequested, this, &CrashReportOverlay::sendReportRequested);
-    connect(panel_, &CrashReportPanel::reportOnGitHubRequested, this, &CrashReportOverlay::reportOnGitHubRequested);
     connect(panel_, &CrashReportPanel::openCrashFolderRequested, this, &CrashReportOverlay::openCrashFolderRequested);
-    connect(panel_, &CrashReportPanel::autoSendToggled, this, &CrashReportOverlay::autoSendToggled);
-    // The chrome close X / overflow "Don't send & close" decline AND dismiss the overlay.
+    // Only the visible Don't send button is a committed decline. Chrome close,
+    // Escape and backdrop clicks are neutral dismissals.
     connect(panel_, &CrashReportPanel::dontSendRequested, this, &CrashReportOverlay::dontSendRequested);
     connect(panel_, &CrashReportPanel::dontSendRequested, this, &CrashReportOverlay::closeOverlay);
+    connect(panel_, &CrashReportPanel::dismissRequested, this, &CrashReportOverlay::closeOverlay);
 
     if (parent != nullptr)
         parent->installEventFilter(this);
@@ -67,8 +67,8 @@ bool CrashReportOverlay::isOpen() const noexcept {
     return !isHidden();
 }
 
-bool CrashReportOverlay::autoSendChecked() const {
-    return panel_ != nullptr && panel_->autoSendChecked();
+bool CrashReportOverlay::rememberChoiceChecked() const {
+    return panel_ != nullptr && panel_->rememberChoiceChecked();
 }
 
 void CrashReportOverlay::keyPressEvent(QKeyEvent* event) {

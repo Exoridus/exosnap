@@ -297,8 +297,6 @@ qt_add_executable(exosnap WIN32
     services/RecoveryService.cpp
     services/AtomicFileOps.h
     services/AtomicFileOps.cpp
-    services/CrashIssueReport.h
-    services/CrashIssueReport.cpp
     services/UpdateService.h
     services/UpdateService.cpp
     services/UpdateLaunchPlan.cpp
@@ -1454,7 +1452,7 @@ exosnap_add_gtest(
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
-        # DESIGN-SYNC-R1: CrashReportPanel's auto-send checkbox is now ExoCheckBox.
+        # DESIGN-SYNC-R1: CrashReportPanel's remember-choice draft is an ExoCheckBox.
         ui/widgets/ExoCheckBox.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
@@ -1474,16 +1472,6 @@ exosnap_add_gtest(
 )
 target_include_directories(recording_error_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(recording_error_overlay_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME crash_issue_report_tests
-    TEST_PREFIX crashissue.
-    SOURCES
-        tests/test_crash_issue_report.cpp
-        services/CrashIssueReport.cpp
-    LIBRARIES Qt6::Core
-)
-target_include_directories(crash_issue_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME lucide_icon_tests
@@ -2120,7 +2108,7 @@ set_target_properties(overlay_visual_proof_tests PROPERTIES AUTOMOC ON)
 
 # CRASH-UPDATE-VISUAL-PROOF-R1: offscreen renders of the 0.4.0 crash + update UI
 # surfaces. Applies the real ExoSnap theme (QSS + bundled fonts), so the theme
-# and fonts qrc resources are compiled in via AUTORCC. Produces 6 PNGs under
+# and fonts qrc resources are compiled in via AUTORCC. Produces 7 PNGs under
 # .workspace/screenshots/0.4.0/ for human visual verification.
 exosnap_add_gtest(
     NAME crash_update_visual_proof_tests
@@ -2132,7 +2120,7 @@ exosnap_add_gtest(
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
         ui/theme/ExoSnapTheme.cpp
-        # DESIGN-SYNC-R1: CrashReportPanel's auto-send checkbox is now ExoCheckBox.
+        # DESIGN-SYNC-R1: CrashReportPanel's remember-choice draft is an ExoCheckBox.
         ui/widgets/ExoCheckBox.cpp
         ui/theme/exosnap_theme.qrc
         assets/fonts/exosnap_fonts.qrc

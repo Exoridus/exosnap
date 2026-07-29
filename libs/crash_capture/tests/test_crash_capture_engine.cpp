@@ -234,12 +234,12 @@ TEST_F(CrashEngineLifecycleTest, ConsentGateDoesNotCrashBeforeInit) {
     // Calling consent functions before init must not crash
     EXPECT_NO_FATAL_FAILURE(GiveUserConsent());
     EXPECT_NO_FATAL_FAILURE(RevokeUserConsent());
+    EXPECT_NO_FATAL_FAILURE(ResetUserConsent());
+    EXPECT_FALSE(SendPendingReportOnce());
 }
 
 TEST_F(CrashEngineLifecycleTest, ConsentCanBeToggledRepeatedlyAfterInit) {
-    // The Settings "Send crash reports automatically" toggle (unlike the
-    // one-shot crash dialog) can call GiveUserConsent()/RevokeUserConsent() many
-    // times in a single session as the user flips the setting back and forth.
+    // The Settings policy can reconcile consent repeatedly in one session.
     // Round-tripping must never crash regardless of whether sentry-native is
     // linked.
     CrashCaptureConfig cfg;
@@ -250,8 +250,24 @@ TEST_F(CrashEngineLifecycleTest, ConsentCanBeToggledRepeatedlyAfterInit) {
 
     EXPECT_NO_FATAL_FAILURE(GiveUserConsent());
     EXPECT_NO_FATAL_FAILURE(RevokeUserConsent());
+    EXPECT_NO_FATAL_FAILURE(ResetUserConsent());
     EXPECT_NO_FATAL_FAILURE(GiveUserConsent());
     EXPECT_NO_FATAL_FAILURE(RevokeUserConsent());
+}
+
+TEST_F(CrashEngineLifecycleTest, OneShotConsentAttemptCanBeRepeated) {
+    CrashCaptureConfig cfg;
+    cfg.crash_dir = crash_dir_;
+    cfg.handler_exe_path = ResolveHandlerExePath();
+    cfg.app_version = "0.4.0";
+    Initialize(cfg);
+
+    // Delivery is a runtime result, not a lifecycle invariant: a Sentry-linked
+    // self-build intentionally has no official DSN or pending envelope and may
+    // therefore report that the bounded flush delivered nothing. The wrapper
+    // must still reset consent and remain safely repeatable.
+    EXPECT_NO_FATAL_FAILURE((void)SendPendingReportOnce());
+    EXPECT_NO_FATAL_FAILURE((void)SendPendingReportOnce());
 }
 
 TEST_F(CrashEngineLifecycleTest, SetEncoderContextDoesNotCrash) {

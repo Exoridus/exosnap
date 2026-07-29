@@ -8,8 +8,9 @@
 //     Self-builds never phone home.
 //   - Consent gate: nothing is uploaded until the user explicitly grants consent
 //     (call GiveUserConsent). Consent may be revoked at any time.
-//   - before_send scrubbing: all sensitive paths, usernames, machine names, and
-//     output filenames are stripped before any event leaves the process.
+//   - before_send scrubbing: sensitive paths, usernames, machine names, and
+//     output filenames are stripped from the structured event. A native
+//     minidump is a separate binary channel and can contain module paths.
 //   - Recovery-manifest coordination: the handler writes a "dump_handled" sentinel
 //     so the recovery overlay and the crash dialog do not double-report.
 
@@ -73,14 +74,24 @@ void Shutdown();
 // ---------------------------------------------------------------------------
 // Consent gate — governs whether captured events are uploaded to Sentry.
 //
-// On first use, consent is UNSET (nothing is uploaded).
-// The UI layer calls GiveUserConsent() when the user opts in via the
-// crash-reporting dialog.  RevokeUserConsent() resets to UNSET.
+// On first use, consent is UNKNOWN (nothing is uploaded).
+// GiveUserConsent() persists an affirmative state for automatic reporting.
+// RevokeUserConsent() persists an explicit refusal. ResetUserConsent() returns
+// to the ask state without expressing either choice.
 //
 // These functions are safe to call from any thread after Initialize().
 // ---------------------------------------------------------------------------
 void GiveUserConsent();
 void RevokeUserConsent();
+void ResetUserConsent();
+
+// One-shot delivery for an AskEveryTime decision. sentry-native's consent is a
+// persisted SDK-wide state, so this grants it, makes a bounded flush attempt,
+// and always resets it to UNKNOWN before returning. This avoids silently
+// consenting to later reports in the same app session. Returns false when the
+// transport did not flush within the bounded timeout. Stub/self builds return
+// true without network activity.
+bool SendPendingReportOnce();
 
 // ---------------------------------------------------------------------------
 // Send a single diagnostic message event (Sentry "Verify" step). No-op unless

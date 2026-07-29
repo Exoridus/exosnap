@@ -70,8 +70,18 @@ QPushButton#titlebarWindowButton:hover {
     color: ${text0};
 }
 
+QPushButton#titlebarWindowButton:pressed {
+    background: ${bg4};
+    color: ${text0};
+}
+
 QPushButton#titlebarWindowButton[windowControlRole="close"]:hover {
     background: #b8261d;
+    color: #ffffff;
+}
+
+QPushButton#titlebarWindowButton[windowControlRole="close"]:pressed {
+    background: #971e17;
     color: #ffffff;
 }
 

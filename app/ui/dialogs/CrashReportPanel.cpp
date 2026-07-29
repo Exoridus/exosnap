@@ -6,16 +6,13 @@
 #include "../theme/LucideIcon.h"
 #include "../widgets/ExoCheckBox.h"
 
-#include <QAction>
 #include <QColor>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenu>
-#include <QPaintEvent>
-#include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QString>
@@ -25,16 +22,6 @@ namespace exosnap::ui::dialogs {
 namespace {
 
 using theme::ExoSnapPalette;
-
-// The design's HT tokens map 1:1 onto the palette. The dim/border variants of the
-// semantic colours (success/error) are derived from the base tokens at the
-// frozen design alphas so there are no colour literals at call sites.
-//   successDim 0.13 · successB 0.45 · errorDim 0.13 · errorB 0.42
-QString rgba(const char* base, double alpha) {
-    QColor c(QString::fromLatin1(base));
-    c.setAlphaF(alpha);
-    return QStringLiteral("rgba(%1, %2, %3, %4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF(), 0, 'f', 3);
-}
 
 QString tok(const char* base) {
     return QString::fromLatin1(base);
@@ -50,106 +37,37 @@ QLabel* makeIconLabel(const QString& name, const char* color_base, int size, QWi
     return label;
 }
 
-// Copy — exact strings from the FINAL design (mappe-waves-late.jsx).
+// Short disclosure copy. The native dump is a separate binary channel, so
+// paths/usernames are deliberately not promised absent here.
 const QStringList kSent = {
-    QStringLiteral("Stack trace + exception code"),
-    QStringLiteral("App version + build"),
-    QStringLiteral("OS build"),
-    QStringLiteral("GPU model + driver version"),
-    QStringLiteral("Active encoder backend"),
-    QStringLiteral("Container / codec"),
+    QStringLiteral("Native crash dump, when available"),
+    QStringLiteral("Crash and stack information"),
+    QStringLiteral("Encoder, container, video and audio codec context"),
 };
 const QStringList kNever = {
-    QStringLiteral("File paths & filenames"), QStringLiteral("Recording content"),
-    QStringLiteral("Folder names"),           QStringLiteral("Usernames"),
-    QStringLiteral("Machine name"),
+    QStringLiteral("Recordings or recording content"),
+    QStringLiteral("Output files"),
+    QStringLiteral("Settings or presets"),
+    QStringLiteral("Application logs"),
 };
 
-// A cleanly antialiased filled dot. A styled QFrame at this size renders as a
-// slightly boxy square on some DPRs; a painted circle is crisp everywhere and
-// carries no cascading border (the old QWidget{border-left} on the column used
-// to paint a stray 1px bar onto each of these). No Q_OBJECT — pure paintEvent.
-class BulletDot : public QWidget {
-  public:
-    BulletDot(const QColor& color, QWidget* parent) : QWidget(parent), color_(color) {
-        // Box is one text-line tall so a top-aligned dot centres on the first line.
-        // The box is wider than the painted circle (10px vs 6px) so the circle's
-        // edges never land on the widget boundary; at some DPRs a 6px-wide box
-        // clipped the antialiased edge of a 6px circle into a flattened nub.
-        setFixedSize(10, 17);
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        setStyleSheet(QStringLiteral("background:transparent; border:none;"));
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(Qt::NoPen);
-        p.setBrush(color_);
-        // 6px circle centred in the (wider) box, both horizontally and within
-        // the line-tall box vertically.
-        const QRectF dot((width() - 6) / 2.0, (height() - 6) / 2.0, 6.0, 6.0);
-        p.drawEllipse(dot);
-    }
-
-  private:
-    QColor color_;
-};
-
-QWidget* makeBullet(const char* color_base, QWidget* parent) {
-    return new BulletDot(QColor(tok(color_base)), parent);
-}
-
-// One "What gets sent / Never sent" column. `icon_name` is the Lucide glyph shown
-// before the heading (check for "sent", x for "never sent").
-QWidget* makeTransparencyColumn(const QString& icon_name, const QString& heading, const char* color_base,
-                                const QStringList& items, bool left_rule, QWidget* parent) {
-    auto* col = new QWidget(parent);
-    auto* layout = new QVBoxLayout(col);
-    if (left_rule)
-        layout->setContentsMargins(15, 0, 0, 0);
-    else
-        layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
-
-    auto* title_row = new QWidget(col);
-    auto* title_layout = new QHBoxLayout(title_row);
-    title_layout->setContentsMargins(0, 0, 0, 0);
-    title_layout->setSpacing(6);
-    title_layout->addWidget(makeIconLabel(icon_name, color_base, 12, title_row), 0, Qt::AlignVCenter);
-    auto* title = new QLabel(heading, title_row);
-    title->setStyleSheet(
-        QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10px; letter-spacing:0.6px; "
-                       "text-transform:uppercase; color:%1; background:transparent;")
-            .arg(tok(color_base)));
-    title_layout->addWidget(title, 1);
-    layout->addWidget(title_row);
-
+QWidget* makeDisclosureList(const QString& icon_name, const QString& heading, const char* color_base,
+                            const QStringList& items, QWidget* parent) {
+    QString html =
+        QStringLiteral("<span style=\"font-family:'IBM Plex Mono','Consolas',monospace; color:%1;\">"
+                       "%2&nbsp;&nbsp;%3</span>")
+            .arg(tok(color_base), icon_name == QStringLiteral("check") ? QStringLiteral("✓") : QStringLiteral("×"),
+                 heading.toUpper().toHtmlEscaped());
     for (const QString& item : items) {
-        auto* row = new QWidget(col);
-        auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(0, 0, 0, 0);
-        // Bullet box widened 6px->10px (see BulletDot); spacing trimmed 8->4 so
-        // the item text keeps its original x-position (10+4 == 6+8).
-        row_layout->setSpacing(4);
-        auto* bullet = makeBullet(color_base, row);
-        row_layout->addWidget(bullet, 0, Qt::AlignTop);
-        auto* text = new QLabel(item, row);
-        text->setWordWrap(true);
-        text->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent;")
-                                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut)));
-        row_layout->addWidget(text, 1);
-        layout->addWidget(row);
+        html += QStringLiteral("<br><span style=\"color:%1;\">•&nbsp;&nbsp;%2</span>")
+                    .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), item.toHtmlEscaped());
     }
-    layout->addStretch(1);
-
-    // NOTE: the column separator is now a single explicit divider owned by
-    // buildTransparencyBlock. The previous `QWidget { border-left }` set here
-    // cascaded to every descendant widget — painting a stray 1px bar next to
-    // each bullet and beside the header glyph (the "broken" look). `left_rule`
-    // now only governs the content indent.
-    return col;
+    auto* label = new QLabel(html, parent);
+    label->setTextFormat(Qt::RichText);
+    label->setWordWrap(true);
+    label->setMinimumHeight(24 + items.size() * 22);
+    label->setStyleSheet(QStringLiteral("font-size:11px; background:transparent;"));
+    return label;
 }
 
 QWidget* makeReportLine(const QString& key, const QString& value, QWidget* parent) {
@@ -203,8 +121,8 @@ void CrashReportPanel::applyTheme() {
                       .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf),
                            QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2)));
 
-    // Preserve user-facing state across the rebuild.
-    const bool auto_send = autoSendChecked();
+    // Preserve local draft state across the rebuild.
+    const bool remember_choice = rememberChoiceChecked();
 
     delete content_;
     content_ = new QWidget(this);
@@ -228,14 +146,11 @@ void CrashReportPanel::applyTheme() {
         body_layout->addSpacing(14);
     }
 
-    body_layout->addWidget(buildTransparencyBlock());
+    body_layout->addWidget(buildSummary());
     body_layout->addSpacing(12);
-
-    body_layout->addWidget(buildDetailsSection());
-
-    scrubbed_report_ = qobject_cast<QFrame*>(buildScrubbedReport());
-    scrubbed_report_->setVisible(false);
-    body_layout->addWidget(scrubbed_report_);
+    body_layout->addWidget(buildPrivacyDisclosure());
+    privacy_details_ = buildPrivacyDetails();
+    body_layout->addWidget(privacy_details_);
 
     // divider + opt-in checkbox (default OFF)
     body_layout->addSpacing(14);
@@ -246,13 +161,25 @@ void CrashReportPanel::applyTheme() {
     body_layout->addWidget(divider);
     body_layout->addSpacing(14);
 
-    // Canonical checkbox (mint fill + accent-ink tick) — ExoCheckBox custom-paints,
-    // so no per-widget indicator stylesheet is needed.
-    auto_send_check_ = new widgets::ExoCheckBox(QStringLiteral("Send reports automatically next time"), body);
-    auto_send_check_->setObjectName(QStringLiteral("crashAutoSendCheck"));
-    auto_send_check_->setChecked(false); // opt-in · default OFF
-    connect(auto_send_check_, &widgets::ExoCheckBox::toggled, this, &CrashReportPanel::autoSendToggled);
-    body_layout->addWidget(auto_send_check_);
+    remember_choice_check_ = new widgets::ExoCheckBox(QStringLiteral("Remember this choice for future crashes"), body);
+    remember_choice_check_->setObjectName(QStringLiteral("crashRememberChoiceCheck"));
+    remember_choice_check_->setChecked(false);
+    remember_choice_check_->setAccessibleDescription(
+        QStringLiteral("Send report enables automatic reports. Don't send stops future report prompts. "
+                       "You can change this anytime in Settings."));
+    connect(remember_choice_check_, &widgets::ExoCheckBox::toggled, this,
+            [this](bool /*checked*/) { updateRememberState(); });
+    body_layout->addWidget(remember_choice_check_);
+
+    remember_hint_ =
+        new QLabel(QStringLiteral("Send report will enable automatic reports. Don't send will stop future report "
+                                  "prompts. You can change this anytime in Settings."),
+                   body);
+    remember_hint_->setObjectName(QStringLiteral("crashRememberChoiceHint"));
+    remember_hint_->setWordWrap(true);
+    remember_hint_->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent;")
+                                      .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
+    body_layout->addWidget(remember_hint_);
 
     body_layout->addSpacing(16);
     body_layout->addWidget(buildActionsRow());
@@ -261,30 +188,17 @@ void CrashReportPanel::applyTheme() {
 
     static_cast<QVBoxLayout*>(layout())->addWidget(content_);
 
-    // Restore the preserved opt-in without re-emitting autoSendToggled to the host.
+    // Restore draft state without triggering action/persistence signals.
     {
-        const QSignalBlocker blocker(auto_send_check_);
-        auto_send_check_->setChecked(auto_send);
+        const QSignalBlocker blocker(remember_choice_check_);
+        remember_choice_check_->setChecked(remember_choice);
     }
-
-    // Restore the details-expanded state (buildDetailsSection/buildScrubbedReport always
-    // build in the collapsed layout; re-apply the current expansion after the rebuild).
-    if (scrubbed_report_ != nullptr)
-        scrubbed_report_->setVisible(details_expanded_);
-    if (details_toggle_ != nullptr) {
-        details_toggle_->setChecked(details_expanded_);
-        details_toggle_->setText(details_expanded_ ? QStringLiteral("Hide report details")
-                                                   : QStringLiteral("Show report details"));
-    }
-    if (details_chevron_ != nullptr) {
-        details_chevron_->setPixmap(
-            theme::lucidePixmap(details_expanded_ ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
-                                QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 15, devicePixelRatioF()));
-    }
+    updateRememberState();
+    updatePrivacyDisclosureState();
 }
 
-bool CrashReportPanel::autoSendChecked() const {
-    return auto_send_check_ != nullptr && auto_send_check_->isChecked();
+bool CrashReportPanel::rememberChoiceChecked() const {
+    return remember_choice_check_ != nullptr && remember_choice_check_->isChecked();
 }
 
 QWidget* CrashReportPanel::buildChromeBar() {
@@ -326,7 +240,7 @@ QWidget* CrashReportPanel::buildChromeBar() {
 
     layout->addStretch(1);
 
-    // Window-chrome close X — declines & closes, same as the overflow danger item.
+    // Window-chrome close is a neutral dismissal, never a committed decline.
     auto* close_btn = new QPushButton(bar);
     close_btn->setObjectName(QStringLiteral("crashChromeCloseButton"));
     close_btn->setFixedSize(30, 30);
@@ -337,7 +251,7 @@ QWidget* CrashReportPanel::buildChromeBar() {
     close_btn->setStyleSheet(QStringLiteral("QPushButton { background:transparent; border:none; border-radius:7px; }"
                                             "QPushButton:hover { background:%1; }")
                                  .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise)));
-    connect(close_btn, &QPushButton::clicked, this, &CrashReportPanel::dontSendRequested);
+    connect(close_btn, &QPushButton::clicked, this, &CrashReportPanel::dismissRequested);
     layout->addWidget(close_btn, 0, Qt::AlignVCenter);
 
     return bar;
@@ -367,13 +281,17 @@ QWidget* CrashReportPanel::buildStatement() {
     text_layout->setContentsMargins(0, 0, 0, 0);
     text_layout->setSpacing(3);
 
-    auto* headline = new QLabel(QStringLiteral("ExoSnap closed unexpectedly"), text_col);
+    auto* headline = new QLabel(QStringLiteral("The previous session did not shut down normally"), text_col);
     headline->setStyleSheet(QStringLiteral("font-size:15.5px; font-weight:600; color:%1; background:transparent;")
                                 .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
     text_layout->addWidget(headline);
 
-    auto* sub = new QLabel(
-        QStringLiteral("A problem report is ready. Review it below — nothing is sent unless you choose to."), text_col);
+    const QString availability =
+        model_.dmp_path.isEmpty()
+            ? QStringLiteral("Only limited session context is available. Nothing is sent unless you choose to.")
+            : QStringLiteral("A local crash dump is available and can help determine the cause. Nothing is sent "
+                             "unless you choose to.");
+    auto* sub = new QLabel(availability, text_col);
     sub->setWordWrap(true);
     sub->setStyleSheet(QStringLiteral("font-size:12.5px; color:%1; background:transparent;")
                            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut)));
@@ -400,7 +318,7 @@ QWidget* CrashReportPanel::buildRecordingBanner() {
     auto* icon = makeIconLabel(QStringLiteral("shield-check"), exosnap::ui::theme::ActiveTheme().success, 16, banner);
     layout->addWidget(icon, 0, Qt::AlignTop);
 
-    auto* text = new QLabel(QStringLiteral("Your recording was secured and will be restored on next launch."), banner);
+    auto* text = new QLabel(QStringLiteral("Your interrupted recording data is available for recovery."), banner);
     text->setWordWrap(true);
     text->setStyleSheet(QStringLiteral("font-size:12.5px; color:%1; background:transparent;")
                             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
@@ -408,148 +326,134 @@ QWidget* CrashReportPanel::buildRecordingBanner() {
     return banner;
 }
 
-QWidget* CrashReportPanel::buildTransparencyBlock() {
-    auto* panel = new QFrame(this);
-    panel->setObjectName(QStringLiteral("crashTransparencyPanel"));
-    panel->setStyleSheet(
-        QStringLiteral("#crashTransparencyPanel { background:%1; border:1px solid %2; border-radius:12px; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf2),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
+QWidget* CrashReportPanel::buildSummary() {
+    auto* summary = new QWidget(this);
+    summary->setObjectName(QStringLiteral("crashWhatHappenedSummary"));
+    auto* layout = new QVBoxLayout(summary);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
 
-    auto* layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(15, 14, 15, 14);
-    layout->setSpacing(12);
+    auto* heading = new QLabel(QStringLiteral("WHAT HAPPENED"), summary);
+    heading->setStyleSheet(
+        QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10px; letter-spacing:0.6px; "
+                       "color:%1; background:transparent;")
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
+    layout->addWidget(heading);
 
-    auto* cols = new QWidget(panel);
-    auto* cols_layout = new QHBoxLayout(cols);
-    cols_layout->setContentsMargins(0, 0, 0, 0);
-    cols_layout->setSpacing(16);
+    layout->addWidget(makeReportLine(QStringLiteral("SESSION"), QStringLiteral("Did not shut down normally"), summary));
+    layout->addWidget(makeReportLine(
+        QStringLiteral("CRASH DUMP"),
+        model_.dmp_path.isEmpty() ? QStringLiteral("Unavailable") : QStringLiteral("Available"), summary));
+    layout->addWidget(makeReportLine(QStringLiteral("CAUSE"), QStringLiteral("Not available locally"), summary));
 
-    auto* sent_col = makeTransparencyColumn(QStringLiteral("check"), QStringLiteral("What gets sent"),
-                                            exosnap::ui::theme::ActiveTheme().success, kSent, false, cols);
-    sent_col->setObjectName(QStringLiteral("crashWhatGetsSentColumn"));
-    auto* never_col = makeTransparencyColumn(QStringLiteral("x"), QStringLiteral("Never sent"),
-                                             exosnap::ui::theme::ActiveTheme().error, kNever, true, cols);
-    never_col->setObjectName(QStringLiteral("crashNeverSentColumn"));
+    if (!model_.version.trimmed().isEmpty())
+        layout->addWidget(makeReportLine(QStringLiteral("VERSION"), model_.version, summary));
+    if (!model_.encoder.trimmed().isEmpty())
+        layout->addWidget(makeReportLine(QStringLiteral("ENCODER"), model_.encoder, summary));
+    if (!model_.exception.trimmed().isEmpty())
+        layout->addWidget(makeReportLine(QStringLiteral("EXCEPTION"), model_.exception, summary));
+    if (!model_.module.trimmed().isEmpty())
+        layout->addWidget(makeReportLine(QStringLiteral("MODULE"), model_.module, summary));
+    if (!model_.thread.trimmed().isEmpty())
+        layout->addWidget(makeReportLine(QStringLiteral("THREAD"), model_.thread, summary));
+    if (!model_.stack.isEmpty()) {
+        auto* stack = new QLabel(model_.stack.join(QStringLiteral("\n")), summary);
+        stack->setObjectName(QStringLiteral("crashStackDetails"));
+        stack->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        stack->setStyleSheet(
+            QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; color:%1; "
+                           "border-left:2px solid %2; padding-left:11px; background:transparent;")
+                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
+                     QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2)));
+        stack->setContentsMargins(86, 0, 0, 0);
+        layout->addWidget(stack);
+    }
 
-    // Single hairline divider between the columns (scoped to this one frame, so
-    // it can never cascade onto the bullets/labels the way the old per-column
-    // border-left did).
-    auto* divider = new QFrame(cols);
-    divider->setObjectName(QStringLiteral("crashTransparencyDivider"));
-    divider->setFixedWidth(1);
-    divider->setStyleSheet(QStringLiteral("#crashTransparencyDivider { background:%1; border:none; }")
-                               .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
+    return summary;
+}
 
-    cols_layout->addWidget(sent_col, 1);
-    cols_layout->addWidget(divider, 0);
-    cols_layout->addWidget(never_col, 1);
-    layout->addWidget(cols);
+QWidget* CrashReportPanel::buildPrivacyDisclosure() {
+    auto* disclosure = new QWidget(this);
+    auto* layout = new QVBoxLayout(disclosure);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(3);
+
+    privacy_toggle_ = new QPushButton(QStringLiteral("What is included in this report?"), disclosure);
+    privacy_toggle_->setObjectName(QStringLiteral("crashPrivacyDisclosure"));
+    privacy_toggle_->setCheckable(true);
+    privacy_toggle_->setCursor(Qt::PointingHandCursor);
+    privacy_toggle_->setAccessibleName(QStringLiteral("What is included in this report?"));
+    privacy_toggle_->setAccessibleDescription(QStringLiteral("Expands or collapses the crash report privacy details."));
+    privacy_toggle_->setStyleSheet(
+        QStringLiteral("QPushButton { text-align:left; padding:9px 24px 9px 0; background:transparent; border:none; "
+                       "border-top:1px solid %1; border-radius:0; color:%2; font-size:12.5px; font-weight:600; }"
+                       "QPushButton:hover { color:%3; }")
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac)));
+    connect(privacy_toggle_, &QPushButton::clicked, this, [this](bool expanded) {
+        privacy_expanded_ = expanded;
+        updatePrivacyDisclosureState();
+    });
+
+    auto* chevron_layout = new QHBoxLayout(privacy_toggle_);
+    chevron_layout->setContentsMargins(0, 0, 3, 0);
+    chevron_layout->addStretch(1);
+    privacy_chevron_ = new QLabel(privacy_toggle_);
+    privacy_chevron_->setFixedSize(15, 15);
+    privacy_chevron_->setStyleSheet(QStringLiteral("background:transparent; border:none;"));
+    chevron_layout->addWidget(privacy_chevron_, 0, Qt::AlignVCenter);
+    layout->addWidget(privacy_toggle_);
+
+    auto* summary = new QLabel(
+        QStringLiteral("Includes a native crash dump when available and limited app diagnostics. Recordings are never "
+                       "included."),
+        disclosure);
+    summary->setObjectName(QStringLiteral("crashPrivacySummary"));
+    summary->setWordWrap(true);
+    summary->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent;")
+                               .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
+    layout->addWidget(summary);
+    return disclosure;
+}
+
+QWidget* CrashReportPanel::buildPrivacyDetails() {
+    auto* scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("crashPrivacyDetails"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setFixedHeight(120);
+    scroll->setStyleSheet(QStringLiteral("QScrollArea#crashPrivacyDetails { background:transparent; border:none; }"
+                                         "QScrollArea#crashPrivacyDetails > QWidget > QWidget { "
+                                         "background:transparent; }"));
+
+    auto* details = new QWidget(scroll);
+    details->setMinimumHeight(310);
+    auto* layout = new QVBoxLayout(details);
+    layout->setContentsMargins(0, 10, 0, 0);
+    layout->setSpacing(10);
+
+    auto* included = makeDisclosureList(QStringLiteral("check"), QStringLiteral("Included"),
+                                        exosnap::ui::theme::ActiveTheme().success, kSent, details);
+    auto* excluded = makeDisclosureList(QStringLiteral("x"), QStringLiteral("Not included"),
+                                        exosnap::ui::theme::ActiveTheme().error, kNever, details);
+    layout->addWidget(included);
+    layout->addWidget(excluded);
 
     auto* note = new QLabel(
-        QStringLiteral(
-            "At most a random per-report correlation id is attached — never a persistent or machine identifier."),
-        panel);
+        QStringLiteral("Sent to Sentry's EU region. The native dump is separate from the privacy-scrubbed structured "
+                       "event and can include loaded-module paths, including the ExoSnap install path. Your IP address "
+                       "is used in transit; Sentry is configured not to store it."),
+        details);
+    note->setObjectName(QStringLiteral("crashPrivacyChannelNote"));
     note->setWordWrap(true);
     note->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent;")
                             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
     layout->addWidget(note);
-    return panel;
-}
-
-QWidget* CrashReportPanel::buildDetailsSection() {
-    // Left `layers` icon + text on the button itself; a right `chevron-down` label is
-    // overlaid via an internal layout and rotated (swapped to up) when expanded.
-    details_toggle_ = new QPushButton(this);
-    details_toggle_->setObjectName(QStringLiteral("crashDetailsToggle"));
-    details_toggle_->setCheckable(true);
-    details_toggle_->setCursor(Qt::PointingHandCursor);
-    details_toggle_->setText(QStringLiteral("Show report details"));
-    details_toggle_->setIcon(theme::lucideIcon(
-        QStringLiteral("layers"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, devicePixelRatioF()));
-    details_toggle_->setIconSize(QSize(14, 14));
-    details_toggle_->setStyleSheet(
-        QStringLiteral("QPushButton { text-align:left; padding:10px 13px; background:transparent; border:1px solid %1; "
-                       "border-radius:10px; color:%2; font-size:12.5px; font-weight:500; }"
-                       "QPushButton:hover { border:1px solid %3; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
-                 exosnap::ui::theme::ActiveTheme().line3_override
-                     ? QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line3_override)
-                     : QStringLiteral("rgba(255, 255, 255, 0.20)")));
-    connect(details_toggle_, &QPushButton::clicked, this, &CrashReportPanel::toggleDetails);
-
-    // Right-aligned chevron inside the button's padding (down = collapsed, up = expanded).
-    auto* chevron_layout = new QHBoxLayout(details_toggle_);
-    chevron_layout->setContentsMargins(0, 0, 13, 0);
-    chevron_layout->addStretch(1);
-    details_chevron_ = new QLabel(details_toggle_);
-    details_chevron_->setFixedSize(15, 15);
-    details_chevron_->setStyleSheet(QStringLiteral("background:transparent; border:none;"));
-    details_chevron_->setPixmap(theme::lucidePixmap(QStringLiteral("chevron-down"),
-                                                    QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 15,
-                                                    devicePixelRatioF()));
-    chevron_layout->addWidget(details_chevron_, 0, Qt::AlignVCenter);
-    return details_toggle_;
-}
-
-QWidget* CrashReportPanel::buildScrubbedReport() {
-    auto* frame = new QFrame(this);
-    frame->setObjectName(QStringLiteral("crashScrubbedReport"));
-    frame->setStyleSheet(
-        QStringLiteral("#crashScrubbedReport { background:%1; border:1px solid %2; border-radius:10px; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().bg),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
-
-    auto* root = new QVBoxLayout(frame);
-    root->setContentsMargins(0, 10, 0, 0); // top margin matches the design gap above the report
-    root->setSpacing(0);
-
-    auto* body = new QWidget(frame);
-    auto* body_layout = new QVBoxLayout(body);
-    body_layout->setContentsMargins(15, 13, 15, 13);
-    body_layout->setSpacing(6);
-
-    body_layout->addWidget(makeReportLine(QStringLiteral("EXCEPTION"), model_.exception, body));
-    body_layout->addWidget(makeReportLine(QStringLiteral("MODULE"), model_.module, body));
-    body_layout->addWidget(makeReportLine(QStringLiteral("THREAD"), model_.thread, body));
-
-    // Stack frames — indented under the report keys, with a vertical rule (design).
-    auto* stack_label = new QLabel(model_.stack.join(QStringLiteral("\n")), body);
-    stack_label->setStyleSheet(
-        QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10.5px; color:%1; "
-                       "border-left:2px solid %2; padding-left:11px; background:transparent;")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2)));
-    stack_label->setContentsMargins(86, 0, 0, 0);
-    body_layout->addWidget(stack_label);
-
-    body_layout->addWidget(makeReportLine(QStringLiteral("VERSION"), model_.version, body));
-    body_layout->addWidget(makeReportLine(QStringLiteral("OS"), model_.os, body));
-    body_layout->addWidget(makeReportLine(QStringLiteral("GPU"), model_.gpu, body));
-    body_layout->addWidget(makeReportLine(QStringLiteral("ENCODER"), model_.encoder, body));
-    root->addWidget(body);
-
-    // Footer: read-only note. The raw .dmp is attached but never shown.
-    auto* footer = new QWidget(frame);
-    footer->setStyleSheet(
-        QStringLiteral("border-top:1px solid %1;").arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
-    auto* footer_layout = new QHBoxLayout(footer);
-    footer_layout->setContentsMargins(15, 9, 15, 9);
-    footer_layout->setSpacing(8);
-    auto* lock = makeIconLabel(QStringLiteral("lock"), exosnap::ui::theme::ActiveTheme().dim, 12, footer);
-    footer_layout->addWidget(lock, 0, Qt::AlignTop);
-    auto* footer_text = new QLabel(
-        QStringLiteral("Read-only — this is exactly what uploads. The raw minidump (.dmp) is attached but never shown "
-                       "here."),
-        footer);
-    footer_text->setWordWrap(true);
-    footer_text->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent; border:none;")
-                                   .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
-    footer_layout->addWidget(footer_text, 1);
-    root->addWidget(footer);
-
-    return frame;
+    scroll->setWidget(details);
+    return scroll;
 }
 
 QWidget* CrashReportPanel::buildActionsRow() {
@@ -560,14 +464,15 @@ QWidget* CrashReportPanel::buildActionsRow() {
 
     // Tier 1 — primary "Send report" (Studio Mint accent). The upload glyph sits
     // on the mint fill, so it's tinted with the accent-ink colour.
-    auto* send_btn = new QPushButton(QStringLiteral("Send report"), row);
-    send_btn->setObjectName(QStringLiteral("crashSendButton"));
-    send_btn->setCursor(Qt::PointingHandCursor);
-    send_btn->setIcon(theme::lucideIcon(QStringLiteral("upload"),
-                                        QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac_ink), 14,
-                                        devicePixelRatioF()));
-    send_btn->setIconSize(QSize(14, 14));
-    send_btn->setStyleSheet(
+    send_button_ = new QPushButton(QStringLiteral("Send report"), row);
+    send_button_->setObjectName(QStringLiteral("crashSendButton"));
+    send_button_->setAccessibleName(QStringLiteral("Send report"));
+    send_button_->setCursor(Qt::PointingHandCursor);
+    send_button_->setIcon(theme::lucideIcon(QStringLiteral("upload"),
+                                            QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac_ink), 14,
+                                            devicePixelRatioF()));
+    send_button_->setIconSize(QSize(14, 14));
+    send_button_->setStyleSheet(
         QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:9px; padding:0 16px; "
                        "min-height:36px; max-height:36px; font-size:12.5px; font-weight:600; }"
                        "QPushButton:hover { background:%3; }"
@@ -576,18 +481,19 @@ QWidget* CrashReportPanel::buildActionsRow() {
                  QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac_ink),
                  exosnap::ui::theme::ThemeAccentHover(exosnap::ui::theme::ActiveTheme()),
                  exosnap::ui::theme::ThemeAccentPressed(exosnap::ui::theme::ActiveTheme())));
-    connect(send_btn, &QPushButton::clicked, this, &CrashReportPanel::sendReportRequested);
-    layout->addWidget(send_btn);
+    connect(send_button_, &QPushButton::clicked, this, &CrashReportPanel::sendReportRequested);
+    layout->addWidget(send_button_);
 
     // Tier 2 — secondary decline (outline). This panel is shown on the launch *after*
     // the crash, so the app is already running: offering a restart would throw away the
     // session the user just opened. Declining dismisses the report, exactly like the
     // chrome-bar ×. Matches the recording-error panel's outline secondary so both
     // surfaces share one button language.
-    auto* decline_btn = new QPushButton(QStringLiteral("Don't send"), row);
-    decline_btn->setObjectName(QStringLiteral("crashDeclineButton"));
-    decline_btn->setCursor(Qt::PointingHandCursor);
-    decline_btn->setStyleSheet(
+    decline_button_ = new QPushButton(QStringLiteral("Don't send"), row);
+    decline_button_->setObjectName(QStringLiteral("crashDeclineButton"));
+    decline_button_->setAccessibleName(QStringLiteral("Don't send"));
+    decline_button_->setCursor(Qt::PointingHandCursor);
+    decline_button_->setStyleSheet(
         QStringLiteral(
             "QPushButton { background:transparent; color:%1; border:1px solid %2; border-radius:9px; padding:0 16px; "
             "min-height:34px; max-height:34px; font-size:12.5px; font-weight:500; }"
@@ -597,77 +503,77 @@ QWidget* CrashReportPanel::buildActionsRow() {
                  exosnap::ui::theme::ActiveTheme().line3_override
                      ? QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line3_override)
                      : QStringLiteral("rgba(255, 255, 255, 0.20)")));
-    connect(decline_btn, &QPushButton::clicked, this, &CrashReportPanel::dontSendRequested);
-    layout->addWidget(decline_btn);
+    connect(decline_button_, &QPushButton::clicked, this, &CrashReportPanel::dontSendRequested);
+    layout->addWidget(decline_button_);
 
     layout->addStretch(1);
 
-    // Tier 3 — tertiary "More options" text button. Replaces the cryptic "⋯"
-    // circle; a labelled trigger + right chevron reads as an obvious menu. It
-    // opens the exact same QMenu (Report on GitHub / Open crash folder / decline).
-    overflow_button_ = new QPushButton(QStringLiteral("More options"), row);
-    overflow_button_->setObjectName(QStringLiteral("crashOverflowButton"));
-    overflow_button_->setCursor(Qt::PointingHandCursor);
-    overflow_button_->setLayoutDirection(Qt::RightToLeft); // icon trails the label
-    overflow_button_->setIcon(theme::lucideIcon(QStringLiteral("chevron-down"),
-                                                QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14,
-                                                devicePixelRatioF()));
-    overflow_button_->setIconSize(QSize(14, 14));
-    overflow_button_->setStyleSheet(
-        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:0 10px; "
+    // Tier 3 — directly visible local action. It remains visually quieter than
+    // the consent choices, but no longer hides the useful folder action behind
+    // an overflow menu (or exposes an unrelated GitHub workflow).
+    auto* folder_btn = new QPushButton(QStringLiteral("Open crash folder"), row);
+    folder_btn->setObjectName(QStringLiteral("crashOpenFolderButton"));
+    folder_btn->setAccessibleName(QStringLiteral("Open crash folder"));
+    folder_btn->setCursor(Qt::PointingHandCursor);
+    folder_btn->setIcon(theme::lucideIcon(
+        QStringLiteral("folder"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, devicePixelRatioF()));
+    folder_btn->setIconSize(QSize(14, 14));
+    folder_btn->setStyleSheet(
+        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:0 8px; "
                        "min-height:36px; max-height:36px; color:%1; font-size:12.5px; font-weight:500; }"
-                       "QPushButton:hover { color:%2; }"
-                       "QPushButton::menu-indicator { image: none; width: 0; }")
+                       "QPushButton:hover { color:%2; background:%3; }")
             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
-
-    overflow_menu_ = new QMenu(overflow_button_);
-    overflow_menu_->setStyleSheet(
-        QStringLiteral("QMenu { background:%1; border:1px solid %2; border-radius:11px; padding:5px; }"
-                       "QMenu::item { padding:8px 11px; border-radius:8px; color:%3; font-size:12.5px; }"
-                       "QMenu::item:selected { background:%4; }"
-                       "QMenu::separator { height:1px; background:%5; margin:4px 6px; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
                  QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
-                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme()),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
+                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme())));
+    connect(folder_btn, &QPushButton::clicked, this, &CrashReportPanel::openCrashFolderRequested);
+    layout->addWidget(folder_btn, 0, Qt::AlignVCenter);
 
-    const qreal dpr = devicePixelRatioF();
-    auto* github_action = overflow_menu_->addAction(QStringLiteral("Report on GitHub"));
-    github_action->setIcon(
-        theme::lucideIcon(QStringLiteral("github"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
-    connect(github_action, &QAction::triggered, this, &CrashReportPanel::reportOnGitHubRequested);
-    auto* folder_action = overflow_menu_->addAction(QStringLiteral("Open crash folder"));
-    folder_action->setIcon(
-        theme::lucideIcon(QStringLiteral("folder"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
-    connect(folder_action, &QAction::triggered, this, &CrashReportPanel::openCrashFolderRequested);
-    overflow_menu_->addSeparator();
-    auto* decline_action = overflow_menu_->addAction(QStringLiteral("Don't send & close"));
-    decline_action->setIcon(
-        theme::lucideIcon(QStringLiteral("x"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
-    connect(decline_action, &QAction::triggered, this, &CrashReportPanel::dontSendRequested);
-
-    overflow_button_->setMenu(overflow_menu_);
-    layout->addWidget(overflow_button_, 0, Qt::AlignVCenter);
+    setTabOrder(privacy_toggle_, remember_choice_check_);
+    setTabOrder(remember_choice_check_, send_button_);
+    setTabOrder(send_button_, decline_button_);
+    setTabOrder(decline_button_, folder_btn);
 
     return row;
 }
 
-void CrashReportPanel::toggleDetails() {
-    details_expanded_ = !details_expanded_;
-    if (scrubbed_report_ != nullptr)
-        scrubbed_report_->setVisible(details_expanded_);
-    if (details_toggle_ != nullptr) {
-        details_toggle_->setChecked(details_expanded_);
-        details_toggle_->setText(details_expanded_ ? QStringLiteral("Hide report details")
-                                                   : QStringLiteral("Show report details"));
+void CrashReportPanel::updatePrivacyDisclosureState() {
+    if (privacy_toggle_ != nullptr) {
+        const QSignalBlocker blocker(privacy_toggle_);
+        privacy_toggle_->setChecked(privacy_expanded_);
+        privacy_toggle_->setAccessibleDescription(
+            privacy_expanded_ ? QStringLiteral("Crash report privacy details are expanded. Activate to collapse.")
+                              : QStringLiteral("Crash report privacy details are collapsed. Activate to expand."));
     }
-    if (details_chevron_ != nullptr) {
-        // Swap to an up chevron when expanded (clearer than a CSS rotation in QSS).
-        details_chevron_->setPixmap(
-            theme::lucidePixmap(details_expanded_ ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
+    if (privacy_details_ != nullptr)
+        privacy_details_->setVisible(privacy_expanded_);
+    if (privacy_chevron_ != nullptr) {
+        privacy_chevron_->setPixmap(
+            theme::lucidePixmap(privacy_expanded_ ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
                                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 15, devicePixelRatioF()));
+    }
+    // Expanded content is scroll-bounded and the full card remains within the
+    // 700 px minimum app viewport (30 px overlay margins on each side).
+    setMinimumHeight(privacy_expanded_ ? 640 : 0);
+    updateGeometry();
+}
+
+void CrashReportPanel::updateRememberState() {
+    const bool remember = rememberChoiceChecked();
+    if (remember_hint_ != nullptr)
+        remember_hint_->setVisible(remember);
+    if (send_button_ != nullptr) {
+        send_button_->setText(QStringLiteral("Send report"));
+        send_button_->setAccessibleName(QStringLiteral("Send report"));
+        send_button_->setAccessibleDescription(
+            remember ? QStringLiteral("Sends this report and enables automatic reports for future crashes.")
+                     : QStringLiteral("Sends this report once without changing the saved crash-report policy."));
+    }
+    if (decline_button_ != nullptr) {
+        decline_button_->setText(QStringLiteral("Don't send"));
+        decline_button_->setAccessibleName(QStringLiteral("Don't send"));
+        decline_button_->setAccessibleDescription(
+            remember ? QStringLiteral("Does not send this report and stops future crash-report prompts.")
+                     : QStringLiteral("Does not send this report and keeps asking after future crashes."));
     }
 }
 

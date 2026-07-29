@@ -25,6 +25,17 @@ offline symbolication.
 scrubbed pipeline is extended to **non-fatal recording failures** (a failed Record attempt, not a
 process crash). See *Non-fatal recording errors reuse the crash pipeline* below.
 
+**Updated 2026-07 (crash-dialog action simplification):** The next-launch dialog has one explicit
+delivery path: consent-gated Sentry upload in official builds. The unused Stage-0 prefilled GitHub
+issue builder and its overflow-menu action were removed. The action row is now `Send report`,
+`Don't send`, and a directly visible tertiary `Open crash folder`; self-builds still retain local
+minidumps and the folder action but never offer upload.
+
+**Updated 2026-07 (transactional policy/privacy disclosure):** The old Boolean consent preference
+is replaced by `AskEveryTime | AlwaysSend | NeverSend`. The next-launch dialog now leads with
+truthful local session evidence, distinguishes the structured event from the native dump, and
+commits Remember choices only on an explicit Send/Don't send action.
+
 ## Context
 
 ExoSnap is a native C++/Qt application doing real-time capture, encode, and mux. The defects
@@ -75,27 +86,26 @@ incidental.
 ### The report dialog is separate, single-stage, and explicit
 
 A dedicated crash-report dialog — distinct from the recovery overlay — presents the crash. It is
-**single-stage**: it shows the already-scrubbed report directly. There is no first "raw view" that
-later turns into a separate "anonymized send" window; what the user sees is exactly what would be
-sent ("preview equals payload"). There is no silent send and no pre-checked "upload" box.
+**single-stage** and evidence-first. There is no first raw view followed by a second consent
+window, no pre-checked upload box, and no claim that local summary fields are a byte-for-byte
+preview of both Sentry channels.
 
 Dialog contents and actions:
 
-- A plain statement that ExoSnap crashed, plus — when a recording was active — a reassurance that
-  the recording was secured and will be restored on next launch (via the ADR 0015 recovery
-  manifest).
-- A two-column **"What gets sent / Never sent"** transparency block (adopted from the design
-  mappe mock): the left column lists exactly the allowlisted fields, the right column the
-  categories that are never transmitted (file paths/filenames, recording content, folder names).
-  This makes the scrubbing promise visible at a glance, not buried in fine print.
-- The scrubbed, read-only report in a **collapsed-by-default** details area (stack frame, exception
-  code, app version, GPU/driver, encoder backend), so the dialog is not dominated by a wall of
-  text. The raw binary minidump is never shown here.
-- Actions: **Restart ExoSnap** (primary), **Report on GitHub** (Stage 0 prefilled issue),
-  **Open crash folder** (reveals the raw `.dmp` for users who want it), **Close**. In 0.4.0,
-  when Stage 1 (Sentry EU SaaS) is active, a **Send** action joins them, consent-gated and
-  opt-in. (The design mappe mock shows a Stage-1 "Send report" primary + "Send automatically
-  next time" — that is the target UX for users who enable automated upload.)
+- A plain statement that the previous session did not shut down normally. The next-launch path
+  does not infer a crash cause from the missing clean-exit marker.
+- Recovery availability in the present tense, followed by a flat summary of dump availability,
+  unavailable local cause, previous-session version and non-empty encoder/container/codec context.
+  Empty exception/module/thread/stack fields are omitted.
+- A collapsed-by-default, keyboard-accessible **What is included in this report?** disclosure.
+  It states that the native dump is separate from the privacy-scrubbed structured event, can carry
+  loaded-module/install paths, and is sent to Sentry's EU region only with consent.
+- Actions: **Send report** (primary, present only when Sentry upload is active), **Don't send**
+  (secondary), and a directly visible **Open crash folder** tertiary action. There is no overflow
+  menu and no prefilled GitHub-issue action.
+- An unchecked **Remember this choice for future crashes** draft. Toggle alone has no persistence
+  or consent side effect. Send+remember commits AlwaysSend; Don't send+remember commits NeverSend;
+  X, Escape and backdrop close commit nothing.
 
 ### Two triggers: an immediate reporter and a next-launch check
 
@@ -123,7 +133,7 @@ encoder backend, container/codec) rather than a denylist of fields to remove. Th
 stack is retained but the surrounding metadata is annotated as scrubbed.
 
 **No persistent install identifier.** The report carries no device-persistent id (rejecting the
-design mappe mock's "anonymous install id"), keeping faith with `PRIVACY.md` ("no account system,
+design mappe mock's persistent install id, keeping faith with `PRIVACY.md` ("no account system,
 no analytics"). At most a per-report random correlation id may be attached if a future automated
 backend genuinely needs to de-duplicate a single user's repeated submissions — never a stable id
 that links reports across time.
@@ -133,8 +143,19 @@ that links reports across time.
 Upload is off by default and requires explicit, informed consent (per-report or remembered).
 The client binary contains no token or credential, consistent with ADR 0012.
 
+The persisted policy has three values: `AskEveryTime` (default), `AlwaysSend`, and `NeverSend`.
+Legacy `auto_send_crash_reports=true` migrates to AlwaysSend; false/missing migrates to
+AskEveryTime. NeverSend suppresses the consent prompt only; ADR 0015 recovery remains independent.
+Settings exposes all three values and reconciles SDK consent immediately.
+
+sentry-native 0.15 stores consent at SDK/database scope. A one-shot Send therefore calls give,
+flushes the pending transport work with a bounded timeout, and only then calls
+`sentry_user_consent_reset()` to return to unknown. Resetting immediately after give could strand
+the envelope; leaving consent given would authorize later same-session reports. Remembered
+AlwaysSend uses persistent give; Ask uses reset; NeverSend uses revoke.
+
 **The chosen automated upload target is Sentry SaaS with EU data residency (EU/Germany ingest).**
-GitHub is unsuitable as an *automated* crash-ingest endpoint: it offers no anonymous minidump
+GitHub is unsuitable as an *automated* crash-ingest endpoint: it offers no unauthenticated minidump
 ingest, and the Issues API would require a client-side token, which is forbidden. A self-hosted
 Germany-only endpoint was considered but rejected: self-hosted Sentry is too RAM-heavy for a small
 VPS, and lighter alternatives would require building and hardening custom ingest infrastructure.
@@ -147,10 +168,12 @@ keeps data within the EU, and is available without standing up custom servers.
   default and requires per-report (or remembered) consent.
 - `enable_logs=0` — Crashpad breadcrumb logs are not collected.
 - `debug=0` in Release builds.
-- `before_send` scrubbing via an **allowlist**: only OS build, GPU model/driver version, app
-  version, encoder backend, container/codec, plus the stack/minidump are included. Usernames,
-  file paths (including output path and recording filenames), and the machine name are stripped
-  before the report leaves the process.
+- `before_send` scrubbing via an **allowlist**. Today app code populates encoder backend,
+  container, video codec and audio codec. OS/GPU/app-version tag keys are allowlisted but not
+  currently populated. Usernames, file paths (including output path and recording filenames), and
+  the machine name are stripped from the structured event.
+- The Crashpad minidump is a separate binary channel and can contain loaded-module paths,
+  including a username-bearing install path for a portable install under `%USERPROFILE%`.
 - Crash database at `%LOCALAPPDATA%\ExoSnap\crashes\`.
 - The Sentry DSN is compiled in **only** under `EXOSNAP_OFFICIAL_BUILD`; self-builds never phone
   home. The DSN is a write-only ingest key (not a secret in the ADR 0012 sense — it cannot read
@@ -163,35 +186,14 @@ keeps data within the EU, and is available without standing up custom servers.
 Automated upload is compiled out or hard-disabled in the absence of `EXOSNAP_OFFICIAL_BUILD`,
 exactly like the official-build update gate.
 
-### Staged delivery: assisted manual report first, automated upload later
+### Delivery: consent-gated Sentry upload, local fallback
 
-Report delivery is a two-stage capability so that 0.4.0 ships something useful with **zero
-backend**:
-
-- **Stage 0 — assisted manual report (ships in 0.4.0, no infrastructure).** The crash-report
-  dialog presents the scrubbed, plain-text report and offers: *Copy report* (to clipboard),
-  *Open crash folder* (reveals the `.dmp` so the user can attach it), and *Report on GitHub*
-  (opens a prefilled issue from a `.github/ISSUE_TEMPLATE/crash.*` template with the stack
-  trace and allowlisted metadata pre-populated via URL query). The structured **text** travels
-  in the prefilled issue; the **minidump binary** cannot — GitHub prefill URLs are length-limited
-  (~8 KB) and the Issues API would need a client token — so the user attaches the `.dmp` manually.
-  This is an accepted OSS pattern: full consent, full transparency, no third-party data processor,
-  and no DPA obligation. Users without a GitHub account fall back to the clipboard copy.
-- **Stage 1 — automated opt-in upload to Sentry (EU data residency) — active in 0.4.0 official
-  builds, gated by consent.** The upload target is Sentry SaaS with EU data residency. The DSN is
-  compiled in behind `EXOSNAP_OFFICIAL_BUILD` and verified; opt-in automated upload lights up
-  behind that gate and the consent gate above, replacing the manual attach step for users who
-  consent. Stage 0 remains the no-account / declined-upload fallback. The upload targets Sentry's
-  EU ingest endpoint; a Data Processing Agreement governs the relationship. See the privacy
-  controls enumerated above. The remaining Crash C work — automated `sentry-cli` *symbol* upload so
-  reports symbolicate server-side — is deferred pending a Sentry auth token (PDBs are archived
-  offline in the interim).
-
-The trade-off is explicit: Stage 0 captures fewer reports (manual steps lower conversion) and
-omits the binary unless the user attaches it, but it requires no infrastructure, no account on
-ExoSnap's side, and no data-processing agreement. Stage 1 raises fidelity and conversion at the
-cost of an external dependency and a DPA obligation — the latter is met by the Sentry EU SaaS
-arrangement.
+Official builds offer automated opt-in upload to Sentry with EU data residency. The DSN is
+compiled in behind `EXOSNAP_OFFICIAL_BUILD`; both that gate and explicit user consent must pass.
+Self-builds and users who decline retain the local minidump and can reveal it through **Open crash
+folder**, but the app does not prepare or transmit an alternate GitHub issue. The remaining Crash C
+work — automated `sentry-cli` symbol upload — is deferred pending a Sentry auth token (PDBs are
+archived offline in the interim).
 
 ### Symbol pipeline via release artifacts, not a custom server
 

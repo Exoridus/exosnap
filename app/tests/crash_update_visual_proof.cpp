@@ -6,13 +6,14 @@
 // styling, constructs the real widgets with realistic sample data, then writes
 // PNGs via QWidget rendering for human visual verification.
 //
-// Produces 6 PNGs under .workspace/screenshots/0.4.0/:
+// Produces crash-state PNGs under .workspace/screenshots/0.4.0/:
 //   01-crash-next-launch.png — CrashReportPanel, honest next-launch state
 //                              (no exception/module/thread/stack), not recording.
 //   02-crash-recording.png   — same panel with recording_was_active=true
 //                              (green "recording secured" banner visible).
-//   03-crash-details.png     — next-launch model + populated scrubbed report
-//                              fields, with the details section expanded.
+//   03-crash-privacy-expanded.png — expanded disclosure.
+//   04-crash-no-dump.png     — limited-context path.
+//   05-crash-remember-choice.png — uncommitted remember draft.
 //
 // All renders are composited onto a neutral mid-gray backdrop (#606060) at a
 // devicePixelRatio of 2 so text is crisp when judged at full resolution.
@@ -41,6 +42,7 @@
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/CrashReportPanel.h"
 #include "ui/theme/ExoSnapTheme.h"
+#include "ui/widgets/ExoCheckBox.h"
 
 namespace exosnap {
 namespace {
@@ -154,8 +156,6 @@ class CrashUpdateVisualProofTest : public ::testing::Test {
         CrashReportModel m;
         m.recording_was_active = false;
         m.version = QStringLiteral("0.4.0 \xc2\xb7 build a5d55f1");
-        m.os = QStringLiteral("Windows 11 \xc2\xb7 26100.1742");
-        m.gpu = QStringLiteral("NVIDIA RTX 4070");
         m.encoder = QStringLiteral("NVENC AV1 \xe2\x86\x92 MKV");
         m.crash_dir = QStringLiteral("C:/Users/test/AppData/Local/ExoSnap/crash");
         m.dmp_path = QStringLiteral("C:/Users/test/AppData/Local/ExoSnap/crash/report.dmp");
@@ -241,25 +241,33 @@ TEST_F(CrashUpdateVisualProofTest, Crash_RecordingSecured) {
     EXPECT_TRUE(saved);
 }
 
-TEST_F(CrashUpdateVisualProofTest, Crash_DetailsExpanded) {
-    // Next-launch chrome but with the scrubbed report populated so the expanded
-    // section shows real content.
+TEST_F(CrashUpdateVisualProofTest, Crash_PrivacyExpanded) {
     CrashReportModel m = baseModel();
-    m.exception = QStringLiteral("0xC0000005 \xc2\xb7 ACCESS_VIOLATION");
-    m.module = QStringLiteral("exosnap.dll +0x3f1a2");
-    m.thread = QStringLiteral("\"encoder\" (#7)");
-    m.stack = {QStringLiteral("exo::EncoderNVENC::submitFrame()"), QStringLiteral("exo::Pipeline::onFrameReady()"),
-               QStringLiteral("exo::CaptureLoop::tick()")};
-
     CrashReportPanel panel(m, nullptr);
-
-    // Expand the scrubbed report via the details toggle button.
-    auto* toggle = panel.findChild<QPushButton*>(QStringLiteral("crashDetailsToggle"));
-    ASSERT_NE(toggle, nullptr) << "crashDetailsToggle not found";
+    auto* toggle = panel.findChild<QPushButton*>(QStringLiteral("crashPrivacyDisclosure"));
+    ASSERT_NE(toggle, nullptr) << "crashPrivacyDisclosure not found";
     toggle->click();
     QCoreApplication::processEvents();
 
-    const bool saved = renderAndSave(panel, QStringLiteral("03-crash-details.png"));
+    const bool saved = renderAndSave(panel, QStringLiteral("03-crash-privacy-expanded.png"));
+    EXPECT_TRUE(saved);
+}
+
+TEST_F(CrashUpdateVisualProofTest, Crash_NoDumpAvailable) {
+    CrashReportModel m = baseModel();
+    m.dmp_path.clear();
+    CrashReportPanel panel(m, nullptr);
+    const bool saved = renderAndSave(panel, QStringLiteral("04-crash-no-dump.png"));
+    EXPECT_TRUE(saved);
+}
+
+TEST_F(CrashUpdateVisualProofTest, Crash_RememberChoiceDraft) {
+    CrashReportPanel panel(baseModel(), nullptr);
+    auto* remember = panel.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("crashRememberChoiceCheck"));
+    ASSERT_NE(remember, nullptr);
+    remember->setChecked(true);
+    QCoreApplication::processEvents();
+    const bool saved = renderAndSave(panel, QStringLiteral("05-crash-remember-choice.png"));
     EXPECT_TRUE(saved);
 }
 

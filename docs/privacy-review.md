@@ -9,7 +9,7 @@ data the app processes. It is a **procedure** — a place the egress inventory l
 handful of automated checks that make "nothing new phones home" and "the docs match the code"
 provable instead of a reviewer's hope.
 
-## Egress inventory (E1–E5)
+## Egress inventory (E1–E4)
 
 There are exactly four runtime network call sites in the app, all over WinHTTP, all to GitHub or
 Sentry. `scripts/validate-network-egress.ps1` (CI, every PR) fails if a fifth appears without this
@@ -17,15 +17,14 @@ table being updated and the script's allowlist being consciously extended.
 
 | # | Purpose | Gate · Consent | Fields sent | Recipient / host |
 |---|---|---|---|---|
-| E1 | Crash report upload (Sentry, Stage 1) | Official build only (DSN compiled in under `EXOSNAP_OFFICIAL_BUILD`); **consent-gated** — nothing uploads before `GiveUserConsent()` | Allowlisted tags only (see table below) + crash stack + minidump. Minidump binary carries module paths — see "Minidump module paths" below. | `ingest.de.sentry.io` (EU) |
-| E2 | Stage-0 GitHub issue (assisted, prefilled URL) | Always available (no Official-build gate); user must click "File an issue" and review/submit in the browser | `app_version`, `os`, `gpu`, `encoder`, `exception`, `correlation_id` — allowlisted fields only (`CrashIssueData`) | `github.com/Exoridus/exosnap/issues/new` |
-| E3 | Update check | **Opt-in** — `check_updates_on_start` defaults to `false` (ADR 0045); self-built binaries are additionally blocked at compile time (`IsUpdateCheckEnabled()`) regardless of the setting | No request body, no auth token, no app version. Fixed User-Agent `ExoSnap-UpdateChecker/1.0` (protocol version, not app version) + `Accept`/`X-GitHub-Api-Version` headers. Version comparison is client-side against the fetched releases JSON. | `api.github.com` |
-| E4 | Update package download | Same opt-in gate as E3 (only reached after E3 finds a newer release and the user clicks Update) | No body, no token. Fixed User-Agent `ExoSnap-Updater/1.0`. | GitHub Release asset URLs (`objects.githubusercontent.com` / `github.com`) |
-| E5 | Support bundle (Thema "diagnostics support channel", #194) | User-initiated, local file operation — **no transmission** | N/A — the bundle is a `.zip` written to a location the user picks; ExoSnap never uploads it | None — this is the "local, not egress" entry, kept in the table so "no network path" is explicit rather than merely absent |
+| E1 | Crash report upload (Sentry, Stage 1) | Official build only (DSN compiled in under `EXOSNAP_OFFICIAL_BUILD`); **consent-gated** by Ask/Always/Never policy. One-shot Send flushes the pending envelope before resetting consent. | Allowlisted tags only (see table below) + crash stack + minidump. Minidump binary carries module paths — see "Minidump module paths" below. | `ingest.de.sentry.io` (EU) |
+| E2 | Update check | **Opt-in** — `check_updates_on_start` defaults to `false` (ADR 0045); self-built binaries are additionally blocked at compile time (`IsUpdateCheckEnabled()`) regardless of the setting | No request body, no auth token, no app version. Fixed User-Agent `ExoSnap-UpdateChecker/1.0` (protocol version, not app version) + `Accept`/`X-GitHub-Api-Version` headers. Version comparison is client-side against the fetched releases JSON. | `api.github.com` |
+| E3 | Update package download | Same opt-in gate as E2 (only reached after E2 finds a newer release and the user clicks Update) | No body, no token. Fixed User-Agent `ExoSnap-Updater/1.0`. | GitHub Release asset URLs (`objects.githubusercontent.com` / `github.com`) |
+| E4 | Support bundle (Thema "diagnostics support channel", #194) | User-initiated, local file operation — **no transmission** | N/A — the bundle is a `.zip` written to a location the user picks; ExoSnap never uploads it | None — this is the "local, not egress" entry, kept in the table so "no network path" is explicit rather than merely absent |
 
-**E3 baseline note (ADR 0045).** Before this slice, `check_updates_on_start` defaulted to `true`
+**E2 baseline note (ADR 0045).** Before this slice, `check_updates_on_start` defaulted to `true`
 with no first-run consent step — an Official build silently contacted `api.github.com` on first
-launch, contradicting `PRIVACY.md`'s "opt-in" claim. The default is now `false`; this table's E3
+launch, contradicting `PRIVACY.md`'s "opt-in" claim. The default is now `false`; this table's E2
 row is code-true as written. See ADR 0045 for the full before/after.
 
 ### What is sent (crash-report tag allowlist)
@@ -48,9 +47,9 @@ mapping tables in `PRIVACY.md` or `docs/product-spec.md` §14 in either directio
 | `video_codec` | Selected video codec | Yes |
 | `audio_codec` | Selected audio codec | Yes |
 
-OS/GPU facts reach the user today only via the Stage-0 GitHub issue (E2) and the local crash
-dialog, not the Sentry tag path — a documented, deliberate doc↔code precision (not a leak: less
-is sent than the allowlist permits, never more).
+OS/GPU facts are not populated on the Sentry tag path and are not presented as previous-session
+facts in the next-launch dialog. This is deliberate doc↔code precision: less is sent than the
+allowlist permits, never more.
 
 ### Minidump module paths (E1 detail)
 
@@ -60,8 +59,9 @@ runs only on the structured event, never on the minidump binary — it cannot st
 Program-Files-style install this is not personal; for a **portable install run from under
 `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump. This is
 a real, narrower exception to "paths are stripped" (see `PRIVACY.md`) — it applies only to the
-minidump binary, never to the structured event, the Stage-0 issue, or the crash dialog shown
-beforehand. No code mitigation ships in this slice (see Offene Frage 1 / ADR 0045); the doc
+minidump binary, never to the structured event. The crash dialog discloses this boundary but does
+not display the binary contents. No code mitigation ships in this slice (see Offene Frage 1 /
+ADR 0045); the doc
 precision above is the fix that landed. A forced standard-install-path mitigation remains a
 possible follow-up, tracked as a known limitation rather than silently promised.
 
@@ -85,7 +85,7 @@ Confirmed by code search: no `WinHttpOpen`/socket call exists outside `libs/upda
 - Logs — `exosnap.log`, `engine.jsonl` (rotated) and per-recording `reports/session-*.json`
 - Local crash captures — `%LOCALAPPDATA%\ExoSnap\crashes\*.dmp`
 - Recordings — the output folder the user chooses
-- Support bundle `.zip` — written to a location the user picks (E5 above)
+- Support bundle `.zip` — written to a location the user picks (E4 above)
 
 ## Window-title logging (capture-target privacy)
 
@@ -114,7 +114,7 @@ plugs into the release process.
 - **[CI]** `scripts/validate-privacy-allowlist.ps1` green — the crash-report tag allowlist matches
   `PRIVACY.md` and `docs/product-spec.md` §14, in both directions.
 - **[CI]** `scripts/validate-network-egress.ps1` green — no network primitive or disallowed host
-  literal outside the four known call sites (E1/E3/E4 above).
+  literal outside the four known call sites (E1/E2/E3 above).
 - **[CI]** Crash-scrubber tests green — the allowlist Golden-Set test (`test_crash_scrubber.cpp`)
   and the sentry-free `IsAllowedTagKey`/`ScrubString` suite, on every PR (`build-test` job,
   `ci.yml`). The sentry-linked `before_send` path (tag filtering + the defensive backstop) is

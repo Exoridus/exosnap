@@ -192,12 +192,50 @@ TEST(ResolveUpdateCardState, AvailableWhenNoStamp) {
               QStringLiteral("available"));
 }
 
-// Loop guard (automatic startup check): the updater already launched for this
-// version (applied_version stamp == available), so the card stays "pending".
+// A stamp can only represent an accepted marked handoff in the current process.
+// While it matches the available version, the card stays "pending".
 TEST(ResolveUpdateCardState, PendingWhenStampMatchesAvailable) {
     EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
                                               QStringLiteral("2.0.0")),
               QStringLiteral("pending"));
+}
+
+TEST(ResolveUpdateCardState, UpdaterProcessStartIsRunningNotRestartPending) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(
+                  /*update_available=*/true, /*is_scoop=*/false, QString(), QStringLiteral("2.0.0"),
+                  /*verify_reinstall_mode=*/false, QStringLiteral("1.0.0"),
+                  exosnap::UpdateHandoffPhase::UpdaterRunning),
+              QStringLiteral("updater-running"));
+}
+
+TEST(ResolveUpdateCardState, MarkedCloseHandoffIsTheOnlyRuntimePendingState) {
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(
+                  /*update_available=*/true, /*is_scoop=*/false, QString(), QStringLiteral("2.0.0"),
+                  /*verify_reinstall_mode=*/false, QStringLiteral("1.0.0"),
+                  exosnap::UpdateHandoffPhase::ClosingForHandoff),
+              QStringLiteral("pending"));
+}
+
+TEST(UpdateHandoffPersistence, LaunchFailureOrAbortLeavesNoAppliedVersion) {
+    EXPECT_TRUE(exosnap::AppliedVersionForCommittedHandoff(QString(), false).isEmpty());
+    EXPECT_EQ(exosnap::ResolveUpdateCardState(
+                  /*update_available=*/true, /*is_scoop=*/false, QString(), QStringLiteral("2.0.0"),
+                  /*verify_reinstall_mode=*/false, QStringLiteral("1.0.0"), exosnap::UpdateHandoffPhase::Idle),
+              QStringLiteral("available"));
+}
+
+TEST(UpdateHandoffPersistence, NormalCommittedHandoffStampsTarget) {
+    EXPECT_EQ(exosnap::AppliedVersionForCommittedHandoff(QStringLiteral("2.0.0"), false), QStringLiteral("2.0.0"));
+}
+
+TEST(UpdateHandoffPersistence, VerifyReinstallNeverStampsSameVersion) {
+    EXPECT_TRUE(exosnap::AppliedVersionForCommittedHandoff(QStringLiteral("0.9.0-rc4"), true).isEmpty());
+}
+
+TEST(UpdateHandoffPersistence, EveryFreshProcessDiscardsAStalePendingStamp) {
+    EXPECT_TRUE(exosnap::ReconcileAppliedVersionOnStartup(QStringLiteral("2.0.0")).isEmpty());
+    EXPECT_TRUE(exosnap::ReconcileAppliedVersionOnStartup(QStringLiteral("0.9.0-rc4")).isEmpty());
+    EXPECT_TRUE(exosnap::ReconcileAppliedVersionOnStartup(QString()).isEmpty());
 }
 
 // A newer version than the stamped one is offered normally.
@@ -207,9 +245,8 @@ TEST(ResolveUpdateCardState, AvailableWhenStampIsOlderVersion) {
               QStringLiteral("available"));
 }
 
-// Recovery: a stuck "Restart pending" (updater launched but never swapped) is
-// cleared by a manual check clearing applied_version BEFORE the check runs. With
-// an empty stamp, the same still-applicable version re-arms to "available".
+// Recovery: a manual check clears any in-process handoff stamp before checking.
+// With an empty stamp, the same still-applicable version re-arms to "available".
 TEST(ResolveUpdateCardState, RearmsToAvailableAfterManualCheckClearsStamp) {
     // Automatic re-check with the stamp still set -> pending.
     EXPECT_EQ(exosnap::ResolveUpdateCardState(/*update_available=*/true, /*is_scoop=*/false, QStringLiteral("2.0.0"),
