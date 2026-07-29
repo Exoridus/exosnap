@@ -17,7 +17,7 @@ table being updated and the script's allowlist being consciously extended.
 
 | # | Purpose | Gate · Consent | Fields sent | Recipient / host |
 |---|---|---|---|---|
-| E1 | Crash report upload (Sentry, Stage 1) | Official build only (DSN compiled in under `EXOSNAP_OFFICIAL_BUILD`); **consent-gated** — nothing uploads before `GiveUserConsent()` | Allowlisted tags only (see table below) + crash stack + minidump. Minidump binary carries module paths — see "Minidump module paths" below. | `ingest.de.sentry.io` (EU) |
+| E1 | Crash report upload (Sentry, Stage 1) | Official build only (DSN compiled in under `EXOSNAP_OFFICIAL_BUILD`); **consent-gated** by Ask/Always/Never policy. One-shot Send flushes the pending envelope before resetting consent. | Allowlisted tags only (see table below) + crash stack + minidump. Minidump binary carries module paths — see "Minidump module paths" below. | `ingest.de.sentry.io` (EU) |
 | E2 | Update check | **Opt-in** — `check_updates_on_start` defaults to `false` (ADR 0045); self-built binaries are additionally blocked at compile time (`IsUpdateCheckEnabled()`) regardless of the setting | No request body, no auth token, no app version. Fixed User-Agent `ExoSnap-UpdateChecker/1.0` (protocol version, not app version) + `Accept`/`X-GitHub-Api-Version` headers. Version comparison is client-side against the fetched releases JSON. | `api.github.com` |
 | E3 | Update package download | Same opt-in gate as E2 (only reached after E2 finds a newer release and the user clicks Update) | No body, no token. Fixed User-Agent `ExoSnap-Updater/1.0`. | GitHub Release asset URLs (`objects.githubusercontent.com` / `github.com`) |
 | E4 | Support bundle (Thema "diagnostics support channel", #194) | User-initiated, local file operation — **no transmission** | N/A — the bundle is a `.zip` written to a location the user picks; ExoSnap never uploads it | None — this is the "local, not egress" entry, kept in the table so "no network path" is explicit rather than merely absent |
@@ -47,9 +47,9 @@ mapping tables in `PRIVACY.md` or `docs/product-spec.md` §14 in either directio
 | `video_codec` | Selected video codec | Yes |
 | `audio_codec` | Selected audio codec | Yes |
 
-OS/GPU facts reach the user today only via the local crash dialog, not the Sentry tag path — a
-documented, deliberate doc↔code precision (not a leak: less is sent than the allowlist permits,
-never more).
+OS/GPU facts are not populated on the Sentry tag path and are not presented as previous-session
+facts in the next-launch dialog. This is deliberate doc↔code precision: less is sent than the
+allowlist permits, never more.
 
 ### Minidump module paths (E1 detail)
 
@@ -59,8 +59,9 @@ runs only on the structured event, never on the minidump binary — it cannot st
 Program-Files-style install this is not personal; for a **portable install run from under
 `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump. This is
 a real, narrower exception to "paths are stripped" (see `PRIVACY.md`) — it applies only to the
-minidump binary, never to the structured event or the crash dialog shown
-beforehand. No code mitigation ships in this slice (see Offene Frage 1 / ADR 0045); the doc
+minidump binary, never to the structured event. The crash dialog discloses this boundary but does
+not display the binary contents. No code mitigation ships in this slice (see Offene Frage 1 /
+ADR 0045); the doc
 precision above is the fix that landed. A forced standard-install-path mitigation remains a
 possible follow-up, tracked as a known limitation rather than silently promised.
 

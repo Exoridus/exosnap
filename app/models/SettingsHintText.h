@@ -160,13 +160,10 @@ inline const QString kVideoHdrMode =
                                 "Record native HDR10 keeps the original PQ/BT.2020 signal but needs HEVC or AV1.<br>"
                                 "No effect when the display is not HDR."));
 
-// ---- Crash reporting (Developer/Advanced card) ----
-// Mirrors the crash dialog's "Send reports automatically next time" opt-in
-// (CrashReportPanel) so the choice can be revisited later without waiting for
-// another crash.
+// ---- Crash reporting (Developer card) ----
 inline const QString kCrashReporting =
-    QStringLiteral("Off \xC2\xB7 the next crash asks again. On \xC2\xB7 future crashes are sent automatically, "
-                   "no dialog.");
+    QStringLiteral("Ask every time keeps each report opt-in. Send automatically remembers consent. Never send "
+                   "suppresses future report prompts but does not hide local recording recovery.");
 
 // ---- Skipped (control does not exist in current UI) ----
 // kPerTrackGain          — per-track gain (0.6 wave)

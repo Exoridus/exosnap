@@ -31,15 +31,13 @@ class CrashReportOverlay : public QWidget {
     void closeOverlay();
     bool isOpen() const noexcept;
 
-    // Whether the panel's "Send reports automatically next time" opt-in is checked.
-    bool autoSendChecked() const;
+    bool rememberChoiceChecked() const;
 
   signals:
     // Forwarded from the embedded CrashReportPanel.
     void sendReportRequested();
     void openCrashFolderRequested();
     void dontSendRequested();
-    void autoSendToggled(bool checked);
 
     // Emitted whenever the overlay is dismissed (Escape / backdrop / chrome X).
     void closed();

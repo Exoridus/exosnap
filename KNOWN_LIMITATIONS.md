@@ -374,7 +374,8 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 ## Crash reporting and updates (0.6.0)
 
 - **Crash reporting is opt-in and consent-gated.** Capture is local-first (out-of-process Crashpad).
-  Nothing leaves the machine without an explicit choice on the next-launch crash dialog.
+  `Ask every time` is the default; `Send automatically` and `Never send` are explicit, revisitable
+  policies. `Never send` suppresses only the report prompt, not local recording recovery.
 - **Crash detection is next-launch only.** Crashes are surfaced and offered for reporting on the
   *following* launch (clean-exit marker + session sidecar). An immediate in-session crash reporter
   is deferred.

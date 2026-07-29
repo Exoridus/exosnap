@@ -5045,25 +5045,31 @@ void ConfigPage::buildDeveloperCard() {
         dev_layout->addWidget(makeSettingsRow(developer_card_, QStringLiteral("NVTX / profiling markers"), nullptr,
                                               QStringLiteral("Planned for a future build"), nvtx_check));
 
-        // Crash-report auto-send consent -- mirrors the crash dialog's "Send reports
-        // automatically next time" opt-in (CrashReportPanel::autoSendChecked). Placed
-        // here so a consent choice made from the crash dialog can be revisited later
-        // without waiting for another crash. MainWindow wires
-        // autoSendCrashReportsToggled to crash_capture::GiveUserConsent() /
-        // RevokeUserConsent(): turning this off revokes consent so the next crash
-        // shows the consent dialog again; turning it on grants silent auto-send
-        // immediately.
+        // Explicit three-state policy. Ask and Never must remain distinguishable;
+        // MainWindow reconciles the corresponding Sentry consent immediately.
         {
-            crash_reports_auto_send_check_ = new ui::widgets::ExoToggle(developer_card_);
-            crash_reports_auto_send_check_->setObjectName(QStringLiteral("crashReportsAutoSendToggle"));
-            crash_reports_auto_send_check_->setOn(auto_send_crash_reports_);
-            dev_layout->addWidget(
-                makeSettingsRow(developer_card_, QStringLiteral("Send crash reports automatically"),
-                                new ui::widgets::InfoHintIcon(ui::hints::kCrashReporting, developer_card_), QString(),
-                                crash_reports_auto_send_check_));
-            connect(crash_reports_auto_send_check_, &ui::widgets::ExoToggle::toggled, this, [this](bool checked) {
-                auto_send_crash_reports_ = checked;
-                emit autoSendCrashReportsToggled(checked);
+            crash_report_policy_combo_ = new QComboBox(developer_card_);
+            crash_report_policy_combo_->setObjectName(QStringLiteral("crashReportPolicyCombo"));
+            crash_report_policy_combo_->addItem(QStringLiteral("Ask every time"),
+                                                static_cast<int>(CrashReportPolicy::AskEveryTime));
+            crash_report_policy_combo_->addItem(QStringLiteral("Send automatically"),
+                                                static_cast<int>(CrashReportPolicy::AlwaysSend));
+            crash_report_policy_combo_->addItem(QStringLiteral("Never send"),
+                                                static_cast<int>(CrashReportPolicy::NeverSend));
+            crash_report_policy_combo_->setFixedWidth(180);
+            crash_report_policy_combo_->setProperty("settingsRowInput", true);
+            const int initial_index = crash_report_policy_combo_->findData(static_cast<int>(crash_report_policy_));
+            crash_report_policy_combo_->setCurrentIndex(initial_index >= 0 ? initial_index : 0);
+            dev_layout->addWidget(makeSettingsRow(
+                developer_card_, QStringLiteral("Crash reports"),
+                new ui::widgets::InfoHintIcon(ui::hints::kCrashReporting, developer_card_),
+                QStringLiteral(
+                    "May include a native crash dump and limited diagnostics. Recordings are never included."),
+                crash_report_policy_combo_));
+            connect(crash_report_policy_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+                const auto policy = static_cast<CrashReportPolicy>(crash_report_policy_combo_->itemData(index).toInt());
+                crash_report_policy_ = policy;
+                emit crashReportPolicyChanged(policy);
             });
         }
 
@@ -5770,12 +5776,15 @@ void ConfigPage::setDeveloperLogLevel(const QString& level) {
     developer_log_level_combo_->setCurrentIndex(idx);
 }
 
-void ConfigPage::setAutoSendCrashReports(bool on) {
-    auto_send_crash_reports_ = on;
-    if (!crash_reports_auto_send_check_)
+void ConfigPage::setCrashReportPolicy(CrashReportPolicy policy) {
+    crash_report_policy_ = policy;
+    if (!crash_report_policy_combo_)
         return; // Defensive only -- the Developer card is built eagerly in the constructor.
-    const QSignalBlocker blocker(crash_reports_auto_send_check_);
-    crash_reports_auto_send_check_->setOn(on);
+    const int index = crash_report_policy_combo_->findData(static_cast<int>(policy));
+    if (index < 0)
+        return;
+    const QSignalBlocker blocker(crash_report_policy_combo_);
+    crash_report_policy_combo_->setCurrentIndex(index);
 }
 
 void ConfigPage::setThemeId(const QString& theme_id) {

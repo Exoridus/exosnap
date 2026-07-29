@@ -1109,7 +1109,7 @@ unimplemented behavior.
 **Crash reporting.**
 
 - **Opt-in and consent-gated**, local-first (out-of-process Crashpad). Nothing leaves the machine
-  without an explicit choice on the next-launch crash dialog.
+  without an explicit current or previously remembered choice.
 - **A crash always leaves a local minidump.** Official builds capture it out-of-process via
   Crashpad; builds without it fall back to an in-process handler. The dump stays on the machine
   and is never uploaded without consent.
@@ -1119,12 +1119,25 @@ unimplemented behavior.
   upload. The crash dialog does not construct or open a prefilled GitHub issue.
 - **Crash-dialog actions:** `Send report` (when the official upload path is active), `Don't send`
   and a directly visible tertiary `Open crash folder`. There is no overflow menu.
-- Reports are privacy-scrubbed (see Privacy).
-- **Consent is revisitable from Settings.** The crash dialog's "Send reports automatically next
-  time" opt-in is not a one-way choice: **Settings → Advanced → "Send crash reports
-  automatically"** shows and controls the same consent state. Turning it on grants silent
-  auto-send immediately (no need to wait for the next crash); turning it off revokes consent, so
-  the next crash shows the consent dialog again instead of auto-sending.
+- The dialog leads with the truthful next-launch fact ("the previous session did not shut down
+  normally"), recovery availability, dump availability, cause availability and the non-empty
+  version/encoder context from the previous-session sidecar. It does not render empty
+  exception/module/thread/stack rows or substitute current-machine OS/GPU probes as crash facts.
+- Privacy details are a collapsed, keyboard-accessible disclosure. They distinguish the
+  privacy-scrubbed structured event from the native minidump binary, including the dump's possible
+  loaded-module paths and IP transit to Sentry's EU ingest region.
+- **Persisted policy:** `Ask every time` (default), `Send automatically`, or `Never send`.
+  Migration maps legacy `auto_send_crash_reports=true` to `Send automatically`; false or a missing
+  key maps to `Ask every time`, never to `Never send`. `Never send` suppresses only the report
+  consent prompt; the independent local recording-recovery surface remains available.
+- The dialog checkbox is **Remember this choice for future crashes**, unchecked by default. It is
+  draft state only: Send + remember commits `Send automatically`; Don't send + remember commits
+  `Never send`; either action without remember leaves `Ask every time`; close, Escape and backdrop
+  dismissals never change policy. Settings → Developer → **Crash reports** exposes all three
+  choices and applies the corresponding consent state immediately.
+- A Send action without remember is one-shot consent. The app releases and flushes the pending
+  Sentry envelope, then resets sentry-native consent to unknown, so later reports in the same
+  session do not inherit that decision. Remembered automatic send remains persistent until changed.
 
 **Signing status.** Builds are **not yet code-signed** (portable ZIP and MSI); Windows SmartScreen
 may warn on first launch. ExoSnap participates in the SignPath Foundation free code-signing program;
@@ -1160,8 +1173,7 @@ release binaries will be signed once the certificate is issued.
 
   plus the crash stack/minidump — nothing else. Only `encoder_backend`/`container`/`video_codec`/
   `audio_codec` are populated on the Sentry path today; `os.*`/`gpu.*`/`app.version` are allowlisted
-  (so a future change could set them) but currently reach the user only via the local crash dialog,
-  not the Sentry upload. Kept honest by
+  (so a future change could set them) but are not populated by current app code. Kept honest by
   `scripts/validate-privacy-allowlist.ps1` (see `docs/privacy-review.md`).
 - **Never sent (structured event):** usernames, file paths (including output folder and recording
   filenames), machine name, breadcrumb logs. Recording content is never captured. No persistent

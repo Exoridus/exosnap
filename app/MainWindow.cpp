@@ -96,7 +96,6 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyle>
-#include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTextStream>
 #include <QThread>
@@ -511,6 +510,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // log-level now that it is known. AppLog::init() (above) already ran with the
     // "record everything" default, so early-startup entries are unaffected.
     diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(persisted_settings_.developer_log_level));
+    // Reconcile the SDK-wide persisted consent with the explicit app policy
+    // before any report UI is considered in this process.
+    switch (persisted_settings_.crash_report_policy) {
+    case CrashReportPolicy::AskEveryTime:
+        applyCrashConsentAction(CrashConsentAction::ResetToAsk);
+        break;
+    case CrashReportPolicy::AlwaysSend:
+        applyCrashConsentAction(CrashConsentAction::GrantPersistent);
+        break;
+    case CrashReportPolicy::NeverSend:
+        applyCrashConsentAction(CrashConsentAction::Revoke);
+        break;
+    }
     // ADR 0033: sync the present provider opt-in from the persisted setting now
     // that the settings store has been loaded. The provider was constructed with
     // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
@@ -1389,13 +1401,16 @@ void MainWindow::checkAndShowCrashReportOverlay() {
     if (!pending_crash_)
         return;
 
-    // Auto-send path: the user previously opted into silent send. Grant consent
-    // (dormant w/o DSN) and skip the dialog entirely.
-    if (persisted_settings_.auto_send_crash_reports) {
-        crash_capture::GiveUserConsent();
+    const CrashPromptDisposition disposition = ResolveCrashPromptDisposition(persisted_settings_.crash_report_policy);
+    if (disposition == CrashPromptDisposition::SuppressAndSend) {
         diagnostics::AppLog::info(
             QStringLiteral("crash"),
             QStringLiteral("Auto-send enabled — consent granted silently; crash dialog suppressed"));
+        return;
+    }
+    if (disposition == CrashPromptDisposition::SuppressWithoutSend) {
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Crash-report policy is Never send; consent prompt suppressed"));
         return;
     }
 
@@ -1420,19 +1435,10 @@ void MainWindow::openCrashReportOverlay() {
     ui::dialogs::CrashReportModel model;
     model.recording_was_active = recording_was_active;
 
-    // Version: "<version> · build <sha>" when a short SHA is available.
-    const QString version = QString::fromUtf8(exosnap::build::kVersion);
-    const QString sha = QString::fromUtf8(exosnap::build::kGitCommit);
-    model.version =
-        (sha.isEmpty() || sha == QStringLiteral("Unavailable")) ? version : version + QStringLiteral(" · build ") + sha;
-
-    model.os = QSysInfo::prettyProductName() + QStringLiteral(" · ") + QSysInfo::kernelVersion();
-
-    // GPU: CapabilitySet exposes the adapter name only (no driver version).
-    if (runtime_caps_ready_ && !runtime_caps_.gpu_adapter_name.empty())
-        model.gpu = QString::fromStdString(runtime_caps_.gpu_adapter_name);
-    else
-        model.gpu = QStringLiteral("—");
+    // The sidecar identifies the previous session version. Do not substitute
+    // the currently running build or current-machine probe results as though
+    // they were facts captured at the abnormal shutdown.
+    model.version = QString::fromStdString(pending_crash_->app_version);
 
     // Encoder: "<BACKEND> <video> → <container>" e.g. "NVENC AV1 → MKV".
     const QString backend = QString::fromStdString(pending_crash_->encoder_backend).toUpper();
@@ -1464,12 +1470,17 @@ void MainWindow::openCrashReportOverlay() {
     crash_overlay_->hide();
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::sendReportRequested, this, [this]() {
-        crash_capture::GiveUserConsent();
-        if (crash_overlay_ && crash_overlay_->autoSendChecked()) {
-            persisted_settings_.auto_send_crash_reports = true;
+        const bool remember = crash_overlay_ && crash_overlay_->rememberChoiceChecked();
+        const CrashReportDecision decision = ResolveCrashReportDecision(CrashReportAction::SendReport, remember);
+        if (decision.persisted_policy.has_value()) {
+            persisted_settings_.crash_report_policy = *decision.persisted_policy;
             settings_store_.Save(persisted_settings_);
         }
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User granted crash-report consent (send)"));
+        const bool delivered = applyCrashConsentAction(decision.consent_action);
+        diagnostics::AppLog::info(
+            QStringLiteral("crash"),
+            delivered ? QStringLiteral("User granted crash-report consent; pending report released")
+                      : QStringLiteral("User granted one-shot crash-report consent, but the transport did not flush"));
         if (crash_overlay_)
             crash_overlay_->closeOverlay();
     });
@@ -1478,13 +1489,16 @@ void MainWindow::openCrashReportOverlay() {
             [this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(crash_dir_))); });
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::dontSendRequested, this, [this]() {
-        // The overlay already dismisses itself on this signal; just log.
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User declined crash report (don't send)"));
-    });
-
-    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::autoSendToggled, this, [this](bool checked) {
-        persisted_settings_.auto_send_crash_reports = checked;
-        settings_store_.Save(persisted_settings_);
+        const bool remember = crash_overlay_ && crash_overlay_->rememberChoiceChecked();
+        const CrashReportDecision decision = ResolveCrashReportDecision(CrashReportAction::DontSend, remember);
+        if (decision.persisted_policy.has_value()) {
+            persisted_settings_.crash_report_policy = *decision.persisted_policy;
+            settings_store_.Save(persisted_settings_);
+        }
+        applyCrashConsentAction(decision.consent_action);
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  remember ? QStringLiteral("User declined and disabled future crash-report prompts")
+                                           : QStringLiteral("User declined this crash report"));
     });
 
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this, [this]() {
@@ -4180,22 +4194,41 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
     }
 }
 
-void MainWindow::onAutoSendCrashReportsToggled(bool enabled) {
-    persisted_settings_.auto_send_crash_reports = enabled;
+bool MainWindow::applyCrashConsentAction(CrashConsentAction action) {
+    switch (action) {
+    case CrashConsentAction::None:
+        return true;
+    case CrashConsentAction::SendPendingOnce:
+        return crash_capture::SendPendingReportOnce();
+    case CrashConsentAction::GrantPersistent:
+        crash_capture::GiveUserConsent();
+        return true;
+    case CrashConsentAction::ResetToAsk:
+        crash_capture::ResetUserConsent();
+        return true;
+    case CrashConsentAction::Revoke:
+        crash_capture::RevokeUserConsent();
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::onCrashReportPolicyChanged(CrashReportPolicy policy) {
+    persisted_settings_.crash_report_policy = policy;
     settings_store_.Save(persisted_settings_);
 
-    if (enabled) {
-        // Matches the crash dialog's silent-consent path (checkAndShowCrashReportOverlay):
-        // grant consent immediately rather than waiting for the next crash.
-        crash_capture::GiveUserConsent();
+    if (policy == CrashReportPolicy::AlwaysSend) {
+        applyCrashConsentAction(CrashConsentAction::GrantPersistent);
         diagnostics::AppLog::info(QStringLiteral("crash"),
-                                  QStringLiteral("Auto-send enabled from Settings — consent granted"));
+                                  QStringLiteral("Crash-report policy changed to Send automatically"));
+    } else if (policy == CrashReportPolicy::NeverSend) {
+        applyCrashConsentAction(CrashConsentAction::Revoke);
+        diagnostics::AppLog::info(QStringLiteral("crash"),
+                                  QStringLiteral("Crash-report policy changed to Never send; consent revoked"));
     } else {
-        // Revoke so the next crash shows the consent dialog again instead of
-        // silently auto-sending.
-        crash_capture::RevokeUserConsent();
+        applyCrashConsentAction(CrashConsentAction::ResetToAsk);
         diagnostics::AppLog::info(QStringLiteral("crash"),
-                                  QStringLiteral("Auto-send disabled from Settings — consent revoked"));
+                                  QStringLiteral("Crash-report policy changed to Ask every time"));
     }
 }
 
@@ -4877,8 +4910,8 @@ void MainWindow::buildConfigPage() {
     config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
     connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
             &MainWindow::onPresentDiagnosticsOptInToggled);
-    config_page_->setAutoSendCrashReports(persisted_settings_.auto_send_crash_reports);
-    connect(config_page_, &ConfigPage::autoSendCrashReportsToggled, this, &MainWindow::onAutoSendCrashReportsToggled);
+    config_page_->setCrashReportPolicy(persisted_settings_.crash_report_policy);
+    connect(config_page_, &ConfigPage::crashReportPolicyChanged, this, &MainWindow::onCrashReportPolicyChanged);
     // Route Settings webcam panel Rescan through the webcam notifier.
     // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
     auto* setup_panel =

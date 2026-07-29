@@ -343,11 +343,8 @@ class MainWindow : public QMainWindow {
     // elevation state.
     void onPresentDiagnosticsOptInToggled(bool enabled);
 
-    // Crash-report auto-send consent toggle (Settings > Developer/Advanced card):
-    // persist the choice and grant/revoke crash_capture consent to match. Turning
-    // it off means the next crash shows the consent dialog again instead of
-    // silently auto-sending.
-    void onAutoSendCrashReportsToggled(bool enabled);
+    void onCrashReportPolicyChanged(CrashReportPolicy policy);
+    bool applyCrashConsentAction(CrashConsentAction action);
 
     // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
     // the paused banner) while recording / remuxing.

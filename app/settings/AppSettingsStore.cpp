@@ -10,9 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 19: WHATS-NEW adds whats_new_suppressed.
-// Pre-1.0: no migration; missing key defaults to false.
-constexpr int kSettingsVersionCurrent = 19;
+// Bump to 20: CRASH-POLICY-R2 replaces the legacy Boolean with an explicit
+// AskEveryTime / AlwaysSend / NeverSend value.
+constexpr int kSettingsVersionCurrent = 20;
 
 } // namespace
 
@@ -85,9 +85,20 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("crash"));
-    // CRASH-WIRE-R1: auto-send opt-in (default OFF).
-    // Pre-1.0: no migration; missing key defaults to false.
-    persisted.auto_send_crash_reports = settings.value(QStringLiteral("auto_send_crash_reports"), false).toBool();
+    // CRASH-POLICY-R2: migrate the old Boolean without turning a historical
+    // false/missing value into a permanent refusal.
+    const QString persisted_policy = settings.value(QStringLiteral("report_policy")).toString();
+    if (persisted_policy == QStringLiteral("always_send")) {
+        persisted.crash_report_policy = CrashReportPolicy::AlwaysSend;
+    } else if (persisted_policy == QStringLiteral("never_send")) {
+        persisted.crash_report_policy = CrashReportPolicy::NeverSend;
+    } else if (persisted_policy == QStringLiteral("ask_every_time")) {
+        persisted.crash_report_policy = CrashReportPolicy::AskEveryTime;
+    } else if (settings.value(QStringLiteral("auto_send_crash_reports"), false).toBool()) {
+        persisted.crash_report_policy = CrashReportPolicy::AlwaysSend;
+    } else {
+        persisted.crash_report_policy = CrashReportPolicy::AskEveryTime;
+    }
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("update"));
@@ -198,8 +209,19 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("crash"));
-    // CRASH-WIRE-R1: auto-send opt-in.
-    settings.setValue(QStringLiteral("auto_send_crash_reports"), settings_snapshot.auto_send_crash_reports);
+    QString crash_policy = QStringLiteral("ask_every_time");
+    switch (settings_snapshot.crash_report_policy) {
+    case CrashReportPolicy::AskEveryTime:
+        break;
+    case CrashReportPolicy::AlwaysSend:
+        crash_policy = QStringLiteral("always_send");
+        break;
+    case CrashReportPolicy::NeverSend:
+        crash_policy = QStringLiteral("never_send");
+        break;
+    }
+    settings.setValue(QStringLiteral("report_policy"), crash_policy);
+    settings.remove(QStringLiteral("auto_send_crash_reports"));
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("update"));

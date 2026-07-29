@@ -105,30 +105,30 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 19: WHATS-NEW adds whats_new_suppressed.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 19);
+    // Version bumped to 20: crash-report policy replaces the legacy Boolean.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 20);
 }
 
-// CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultAutoSendCrashReportsIsFalse) {
+TEST(AppSettingsStoreTest, CrashReportPolicy_DefaultsToAskEveryTime) {
     PersistedAppSettings settings;
-    EXPECT_FALSE(settings.auto_send_crash_reports);
+    EXPECT_EQ(settings.crash_report_policy, CrashReportPolicy::AskEveryTime);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AutoSendCrashReports_True) {
+TEST(AppSettingsStoreTest, CrashReportPolicy_RoundTripsAllThreeStates) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.auto_send_crash_reports = true;
-    store.Save(settings);
-
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_TRUE(loaded.auto_send_crash_reports);
+    for (const CrashReportPolicy policy :
+         {CrashReportPolicy::AskEveryTime, CrashReportPolicy::AlwaysSend, CrashReportPolicy::NeverSend}) {
+        settings.crash_report_policy = policy;
+        store.Save(settings);
+        EXPECT_EQ(store.Load().crash_report_policy, policy);
+    }
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingAutoSendCrashReportsKey_DefaultsFalse) {
+TEST(AppSettingsStoreTest, CrashReportPolicy_MissingLegacyKeyMigratesToAskEveryTime) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -143,8 +143,93 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingAutoSendCrashReportsKey_Defau
     }
 
     AppSettingsStore store(settings_path);
-    const PersistedAppSettings loaded = store.Load();
-    EXPECT_FALSE(loaded.auto_send_crash_reports);
+    EXPECT_EQ(store.Load().crash_report_policy, CrashReportPolicy::AskEveryTime);
+}
+
+TEST(AppSettingsStoreTest, CrashReportPolicy_LegacyFalseMigratesToAskEveryTime) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings settings(settings_path, QSettings::IniFormat);
+        settings.setValue(QStringLiteral("crash/auto_send_crash_reports"), false);
+    }
+
+    AppSettingsStore store(settings_path);
+    EXPECT_EQ(store.Load().crash_report_policy, CrashReportPolicy::AskEveryTime);
+}
+
+TEST(AppSettingsStoreTest, CrashReportPolicy_LegacyTrueMigratesToAlwaysSend) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings settings(settings_path, QSettings::IniFormat);
+        settings.setValue(QStringLiteral("crash/auto_send_crash_reports"), true);
+    }
+
+    AppSettingsStore store(settings_path);
+    EXPECT_EQ(store.Load().crash_report_policy, CrashReportPolicy::AlwaysSend);
+}
+
+TEST(AppSettingsStoreTest, CrashReportPolicy_SaveRemovesLegacyBoolean) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+    {
+        QSettings settings(settings_path, QSettings::IniFormat);
+        settings.setValue(QStringLiteral("crash/auto_send_crash_reports"), true);
+    }
+
+    AppSettingsStore store(settings_path);
+    PersistedAppSettings settings;
+    settings.crash_report_policy = CrashReportPolicy::NeverSend;
+    store.Save(settings);
+
+    QSettings raw_settings(settings_path, QSettings::IniFormat);
+    EXPECT_FALSE(raw_settings.contains(QStringLiteral("crash/auto_send_crash_reports")));
+    EXPECT_EQ(raw_settings.value(QStringLiteral("crash/report_policy")).toString(), QStringLiteral("never_send"));
+}
+
+TEST(CrashReportDecisionTest, SendWithoutRememberIsOneShotAndDoesNotPersist) {
+    const auto decision = ResolveCrashReportDecision(CrashReportAction::SendReport, false);
+    EXPECT_TRUE(decision.send_current_report);
+    EXPECT_FALSE(decision.persisted_policy.has_value());
+    EXPECT_EQ(decision.consent_action, CrashConsentAction::SendPendingOnce);
+}
+
+TEST(CrashReportDecisionTest, DeclineWithoutRememberDoesNotPersist) {
+    const auto decision = ResolveCrashReportDecision(CrashReportAction::DontSend, false);
+    EXPECT_FALSE(decision.send_current_report);
+    EXPECT_FALSE(decision.persisted_policy.has_value());
+    EXPECT_EQ(decision.consent_action, CrashConsentAction::ResetToAsk);
+}
+
+TEST(CrashReportDecisionTest, SendWithRememberCommitsAlwaysSend) {
+    const auto decision = ResolveCrashReportDecision(CrashReportAction::SendReport, true);
+    ASSERT_TRUE(decision.persisted_policy.has_value());
+    EXPECT_EQ(*decision.persisted_policy, CrashReportPolicy::AlwaysSend);
+    EXPECT_EQ(decision.consent_action, CrashConsentAction::GrantPersistent);
+}
+
+TEST(CrashReportDecisionTest, DeclineWithRememberCommitsNeverSend) {
+    const auto decision = ResolveCrashReportDecision(CrashReportAction::DontSend, true);
+    ASSERT_TRUE(decision.persisted_policy.has_value());
+    EXPECT_EQ(*decision.persisted_policy, CrashReportPolicy::NeverSend);
+    EXPECT_EQ(decision.consent_action, CrashConsentAction::Revoke);
+}
+
+TEST(CrashReportDecisionTest, DismissNeverSendsOrPersistsEvenWithRememberDraft) {
+    const auto decision = ResolveCrashReportDecision(CrashReportAction::Dismiss, true);
+    EXPECT_FALSE(decision.send_current_report);
+    EXPECT_FALSE(decision.persisted_policy.has_value());
+    EXPECT_EQ(decision.consent_action, CrashConsentAction::None);
+}
+
+TEST(CrashReportPromptTest, ThreeStatePolicyResolvesDistinctStartupBehavior) {
+    EXPECT_EQ(ResolveCrashPromptDisposition(CrashReportPolicy::AskEveryTime), CrashPromptDisposition::ShowPrompt);
+    EXPECT_EQ(ResolveCrashPromptDisposition(CrashReportPolicy::AlwaysSend), CrashPromptDisposition::SuppressAndSend);
+    EXPECT_EQ(ResolveCrashPromptDisposition(CrashReportPolicy::NeverSend), CrashPromptDisposition::SuppressWithoutSend);
 }
 
 // DIAGNOSTICS-OVERLAY-R1: show_diagnostics_overlay round-trip tests

@@ -1452,7 +1452,7 @@ exosnap_add_gtest(
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
-        # DESIGN-SYNC-R1: CrashReportPanel's auto-send checkbox is now ExoCheckBox.
+        # DESIGN-SYNC-R1: CrashReportPanel's remember-choice draft is an ExoCheckBox.
         ui/widgets/ExoCheckBox.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
@@ -2108,7 +2108,7 @@ set_target_properties(overlay_visual_proof_tests PROPERTIES AUTOMOC ON)
 
 # CRASH-UPDATE-VISUAL-PROOF-R1: offscreen renders of the 0.4.0 crash + update UI
 # surfaces. Applies the real ExoSnap theme (QSS + bundled fonts), so the theme
-# and fonts qrc resources are compiled in via AUTORCC. Produces 6 PNGs under
+# and fonts qrc resources are compiled in via AUTORCC. Produces 7 PNGs under
 # .workspace/screenshots/0.4.0/ for human visual verification.
 exosnap_add_gtest(
     NAME crash_update_visual_proof_tests
@@ -2120,7 +2120,7 @@ exosnap_add_gtest(
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
         ui/theme/ExoSnapTheme.cpp
-        # DESIGN-SYNC-R1: CrashReportPanel's auto-send checkbox is now ExoCheckBox.
+        # DESIGN-SYNC-R1: CrashReportPanel's remember-choice draft is an ExoCheckBox.
         ui/widgets/ExoCheckBox.cpp
         ui/theme/exosnap_theme.qrc
         assets/fonts/exosnap_fonts.qrc

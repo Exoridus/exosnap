@@ -2,6 +2,7 @@
 #include <QImage>
 #include <QWidget>
 
+#include "../models/CrashReportPolicy.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
@@ -187,10 +188,8 @@ class ConfigPage : public QWidget {
     // card is built eagerly in the constructor, so the combo already exists by the
     // time this is called. No signal emitted.
     void setDeveloperLogLevel(const QString& level);
-    // Seeds the "Send crash reports automatically" toggle (Developer card) from
-    // persisted settings. The Developer card is built eagerly in the constructor,
-    // so the toggle already exists by the time this is called. No signal emitted.
-    void setAutoSendCrashReports(bool on);
+    // Seeds the three-state crash-report selector without emitting a change.
+    void setCrashReportPolicy(CrashReportPolicy policy);
 
     // Drives the visible Updates card (ADR 0034 Phase A). state is one of
     // "checking" | "uptodate" | "available" | "error". When "available",
@@ -261,11 +260,7 @@ class ConfigPage : public QWidget {
     // ADR 0033: emitted when the user toggles the present-diagnostics opt-in.
     void presentDiagnosticsOptInToggled(bool enabled);
     void themeIdChanged(const QString& theme_id);
-    // Crash-report auto-send consent toggle (Developer/Advanced card). ON
-    // grants silent auto-send consent immediately; OFF revokes it so the next
-    // crash shows the consent dialog again. MainWindow persists the value and
-    // calls crash_capture::GiveUserConsent()/RevokeUserConsent().
-    void autoSendCrashReportsToggled(bool enabled);
+    void crashReportPolicyChanged(CrashReportPolicy policy);
 
     // ---- Preset management signals ----
     void savePresetAsRequested(const QString& name);
@@ -613,12 +608,8 @@ class ConfigPage : public QWidget {
     // the combo on construction, or immediately via setDeveloperLogLevel() after.
     QComboBox* developer_log_level_combo_ = nullptr;
     QString developer_log_level_ = QStringLiteral("Debug");
-    // Crash-report auto-send consent toggle (Developer/Advanced card).
-    // auto_send_crash_reports_ is the pending/current value; applied to the
-    // toggle on build (lazy) or immediately if already built
-    // (setAutoSendCrashReports).
-    ui::widgets::ExoToggle* crash_reports_auto_send_check_ = nullptr;
-    bool auto_send_crash_reports_ = false;
+    QComboBox* crash_report_policy_combo_ = nullptr;
+    CrashReportPolicy crash_report_policy_ = CrashReportPolicy::AskEveryTime;
 
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;

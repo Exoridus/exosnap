@@ -4,6 +4,8 @@
 #include <array>
 #include <string>
 
+#include "../models/CrashReportPolicy.h"
+
 namespace exosnap {
 
 struct PersistedWindowGeometry {
@@ -59,10 +61,10 @@ struct PersistedAppSettings {
     // opt-in feature gated here.
     bool show_quick_controls = false;
 
-    // CRASH-WIRE-R1 (ADR 0017): when true, the next-launch crash dialog is
-    // suppressed and consent is granted silently so the (dormant w/o DSN) report
-    // is sent automatically. Opt-in only; default OFF.
-    bool auto_send_crash_reports = false;
+    // CRASH-POLICY-R2 (ADR 0017): explicit persisted report policy. AskEveryTime
+    // is the privacy-by-default state; NeverSend is an explicit refusal and
+    // suppresses only the report-consent prompt, never local recovery UI.
+    CrashReportPolicy crash_report_policy = CrashReportPolicy::AskEveryTime;
 
     // UPDATE-WIRE-R1 (ADR 0012): the selected update channel — "Stable" | "Preview".
     // Applied immediately on change (persist + re-check); default Stable.
