@@ -83,6 +83,16 @@ UpdaterUiState FailureState(FailureCase failure, bool verify = false) {
     return controller.state();
 }
 
+UpdaterUiState WorkingState(UpStep active) {
+    UpdaterController controller(QStringLiteral("0.9.0-rc4"), QStringLiteral("0.9.0-rc5"));
+    for (int i = 0; i < static_cast<int>(active); ++i)
+        controller.onStepDone(static_cast<UpStep>(i));
+    controller.onStepStarted(active);
+    if (active == UpStep::Download)
+        controller.onDownloadProgress(38, 100);
+    return controller.state();
+}
+
 void Settle(QWidget& widget) {
     widget.move(-20000, -20000);
     widget.show();
@@ -150,6 +160,23 @@ TEST_F(UpdaterVisualProofTest, FailureMatrixAtRepresentativeDpiScales) {
     for (const Scenario& scenario : scenarios) {
         UpdaterWindow window;
         window.render(FailureState(scenario.failure, scenario.verify));
+        ExpectNoClippedCopy(window);
+        EXPECT_TRUE(RenderEvidence(window, QString::fromLatin1(scenario.filename), scenario.dpr)) << scenario.filename;
+    }
+
+    struct WorkingScenario {
+        const char* filename;
+        UpStep step;
+        qreal dpr;
+    };
+    constexpr std::array<WorkingScenario, 3> working = {{
+        {"06-downloading-dpr100.png", UpStep::Download, 1.0},
+        {"07-installing-dpr150.png", UpStep::Install, 1.5},
+        {"08-verifying-dpr200.png", UpStep::Verify, 2.0},
+    }};
+    for (const WorkingScenario& scenario : working) {
+        UpdaterWindow window;
+        window.render(WorkingState(scenario.step));
         ExpectNoClippedCopy(window);
         EXPECT_TRUE(RenderEvidence(window, QString::fromLatin1(scenario.filename), scenario.dpr)) << scenario.filename;
     }

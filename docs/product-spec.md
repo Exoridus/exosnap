@@ -1051,8 +1051,8 @@ unimplemented behavior.
   `Verification reinstall available — <ver>` with `Reinstall <ver>` and the notice
   *Reinstalls the currently running signed version.* The mode can never offer a downgrade, never
   relaxes signature/hash checks, is logged in the app log and support bundle while active, and is
-  visibly marked with the quiet, non-interactive label `UPDATER · VERIFY` throughout the external
-  updater run. It is gone after the next restart. Without the flag, the same version is never
+  visibly marked with a quiet, non-interactive `VERIFY` tag beside the stable `Updater` title
+  throughout the external updater run. It is gone after the next restart. Without the flag, the same version is never
   offered.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
   available" notification deep-links to the Settings update card → clicking **Update** opens the
@@ -1069,6 +1069,18 @@ unimplemented behavior.
      is discarded.
 
   The swap is **staged and reversible** (dual-swap) and nothing is swapped until verification passes.
+  The updater uses one fixed window size in every working and terminal state. Its title bar always
+  has the same hierarchy: white **Updater** title, current phase/status (**Downloading, Preparing,
+  Installing, Verifying, Launching, Completed, Warning, Error**) and one short explanatory line.
+  Result-card actions use the same compact button component and stay together: retryable results
+  show **Retry/Re-download + Close**, a completed update that needs a manual launch shows
+  **Open ExoSnap + Close**, and non-retryable results show **Close** only. The ambiguous
+  **Open current version** label is not used.
+
+  During **Downloading** and **Closing previous version**, the normal title-bar close action safely
+  cancels the worker and closes the updater; its accessible description and tooltip say
+  **Cancel update and close**. The active footer remains button-free. No separate Cancel button is
+  shown because it would duplicate the same safe action.
   While the swap-critical steps (Installing, Verifying, Launching) are in flight the updater window
   **refuses to close** — the close control is disabled and Alt+F4, the taskbar close, and a Windows
   logoff are all ignored — so the in-place rename cannot be torn apart mid-swap. If a forced kill

@@ -260,8 +260,7 @@ int main(int argc, char** argv) {
         (void)LaunchExoSnapFrom(ResolveOpenDir(*args));
         QCoreApplication::quit();
     };
-    QObject::connect(&window, &UpdaterWindow::openCurrentRequested, &window, openAndQuit);
-    QObject::connect(&window, &UpdaterWindow::openNewRequested, &window, openAndQuit);
+    QObject::connect(&window, &UpdaterWindow::openExoSnapRequested, &window, openAndQuit);
 
     // First paint mirrors the pipeline's first event so the window never shows
     // an all-queued limbo state.

@@ -2,8 +2,8 @@
 
 // UpdaterWindow -- the whole standalone updater window, rendered as a pure
 // function of an UpdaterUiState. A dedicated (frameless-look) title bar carries
-// the brand + a quiet UPDATER mode label + a close X that refuses to interrupt a swap;
-// below it sit the version pills, the ProgressRing, a status line, the
+// a stable Updater label, the current phase + concise detail, and a close X that
+// refuses to interrupt a swap; below it sit the version pills, the ProgressRing, a status line, the
 // five-step checklist and a state-dependent footer (reassurance while working,
 // a tinted result card with 1-2 actions on a terminal variant).
 
@@ -40,8 +40,7 @@ class UpdaterWindow : public QWidget {
   signals:
     void retryRequested();
     void closeRequested();
-    void openCurrentRequested();
-    void openNewRequested();
+    void openExoSnapRequested();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -50,9 +49,12 @@ class UpdaterWindow : public QWidget {
   private:
     void buildFooter(const UpdaterUiState& state);
     void emitForAction(const QString& action);
+    void updateTitleBar(const UpdaterUiState& state);
 
     // Header
-    QLabel* mode_tag_ = nullptr; // "UPDATER" / "UPDATER · VERIFY" (ADR 0055)
+    QLabel* title_status_ = nullptr;
+    QLabel* title_detail_ = nullptr;
+    QLabel* verify_tag_ = nullptr;
     QPushButton* close_button_ = nullptr;
     // Mirrors the same "Install/Verify/Launch working" gate as the in-window
     // close X (see render()), but also refuses WM_CLOSE arriving through any

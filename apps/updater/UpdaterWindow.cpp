@@ -34,6 +34,8 @@ namespace {
 using namespace updater_theme;
 
 constexpr int kWindowWidth = 640;
+constexpr int kWindowHeight = 768;
+constexpr int kActionHeight = 36;
 
 // ── Small painted icon (status line + footer marks) ──────────────────────────
 enum class Ico { None, Check, Cross, Warning, ShieldCheck, Dot, Spinner, Chevron };
@@ -137,7 +139,7 @@ QString rgba(const QColor& c) {
 }
 
 QIcon refreshIcon(const QColor& color, qreal dpr) {
-    const int logicalSide = 14;
+    const int logicalSide = 16;
     QPixmap px(qRound(logicalSide * dpr), qRound(logicalSide * dpr));
     px.setDevicePixelRatio(dpr);
     px.fill(Qt::transparent);
@@ -147,26 +149,47 @@ QIcon refreshIcon(const QColor& color, qreal dpr) {
     return QIcon(px);
 }
 
-QPushButton* makeButton(const QString& text, bool primary, QWidget* parent) {
+QIcon closeIcon(const QColor& color, qreal dpr) {
+    constexpr int logicalSide = 20;
+    QPixmap px(qRound(logicalSide * dpr), qRound(logicalSide * dpr));
+    px.setDevicePixelRatio(dpr);
+    px.fill(Qt::transparent);
+    QPainter painter(&px);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    paintCross(painter, QRectF(3, 3, 14, 14), color, 1.6);
+    return QIcon(px);
+}
+
+enum class ButtonVariant { Primary, Secondary, Destructive };
+
+QPushButton* makeButton(const QString& text, ButtonVariant variant, QWidget* parent) {
     auto* b = new QPushButton(text, parent);
     b->setAccessibleName(text);
     b->setFont(ui(13, QFont::DemiBold));
     b->setCursor(Qt::PointingHandCursor);
-    if (primary) {
+    b->setFixedHeight(kActionHeight);
+    b->setMinimumWidth(76);
+    if (variant == ButtonVariant::Primary) {
         b->setStyleSheet(QStringLiteral("QPushButton{color:%1;background:%2;border:1px solid %2;"
-                                        "border-radius:999px;padding:7px 16px;}"
+                                        "border-radius:10px;padding:0 16px;}"
                                         "QPushButton:hover{background:%3;}")
                              .arg(mintInk().name(), mint().name(), mint().lighter(108).name()));
+    } else if (variant == ButtonVariant::Destructive) {
+        b->setStyleSheet(QStringLiteral("QPushButton{color:%1;background:%2;border:1px solid %3;"
+                                        "border-radius:10px;padding:0 16px;}"
+                                        "QPushButton:hover{background:%4;}")
+                             .arg(error().name(), rgba(statusDim(error())), rgba(statusBorder(error())),
+                                  rgba(withAlpha(error(), 0.20))));
     } else {
         b->setStyleSheet(QStringLiteral("QPushButton{color:%1;background:transparent;border:1px solid %2;"
-                                        "border-radius:999px;padding:7px 16px;}"
+                                        "border-radius:10px;padding:0 16px;}"
                                         "QPushButton:hover{color:%3;border-color:%3;}")
                              .arg(mut().name(), rgba(line2()), ink().name()));
     }
     if (text == QStringLiteral("Retry") || text == QStringLiteral("Re-download")) {
         b->setObjectName(QStringLiteral("updaterRetryButton"));
-        b->setIcon(refreshIcon(primary ? mintInk() : mut(), parent->devicePixelRatioF()));
-        b->setIconSize(QSize(14, 14));
+        b->setIcon(refreshIcon(variant == ButtonVariant::Primary ? mintInk() : mut(), parent->devicePixelRatioF()));
+        b->setIconSize(QSize(16, 16));
     }
     return b;
 }
@@ -179,63 +202,71 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     ensureFontsLoaded();
     setWindowTitle(QStringLiteral("ExoSnap Updater"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    setFixedWidth(kWindowWidth);
+    setFixedSize(kWindowWidth, kWindowHeight);
     setAutoFillBackground(true);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
-    root->setSizeConstraint(QLayout::SetFixedSize);
+    root->setSizeConstraint(QLayout::SetDefaultConstraint);
 
     // ── Title bar ────────────────────────────────────────────────────────────
     auto* titleBar = new QWidget(this);
-    titleBar->setFixedHeight(46);
+    titleBar->setFixedHeight(62);
     titleBar->setFixedWidth(kWindowWidth);
     titleBar->setStyleSheet(QStringLiteral("border-bottom:1px solid %1;").arg(rgba(line())));
     auto* tbLayout = new QHBoxLayout(titleBar);
-    tbLayout->setContentsMargins(14, 0, 8, 0);
-    tbLayout->setSpacing(10);
+    tbLayout->setContentsMargins(16, 0, 10, 0);
+    tbLayout->setSpacing(12);
 
-    tbLayout->addWidget(new MarkWidget(18, titleBar));
+    tbLayout->addWidget(new MarkWidget(20, titleBar));
 
-    auto* wordmark = new QLabel(titleBar);
-    wordmark->setTextFormat(Qt::RichText);
-    wordmark->setText(QStringLiteral("<span style='color:%1'>exo</span><span style='color:%2'>snap</span>")
-                          .arg(ink().name(), mint().name()));
-    wordmark->setFont(ui(14, QFont::DemiBold));
-    tbLayout->addWidget(wordmark);
+    auto* titleStack = new QVBoxLayout();
+    titleStack->setContentsMargins(0, 0, 0, 0);
+    titleStack->setSpacing(1);
 
-    mode_tag_ = new QLabel(QStringLiteral("UPDATER"), titleBar);
-    mode_tag_->setObjectName(QStringLiteral("updaterModeTag"));
-    mode_tag_->setAccessibleName(QStringLiteral("Updater mode"));
-    mode_tag_->setFont(mono(9, QFont::Medium));
-    mode_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;background:transparent;border:none;"
-                                            "padding:0 2px;letter-spacing:1px;}")
-                                 .arg(dim().name()));
-    tbLayout->addWidget(mode_tag_);
+    auto* titleRow = new QHBoxLayout();
+    titleRow->setContentsMargins(0, 0, 0, 0);
+    titleRow->setSpacing(8);
+    auto* title = new QLabel(QStringLiteral("Updater"), titleBar);
+    title->setObjectName(QStringLiteral("updaterTitle"));
+    title->setFont(ui(14, QFont::DemiBold));
+    title->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+    titleRow->addWidget(title);
 
-    tbLayout->addStretch(1);
+    title_status_ = new QLabel(QStringLiteral("Downloading"), titleBar);
+    title_status_->setObjectName(QStringLiteral("updaterTitleStatus"));
+    title_status_->setFont(mono(10, QFont::DemiBold));
+    titleRow->addWidget(title_status_);
+
+    verify_tag_ = new QLabel(QStringLiteral("VERIFY"), titleBar);
+    verify_tag_->setObjectName(QStringLiteral("updaterVerifyTag"));
+    verify_tag_->setAccessibleName(QStringLiteral("Verification reinstall"));
+    verify_tag_->setFont(mono(8, QFont::DemiBold));
+    verify_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;background:%2;border:1px solid %3;"
+                                              "border-radius:5px;padding:1px 5px;letter-spacing:0.8px;}")
+                                   .arg(mint().name(), rgba(accentDim()), rgba(accentBorder())));
+    verify_tag_->hide();
+    titleRow->addWidget(verify_tag_);
+    titleRow->addStretch(1);
+    titleStack->addLayout(titleRow);
+
+    title_detail_ = new QLabel(QStringLiteral("Fetching and checking the signed update"), titleBar);
+    title_detail_->setObjectName(QStringLiteral("updaterTitleDetail"));
+    title_detail_->setFont(ui(11, QFont::Normal));
+    title_detail_->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(mut().name()));
+    titleStack->addWidget(title_detail_);
+    tbLayout->addLayout(titleStack, 1);
 
     close_button_ = new QPushButton(titleBar);
     close_button_->setFixedSize(34, 34);
     close_button_->setCursor(Qt::PointingHandCursor);
     close_button_->setToolTip(QStringLiteral("Close"));
+    close_button_->setAccessibleName(QStringLiteral("Close updater"));
     close_button_->setStyleSheet(QStringLiteral("QPushButton{background:transparent;border:none;}"
                                                 "QPushButton:hover:enabled{background:%1;border-radius:8px;}")
                                      .arg(rgba(line())));
-    {
-        // Render at the window's actual device pixel ratio so the glyph stays
-        // crisp on HiDPI instead of being upscaled from a 20x20 logical bitmap.
-        const qreal dpr = devicePixelRatioF();
-        const int side = qRound(20 * dpr);
-        QPixmap px(side, side);
-        px.setDevicePixelRatio(dpr);
-        px.fill(Qt::transparent);
-        QPainter pp(&px);
-        pp.setRenderHint(QPainter::Antialiasing, true);
-        paintCross(pp, QRectF(3, 3, 14, 14), line2(), 1.6);
-        close_button_->setIcon(QIcon(px));
-    }
+    close_button_->setIcon(closeIcon(mut(), devicePixelRatioF()));
     connect(close_button_, &QPushButton::clicked, this, [this] { emit closeRequested(); });
     tbLayout->addWidget(close_button_);
 
@@ -245,11 +276,12 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     auto* content = new QWidget(this);
     content->setFixedWidth(kWindowWidth);
     auto* col = new QVBoxLayout(content);
-    col->setContentsMargins(40, 26, 40, 24);
-    col->setSpacing(18);
+    col->setContentsMargins(40, 20, 40, 20);
+    col->setSpacing(14);
 
     // Version transition
     auto* versionBlock = new QWidget(content);
+    versionBlock->setFixedHeight(55);
     auto* vb = new QVBoxLayout(versionBlock);
     vb->setContentsMargins(0, 0, 0, 0);
     vb->setSpacing(9);
@@ -288,6 +320,7 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
 
     // Status line
     status_row_ = new QWidget(content);
+    status_row_->setFixedHeight(22);
     auto* sr = new QHBoxLayout(status_row_);
     sr->setContentsMargins(0, 0, 0, 0);
     sr->setSpacing(9);
@@ -300,10 +333,12 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
 
     // Step list
     steps_ = new StepListWidget(content);
+    steps_->setFixedHeight(210);
     col->addWidget(steps_);
 
     // Footer
     footer_container_ = new QWidget(content);
+    footer_container_->setFixedHeight(170);
     footer_layout_ = new QVBoxLayout(footer_container_);
     footer_layout_->setContentsMargins(0, 0, 0, 0);
     footer_layout_->setSpacing(0);
@@ -328,16 +363,7 @@ QStringList UpdaterWindow::footerButtonLabels() const {
 }
 
 void UpdaterWindow::render(const UpdaterUiState& state) {
-    // ADR 0055: a verification reinstall is marked in the title tag for the whole
-    // run, so the identical from/to version pills can never read as a stalled or
-    // mislabelled upgrade.
-    if (mode_tag_ != nullptr) {
-        mode_tag_->setText(state.verification_reinstall ? QStringLiteral("UPDATER \xc2\xb7 VERIFY")
-                                                        : QStringLiteral("UPDATER"));
-        mode_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;background:transparent;border:none;"
-                                                "padding:0 2px;letter-spacing:1px;}")
-                                     .arg(state.verification_reinstall ? mint().name() : dim().name()));
-    }
+    updateTitleBar(state);
 
     // Ring
     ring_->setValue(state.ring);
@@ -359,10 +385,10 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     // than "failed" (display-only -- the controller's StepStatus is untouched).
     steps_->setSteps(state.steps, state.variant == TerminalVariant::Green);
 
-    // Terminal result headlines belong inside their tinted result component.
-    // Keep this loose status row only for live progress and ordinary success.
-    const bool terminal_result = state.variant != TerminalVariant::None && state.variant != TerminalVariant::Success;
-    status_row_->setVisible(!terminal_result);
+    // The central status row keeps the same footprint in every state. Terminal
+    // states use a short summary here; the result card below owns the actionable
+    // detail and safety truth.
+    status_row_->setVisible(true);
 
     // Status line
     auto* icon = static_cast<GlyphWidget*>(status_icon_);
@@ -420,10 +446,69 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
                        state.steps[size_t(UpStep::Verify)] == StepStatus::Working ||
                        state.steps[size_t(UpStep::Launch)] == StepStatus::Working;
     close_button_->setEnabled(!block);
-    close_button_->setToolTip(block ? QStringLiteral("Please wait - updating") : QStringLiteral("Close"));
+    const bool terminal = state.variant != TerminalVariant::None;
+    close_button_->setToolTip(block ? QStringLiteral("Please wait - updating")
+                                    : terminal ? QStringLiteral("Close")
+                                               : QStringLiteral("Cancel update and close"));
+    close_button_->setAccessibleName(block ? QStringLiteral("Close unavailable while updating")
+                                          : terminal ? QStringLiteral("Close updater")
+                                                     : QStringLiteral("Cancel update and close"));
+    close_button_->setIcon(closeIcon(block ? line2() : mut(), devicePixelRatioF()));
     close_blocked_ = block;
+}
 
-    adjustSize();
+void UpdaterWindow::updateTitleBar(const UpdaterUiState& state) {
+    QString status = QStringLiteral("Preparing");
+    QString detail = QStringLiteral("Getting the updater ready");
+    QColor tone = mint();
+
+    if (state.variant != TerminalVariant::None) {
+        switch (state.variant) {
+        case TerminalVariant::Success:
+        case TerminalVariant::Green:
+            status = QStringLiteral("Completed");
+            detail = QStringLiteral("Version %1 is ready").arg(state.to_version);
+            tone = success();
+            break;
+        case TerminalVariant::RebootRequired:
+            status = QStringLiteral("Completed");
+            detail = QStringLiteral("Restart Windows to finish");
+            tone = success();
+            break;
+        case TerminalVariant::Amber:
+            status = QStringLiteral("Warning");
+            detail = state.headline;
+            tone = caution();
+            break;
+        case TerminalVariant::Red:
+            status = QStringLiteral("Error");
+            detail = state.headline;
+            tone = error();
+            break;
+        case TerminalVariant::None:
+            break;
+        }
+    } else if (state.steps[size_t(UpStep::Launch)] == StepStatus::Working) {
+        status = QStringLiteral("Launching");
+        detail = QStringLiteral("Starting the updated app");
+    } else if (state.steps[size_t(UpStep::Verify)] == StepStatus::Working) {
+        status = QStringLiteral("Verifying");
+        detail = QStringLiteral("Checking the installed files");
+    } else if (state.steps[size_t(UpStep::Install)] == StepStatus::Working) {
+        status = QStringLiteral("Installing");
+        detail = QStringLiteral("Replacing the application files");
+    } else if (state.steps[size_t(UpStep::CloseApp)] == StepStatus::Working) {
+        status = QStringLiteral("Preparing");
+        detail = QStringLiteral("Waiting for ExoSnap to close");
+    } else if (state.steps[size_t(UpStep::Download)] == StepStatus::Working) {
+        status = QStringLiteral("Downloading");
+        detail = QStringLiteral("Fetching and checking the signed update");
+    }
+
+    title_status_->setText(status);
+    title_status_->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(tone.name()));
+    title_detail_->setText(detail);
+    verify_tag_->setVisible(state.verification_reinstall);
 }
 
 void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
@@ -433,6 +518,7 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
             w->deleteLater();
         delete item;
     }
+    footer_layout_->addStretch(1);
 
     const bool terminal = state.variant != TerminalVariant::None && state.variant != TerminalVariant::Success;
 
@@ -539,14 +625,14 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
     ar->setSpacing(8);
     ar->addStretch(1);
     if (!state.primary_action.isEmpty()) {
-        auto* b = makeButton(state.primary_action, true, actions);
+        auto* b = makeButton(state.primary_action, ButtonVariant::Primary, actions);
         const QString action = state.primary_action;
         connect(b, &QPushButton::clicked, this, [this, action] { emitForAction(action); });
         footer_buttons_ << b;
         ar->addWidget(b);
     }
     if (!state.secondary_action.isEmpty()) {
-        auto* b = makeButton(state.secondary_action, false, actions);
+        auto* b = makeButton(state.secondary_action, ButtonVariant::Secondary, actions);
         const QString action = state.secondary_action;
         connect(b, &QPushButton::clicked, this, [this, action] { emitForAction(action); });
         footer_buttons_ << b;
@@ -560,10 +646,8 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
 void UpdaterWindow::emitForAction(const QString& action) {
     if (action == QStringLiteral("Retry") || action == QStringLiteral("Re-download"))
         emit retryRequested();
-    else if (action == QStringLiteral("Open current version"))
-        emit openCurrentRequested();
     else if (action == QStringLiteral("Open ExoSnap"))
-        emit openNewRequested();
+        emit openExoSnapRequested();
     else
         emit closeRequested();
 }

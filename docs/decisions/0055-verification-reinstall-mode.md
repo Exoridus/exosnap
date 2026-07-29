@@ -60,8 +60,8 @@ signature check and on top of the downgrade guard, the updater requires the sign
 version string to equal `--current-version` exactly. A mismatch — including a legitimately newer
 release — is a terminal, non-installing failure (`VerifyReinstallMismatch`): nothing is
 downloaded into place, nothing is installed, and no Retry is offered, because re-fetching the
-same manifest cannot change the answer. The updater window is marked `UPDATER · VERIFY` and its
-working lines say "reinstall", so identical from/to version pills cannot read as a stalled
+same manifest cannot change the answer. The updater window keeps its stable `Updater` title and
+adds a quiet `VERIFY` tag beside it; its working lines say "reinstall", so identical from/to version pills cannot read as a stalled
 upgrade.
 
 Nothing about signature verification, hash verification, feed selection or the downgrade guard

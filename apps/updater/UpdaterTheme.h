@@ -173,14 +173,28 @@ inline void paintSpinner(QPainter& p, const QRectF& r, const QColor& track, cons
 inline void paintRefresh(QPainter& p, const QRectF& r, const QColor& c, double stroke) {
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(c, stroke, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    const QRectF arc = r.adjusted(r.width() * 0.16, r.height() * 0.16, -r.width() * 0.16, -r.height() * 0.16);
-    p.drawArc(arc, 35 * 16, 285 * 16);
 
-    QPainterPath arrow;
-    arrow.moveTo(r.left() + r.width() * 0.72, r.top() + r.height() * 0.10);
-    arrow.lineTo(r.left() + r.width() * 0.80, r.top() + r.height() * 0.34);
-    arrow.lineTo(r.left() + r.width() * 0.56, r.top() + r.height() * 0.29);
-    p.drawPath(arrow);
+    // Two opposed curved arrows remain unmistakably "retry" at 16 px. A
+    // near-complete single arc blurred into the letter "C" at 150-200% scale.
+    QPainterPath upper;
+    upper.moveTo(r.left() + r.width() * 0.18, r.top() + r.height() * 0.48);
+    upper.cubicTo(r.left() + r.width() * 0.20, r.top() + r.height() * 0.18,
+                  r.left() + r.width() * 0.55, r.top() + r.height() * 0.08,
+                  r.left() + r.width() * 0.79, r.top() + r.height() * 0.27);
+    upper.moveTo(r.left() + r.width() * 0.79, r.top() + r.height() * 0.08);
+    upper.lineTo(r.left() + r.width() * 0.79, r.top() + r.height() * 0.27);
+    upper.lineTo(r.left() + r.width() * 0.60, r.top() + r.height() * 0.27);
+    p.drawPath(upper);
+
+    QPainterPath lower;
+    lower.moveTo(r.left() + r.width() * 0.82, r.top() + r.height() * 0.52);
+    lower.cubicTo(r.left() + r.width() * 0.80, r.top() + r.height() * 0.82,
+                  r.left() + r.width() * 0.45, r.top() + r.height() * 0.92,
+                  r.left() + r.width() * 0.21, r.top() + r.height() * 0.73);
+    lower.moveTo(r.left() + r.width() * 0.21, r.top() + r.height() * 0.92);
+    lower.lineTo(r.left() + r.width() * 0.21, r.top() + r.height() * 0.73);
+    lower.lineTo(r.left() + r.width() * 0.40, r.top() + r.height() * 0.73);
+    p.drawPath(lower);
 }
 
 // Shield with an inner check (footer "safe / keep-on" mark).

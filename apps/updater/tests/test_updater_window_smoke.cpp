@@ -163,7 +163,7 @@ TEST_F(UpdaterWindowTest, RedVariantFooterButtons) {
     const QStringList buttons = window.footerButtonLabels();
     ASSERT_EQ(buttons.size(), 2);
     EXPECT_EQ(buttons[0], QStringLiteral("Retry"));
-    EXPECT_EQ(buttons[1], QStringLiteral("Open current version"));
+    EXPECT_EQ(buttons[1], QStringLiteral("Close"));
 }
 
 TEST_F(UpdaterWindowTest, TerminalHeadlineSafetyAndActionsShareOneResultCard) {
@@ -188,18 +188,58 @@ TEST_F(UpdaterWindowTest, TerminalHeadlineSafetyAndActionsShareOneResultCard) {
     EXPECT_EQ(retry->accessibleName(), QStringLiteral("Retry"));
 }
 
-TEST_F(UpdaterWindowTest, ModeLabelIsQuietAndVerifyModeRemainsExplicit) {
+TEST_F(UpdaterWindowTest, TitleBarHasStableHierarchyAndVerifyModeRemainsExplicit) {
     UpdaterWindow window;
     UpdaterUiState state = InstallInFlight();
     state.verification_reinstall = true;
     window.render(state);
 
-    auto* mode = window.findChild<QLabel*>(QStringLiteral("updaterModeTag"));
-    ASSERT_NE(mode, nullptr);
-    EXPECT_EQ(mode->text(), QStringLiteral("UPDATER \xc2\xb7 VERIFY"));
-    EXPECT_TRUE(mode->styleSheet().contains(QStringLiteral("border:none")));
-    EXPECT_FALSE(mode->styleSheet().contains(QStringLiteral("border-radius")));
-    EXPECT_EQ(mode->accessibleName(), QStringLiteral("Updater mode"));
+    auto* title = window.findChild<QLabel*>(QStringLiteral("updaterTitle"));
+    auto* status = window.findChild<QLabel*>(QStringLiteral("updaterTitleStatus"));
+    auto* detail = window.findChild<QLabel*>(QStringLiteral("updaterTitleDetail"));
+    auto* verify = window.findChild<QLabel*>(QStringLiteral("updaterVerifyTag"));
+    ASSERT_NE(title, nullptr);
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(detail, nullptr);
+    ASSERT_NE(verify, nullptr);
+    EXPECT_EQ(title->text(), QStringLiteral("Updater"));
+    EXPECT_EQ(status->text(), QStringLiteral("Installing"));
+    EXPECT_EQ(detail->text(), QStringLiteral("Replacing the application files"));
+    EXPECT_EQ(verify->text(), QStringLiteral("VERIFY"));
+    EXPECT_TRUE(verify->isVisibleTo(&window));
+    EXPECT_EQ(verify->accessibleName(), QStringLiteral("Verification reinstall"));
+}
+
+TEST_F(UpdaterWindowTest, WindowDimensionsStayFixedAcrossWorkingAndTerminalStates) {
+    UpdaterWindow working;
+    working.render(InstallInFlight());
+    const QSize expected = working.size();
+
+    UpdaterWindow warning;
+    warning.render(Terminal(FailureCase::InstallFailed));
+    UpdaterWindow error;
+    error.render(Terminal(FailureCase::VerifyInstallFailed));
+    UpdaterWindow completed;
+    completed.render(Terminal(FailureCase::LaunchFailed));
+
+    EXPECT_EQ(expected, QSize(640, 768));
+    EXPECT_EQ(warning.size(), expected);
+    EXPECT_EQ(error.size(), expected);
+    EXPECT_EQ(completed.size(), expected);
+}
+
+TEST_F(UpdaterWindowTest, SafeWorkingPhasesExposeCancelSemanticsThroughCloseControl) {
+    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    controller.onStepStarted(UpStep::Download);
+    UpdaterWindow window;
+    window.render(controller.state());
+
+    EXPECT_TRUE(window.closeEnabled());
+    bool found_cancel = false;
+    for (auto* button : window.findChildren<QPushButton*>())
+        found_cancel = found_cancel || button->accessibleName() == QStringLiteral("Cancel update and close");
+    EXPECT_TRUE(found_cancel);
+    EXPECT_TRUE(window.footerButtonLabels().isEmpty());
 }
 
 TEST_F(UpdaterWindowTest, GreenVariantFooterButtons) {
@@ -261,7 +301,7 @@ TEST_F(UpdaterWindowTest, MsiVerifyFailureDoesNotClaimAConfirmedRollback) {
     const QStringList buttons = window.footerButtonLabels();
     ASSERT_EQ(buttons.size(), 2);
     EXPECT_EQ(buttons[0], QStringLiteral("Retry"));
-    EXPECT_EQ(buttons[1], QStringLiteral("Open current version"));
+    EXPECT_EQ(buttons[1], QStringLiteral("Close"));
 }
 
 TEST_F(UpdaterWindowTest, InProgressStateHasNoFooterButtons) {

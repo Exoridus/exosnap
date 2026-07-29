@@ -91,7 +91,7 @@ TEST(UpdaterController, VerifyInstallFailedIsRedRestored) {
     EXPECT_EQ(s.variant, TerminalVariant::Red);
     EXPECT_TRUE(s.safety_text.contains(QStringLiteral("previous version 0.8.1 was restored")));
     EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
-    EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
 }
 
 TEST(UpdaterController, VerifyInstallFailedMsiDoesNotClaimAConfirmedRollback) {
@@ -109,7 +109,7 @@ TEST(UpdaterController, VerifyInstallFailedMsiDoesNotClaimAConfirmedRollback) {
     EXPECT_TRUE(s.headline.contains(QStringLiteral("confirm")));
     EXPECT_FALSE(s.safety_text.contains(QStringLiteral("was restored")));
     EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
-    EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
 }
 
 TEST(UpdaterController, MsiRebootRequiredIsTerminalSuccessWithRestartCopy) {

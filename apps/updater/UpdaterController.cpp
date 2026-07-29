@@ -162,7 +162,7 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.safety_text =
             QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Open current version");
+        state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::VerifyInstallFailed: // B3 (portable: staged-rename backup restored)
         state_.variant = TerminalVariant::Red;
@@ -172,7 +172,7 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.safety_text =
             QStringLiteral("Your previous version %1 was restored and is ready to run.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Open current version");
+        state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::RestoreFailed: // B3-R (portable backup is preserved but not live)
         state_.variant = TerminalVariant::Red;
@@ -199,7 +199,7 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
             QStringLiteral("Windows Installer may have kept or restored version %1; no rollback is being claimed.")
                 .arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
-        state_.secondary_action = QStringLiteral("Open current version");
+        state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::LaunchFailed: // B4 (soft success)
         state_.variant = TerminalVariant::Green;
