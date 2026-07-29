@@ -182,4 +182,15 @@ TEST_F(UpdaterVisualProofTest, FailureMatrixAtRepresentativeDpiScales) {
     }
 }
 
+TEST_F(UpdaterVisualProofTest, SafeCancelConfirmationAtRepresentativeDpi) {
+    UpdaterWindow window;
+    window.render(WorkingState(UpStep::Download));
+    Settle(window);
+    auto* cancel = window.findChild<QPushButton*>(QStringLiteral("updaterCancelButton"));
+    ASSERT_NE(cancel, nullptr);
+    cancel->click();
+    ASSERT_TRUE(window.cancelConfirmationVisible());
+    EXPECT_TRUE(RenderEvidence(window, QStringLiteral("09-cancel-confirm-dpr125.png"), 1.25));
+}
+
 } // namespace

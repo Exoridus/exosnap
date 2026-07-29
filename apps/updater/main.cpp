@@ -33,8 +33,8 @@
 
 namespace {
 
-constexpr char kPreviewFrom[] = "0.8.1";
-constexpr char kPreviewTo[] = "0.9.0";
+constexpr char kPreviewFrom[] = "0.9.0-rc4";
+constexpr char kPreviewTo[] = "0.9.0-rc5";
 
 // How long the Success footer ("this window closes automatically") lingers.
 constexpr int kSuccessAutoCloseMs = 1500;
@@ -44,6 +44,11 @@ constexpr int kSuccessAutoCloseMs = 1500;
 std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     UpdaterController c(QString::fromLatin1(kPreviewFrom), QString::fromLatin1(kPreviewTo));
 
+    if (which == QStringLiteral("download")) {
+        c.onStepStarted(UpStep::Download);
+        c.onDownloadProgress(38, 100);
+        return c.state();
+    }
     if (which == QStringLiteral("progress")) {
         c.onStepDone(UpStep::Download);
         c.onStepDone(UpStep::CloseApp);
@@ -132,7 +137,7 @@ int main(int argc, char** argv) {
         if (!state.has_value()) {
             std::fprintf(stderr,
                          "exosnap-updater: invalid --preview-state '%s' "
-                         "(expected progress|amber|red|green|reboot)\n",
+                         "(expected download|progress|amber|red|green|reboot)\n",
                          qPrintable(which));
             return 2;
         }

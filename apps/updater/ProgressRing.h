@@ -1,6 +1,6 @@
 #pragma once
 
-// ProgressRing -- the 150px circular progress indicator at the heart of the
+// ProgressRing -- the 120px circular progress indicator at the heart of the
 // updater window. While a swap is in flight it draws a mint arc over a faint
 // track with a big percent number in the centre; on a terminal result it drops
 // the number and shows a tinted glyph pill (warning / cross / check) coloured by
@@ -16,7 +16,7 @@ class ProgressRing : public QWidget {
   public:
     explicit ProgressRing(QWidget* parent = nullptr);
 
-    void setValue(double value01);          // 0..1 arc fraction
+    void setValue(double value01);            // 0..1 arc fraction
     void setVariant(TerminalVariant variant); // None = show percent
 
     QSize sizeHint() const override;

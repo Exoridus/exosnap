@@ -1,7 +1,7 @@
 #include "ProgressRing.h"
 
-#include <QPainter>
 #include <QPaintEvent>
+#include <QPainter>
 #include <QRectF>
 #include <algorithm>
 #include <cmath>
@@ -9,8 +9,8 @@
 #include "UpdaterTheme.h"
 
 namespace {
-constexpr int kSize = 150;
-constexpr double kArc = 10.0; // arc/track stroke width
+constexpr int kSize = 120;
+constexpr double kArc = 8.0; // arc/track stroke width
 } // namespace
 
 ProgressRing::ProgressRing(QWidget* parent) : QWidget(parent) {
@@ -49,12 +49,24 @@ void ProgressRing::paintEvent(QPaintEvent*) {
     // Resolve the tone for the progress arc / terminal glyph.
     QColor tone = mint();
     switch (variant_) {
-    case TerminalVariant::Amber: tone = caution(); break;
-    case TerminalVariant::Red: tone = error(); break;
-    case TerminalVariant::Green: tone = success(); break;
-    case TerminalVariant::RebootRequired: tone = success(); break;
-    case TerminalVariant::Success: tone = mint(); break;
-    case TerminalVariant::None: tone = mint(); break;
+    case TerminalVariant::Amber:
+        tone = caution();
+        break;
+    case TerminalVariant::Red:
+        tone = error();
+        break;
+    case TerminalVariant::Green:
+        tone = success();
+        break;
+    case TerminalVariant::RebootRequired:
+        tone = success();
+        break;
+    case TerminalVariant::Success:
+        tone = mint();
+        break;
+    case TerminalVariant::None:
+        tone = mint();
+        break;
     }
 
     if (terminal) {

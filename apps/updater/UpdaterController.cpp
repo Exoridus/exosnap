@@ -179,9 +179,8 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.headline = QStringLiteral("Couldn't restore the previous version");
         state_.detail_text =
             QStringLiteral("The update failed and the automatic restore couldn't put the backup back in place.");
-        state_.safety_text =
-            QStringLiteral("Your previous version %1 is preserved in the backup folder, but isn't ready to run.")
-                .arg(state_.from_version);
+        state_.safety_text = QStringLiteral("Version %1 is preserved in the backup folder but isn't ready to run.")
+                                 .arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Close");
         break;
@@ -196,8 +195,7 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.detail_text =
             QStringLiteral("Windows Installer finished, but ExoSnap couldn't verify the installed files.");
         state_.safety_text =
-            QStringLiteral("Windows Installer may have kept or restored version %1; no rollback is being claimed.")
-                .arg(state_.from_version);
+            QStringLiteral("Version %1 may still be installed; no rollback is being claimed.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Close");
         break;
@@ -223,9 +221,8 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
     case FailureCase::MsiFailed: // C2
         state_.variant = TerminalVariant::Red;
         state_.headline = QStringLiteral("Windows Installer couldn't apply the update");
-        state_.detail_text =
-            QStringLiteral("The installer stopped with code %1. You can close this window and try again later.")
-                .arg(detail.isEmpty() ? QStringLiteral("unknown") : detail);
+        state_.detail_text = QStringLiteral("Windows Installer stopped with code %1. Try again later.")
+                                 .arg(detail.isEmpty() ? QStringLiteral("unknown") : detail);
         state_.safety_text = QStringLiteral("Your previous version %1 is still usable.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Close");
         state_.secondary_action.clear();
