@@ -1,12 +1,10 @@
 #include <gtest/gtest.h>
 
-#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QFrame>
 #include <QLabel>
-#include <QMenu>
 #include <QPushButton>
 #include <QWidget>
 
@@ -187,19 +185,37 @@ TEST_F(CrashReportTest, ScrubbedReportRendersModelFields) {
     EXPECT_TRUE(ContainsLabel(panel, QStringLiteral("submitFrame")));
 }
 
-TEST_F(CrashReportTest, OverflowMenuHasFallbackActions) {
+TEST_F(CrashReportTest, ActionRowHasVisibleFolderButtonAndNoOverflowMenu) {
     ui::dialogs::CrashReportPanel panel(SampleModel());
-    auto* overflow = panel.findChild<QPushButton*>(QStringLiteral("crashOverflowButton"));
-    ASSERT_NE(overflow, nullptr);
-    ASSERT_NE(overflow->menu(), nullptr);
+    EXPECT_EQ(panel.findChild<QPushButton*>(QStringLiteral("crashOverflowButton")), nullptr);
+    EXPECT_FALSE(ContainsLabel(panel, QStringLiteral("Report on GitHub")));
 
-    QStringList action_texts;
-    for (auto* action : overflow->menu()->actions())
-        if (!action->isSeparator())
-            action_texts << action->text();
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Report on GitHub")));
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Open crash folder")));
-    EXPECT_TRUE(action_texts.contains(QStringLiteral("Don't send & close")));
+    auto* folder = panel.findChild<QPushButton*>(QStringLiteral("crashOpenFolderButton"));
+    ASSERT_NE(folder, nullptr);
+    EXPECT_EQ(folder->text(), QStringLiteral("Open crash folder"));
+    EXPECT_EQ(folder->accessibleName(), QStringLiteral("Open crash folder"));
+    EXPECT_TRUE(folder->isVisibleTo(&panel));
+
+    int count = 0;
+    QObject::connect(&panel, &ui::dialogs::CrashReportPanel::openCrashFolderRequested, &panel, [&count]() { ++count; });
+    folder->click();
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(CrashReportTest, ActionRowTextsAndFocusOrderAreStable) {
+    ui::dialogs::CrashReportPanel panel(SampleModel());
+    auto* send = panel.findChild<QPushButton*>(QStringLiteral("crashSendButton"));
+    auto* decline = panel.findChild<QPushButton*>(QStringLiteral("crashDeclineButton"));
+    auto* folder = panel.findChild<QPushButton*>(QStringLiteral("crashOpenFolderButton"));
+    ASSERT_NE(send, nullptr);
+    ASSERT_NE(decline, nullptr);
+    ASSERT_NE(folder, nullptr);
+
+    EXPECT_EQ(send->text(), QStringLiteral("Send report"));
+    EXPECT_EQ(decline->text(), QStringLiteral("Don't send"));
+    EXPECT_EQ(folder->text(), QStringLiteral("Open crash folder"));
+    EXPECT_EQ(send->nextInFocusChain(), decline);
+    EXPECT_EQ(decline->nextInFocusChain(), folder);
 }
 
 TEST_F(CrashReportTest, OverlayForwardsSendReportSignal) {

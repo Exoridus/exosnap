@@ -46,7 +46,11 @@ QStringList BuildUpdaterArgs(const exosnap::update::UpdateState& st, const QStri
 
 QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
                                const QString& available_version, bool verify_reinstall_mode,
-                               const QString& current_version) {
+                               const QString& current_version, UpdateHandoffPhase handoff_phase) {
+    if (handoff_phase == UpdateHandoffPhase::UpdaterRunning)
+        return QStringLiteral("updater-running");
+    if (handoff_phase == UpdateHandoffPhase::ClosingForHandoff)
+        return QStringLiteral("pending");
     if (!update_available)
         return QStringLiteral("uptodate");
     if (is_scoop)
@@ -61,6 +65,14 @@ QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QStri
     if (!applied_version.isEmpty() && available_version == applied_version)
         return QStringLiteral("pending");
     return QStringLiteral("available");
+}
+
+QString AppliedVersionForCommittedHandoff(const QString& target_version, bool verification_reinstall) {
+    return verification_reinstall ? QString() : target_version;
+}
+
+QString ReconcileAppliedVersionOnStartup(const QString& /*persisted_applied_version*/) {
+    return {};
 }
 
 bool UpdateService::IsScoopManagedInstall(const QString& app_dir_path) {

@@ -16,6 +16,13 @@ target_include_directories(soak_metrics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(soak_metrics PUBLIC nlohmann_json::nlohmann_json)
 target_compile_features(soak_metrics PUBLIC cxx_std_20)
 
+# --- Pure clapper CLI/schedule validation (no WinAPI / engine) ---
+add_library(clapper_schedule STATIC
+    clapper_schedule.cpp
+)
+target_include_directories(clapper_schedule PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(clapper_schedule PUBLIC cxx_std_20)
+
 # --- Host run-loop: engine-callback latch + process sampler + timeline + abort ---
 add_library(soak_runner STATIC
     soak_runner.cpp
@@ -32,6 +39,7 @@ add_executable(exosnap-soak
     main.cpp
 )
 target_link_libraries(exosnap-soak PRIVATE
+    clapper_schedule
     soak_runner
     recorder_core_testutil
     exosnap::warnings
@@ -47,6 +55,13 @@ exosnap_add_gtest(
     LIBRARIES soak_metrics
 )
 
+exosnap_add_gtest(
+    NAME clapper_schedule_tests
+    TEST_PREFIX soak.
+    SOURCES tests/test_clapper_schedule.cpp
+    LIBRARIES clapper_schedule
+)
+
 # Synthetic run-loop end-to-end: drives the GPU-free session through the real
 # SoakRunner wiring, validates the output with the vendored libavformat, and trips
 # the wired abort policy with an injected skew ramp.
@@ -57,3 +72,11 @@ exosnap_add_gtest(
     LIBRARIES soak_runner recorder_core_testutil
 )
 target_compile_definitions(soak_synthetic_tests PRIVATE NOMINMAX)
+
+if(Python3_EXECUTABLE)
+    add_test(
+        NAME soak.av_sync_analyzer_unit
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/dev/test_av_sync_check.py"
+    )
+    set_tests_properties(soak.av_sync_analyzer_unit PROPERTIES TIMEOUT 30)
+endif()

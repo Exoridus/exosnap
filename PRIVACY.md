@@ -64,8 +64,8 @@ is subject to the following guarantees:
   **Today, only `encoder_backend`, `container`, `video_codec`, and `audio_codec` are actually set**
   on the Sentry path (`SetEncoderContext`). `os.*`, `gpu.*`, and `app.version` are allowlisted (so
   they would pass the scrubber if a future change sets them) but are not populated by app code
-  today — OS build and GPU model/driver currently reach you only through the local crash dialog
-  and the opt-in Stage-0 GitHub issue (see docs/product-spec.md §13), not the Sentry upload. This
+  today — OS build and GPU model/driver currently reach you only through the local crash dialog,
+  not the Sentry upload. This
   table is kept in sync with the code by an automated check
   (`scripts/validate-privacy-allowlist.ps1`, see `docs/privacy-review.md`).
 - **What is never sent.** Usernames, file paths (including your chosen output folder and
@@ -79,7 +79,7 @@ is subject to the following guarantees:
   Program-Files-style install this is not personal; for a **portable install run from under
   `%USERPROFILE%`**, the username segment of that path can appear in the uploaded minidump. This
   is a real, narrower exception to "paths are stripped" — it applies only to the minidump binary,
-  never to the structured event, the Stage-0 GitHub issue, or the crash dialog you see beforehand.
+  never to the structured event or the crash dialog you see beforehand.
 - **No persistent identifier.** No stable device-level identifier is generated or stored. At
   most a per-report random correlation id may be attached for de-duplication within a single
   crash submission.

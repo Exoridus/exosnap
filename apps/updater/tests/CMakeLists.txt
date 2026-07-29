@@ -36,3 +36,12 @@ exosnap_add_gtest(
     SOURCES test_updater_window_smoke.cpp
     LIBRARIES exosnap_updater_ui
 )
+
+# Deterministic QWidget renders of the terminal failure matrix at representative
+# Windows DPR values. Evidence is written under .workspace/live-verify/.
+exosnap_add_gtest(
+    NAME    test_updater_visual_proof
+    TEST_PREFIX updater.
+    SOURCES test_updater_visual_proof.cpp
+    LIBRARIES exosnap_updater_ui
+)

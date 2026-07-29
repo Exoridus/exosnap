@@ -8,6 +8,10 @@ verified that promise was still true release over release, or that it stayed tru
 changed. This ADR records the decisions behind a durable inventory document, three cheap
 automated checks, and two real fixes an adversarial review of the current code surfaced.
 
+**Amended 2026-07-29.** The crash dialog's unused prefilled GitHub-issue path was removed. The
+inventory now has E1–E4 (crash upload, update check, update download, local-only support bundle);
+the four runtime network call sites themselves are unchanged.
+
 ## Context
 
 A review of every runtime network call site (`libs/update`, `libs/crash_capture`, and a project-
@@ -38,8 +42,8 @@ reaches a log a user might share.
 
 ### D1 — A durable, tracked egress inventory: `docs/privacy-review.md`
 
-A new tracked document holds the egress table (E1–E5: crash upload, Stage-0 GitHub issue, update
-check, update download, the local-only support bundle), the local-never-transmitted store list,
+A new tracked document holds the egress table (E1–E4: crash upload, update check, update download,
+the local-only support bundle), the local-never-transmitted store list,
 and the release checklist, each item tagged **[CI]** or **[Live]**. `PRIVACY.md` stays the
 user-facing plain-language statement; `docs/privacy-review.md` is the reviewer-facing artifact
 with code references and test coverage — the two are cross-checked automatically (D2b) instead of
@@ -135,8 +139,8 @@ doc-honesty fix, not a privacy fix.
 Only `encoder_backend`/`container`/`video_codec`/`audio_codec` are populated on the Sentry tag
 path today (`SetEncoderContext`); the six other allowlisted keys (`os.*`, `gpu.*`, `app.version`)
 are allowlisted (and would be scrubbed correctly if ever set) but are not populated by app code —
-OS/GPU facts currently reach the user only via the Stage-0 GitHub issue and the crash dialog, not
-the Sentry upload. `PRIVACY.md` and product-spec §14 are precised to state this explicitly rather
+OS/GPU facts currently reach the user only via the crash dialog, not the Sentry upload.
+`PRIVACY.md` and product-spec §14 are precise about this rather
 than the app being changed to start sending more data on the Sentry path. This keeps the crash
 network path unchanged (see "Deliberately not built" below) while still resolving the doc↔code
 drift the review exists to find.

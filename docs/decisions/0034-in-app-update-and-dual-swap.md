@@ -46,6 +46,20 @@ affordance during Install/Verify/Restart so the swap cannot be interrupted mid-f
 The three terminal failure variants (amber / red / green) each always name the version that is safe
 to run — see product-spec §13 and the failure matrix behind `FailureCase` / `RetryEntryStep`.
 
+**Lifecycle ownership amendment (2026-07).** Launching the detached updater is not itself a
+restart handoff. While both processes are alive the Settings card says **Updater running** and
+`UpdateService` watches the detached process handle without polling. If it exits before handoff,
+the card becomes actionable again. Only the updater's private, magic-marked Win32 close message
+transitions the app to **ClosingForHandoff** / `Restart pending`; an ordinary close cannot forge
+that state. The normal-mode `applied_version` loop guard is committed immediately before that
+accepted close, never at process launch, and verification-reinstall never writes it. Every fresh
+app process discards a leftover applied stamp and reconstructs its card from the release truth,
+so an abort, failure, forced close or verify run cannot leave a stale pending state.
+
+Terminal updater failures use a structured result model (headline, detail, safety statement and
+actions) rendered inside one result card. Raw transport/MSI/path details remain log evidence. A
+restore failure has its own hard-stop case and never claims that the previous version was restored.
+
 ## Context
 
 The update backend already checks for releases, downloads, and **verifies signatures**, and can hand

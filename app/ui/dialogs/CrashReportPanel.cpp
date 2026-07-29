@@ -6,13 +6,11 @@
 #include "../theme/LucideIcon.h"
 #include "../widgets/ExoCheckBox.h"
 
-#include <QAction>
 #include <QColor>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenu>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -562,6 +560,7 @@ QWidget* CrashReportPanel::buildActionsRow() {
     // on the mint fill, so it's tinted with the accent-ink colour.
     auto* send_btn = new QPushButton(QStringLiteral("Send report"), row);
     send_btn->setObjectName(QStringLiteral("crashSendButton"));
+    send_btn->setAccessibleName(QStringLiteral("Send report"));
     send_btn->setCursor(Qt::PointingHandCursor);
     send_btn->setIcon(theme::lucideIcon(QStringLiteral("upload"),
                                         QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac_ink), 14,
@@ -586,6 +585,7 @@ QWidget* CrashReportPanel::buildActionsRow() {
     // surfaces share one button language.
     auto* decline_btn = new QPushButton(QStringLiteral("Don't send"), row);
     decline_btn->setObjectName(QStringLiteral("crashDeclineButton"));
+    decline_btn->setAccessibleName(QStringLiteral("Don't send"));
     decline_btn->setCursor(Qt::PointingHandCursor);
     decline_btn->setStyleSheet(
         QStringLiteral(
@@ -602,54 +602,28 @@ QWidget* CrashReportPanel::buildActionsRow() {
 
     layout->addStretch(1);
 
-    // Tier 3 — tertiary "More options" text button. Replaces the cryptic "⋯"
-    // circle; a labelled trigger + right chevron reads as an obvious menu. It
-    // opens the exact same QMenu (Report on GitHub / Open crash folder / decline).
-    overflow_button_ = new QPushButton(QStringLiteral("More options"), row);
-    overflow_button_->setObjectName(QStringLiteral("crashOverflowButton"));
-    overflow_button_->setCursor(Qt::PointingHandCursor);
-    overflow_button_->setLayoutDirection(Qt::RightToLeft); // icon trails the label
-    overflow_button_->setIcon(theme::lucideIcon(QStringLiteral("chevron-down"),
-                                                QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14,
-                                                devicePixelRatioF()));
-    overflow_button_->setIconSize(QSize(14, 14));
-    overflow_button_->setStyleSheet(
-        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:0 10px; "
+    // Tier 3 — directly visible local action. It remains visually quieter than
+    // the consent choices, but no longer hides the useful folder action behind
+    // an overflow menu (or exposes an unrelated GitHub workflow).
+    auto* folder_btn = new QPushButton(QStringLiteral("Open crash folder"), row);
+    folder_btn->setObjectName(QStringLiteral("crashOpenFolderButton"));
+    folder_btn->setAccessibleName(QStringLiteral("Open crash folder"));
+    folder_btn->setCursor(Qt::PointingHandCursor);
+    folder_btn->setIcon(theme::lucideIcon(
+        QStringLiteral("folder"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, devicePixelRatioF()));
+    folder_btn->setIconSize(QSize(14, 14));
+    folder_btn->setStyleSheet(
+        QStringLiteral("QPushButton { background:transparent; border:none; border-radius:9px; padding:0 8px; "
                        "min-height:36px; max-height:36px; color:%1; font-size:12.5px; font-weight:500; }"
-                       "QPushButton:hover { color:%2; }"
-                       "QPushButton::menu-indicator { image: none; width: 0; }")
+                       "QPushButton:hover { color:%2; background:%3; }")
             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
-
-    overflow_menu_ = new QMenu(overflow_button_);
-    overflow_menu_->setStyleSheet(
-        QStringLiteral("QMenu { background:%1; border:1px solid %2; border-radius:11px; padding:5px; }"
-                       "QMenu::item { padding:8px 11px; border-radius:8px; color:%3; font-size:12.5px; }"
-                       "QMenu::item:selected { background:%4; }"
-                       "QMenu::separator { height:1px; background:%5; margin:4px 6px; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
                  QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
-                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme()),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
+                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme())));
+    connect(folder_btn, &QPushButton::clicked, this, &CrashReportPanel::openCrashFolderRequested);
+    layout->addWidget(folder_btn, 0, Qt::AlignVCenter);
 
-    const qreal dpr = devicePixelRatioF();
-    auto* github_action = overflow_menu_->addAction(QStringLiteral("Report on GitHub"));
-    github_action->setIcon(
-        theme::lucideIcon(QStringLiteral("github"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
-    connect(github_action, &QAction::triggered, this, &CrashReportPanel::reportOnGitHubRequested);
-    auto* folder_action = overflow_menu_->addAction(QStringLiteral("Open crash folder"));
-    folder_action->setIcon(
-        theme::lucideIcon(QStringLiteral("folder"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
-    connect(folder_action, &QAction::triggered, this, &CrashReportPanel::openCrashFolderRequested);
-    overflow_menu_->addSeparator();
-    auto* decline_action = overflow_menu_->addAction(QStringLiteral("Don't send & close"));
-    decline_action->setIcon(
-        theme::lucideIcon(QStringLiteral("x"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
-    connect(decline_action, &QAction::triggered, this, &CrashReportPanel::dontSendRequested);
-
-    overflow_button_->setMenu(overflow_menu_);
-    layout->addWidget(overflow_button_, 0, Qt::AlignVCenter);
+    setTabOrder(send_btn, decline_btn);
+    setTabOrder(decline_btn, folder_btn);
 
     return row;
 }

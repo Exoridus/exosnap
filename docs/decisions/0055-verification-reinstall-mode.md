@@ -49,7 +49,10 @@ card gets its own state, `verify-reinstall`: "Verification reinstall available �
 version. It is never phrased as an available update, and the hub advisory and the toast stay
 silent, because nothing new is available. Scoop installs remain notify-only. The
 recording/finalizing guards apply unchanged to both the check and the launch. The loop-guard
-`applied_version` stamp is not written in this mode — the mode persists nothing. A support
+`applied_version` stamp is not written in this mode — the mode persists nothing. Updater launch
+shows a distinct **Updater running** card state; only the updater's marked close/handoff request
+may show **Restart pending**. A detached updater that exits before handoff re-arms the reinstall
+action, and a fresh normal process discards any legacy applied stamp. A support
 bundle taken during such a run records the mode in its manifest.
 
 **Updater.** The app passes `--verify-reinstall` alongside `--current-version`. After the

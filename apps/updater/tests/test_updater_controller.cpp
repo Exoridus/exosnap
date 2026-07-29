@@ -89,7 +89,7 @@ TEST(UpdaterController, VerifyInstallFailedIsRedRestored) {
     const UpdaterUiState& s = c.state();
     EXPECT_EQ(s.steps[size_t(UpStep::Verify)], StepStatus::Failed);
     EXPECT_EQ(s.variant, TerminalVariant::Red);
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("previous version was restored")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("previous version 0.8.1 was restored")));
     EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
     EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
 }
@@ -106,8 +106,8 @@ TEST(UpdaterController, VerifyInstallFailedMsiDoesNotClaimAConfirmedRollback) {
     // Windows Installer for an actual rollback outcome either -- it only re-reads the
     // registry install path and re-checks the version -- so the copy must not assert a
     // rollback happened, only that the post-install state could not be confirmed.
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("could not be confirmed")));
-    EXPECT_FALSE(s.footer_text.contains(QStringLiteral("was restored")));
+    EXPECT_TRUE(s.headline.contains(QStringLiteral("confirm")));
+    EXPECT_FALSE(s.safety_text.contains(QStringLiteral("was restored")));
     EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
     EXPECT_EQ(s.secondary_action, QStringLiteral("Open current version"));
 }
@@ -121,10 +121,10 @@ TEST(UpdaterController, MsiRebootRequiredIsTerminalSuccessWithRestartCopy) {
     // own terminal variant rather than a red failure card.
     EXPECT_EQ(s.steps[size_t(UpStep::Install)], StepStatus::Done);
     EXPECT_EQ(s.variant, TerminalVariant::RebootRequired);
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("restart Windows")));
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("installed")));
+    EXPECT_TRUE(s.headline.contains(QStringLiteral("restart Windows")));
+    EXPECT_TRUE(s.detail_text.contains(QStringLiteral("system restart")));
     // Not the generic C2 failure wording.
-    EXPECT_FALSE(s.footer_text.contains(QStringLiteral("Installation failed")));
+    EXPECT_FALSE(s.headline.contains(QStringLiteral("Installation failed")));
     EXPECT_EQ(s.primary_action, QStringLiteral("Close"));
     EXPECT_TRUE(s.secondary_action.isEmpty());
 }
@@ -138,7 +138,7 @@ TEST(UpdaterController, LaunchFailedIsGreenSoftSuccess) {
     EXPECT_EQ(s.primary_action, QStringLiteral("Open ExoSnap"));
     EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
     // %1 in the copy resolves to the target version.
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("0.9.0")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("0.9.0")));
 }
 
 TEST(UpdaterController, DownloadFailedIsAmber) {
@@ -149,7 +149,8 @@ TEST(UpdaterController, DownloadFailedIsAmber) {
     EXPECT_EQ(s.steps[size_t(UpStep::Download)], StepStatus::Failed);
     EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
     EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("current version is unchanged")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("current version 0.8.1 is unchanged")));
+    EXPECT_FALSE(s.detail_text.contains(QStringLiteral("WinHttp")));
 }
 
 TEST(UpdaterController, VerifyDownloadFailedIsRedSecurityStop) {
@@ -158,7 +159,8 @@ TEST(UpdaterController, VerifyDownloadFailedIsRedSecurityStop) {
     const UpdaterUiState& s = c.state();
     EXPECT_EQ(s.variant, TerminalVariant::Red);
     EXPECT_EQ(s.primary_action, QStringLiteral("Re-download"));
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("corrupt or tampered")));
+    EXPECT_TRUE(s.detail_text.contains(QStringLiteral("signed release")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("Nothing was installed")));
 }
 
 TEST(UpdaterController, MsiFailedEmbedsCodeAndHasNoSecondary) {
@@ -168,7 +170,7 @@ TEST(UpdaterController, MsiFailedEmbedsCodeAndHasNoSecondary) {
     EXPECT_EQ(s.variant, TerminalVariant::Red);
     EXPECT_EQ(s.primary_action, QStringLiteral("Close"));
     EXPECT_TRUE(s.secondary_action.isEmpty());
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("1603")));
+    EXPECT_TRUE(s.detail_text.contains(QStringLiteral("1603")));
 }
 
 // ── Verification reinstall (ADR 0055) ───────────────────────────────────────
@@ -201,9 +203,24 @@ TEST(UpdaterController, VerifyReinstallMismatchIsRedAndOffersNoRetry) {
     EXPECT_EQ(s.steps[size_t(UpStep::Download)], StepStatus::Failed);
     EXPECT_EQ(s.primary_action, QStringLiteral("Close"));
     EXPECT_TRUE(s.secondary_action.isEmpty()) << "re-fetching the same manifest cannot help";
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("identical version")));
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("0.9.1")));
-    EXPECT_TRUE(s.footer_text.contains(QStringLiteral("Nothing was installed")));
+    EXPECT_TRUE(s.detail_text.contains(QStringLiteral("0.9.1")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("Nothing was installed")));
+}
+
+TEST(UpdaterController, RestoreFailureDoesNotClaimTheOldVersionIsReady) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::RestoreFailed, QStringLiteral("C:/technical/path"));
+    const UpdaterUiState& s = c.state();
+
+    EXPECT_EQ(s.variant, TerminalVariant::Red);
+    EXPECT_EQ(s.steps[size_t(UpStep::Verify)], StepStatus::Failed);
+    EXPECT_TRUE(s.headline.contains(QStringLiteral("restore")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("backup folder")));
+    EXPECT_TRUE(s.safety_text.contains(QStringLiteral("isn't ready to run")));
+    EXPECT_FALSE(s.detail_text.contains(QStringLiteral("C:/technical/path")))
+        << "filesystem details belong in logs, not primary UI copy";
+    EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
+    EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
 }
 
 } // namespace

@@ -15,7 +15,6 @@
 #include "pages/EditExportPage.h"
 #include "pages/LogsPage.h"
 #include "pages/RecordPage.h"
-#include "services/CrashIssueReport.h"
 #include "services/ElevatedRelaunch.h"
 #include "services/GlobalHotkeyService.h"
 #include "services/UpdateService.h"
@@ -66,10 +65,10 @@
 #include <capability/user_config.h>
 #include <crash_capture/crash_capture.h>
 #include <crash_capture/crash_scrubber.h>
+#include <update/update_handoff.h>
 
 #include <QAbstractButton>
 #include <QApplication>
-#include <QClipboard>
 #include <QCloseEvent>
 #include <QColor>
 #include <QCoreApplication>
@@ -536,41 +535,52 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
     connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
 
-    // The staged swap updater has been launched: stamp the loop guard so a stale
-    // releases-API cache can't re-offer the same version, and flip the card to the
-    // "Restart pending" state. The updater will send WM_CLOSE when it is ready to
-    // swap; the app then closes normally.
+    // Process launch and close handoff are separate states. Download/verification
+    // can still fail or be cancelled while the old app remains open, so spawning
+    // the detached updater must never persist the applied-version stamp or claim
+    // a restart is pending.
     connect(update_service_, &UpdateService::updaterLaunched, this, [this]() {
-        // ADR 0055: the verification-reinstall mode persists nothing, so it does
-        // not write the loop-guard stamp either — the version it "applies" is the
-        // one already installed, and the stamp would only be cleared again on the
-        // next launch. The card still shows the restart-pending state.
-        if (!verify_update_reinstall_) {
-            persisted_settings_.applied_version = last_available_version_;
-            settings_store_.Save(persisted_settings_);
-        }
+        update_handoff_phase_ = UpdateHandoffPhase::UpdaterRunning;
         if (config_page_)
-            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+            config_page_->setUpdateStatus(QStringLiteral("updater-running"), last_available_version_, QString());
         diagnostics::AppLog::info(
             QStringLiteral("update"),
             verify_update_reinstall_
-                ? QStringLiteral("Updater launched to reinstall %1 — restart pending").arg(last_available_version_)
-                : QStringLiteral("Updater launched for %1 — restart pending").arg(last_available_version_));
+                ? QStringLiteral("Updater launched to verify-reinstall %1; waiting for close handoff")
+                      .arg(last_available_version_)
+                : QStringLiteral("Updater launched for %1; waiting for close handoff").arg(last_available_version_));
+    });
+    connect(update_service_, &UpdateService::updaterExited, this, [this](qint64 process_id, quint32 exit_code) {
+        if (update_handoff_phase_ != UpdateHandoffPhase::UpdaterRunning)
+            return;
+
+        update_handoff_phase_ = UpdateHandoffPhase::Idle;
+        const QString state =
+            verify_update_reinstall_ ? QStringLiteral("verify-reinstall") : QStringLiteral("available");
+        if (config_page_)
+            config_page_->setUpdateStatus(state, last_available_version_, QString());
+        diagnostics::AppLog::warning(
+            QStringLiteral("update"),
+            QStringLiteral("Updater process %1 exited before close handoff (code %2); update card re-armed")
+                .arg(process_id)
+                .arg(exit_code));
     });
     // Any staging/launch failure surfaces on the Settings card as an error.
     connect(update_service_, &UpdateService::updateError, this,
             [this](exosnap::update::VerifyResult /*result*/, const QString& detail) {
+                update_handoff_phase_ = UpdateHandoffPhase::Idle;
                 if (config_page_)
                     config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), detail);
                 diagnostics::AppLog::warning(QStringLiteral("update"),
                                              QStringLiteral("Updater launch failed: %1").arg(detail));
             });
 
-    // Loop guard: once the running build equals a pending applied_version, the swap
-    // completed — clear the stamp so future checks work normally.
-    if (!persisted_settings_.applied_version.isEmpty() &&
-        persisted_settings_.applied_version == QString::fromLatin1(exosnap::build::kVersion)) {
-        persisted_settings_.applied_version.clear();
+    // Handoff truth belongs to the process that accepted the updater's marked
+    // close request. A fresh process (whether the new version or a restored old
+    // one) must never reconstruct "Restart pending" from that stale UI stamp.
+    const QString reconciled_applied = ReconcileAppliedVersionOnStartup(persisted_settings_.applied_version);
+    if (persisted_settings_.applied_version != reconciled_applied) {
+        persisted_settings_.applied_version = reconciled_applied;
         settings_store_.Save(persisted_settings_);
     }
 
@@ -1464,20 +1474,6 @@ void MainWindow::openCrashReportOverlay() {
             crash_overlay_->closeOverlay();
     });
 
-    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::reportOnGitHubRequested, this, [this, model]() {
-        services::CrashIssueData data;
-        data.app_version = model.version;
-        data.os = model.os;
-        data.gpu = model.gpu;
-        data.encoder = model.encoder;
-        data.exception = model.exception;
-        data.correlation_id = QString::fromStdString(crash_capture::GenerateCorrelationId());
-        QDesktopServices::openUrl(QUrl(services::BuildCrashIssueUrl(data)));
-        if (auto* clipboard = QGuiApplication::clipboard())
-            clipboard->setText(services::BuildCrashMetadataBlock(data));
-        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("Opened GitHub crash issue form"));
-    });
-
     connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::openCrashFolderRequested, this,
             [this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(crash_dir_))); });
 
@@ -2037,6 +2033,21 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 return true;
             }
 
+            if (msg->hwnd == main_hwnd && msg->message == static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage) &&
+                msg->wParam == static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic)) {
+                // The updater has completed download verification and now owns
+                // the close/install/relaunch sequence. Mark the request, bypass
+                // close-to-tray, and let closeEvent commit the pending stamp only
+                // after its recording/finalization guards accept the close.
+                if (update_handoff_phase_ == UpdateHandoffPhase::UpdaterRunning) {
+                    update_handoff_phase_ = UpdateHandoffPhase::ClosingForHandoff;
+                    force_quit_ = true;
+                    QMetaObject::invokeMethod(this, [this] { close(); }, Qt::QueuedConnection);
+                }
+                *result = 0;
+                return true;
+            }
+
             if (msg->hwnd == main_hwnd &&
                 (msg->message == WM_NCACTIVATE || msg->message == WM_ACTIVATE || msg->message == WM_SETFOCUS)) {
                 const char* reason = "focus-transition";
@@ -2284,6 +2295,27 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
     saveWindowGeometry();
 
+    if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff) {
+        const bool export_active = edit_export_overlay_ && edit_export_overlay_->page() &&
+                                   edit_export_overlay_->page()->phase() == EditExportPage::Phase::Exporting;
+        const bool handoff_blocked = record_status_label_ == QStringLiteral("STOPPING") || remuxing_active_ ||
+                                     recording_active_ || export_active;
+        if (handoff_blocked) {
+            update_handoff_phase_ = UpdateHandoffPhase::Idle;
+            force_quit_ = false;
+            if (config_page_) {
+                const QString state =
+                    verify_update_reinstall_ ? QStringLiteral("verify-reinstall") : QStringLiteral("available");
+                config_page_->setUpdateStatus(state, last_available_version_, QString());
+            }
+            diagnostics::AppLog::warning(
+                QStringLiteral("update"),
+                QStringLiteral("Updater close handoff refused because recording or finalization became active"));
+            event->ignore();
+            return;
+        }
+    }
+
     // TRAY-CLOSE-TO-TRAY-R1: if close-to-tray is enabled and this is NOT a
     // force-quit (e.g. from the tray "Quit" action or recording guard accept),
     // hide the window to the tray instead of quitting.
@@ -2406,6 +2438,19 @@ void MainWindow::closeEvent(QCloseEvent* event) {
             event->ignore();
         }
         return;
+    }
+    if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff) {
+        persisted_settings_.applied_version =
+            AppliedVersionForCommittedHandoff(last_available_version_, verify_update_reinstall_);
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setUpdateStatus(QStringLiteral("pending"), last_available_version_, QString());
+        diagnostics::AppLog::info(
+            QStringLiteral("update"),
+            verify_update_reinstall_
+                ? QStringLiteral("Verification reinstall handoff committed for %1; no loop guard persisted")
+                      .arg(last_available_version_)
+                : QStringLiteral("Update handoff committed for %1; closing the old app").arg(last_available_version_));
     }
     QMainWindow::closeEvent(event);
 }
@@ -4399,9 +4444,9 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         // stuck "Restart pending" re-arms to "available" for a still-applicable
         // version; automatic checks keep available==applied pinned to "pending".
         const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
-        const QString card_state =
-            exosnap::ResolveUpdateCardState(result.update_available, is_scoop, persisted_settings_.applied_version,
-                                            available_version, verify_update_reinstall_, current_version);
+        const QString card_state = exosnap::ResolveUpdateCardState(
+            result.update_available, is_scoop, persisted_settings_.applied_version, available_version,
+            verify_update_reinstall_, current_version, update_handoff_phase_);
         config_page_->setUpdateStatus(card_state, available_version, last_checked);
     }
 

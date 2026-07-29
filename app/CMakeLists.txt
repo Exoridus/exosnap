@@ -297,8 +297,6 @@ qt_add_executable(exosnap WIN32
     services/RecoveryService.cpp
     services/AtomicFileOps.h
     services/AtomicFileOps.cpp
-    services/CrashIssueReport.h
-    services/CrashIssueReport.cpp
     services/UpdateService.h
     services/UpdateService.cpp
     services/UpdateLaunchPlan.cpp
@@ -1474,16 +1472,6 @@ exosnap_add_gtest(
 )
 target_include_directories(recording_error_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(recording_error_overlay_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME crash_issue_report_tests
-    TEST_PREFIX crashissue.
-    SOURCES
-        tests/test_crash_issue_report.cpp
-        services/CrashIssueReport.cpp
-    LIBRARIES Qt6::Core
-)
-target_include_directories(crash_issue_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME lucide_icon_tests

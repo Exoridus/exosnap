@@ -36,10 +36,9 @@ CrashReportOverlay::CrashReportOverlay(const CrashReportModel& model, QWidget* p
 
     // Forward the panel's action signals so the host can connect to the overlay.
     connect(panel_, &CrashReportPanel::sendReportRequested, this, &CrashReportOverlay::sendReportRequested);
-    connect(panel_, &CrashReportPanel::reportOnGitHubRequested, this, &CrashReportOverlay::reportOnGitHubRequested);
     connect(panel_, &CrashReportPanel::openCrashFolderRequested, this, &CrashReportOverlay::openCrashFolderRequested);
     connect(panel_, &CrashReportPanel::autoSendToggled, this, &CrashReportOverlay::autoSendToggled);
-    // The chrome close X / overflow "Don't send & close" decline AND dismiss the overlay.
+    // The chrome close X / visible "Don't send" action decline AND dismiss the overlay.
     connect(panel_, &CrashReportPanel::dontSendRequested, this, &CrashReportOverlay::dontSendRequested);
     connect(panel_, &CrashReportPanel::dontSendRequested, this, &CrashReportOverlay::closeOverlay);
 

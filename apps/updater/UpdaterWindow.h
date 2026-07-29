@@ -2,7 +2,7 @@
 
 // UpdaterWindow -- the whole standalone updater window, rendered as a pure
 // function of an UpdaterUiState. A dedicated (frameless-look) title bar carries
-// the brand + a boxed UPDATER tag + a close X that refuses to interrupt a swap;
+// the brand + a quiet UPDATER mode label + a close X that refuses to interrupt a swap;
 // below it sit the version pills, the ProgressRing, a status line, the
 // five-step checklist and a state-dependent footer (reassurance while working,
 // a tinted result card with 1-2 actions on a terminal variant).
@@ -67,6 +67,7 @@ class UpdaterWindow : public QWidget {
 
     // Ring + status
     ProgressRing* ring_ = nullptr;
+    QWidget* status_row_ = nullptr;
     QWidget* status_icon_ = nullptr;
     QLabel* status_text_ = nullptr;
 

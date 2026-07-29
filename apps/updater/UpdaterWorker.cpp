@@ -28,6 +28,7 @@
 #include <update/package_verifier.h>
 #include <update/release_locator.h>
 #include <update/update_checker.h>
+#include <update/update_handoff.h>
 #include <update/zip_extract.h>
 
 namespace fs = std::filesystem;
@@ -143,6 +144,7 @@ UpStep RetryEntryStep(FailureCase c) {
         return UpStep::CloseApp;
     case FailureCase::InstallFailed:          // B2 (staging kept)
     case FailureCase::VerifyInstallFailed:    // B3 (portable: previous version restored)
+    case FailureCase::RestoreFailed:          // B3-R (backup preserved; retry heals it)
     case FailureCase::VerifyInstallFailedMsi: // B3-MSI (msiexec rolled back)
     case FailureCase::UacDeclined:            // C1 (re-handoff)
     case FailureCase::MsiFailed:              // C2
@@ -194,8 +196,8 @@ void* OpenPackageWriteLock(const std::wstring& path) {
     // file — can open it for writing, rename it, or delete it while this handle
     // lives. Kernel share-mode enforcement cannot be bypassed by a file owner the
     // way an ACL can, which is why this beats staging into an ACL'd directory.
-    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                             nullptr);
     return h; // INVALID_HANDLE_VALUE on failure
 }
 
@@ -205,8 +207,7 @@ void ClosePackageLock(void* handle) noexcept {
     }
 }
 
-bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds timeout,
-                            const std::atomic<bool>& cancel) {
+bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds timeout, const std::atomic<bool>& cancel) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     HANDLE proc = static_cast<HANDLE>(process_handle);
     for (;;) {
@@ -262,8 +263,7 @@ void UpdaterWorker::run(UpStep entry) {
         return;
     }
     if (int(entry) <= int(UpStep::Install)) {
-        const bool ok =
-            args_.install_mode == InstallMode::Portable ? runInstallPortable() : runInstallMsi();
+        const bool ok = args_.install_mode == InstallMode::Portable ? runInstallPortable() : runInstallMsi();
         if (!ok) {
             return;
         }
@@ -278,8 +278,8 @@ void UpdaterWorker::run(UpStep entry) {
 bool UpdaterWorker::runDownload() {
     emit stepStarted(UpStep::Download);
 
-    const std::string base_url = args_.base_url.isEmpty() ? std::string(kDefaultReleasesUrl)
-                                                          : args_.base_url.toStdString();
+    const std::string base_url =
+        args_.base_url.isEmpty() ? std::string(kDefaultReleasesUrl) : args_.base_url.toStdString();
     std::string fetch_error;
     const std::optional<std::string> releases_json = FetchReleasesJson(base_url, fetch_error);
     if (!releases_json.has_value()) {
@@ -291,9 +291,8 @@ bool UpdaterWorker::runDownload() {
     const auto release = LocateRelease(*releases_json, args_.channel, &parse_error);
     if (!release.has_value()) {
         emit failed(FailureCase::DownloadFailed, // A1
-                    parse_error.empty()
-                        ? QStringLiteral("No release with an update manifest found for this channel.")
-                        : QString::fromStdString(parse_error));
+                    parse_error.empty() ? QStringLiteral("No release with an update manifest found for this channel.")
+                                        : QString::fromStdString(parse_error));
         return false;
     }
     emit releaseResolved(QString::fromStdString(release->version.ToString()));
@@ -522,9 +521,13 @@ bool UpdaterWorker::runCloseApp() {
     emit stepStarted(UpStep::CloseApp);
 
     if (args_.app_pid != 0) {
-        // The app keeps running until we ask it to close (close handshake).
+        // The app keeps running until download verification succeeds. A marked
+        // private message transfers handoff ownership; unlike a generic
+        // WM_CLOSE it lets the app persist "pending" only for this real updater
+        // transition and bypass close-to-tray without weakening recording guards.
         if (const HWND app_window = ::FindWindowW(nullptr, kAppWindowTitle)) {
-            ::PostMessageW(app_window, WM_CLOSE, 0, 0);
+            ::PostMessageW(app_window, static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage),
+                           static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic), 0);
         }
         if (!WaitForProcessExit(args_.app_pid, kCloseAppTimeout)) {
             emit failed(FailureCase::AppWontClose, QString()); // B1 -- download kept, Retry re-enters here
@@ -588,11 +591,11 @@ bool UpdaterWorker::runInstallPortable() {
         emit failed(FailureCase::InstallFailed,
                     QStringLiteral("The current installation is in use and could not be moved.")); // B2
         return false;
-    case SwapError::RenameNewFailed: // old version already restored and live again
+    case SwapError::RenameNewFailed:                              // old version already restored and live again
         emit failed(FailureCase::VerifyInstallFailed, QString()); // B3 -- footer says "restored"
         return false;
     case SwapError::RestoreFailed: // worst case: old tree stranded in backup dir
-        emit failed(FailureCase::VerifyInstallFailed, RestoreFailedDetail(plan_)); // B3 + both paths
+        emit failed(FailureCase::RestoreFailed, RestoreFailedDetail(plan_)); // B3-R + paths in stderr
         return false;
     }
 
@@ -679,7 +682,8 @@ bool UpdaterWorker::runVerify() {
     if (args_.install_mode == InstallMode::Portable) {
         if (!VerifyInstalledVersion(plan_)) {
             const SwapError restore = RestoreBackup(plan_);
-            emit failed(FailureCase::VerifyInstallFailed, // B3
+            emit failed(restore == SwapError::RestoreFailed ? FailureCase::RestoreFailed
+                                                            : FailureCase::VerifyInstallFailed,
                         restore == SwapError::RestoreFailed ? RestoreFailedDetail(plan_) : QString());
             return false;
         }
@@ -720,7 +724,8 @@ bool UpdaterWorker::runLaunch() {
         if (args_.install_mode == InstallMode::Portable) {
             // The new build never came up -- put the old version back.
             const SwapError restore = RestoreBackup(plan_);
-            emit failed(FailureCase::VerifyInstallFailed, // B3
+            emit failed(restore == SwapError::RestoreFailed ? FailureCase::RestoreFailed
+                                                            : FailureCase::VerifyInstallFailed,
                         restore == SwapError::RestoreFailed ? RestoreFailedDetail(plan_) : QString());
         } else {
             // MSI: nothing to restore; the install itself verified fine.

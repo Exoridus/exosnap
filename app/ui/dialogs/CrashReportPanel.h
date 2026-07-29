@@ -6,7 +6,6 @@
 
 class QFrame;
 class QLabel;
-class QMenu;
 class QPushButton;
 
 namespace exosnap::ui::widgets {
@@ -55,7 +54,6 @@ class CrashReportPanel : public QWidget {
 
   signals:
     void sendReportRequested();
-    void reportOnGitHubRequested();
     void openCrashFolderRequested();
     void dontSendRequested();
     void autoSendToggled(bool checked);
@@ -84,8 +82,6 @@ class CrashReportPanel : public QWidget {
     QLabel* details_chevron_ = nullptr;
     QFrame* scrubbed_report_ = nullptr;
     widgets::ExoCheckBox* auto_send_check_ = nullptr;
-    QPushButton* overflow_button_ = nullptr;
-    QMenu* overflow_menu_ = nullptr;
     bool details_expanded_ = false;
 };
 

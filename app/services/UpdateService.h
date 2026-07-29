@@ -25,6 +25,12 @@ class RecordingCoordinator;
 
 namespace exosnap {
 
+enum class UpdateHandoffPhase : uint8_t {
+    Idle,
+    UpdaterRunning,
+    ClosingForHandoff,
+};
+
 class UpdateService final : public QObject {
     Q_OBJECT
 
@@ -61,7 +67,7 @@ class UpdateService final : public QObject {
 
     // Stage the updater (executable + Qt runtime subset) into
     // %LOCALAPPDATA%\ExoSnap\updater\ and launch it. The app keeps running and
-    // exits normally once the updater sends WM_CLOSE to the app window when it is
+    // exits normally once the updater sends the marked handoff message when it is
     // ready to perform the swap. This call does NOT wait for the updater.
     //   * Blocked while recording/finalizing (emits updateError, no-op).
     //   * Emits updaterLaunched() on success, or updateError() on any staging /
@@ -92,6 +98,10 @@ class UpdateService final : public QObject {
     void updateStateChanged(exosnap::update::UpdateState state);
     void packageReadyForInstall(QString installer_path);
     void updaterLaunched();
+    // Emitted only while the old app is still alive and can observe the detached
+    // process exit. MainWindow uses it to re-arm a card that was showing
+    // "Updater running" after failure, cancellation or user-close.
+    void updaterExited(qint64 process_id, quint32 exit_code);
     void updateError(exosnap::update::VerifyResult result, QString detail);
 
   private:
@@ -125,13 +135,13 @@ class UpdateService final : public QObject {
 //   * verify mode AND available == current     -> "verify-reinstall" (ADR 0055:
 //                                                 the offered version IS the
 //                                                 running one, on purpose)
-//   * available_version == applied_version     -> "pending" (loop guard: the
-//                                                 updater already ran for this
-//                                                 version; awaiting restart)
+//   * available_version == applied_version     -> "pending" (legacy/runtime loop
+//                                                 guard from an accepted marked
+//                                                 close handoff)
 //   * otherwise                                -> "available"
-// Recovery from a stuck "Restart pending": a user-initiated (manual) check clears
-// the persisted applied_version BEFORE the check, so applied_version is empty here
-// and the same still-applicable version resolves to "available" again.
+// A fresh process clears persisted legacy stamps. A user-initiated check also
+// clears the in-process stamp before checking, so the same still-applicable
+// version can resolve to "available" again.
 //
 // Order notes: Scoop wins over everything offerable — a Scoop tree is never
 // touched by the staged swap, verification mode included. The verification
@@ -140,6 +150,17 @@ class UpdateService final : public QObject {
 // non-persistent, so it cannot leave the card stuck.
 [[nodiscard]] QString ResolveUpdateCardState(bool update_available, bool is_scoop, const QString& applied_version,
                                              const QString& available_version, bool verify_reinstall_mode = false,
-                                             const QString& current_version = QString());
+                                             const QString& current_version = QString(),
+                                             UpdateHandoffPhase handoff_phase = UpdateHandoffPhase::Idle);
+
+// The applied-version loop guard is committed only with the marked close
+// handoff, never when the detached updater merely starts. Verification
+// reinstalls persist nothing by design.
+[[nodiscard]] QString AppliedVersionForCommittedHandoff(const QString& target_version, bool verification_reinstall);
+
+// A pending handoff is process-local truth. Any new app process starts by
+// discarding the old process's stamp; a successful new version also no longer
+// needs it because normal update discovery compares against its real version.
+[[nodiscard]] QString ReconcileAppliedVersionOnStartup(const QString& persisted_applied_version);
 
 } // namespace exosnap

@@ -6269,9 +6269,13 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
             QStringLiteral("Managed by Scoop \xe2\x80\x94 update with 'scoop update exosnap'"));
         updates_action_btn_->setText(QStringLiteral("Open releases page"));
         updates_action_intrinsically_enabled_ = true;
+    } else if (state == QStringLiteral("updater-running")) {
+        updates_status_label_->setText(QStringLiteral("Updater running\xe2\x80\xa6 follow the updater window"));
+        updates_action_btn_->setText(QStringLiteral("Updater running"));
+        updates_action_intrinsically_enabled_ = false;
     } else if (state == QStringLiteral("pending")) {
-        // Loop guard: the updater is staged/launched for this version. Restart is
-        // pending; don't re-offer the Update CTA.
+        // The updater sent the marked close handoff and owns install/relaunch.
+        // Merely spawning the updater uses "updater-running" above.
         updates_status_label_->setText(QStringLiteral("Restart pending\xe2\x80\xa6 finishing the update"));
         updates_action_btn_->setText(QStringLiteral("Restart pending"));
         updates_action_intrinsically_enabled_ = false;

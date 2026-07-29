@@ -6,17 +6,28 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLayoutItem>
-#include <QPainter>
 #include <QPaintEvent>
+#include <QPainter>
 #include <QPixmap>
 #include <QPointF>
 #include <QPushButton>
 #include <QRectF>
+#include <QResource>
 #include <QVBoxLayout>
 
 #include "ProgressRing.h"
 #include "StepListWidget.h"
 #include "UpdaterTheme.h"
+
+namespace {
+void EnsureUpdaterResources() {
+    static const bool initialized = [] {
+        Q_INIT_RESOURCE(updater_fonts);
+        return true;
+    }();
+    Q_UNUSED(initialized);
+}
+} // namespace
 
 namespace {
 
@@ -44,24 +55,35 @@ class GlyphWidget : public QWidget {
         p.setRenderHint(QPainter::Antialiasing, true);
         const QRectF r(0, 0, width(), height());
         switch (ico_) {
-        case Ico::Check: paintCheck(p, r, color_, 2.0); break;
-        case Ico::Cross: paintCross(p, r, color_, 2.0); break;
-        case Ico::Warning: paintWarning(p, r, color_, 2.0); break;
-        case Ico::ShieldCheck: paintShieldCheck(p, r.adjusted(1, 0, -1, 0), color_, 1.6); break;
-        case Ico::Dot: paintDot(p, r, color_, width() * 0.5); break;
-        case Ico::Spinner: paintSpinner(p, r.adjusted(2, 2, -2, -2), line2(), mint(), 2.0); break;
+        case Ico::Check:
+            paintCheck(p, r, color_, 2.0);
+            break;
+        case Ico::Cross:
+            paintCross(p, r, color_, 2.0);
+            break;
+        case Ico::Warning:
+            paintWarning(p, r, color_, 2.0);
+            break;
+        case Ico::ShieldCheck:
+            paintShieldCheck(p, r.adjusted(1, 0, -1, 0), color_, 1.6);
+            break;
+        case Ico::Dot:
+            paintDot(p, r, color_, width() * 0.5);
+            break;
+        case Ico::Spinner:
+            paintSpinner(p, r.adjusted(2, 2, -2, -2), line2(), mint(), 2.0);
+            break;
         case Ico::Chevron: {
             QPen pen(color_, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
             p.setPen(pen);
             p.setBrush(Qt::NoBrush);
             const double x = r.left() + r.width() * 0.40;
-            p.drawLine(QPointF(x, r.top() + r.height() * 0.28),
-                       QPointF(x + r.width() * 0.24, r.center().y()));
-            p.drawLine(QPointF(x + r.width() * 0.24, r.center().y()),
-                       QPointF(x, r.bottom() - r.height() * 0.28));
+            p.drawLine(QPointF(x, r.top() + r.height() * 0.28), QPointF(x + r.width() * 0.24, r.center().y()));
+            p.drawLine(QPointF(x + r.width() * 0.24, r.center().y()), QPointF(x, r.bottom() - r.height() * 0.28));
             break;
         }
-        case Ico::None: break;
+        case Ico::None:
+            break;
         }
     }
 
@@ -111,29 +133,40 @@ QString pillStyle(const QColor& fg, const QColor& bgc, const QColor& border) {
 }
 
 QString rgba(const QColor& c) {
-    return QStringLiteral("rgba(%1,%2,%3,%4)")
-        .arg(c.red())
-        .arg(c.green())
-        .arg(c.blue())
-        .arg(c.alphaF());
+    return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alphaF());
+}
+
+QIcon refreshIcon(const QColor& color, qreal dpr) {
+    const int logicalSide = 14;
+    QPixmap px(qRound(logicalSide * dpr), qRound(logicalSide * dpr));
+    px.setDevicePixelRatio(dpr);
+    px.fill(Qt::transparent);
+    QPainter painter(&px);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    paintRefresh(painter, QRectF(0.5, 0.5, logicalSide - 1.0, logicalSide - 1.0), color, 1.6);
+    return QIcon(px);
 }
 
 QPushButton* makeButton(const QString& text, bool primary, QWidget* parent) {
     auto* b = new QPushButton(text, parent);
+    b->setAccessibleName(text);
     b->setFont(ui(13, QFont::DemiBold));
     b->setCursor(Qt::PointingHandCursor);
     if (primary) {
-        b->setStyleSheet(QStringLiteral(
-                             "QPushButton{color:%1;background:%2;border:1px solid %2;"
-                             "border-radius:999px;padding:7px 16px;}"
-                             "QPushButton:hover{background:%3;}")
+        b->setStyleSheet(QStringLiteral("QPushButton{color:%1;background:%2;border:1px solid %2;"
+                                        "border-radius:999px;padding:7px 16px;}"
+                                        "QPushButton:hover{background:%3;}")
                              .arg(mintInk().name(), mint().name(), mint().lighter(108).name()));
     } else {
-        b->setStyleSheet(QStringLiteral(
-                             "QPushButton{color:%1;background:transparent;border:1px solid %2;"
-                             "border-radius:999px;padding:7px 16px;}"
-                             "QPushButton:hover{color:%3;border-color:%3;}")
+        b->setStyleSheet(QStringLiteral("QPushButton{color:%1;background:transparent;border:1px solid %2;"
+                                        "border-radius:999px;padding:7px 16px;}"
+                                        "QPushButton:hover{color:%3;border-color:%3;}")
                              .arg(mut().name(), rgba(line2()), ink().name()));
+    }
+    if (text == QStringLiteral("Retry") || text == QStringLiteral("Re-download")) {
+        b->setObjectName(QStringLiteral("updaterRetryButton"));
+        b->setIcon(refreshIcon(primary ? mintInk() : mut(), parent->devicePixelRatioF()));
+        b->setIconSize(QSize(14, 14));
     }
     return b;
 }
@@ -142,6 +175,7 @@ QPushButton* makeButton(const QString& text, bool primary, QWidget* parent) {
 
 // ── UpdaterWindow ────────────────────────────────────────────────────────────
 UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
+    EnsureUpdaterResources();
     ensureFontsLoaded();
     setWindowTitle(QStringLiteral("ExoSnap Updater"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -157,8 +191,7 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     auto* titleBar = new QWidget(this);
     titleBar->setFixedHeight(46);
     titleBar->setFixedWidth(kWindowWidth);
-    titleBar->setStyleSheet(
-        QStringLiteral("border-bottom:1px solid %1;").arg(rgba(line())));
+    titleBar->setStyleSheet(QStringLiteral("border-bottom:1px solid %1;").arg(rgba(line())));
     auto* tbLayout = new QHBoxLayout(titleBar);
     tbLayout->setContentsMargins(14, 0, 8, 0);
     tbLayout->setSpacing(10);
@@ -174,10 +207,11 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
 
     mode_tag_ = new QLabel(QStringLiteral("UPDATER"), titleBar);
     mode_tag_->setObjectName(QStringLiteral("updaterModeTag"));
+    mode_tag_->setAccessibleName(QStringLiteral("Updater mode"));
     mode_tag_->setFont(mono(9, QFont::Medium));
-    mode_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;border:1px solid %2;border-radius:6px;"
-                                            "padding:2px 7px;letter-spacing:1px;}")
-                                 .arg(dim().name(), rgba(line())));
+    mode_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;background:transparent;border:none;"
+                                            "padding:0 2px;letter-spacing:1px;}")
+                                 .arg(dim().name()));
     tbLayout->addWidget(mode_tag_);
 
     tbLayout->addStretch(1);
@@ -186,10 +220,9 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     close_button_->setFixedSize(34, 34);
     close_button_->setCursor(Qt::PointingHandCursor);
     close_button_->setToolTip(QStringLiteral("Close"));
-    close_button_->setStyleSheet(
-        QStringLiteral("QPushButton{background:transparent;border:none;}"
-                       "QPushButton:hover:enabled{background:%1;border-radius:8px;}")
-            .arg(rgba(line())));
+    close_button_->setStyleSheet(QStringLiteral("QPushButton{background:transparent;border:none;}"
+                                                "QPushButton:hover:enabled{background:%1;border-radius:8px;}")
+                                     .arg(rgba(line())));
     {
         // Render at the window's actual device pixel ratio so the glyph stays
         // crisp on HiDPI instead of being upscaled from a 20x20 logical bitmap.
@@ -254,16 +287,16 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     col->addWidget(ring_, 0, Qt::AlignHCenter);
 
     // Status line
-    auto* statusRow = new QWidget(content);
-    auto* sr = new QHBoxLayout(statusRow);
+    status_row_ = new QWidget(content);
+    auto* sr = new QHBoxLayout(status_row_);
     sr->setContentsMargins(0, 0, 0, 0);
     sr->setSpacing(9);
-    auto* statusIcon = new GlyphWidget(16, statusRow);
+    auto* statusIcon = new GlyphWidget(16, status_row_);
     status_icon_ = statusIcon;
     sr->addWidget(statusIcon, 0, Qt::AlignVCenter);
-    status_text_ = new QLabel(statusRow);
+    status_text_ = new QLabel(status_row_);
     sr->addWidget(status_text_, 0, Qt::AlignVCenter);
-    col->addWidget(statusRow, 0, Qt::AlignHCenter);
+    col->addWidget(status_row_, 0, Qt::AlignHCenter);
 
     // Step list
     steps_ = new StepListWidget(content);
@@ -301,6 +334,9 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     if (mode_tag_ != nullptr) {
         mode_tag_->setText(state.verification_reinstall ? QStringLiteral("UPDATER \xc2\xb7 VERIFY")
                                                         : QStringLiteral("UPDATER"));
+        mode_tag_->setStyleSheet(QStringLiteral("QLabel{color:%1;background:transparent;border:none;"
+                                                "padding:0 2px;letter-spacing:1px;}")
+                                     .arg(state.verification_reinstall ? mint().name() : dim().name()));
     }
 
     // Ring
@@ -315,14 +351,18 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
     QColor failColor = caution();
     if (state.variant == TerminalVariant::Red)
         failColor = error();
-    else if (state.variant == TerminalVariant::Green ||
-             state.variant == TerminalVariant::RebootRequired)
+    else if (state.variant == TerminalVariant::Green || state.variant == TerminalVariant::RebootRequired)
         failColor = success();
     steps_->setFailColor(failColor);
     // Green is a soft-success terminal: a Failed step there is the auto-relaunch
     // that didn't happen, not a real error, so the row reads as "manual" rather
     // than "failed" (display-only -- the controller's StepStatus is untouched).
     steps_->setSteps(state.steps, state.variant == TerminalVariant::Green);
+
+    // Terminal result headlines belong inside their tinted result component.
+    // Keep this loose status row only for live progress and ordinary success.
+    const bool terminal_result = state.variant != TerminalVariant::None && state.variant != TerminalVariant::Success;
+    status_row_->setVisible(!terminal_result);
 
     // Status line
     auto* icon = static_cast<GlyphWidget*>(status_icon_);
@@ -380,8 +420,7 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
                        state.steps[size_t(UpStep::Verify)] == StepStatus::Working ||
                        state.steps[size_t(UpStep::Launch)] == StepStatus::Working;
     close_button_->setEnabled(!block);
-    close_button_->setToolTip(block ? QStringLiteral("Please wait - updating")
-                                    : QStringLiteral("Close"));
+    close_button_->setToolTip(block ? QStringLiteral("Please wait - updating") : QStringLiteral("Close"));
     close_blocked_ = block;
 
     adjustSize();
@@ -395,8 +434,7 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
         delete item;
     }
 
-    const bool terminal = state.variant != TerminalVariant::None &&
-                          state.variant != TerminalVariant::Success;
+    const bool terminal = state.variant != TerminalVariant::None && state.variant != TerminalVariant::Success;
 
     auto* card = new QWidget(footer_container_);
 
@@ -418,12 +456,10 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
         auto* note = new QLabel(card);
         note->setWordWrap(true);
         note->setFont(ui(12, QFont::Normal));
-        note->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;")
-                                .arg(dim().name()));
+        note->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(dim().name()));
         note->setText(
             successDone
-                ? QStringLiteral("ExoSnap %1 is starting - this window closes automatically.")
-                      .arg(state.to_version)
+                ? QStringLiteral("ExoSnap %1 is starting - this window closes automatically.").arg(state.to_version)
                 : QStringLiteral("Keep your computer on. ExoSnap reopens on %1 automatically "
                                  "when the swap finishes.")
                       .arg(state.to_version));
@@ -436,28 +472,64 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
     QColor tone = caution();
     if (state.variant == TerminalVariant::Red)
         tone = error();
-    else if (state.variant == TerminalVariant::Green ||
-             state.variant == TerminalVariant::RebootRequired)
+    else if (state.variant == TerminalVariant::Green || state.variant == TerminalVariant::RebootRequired)
         tone = success();
 
-    card->setStyleSheet(QStringLiteral("QWidget#card{background:%1;border:1px solid %2;"
-                                       "border-radius:12px;}")
-                            .arg(rgba(statusDim(tone)), rgba(statusBorder(tone))));
-    card->setObjectName(QStringLiteral("card"));
     auto* box = new QVBoxLayout(card);
     box->setContentsMargins(16, 14, 16, 14);
     box->setSpacing(13);
 
-    auto* sentence = new QLabel(state.footer_text, card);
-    sentence->setWordWrap(true);
-    sentence->setFont(ui(12, QFont::Normal));
-    sentence->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;")
-                                .arg(mut().name()));
-    box->addWidget(sentence);
+    card->setObjectName(QStringLiteral("updaterResultCard"));
+    card->setStyleSheet(QStringLiteral("QWidget#updaterResultCard{background:%1;border:1px solid %2;"
+                                       "border-radius:12px;}")
+                            .arg(rgba(statusDim(tone)), rgba(statusBorder(tone))));
 
-    // The "keep your computer on" note is an in-progress affordance only (see the
-    // !terminal branch above); terminal Amber already told the user the current
-    // version is safe via footer_text, so it does not repeat the keep-on note.
+    auto* header = new QWidget(card);
+    header->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
+    auto* hr = new QHBoxLayout(header);
+    hr->setContentsMargins(0, 0, 0, 0);
+    hr->setSpacing(9);
+    auto* result_icon = new GlyphWidget(18, header);
+    if (state.variant == TerminalVariant::Amber)
+        result_icon->set(Ico::Warning, tone);
+    else if (state.variant == TerminalVariant::Red)
+        result_icon->set(Ico::Cross, tone);
+    else
+        result_icon->set(Ico::Check, tone);
+    result_icon->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
+    hr->addWidget(result_icon, 0, Qt::AlignTop);
+
+    auto* headline = new QLabel(state.headline, header);
+    headline->setObjectName(QStringLiteral("updaterResultHeadline"));
+    headline->setWordWrap(true);
+    headline->setFont(ui(14, QFont::DemiBold));
+    headline->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+    hr->addWidget(headline, 1);
+    box->addWidget(header);
+
+    auto* detail = new QLabel(state.detail_text, card);
+    detail->setObjectName(QStringLiteral("updaterResultDetail"));
+    detail->setWordWrap(true);
+    detail->setFont(ui(12, QFont::Normal));
+    detail->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(mut().name()));
+    box->addWidget(detail);
+
+    auto* safety = new QWidget(card);
+    safety->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
+    auto* safe_row = new QHBoxLayout(safety);
+    safe_row->setContentsMargins(0, 0, 0, 0);
+    safe_row->setSpacing(8);
+    auto* shield = new GlyphWidget(16, safety);
+    shield->set(Ico::ShieldCheck, success());
+    shield->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
+    safe_row->addWidget(shield, 0, Qt::AlignTop);
+    auto* safe_text = new QLabel(state.safety_text, safety);
+    safe_text->setObjectName(QStringLiteral("updaterSafetyText"));
+    safe_text->setWordWrap(true);
+    safe_text->setFont(ui(12, QFont::Medium));
+    safe_text->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+    safe_row->addWidget(safe_text, 1);
+    box->addWidget(safety);
 
     // Action buttons, right-aligned: primary (filled) then secondary (outline).
     auto* actions = new QWidget(card);

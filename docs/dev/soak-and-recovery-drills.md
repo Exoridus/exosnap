@@ -93,14 +93,33 @@ override with `--max-drift-ms` / `--max-skew-ms`.
 
 ## 2. A/V-sync drift — clapper + `av-sync-check.py`
 
-Measures A/V **clock drift** of a finished file from a start/end clapper signal.
+Measures A/V **clock drift** of a finished file from a two- or three-marker clapper signal.
 
 ### Capture (user-live)
 
-`exosnap-soak --clapper --seconds 120` emits a full-frame **white flash** + a loud
-**beep** at start and at end, on the display and the default render endpoint. Run
-it while ExoSnap records that display + system audio (SYS loopback). Inherently
-live — it needs a real display and speaker that ExoSnap captures.
+The backward-compatible two-marker form
+`exosnap-soak --clapper --seconds 120` emits a full-frame **white flash** + loud
+**beep** immediately and again after 120 seconds. For long acceptance runs use one
+three-marker process whose total duration includes recording margins:
+
+```powershell
+exosnap-soak --clapper --seconds 7200 --markers 3 `
+  --start-margin-seconds 10 --end-margin-seconds 10
+```
+
+That schedule emits at `+10 s`, `+3600 s`, and `+7190 s`; the 3-hour equivalent
+(`--seconds 10800`) emits at `+10`, `+5400`, and `+10790`. Add
+`--print-clapper-schedule` to validate either schedule without waiting or producing a
+flash/beep. Durations and integer controls are strict: missing, zero, negative,
+nonnumeric and overflowing values fail with exit 64.
+
+The helper is a separate executable, does not acquire ExoSnap's single-instance mutex,
+and returns from the clapper path before any recorder/capture session is constructed.
+It owns one topmost Win32 full-screen window on the primary display only while each
+marker is emitted and uses Win32 `Beep`; no media player or second ExoSnap process is
+involved. Run it while ExoSnap records that primary display + system audio (SYS
+loopback). Inherently live — it needs a real display and render endpoint that ExoSnap
+captures.
 
 ### Analyze
 
@@ -108,14 +127,30 @@ live — it needs a real display and speaker that ExoSnap captures.
 python scripts/dev/av-sync-check.py <recorded-file> [--max-drift-ms 20]
 ```
 
-Recovers, via system ffmpeg/ffprobe, the flash video-PTS and beep audio-PTS at
-start and end, then:
+For a scheduled three-marker run, provide the expected schedule so extra paired
+disturbances cannot be silently selected:
+
+```powershell
+python scripts/dev/av-sync-check.py <recorded-file> --max-drift-ms 20 `
+  --expected-markers 3 --marker-times-seconds 10,3600,7190
+```
+
+The analyzer pairs each flash edge to the closest beep edge within the bounded
+cross-stream skew, then recovers start/end (and, for three markers, middle) PTS:
 
 ```
 offset_start = flash_start - beep_start
 offset_end   = flash_end   - beep_end
 drift        = offset_end - offset_start     (over the measured span)
 ```
+
+Three-marker output also includes `offset_middle`, `drift_start_middle`,
+`drift_middle_end`, recognized flash/beep PTS and raw/paired event counts. Auto mode
+accepts exactly two or three pairs and fails closed on extras; an explicit expected
+schedule may select the matching marker set around disturbances. Opposing segment
+drifts that exceed the total budget but cancel at the endpoint are printed and
+recorded in JSON as a reliability finding even when the canonical start→end gate
+passes.
 
 **Only the drift is pass/fail.** The absolute `offset_start` carries a
 device-dependent **emission skew** (~10–50 ms: GPU present → display capture vs.

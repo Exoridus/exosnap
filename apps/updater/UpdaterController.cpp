@@ -50,6 +50,7 @@ UpStep FailedStepFor(FailureCase c) {
     case FailureCase::MsiRebootRequired: // succeeded at Install; restart pending
         return UpStep::Install;
     case FailureCase::VerifyInstallFailed:
+    case FailureCase::RestoreFailed:
     case FailureCase::VerifyInstallFailedMsi:
         return UpStep::Verify;
     case FailureCase::LaunchFailed:
@@ -109,20 +110,25 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         c == FailureCase::MsiRebootRequired ? StepStatus::Done : StepStatus::Failed;
     state_.status_line.clear();
 
-    // Copy is VERBATIM from the failure matrix; %1 = version string
-    // (B4: target version) or the installer exit code (C2). — = em dash.
+    // Raw WinHTTP/filesystem details stay in stderr evidence (main.cpp); this
+    // state carries only actionable user copy and the exact safe-version truth.
     switch (c) {
     case FailureCase::DownloadFailed: // A1
         state_.variant = TerminalVariant::Amber;
-        state_.footer_text = QStringLiteral("Download failed. Your current version is unchanged.");
+        state_.headline = QStringLiteral("Couldn't download the update");
+        state_.detail_text = QStringLiteral("Check your internet connection and try again.");
+        state_.safety_text =
+            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::VerifyDownloadFailed: // A2 (security stop)
         state_.variant = TerminalVariant::Red;
-        state_.footer_text = QStringLiteral(
-            "Verification failed — the download may be corrupt or tampered. "
-            "Nothing was installed.");
+        state_.headline = QStringLiteral("Download verification failed");
+        state_.detail_text =
+            QStringLiteral("The downloaded files didn't match the signed release, so they were discarded.");
+        state_.safety_text =
+            QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Re-download");
         state_.secondary_action = QStringLiteral("Close");
         break;
@@ -131,33 +137,53 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // offered manifest simply is not the version this run demanded. Retry
         // would re-fetch the same manifest, so only Close is offered.
         state_.variant = TerminalVariant::Red;
-        state_.footer_text = QStringLiteral(
-            "Verification reinstall needs the identical version — the release offers %1 instead. "
-            "Nothing was installed.")
-                                 .arg(detail.isEmpty() ? QStringLiteral("another version") : detail);
+        state_.headline = QStringLiteral("Verification reinstall unavailable");
+        state_.detail_text =
+            QStringLiteral("This check requires version %1, but the signed release offers %2.")
+                .arg(state_.from_version, detail.isEmpty() ? QStringLiteral("another version") : detail);
+        state_.safety_text =
+            QStringLiteral("Nothing was installed. Your current version %1 is unchanged.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Close");
         state_.secondary_action.clear();
         break;
     case FailureCase::AppWontClose: // B1
         state_.variant = TerminalVariant::Amber;
-        state_.footer_text =
-            QStringLiteral("Couldn't close the running ExoSnap. Please close it and retry.");
+        state_.headline = QStringLiteral("Couldn't close ExoSnap");
+        state_.detail_text = QStringLiteral("Close the running app, then try the handoff again.");
+        state_.safety_text =
+            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::InstallFailed: // B2
         state_.variant = TerminalVariant::Amber;
-        state_.footer_text =
-            QStringLiteral("Couldn't install the update. Your current version still works.");
+        state_.headline = QStringLiteral("Couldn't install the update");
+        state_.detail_text = QStringLiteral("The new files couldn't be put in place. You can try again.");
+        state_.safety_text =
+            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
         break;
     case FailureCase::VerifyInstallFailed: // B3 (portable: staged-rename backup restored)
         state_.variant = TerminalVariant::Red;
-        state_.footer_text = QStringLiteral(
-            "Update verification failed — your previous version was restored.");
+        state_.headline = QStringLiteral("Update verification failed");
+        state_.detail_text =
+            QStringLiteral("The installed files didn't match the signed release, so the swap was undone.");
+        state_.safety_text =
+            QStringLiteral("Your previous version %1 was restored and is ready to run.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
+        break;
+    case FailureCase::RestoreFailed: // B3-R (portable backup is preserved but not live)
+        state_.variant = TerminalVariant::Red;
+        state_.headline = QStringLiteral("Couldn't restore the previous version");
+        state_.detail_text =
+            QStringLiteral("The update failed and the automatic restore couldn't put the backup back in place.");
+        state_.safety_text =
+            QStringLiteral("Your previous version %1 is preserved in the backup folder, but isn't ready to run.")
+                .arg(state_.from_version);
+        state_.primary_action = QStringLiteral("Retry");
+        state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::VerifyInstallFailedMsi: // B3-MSI (post-install state could not be confirmed)
         state_.variant = TerminalVariant::Red;
@@ -166,40 +192,50 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // queries Windows Installer for an actual rollback/repair outcome. msiexec
         // returned 0 (success), so asserting "rolled back" here would be a guess this
         // code cannot back up; only "could not confirm" is truthful.
-        state_.footer_text = QStringLiteral(
-            "Update verification failed — the installed version could not be confirmed. "
-            "Windows Installer may have kept or restored the previous version.");
+        state_.headline = QStringLiteral("Couldn't confirm the installed version");
+        state_.detail_text =
+            QStringLiteral("Windows Installer finished, but ExoSnap couldn't verify the installed files.");
+        state_.safety_text =
+            QStringLiteral("Windows Installer may have kept or restored version %1; no rollback is being claimed.")
+                .arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Open current version");
         break;
     case FailureCase::LaunchFailed: // B4 (soft success)
         state_.variant = TerminalVariant::Green;
-        state_.footer_text = QStringLiteral("Update complete — version %1 is ready. You can "
-                                            "close this window and start ExoSnap.")
-                                 .arg(state_.to_version);
+        state_.headline = QStringLiteral("Update complete — version %1 is ready").arg(state_.to_version);
+        state_.detail_text =
+            QStringLiteral("The update was installed and verified, but the automatic restart didn't open.");
+        state_.safety_text =
+            QStringLiteral("Version %1 is installed and can be started manually.").arg(state_.to_version);
         state_.primary_action = QStringLiteral("Open ExoSnap");
         state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::UacDeclined: // C1
         state_.variant = TerminalVariant::Amber;
-        state_.footer_text = QStringLiteral("The update needs administrator approval. "
-                                            "Update canceled; your version is unchanged.");
+        state_.headline = QStringLiteral("Administrator approval was canceled");
+        state_.detail_text = QStringLiteral("Approve the Windows prompt when you retry the installation.");
+        state_.safety_text =
+            QStringLiteral("Your current version %1 is unchanged and still works.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Retry");
         state_.secondary_action = QStringLiteral("Close");
         break;
     case FailureCase::MsiFailed: // C2
         state_.variant = TerminalVariant::Red;
-        state_.footer_text =
-            QStringLiteral("Installation failed (code %1). Your previous version is still usable.")
-                .arg(detail);
+        state_.headline = QStringLiteral("Windows Installer couldn't apply the update");
+        state_.detail_text =
+            QStringLiteral("The installer stopped with code %1. You can close this window and try again later.")
+                .arg(detail.isEmpty() ? QStringLiteral("unknown") : detail);
+        state_.safety_text = QStringLiteral("Your previous version %1 is still usable.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Close");
         state_.secondary_action.clear();
         break;
     case FailureCase::MsiRebootRequired: // C3 (terminal success; restart pending)
         state_.variant = TerminalVariant::RebootRequired;
-        state_.footer_text = QStringLiteral(
-            "Update installed — restart Windows to finish. Your current version keeps "
-            "working until you restart.");
+        state_.headline = QStringLiteral("Update installed — restart Windows to finish");
+        state_.detail_text = QStringLiteral("Windows Installer needs a system restart to complete the update.");
+        state_.safety_text =
+            QStringLiteral("Version %1 keeps working until you restart Windows.").arg(state_.from_version);
         state_.primary_action = QStringLiteral("Close");
         state_.secondary_action.clear();
         break;

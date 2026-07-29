@@ -96,6 +96,7 @@ class EditExportPage;
 class LogsPage;
 class RecordPage;
 class UpdateService;
+enum class UpdateHandoffPhase : uint8_t;
 
 namespace pages {
 class AboutPage;
@@ -416,7 +417,7 @@ class MainWindow : public QMainWindow {
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
     QString last_update_releases_url_;
     // Last check's available version string (empty when up to date). Used to stamp
-    // the loop-guard applied_version when the staged updater is launched.
+    // the loop guard only when a marked normal-update handoff is accepted.
     QString last_available_version_;
     // ADR 0034 Phase A: true while a user-initiated check is in flight, so an
     // available result updates the Settings card but does NOT also raise a toast.
@@ -424,6 +425,10 @@ class MainWindow : public QMainWindow {
     // ADR 0055: verification reinstall armed for this run only (CLI flag, never
     // persisted). Drives the card state and the support-bundle manifest note.
     bool verify_update_reinstall_ = false;
+    // Explicit ownership of the detached updater lifecycle. "Pending" is only
+    // reachable after the updater sends the marked close handoff; merely
+    // spawning the process is a distinct, recoverable state.
+    UpdateHandoffPhase update_handoff_phase_{};
     // Last known monitor rect from RecordPage for overlay positioning.
     QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;

@@ -37,9 +37,8 @@ class ResolveStagedRootTest : public ::testing::Test {
   protected:
     void SetUp() override {
         root_ = fs::temp_directory_path() /
-                (L"exosnap_staged_root_test_" +
-                 std::to_wstring(::testing::UnitTest::GetInstance()->random_seed()) + L"_" +
-                 std::to_wstring(reinterpret_cast<uintptr_t>(this)));
+                (L"exosnap_staged_root_test_" + std::to_wstring(::testing::UnitTest::GetInstance()->random_seed()) +
+                 L"_" + std::to_wstring(reinterpret_cast<uintptr_t>(this)));
         fs::remove_all(root_);
         fs::create_directories(root_);
     }
@@ -163,6 +162,7 @@ TEST(RetryEntryStep, AppWontCloseReentersCloseApp) {
 TEST(RetryEntryStep, InstallFailuresReenterInstall) {
     EXPECT_EQ(RetryEntryStep(FailureCase::InstallFailed), UpStep::Install);          // B2
     EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailed), UpStep::Install);    // B3
+    EXPECT_EQ(RetryEntryStep(FailureCase::RestoreFailed), UpStep::Install);          // B3-R
     EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailedMsi), UpStep::Install); // B3-MSI
     EXPECT_EQ(RetryEntryStep(FailureCase::UacDeclined), UpStep::Install);            // C1 re-handoff
     EXPECT_EQ(RetryEntryStep(FailureCase::MsiFailed), UpStep::Install);              // C2
@@ -294,8 +294,7 @@ class PackageLockTest : public ::testing::Test {
     }
 
     // SHA-256("abc"), the canonical NIST test vector.
-    static constexpr const char* kAbcSha256 =
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    static constexpr const char* kAbcSha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
     fs::path path_;
 };
@@ -315,8 +314,8 @@ TEST_F(PackageLockTest, HeldLockDeniesConcurrentWriteOpen) {
     void* lock = OpenPackageWriteLock(path_.wstring());
     ASSERT_NE(lock, INVALID_HANDLE_VALUE);
 
-    HANDLE writer = ::CreateFileW(path_.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE writer = ::CreateFileW(path_.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
     EXPECT_EQ(writer, INVALID_HANDLE_VALUE);
     EXPECT_EQ(::GetLastError(), static_cast<DWORD>(ERROR_SHARING_VIOLATION));
     if (writer != INVALID_HANDLE_VALUE) {
@@ -349,8 +348,8 @@ TEST_F(PackageLockTest, ReleasingLockRestoresWriteAccess) {
     ASSERT_NE(lock, INVALID_HANDLE_VALUE);
     ClosePackageLock(lock);
 
-    HANDLE writer = ::CreateFileW(path_.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE writer = ::CreateFileW(path_.wstring().c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
     EXPECT_NE(writer, INVALID_HANDLE_VALUE);
     if (writer != INVALID_HANDLE_VALUE) {
         ::CloseHandle(writer);

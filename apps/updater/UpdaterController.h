@@ -28,6 +28,7 @@ enum class FailureCase : uint8_t { // failure matrix cases
     AppWontClose,                  // B1     -> Amber
     InstallFailed,                 // B2     -> Amber
     VerifyInstallFailed,           // B3     -> Red (portable: previous version restored)
+    RestoreFailed,                 // B3-R   -> Red (backup preserved, restore incomplete)
     VerifyInstallFailedMsi,        // B3-MSI -> Red (msiexec rolled back to the previous version)
     LaunchFailed,                  // B4     -> Green (soft success)
     UacDeclined,                   // C1     -> Amber
@@ -40,7 +41,11 @@ struct UpdaterUiState {
     double ring = 0.0;   // 0..1
     QString status_line; // mono line under the ring
     TerminalVariant variant = TerminalVariant::None;
-    QString footer_text;
+    // Terminal content is structured so the warning card owns its headline,
+    // user-oriented explanation, safety truth and actions as one component.
+    QString headline;
+    QString detail_text;
+    QString safety_text;
     QString primary_action;   // "" = hidden
     QString secondary_action; // "" = hidden
     QString from_version, to_version;
@@ -51,20 +56,22 @@ struct UpdaterUiState {
 };
 
 class UpdaterController {
-public:
+  public:
     UpdaterController(QString from_version, QString to_version);
 
     // Mark this run as a verification reinstall (ADR 0055). Affects wording only.
     void setVerificationReinstall(bool on);
 
-    void onStepStarted(UpStep s);                        // marks Working + status line
-    void onDownloadProgress(quint64 got, quint64 total); // ring within the download band
-    void onStepDone(UpStep s);                           // Done + ring snaps to step weight
-    void onAllDone();                                    // variant = Success
+    void onStepStarted(UpStep s);                         // marks Working + status line
+    void onDownloadProgress(quint64 got, quint64 total);  // ring within the download band
+    void onStepDone(UpStep s);                            // Done + ring snaps to step weight
+    void onAllDone();                                     // variant = Success
     void onFailure(FailureCase c, const QString& detail); // maps per matrix
 
-    [[nodiscard]] const UpdaterUiState& state() const { return state_; }
+    [[nodiscard]] const UpdaterUiState& state() const {
+        return state_;
+    }
 
-private:
+  private:
     UpdaterUiState state_;
 };

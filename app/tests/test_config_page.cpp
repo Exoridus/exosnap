@@ -4012,8 +4012,9 @@ TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallHintIsHiddenInEveryOtherState)
     page.setUpdateStatus(QStringLiteral("verify-reinstall"), QStringLiteral("0.9.0-rc4"), QString());
     ASSERT_FALSE(hint->isHidden());
 
-    for (const QString& state : {QStringLiteral("uptodate"), QStringLiteral("available"), QStringLiteral("checking"),
-                                 QStringLiteral("error"), QStringLiteral("scoop"), QStringLiteral("pending")}) {
+    for (const QString& state :
+         {QStringLiteral("uptodate"), QStringLiteral("available"), QStringLiteral("checking"), QStringLiteral("error"),
+          QStringLiteral("scoop"), QStringLiteral("updater-running"), QStringLiteral("pending")}) {
         page.setUpdateStatus(state, QStringLiteral("1.0.0"), QString());
         EXPECT_TRUE(hint->isHidden()) << "hint leaked into state " << state.toStdString();
     }
@@ -4036,6 +4037,24 @@ TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallButtonRequestsThePrimaryAction
 
     EXPECT_EQ(primary, 1);
     EXPECT_EQ(checks, 0);
+}
+
+TEST_F(ConfigPageTest, UpdatesCard_UpdaterRunningIsDistinctFromCommittedPending) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* status = page.findChild<QLabel*>(QStringLiteral("updatesStatusLabel"));
+    auto* action = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(action, nullptr);
+
+    page.setUpdateStatus(QStringLiteral("updater-running"), QStringLiteral("0.9.0-rc5"), QString());
+    EXPECT_EQ(status->text(), QStringLiteral("Updater running\xe2\x80\xa6 follow the updater window"));
+    EXPECT_EQ(action->text(), QStringLiteral("Updater running"));
+    EXPECT_FALSE(action->isEnabled());
+    EXPECT_FALSE(status->text().contains(QStringLiteral("Restart pending")));
+
+    page.setUpdateStatus(QStringLiteral("pending"), QStringLiteral("0.9.0-rc5"), QString());
+    EXPECT_EQ(status->text(), QStringLiteral("Restart pending\xe2\x80\xa6 finishing the update"));
+    EXPECT_FALSE(action->isEnabled());
 }
 
 // ── Updates card: the scroll position must survive a status change ──────────

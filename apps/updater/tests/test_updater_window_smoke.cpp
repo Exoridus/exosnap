@@ -13,6 +13,7 @@
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QLabel>
+#include <QPushButton>
 #include <QString>
 #include <QStringList>
 
@@ -70,7 +71,9 @@ UpdaterUiState Terminal(FailureCase which) {
 
 class UpdaterWindowTest : public ::testing::Test {
   protected:
-    static void SetUpTestSuite() { EnsureApplication(); }
+    static void SetUpTestSuite() {
+        EnsureApplication();
+    }
 };
 
 TEST_F(UpdaterWindowTest, StepLabelsAreTheFiveFixedCanonStrings) {
@@ -163,6 +166,42 @@ TEST_F(UpdaterWindowTest, RedVariantFooterButtons) {
     EXPECT_EQ(buttons[1], QStringLiteral("Open current version"));
 }
 
+TEST_F(UpdaterWindowTest, TerminalHeadlineSafetyAndActionsShareOneResultCard) {
+    UpdaterWindow window;
+    window.render(Terminal(FailureCase::DownloadFailed));
+
+    auto* card = window.findChild<QWidget*>(QStringLiteral("updaterResultCard"));
+    auto* headline = window.findChild<QLabel*>(QStringLiteral("updaterResultHeadline"));
+    auto* detail = window.findChild<QLabel*>(QStringLiteral("updaterResultDetail"));
+    auto* safety = window.findChild<QLabel*>(QStringLiteral("updaterSafetyText"));
+    auto* retry = window.findChild<QPushButton*>(QStringLiteral("updaterRetryButton"));
+    ASSERT_NE(card, nullptr);
+    ASSERT_NE(headline, nullptr);
+    ASSERT_NE(detail, nullptr);
+    ASSERT_NE(safety, nullptr);
+    ASSERT_NE(retry, nullptr);
+    EXPECT_TRUE(card->isAncestorOf(headline));
+    EXPECT_TRUE(card->isAncestorOf(detail));
+    EXPECT_TRUE(card->isAncestorOf(safety));
+    EXPECT_TRUE(card->isAncestorOf(retry));
+    EXPECT_FALSE(retry->icon().isNull());
+    EXPECT_EQ(retry->accessibleName(), QStringLiteral("Retry"));
+}
+
+TEST_F(UpdaterWindowTest, ModeLabelIsQuietAndVerifyModeRemainsExplicit) {
+    UpdaterWindow window;
+    UpdaterUiState state = InstallInFlight();
+    state.verification_reinstall = true;
+    window.render(state);
+
+    auto* mode = window.findChild<QLabel*>(QStringLiteral("updaterModeTag"));
+    ASSERT_NE(mode, nullptr);
+    EXPECT_EQ(mode->text(), QStringLiteral("UPDATER \xc2\xb7 VERIFY"));
+    EXPECT_TRUE(mode->styleSheet().contains(QStringLiteral("border:none")));
+    EXPECT_FALSE(mode->styleSheet().contains(QStringLiteral("border-radius")));
+    EXPECT_EQ(mode->accessibleName(), QStringLiteral("Updater mode"));
+}
+
 TEST_F(UpdaterWindowTest, GreenVariantFooterButtons) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::LaunchFailed));
@@ -213,7 +252,7 @@ TEST_F(UpdaterWindowTest, MsiVerifyFailureDoesNotClaimAConfirmedRollback) {
     bool could_not_confirm = false;
     bool restored = false;
     for (const QString& text : seen) {
-        could_not_confirm = could_not_confirm || text.contains(QStringLiteral("could not be confirmed"));
+        could_not_confirm = could_not_confirm || text.contains(QStringLiteral("Couldn't confirm"));
         restored = restored || text.contains(QStringLiteral("was restored"));
     }
     EXPECT_TRUE(could_not_confirm);
@@ -279,8 +318,7 @@ TEST_F(UpdaterWindowTest, TerminalAmberHasNoKeepOnNote) {
     for (auto* label : window.findChildren<QLabel*>())
         seen << label->text();
     for (const QString& text : seen)
-        EXPECT_FALSE(text.contains(QStringLiteral("Keep your computer on")))
-            << text.toStdString();
+        EXPECT_FALSE(text.contains(QStringLiteral("Keep your computer on"))) << text.toStdString();
 }
 
 } // namespace
