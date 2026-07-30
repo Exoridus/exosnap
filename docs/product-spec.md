@@ -1120,7 +1120,7 @@ unimplemented behavior.
   - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"See what's
     new in vX.Y"** link opens the overlay with the **full reference list for the active channel**
     (every non-draft release; Preview includes release candidates, Stable does not) — not just the
-    pending gap, so it also works when already up to date.
+    pending gap, so the list itself doesn't go empty when there's nothing new to update to.
   - **Post-update (one-time):** clicking **Update** persists the gap notes — every version in
     `(installed, target]` — as a pending payload; on the first launch of the new build — when the
     payload's target equals the running version and the suppress setting is off — the overlay is

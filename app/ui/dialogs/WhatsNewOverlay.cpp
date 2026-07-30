@@ -86,10 +86,9 @@ QFrame* WhatsNewOverlay::buildCard() {
     main_layout->addWidget(title);
     main_layout->addSpacing(4);
 
-    auto* subtitle =
-        new QLabel(post_update_mode_ ? QStringLiteral("You're now up to date. Here's what changed.")
-                                     : QStringLiteral("Here's what changed in the update that's available."),
-                   card);
+    auto* subtitle = new QLabel(post_update_mode_ ? QStringLiteral("You're now up to date. Here's what changed.")
+                                                  : QStringLiteral("Everything shipped on this channel, newest first."),
+                                card);
     subtitle->setObjectName("whatsNewSubtitle");
     subtitle->setProperty("labelRole", "whatsNewSubtitle");
     subtitle->setWordWrap(true);
@@ -102,6 +101,7 @@ QFrame* WhatsNewOverlay::buildCard() {
     browser->setFrameShape(QFrame::NoFrame);
     browser->setOpenExternalLinks(true);
     browser->setMaximumHeight(420);
+    browser->setMinimumHeight(320);
     browser->setHtml(AssembleNotesHtml(notes_));
     main_layout->addWidget(browser);
     main_layout->addSpacing(16);

@@ -2145,6 +2145,7 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(whats_new_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(whats_new_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(whats_new_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # RECORDING-ERROR-MODAL-R1: offscreen renders of the non-fatal recording-error

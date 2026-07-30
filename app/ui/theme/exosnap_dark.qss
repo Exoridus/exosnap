@@ -2876,6 +2876,12 @@ QPushButton#updatesActionButton[updatesCta="true"]:hover {
     border-color: ${accent-hover};
 }
 
+QPushButton#updatesActionButton[updatesCta="true"]:disabled {
+    color: ${text2};
+    background: ${bg3};
+    border-color: ${line2};
+}
+
 QPushButton#updatesActionButton:disabled {
     color: ${text3};
     border-color: ${line1};
