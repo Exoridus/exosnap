@@ -1113,18 +1113,22 @@ unimplemented behavior.
   window while the app is closed for the swap.
 - **What's new (shipped).** Release notes are surfaced from the GitHub release bodies already present
   in the `/releases` payload the update check fetches — no extra network call. One in-window overlay
-  lists the notes for **every version in the gap `(installed, target]`**, newest first, with the newest
-  expanded and older entries collapsed (click to expand); bodies are Markdown, and a footer **"All
-  releases"** link opens the releases page. It has two entry points:
-  - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"What's new in
-    vX.Y"** link opens the overlay with the gap notes from the last check.
-  - **Post-update (one-time):** clicking **Update** persists the gap notes as a pending payload; on the
-    first launch of the new build — when the payload's target equals the running version and the
-    suppress setting is off — the overlay is shown once and the payload is cleared. This mode carries a
-    **"Don't show this after updates"** checkbox (default off = notices shown) persisting
-    `whats_new_suppressed`; that setting only gates the post-update auto-show and never hides the card
-    link. First install, downgrade, and manual-ZIP updates leave no matching payload, so no overlay
-    appears.
+  shows the notes as a single, always-expanded scrolling document (no collapse/expand), newest first;
+  bodies are Markdown, and a footer **"All releases"** link (bottom-left, with an external-link icon)
+  opens the releases page; a primary **Close**/**Got it** button sits bottom-right. It has two entry
+  points, which differ in *which* notes they show:
+  - **Pre-update:** while the Settings update card shows "Update available — vX.Y", a **"See what's
+    new in vX.Y"** link opens the overlay with the **full reference list for the active channel**
+    (every non-draft release; Preview includes release candidates, Stable does not) — not just the
+    pending gap, so it also works when already up to date.
+  - **Post-update (one-time):** clicking **Update** persists the gap notes — every version in
+    `(installed, target]` — as a pending payload; on the first launch of the new build — when the
+    payload's target equals the running version and the suppress setting is off — the overlay is
+    shown once with those gap notes and the payload is cleared. This mode carries a **"Show release
+    notes after updates"** checkbox, **checked by default**, persisting `whats_new_suppressed`
+    (unchecking it suppresses future auto-shows); that setting only gates the post-update auto-show
+    and never hides the card link. First install, downgrade, and manual-ZIP updates leave no matching
+    payload, so no overlay appears.
 
 **Crash reporting.**
 
