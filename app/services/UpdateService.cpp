@@ -54,6 +54,10 @@ class UpdateService::Impl {
     // WHATS-NEW: gap notes from the most recent completed check (mutex-guarded).
     std::vector<exosnap::update::ReleaseNote> gap_notes;
 
+    // WHATS-NEW: the full channel-history notes from the most recent completed check
+    // (mutex-guarded, mirrors gap_notes).
+    std::vector<exosnap::update::ReleaseNote> all_channel_notes;
+
 #if defined(_WIN32)
     HANDLE updater_process = nullptr;
     QWinEventNotifier* updater_exit_notifier = nullptr;
@@ -149,6 +153,11 @@ std::vector<exosnap::update::ReleaseNote> UpdateService::LastGapNotes() const {
     return impl_->gap_notes;
 }
 
+std::vector<exosnap::update::ReleaseNote> UpdateService::LastAllChannelNotes() const {
+    QMutexLocker lk(&impl_->mutex);
+    return impl_->all_channel_notes;
+}
+
 void UpdateService::RequestUpdateCheck() {
     if (impl_->checking.exchange(true))
         return; // already in progress
@@ -181,6 +190,7 @@ void UpdateService::RequestUpdateCheck() {
             if (result.error_message)
                 impl->state.last_error = *result.error_message;
             impl->gap_notes = result.gap_notes;
+            impl->all_channel_notes = result.all_channel_notes;
         }
 
         QMetaObject::invokeMethod(

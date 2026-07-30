@@ -93,6 +93,13 @@ class UpdateService final : public QObject {
     // pending payload persisted by LaunchUpdater.
     std::vector<exosnap::update::ReleaseNote> LastGapNotes() const;
 
+    // WHATS-NEW: the full reference list of release notes for the active channel from
+    // the most recent completed check (newest first), independent of whether an update
+    // is available. Empty only before the first completed check. Drives the Settings
+    // card "See what's new" link (pre-update mode); the post-update auto-show keeps
+    // using LastGapNotes().
+    std::vector<exosnap::update::ReleaseNote> LastAllChannelNotes() const;
+
   signals:
     void updateCheckComplete(exosnap::update::UpdateCheckResult result);
     void updateStateChanged(exosnap::update::UpdateState state);
