@@ -156,6 +156,34 @@ UpdateOffer DecideOffer(const SemVer& release_version, std::string_view release_
 }
 
 // ---------------------------------------------------------------------------
+// BuildCheckResult
+// ---------------------------------------------------------------------------
+UpdateCheckResult BuildCheckResult(std::string_view releases_json, const std::optional<ReleaseAssets>& release,
+                                   const CheckParams& params) noexcept {
+    UpdateCheckResult r{};
+    r.check_failed = false;
+
+    // Reference list for the pre-update "See what's new" link: every non-draft release
+    // on this channel, independent of whether an update is offered.
+    r.all_channel_notes = CollectAllReleaseNotesForChannel(releases_json, params.channel);
+
+    const UpdateOffer offer = release ? DecideOffer(release->version, release->version_tag, params) : UpdateOffer::None;
+    if (offer != UpdateOffer::None) {
+        r.update_available = true;
+        r.verification_reinstall = (offer == UpdateOffer::VerificationReinstall);
+        r.available_version = release->version;
+        r.releases_page_url = release->releases_page_url;
+        // Gap-aware What's-new notes: every release in (current, best] for this
+        // channel, newest first -- read from the SAME fetched JSON (no extra call).
+        // A verification reinstall spans an empty range (current == target), so
+        // the notes stay empty by construction -- there is nothing "new" to show.
+        if (offer == UpdateOffer::Update)
+            r.gap_notes = CollectReleaseNotes(releases_json, params.current_version, release->version, params.channel);
+    }
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // CheckForUpdate
 // ---------------------------------------------------------------------------
 UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
@@ -203,22 +231,7 @@ UpdateCheckResult CheckForUpdate(const CheckParams& params) noexcept {
         return r;
     }
 
-    UpdateCheckResult r{};
-    r.check_failed = false;
-    const UpdateOffer offer = release ? DecideOffer(release->version, release->version_tag, params) : UpdateOffer::None;
-    if (offer != UpdateOffer::None) {
-        r.update_available = true;
-        r.verification_reinstall = (offer == UpdateOffer::VerificationReinstall);
-        r.available_version = release->version;
-        r.releases_page_url = release->releases_page_url;
-        // Gap-aware What's-new notes: every release in (current, best] for this
-        // channel, newest first — read from the SAME fetched JSON (no extra call).
-        // A verification reinstall spans an empty range (current == target), so
-        // the notes stay empty by construction — there is nothing "new" to show.
-        if (offer == UpdateOffer::Update)
-            r.gap_notes = CollectReleaseNotes(*body, params.current_version, release->version, params.channel);
-    }
-    return r;
+    return BuildCheckResult(*body, release, params);
 }
 
 } // namespace exosnap::update
