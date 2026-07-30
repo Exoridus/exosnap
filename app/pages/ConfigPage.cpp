@@ -6312,7 +6312,7 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
         const bool show_link = (state == QStringLiteral("available")) && !available_version.isEmpty();
         updates_whats_new_link_->setVisible(show_link);
         if (show_link)
-            updates_whats_new_link_->setText(QStringLiteral("What's new in %1").arg(available_version));
+            updates_whats_new_link_->setText(QStringLiteral("See what's new in %1").arg(available_version));
     }
 
     // ADR 0055: the reinstall explainer rides along with its own state only.

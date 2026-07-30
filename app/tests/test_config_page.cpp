@@ -3970,6 +3970,15 @@ TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallStateSaysReinstallNotUpdate) {
     EXPECT_FALSE(hint->isHidden());
 }
 
+TEST_F(ConfigPageTest, UpdatesCard_WhatsNewLinkReadsSeeWhatsNew) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setUpdateStatus(QStringLiteral("available"), QStringLiteral("0.9.0"), QString());
+
+    auto* link = page.findChild<QPushButton*>(QStringLiteral("updatesWhatsNewLink"));
+    ASSERT_NE(link, nullptr);
+    EXPECT_EQ(link->text(), QStringLiteral("See what's new in 0.9.0"));
+}
+
 TEST_F(ConfigPageTest, UpdatesCard_VerifyReinstallHintIsHiddenInEveryOtherState) {
     ConfigPage page(output_defaults_, video_defaults_);
     auto* hint = page.findChild<QLabel*>(QStringLiteral("updatesVerifyReinstallHint"));

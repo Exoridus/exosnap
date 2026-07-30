@@ -4897,14 +4897,14 @@ void MainWindow::buildConfigPage() {
         if (update_service_)
             update_service_->LaunchUpdater();
     });
-    // WHATS-NEW: card "What's new in vX.Y" link -> overlay with the last check's
-    // gap notes (pre-update mode; no suppress checkbox). Never gated by the
-    // suppress setting.
+    // WHATS-NEW: card "See what's new in vX.Y" link -> overlay with the full channel
+    // history from the last check (pre-update mode; no suppress checkbox). Never
+    // gated by the suppress setting.
     connect(config_page_, &ConfigPage::whatsNewRequested, this, [this]() {
         if (!update_service_)
             return;
         QVector<WhatsNewNote> notes;
-        for (const auto& n : update_service_->LastGapNotes()) {
+        for (const auto& n : update_service_->LastAllChannelNotes()) {
             WhatsNewNote note;
             note.version = QString::fromStdString(n.version.ToString());
             note.body = QString::fromStdString(n.body_markdown);
