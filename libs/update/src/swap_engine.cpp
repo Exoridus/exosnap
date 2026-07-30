@@ -407,4 +407,37 @@ bool WaitForInstanceMutex(const wchar_t* mutex_name, std::chrono::milliseconds t
     }
 }
 
+void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint32_t target_pid) {
+    for (const TopLevelWindow& candidate : candidates) {
+        if (candidate.owner_pid == target_pid) {
+            return candidate.handle;
+        }
+    }
+    return nullptr;
+}
+
+namespace {
+struct FindWindowContext {
+    DWORD target_pid;
+    HWND result;
+};
+
+BOOL CALLBACK CollectWindowIfOwnedByProcess(HWND hwnd, LPARAM lparam) {
+    auto* ctx = reinterpret_cast<FindWindowContext*>(lparam);
+    DWORD owner_pid = 0;
+    ::GetWindowThreadProcessId(hwnd, &owner_pid);
+    if (owner_pid == ctx->target_pid) {
+        ctx->result = hwnd;
+        return FALSE; // found it, stop enumerating
+    }
+    return TRUE;
+}
+} // namespace
+
+void* FindTopLevelWindowForProcess(uint32_t target_pid) {
+    FindWindowContext ctx{static_cast<DWORD>(target_pid), nullptr};
+    ::EnumWindows(CollectWindowIfOwnedByProcess, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.result;
+}
+
 } // namespace exosnap::update

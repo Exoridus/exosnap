@@ -193,3 +193,45 @@ TEST(SwapEngine, WaitForInstanceMutexDetectsPresentAndAbsent) {
     const std::wstring absent = L"ExoSnapTestMutex_never_" + std::to_wstring(::GetCurrentProcessId());
     EXPECT_FALSE(WaitForInstanceMutex(absent.c_str(), std::chrono::milliseconds(300)));
 }
+
+// The updater's close/handoff message must reach exactly the app process it
+// launched, never merely "a" window that happens to share ExoSnap's title --
+// a second already-running instance (a developer's own separate build, say)
+// can carry that same title, and posting the handoff to it leaves the real
+// target waiting out its close timeout untouched. Matching is by owner PID.
+TEST(SwapEngine, SelectWindowForProcessMatchesOwnerPidIgnoringOthers) {
+    const std::vector<TopLevelWindow> candidates = {
+        {reinterpret_cast<void*>(0x1), 111},
+        {reinterpret_cast<void*>(0x2), 222},
+        {reinterpret_cast<void*>(0x3), 222},
+    };
+    EXPECT_EQ(SelectWindowForProcess(candidates, 222), reinterpret_cast<void*>(0x2));
+    EXPECT_EQ(SelectWindowForProcess(candidates, 333), nullptr);
+    EXPECT_EQ(SelectWindowForProcess({}, 222), nullptr);
+}
+
+TEST(SwapEngine, FindTopLevelWindowForProcessFindsRealWindowByPid) {
+    EXPECT_EQ(FindTopLevelWindowForProcess(0), nullptr); // pid 0 owns no window
+
+    const wchar_t* kClassName = L"ExoSnapTestSwapEngineWindow";
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = ::DefWindowProcW;
+    wc.hInstance = ::GetModuleHandleW(nullptr);
+    wc.lpszClassName = kClassName;
+    const ATOM registered = ::RegisterClassW(&wc);
+    ASSERT_NE(registered, 0);
+
+    // Same title a colliding second instance could plausibly also use --
+    // proving the match still lands on this process's own window, not on
+    // title alone.
+    HWND window = ::CreateWindowExW(0, kClassName, L"ExoSnap", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, nullptr, nullptr,
+                                    wc.hInstance, nullptr);
+    ASSERT_NE(window, nullptr);
+
+    const DWORD self_pid = ::GetCurrentProcessId();
+    EXPECT_EQ(FindTopLevelWindowForProcess(self_pid), reinterpret_cast<void*>(window));
+
+    ::DestroyWindow(window);
+    ::UnregisterClassW(kClassName, wc.hInstance);
+    EXPECT_EQ(FindTopLevelWindowForProcess(self_pid), nullptr);
+}
