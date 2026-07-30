@@ -7,6 +7,7 @@
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
+#include <QTextBrowser>
 #include <QWidget>
 
 #include "services/WhatsNewPayload.h"
@@ -53,41 +54,17 @@ TEST_F(WhatsNewOverlayTest, CardAndTitlePresent) {
     EXPECT_TRUE(title->text().contains(QStringLiteral("new"), Qt::CaseInsensitive));
 }
 
-TEST_F(WhatsNewOverlayTest, RendersOneSectionPerNote) {
+TEST_F(WhatsNewOverlayTest, NotesBrowserShowsEveryVersionConcatenated) {
     ui::dialogs::WhatsNewOverlay overlay(MakeSections(), false, QStringLiteral("https://gh/releases"));
-    EXPECT_NE(overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_0")), nullptr);
-    EXPECT_NE(overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_1")), nullptr);
-    EXPECT_EQ(overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_2")), nullptr);
-}
-
-TEST_F(WhatsNewOverlayTest, NewestExpandedOlderCollapsed) {
-    ui::dialogs::WhatsNewOverlay overlay(MakeSections(), false, QStringLiteral("https://gh/releases"));
-    auto* body0 = overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_0"));
-    auto* body1 = overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_1"));
-    ASSERT_NE(body0, nullptr);
-    ASSERT_NE(body1, nullptr);
-    // Use !isHidden() rather than isVisible(): the overlay is not shown in the
-    // headless fixture, so isVisible() is transitively false.
-    EXPECT_FALSE(body0->isHidden()); // newest expanded
-    EXPECT_TRUE(body1->isHidden());  // older collapsed
-}
-
-TEST_F(WhatsNewOverlayTest, OlderSectionExpandsOnHeaderClick) {
-    ui::dialogs::WhatsNewOverlay overlay(MakeSections(), false, QStringLiteral("https://gh/releases"));
-    auto* header1 = overlay.findChild<QAbstractButton*>(QStringLiteral("whatsNewHeader_1"));
-    auto* body1 = overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_1"));
-    ASSERT_NE(header1, nullptr);
-    ASSERT_NE(body1, nullptr);
-    EXPECT_TRUE(body1->isHidden());
-    header1->click();
-    EXPECT_FALSE(body1->isHidden());
-}
-
-TEST_F(WhatsNewOverlayTest, BodyRendersMarkdownContent) {
-    ui::dialogs::WhatsNewOverlay overlay(MakeSections(), false, QStringLiteral("https://gh/releases"));
-    auto* body0 = overlay.findChild<QLabel*>(QStringLiteral("whatsNewBody_0"));
-    ASSERT_NE(body0, nullptr);
-    EXPECT_TRUE(body0->text().contains(QStringLiteral("Feature C")));
+    auto* browser = overlay.findChild<QTextBrowser*>(QStringLiteral("whatsNewNotesBrowser"));
+    ASSERT_NE(browser, nullptr);
+    const QString text = browser->toPlainText();
+    EXPECT_TRUE(text.contains(QStringLiteral("1.2.0")));
+    EXPECT_TRUE(text.contains(QStringLiteral("1.1.0")));
+    EXPECT_TRUE(text.contains(QStringLiteral("Feature C")));
+    EXPECT_TRUE(text.contains(QStringLiteral("Feature B")));
+    // Newest first: 1.2.0's content appears before 1.1.0's.
+    EXPECT_LT(text.indexOf(QStringLiteral("Feature C")), text.indexOf(QStringLiteral("Feature B")));
 }
 
 TEST_F(WhatsNewOverlayTest, SuppressCheckboxOnlyInPostUpdateMode) {
@@ -98,21 +75,30 @@ TEST_F(WhatsNewOverlayTest, SuppressCheckboxOnlyInPostUpdateMode) {
     EXPECT_NE(post.findChild<QAbstractButton*>(QStringLiteral("whatsNewSuppressCheck")), nullptr);
 }
 
-TEST_F(WhatsNewOverlayTest, SuppressToggleEmitsSignal) {
+TEST_F(WhatsNewOverlayTest, SuppressCheckboxDefaultCheckedMeansNotSuppressed) {
     ui::dialogs::WhatsNewOverlay overlay(MakeSections(), /*post_update_mode=*/true,
                                          QStringLiteral("https://gh/releases"));
     auto* check = overlay.findChild<QAbstractButton*>(QStringLiteral("whatsNewSuppressCheck"));
     ASSERT_NE(check, nullptr);
+    EXPECT_TRUE(check->isChecked()) << "\"Show release notes after updates\" is on by default";
+}
+
+TEST_F(WhatsNewOverlayTest, UncheckingSuppressCheckboxEmitsSuppressedTrue) {
+    ui::dialogs::WhatsNewOverlay overlay(MakeSections(), /*post_update_mode=*/true,
+                                         QStringLiteral("https://gh/releases"));
+    auto* check = overlay.findChild<QAbstractButton*>(QStringLiteral("whatsNewSuppressCheck"));
+    ASSERT_NE(check, nullptr);
+    ASSERT_TRUE(check->isChecked());
 
     bool received = false;
-    bool value = false;
+    bool suppressed = false;
     QObject::connect(&overlay, &ui::dialogs::WhatsNewOverlay::suppressToggled, &overlay, [&](bool on) {
         received = true;
-        value = on;
+        suppressed = on;
     });
-    check->click();
+    check->click(); // unchecking "show after updates" means the user IS suppressing it
     EXPECT_TRUE(received);
-    EXPECT_TRUE(value);
+    EXPECT_TRUE(suppressed) << "unchecking the box must emit suppressToggled(true)";
 }
 
 TEST_F(WhatsNewOverlayTest, AllReleasesFooterPresent) {
@@ -120,6 +106,7 @@ TEST_F(WhatsNewOverlayTest, AllReleasesFooterPresent) {
     auto* btn = overlay.findChild<QPushButton*>(QStringLiteral("whatsNewAllReleasesBtn"));
     ASSERT_NE(btn, nullptr);
     EXPECT_TRUE(btn->text().contains(QStringLiteral("releases"), Qt::CaseInsensitive));
+    EXPECT_FALSE(btn->icon().isNull()) << "must carry the external-link glyph";
 }
 
 TEST_F(WhatsNewOverlayTest, OpenCloseState) {

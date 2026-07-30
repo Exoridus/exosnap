@@ -1812,7 +1812,8 @@ exosnap_add_gtest(
         services/WhatsNewPayload.cpp
         ui/widgets/ExoCheckBox.cpp
         ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(whats_new_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(whats_new_overlay_tests PRIVATE NOMINMAX)
@@ -2129,6 +2130,22 @@ exosnap_add_gtest(
 target_include_directories(crash_update_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(crash_update_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(crash_update_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
+
+exosnap_add_gtest(
+    NAME whats_new_visual_proof_tests
+    TEST_PREFIX whats.new.proof.
+    SOURCES
+        tests/whats_new_visual_proof.cpp
+        ui/dialogs/WhatsNewOverlay.cpp
+        ui/widgets/ExoCheckBox.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(whats_new_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(whats_new_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # RECORDING-ERROR-MODAL-R1: offscreen renders of the non-fatal recording-error
 # dialog. Applies the real ExoSnap theme; produces PNGs under

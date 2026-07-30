@@ -13,11 +13,11 @@
 //   - Pre-update (post_update_mode = false): opened from the Settings update
 //     card "What's new in vX.Y" link. No suppress checkbox.
 //   - Post-update (post_update_mode = true): shown once on the first launch of a
-//     freshly-updated build. Shows the "Don't show this after updates" checkbox.
+//     freshly-updated build. Shows the "Show release notes after updates" checkbox.
 //
-// Sections are newest-first; the newest is expanded, older ones collapsed and
-// expandable by clicking their header. Bodies are GitHub release Markdown,
-// rendered via QTextDocument::setMarkdown.
+// All notes are concatenated into a single always-expanded QTextBrowser, newest
+// first, each preceded by a plain version heading. Bodies are GitHub release
+// Markdown, rendered via QTextDocument::setMarkdown.
 
 #include <QVector>
 #include <QWidget>
@@ -31,6 +31,7 @@ class QMouseEvent;
 class QPaintEvent;
 class QShowEvent;
 class QLabel;
+class QTextBrowser;
 
 namespace exosnap::ui::dialogs {
 

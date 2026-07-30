@@ -747,39 +747,11 @@ QLabel[labelRole="whatsNewSubtitle"] {
     color: ${text2};
 }
 
-QScrollArea#whatsNewScroll,
-QWidget#whatsNewSections {
+QTextBrowser#whatsNewNotesBrowser {
     background: transparent;
     border: none;
-}
-
-QPushButton[whatsNewHeader="true"] {
-    text-align: left;
-    padding: 8px 10px;
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-    background: ${bg2};
-    color: ${text0};
-    font-family: ${font-mono};
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-}
-
-QPushButton[whatsNewHeader="true"]:hover {
-    background: ${bg3};
-    border-color: ${accent};
-}
-
-QPushButton[whatsNewHeader="true"]:checked {
-    border-color: ${accent};
-    color: ${accent};
-}
-
-QLabel[labelRole="whatsNewBody"] {
-    font-size: 13px;
     color: ${text1};
-    padding: 2px 10px 6px 10px;
+    font-size: 13px;
 }
 
 QPushButton#whatsNewAllReleasesBtn,
