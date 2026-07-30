@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <update/release_locator.h>
 #include <update/update_types.h>
 
 namespace exosnap::update {
@@ -60,6 +61,16 @@ enum class UpdateOffer : uint8_t {
 //   * anything else                              -> None
 [[nodiscard]] UpdateOffer DecideOffer(const SemVer& release_version, std::string_view release_version_raw,
                                       const CheckParams& params) noexcept;
+
+// Assembles the check result once a release has been located (or not) for the channel
+// -- the offer decision, gap notes, and the full-channel reference list. Pulled out of
+// CheckForUpdate so this logic is testable without the network fetch or the
+// EXOSNAP_OFFICIAL_BUILD gate. `releases_json` is the same raw body LocateRelease and
+// CollectReleaseNotes/CollectAllReleaseNotesForChannel read; `release` is
+// LocateRelease's result for that body and params.channel (nullopt if none qualified).
+[[nodiscard]] UpdateCheckResult BuildCheckResult(std::string_view releases_json,
+                                                 const std::optional<ReleaseAssets>& release,
+                                                 const CheckParams& params) noexcept;
 
 // Synchronous blocking call; intended to be run on a background thread.
 // Never throws; always returns a populated UpdateCheckResult.

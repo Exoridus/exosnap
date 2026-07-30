@@ -173,6 +173,12 @@ struct UpdateCheckResult {
     // Release notes for every version in the gap (current, best], newest first,
     // for the same channel the check ran on. Empty unless an update is available.
     std::vector<ReleaseNote> gap_notes;
+
+    // The full reference list for the channel the check ran on -- every non-draft
+    // release, newest first, independent of update_available. Populated on every
+    // successful check (unlike gap_notes) because the pre-update "See what's new"
+    // link must work even when already up to date.
+    std::vector<ReleaseNote> all_channel_notes;
 };
 
 // ---------------------------------------------------------------------------

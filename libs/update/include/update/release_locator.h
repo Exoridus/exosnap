@@ -57,6 +57,14 @@ struct ReleaseAssets {
 [[nodiscard]] std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, const SemVer& above,
                                                            const SemVer& up_to, UpdateChannel channel);
 
+// Collect the release notes for every non-draft release on `channel`, newest first,
+// independent of any install/target gap -- the full reference list, not a window.
+// Same channel rule as CollectReleaseNotes (Stable excludes prereleases, Preview
+// includes them) and the same already-fetched JSON body (no extra network call).
+// Bounded by whatever the fetch's per_page returns (currently 30, unpaginated).
+[[nodiscard]] std::vector<ReleaseNote> CollectAllReleaseNotesForChannel(std::string_view releases_json,
+                                                                        UpdateChannel channel);
+
 // Installed -> PackageKind::Installer, Portable -> PackageKind::Portable; nullptr if absent.
 [[nodiscard]] const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode);
 

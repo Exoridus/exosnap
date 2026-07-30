@@ -6305,14 +6305,14 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
     parkUpdatesFocusBeforeDisable(action_enabled);
     updates_action_btn_->setEnabled(action_enabled);
 
-    // WHATS-NEW: the "What's new in vX.Y" link appears only in the available state.
-    // The suppress setting never hides this link (it only gates the post-update
-    // auto-show).
+    // WHATS-NEW: the "See what's new in vX.Y" link appears only in the available
+    // state. The suppress setting never hides this link (it only gates the
+    // post-update auto-show).
     if (updates_whats_new_link_) {
         const bool show_link = (state == QStringLiteral("available")) && !available_version.isEmpty();
         updates_whats_new_link_->setVisible(show_link);
         if (show_link)
-            updates_whats_new_link_->setText(QStringLiteral("What's new in %1").arg(available_version));
+            updates_whats_new_link_->setText(QStringLiteral("See what's new in %1").arg(available_version));
     }
 
     // ADR 0055: the reinstall explainer rides along with its own state only.

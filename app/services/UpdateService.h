@@ -89,9 +89,17 @@ class UpdateService final : public QObject {
 
     // WHATS-NEW: the gap-aware release notes (versions in (installed, target],
     // newest first) from the most recent completed check. Empty when the last
-    // check found no update. Drives the Settings card "What's new" link and the
-    // pending payload persisted by LaunchUpdater.
+    // check found no update. No longer drives the Settings card link (that now
+    // uses LastAllChannelNotes()); its only remaining consumer is the pending
+    // post-update payload persisted by LaunchUpdater.
     std::vector<exosnap::update::ReleaseNote> LastGapNotes() const;
+
+    // WHATS-NEW: the full reference list of release notes for the active channel from
+    // the most recent completed check (newest first), independent of whether an update
+    // is available. Empty only before the first completed check. Drives the Settings
+    // card "See what's new" link (pre-update mode); the post-update auto-show keeps
+    // using LastGapNotes().
+    std::vector<exosnap::update::ReleaseNote> LastAllChannelNotes() const;
 
   signals:
     void updateCheckComplete(exosnap::update::UpdateCheckResult result);

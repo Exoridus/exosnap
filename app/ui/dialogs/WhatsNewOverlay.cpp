@@ -1,6 +1,7 @@
 #include "WhatsNewOverlay.h"
 
 #include "ui/theme/ExoSnapTheme.h"
+#include "ui/theme/LucideIcon.h"
 #include "ui/widgets/ExoCheckBox.h"
 
 #include <QColor>
@@ -13,9 +14,9 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QShowEvent>
 #include <QString>
+#include <QTextBrowser>
 #include <QTextDocument>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -31,6 +32,21 @@ QString MarkdownToRichText(const QString& markdown) {
     QTextDocument doc;
     doc.setMarkdown(markdown.isEmpty() ? QStringLiteral("_No release notes._") : markdown);
     return doc.toHtml();
+}
+
+// Assemble every note into one HTML document, newest first, each preceded by a plain
+// version heading and separated from the next by a rule.
+QString AssembleNotesHtml(const QVector<WhatsNewNote>& notes) {
+    QString html;
+    for (int i = 0; i < notes.size(); ++i) {
+        if (i > 0)
+            html += QStringLiteral("<hr/>");
+        const WhatsNewNote& note = notes.at(i);
+        html += QStringLiteral("<p style=\"font-family:%1;font-weight:600;\">v%2</p>")
+                    .arg(QStringLiteral("monospace"), note.version);
+        html += MarkdownToRichText(note.body);
+    }
+    return html;
 }
 
 } // namespace
@@ -70,101 +86,58 @@ QFrame* WhatsNewOverlay::buildCard() {
     main_layout->addWidget(title);
     main_layout->addSpacing(4);
 
-    auto* subtitle =
-        new QLabel(post_update_mode_ ? QStringLiteral("You're now up to date. Here's what changed.")
-                                     : QStringLiteral("Here's what changed in the update that's available."),
-                   card);
+    auto* subtitle = new QLabel(post_update_mode_ ? QStringLiteral("You're now up to date. Here's what changed.")
+                                                  : QStringLiteral("Everything shipped on this channel, newest first."),
+                                card);
     subtitle->setObjectName("whatsNewSubtitle");
     subtitle->setProperty("labelRole", "whatsNewSubtitle");
     subtitle->setWordWrap(true);
     main_layout->addWidget(subtitle);
     main_layout->addSpacing(14);
 
-    // ── Scrollable sections ─────────────────────────────────────────────────
-    auto* scroll = new QScrollArea(card);
-    scroll->setObjectName("whatsNewScroll");
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    scroll->setMaximumHeight(420);
-
-    auto* sections = new QWidget(scroll);
-    sections->setObjectName("whatsNewSections");
-    auto* sections_layout = new QVBoxLayout(sections);
-    sections_layout->setContentsMargins(0, 0, 8, 0);
-    sections_layout->setSpacing(10);
-
-    for (int i = 0; i < notes_.size(); ++i) {
-        const WhatsNewNote& note = notes_.at(i);
-        const bool expanded = (i == 0); // newest expanded, older collapsed
-
-        if (i > 0) {
-            auto* rule = new QFrame(sections);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            sections_layout->addWidget(rule);
-        }
-
-        // Header row: clickable, checkable, toggles the body.
-        auto* header = new QPushButton(sections);
-        header->setObjectName(QStringLiteral("whatsNewHeader_%1").arg(i));
-        header->setProperty("whatsNewHeader", true);
-        header->setCheckable(true);
-        header->setChecked(expanded);
-        header->setCursor(Qt::PointingHandCursor);
-        header->setText(QStringLiteral("%1  v%2").arg(expanded ? QStringLiteral("\xE2\x96\xBE")  // ▾
-                                                               : QStringLiteral("\xE2\x96\xB8"), // ▸
-                                                      note.version));
-        sections_layout->addWidget(header);
-
-        auto* body = new QLabel(sections);
-        body->setObjectName(QStringLiteral("whatsNewBody_%1").arg(i));
-        body->setProperty("labelRole", "whatsNewBody");
-        body->setTextFormat(Qt::RichText);
-        body->setText(MarkdownToRichText(note.body));
-        body->setWordWrap(true);
-        body->setOpenExternalLinks(true);
-        body->setTextInteractionFlags(Qt::TextBrowserInteraction);
-        body->setVisible(expanded);
-        sections_layout->addWidget(body);
-
-        const QString version = note.version;
-        connect(header, &QPushButton::toggled, this, [header, body, version](bool on) {
-            body->setVisible(on);
-            header->setText(QStringLiteral("%1  v%2").arg(
-                on ? QStringLiteral("\xE2\x96\xBE") : QStringLiteral("\xE2\x96\xB8"), version));
-        });
-    }
-
-    sections_layout->addStretch(1);
-    scroll->setWidget(sections);
-    main_layout->addWidget(scroll);
+    // ── Notes ────────────────────────────────────────────────────────────────
+    auto* browser = new QTextBrowser(card);
+    browser->setObjectName(QStringLiteral("whatsNewNotesBrowser"));
+    browser->setFrameShape(QFrame::NoFrame);
+    browser->setOpenExternalLinks(true);
+    browser->setMaximumHeight(420);
+    browser->setMinimumHeight(320);
+    browser->setHtml(AssembleNotesHtml(notes_));
+    main_layout->addWidget(browser);
     main_layout->addSpacing(16);
 
     // ── Footer ──────────────────────────────────────────────────────────────
+    auto* footer_column = new QVBoxLayout();
+    footer_column->setContentsMargins(0, 0, 0, 0);
+    footer_column->setSpacing(10);
+
+    if (post_update_mode_) {
+        auto* suppress = new ui::widgets::ExoCheckBox(QStringLiteral("Show release notes after updates"), card);
+        suppress->setObjectName("whatsNewSuppressCheck");
+        suppress->setChecked(true); // default on: notices are shown unless the user opts out
+        connect(suppress, &QAbstractButton::toggled, this, [this](bool shown) { emit suppressToggled(!shown); });
+        footer_column->addWidget(suppress);
+    }
+
     auto* footer = new QHBoxLayout();
     footer->setContentsMargins(0, 0, 0, 0);
     footer->setSpacing(10);
-
-    if (post_update_mode_) {
-        auto* suppress = new ui::widgets::ExoCheckBox(QStringLiteral("Don't show this after updates"), card);
-        suppress->setObjectName("whatsNewSuppressCheck");
-        connect(suppress, &QAbstractButton::toggled, this, [this](bool on) { emit suppressToggled(on); });
-        footer->addWidget(suppress, 0, Qt::AlignVCenter);
-    }
-
-    footer->addStretch(1);
 
     auto* all_releases = new QPushButton(QStringLiteral("All releases"), card);
     all_releases->setObjectName("whatsNewAllReleasesBtn");
     all_releases->setFlat(true);
     all_releases->setCursor(Qt::PointingHandCursor);
+    all_releases->setIcon(ui::theme::lucideIcon(QStringLiteral("external-link"),
+                                                QString::fromUtf8(theme::ActiveTheme().ac), 14,
+                                                all_releases->devicePixelRatioF()));
     connect(all_releases, &QPushButton::clicked, this, [this]() {
         const QString url =
             releases_url_.isEmpty() ? QStringLiteral("https://github.com/Exoridus/exosnap/releases") : releases_url_;
         QDesktopServices::openUrl(QUrl(url));
     });
     footer->addWidget(all_releases, 0, Qt::AlignVCenter);
+
+    footer->addStretch(1);
 
     auto* close_btn = new QPushButton(post_update_mode_ ? QStringLiteral("Got it") : QStringLiteral("Close"), card);
     close_btn->setObjectName("whatsNewCloseBtn");
@@ -173,7 +146,8 @@ QFrame* WhatsNewOverlay::buildCard() {
     connect(close_btn, &QPushButton::clicked, this, &WhatsNewOverlay::closeOverlay);
     footer->addWidget(close_btn, 0, Qt::AlignVCenter);
 
-    main_layout->addLayout(footer);
+    footer_column->addLayout(footer);
+    main_layout->addLayout(footer_column);
     return card;
 }
 

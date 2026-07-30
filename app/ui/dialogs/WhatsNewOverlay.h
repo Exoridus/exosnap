@@ -1,6 +1,7 @@
 #pragma once
-// WhatsNewOverlay.h -- in-window "What's new" surface listing the release notes
-// for every version in the gap (installed, target].
+// WhatsNewOverlay.h -- in-window "What's new" surface listing release notes.
+// Pre-update mode shows the full channel history (every non-draft release);
+// post-update mode shows only the gap (installed, target].
 //
 // Follows the RecoveryOverlay pattern exactly:
 //   - Plain QWidget (never a QDialog / OS window).
@@ -11,13 +12,13 @@
 //
 // Two entry points share this one overlay:
 //   - Pre-update (post_update_mode = false): opened from the Settings update
-//     card "What's new in vX.Y" link. No suppress checkbox.
+//     card "See what's new in vX.Y" link. No suppress checkbox.
 //   - Post-update (post_update_mode = true): shown once on the first launch of a
-//     freshly-updated build. Shows the "Don't show this after updates" checkbox.
+//     freshly-updated build. Shows the "Show release notes after updates" checkbox.
 //
-// Sections are newest-first; the newest is expanded, older ones collapsed and
-// expandable by clicking their header. Bodies are GitHub release Markdown,
-// rendered via QTextDocument::setMarkdown.
+// All notes are concatenated into a single always-expanded QTextBrowser, newest
+// first, each preceded by a plain version heading. Bodies are GitHub release
+// Markdown, rendered via QTextDocument::setMarkdown.
 
 #include <QVector>
 #include <QWidget>
@@ -31,6 +32,7 @@ class QMouseEvent;
 class QPaintEvent;
 class QShowEvent;
 class QLabel;
+class QTextBrowser;
 
 namespace exosnap::ui::dialogs {
 
@@ -48,8 +50,9 @@ class WhatsNewOverlay : public QWidget {
 
   signals:
     void closed();
-    // Emitted when the "Don't show this after updates" checkbox toggles
-    // (post-update mode only). MainWindow persists whats_new_suppressed.
+    // Emitted when the "Show release notes after updates" checkbox toggles
+    // (post-update mode only; checked by default). Carries the inverse of the
+    // checkbox's own checked state. MainWindow persists whats_new_suppressed.
     void suppressToggled(bool suppressed);
 
   protected:

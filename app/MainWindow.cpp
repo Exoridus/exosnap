@@ -2166,6 +2166,16 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 } else {
                     resize_cursor_shown_ = false;
                 }
+
+                // Safety net for the titlebar drag/move override cursor: WM_EXITSIZEMOVE
+                // below is the normal reset signal, but it depends on startSystemMove's
+                // modal loop actually starting and cleanly exiting. WM_SETCURSOR instead
+                // fires continuously for every mouse move anywhere over the window
+                // (titlebar and plain body alike), so if it ever observes the left button
+                // no longer held while the override is still active, the drag ended some
+                // other way and the override would otherwise stick indefinitely.
+                if (title_bar_ != nullptr && !(QGuiApplication::mouseButtons() & Qt::LeftButton))
+                    title_bar_->resetDragCursor();
             }
 
             // Reset the drag/move override cursor when the window-move or resize
@@ -4887,14 +4897,14 @@ void MainWindow::buildConfigPage() {
         if (update_service_)
             update_service_->LaunchUpdater();
     });
-    // WHATS-NEW: card "What's new in vX.Y" link -> overlay with the last check's
-    // gap notes (pre-update mode; no suppress checkbox). Never gated by the
-    // suppress setting.
+    // WHATS-NEW: card "See what's new in vX.Y" link -> overlay with the full channel
+    // history from the last check (pre-update mode; no suppress checkbox). Never
+    // gated by the suppress setting.
     connect(config_page_, &ConfigPage::whatsNewRequested, this, [this]() {
         if (!update_service_)
             return;
         QVector<WhatsNewNote> notes;
-        for (const auto& n : update_service_->LastGapNotes()) {
+        for (const auto& n : update_service_->LastAllChannelNotes()) {
             WhatsNewNote note;
             note.version = QString::fromStdString(n.version.ToString());
             note.body = QString::fromStdString(n.body_markdown);
