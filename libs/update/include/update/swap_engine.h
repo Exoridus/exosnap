@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <update/update_types.h>
+#include <vector>
 
 namespace exosnap::update {
 
@@ -70,6 +71,30 @@ enum class SwapError : uint8_t {
 // (ERROR_ACCESS_DENIED) still counts as present. False if it never appears
 // before the timeout elapses.
 [[nodiscard]] bool WaitForInstanceMutex(const wchar_t* mutex_name, std::chrono::milliseconds timeout);
+
+// ---------------------------------------------------------------------------
+// Window discovery -- the close/handoff message must reach exactly the app
+// process this updater was launched for (--app-pid), never merely "a" window
+// that happens to share ExoSnap's title. A second already-running instance
+// (a developer's own separate build, say) can carry that same title; matching
+// on title alone risks handing the message to the wrong instance while the
+// real target waits out its close timeout untouched. Matching is by owner PID.
+// ---------------------------------------------------------------------------
+
+struct TopLevelWindow {
+    void* handle; // native window handle (HWND)
+    uint32_t owner_pid;
+};
+
+// Pure: the first candidate owned by target_pid, or nullptr if none matches.
+// Candidates come from the caller -- a real enumeration walk in production, a
+// fabricated list in tests -- so the matching rule can be proven without
+// depending on real desktop window state.
+[[nodiscard]] void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint32_t target_pid);
+
+// Real Win32 enumeration + selection: walks all top-level windows and returns
+// the one owned by target_pid, or nullptr if none is currently open.
+[[nodiscard]] void* FindTopLevelWindowForProcess(uint32_t target_pid);
 
 // ---------------------------------------------------------------------------
 // The swap itself.
