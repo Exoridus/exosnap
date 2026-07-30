@@ -25,25 +25,40 @@ Read:
   - **Device** hosts adapter selection + the per-GPU capability matrix (moved out of Diagnostics)
   - **Edit/Output/Save** is an overlay over the Record page (ADR 0022), not a nav item
 
-## Never drive the running application
+## Coordinate before driving the running application
 
-The developer works on the same machine. Taking over the pointer or the foreground window
-interrupts them and is not acceptable.
+The developer works on the same machine and may be doing anything else on it (gaming with a
+controller, moving the mouse) at the same moment. The actual failure mode this guards against
+is **uncoordinated** input: taking window focus while a controller is in use breaks controller-
+input recognition, and moving the OS cursor while the developer is moving it themselves causes
+mis-clicks on their side. (Origin: PR #154 — an agent used `EnumWindows`/`GetWindowRect` hunting
+for the app window and took over the mouse mid-session without warning.) This is **not** a
+categorical ban on ever interacting with a running instance — it is a coordination requirement.
 
-- **Never interact with a running ExoSnap instance.** No mouse or keyboard synthesis, no
-  `EnumWindows` / `GetWindowRect` / `SetForegroundWindow`, no window enumeration, no clicking,
-  no screenshots of the live app.
-- Starting the app **once** to confirm it does not crash at startup is allowed, and is required
-  after editing a QSS theme (an invalid `${token}` crashes at launch). Confirm the process
-  survives, then close it. Nothing else.
-- Judge pixels with the `--visual-test` render harness. Judge behavior with the widget tests.
+- **Never synthesize mouse/keyboard input or steal window focus without asking first and
+  getting confirmation that the developer isn't actively using the mouse/keyboard/controller
+  right now.** Ask in the same turn, before triggering anything; don't assume a earlier "go
+  ahead" still holds later in the session. This applies to any application, not just ExoSnap.
+- **UAC / Secure Desktop prompts cannot be scripted at all** — Windows blocks synthetic input
+  across the Secure Desktop boundary by design. Tell the developer in advance exactly what the
+  prompt will ask and what accept/decline does, then wait for them to have read that before
+  triggering it — they cannot have another window open while responding to a Secure Desktop
+  prompt.
+- **Physical/hardware and system-level settings stay the developer's own action** even inside
+  an otherwise-automated flow (e.g. turning HDR on, changing display refresh rate, unplugging an
+  audio endpoint).
+- Prefer structural automation (UI Automation invoke patterns / accessible names) over raw
+  coordinate-based mouse synthesis where available — it does not move the real OS cursor and so
+  cannot collide with the developer's own pointer.
+- Starting the app **once** to confirm it does not crash at startup is always allowed (e.g.
+  after a QSS theme edit); confirm the process survives, then close it.
+- Judge pixels with the `--visual-test` render harness and behavior with the widget tests first
+  — reach for live driving only when nothing else can verify the change, and say so.
 - `--auto-record` is the same class of exception as `--visual-test`: CLI/env-configured, never
   mouse/keyboard synthesis or window automation. Bare mode never creates a window; preview mode
   creates one off-screen only to reuse the existing preview/hub and screenshot machinery, never to
   click through it. Recording output always goes to a scratch directory (`EXOSNAP_OUTPUT_DIR` when
   set, otherwise the system temp directory) and is never committed.
-- If a change can only be verified by clicking through the live app, **stop and ask the developer
-  to do it.** Never do it yourself, and never do it without asking first.
 
 ## Work style
 
