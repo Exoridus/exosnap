@@ -154,3 +154,42 @@ TEST(CollectReleaseNotes, MalformedJsonYieldsEmpty) {
     auto notes = CollectReleaseNotes("not json", SemVer{0, 0, 0}, SemVer{9, 9, 9}, UpdateChannel::Stable);
     EXPECT_TRUE(notes.empty());
 }
+
+// ---------------------------------------------------------------------------
+// CollectAllReleaseNotesForChannel -- the full reference list for a channel,
+// independent of any install/target gap. Same fixture as CollectReleaseNotes
+// above: kNotes has 1.2.0, 1.1.5-rc.1 (prerelease), 1.1.0, 1.3.0 (draft), 1.0.0.
+// ---------------------------------------------------------------------------
+
+TEST(CollectAllReleaseNotesForChannel, StableExcludesPrereleasesAndDrafts) {
+    auto notes = CollectAllReleaseNotesForChannel(kNotes, UpdateChannel::Stable);
+    ASSERT_EQ(notes.size(), 3u);
+    EXPECT_EQ(notes[0].version, (SemVer{1, 2, 0}));
+    EXPECT_EQ(notes[1].version, (SemVer{1, 1, 0}));
+    EXPECT_EQ(notes[2].version, (SemVer{1, 0, 0}));
+}
+
+TEST(CollectAllReleaseNotesForChannel, PreviewIncludesPrereleases) {
+    auto notes = CollectAllReleaseNotesForChannel(kNotes, UpdateChannel::Preview);
+    ASSERT_EQ(notes.size(), 4u);
+    EXPECT_EQ(notes[0].version, (SemVer{1, 2, 0}));
+    EXPECT_EQ(notes[1].version, (SemVer{1, 1, 5, true, 0}));
+    EXPECT_EQ(notes[2].version, (SemVer{1, 1, 0}));
+    EXPECT_EQ(notes[3].version, (SemVer{1, 0, 0}));
+}
+
+TEST(CollectAllReleaseNotesForChannel, DraftIsNeverIncluded) {
+    auto notes = CollectAllReleaseNotesForChannel(kNotes, UpdateChannel::Preview);
+    for (const auto& n : notes)
+        EXPECT_NE(n.version, (SemVer{1, 3, 0}));
+}
+
+TEST(CollectAllReleaseNotesForChannel, MalformedJsonYieldsEmpty) {
+    auto notes = CollectAllReleaseNotesForChannel("not json", UpdateChannel::Stable);
+    EXPECT_TRUE(notes.empty());
+}
+
+TEST(CollectAllReleaseNotesForChannel, EmptyArrayYieldsEmpty) {
+    auto notes = CollectAllReleaseNotesForChannel("[]", UpdateChannel::Stable);
+    EXPECT_TRUE(notes.empty());
+}

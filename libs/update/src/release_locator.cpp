@@ -4,6 +4,7 @@
 #include <update/release_locator.h>
 
 #include <algorithm>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -97,8 +98,12 @@ std::optional<ReleaseAssets> LocateRelease(std::string_view releases_json, Updat
     return best;
 }
 
-std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, const SemVer& above, const SemVer& up_to,
-                                             UpdateChannel channel) {
+namespace {
+
+// Shared release-note collection: applies the draft/channel filter every caller needs,
+// then `in_range` to decide inclusion. Newest first on return.
+std::vector<ReleaseNote> CollectNotesMatching(std::string_view releases_json, UpdateChannel channel,
+                                              const std::function<bool(const SemVer&)>& in_range) {
     std::vector<ReleaseNote> notes;
 
     try {
@@ -117,8 +122,7 @@ std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, con
             if (!sv)
                 continue;
 
-            // Half-open lower (exclusive), closed upper (inclusive): (above, up_to].
-            if (!(*sv > above) || !(*sv <= up_to))
+            if (!in_range(*sv))
                 continue;
 
             ReleaseNote note;
@@ -135,6 +139,19 @@ std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, con
     std::sort(notes.begin(), notes.end(),
               [](const ReleaseNote& a, const ReleaseNote& b) { return b.version < a.version; });
     return notes;
+}
+
+} // namespace
+
+std::vector<ReleaseNote> CollectReleaseNotes(std::string_view releases_json, const SemVer& above, const SemVer& up_to,
+                                             UpdateChannel channel) {
+    // Half-open lower (exclusive), closed upper (inclusive): (above, up_to].
+    return CollectNotesMatching(releases_json, channel,
+                                [&above, &up_to](const SemVer& v) { return v > above && v <= up_to; });
+}
+
+std::vector<ReleaseNote> CollectAllReleaseNotesForChannel(std::string_view releases_json, UpdateChannel channel) {
+    return CollectNotesMatching(releases_json, channel, [](const SemVer&) { return true; });
 }
 
 const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode) {
