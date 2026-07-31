@@ -194,24 +194,29 @@ TEST(SwapEngine, WaitForInstanceMutexDetectsPresentAndAbsent) {
     EXPECT_FALSE(WaitForInstanceMutex(absent.c_str(), std::chrono::milliseconds(300)));
 }
 
-// The updater's close/handoff message must reach exactly the app process it
-// launched, never merely "a" window that happens to share ExoSnap's title --
-// a second already-running instance (a developer's own separate build, say)
-// can carry that same title, and posting the handoff to it leaves the real
-// target waiting out its close timeout untouched. Matching is by owner PID.
-TEST(SwapEngine, SelectWindowForProcessMatchesOwnerPidIgnoringOthers) {
+// The updater's close/handoff message must reach exactly the app's real main
+// window: never merely a same-titled window from a different process (a
+// second already-running instance can carry the same title, leaving the real
+// target waiting out its close timeout untouched), and never merely some
+// other window the SAME process happens to own (ExoSnap's system tray icon
+// gives Qt a hidden native callback window under the same PID; matching on
+// PID alone can silently grab that one instead, and the message is then
+// swallowed because only the real main window's nativeEvent reacts to it).
+// Matching requires both owner PID and exact title.
+TEST(SwapEngine, SelectWindowForProcessRequiresBothPidAndTitle) {
     const std::vector<TopLevelWindow> candidates = {
-        {reinterpret_cast<void*>(0x1), 111},
-        {reinterpret_cast<void*>(0x2), 222},
-        {reinterpret_cast<void*>(0x3), 222},
+        {reinterpret_cast<void*>(0x1), 111, L"ExoSnap"},          // wrong pid
+        {reinterpret_cast<void*>(0x2), 222, L""},                 // right pid, hidden helper window (no title)
+        {reinterpret_cast<void*>(0x3), 222, L"ExoSnap"},          // right pid, right title
+        {reinterpret_cast<void*>(0x4), 222, L"ExoSnap - Second"}, // right pid, wrong title
     };
-    EXPECT_EQ(SelectWindowForProcess(candidates, 222), reinterpret_cast<void*>(0x2));
-    EXPECT_EQ(SelectWindowForProcess(candidates, 333), nullptr);
-    EXPECT_EQ(SelectWindowForProcess({}, 222), nullptr);
+    EXPECT_EQ(SelectWindowForProcess(candidates, 222, L"ExoSnap"), reinterpret_cast<void*>(0x3));
+    EXPECT_EQ(SelectWindowForProcess(candidates, 333, L"ExoSnap"), nullptr);
+    EXPECT_EQ(SelectWindowForProcess({}, 222, L"ExoSnap"), nullptr);
 }
 
-TEST(SwapEngine, FindTopLevelWindowForProcessFindsRealWindowByPid) {
-    EXPECT_EQ(FindTopLevelWindowForProcess(0), nullptr); // pid 0 owns no window
+TEST(SwapEngine, FindTopLevelWindowForProcessFindsRealWindowByPidAndTitle) {
+    EXPECT_EQ(FindTopLevelWindowForProcess(0, L"ExoSnap"), nullptr); // pid 0 owns no window
 
     const wchar_t* kClassName = L"ExoSnapTestSwapEngineWindow";
     WNDCLASSW wc{};
@@ -221,6 +226,13 @@ TEST(SwapEngine, FindTopLevelWindowForProcessFindsRealWindowByPid) {
     const ATOM registered = ::RegisterClassW(&wc);
     ASSERT_NE(registered, 0);
 
+    // Untitled window created FIRST, standing in for Qt's hidden system-tray
+    // callback window: same process, same class, enumerated before the real
+    // main window. If matching only checked PID, this one would win.
+    HWND hidden = ::CreateWindowExW(0, kClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 10, 10, nullptr, nullptr,
+                                    wc.hInstance, nullptr);
+    ASSERT_NE(hidden, nullptr);
+
     // Same title a colliding second instance could plausibly also use --
     // proving the match still lands on this process's own window, not on
     // title alone.
@@ -229,9 +241,10 @@ TEST(SwapEngine, FindTopLevelWindowForProcessFindsRealWindowByPid) {
     ASSERT_NE(window, nullptr);
 
     const DWORD self_pid = ::GetCurrentProcessId();
-    EXPECT_EQ(FindTopLevelWindowForProcess(self_pid), reinterpret_cast<void*>(window));
+    EXPECT_EQ(FindTopLevelWindowForProcess(self_pid, L"ExoSnap"), reinterpret_cast<void*>(window));
 
     ::DestroyWindow(window);
+    ::DestroyWindow(hidden);
     ::UnregisterClassW(kClassName, wc.hInstance);
-    EXPECT_EQ(FindTopLevelWindowForProcess(self_pid), nullptr);
+    EXPECT_EQ(FindTopLevelWindowForProcess(self_pid, L"ExoSnap"), nullptr);
 }

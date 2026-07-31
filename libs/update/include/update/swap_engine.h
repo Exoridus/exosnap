@@ -74,27 +74,40 @@ enum class SwapError : uint8_t {
 
 // ---------------------------------------------------------------------------
 // Window discovery -- the close/handoff message must reach exactly the app
-// process this updater was launched for (--app-pid), never merely "a" window
-// that happens to share ExoSnap's title. A second already-running instance
-// (a developer's own separate build, say) can carry that same title; matching
-// on title alone risks handing the message to the wrong instance while the
-// real target waits out its close timeout untouched. Matching is by owner PID.
+// process this updater was launched for (--app-pid), AND specifically its
+// main window, never merely "a" top-level window that process happens to
+// own. Two distinct ways this goes wrong if only one of {pid, title} is
+// checked:
+//   - Title only: a second already-running instance (a developer's own
+//     separate build, say) can carry the same title; the message then hands
+//     off to the wrong instance while the real target waits out its close
+//     timeout untouched.
+//   - PID only: ExoSnap's own process owns MORE than one top-level window
+//     when a system tray icon is active (Qt creates a hidden native window
+//     for tray callbacks) -- EnumWindows can return that hidden window
+//     before the real main window, and posting to it is silently swallowed
+//     (MainWindow::nativeEvent only reacts to its own HWND), so the app
+//     never closes and the updater eventually times out.
+// Matching therefore requires BOTH: owner PID and exact window title.
 // ---------------------------------------------------------------------------
 
 struct TopLevelWindow {
     void* handle; // native window handle (HWND)
     uint32_t owner_pid;
+    std::wstring title; // exact window text (empty for untitled/hidden windows)
 };
 
-// Pure: the first candidate owned by target_pid, or nullptr if none matches.
-// Candidates come from the caller -- a real enumeration walk in production, a
-// fabricated list in tests -- so the matching rule can be proven without
-// depending on real desktop window state.
-[[nodiscard]] void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint32_t target_pid);
+// Pure: the first candidate owned by target_pid with title == target_title,
+// or nullptr if none matches. Candidates come from the caller -- a real
+// enumeration walk in production, a fabricated list in tests -- so the
+// matching rule can be proven without depending on real desktop window state.
+[[nodiscard]] void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint32_t target_pid,
+                                           const std::wstring& target_title);
 
 // Real Win32 enumeration + selection: walks all top-level windows and returns
-// the one owned by target_pid, or nullptr if none is currently open.
-[[nodiscard]] void* FindTopLevelWindowForProcess(uint32_t target_pid);
+// the one owned by target_pid whose title is exactly target_title, or nullptr
+// if none is currently open.
+[[nodiscard]] void* FindTopLevelWindowForProcess(uint32_t target_pid, const std::wstring& target_title);
 
 // ---------------------------------------------------------------------------
 // The swap itself.
