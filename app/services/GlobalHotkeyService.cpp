@@ -240,6 +240,14 @@ QKeySequence GlobalHotkeyService::GetBinding(HotkeyAction action) const {
     return bindings_[static_cast<std::size_t>(idx)];
 }
 
+bool GlobalHotkeyService::IsAtDefault(HotkeyAction action) const {
+    AssertOwnerThread();
+    const int idx = static_cast<int>(action);
+    if (idx < 0 || idx >= kHotkeyActionCount)
+        return false;
+    return bindings_[static_cast<std::size_t>(idx)] == DefaultBinding(action);
+}
+
 void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
     AssertOwnerThread();
     // Load every registered action; empty stored strings fall back to defaults.

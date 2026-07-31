@@ -82,6 +82,14 @@ class GlobalHotkeyService : public QObject {
 
     [[nodiscard]] QKeySequence GetBinding(HotkeyAction action) const;
 
+    // True when action's current binding is exactly the shipped default (never
+    // customized, or customized back to the same value -- either way it's the
+    // combo ExoSnap ships out of the box, not a deliberate user choice of
+    // something else). Used to decide whether a startup registration failure
+    // is worth interrupting the user about, or just quiet environmental noise
+    // (another app's own default claimed the same combo first).
+    [[nodiscard]] bool IsAtDefault(HotkeyAction action) const;
+
     // Load from stored strings (e.g. AppSettingsStore).
     // Invalid or empty strings fall back to defaults.
     void LoadFromStrings(const HotkeyBindings& stored);
