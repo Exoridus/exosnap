@@ -62,6 +62,7 @@ using exosnap::update::WaitForProcessExit;
 namespace {
 
 constexpr const wchar_t* kInstanceMutexName = L"ExoSnap_SingleInstance_Mutex";
+constexpr const wchar_t* kAppWindowTitle = L"ExoSnap";
 constexpr const wchar_t* kExeName = L"exosnap.exe";
 constexpr const char* kDefaultReleasesUrl = "https://api.github.com/repos/Exoridus/exosnap/releases";
 
@@ -525,10 +526,13 @@ bool UpdaterWorker::runCloseApp() {
         // private message transfers handoff ownership; unlike a generic
         // WM_CLOSE it lets the app persist "pending" only for this real updater
         // transition and bypass close-to-tray without weakening recording guards.
-        // Found by owner PID, not by window title: a second already-running
-        // ExoSnap instance can share the same title, and posting to it would
-        // leave the real target waiting out its close timeout untouched.
-        if (const auto app_window = reinterpret_cast<HWND>(FindTopLevelWindowForProcess(args_.app_pid))) {
+        // Found by owner PID AND window title together: PID alone can grab a
+        // hidden helper window the same process also owns (e.g. Qt's system-
+        // tray callback window), which silently swallows the message since
+        // only the real main window's nativeEvent reacts to it; title alone
+        // can hit a second already-running instance that shares the title.
+        if (const auto app_window =
+                reinterpret_cast<HWND>(FindTopLevelWindowForProcess(args_.app_pid, kAppWindowTitle))) {
             ::PostMessageW(app_window, static_cast<UINT>(exosnap::update::kUpdaterHandoffMessage),
                            static_cast<WPARAM>(exosnap::update::kUpdaterHandoffMagic), 0);
         }

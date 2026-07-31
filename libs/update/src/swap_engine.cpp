@@ -407,9 +407,10 @@ bool WaitForInstanceMutex(const wchar_t* mutex_name, std::chrono::milliseconds t
     }
 }
 
-void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint32_t target_pid) {
+void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint32_t target_pid,
+                             const std::wstring& target_title) {
     for (const TopLevelWindow& candidate : candidates) {
-        if (candidate.owner_pid == target_pid) {
+        if (candidate.owner_pid == target_pid && candidate.title == target_title) {
             return candidate.handle;
         }
     }
@@ -417,27 +418,33 @@ void* SelectWindowForProcess(const std::vector<TopLevelWindow>& candidates, uint
 }
 
 namespace {
-struct FindWindowContext {
+struct CollectWindowsContext {
     DWORD target_pid;
-    HWND result;
+    std::vector<TopLevelWindow> candidates;
 };
 
 BOOL CALLBACK CollectWindowIfOwnedByProcess(HWND hwnd, LPARAM lparam) {
-    auto* ctx = reinterpret_cast<FindWindowContext*>(lparam);
+    auto* ctx = reinterpret_cast<CollectWindowsContext*>(lparam);
     DWORD owner_pid = 0;
     ::GetWindowThreadProcessId(hwnd, &owner_pid);
-    if (owner_pid == ctx->target_pid) {
-        ctx->result = hwnd;
-        return FALSE; // found it, stop enumerating
+    if (owner_pid != ctx->target_pid) {
+        return TRUE;
     }
+    // Hidden helper windows (e.g. Qt's system-tray callback window) are also
+    // owned by this process and have no title -- collect every candidate so
+    // SelectWindowForProcess can pick the one that also matches by title,
+    // rather than grabbing whichever window EnumWindows happens to visit first.
+    wchar_t title[256] = {};
+    const int len = ::GetWindowTextW(hwnd, title, static_cast<int>(sizeof(title) / sizeof(title[0])));
+    ctx->candidates.push_back(TopLevelWindow{hwnd, owner_pid, std::wstring(title, static_cast<size_t>(len))});
     return TRUE;
 }
 } // namespace
 
-void* FindTopLevelWindowForProcess(uint32_t target_pid) {
-    FindWindowContext ctx{static_cast<DWORD>(target_pid), nullptr};
+void* FindTopLevelWindowForProcess(uint32_t target_pid, const std::wstring& target_title) {
+    CollectWindowsContext ctx{static_cast<DWORD>(target_pid), {}};
     ::EnumWindows(CollectWindowIfOwnedByProcess, reinterpret_cast<LPARAM>(&ctx));
-    return ctx.result;
+    return SelectWindowForProcess(ctx.candidates, target_pid, target_title);
 }
 
 } // namespace exosnap::update
