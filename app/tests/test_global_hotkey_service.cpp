@@ -173,6 +173,25 @@ TEST_F(HotkeyServiceTest, SetRegistrarReportsFailedBindings) {
               GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording));
 }
 
+// IsAtDefault distinguishes a still-default binding from one the user
+// explicitly customized -- this is what lets a startup registration failure
+// be treated as quiet environmental noise (default vs. default collision, no
+// notification) versus a deliberate choice worth telling the user about.
+TEST_F(HotkeyServiceTest, IsAtDefaultReflectsCustomizationState) {
+    GlobalHotkeyService svc;
+    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // untouched: Alt+F9 default
+    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::TogglePause));     // untouched: empty default
+
+    FakeRegistrar reg;
+    (void)svc.SetRegistrar(&reg);
+    [[maybe_unused]] auto r = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F8));
+    ASSERT_TRUE(r.success);
+    EXPECT_FALSE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // now customized away from Alt+F9
+
+    [[maybe_unused]] auto reset = svc.ResetToDefault(HotkeyAction::ToggleRecording);
+    EXPECT_TRUE(svc.IsAtDefault(HotkeyAction::ToggleRecording)); // back to default
+}
+
 // 9c. SetRegistrar reports nothing when every registration succeeds.
 TEST_F(HotkeyServiceTest, SetRegistrarReportsNoFailuresOnSuccess) {
     GlobalHotkeyService svc;

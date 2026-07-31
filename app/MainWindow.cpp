@@ -1706,25 +1706,52 @@ void MainWindow::showEvent(QShowEvent* event) {
             const std::vector<HotkeyAction> failed_hotkeys =
                 hotkey_service_->SetRegistrar(win32_hotkey_registrar_.get());
             if (!failed_hotkeys.empty()) {
+                // Split by provenance BEFORE unsetting (unsetting clears the binding,
+                // which would make everything read as "at default" afterwards).
+                // Default-vs-default collisions are common environmental noise (another
+                // app's own default hotkey, e.g. NVIDIA's Alt+F9 Instant Replay, claimed
+                // the combo first) and happen on every launch that app is running —
+                // worth logging, not worth interrupting the user about every time. A
+                // combo the user deliberately chose is different: it worked when they
+                // set it, so losing it now is worth telling them.
+                std::vector<HotkeyAction> default_failed;
+                std::vector<HotkeyAction> custom_failed;
+                for (const HotkeyAction action : failed_hotkeys) {
+                    if (hotkey_service_->IsAtDefault(action))
+                        default_failed.push_back(action);
+                    else
+                        custom_failed.push_back(action);
+                }
+
                 QStringList names;
                 for (const HotkeyAction action : failed_hotkeys)
                     names << GlobalHotkeyService::ActionDisplayName(action);
-                const QString joined = names.join(QStringLiteral(", "));
-                diagnostics::AppLog::warning(
-                    QStringLiteral("hotkeys"),
-                    QStringLiteral("Hotkey registration failed at startup (in use elsewhere): %1").arg(joined));
+                diagnostics::AppLog::warning(QStringLiteral("hotkeys"),
+                                             QStringLiteral("Hotkey registration failed at startup (in use "
+                                                            "elsewhere): %1 (default: %2, user-set: %3)")
+                                                 .arg(names.join(QStringLiteral(", ")))
+                                                 .arg(default_failed.size())
+                                                 .arg(custom_failed.size()));
 
                 // Windows has no API to reveal which process holds the combo, and we
                 // cannot steal it — a binding we could not register is dead weight that
                 // would silently swallow the key and re-warn every launch. Drop it
                 // (UnsetBinding persists the cleared binding via bindingChanged) so the
-                // action is cleanly unbound until the user picks a working shortcut. The
-                // notification routes them straight to Settings → Hotkeys.
+                // action is cleanly unbound until the user picks a working shortcut,
+                // regardless of whether it was a default or a custom choice.
                 for (const HotkeyAction action : failed_hotkeys)
                     hotkey_service_->UnsetBinding(action);
 
-                if (notification_manager_) {
-                    const bool plural = failed_hotkeys.size() > 1;
+                // Only a lost CUSTOM binding gets a notification. A lost default is
+                // silently dropped -- the notification routes to Settings → Hotkeys,
+                // which isn't useful noise for "something else on this machine also
+                // defaults to this combo".
+                if (notification_manager_ && !custom_failed.empty()) {
+                    QStringList custom_names;
+                    for (const HotkeyAction action : custom_failed)
+                        custom_names << GlobalHotkeyService::ActionDisplayName(action);
+                    const QString joined = custom_names.join(QStringLiteral(", "));
+                    const bool plural = custom_failed.size() > 1;
                     notifications::NotificationEvent hotkey_conflict_event;
                     hotkey_conflict_event.type = notifications::NotificationType::HotkeyConflict;
                     hotkey_conflict_event.title = QStringLiteral("Hotkey unavailable");

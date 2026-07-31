@@ -847,12 +847,18 @@ If a hotkey starts recording while the app window is visible, the Record view is
 window is minimized, it is not restored.
 
 If a persisted hotkey can no longer be registered at startup (another app or Windows already holds
-it), it does not fail silently. Windows exposes no way to name the holding process or to reclaim the
-combo, so ExoSnap **drops the unregisterable binding** (it stays cleared across launches rather than
-silently swallowing the key or re-warning every start) and raises a notification naming the affected
-action. The notification carries a **Rebind** action that deep-links to Settings → Hotkeys, where the
-user can bind a working shortcut; attempting a combo already held elsewhere is reported inline there
-as a conflict.
+it), ExoSnap **drops the unregisterable binding** (it stays cleared across launches rather than
+silently swallowing the key or re-warning every start). Windows exposes no way to name the holding
+process or to reclaim the combo.
+
+Whether this also raises a notification depends on the binding's provenance. A binding still equal
+to its shipped default (never customized) is common environmental noise — another app's own default
+hotkey (e.g. NVIDIA's Alt+F9 Instant Replay) claims the same combo first, which happens on every
+launch that app is running — and is dropped silently, logged but not surfaced. A binding the user
+deliberately set to something else worked when they chose it, so losing it is worth telling them
+about: it raises a notification naming the affected action, with a **Rebind** action that deep-links
+to Settings → Hotkeys, where the user can bind a working shortcut; attempting a combo already held
+elsewhere is reported inline there as a conflict.
 
 ---
 
