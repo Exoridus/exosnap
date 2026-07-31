@@ -689,17 +689,33 @@ TEST_F(NotificationToastTest, CardHeight_TwoActions_AddAButtonRow) {
 // them), proving the chevron's column really is reserved and not just a
 // cosmetic overlap left for the painter to clip.
 TEST_F(NotificationToastTest, CardHeight_OneAction_ChevronColumnNarrowsWrapWidth) {
-    // Length matters here, not phrasing: the sentence must land just past the
-    // point where the wide (no chevron) column still fits it on two lines but
-    // the narrower (chevron) column needs a third — verified empirically
-    // against the real body font (a few characters of slack either side, so
-    // this isn't a knife-edge match against one exact wrap point).
-    const QString body =
-        QStringLiteral("Recording continued while several frames were dropped during this capture session on your PC.");
-    const int no_action = singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::None);
-    const int one_action =
-        singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::OpenDiagnostics);
-    EXPECT_GT(one_action, no_action);
+    // A hand-picked sentence tuned to land "just past" the wrap boundary is
+    // fragile: the exact pixel width of a wrapped line depends on font
+    // metrics that differ between environments (e.g. this machine's native
+    // Windows rendering vs. CI's offscreen QPA platform), so a literal that
+    // diverges here can stop diverging there. Grow the body one CHARACTER at
+    // a time instead (a single unbroken run, so QTextOption's WrapAnywhere
+    // fallback kicks in) and let each environment find its own boundary. The
+    // gap between the two column widths (kChevronColumnW) is only a handful
+    // of characters wide, so whole-word steps are too coarse to reliably
+    // straddle it — per-character steps are. The invariant under test (the
+    // chevron-narrowed column never needs fewer lines, and eventually needs
+    // more) holds regardless of exact metrics.
+    QString body;
+    bool diverged = false;
+    for (int chars = 1; chars <= 300; ++chars) {
+        body += QLatin1Char('x');
+        const int no_action = singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::None);
+        const int one_action =
+            singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::OpenDiagnostics);
+        ASSERT_GE(one_action, no_action) << "chevron-narrowed column needed FEWER lines than the wide column at "
+                                         << chars << " characters";
+        if (one_action > no_action) {
+            diverged = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(diverged) << "chevron-narrowed column never needed an extra line within 300 characters";
 }
 
 // ── One-action card: the card is the action ──────────────────────────────────
