@@ -681,6 +681,23 @@ TEST_F(NotificationToastTest, CardHeight_TwoActions_AddAButtonRow) {
     EXPECT_GT(two_actions, one_action);
 }
 
+// A single-action card draws a › chevron in its own column, left of the ✕ —
+// the wrap width used to grow the card must be narrower than a same-content
+// no-action card's, or long text runs through the chevron's x-range. Over a
+// long enough body the narrower column needs a strictly taller card (never
+// shorter — word-wrap into a narrower column can only add lines, not remove
+// them), proving the chevron's column really is reserved and not just a
+// cosmetic overlap left for the painter to clip.
+TEST_F(NotificationToastTest, CardHeight_OneAction_ChevronColumnNarrowsWrapWidth) {
+    const QString body =
+        QStringLiteral("This body wraps across a couple of lines so a small reduction in the column width, "
+                       "reserved for the one-action chevron marker, pushes one more word onto the next line.");
+    const int no_action = singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::None);
+    const int one_action =
+        singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::OpenDiagnostics);
+    EXPECT_GT(one_action, no_action);
+}
+
 // ── One-action card: the card is the action ──────────────────────────────────
 
 TEST_F(NotificationToastTest, OneActionCard_WholeCardIsTheActionTarget) {

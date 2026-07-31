@@ -339,6 +339,14 @@ int bodyLineCount(const QString& body, const QFontMetrics& body_fm, int text_w) 
 constexpr int kTextX = kPadLeft + kChipSize + kChipTextGap;
 constexpr int kTextW = kToastWidth - kTextX - kPadRight - kDismissSize - 6;
 
+// A single-action ("clickable") card draws a › chevron in its own
+// kDismissSize-wide column, left of the ✕ column (see layoutFor's chevron_rect).
+// kTextW above only reserves the ✕ column, so a card with a chevron needs this
+// much MORE subtracted, or title/body text wraps straight through the
+// chevron's x-range -- not just at whichever line happens to share its
+// vertical center, but the whole column, above and below it too.
+constexpr int kChevronColumnW = kDismissSize + 6;
+
 // One action button's resolved label, tone, and action tag.
 struct ButtonSpec {
     QString label;
@@ -404,16 +412,26 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
     return buttons;
 }
 
+// Text column width for a card with the given button specs: narrower by
+// kChevronColumnW when there's exactly one action (a chevron column to clear),
+// unchanged otherwise. Single source of truth for toastHeight, layoutFor, and
+// paintEvent so the wrap width used to grow the card always matches the width
+// actually painted with.
+int textWidthFor(const QVector<ButtonSpec>& specs) {
+    return kTextW - (specs.size() == 1 ? kChevronColumnW : 0);
+}
+
 // Calculate the total height of a single toast card. The card grows to fit its
 // content: no reserved space for an absent body, and a button strip only when
 // there are two actions (a one-action card IS the action — no strip).
 int toastHeight(const notifications::NotificationEvent& event, const QFontMetrics& body_fm) {
-    const int body_lines = bodyLineCount(event.body, body_fm, kTextW);
+    const QVector<ButtonSpec> specs = buttonSpecsFor(event);
+    const int body_lines = bodyLineCount(event.body, body_fm, textWidthFor(specs));
 
     int content_h = kTitleH;
     if (body_lines > 0)
         content_h += kBodyGapTop + kBodyH * body_lines;
-    if (buttonSpecsFor(event).size() >= 2)
+    if (specs.size() >= 2)
         content_h += kActionsGapTop + kPillHTotal;
 
     // Card height = padTop + max(chip, content) + padBottom + optional bar
@@ -436,6 +454,7 @@ struct ToastLayout {
     QRectF card_rect;    // rounded card body (FULL height incl. bar strip)
     QRectF dismiss_rect; // top-right ✕ hit/paint rect
     int text_x = 0;
+    int text_w = 0;  // narrower than kTextW when a chevron column must stay clear
     int title_y = 0; // window-space y of the title line (block centered to the chip)
     int body_lines = 0;
     QStringList body_lines_text; // resolved, pre-wrapped body lines (paint reads these)
@@ -489,9 +508,14 @@ ToastLayout layoutFor(const notifications::NotificationEvent& event, int y_offse
     // window-space text x:
     L.text_x = kShadowMargin + card_text_x;
 
+    // Resolve the button specs once, up front: a single action means a
+    // chevron column that the text width (below) must also clear.
+    const QVector<ButtonSpec> specs = buttonSpecsFor(event);
+    L.text_w = textWidthFor(specs);
+
     // Center the title+body block on the glyph chip; a title-only card centers
     // the single line, a wrapped body simply starts at the top pad.
-    L.body_lines_text = wrapBodyLines(event.body, kTextW);
+    L.body_lines_text = wrapBodyLines(event.body, L.text_w);
     L.body_lines = static_cast<int>(L.body_lines_text.size());
     const int text_block_h = kTitleH + (L.body_lines > 0 ? kBodyGapTop + kBodyH * L.body_lines : 0);
     const int text_y_top = y_offset + kPadTop;
@@ -503,7 +527,6 @@ ToastLayout layoutFor(const notifications::NotificationEvent& event, int y_offse
     L.dismiss_rect =
         QRectF(kShadowMargin + kToastWidth - kPadRight - kDismissSize, y_offset + kPadTop, kDismissSize, kDismissSize);
 
-    const QVector<ButtonSpec> specs = buttonSpecsFor(event);
     if (specs.size() >= 2) {
         // Two actions: named buttons in their own row.
         L.buttons = specs;
@@ -727,8 +750,10 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
 
         // ── Text column ───────────────────────────────────────────────────
         const int text_x = L.text_x; // window-space
-        // Text width is card-relative (card is always kToastWidth wide).
-        const int text_w = kTextW;
+        // Narrower than kTextW when a chevron column must stay clear (see
+        // textWidthFor); L.text_w is the single source of truth layoutFor
+        // already used to grow the card and wrap the body.
+        const int text_w = L.text_w;
 
         p.setFont(title_font);
         p.setPen(kInk);
