@@ -40,6 +40,8 @@ add_library(exosnap_updater_logic STATIC
     UpdaterController.h
     UpdaterWorker.cpp
     UpdaterWorker.h
+    WindowPlacement.cpp
+    WindowPlacement.h
 )
 # UpdaterWorker is a QObject (signals across the worker-thread boundary).
 set_target_properties(exosnap_updater_logic PROPERTIES AUTOMOC ON)

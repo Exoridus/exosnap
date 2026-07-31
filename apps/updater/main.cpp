@@ -10,7 +10,13 @@
 // all engine work and renders a canned UpdaterUiState so the canon looks can be
 // inspected (and screenshotted) without a real download/install in flight.
 
+// clang-format off
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+// clang-format on
+
 #include <QApplication>
+#include <QGuiApplication>
 #include <QScreen>
 #include <QString>
 #include <QStringList>
@@ -24,12 +30,14 @@
 #include <string>
 
 #include <update/install_mode_detector.h>
+#include <update/swap_engine.h>
 #include <update/update_types.h>
 
 #include "UpdaterArgs.h"
 #include "UpdaterController.h"
 #include "UpdaterWindow.h"
 #include "UpdaterWorker.h"
+#include "WindowPlacement.h"
 
 namespace {
 
@@ -99,6 +107,35 @@ void CenterOnScreen(QWidget& w) {
         const QRect avail = screen->availableGeometry();
         w.move(avail.center() - QPoint(w.width() / 2, w.height() / 2));
     }
+}
+
+// Positions the updater window centered on the ExoSnap window it was launched
+// for (--app-pid), clamped inside that window's own monitor's available
+// (taskbar-excluded) work area -- see WindowPlacement.h. Always centering on
+// the primary screen (the old CenterOnScreen) put the updater on the wrong
+// monitor whenever ExoSnap ran on a secondary one. Falls back to
+// CenterOnScreen when app_pid is 0, the window can't be found (already
+// closed, verify-reinstall's own app pid replaced by a stale one, ...), or no
+// screen contains it.
+void PlaceNearAppWindow(QWidget& w, quint32 app_pid) {
+    if (app_pid != 0) {
+        const auto hwnd = reinterpret_cast<HWND>(exosnap::update::FindTopLevelWindowForProcess(app_pid, L"ExoSnap"));
+        if (hwnd != nullptr) {
+            RECT r{};
+            if (::GetWindowRect(hwnd, &r)) {
+                const QPoint anchor_center((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+                QScreen* screen = QGuiApplication::screenAt(anchor_center);
+                if (screen == nullptr)
+                    screen = QApplication::primaryScreen();
+                if (screen != nullptr) {
+                    const QRect placed = PlaceWindowNearAnchor(w.size(), anchor_center, screen->availableGeometry());
+                    w.move(placed.topLeft());
+                    return;
+                }
+            }
+        }
+    }
+    CenterOnScreen(w);
 }
 
 // Where exosnap.exe lives for the window's "Open ..." actions. Portable: the
@@ -272,7 +309,7 @@ int main(int argc, char** argv) {
     controller->onStepStarted(UpStep::Download);
     render();
     window.show();
-    CenterOnScreen(window);
+    PlaceNearAppWindow(window, args->app_pid);
 
     in_flight = true;
     QMetaObject::invokeMethod(&worker, [&worker] { worker.run(UpStep::Download); }, Qt::QueuedConnection);

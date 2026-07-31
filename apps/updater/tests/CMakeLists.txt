@@ -27,6 +27,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_updater_logic
 )
 
+# Pure geometry behind placing the updater window near the ExoSnap window
+# it was launched for (centered, clamped inside the target monitor's work
+# area). Qt Core only (QRect/QPoint/QSize); no QApplication needed.
+exosnap_add_gtest(
+    NAME    test_window_placement
+    TEST_PREFIX updater.
+    SOURCES test_window_placement.cpp
+    LIBRARIES exosnap_updater_logic
+)
+
 # Widget smoke test: UpdaterWindow / ProgressRing / StepListWidget are QtWidgets,
 # so this binary owns its own QApplication (CTest isolates each binary in its own
 # process). It links the UI library, which already carries the AUTOMOC output.
