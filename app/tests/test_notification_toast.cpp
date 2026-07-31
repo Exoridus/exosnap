@@ -689,9 +689,13 @@ TEST_F(NotificationToastTest, CardHeight_TwoActions_AddAButtonRow) {
 // them), proving the chevron's column really is reserved and not just a
 // cosmetic overlap left for the painter to clip.
 TEST_F(NotificationToastTest, CardHeight_OneAction_ChevronColumnNarrowsWrapWidth) {
+    // Length matters here, not phrasing: the sentence must land just past the
+    // point where the wide (no chevron) column still fits it on two lines but
+    // the narrower (chevron) column needs a third — verified empirically
+    // against the real body font (a few characters of slack either side, so
+    // this isn't a knife-edge match against one exact wrap point).
     const QString body =
-        QStringLiteral("This body wraps across a couple of lines so a small reduction in the column width, "
-                       "reserved for the one-action chevron marker, pushes one more word onto the next line.");
+        QStringLiteral("Recording continued while several frames were dropped during this capture session on your PC.");
     const int no_action = singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::None);
     const int one_action =
         singleToastHeight(NotificationType::FramesDropped, body, NotificationAction::OpenDiagnostics);
