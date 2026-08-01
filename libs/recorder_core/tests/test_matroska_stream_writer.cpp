@@ -148,6 +148,49 @@ int CountCuePoints(const std::vector<uint8_t>& d) {
     return 0;
 }
 
+// ParseChildren reports where each element's DATA begins; checking a
+// CueClusterPosition needs where the element itself begins, plus the Segment's
+// own data start (the origin those positions are measured from).
+struct SegmentChildRef {
+    uint64_t id = 0;
+    size_t element_off = 0; // offset of the element's ID byte, from file start
+};
+
+struct SegmentLayout {
+    size_t data_off = 0; // first byte after the Segment header, from file start
+    std::vector<SegmentChildRef> children;
+};
+
+SegmentLayout ReadSegmentLayout(const std::vector<uint8_t>& d) {
+    SegmentLayout out;
+    size_t off = 0;
+    while (off + 2 <= d.size()) {
+        const uint64_t id = ReadEbmlId(d, off);
+        bool unknown = false;
+        const uint64_t size = ReadEbmlSize(d, off, unknown);
+        if (id != kIdSegment) {
+            off += static_cast<size_t>(size); // skip the EBML head
+            continue;
+        }
+        out.data_off = off;
+        const size_t end = unknown ? d.size() : std::min(d.size(), off + static_cast<size_t>(size));
+        size_t p = off;
+        while (p + 2 <= end) {
+            const size_t element_off = p;
+            const uint64_t child_id = ReadEbmlId(d, p);
+            bool child_unknown = false;
+            const uint64_t child_size = ReadEbmlSize(d, p, child_unknown);
+            size_t child_end = child_unknown ? end : (p + static_cast<size_t>(child_size));
+            if (child_end > end)
+                child_end = end;
+            out.children.push_back({child_id, element_off});
+            p = child_end;
+        }
+        return out;
+    }
+    return out;
+}
+
 // Read the KaxDuration (8-byte big-endian double) from Info. Returns -1 if absent.
 double ReadDurationMs(const std::vector<uint8_t>& d) {
     for (const auto& c : SegmentChildren(d)) {
@@ -215,6 +258,30 @@ uint64_t ReadUInt(const std::vector<uint8_t>& d, const EbmlNode& n) {
     for (uint64_t i = 0; i < n.data_size; ++i)
         v = (v << 8) | d[n.data_off + static_cast<size_t>(i)];
     return v;
+}
+
+// Every CueClusterPosition in the file, in document order.
+std::vector<uint64_t> CueClusterPositions(const std::vector<uint8_t>& d) {
+    constexpr uint64_t kIdCueTrackPositions = 0xB7ULL;
+    constexpr uint64_t kIdCueClusterPosition = 0xF1ULL;
+    std::vector<uint64_t> out;
+    for (const auto& seg : SegmentChildren(d)) {
+        if (seg.id != kIdCues)
+            continue;
+        for (const auto& point : ParseChildren(d, seg.data_off, seg.data_off + seg.data_size)) {
+            if (point.id != kIdCuePoint)
+                continue;
+            for (const auto& tp : ParseChildren(d, point.data_off, point.data_off + point.data_size)) {
+                if (tp.id != kIdCueTrackPositions)
+                    continue;
+                for (const auto& field : ParseChildren(d, tp.data_off, tp.data_off + tp.data_size)) {
+                    if (field.id == kIdCueClusterPosition)
+                        out.push_back(ReadUInt(d, field));
+                }
+            }
+        }
+    }
+    return out;
 }
 
 // Navigate Segment -> Tracks -> first video TrackEntry -> Video -> Colour and
@@ -971,6 +1038,47 @@ TEST_F(StreamWriterTest, LongRecording_MultipleClusters) {
     ASSERT_TRUE(w.Finalize());
     const auto d = ReadFile(tmp_);
     EXPECT_GE(CountClusters(d), 2) << "12 s recording must span multiple clusters";
+}
+
+// 9b. Every CueClusterPosition must resolve to the start of a real Cluster.
+//
+// CueClusterPosition is defined relative to the Segment's DATA start, and
+// libmatroska's KaxCluster::GetPosition() already returns exactly that. Running
+// that result through KaxSegment::GetRelativePosition() a second time subtracts
+// the Segment header twice, so every seek lands short of its cluster -- inside
+// the preceding element's payload. Whether a demuxer recovers from that is pure
+// luck of what the bytes there happen to look like, which is why the count-based
+// cue tests above cannot see it: a wrong position is still a well-formed entry.
+TEST_F(StreamWriterTest, CueClusterPositions_ResolveToRealClusters) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, true, false)));
+    FeedSeconds(w, 12.0, 60, 16); // keyframes every 1 s, cluster boundary every 2 s
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    ASSERT_FALSE(d.empty());
+    const SegmentLayout layout = ReadSegmentLayout(d);
+    ASSERT_GT(layout.data_off, 0u) << "Segment header not found";
+
+    std::vector<size_t> cluster_starts;
+    for (const auto& child : layout.children) {
+        if (child.id == kIdCluster)
+            cluster_starts.push_back(child.element_off);
+    }
+    ASSERT_GE(cluster_starts.size(), 2u) << "12 s recording must span multiple clusters";
+
+    const auto positions = CueClusterPositions(d);
+    ASSERT_FALSE(positions.empty()) << "keyframes were fed, so cue entries must exist";
+    for (const uint64_t pos : positions) {
+        const size_t absolute = layout.data_off + static_cast<size_t>(pos);
+        bool is_cluster_start = false;
+        for (const size_t start : cluster_starts)
+            is_cluster_start = is_cluster_start || (start == absolute);
+        EXPECT_TRUE(is_cluster_start) << "CueClusterPosition " << pos << " resolves to file offset " << absolute
+                                      << ", which is not the start of any Cluster (first cluster starts at "
+                                      << cluster_starts.front() << ")";
+    }
 }
 
 // 10. Push after Finalize is a no-op and does not corrupt the file.
