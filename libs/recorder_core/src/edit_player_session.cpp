@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -15,10 +16,12 @@ namespace recorder_core {
 
 namespace {
 
-// The audio ring's own capacity expressed in seconds -- this is exactly how
-// far ahead of the audio clock the shared decode thread can race before
-// PushSamples() blocks it, and therefore the time span the video queue must
-// be able to hold. 48 kHz is WasapiAudioRenderer's fixed engine rate.
+// The audio ring's own capacity expressed in seconds -- the decode-ahead
+// window the video queue has to be able to hold. 48 kHz is
+// WasapiAudioRenderer's fixed engine rate. The sizing is unchanged from when
+// one thread served both streams: it is still the right window, it is just no
+// longer the audio ring that enforces it on the video side (the frame queue
+// below does that itself now).
 constexpr double kDecodeAheadSeconds = static_cast<double>(kDefaultRingCapacityFrames) / 48000.0;
 
 // The sizing itself is pure math and lives (and is unit-tested) in
@@ -55,27 +58,47 @@ struct EditPlayerSession::Impl {
     std::thread seek_thread;
     std::mutex seek_thread_mutex;
 
-    // Bounded, non-blocking smoothing queue between the playback decode
-    // thread (writer) and PollFrame() (reader, called from the caller's UI
-    // thread) -- two different threads, so this needs its own mutex,
-    // distinct from callback_mutex above. Pacing itself is entirely the
-    // audio ring's job (WasapiAudioRenderer); this queue only smooths
-    // delivery and never blocks the decode thread -- see
-    // docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md.
+    // Bounded, BLOCKING queue between the engine's video decode thread
+    // (writer) and PollFrame() (reader, called from the caller's UI thread) --
+    // two different threads, so this needs its own mutex, distinct from
+    // callback_mutex above.
     //
-    // Capacity must cover the same decode-ahead window the audio ring
-    // allows before it blocks the (shared) decode thread -- kDefaultRing-
-    // CapacityFrames is 200 ms of audio, so that window holds
-    // (frame rate x 0.2 s) video frames; a drop-oldest queue narrower than
-    // that would discard frames before the clock ever reaches them,
-    // starving PollFrame() for the whole clip.
+    // Blocking, not drop-oldest: presentation paces decode. Now that video and
+    // audio decode on separate threads (docs/superpowers/specs/
+    // 2026-08-01-edit-player-decoupled-decode-design.md), nothing else holds
+    // the video thread back, and a drop-oldest queue would let it race through
+    // the file converting frames nobody will ever see -- the conversion is the
+    // dominant per-frame cost, so that is the one thing it must not do.
+    // Blocking it here also cannot starve audio anymore, which is exactly what
+    // made drop-oldest necessary before.
     //
-    // Derived from the OPENED CLIP's rate, never a constant: a fixed 16 (the
-    // 60 fps case plus headroom) silently reintroduces that starvation at any
-    // higher rate -- 200 ms of a 144 fps clip is ~29 frames, well past 16.
+    // Capacity must still cover the decode-ahead window the audio ring allows
+    // -- kDefaultRingCapacityFrames is 200 ms of audio, so that window holds
+    // (frame rate x 0.2 s) video frames. Derived from the OPENED CLIP's rate,
+    // never a constant: a fixed 16 (the 60 fps case plus headroom) is far too
+    // small at any higher rate -- 200 ms of a 144 fps clip is ~29 frames.
     size_t video_queue_capacity = kMinVideoQueueCapacity;
     std::deque<DecodedVideoFrame> video_queue;
     std::mutex video_queue_mutex;
+    std::condition_variable video_queue_cv;
+    // Releases a writer blocked on a full queue during teardown. Every wait
+    // predicate below includes it: a decode thread still parked here when
+    // StopPlaybackDecode() joins it would be a hang, not a delay.
+    bool video_queue_release = false;
+
+    // Playback clock snapshot in absolute media time, or -1 when there is no
+    // clock. Refreshed from the caller's own thread on every presentation tick
+    // (PollFrame/CurrentPositionMs) and read by the engine's video thread to
+    // decide whether a decoded frame is still worth converting.
+    //
+    // A snapshot rather than a direct WasapiAudioRenderer::FramesPlayed() call
+    // from the decode thread on purpose: that method documents a
+    // single-caller-thread contract (it reads through a COM clock object that
+    // Shutdown() releases). One presentation tick of staleness is irrelevant
+    // to a "has this frame's time already passed" decision, and a stale
+    // snapshot can only ever fail towards converting a frame that a fresher
+    // clock would have discarded -- never the other way round.
+    std::atomic<int64_t> media_clock_us{-1};
 
     void DeliverFrame(DecodedVideoFrame frame) {
         std::lock_guard<std::mutex> lock(callback_mutex);
@@ -84,10 +107,22 @@ struct EditPlayerSession::Impl {
     }
 
     void EnqueueVideoFrame(DecodedVideoFrame frame) {
-        std::lock_guard<std::mutex> lock(video_queue_mutex);
-        if (video_queue.size() >= video_queue_capacity)
-            video_queue.pop_front(); // drop-oldest: smoothing only, never blocks
+        std::unique_lock<std::mutex> lock(video_queue_mutex);
+        video_queue_cv.wait(lock, [this] { return video_queue_release || video_queue.size() < video_queue_capacity; });
+        if (video_queue_release)
+            return; // tearing down: drop the frame rather than queue it
         video_queue.push_back(std::move(frame));
+    }
+
+    // Wakes a writer blocked in EnqueueVideoFrame so it can be joined. Must run
+    // BEFORE EditPlayerEngine::StopPlaybackDecode() -- the engine can wake its
+    // own waits, not this one.
+    void ReleaseVideoQueueWriter() {
+        {
+            std::lock_guard<std::mutex> lock(video_queue_mutex);
+            video_queue_release = true;
+        }
+        video_queue_cv.notify_all();
     }
 };
 
@@ -119,6 +154,10 @@ bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out
 
 void EditPlayerSession::Close() {
     Pause();
+    // Pause() already did this for a running playback, but Close() must also
+    // hold for a session that was never playing (or whose decode threads ended
+    // at EOF): nothing may be left parked in the frame queue.
+    impl_->ReleaseVideoQueueWriter();
     {
         std::lock_guard<std::mutex> lock(impl_->seek_thread_mutex);
         impl_->seek_generation.fetch_add(1); // supersede any in-flight seek
@@ -166,14 +205,21 @@ void EditPlayerSession::Play(int64_t start_us) {
 
     // A previous playback run (before a pause or a seek-away) may have left
     // frames queued; starting fresh from start_us must never show one of
-    // those stale frames before the first newly-decoded one arrives.
+    // those stale frames before the first newly-decoded one arrives. The
+    // release flag from that run's teardown is cleared here too, so the new
+    // run's decode thread can block on this queue again.
     {
         std::lock_guard<std::mutex> lock(impl_->video_queue_mutex);
         impl_->video_queue.clear();
+        impl_->video_queue_release = false;
     }
 
     impl_->playing = true;
     impl_->playback_start_us = start_us;
+    // Seed the clock the decode thread reads before it can produce anything:
+    // the frames between the preceding keyframe and start_us are already in
+    // the past and must not be paid a colour conversion for.
+    impl_->media_clock_us.store(impl_->has_audio ? start_us : -1);
 
     if (impl_->has_audio)
         impl_->audio.Start();
@@ -183,21 +229,26 @@ void EditPlayerSession::Play(int64_t start_us) {
         [this](DecodedAudioBlock block) {
             if (impl_->has_audio && block.interleaved_stereo)
                 impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
-        });
+        },
+        [this]() -> int64_t { return impl_->media_clock_us.load(); });
 }
 
 void EditPlayerSession::Pause() {
     if (!impl_->playing)
         return;
     impl_->playing = false;
-    // audio.Stop() must run BEFORE engine.StopPlaybackDecode(): Stop() wakes
-    // any PushSamples() call currently blocked on a full ring (dropping its
-    // remaining data instead of inserting it), which StopPlaybackDecode()'s
-    // join() below depends on -- otherwise the playback thread could be
-    // blocked forever inside a full ring that nothing is draining anymore.
+    // Both releases must run BEFORE engine.StopPlaybackDecode(): its join()
+    // cannot wake a decode thread parked in a wait that belongs to this class.
+    // audio.Stop() wakes a PushSamples() blocked on a full ring (dropping its
+    // remaining data instead of inserting it); ReleaseVideoQueueWriter() wakes
+    // the video thread blocked on a full frame queue. Either one left blocked
+    // turns the join into a deadlock, since nothing drains those buffers once
+    // playback has stopped.
     if (impl_->has_audio)
         impl_->audio.Stop();
+    impl_->ReleaseVideoQueueWriter();
     impl_->engine.StopPlaybackDecode();
+    impl_->media_clock_us.store(-1);
 }
 
 void EditPlayerSession::SeekTo(int64_t target_us) {
@@ -222,35 +273,47 @@ std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
 
     const int64_t clock_ms =
         impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesPlayed(), impl_->audio.SampleRate());
+    impl_->media_clock_us.store(clock_ms * 1000);
 
-    std::lock_guard<std::mutex> lock(impl_->video_queue_mutex);
-    if (impl_->video_queue.empty())
-        return std::nullopt;
+    std::optional<DecodedVideoFrame> selected;
+    {
+        std::lock_guard<std::mutex> lock(impl_->video_queue_mutex);
+        if (impl_->video_queue.empty())
+            return std::nullopt;
 
-    std::vector<int64_t> pts_ms;
-    pts_ms.reserve(impl_->video_queue.size());
-    for (const auto& frame : impl_->video_queue)
-        pts_ms.push_back(frame.pts_us / 1000);
+        std::vector<int64_t> pts_ms;
+        pts_ms.reserve(impl_->video_queue.size());
+        for (const auto& frame : impl_->video_queue)
+            pts_ms.push_back(frame.pts_us / 1000);
 
-    const FrameSelection sel = SelectFrameForClock(pts_ms, clock_ms);
-    if (!sel.index.has_value())
-        return std::nullopt; // clock hasn't reached the first queued frame's timestamp yet
+        const FrameSelection sel = SelectFrameForClock(pts_ms, clock_ms);
+        if (!sel.index.has_value())
+            return std::nullopt; // clock hasn't reached the first queued frame's timestamp yet
 
-    // dropped_count is purely positional (SelectFrameForClock's own
-    // contract, see playback_clock.h): after popping that many frames from
-    // the front, the selected frame is now at the front of what remains.
-    for (size_t i = 0; i < sel.dropped_count; ++i)
+        // dropped_count is purely positional (SelectFrameForClock's own
+        // contract, see playback_clock.h): after popping that many frames from
+        // the front, the selected frame is now at the front of what remains.
+        for (size_t i = 0; i < sel.dropped_count; ++i)
+            impl_->video_queue.pop_front();
+
+        selected = std::move(impl_->video_queue.front());
         impl_->video_queue.pop_front();
-
-    DecodedVideoFrame frame = std::move(impl_->video_queue.front());
-    impl_->video_queue.pop_front();
-    return frame;
+    }
+    // Draining the queue is what un-blocks the video decode thread now that
+    // this queue is the thing pacing it.
+    impl_->video_queue_cv.notify_one();
+    return selected;
 }
 
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
     if (!impl_->has_audio)
         return 0;
-    return impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesPlayed(), impl_->audio.SampleRate());
+    const int64_t position_ms =
+        impl_->playback_start_us / 1000 + AudioClockMs(impl_->audio.FramesPlayed(), impl_->audio.SampleRate());
+    // Same tick, same thread as PollFrame(): keep the decode thread's clock
+    // snapshot fresh even on ticks where no frame is due.
+    impl_->media_clock_us.store(position_ms * 1000);
+    return position_ms;
 }
 
 } // namespace recorder_core

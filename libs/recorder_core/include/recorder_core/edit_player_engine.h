@@ -12,9 +12,8 @@
 // product's own internal mix-bus format).
 //
 // This header covers Open/Close/stream-discovery/single-frame seek-decode
-// (the scrub and trim-handle-drag path). Continuous playback decode
-// (StartPlaybackDecode/StopPlaybackDecode) is declared here too but
-// implemented alongside this class's .cpp in the next task.
+// (the scrub and trim-handle-drag path) as well as continuous playback decode
+// (StartPlaybackDecode/StopPlaybackDecode).
 
 #include <recorder_core/color_metadata.h>
 
@@ -90,14 +89,38 @@ class EditPlayerEngine {
     // nullopt if not open, there is no video stream, or decode fails.
     [[nodiscard]] std::optional<DecodedVideoFrame> DecodeFrameAt(int64_t target_us);
 
-    // ---- Continuous playback decode (implemented in Task 6) ----
+    // ---- Continuous playback decode ----
 
-    // Starts a background thread that decodes forward continuously from
-    // `start_us`, delivering frames/audio via the callbacks below until
-    // StopPlaybackDecode() is called. No-op if not open or already running.
-    void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio);
+    // Starts decoding forward continuously from `start_us`, delivering frames
+    // and audio via the callbacks below until StopPlaybackDecode() is called.
+    // No-op if not open or already running.
+    //
+    // Runs on THREE threads -- demux, video decode+convert, audio
+    // decode+resample -- so that audio never depends on video keeping up
+    // (docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md).
+    // Consequences for callers:
+    //
+    // - on_video and on_audio are invoked from two DIFFERENT threads and may
+    //   run concurrently. Each is called serially with respect to itself.
+    // - Both callbacks MAY BLOCK; that is how the caller paces this engine.
+    //   on_audio blocking (a full audio ring) no longer holds up video, and
+    //   on_video blocking (a full frame queue) no longer holds up audio.
+    // - Because of that, a caller whose callback can block must release it
+    //   before calling StopPlaybackDecode(), or the join inside will hang: the
+    //   engine can wake its own waits, not the caller's. See
+    //   EditPlayerSession::Pause().
+    //
+    // current_media_time_us reports the playback clock in absolute media time
+    // (the caller's audio clock), or any NEGATIVE value when no clock is
+    // available. The video thread discards a decoded frame before the colour
+    // conversion when that clock has already passed the frame's timestamp --
+    // the conversion is the expensive part and the frame would only be dropped
+    // on presentation anyway. With no clock, nothing is discarded. An empty
+    // std::function is treated the same as "no clock".
+    void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
+                             std::function<int64_t()> current_media_time_us);
 
-    // Stops and joins the playback decode thread, if running. Safe to call
+    // Stops and joins the playback decode threads, if running. Safe to call
     // even if not running (no-op). Called from Close() and the destructor.
     void StopPlaybackDecode();
 

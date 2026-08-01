@@ -1,9 +1,11 @@
 // probe_edit_playback — MEASUREMENT ONLY, no product code changed. Backs the
 // 2026-08-01 investigation into whether EditPlayerEngine::StartPlaybackDecode
 // (libs/recorder_core/src/edit_player_engine.cpp) can sustain real-time
-// playback of 1440p60 H.264 source material, or whether its single decode
-// thread (decode + YUV->BGRA convert + per-frame allocation, all serialized)
-// is the bottleneck behind the reported stutter.
+// playback of 1440p60 H.264 source material, or whether its decode path
+// (decode + YUV->BGRA convert + per-frame allocation) is the bottleneck
+// behind the reported stutter. Also the regression guard for the decoupled
+// demux/video/audio thread topology that came out of that investigation:
+// step B must keep running to completion, never hang on teardown.
 //
 // Never touches the ExoSnap application itself; opens the given file
 // READ-ONLY via the real recorder_core::EditPlayerEngine class (same code the
@@ -20,6 +22,9 @@
 //      MAXIMUM throughput the path can produce), stopped after exactly 10s
 //      wall-clock. Reports total video frames + fps, total audio blocks, and
 //      the first delivered frame's resolution.
+//   B2) Three back-to-back start/stop cycles on the same open engine — the
+//      teardown/reap path of the three-thread topology. Each cycle must
+//      terminate; a hang here IS the failure.
 //   C) Isolated cost of ConvertFullPlanarYuv420ToBgra on a 2560x1440 8-bit
 //      dummy YUV420P frame, 100 iterations, averaged.
 //   G) SIMD-vs-scalar comparison for the step C conversion (2026-08-01
@@ -127,7 +132,10 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine) {
 
     constexpr int64_t kStartUs = 600'000'000; // 600s
     const auto t0 = std::chrono::steady_clock::now();
-    engine.StartPlaybackDecode(kStartUs, onVideo, onAudio);
+    // No media clock: nothing is presenting these frames, so nothing is
+    // "late" and the engine discards nothing before conversion. That keeps
+    // this a MAXIMUM-throughput measurement, comparable across revisions.
+    engine.StartPlaybackDecode(kStartUs, onVideo, onAudio, {});
     std::this_thread::sleep_for(std::chrono::seconds(10));
     engine.StopPlaybackDecode();
     const auto t1 = std::chrono::steady_clock::now();
@@ -150,6 +158,34 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine) {
     } else {
         printf("[B] VERDICT: fps >= 60 -> this path CAN sustain real-time playback of 60fps source material.\n");
     }
+}
+
+// ---- Step B2: repeated start/stop on one open engine ----
+//
+// Playback runs on three threads that block on each other's queues, so the
+// teardown order and the wake-before-join discipline are the part of this
+// design most likely to regress into a hang. A single start/stop (step B)
+// does not exercise the reap path a SECOND start takes. Each cycle here must
+// terminate; if one hangs, this probe hangs, which is the signal.
+void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine) {
+    printf("=== [B2] Repeated start/stop on the same open engine (3 cycles, 300ms each) ===\n");
+
+    constexpr int kCycles = 3;
+    for (int cycle = 1; cycle <= kCycles; ++cycle) {
+        std::atomic<uint64_t> videoFrames{0};
+        std::atomic<uint64_t> audioBlocks{0};
+        const auto t0 = std::chrono::steady_clock::now();
+        engine.StartPlaybackDecode(
+            600'000'000, [&](recorder_core::DecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
+            [&](recorder_core::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        engine.StopPlaybackDecode();
+        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        printf("[B2] cycle %d/%d: terminated after %.1fms, video_frames=%llu audio_blocks=%llu\n", cycle, kCycles,
+               elapsedMs, static_cast<unsigned long long>(videoFrames.load()),
+               static_cast<unsigned long long>(audioBlocks.load()));
+    }
+    printf("[B2] all %d cycles terminated (no join deadlock)\n", kCycles);
 }
 
 // ---- Step C: isolated YUV->BGRA conversion cost ----
@@ -493,6 +529,7 @@ int main(int argc, char** argv) {
     }
 
     StepB_PlaybackThroughput(engine);
+    StepB2_RepeatedStartStop(engine);
     StepC_ConvertCost();
     // Runs immediately after C -- same real ConvertFullPlanarYuv420ToBgra
     // call, same frame shape. Kept adjacent purely for readability; the

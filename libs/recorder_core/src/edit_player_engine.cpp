@@ -1,5 +1,6 @@
 #include "recorder_core/edit_player_engine.h"
 
+#include "edit_playback_pacing.h"
 #include "recorder_core/logging/logging.h"
 #include "yuv_to_bgra.h"
 
@@ -12,6 +13,9 @@ extern "C" {
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -129,6 +133,152 @@ ColorRange MapRange(AVColorRange r) noexcept {
     }
 }
 
+// ---- Bounded packet queue (demux thread -> one decode thread) -------------
+//
+// How much media each queue may hold before the demuxer has to wait. One
+// second is the starting value from the design: comfortably longer than any
+// hitch this topology exists to absorb, so a video-side stall leaves audio
+// roughly a second of already-demuxed packets to keep going on.
+//
+// Bounded by buffered DURATION rather than packet count on purpose -- a second
+// of Opus is ~50 tiny packets and a second of 1440p60 video is 60 much larger
+// ones, so any single count would either starve one stream or over-buffer the
+// other.
+constexpr int64_t kPacketQueueCapacityUs = 1'000'000;
+
+// Memory backstop for containers that declare no packet durations at all
+// (pkt->duration == 0), where the duration bound above can never trip. Large
+// enough that it is never the binding limit for real material.
+constexpr size_t kPacketQueueMaxPackets = 1024;
+
+enum class PopResult {
+    Packet,      // a packet was moved into the caller's AVPacket
+    EndOfStream, // the demuxer finished and the queue is drained -- go drain the decoder
+    Aborted,     // shutdown: stop immediately
+};
+
+// Single-producer / single-consumer queue of refcounted packets. Packets are
+// handed over with av_packet_move_ref, never copied.
+//
+// EVERY wait predicate below includes `aborted_`, and Abort() notifies both
+// condition variables: a thread still parked in here when its join runs would
+// be a hang, so waking it is not optional (see the design's shutdown section).
+class PacketQueue {
+  public:
+    explicit PacketQueue(AVRational time_base) noexcept : time_base_(time_base) {
+    }
+    ~PacketQueue() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ClearLocked();
+    }
+
+    PacketQueue(const PacketQueue&) = delete;
+    PacketQueue& operator=(const PacketQueue&) = delete;
+
+    // Producer side. Takes ownership of *src's payload on success (src is left
+    // blank, as if unreferenced). Returns false when the queue is aborted or
+    // its consumer has already left -- the caller then drops the packet.
+    bool Push(AVPacket* src) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        not_full_.wait(lock, [this] {
+            return aborted_ || consumer_gone_ ||
+                   (buffered_us_ < kPacketQueueCapacityUs && packets_.size() < kPacketQueueMaxPackets);
+        });
+        if (aborted_ || consumer_gone_)
+            return false;
+        AVPacket* owned = av_packet_alloc();
+        if (owned == nullptr)
+            return false;
+        av_packet_move_ref(owned, src);
+        buffered_us_ += DurationUs(owned);
+        packets_.push_back(owned);
+        lock.unlock();
+        not_empty_.notify_one();
+        return true;
+    }
+
+    // Producer side: no more packets will ever arrive for this stream.
+    void SignalEndOfStream() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            end_of_stream_ = true;
+        }
+        not_empty_.notify_all();
+    }
+
+    // Consumer side. Moves the next packet into *dst on PopResult::Packet.
+    PopResult Pop(AVPacket* dst) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        not_empty_.wait(lock, [this] { return aborted_ || !packets_.empty() || end_of_stream_; });
+        if (aborted_)
+            return PopResult::Aborted;
+        if (packets_.empty())
+            return PopResult::EndOfStream;
+        AVPacket* front = packets_.front();
+        packets_.pop_front();
+        buffered_us_ -= DurationUs(front);
+        if (buffered_us_ < 0)
+            buffered_us_ = 0;
+        av_packet_move_ref(dst, front);
+        av_packet_free(&front);
+        lock.unlock();
+        not_full_.notify_one();
+        return PopResult::Packet;
+    }
+
+    // Shutdown: wakes every waiter, on both sides.
+    void Abort() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            aborted_ = true;
+            ClearLocked();
+        }
+        not_empty_.notify_all();
+        not_full_.notify_all();
+    }
+
+    // Consumer side, on the way out. A decode thread that ends early (decode
+    // error, cancel) must not strand the demuxer inside a Push nothing will
+    // ever drain again.
+    void CloseForConsumer() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            consumer_gone_ = true;
+            ClearLocked();
+        }
+        not_full_.notify_all();
+    }
+
+  private:
+    [[nodiscard]] int64_t DurationUs(const AVPacket* pkt) const noexcept {
+        if (pkt->duration <= 0)
+            return 0; // unknown: the packet-count backstop bounds this case
+        return av_rescale_q(pkt->duration, time_base_, AVRational{1, AV_TIME_BASE});
+    }
+
+    void ClearLocked() noexcept {
+        for (AVPacket* pkt : packets_)
+            av_packet_free(&pkt);
+        packets_.clear();
+        buffered_us_ = 0;
+    }
+
+    AVRational time_base_{1, AV_TIME_BASE};
+    std::mutex mutex_;
+    std::condition_variable not_empty_;
+    std::condition_variable not_full_;
+    std::deque<AVPacket*> packets_;
+    int64_t buffered_us_ = 0;
+    bool end_of_stream_ = false;
+    bool aborted_ = false;
+    bool consumer_gone_ = false;
+};
+
+// How many consecutive already-late frames the video thread tolerates before
+// it asks the decoder itself to cut work (AVDISCARD_NONREF). Short enough to
+// react within a few frames, long enough that a single hitch does not trip it.
+constexpr int kLateFramesBeforeSkippingNonRef = 4;
+
 } // namespace
 
 struct EditPlayerEngine::Impl {
@@ -141,18 +291,63 @@ struct EditPlayerEngine::Impl {
     MatrixCoefficients matrix = MatrixCoefficients::Bt709;
     AVRational frame_rate{0, 1}; // the opened clip's own rate; {0,1} when unknown
 
-    std::thread playback_thread;
+    // Playback runs on three threads with strictly separate ownership (see
+    // docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md):
+    // demux owns `fmt`, video owns `video_codec`, audio owns `audio_codec` and
+    // `resampler`. No context is touched by two threads, which keeps the
+    // engine's single-writer contract intact instead of covering it with locks.
+    // Everything below is set up (seek, flushes, resampler build) on the
+    // caller's thread inside StartPlaybackDecode, while no thread exists.
+    std::thread demux_thread;
+    std::thread video_thread;
+    std::thread audio_thread;
+    std::unique_ptr<PacketQueue> video_packets;
+    std::unique_ptr<PacketQueue> audio_packets;
+    std::atomic<int> threads_alive{0};
     std::atomic<bool> playback_running{false};
     std::atomic<bool> playback_cancel{false};
     std::mutex playback_mutex; // guards start/stop against concurrent calls
     // Playback audio resampler (decoder-native -> 48 kHz stereo float32).
-    // Built by the playback thread per session; only ever freed/rebuilt after
+    // Owned by the audio thread while it runs; only ever freed/rebuilt after
     // that thread has been joined (StartPlaybackDecode/Close), never
     // concurrently with it.
     SwrCtxGuard resampler;
 
     [[nodiscard]] bool IsOpen() const noexcept {
         return fmt.ctx != nullptr;
+    }
+
+    // Tears playback down in producer-to-consumer order -- demux, video, audio
+    // -- waking every blocking wait before the thread holding it is joined.
+    // Call with playback_mutex held.
+    //
+    // The two waits this cannot reach are the ones outside the engine: the
+    // audio thread parked in a full WASAPI ring, and the video thread parked in
+    // the caller's bounded frame queue. Both are the caller's to wake first --
+    // which is why EditPlayerSession::Pause() calls audio.Stop() and releases
+    // its frame queue BEFORE StopPlaybackDecode().
+    void JoinPlaybackThreads() {
+        if (video_packets)
+            video_packets->Abort();
+        if (audio_packets)
+            audio_packets->Abort();
+        if (demux_thread.joinable())
+            demux_thread.join();
+        if (video_thread.joinable())
+            video_thread.join();
+        if (audio_thread.joinable())
+            audio_thread.join();
+        video_packets.reset();
+        audio_packets.reset();
+        threads_alive.store(0);
+    }
+
+    // Called by each playback thread as it leaves. The last one out clears
+    // playback_running, so a run that ended on its own (EOF) leaves the engine
+    // ready for the next StartPlaybackDecode without a Stop in between.
+    void NotePlaybackThreadFinished() noexcept {
+        if (threads_alive.fetch_sub(1) == 1)
+            playback_running.store(false);
     }
 };
 
@@ -480,148 +675,249 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
     return DecodeForwardToTarget(fmt_ctx, vctx, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range);
 }
 
-void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio) {
+void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
+                                           std::function<int64_t()> current_media_time_us) {
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
     if (!impl_->IsOpen() || impl_->playback_running.load())
         return;
 
-    // A previous session's thread may have finished on its own (EOF) without
+    // A previous run's threads may have finished on their own (EOF) without
     // StopPlaybackDecode() ever being called. Assigning over a still-joinable
-    // std::thread calls std::terminate, so reap it first (it has already run
-    // to completion -- playback_running is false).
-    if (impl_->playback_thread.joinable())
-        impl_->playback_thread.join();
+    // std::thread calls std::terminate, so reap them first (they have already
+    // run to completion -- playback_running is false).
+    impl_->JoinPlaybackThreads();
 
-    impl_->playback_cancel.store(false);
-    impl_->playback_running.store(true);
+    Impl* const impl = impl_.get();
+    AVFormatContext* const fmt_ctx = impl->fmt.ctx;
+    AVCodecContext* const vctx = impl->video_codec.ctx;
+    AVCodecContext* const actx = impl->audio_codec.ctx;
+    AVStream* const vst = fmt_ctx->streams[impl->video_stream_idx];
+    start_us = std::max<int64_t>(start_us, 0);
 
-    impl_->playback_thread = std::thread([impl = impl_.get(), start_us = std::max<int64_t>(start_us, 0),
-                                          on_video = std::move(on_video), on_audio = std::move(on_audio)]() {
-        AVFormatContext* fmt_ctx = impl->fmt.ctx;
-        AVCodecContext* vctx = impl->video_codec.ctx;
-        AVCodecContext* actx = impl->audio_codec.ctx;
+    // Everything from here to the thread spawns runs on the CALLER's thread,
+    // while no playback thread exists: the seek touches the format context,
+    // the flushes touch both codec contexts and the resampler is rebuilt --
+    // all of which are handed to exactly one thread each below and never
+    // touched from here again.
+    //
+    // A failed seek is logged and playback continues from the demuxer's
+    // current position rather than producing nothing (same convention as
+    // DecodeFrameAt).
+    const int64_t seek_ts = av_rescale_q(start_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
+    const int seek_ret = av_seek_frame(fmt_ctx, impl->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
+    if (seek_ret < 0)
+        LogWarn((std::string("playback av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());
+    avcodec_flush_buffers(vctx);
+    // A previous run may have left the overload valve raised.
+    vctx->skip_frame = AVDISCARD_DEFAULT;
+    if (actx != nullptr)
+        avcodec_flush_buffers(actx);
 
-        // Seek to the keyframe at or before start_us and discard any
-        // decoder-buffered frames from before it -- same convention as
-        // DecodeFrameAt. A failed seek is logged and playback continues from
-        // the demuxer's current position rather than producing nothing.
-        AVStream* vst = fmt_ctx->streams[impl->video_stream_idx];
-        const int64_t seek_ts = av_rescale_q(start_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
-        const int seek_ret = av_seek_frame(fmt_ctx, impl->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
-        if (seek_ret < 0)
-            LogWarn((std::string("playback av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());
-        avcodec_flush_buffers(vctx);
-        if (actx != nullptr)
-            avcodec_flush_buffers(actx);
+    if (impl->resampler.ctx != nullptr)
+        swr_free(&impl->resampler.ctx);
+    if (actx != nullptr)
+        impl->resampler.ctx = BuildPlaybackResampler(actx);
+    const bool audio_enabled = (actx != nullptr && impl->resampler.ctx != nullptr);
 
-        // (Re)build the audio resampler for this session. Freeing a previous
-        // session's context is safe here: that session's thread was joined
-        // before this one was spawned.
-        if (impl->resampler.ctx != nullptr)
-            swr_free(&impl->resampler.ctx);
-        if (actx != nullptr)
-            impl->resampler.ctx = BuildPlaybackResampler(actx);
-        const bool audio_enabled = (actx != nullptr && impl->resampler.ctx != nullptr);
+    const AVRational vtb = vst->time_base;
+    const AVRational atb =
+        audio_enabled ? fmt_ctx->streams[impl->audio_stream_idx]->time_base : AVRational{1, AV_TIME_BASE};
 
+    impl->video_packets = std::make_unique<PacketQueue>(vtb);
+    if (audio_enabled)
+        impl->audio_packets = std::make_unique<PacketQueue>(atb);
+
+    impl->playback_cancel.store(false);
+    impl->playback_running.store(true);
+    impl->threads_alive.store(audio_enabled ? 3 : 2);
+
+    // ---- Demux thread: owns the AVFormatContext ----
+    const int video_idx = impl->video_stream_idx;
+    const int audio_idx = audio_enabled ? impl->audio_stream_idx : -1;
+    impl->demux_thread = std::thread([impl, fmt_ctx, video_idx, audio_idx]() {
+        PacketGuard pkt(av_packet_alloc());
+        if (pkt.pkt != nullptr) {
+            while (!impl->playback_cancel.load()) {
+                const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
+                if (read_ret < 0)
+                    break; // EOF or a terminal read error: both decoders drain below
+                // Push moves the payload (refcounted hand-off, no copy); it
+                // only fails when the queue is aborted or its decode thread
+                // has already left, in which case the packet is dropped.
+                if (pkt.pkt->stream_index == video_idx) {
+                    if (!impl->video_packets->Push(pkt.pkt))
+                        av_packet_unref(pkt.pkt);
+                } else if (audio_idx >= 0 && pkt.pkt->stream_index == audio_idx) {
+                    if (!impl->audio_packets->Push(pkt.pkt))
+                        av_packet_unref(pkt.pkt);
+                } else {
+                    av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
+                }
+            }
+        }
+        impl->video_packets->SignalEndOfStream();
+        if (audio_idx >= 0)
+            impl->audio_packets->SignalEndOfStream();
+        impl->NotePlaybackThreadFinished();
+    });
+
+    // ---- Video thread: owns the video AVCodecContext ----
+    impl->video_thread = std::thread([impl, vctx, vtb, start_us, on_video = std::move(on_video),
+                                      media_clock_us = std::move(current_media_time_us)]() {
         PacketGuard pkt(av_packet_alloc());
         FrameGuard frame(av_frame_alloc());
-        if (pkt.pkt == nullptr || frame.frame == nullptr) {
-            impl->playback_running.store(false);
-            return;
-        }
-
-        const AVRational vtb = vst->time_base;
-        const AVRational atb =
-            audio_enabled ? fmt_ctx->streams[impl->audio_stream_idx]->time_base : AVRational{1, AV_TIME_BASE};
-
-        bool draining = false;
-        while (!impl->playback_cancel.load()) {
-            const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
-            if (read_ret < 0) {
-                // EOF (or a terminal read error): enter drain mode on both
-                // decoders so their buffered frames still come out below.
-                draining = true;
-                avcodec_send_packet(vctx, nullptr);
-                if (audio_enabled)
-                    avcodec_send_packet(actx, nullptr);
-            } else if (pkt.pkt->stream_index == impl->video_stream_idx) {
-                // EAGAIN cannot happen: the drain loops below always empty
-                // both decoders before the next send (same contract note as
-                // DecodeForwardToTarget). A real send error (e.g. a corrupt
-                // packet) is logged and that packet skipped.
-                const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
-                av_packet_unref(pkt.pkt);
-                if (send_ret < 0)
-                    LogWarn(
-                        (std::string("playback avcodec_send_packet (video) failed: ") + av_err2str(send_ret)).c_str());
-            } else if (audio_enabled && pkt.pkt->stream_index == impl->audio_stream_idx) {
-                const int send_ret = avcodec_send_packet(actx, pkt.pkt);
-                av_packet_unref(pkt.pkt);
-                if (send_ret < 0)
-                    LogWarn(
-                        (std::string("playback avcodec_send_packet (audio) failed: ") + av_err2str(send_ret)).c_str());
-            } else {
-                av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
-            }
-
-            // Drain video frames. Every decoded frame is delivered (that is
-            // the point of continuous playback), so the one BGRA conversion +
-            // allocation per frame inside ConvertToDecodedFrame is the
-            // structural minimum -- the buffer's ownership crosses to the
-            // consumer via the DecodedVideoFrame shared_ptr, so it cannot be
-            // pooled or reused here.
+        int late_streak = 0;
+        bool skipping_nonref = false;
+        if (pkt.pkt != nullptr && frame.frame != nullptr) {
+            bool draining = false;
             while (!impl->playback_cancel.load()) {
-                if (avcodec_receive_frame(vctx, frame.frame) < 0)
-                    break; // EAGAIN (need more input) or EOF (fully drained)
-                if (IsConvertibleFrame(frame.frame))
-                    on_video(
-                        ConvertToDecodedFrame(frame.frame, FramePtsUs(frame.frame, vtb), impl->matrix, impl->range));
-                av_frame_unref(frame.frame);
-            }
-
-            // Drain audio frames, resampling each to 48 kHz stereo float32.
-            while (audio_enabled && !impl->playback_cancel.load()) {
-                if (avcodec_receive_frame(actx, frame.frame) < 0)
-                    break;
-                // Capture the pts BEFORE av_frame_unref resets the frame.
-                const int64_t pts_us = FramePtsUs(frame.frame, atb);
-                const int64_t max_out_frames = swr_get_out_samples(impl->resampler.ctx, frame.frame->nb_samples);
-                if (max_out_frames <= 0) {
-                    av_frame_unref(frame.frame);
-                    continue;
+                if (!draining) {
+                    const PopResult pop = impl->video_packets->Pop(pkt.pkt);
+                    if (pop == PopResult::Aborted)
+                        break;
+                    if (pop == PopResult::EndOfStream) {
+                        draining = true;
+                        avcodec_send_packet(vctx, nullptr); // enter drain mode
+                    } else {
+                        // EAGAIN cannot happen: the receive loop below always
+                        // empties the decoder before the next send (same
+                        // contract note as DecodeForwardToTarget). A real send
+                        // error (e.g. a corrupt packet) is logged and skipped.
+                        const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
+                        av_packet_unref(pkt.pkt);
+                        if (send_ret < 0)
+                            LogWarn(
+                                (std::string("playback avcodec_send_packet (video) failed: ") + av_err2str(send_ret))
+                                    .c_str());
+                    }
                 }
-                auto pcm =
-                    std::make_shared<std::vector<float>>(static_cast<size_t>(max_out_frames) * kPlaybackOutChannels);
-                uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm->data());
-                const int produced = swr_convert(impl->resampler.ctx, &out_ptr, static_cast<int>(max_out_frames),
-                                                 frame.frame->extended_data, frame.frame->nb_samples);
-                av_frame_unref(frame.frame);
-                if (produced <= 0)
-                    continue;
-                pcm->resize(static_cast<size_t>(produced) * kPlaybackOutChannels);
-                DecodedAudioBlock block;
-                block.pts_us = pts_us;
-                block.frame_count = static_cast<uint32_t>(produced);
-                block.interleaved_stereo = std::move(pcm);
-                on_audio(std::move(block));
+
+                while (!impl->playback_cancel.load()) {
+                    const int recv_ret = avcodec_receive_frame(vctx, frame.frame);
+                    if (recv_ret < 0)
+                        break; // EAGAIN (need more input) or EOF (fully drained)
+
+                    const int64_t pts_us = FramePtsUs(frame.frame, vtb);
+                    // A negative clock reading means "nobody is presenting
+                    // this" -- then nothing is known to be late and nothing is
+                    // discarded (see ShouldConvertDecodedFrame).
+                    const int64_t now_us = media_clock_us ? media_clock_us() : -1;
+                    const bool worth_converting = ShouldConvertDecodedFrame(pts_us, now_us);
+                    // The frames between the keyframe the demuxer seeked to
+                    // and start_us are behind the clock by construction, not
+                    // because this thread is struggling. Counting them would
+                    // raise the overload valve at the start of every play,
+                    // which could then drop real frames just after start_us.
+                    const bool preroll = pts_us < start_us;
+                    if (worth_converting)
+                        late_streak = 0;
+                    else if (!preroll)
+                        ++late_streak;
+
+                    if (worth_converting && IsConvertibleFrame(frame.frame)) {
+                        // Convert and release the decoder's frame BEFORE
+                        // handing the result on: on_video is allowed to block
+                        // on the consumer's bounded queue, and holding a
+                        // decoder frame reference across that would pin a
+                        // buffer the decoder wants back.
+                        DecodedVideoFrame out = ConvertToDecodedFrame(frame.frame, pts_us, impl->matrix, impl->range);
+                        av_frame_unref(frame.frame);
+                        on_video(std::move(out));
+                    } else {
+                        av_frame_unref(frame.frame);
+                    }
+
+                    // Overload valve: while the thread is genuinely behind,
+                    // let the decoder itself drop the frames nothing else
+                    // references, and take that back the moment it catches up.
+                    if (!skipping_nonref && late_streak >= kLateFramesBeforeSkippingNonRef) {
+                        vctx->skip_frame = AVDISCARD_NONREF;
+                        skipping_nonref = true;
+                    } else if (skipping_nonref && late_streak == 0) {
+                        vctx->skip_frame = AVDISCARD_DEFAULT;
+                        skipping_nonref = false;
+                    }
+                }
+
+                if (draining)
+                    break; // EOF reached and the decoder fully drained above
             }
-
-            if (draining)
-                break; // EOF reached and both decoders fully drained above
         }
-
-        impl->playback_running.store(false);
+        if (skipping_nonref)
+            vctx->skip_frame = AVDISCARD_DEFAULT;
+        impl->video_packets->CloseForConsumer(); // never strand the demuxer in a Push
+        impl->NotePlaybackThreadFinished();
     });
+
+    // ---- Audio thread: owns the audio AVCodecContext and the resampler ----
+    if (audio_enabled) {
+        SwrContext* const swr = impl->resampler.ctx;
+        impl->audio_thread = std::thread([impl, actx, atb, swr, on_audio = std::move(on_audio)]() {
+            PacketGuard pkt(av_packet_alloc());
+            FrameGuard frame(av_frame_alloc());
+            if (pkt.pkt != nullptr && frame.frame != nullptr) {
+                bool draining = false;
+                while (!impl->playback_cancel.load()) {
+                    if (!draining) {
+                        const PopResult pop = impl->audio_packets->Pop(pkt.pkt);
+                        if (pop == PopResult::Aborted)
+                            break;
+                        if (pop == PopResult::EndOfStream) {
+                            draining = true;
+                            avcodec_send_packet(actx, nullptr);
+                        } else {
+                            const int send_ret = avcodec_send_packet(actx, pkt.pkt);
+                            av_packet_unref(pkt.pkt);
+                            if (send_ret < 0)
+                                LogWarn((std::string("playback avcodec_send_packet (audio) failed: ") +
+                                         av_err2str(send_ret))
+                                            .c_str());
+                        }
+                    }
+
+                    while (!impl->playback_cancel.load()) {
+                        if (avcodec_receive_frame(actx, frame.frame) < 0)
+                            break;
+                        // Capture the pts BEFORE av_frame_unref resets the frame.
+                        const int64_t pts_us = FramePtsUs(frame.frame, atb);
+                        const int64_t max_out_frames = swr_get_out_samples(swr, frame.frame->nb_samples);
+                        if (max_out_frames <= 0) {
+                            av_frame_unref(frame.frame);
+                            continue;
+                        }
+                        auto pcm = std::make_shared<std::vector<float>>(static_cast<size_t>(max_out_frames) *
+                                                                        kPlaybackOutChannels);
+                        uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm->data());
+                        const int produced = swr_convert(swr, &out_ptr, static_cast<int>(max_out_frames),
+                                                         frame.frame->extended_data, frame.frame->nb_samples);
+                        av_frame_unref(frame.frame);
+                        if (produced <= 0)
+                            continue;
+                        pcm->resize(static_cast<size_t>(produced) * kPlaybackOutChannels);
+                        DecodedAudioBlock block;
+                        block.pts_us = pts_us;
+                        block.frame_count = static_cast<uint32_t>(produced);
+                        block.interleaved_stereo = std::move(pcm);
+                        on_audio(std::move(block)); // may block on a full WASAPI ring -- only THIS thread
+                    }
+
+                    if (draining)
+                        break;
+                }
+            }
+            impl->audio_packets->CloseForConsumer();
+            impl->NotePlaybackThreadFinished();
+        });
+    }
 }
 
 void EditPlayerEngine::StopPlaybackDecode() {
     // Same mutex as StartPlaybackDecode -- Impl's playback_mutex contract is
-    // that start/stop are safe against concurrent calls. The playback thread
-    // itself never takes this mutex, so joining under it cannot deadlock.
+    // that start/stop are safe against concurrent calls. No playback thread
+    // ever takes this mutex, so joining under it cannot deadlock.
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
     impl_->playback_cancel.store(true);
-    if (impl_->playback_thread.joinable())
-        impl_->playback_thread.join();
+    impl_->JoinPlaybackThreads();
     impl_->playback_running.store(false);
 }
 
