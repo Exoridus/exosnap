@@ -1,2 +1,16 @@
 #!/bin/sh
+# Refuse commits that land directly on the default branch. A local main carrying
+# its own commits diverges from origin/main as soon as those commits are
+# squash-merged upstream (the squash gets a new commit id), and every branch cut
+# from that stale main afterwards silently drags the duplicates along.
+# Set ALLOW_MAIN_COMMIT=1 for the legitimate exceptions, e.g. a release bump.
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" = "main" ] && [ "$ALLOW_MAIN_COMMIT" != "1" ]; then
+    echo "pre-commit: refusing to commit on 'main'." >&2
+    echo "  Work on a branch:      git switch -c <name> origin/main" >&2
+    echo "  Move what is staged:   git stash && git switch -c <name> origin/main && git stash pop" >&2
+    echo "  Intentional exception: ALLOW_MAIN_COMMIT=1 git commit ..." >&2
+    exit 1
+fi
+
 pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/check-format.ps1" -Staged -Fix

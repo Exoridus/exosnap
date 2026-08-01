@@ -204,6 +204,22 @@ may warn on first launch.
 GitHub Actions runs configure, build, and test on Windows for both `windows-x64-debug` and
 `windows-x64-release`, plus a lint pass. PRs are the review gate.
 
+Work happens on branches cut from `origin/main`; `main` itself only ever moves by merging a
+PR. Two guards keep that true, both applied automatically by a CMake configure (or by running
+`scripts/install-hooks.ps1` after a bare clone):
+
+- The `pre-commit` hook refuses a commit made while `main` is checked out. Committing on a
+  local `main` is what makes it diverge — once those commits are squash-merged upstream the
+  squash carries a new commit id, so the originals linger locally and every branch cut from
+  that point drags them into its PR. Prefix a command with `ALLOW_MAIN_COMMIT=1` for the rare
+  legitimate case, such as a release bump.
+- `pull.ff` is set to `only`, so a `git pull` that would need a merge fails instead of quietly
+  recording one. This is per-clone local config and cannot be committed, which is why the
+  configure step sets it.
+
+Branch from the remote ref rather than the local branch — `git switch -c <name> origin/main`
+after a `git fetch` — so a stale local `main` cannot become the base of new work.
+
 ## Links
 
 - Repository: <https://github.com/Exoridus/exosnap>
