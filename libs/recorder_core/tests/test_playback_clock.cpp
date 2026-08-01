@@ -10,6 +10,37 @@ using recorder_core::AudioClockMs;
 using recorder_core::ClockPositionToFrames;
 using recorder_core::InterpolateClockPosition;
 using recorder_core::SelectFrameForClock;
+using recorder_core::VideoQueueCapacityForFrameRate;
+
+// The audio ring is 9600 frames at 48 kHz = 200 ms, which is exactly how far
+// ahead of the clock the shared decode thread may race.
+constexpr double kDecodeAhead = 0.2;
+
+TEST(VideoQueueCapacityForFrameRate, SixtyFpsMatchesTheOriginalHandComputedSize) {
+    // 60 x 0.2 s = 12 frames in flight, + 1/3 headroom = 16 -- the value the
+    // queue was hand-sized to before it became rate-derived.
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(60.0, kDecodeAhead), 16u);
+}
+
+TEST(VideoQueueCapacityForFrameRate, HighFrameRateClipGetsAQueueThatCanHoldItsDecodeAhead) {
+    // The whole point: at 144 fps the decode-ahead window holds ~29 frames, so
+    // a fixed capacity of 16 would drop frames before the clock reached them.
+    const size_t capacity = VideoQueueCapacityForFrameRate(144.0, kDecodeAhead);
+    EXPECT_GE(capacity, static_cast<size_t>(144.0 * kDecodeAhead));
+    EXPECT_EQ(capacity, 38u);
+}
+
+TEST(VideoQueueCapacityForFrameRate, LowFrameRateClipKeepsTheFloor) {
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(15.0, kDecodeAhead), 16u);
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(30.0, kDecodeAhead), 16u);
+}
+
+TEST(VideoQueueCapacityForFrameRate, UnknownOrAbsurdRateFallsBackToTheFloor) {
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(0.0, kDecodeAhead), 16u);
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(-1.0, kDecodeAhead), 16u);
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(1e9, kDecodeAhead), 16u);
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(60.0, 0.0), 16u);
+}
 
 TEST(AudioClockMs, ZeroFramesIsZero) {
     EXPECT_EQ(AudioClockMs(0, 48000), 0);

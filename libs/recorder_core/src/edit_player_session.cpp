@@ -3,13 +3,29 @@
 #include "playback_clock.h"
 #include "recorder_core/wasapi_audio_render.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <deque>
 #include <mutex>
 #include <thread>
 #include <vector>
 
 namespace recorder_core {
+
+namespace {
+
+// The audio ring's own capacity expressed in seconds -- this is exactly how
+// far ahead of the audio clock the shared decode thread can race before
+// PushSamples() blocks it, and therefore the time span the video queue must
+// be able to hold. 48 kHz is WasapiAudioRenderer's fixed engine rate.
+constexpr double kDecodeAheadSeconds = static_cast<double>(kDefaultRingCapacityFrames) / 48000.0;
+
+// The sizing itself is pure math and lives (and is unit-tested) in
+// playback_clock.h alongside the rest of the pacing arithmetic.
+constexpr size_t kMinVideoQueueCapacity = 16;
+
+} // namespace
 
 struct EditPlayerSession::Impl {
     EditPlayerEngine engine;
@@ -49,13 +65,15 @@ struct EditPlayerSession::Impl {
     //
     // Capacity must cover the same decode-ahead window the audio ring
     // allows before it blocks the (shared) decode thread -- kDefaultRing-
-    // CapacityFrames is 200 ms of audio, so at the product's fastest
-    // supported frame rate (60 fps CFR, product spec default profile) that
-    // window holds up to 12 video frames; a drop-oldest queue narrower than
+    // CapacityFrames is 200 ms of audio, so that window holds
+    // (frame rate x 0.2 s) video frames; a drop-oldest queue narrower than
     // that would discard frames before the clock ever reaches them,
-    // starving PollFrame() for the whole clip. 16 leaves headroom above the
-    // 60 fps worst case.
-    static constexpr size_t kVideoQueueCapacity = 16;
+    // starving PollFrame() for the whole clip.
+    //
+    // Derived from the OPENED CLIP's rate, never a constant: a fixed 16 (the
+    // 60 fps case plus headroom) silently reintroduces that starvation at any
+    // higher rate -- 200 ms of a 144 fps clip is ~29 frames, well past 16.
+    size_t video_queue_capacity = kMinVideoQueueCapacity;
     std::deque<DecodedVideoFrame> video_queue;
     std::mutex video_queue_mutex;
 
@@ -67,7 +85,7 @@ struct EditPlayerSession::Impl {
 
     void EnqueueVideoFrame(DecodedVideoFrame frame) {
         std::lock_guard<std::mutex> lock(video_queue_mutex);
-        if (video_queue.size() >= kVideoQueueCapacity)
+        if (video_queue.size() >= video_queue_capacity)
             video_queue.pop_front(); // drop-oldest: smoothing only, never blocks
         video_queue.push_back(std::move(frame));
     }
@@ -86,6 +104,7 @@ bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out
     if (!impl_->engine.Open(path, out_error))
         return false;
 
+    impl_->video_queue_capacity = VideoQueueCapacityForFrameRate(impl_->engine.VideoFrameRate(), kDecodeAheadSeconds);
     impl_->has_audio = impl_->engine.HasAudioStream();
     if (impl_->has_audio) {
         std::string audio_err;
@@ -113,6 +132,10 @@ void EditPlayerSession::Close() {
 
 bool EditPlayerSession::HasAudioStream() const noexcept {
     return impl_->has_audio;
+}
+
+double EditPlayerSession::VideoFrameRate() const noexcept {
+    return impl_->engine.VideoFrameRate();
 }
 
 void EditPlayerSession::SetOnFrameReady(std::function<void(DecodedVideoFrame)> callback) {

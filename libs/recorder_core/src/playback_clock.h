@@ -63,4 +63,19 @@ struct FrameSelection {
 // first entry, returns {nullopt, 0} (nothing selected, nothing to drop yet).
 FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, int64_t clock_ms) noexcept;
 
+// How many decoded frames the smoothing queue between the decode thread and
+// PollFrame() must be able to hold.
+//
+// Video and audio share one decode thread, so the audio ring's capacity is
+// also how far ahead of the clock that thread can race before PushSamples()
+// blocks it: within `decode_ahead_seconds` it can produce fps x that many
+// video frames. A queue narrower than that drops frames the clock has not
+// reached yet -- they are gone before they were ever due. The result adds a
+// third again as headroom and never falls below a floor, so a clip declaring a
+// nonsensical rate still plays.
+//
+// Deliberately a function of the CLIP's rate rather than a constant: a fixed
+// capacity is only ever correct for the one frame rate it was computed for.
+size_t VideoQueueCapacityForFrameRate(double fps, double decode_ahead_seconds) noexcept;
+
 } // namespace recorder_core

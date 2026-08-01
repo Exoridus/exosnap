@@ -25,6 +25,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRectF>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSize>
 #include <QStyle>
@@ -112,14 +113,34 @@ QString errBToken() {
     return ThemeRgba(themeColor(t.error), t.kind == ThemeKind::Dark ? 0.44 : 0.42);
 }
 
-// Preview playback clock granularity (~30 fps playhead updates).
-constexpr int kPreviewTickMs = 33;
+// Fallback preview tick, used only until a clip is open (or when its
+// container declares no usable frame rate). The real interval comes from the
+// clip itself -- see EditExportPage::refreshPreviewTickInterval().
+constexpr int kFallbackPreviewTickMs = 16;
+
+// Presentation cadence for a clip at `clip_fps`, capped at `screen_hz`.
+// Painting more often than the display refreshes cannot show more motion, it
+// only burns a full-frame convert+blit per wasted tick -- so a 144 fps clip
+// runs at 144 on a 144 Hz panel and at 60 on a 60 Hz one.
+int PreviewTickMsFor(double clip_fps, double screen_hz) noexcept {
+    double hz = clip_fps;
+    if (!(hz > 0.0))
+        return kFallbackPreviewTickMs;
+    if (screen_hz > 0.0)
+        hz = std::min(hz, screen_hz);
+    // Round down so the timer never lands just past a frame boundary, and
+    // never go below 1 ms (a QTimer cannot honour 0 as "once per frame").
+    return std::max(1, static_cast<int>(std::floor(1000.0 / hz)));
+}
 
 } // namespace
 
 EditExportPage::EditExportPage(QWidget* parent) : QWidget(parent) {
     preview_timer_ = new QTimer(this);
-    preview_timer_->setInterval(kPreviewTickMs);
+    // Coarse timers are allowed a 5% slop, which Qt happily spends at these
+    // intervals -- at 144 fps (6 ms) that is most of a frame.
+    preview_timer_->setTimerType(Qt::PreciseTimer);
+    preview_timer_->setInterval(kFallbackPreviewTickMs);
     connect(preview_timer_, &QTimer::timeout, this, &EditExportPage::onPreviewTick);
     preview_elapsed_ = new QElapsedTimer();
     buildUi();
@@ -752,6 +773,8 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             player_session_->SeekTo(0);
         }
     }
+    // The new clip's own frame rate drives the presentation cadence.
+    refreshPreviewTickInterval();
 
     // --- Reset the preview clock and the timeline for the new clip ---
     duration_seconds_ = ctx_.duration_seconds;
@@ -821,6 +844,9 @@ void EditExportPage::setPreviewPlaying(bool playing) {
         return; // unknown duration: nothing to play against
     preview_playing_ = playing;
     if (preview_playing_) {
+        // Re-evaluated on every start: the window may have moved to a screen
+        // with a different refresh rate since the clip was opened.
+        refreshPreviewTickInterval();
         preview_elapsed_->restart();
         preview_timer_->start();
         // Continuous decode (EditPlayerSession::Play()) is only engaged when
@@ -866,9 +892,26 @@ void EditExportPage::refreshPlayButton() {
 }
 
 QImage EditExportPage::DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame) {
-    const QImage img(frame.bgra->data(), static_cast<int>(frame.width), static_cast<int>(frame.height),
-                     static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32);
-    return img.copy(); // detach: frame.bgra's buffer lifetime is not guaranteed beyond this call
+    // No copy: the QImage keeps its own reference to the decoded buffer and
+    // releases it via the cleanup hook. Copying instead would memcpy the whole
+    // frame (~15 MB at 1440p) on the UI thread for every displayed frame.
+    auto* keep_alive = new std::shared_ptr<const uint8_t[]>(frame.bgra);
+    return QImage(
+        frame.bgra.get(), static_cast<int>(frame.width), static_cast<int>(frame.height),
+        static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32,
+        [](void* owner) { delete static_cast<std::shared_ptr<const uint8_t[]>*>(owner); }, keep_alive);
+}
+
+void EditExportPage::refreshPreviewTickInterval() {
+    if (!preview_timer_)
+        return;
+    const double clip_fps = player_session_ ? player_session_->VideoFrameRate() : 0.0;
+    // The screen the window actually sits on, not the primary one -- dragging
+    // ExoSnap from a 60 Hz to a 144 Hz panel should change the cadence.
+    double screen_hz = 0.0;
+    if (const QScreen* screen = window() ? window()->screen() : nullptr)
+        screen_hz = screen->refreshRate();
+    preview_timer_->setInterval(PreviewTickMsFor(clip_fps, screen_hz));
 }
 
 void EditExportPage::onPreviewTick() {

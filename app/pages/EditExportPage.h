@@ -140,6 +140,9 @@ class EditExportPage : public QWidget {
     void loadMarkers();
     void runExport();
     void refreshPlayButton();
+    // Retunes the preview timer to the open clip's frame rate, capped at the
+    // refresh rate of the screen the window is on.
+    void refreshPreviewTickInterval();
     void updatePlayerHeight();
     [[nodiscard]] qint64 durationMs() const noexcept;
     static QImage DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame);

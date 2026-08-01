@@ -53,6 +53,11 @@ class EditPlayerSession {
 
     [[nodiscard]] bool HasAudioStream() const noexcept;
 
+    // The opened clip's own frame rate in fps, or 0.0 when unknown -- the
+    // caller drives its presentation timer from this rather than from a fixed
+    // interval, so a clip recorded at any rate plays at that rate.
+    [[nodiscard]] double VideoFrameRate() const noexcept;
+
     // Sets the callback invoked (from an internal thread -- NOT the caller's
     // thread) whenever a new frame is ready to display, during both
     // continuous playback and single-frame scrub/trim-drag seeks.

@@ -40,7 +40,11 @@ struct DecodedVideoFrame {
     // Shared (not unique) because frames cross from the engine's decode
     // thread to the UI thread via a queued call, which copies the callback's
     // arguments -- a shared_ptr avoids an extra full-frame copy on that hop.
-    std::shared_ptr<const std::vector<uint8_t>> bgra;
+    //
+    // A raw array rather than a vector on purpose: the conversion overwrites
+    // every byte immediately, so a vector's value-initialization would memset
+    // the whole frame (~15 MB at 1440p) for nothing on every single frame.
+    std::shared_ptr<const uint8_t[]> bgra;
 };
 
 // One block of decoded audio: 48 kHz stereo interleaved float32 PCM.
@@ -71,6 +75,13 @@ class EditPlayerEngine {
 
     [[nodiscard]] bool HasVideoStream() const noexcept;
     [[nodiscard]] bool HasAudioStream() const noexcept;
+
+    // The opened clip's own frame rate in frames per second, or 0.0 when it is
+    // unknown (not open, no video stream, or a container that declares no
+    // usable rate). Callers use it to pace presentation and to size buffers
+    // that hold "some number of frames worth of time" -- neither may assume a
+    // fixed rate, since ExoSnap records anything the user configures.
+    [[nodiscard]] double VideoFrameRate() const noexcept;
 
     // Seeks to the keyframe at or before target_us and decodes forward to the
     // first frame at or after target_us. Synchronous; intended for the scrub

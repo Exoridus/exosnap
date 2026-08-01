@@ -47,4 +47,9 @@ TEST(EditPlayerSession, CurrentPositionMsWithoutAudioStreamIsZero) {
     EXPECT_EQ(session.CurrentPositionMs(), 0);
 }
 
+TEST(EditPlayerSession, ClosedSessionReportsUnknownFrameRate) {
+    EditPlayerSession session;
+    EXPECT_DOUBLE_EQ(session.VideoFrameRate(), 0.0);
+}
+
 } // namespace

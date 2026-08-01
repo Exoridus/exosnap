@@ -1,6 +1,7 @@
 #include "playback_clock.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace recorder_core {
 
@@ -50,6 +51,19 @@ FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, in
     sel.index = selected_index;
     sel.dropped_count = selected_index; // every frame strictly before it is now stale
     return sel;
+}
+
+size_t VideoQueueCapacityForFrameRate(double fps, double decode_ahead_seconds) noexcept {
+    // Matches the original hand-computed 60 fps sizing: 60 x 0.2 s = 12 frames
+    // in the decode-ahead window, + 1/3 headroom = 16.
+    constexpr size_t kFloor = 16;
+    if (!(fps > 0.0) || !(decode_ahead_seconds > 0.0))
+        return kFloor;
+    const double in_window = std::ceil(fps * decode_ahead_seconds);
+    if (!(in_window > 0.0) || in_window > 100000.0)
+        return kFloor; // absurd declared rate: fall back rather than allocate wildly
+    const auto frames = static_cast<size_t>(in_window);
+    return std::max(kFloor, frames + frames / 3u);
 }
 
 } // namespace recorder_core
