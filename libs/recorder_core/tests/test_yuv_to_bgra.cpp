@@ -580,3 +580,114 @@ TEST(FullPlanarYuv420ToBgra, DegenerateInputsAreNoOps) {
     for (uint8_t b : out)
         EXPECT_EQ(b, 0xAB);
 }
+
+// --- SIMD path equals the scalar reference, byte for byte -------------------
+//
+// The 8-bit path has a hand-written SSE4.1 implementation because the scalar
+// one is the editor player's dominant per-frame cost. It is only ever
+// acceptable if it is INDISTINGUISHABLE from the reference, so that is
+// asserted directly rather than through the dispatcher (which on any given
+// machine only ever runs one of the two).
+namespace {
+
+// Deterministic pseudo-random planes, deliberately including the extremes
+// (0 and 255) that drive the conversion into its clamping branches.
+struct ReferenceFrame {
+    std::vector<uint8_t> y, u, v;
+    recorder_core::FullPlanarYuv420Frame src;
+};
+
+ReferenceFrame MakeReferenceFrame(uint32_t width, uint32_t height) {
+    const uint32_t chroma_w = (width + 1u) / 2u;
+    const uint32_t chroma_h = (height + 1u) / 2u;
+    ReferenceFrame f;
+    f.y.resize(static_cast<size_t>(width) * height);
+    f.u.resize(static_cast<size_t>(chroma_w) * chroma_h);
+    f.v.resize(f.u.size());
+    uint32_t state = 0x12345678u;
+    const auto next = [&state]() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<uint8_t>(state >> 24);
+    };
+    for (size_t i = 0; i < f.y.size(); ++i)
+        f.y[i] = (i % 97u == 0) ? 0u : ((i % 89u == 0) ? 255u : next());
+    for (size_t i = 0; i < f.u.size(); ++i) {
+        f.u[i] = (i % 41u == 0) ? 0u : ((i % 37u == 0) ? 255u : next());
+        f.v[i] = (i % 43u == 0) ? 255u : ((i % 31u == 0) ? 0u : next());
+    }
+    f.src.y_plane = f.y.data();
+    f.src.y_stride_bytes = width;
+    f.src.u_plane = f.u.data();
+    f.src.u_stride_bytes = chroma_w;
+    f.src.v_plane = f.v.data();
+    f.src.v_stride_bytes = chroma_w;
+    f.src.width = width;
+    f.src.height = height;
+    f.src.bits_per_sample = 8;
+    return f;
+}
+
+} // namespace
+
+TEST(FullPlanarYuv420ToBgraSimd, MatchesTheScalarReferenceByteForByte) {
+    if (!recorder_core::CpuSupportsYuvToBgraSimd())
+        GTEST_SKIP() << "CPU lacks SSE4.1; the dispatcher never selects the SIMD path here";
+
+    // Widths straddling the 8-pixel vector width: exact multiples, remainders
+    // that leave a partial block, and odd widths where the last chroma pair
+    // covers a single pixel.
+    for (const uint32_t width : {8u, 16u, 24u, 9u, 11u, 15u, 17u, 2u, 6u}) {
+        for (const uint32_t height : {2u, 5u}) {
+            for (const auto matrix :
+                 {recorder_core::MatrixCoefficients::Bt709, recorder_core::MatrixCoefficients::Bt601,
+                  recorder_core::MatrixCoefficients::Bt2020Ncl}) {
+                for (const auto range : {recorder_core::ColorRange::Limited, recorder_core::ColorRange::Full}) {
+                    const ReferenceFrame f = MakeReferenceFrame(width, height);
+                    recorder_core::YuvToBgraParams params;
+                    params.matrix = matrix;
+                    params.range = range;
+
+                    const uint32_t stride = width * 4u;
+                    std::vector<uint8_t> expected(static_cast<size_t>(stride) * height, 0u);
+                    std::vector<uint8_t> actual(expected.size(), 0u);
+                    recorder_core::ConvertFullPlanarYuv420ToBgraScalar(f.src, params, expected.data(), stride);
+                    recorder_core::ConvertFullPlanarYuv420ToBgraSimd(f.src, params, actual.data(), stride);
+
+                    ASSERT_EQ(actual, expected)
+                        << "SIMD output diverged at width=" << width << " height=" << height
+                        << " matrix=" << static_cast<int>(matrix) << " range=" << static_cast<int>(range);
+                }
+            }
+        }
+    }
+}
+
+TEST(FullPlanarYuv420ToBgraSimd, TenBitInputGoesThroughTheScalarReference) {
+    // The vectorised kernel covers 8-bit only; 10-bit must still convert
+    // correctly rather than silently produce nothing.
+    constexpr uint32_t kWidth = 8;
+    constexpr uint32_t kHeight = 2;
+    std::vector<uint16_t> y(static_cast<size_t>(kWidth) * kHeight, 600u);
+    std::vector<uint16_t> u((kWidth / 2u) * (kHeight / 2u), 512u);
+    std::vector<uint16_t> v(u.size(), 512u);
+
+    recorder_core::FullPlanarYuv420Frame src;
+    src.y_plane = reinterpret_cast<const uint8_t*>(y.data());
+    src.y_stride_bytes = kWidth * 2u;
+    src.u_plane = reinterpret_cast<const uint8_t*>(u.data());
+    src.u_stride_bytes = (kWidth / 2u) * 2u;
+    src.v_plane = reinterpret_cast<const uint8_t*>(v.data());
+    src.v_stride_bytes = src.u_stride_bytes;
+    src.width = kWidth;
+    src.height = kHeight;
+    src.bits_per_sample = 10;
+
+    recorder_core::YuvToBgraParams params;
+    const uint32_t stride = kWidth * 4u;
+    std::vector<uint8_t> expected(static_cast<size_t>(stride) * kHeight, 0u);
+    std::vector<uint8_t> actual(expected.size(), 0u);
+    recorder_core::ConvertFullPlanarYuv420ToBgraScalar(src, params, expected.data(), stride);
+    recorder_core::ConvertFullPlanarYuv420ToBgraSimd(src, params, actual.data(), stride);
+    EXPECT_EQ(actual, expected);
+    EXPECT_NE(actual[0], 0u) << "a mid-grey 10-bit frame must not convert to black";
+}

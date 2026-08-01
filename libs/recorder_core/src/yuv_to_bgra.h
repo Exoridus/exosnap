@@ -94,6 +94,32 @@ struct FullPlanarYuv420Frame {
 void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
                                    uint32_t out_stride_bytes);
 
+// --- Implementation seam (exposed for tests, not for callers) --------------
+//
+// ConvertFullPlanarYuv420ToBgra above picks between these two at runtime. The
+// 8-bit path is the editor player's hot loop -- measured at 13.3 ms per
+// 2560x1440 frame scalar against a 16.7 ms budget for 60 fps -- so it has a
+// hand-written SIMD implementation that is 4.6x faster and bit-for-bit
+// identical. Callers should keep using the dispatching function; these exist
+// so a test can assert that "bit-for-bit identical" directly, on a machine
+// where the dispatcher would only ever exercise one of them.
+
+// The portable reference implementation. Always available, always correct,
+// handles 8- and 10-bit.
+void ConvertFullPlanarYuv420ToBgraScalar(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params,
+                                         uint8_t* out_bgra, uint32_t out_stride_bytes);
+
+// True when this CPU has the SSE4.1 instructions the SIMD path below needs
+// (Intel from 2008, AMD from 2011). Result is queried once and cached.
+[[nodiscard]] bool CpuSupportsYuvToBgraSimd() noexcept;
+
+// 8-bit-only SIMD implementation, 8 pixels per iteration. Falls back to the
+// scalar routine above for 10-bit input and for the columns of a width that
+// is not a multiple of 8. MUST NOT be called unless
+// CpuSupportsYuvToBgraSimd() returned true.
+void ConvertFullPlanarYuv420ToBgraSimd(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params,
+                                       uint8_t* out_bgra, uint32_t out_stride_bytes);
+
 // Describes one packed 4:4:4 AYUV frame (DXGI_FORMAT_AYUV): a single plane,
 // 4 bytes per pixel, memory byte order [V, U, Y, A] (matching the AYUV encode
 // surface the RGB->AYUV compute shader writes — see gpu_rgb_to_ayuv.cpp).

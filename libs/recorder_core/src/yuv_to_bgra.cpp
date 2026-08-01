@@ -1,5 +1,21 @@
 #include "yuv_to_bgra.h"
 
+// The SIMD path below is x86-only. Everything stays buildable elsewhere: the
+// capability query then reports false and the dispatcher never leaves the
+// scalar reference implementation.
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+#define EXOSNAP_YUV_TO_BGRA_HAS_SIMD 1
+#include <immintrin.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#else
+#include <cpuid.h>
+#endif
+#include <cstring>
+#else
+#define EXOSNAP_YUV_TO_BGRA_HAS_SIMD 0
+#endif
+
 namespace recorder_core {
 
 namespace {
@@ -108,6 +124,28 @@ inline uint8_t ClampFixedToByte(int32_t fixed) noexcept {
     return static_cast<uint8_t>(v);
 }
 
+// One 4:2:0 chroma pair -- i.e. up to two horizontal pixels sharing one U/V
+// sample -- of an 8-bit fully-planar frame. Factored out so the SIMD path's
+// tail (for widths that are not a multiple of its vector width) runs literally
+// the same arithmetic as the scalar reference rather than a copy of it.
+inline void ConvertFullPlanarPair8(const uint8_t* y_row, const uint8_t* u_row, const uint8_t* v_row, uint8_t* out_row,
+                                   uint32_t col, uint32_t width, const FixedCoefs& c) noexcept {
+    const int32_t u_val = static_cast<int32_t>(u_row[col / 2u]) - c.c_off;
+    const int32_t v_val = static_cast<int32_t>(v_row[col / 2u]) - c.c_off;
+    const int32_t b_term = c.c_bu * u_val;
+    const int32_t g_term = -c.c_gu * u_val - c.c_gv * v_val;
+    const int32_t r_term = c.c_rv * v_val;
+    const uint32_t pair_end = (col + 2u <= width) ? (col + 2u) : width;
+    for (uint32_t p = col; p < pair_end; ++p) {
+        const int32_t luma = c.c_y * (static_cast<int32_t>(y_row[p]) - c.y_off);
+        uint8_t* px = out_row + static_cast<size_t>(p) * 4u;
+        px[0] = ClampFixedToByte(luma + b_term); // B
+        px[1] = ClampFixedToByte(luma + g_term); // G
+        px[2] = ClampFixedToByte(luma + r_term); // R
+        px[3] = 255u;                            // A
+    }
+}
+
 } // namespace
 
 void ConvertYuv420ToBgra(const PlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
@@ -174,8 +212,8 @@ void ConvertYuv420ToBgra(const PlanarYuv420Frame& src, const YuvToBgraParams& pa
     }
 }
 
-void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
-                                   uint32_t out_stride_bytes) {
+void ConvertFullPlanarYuv420ToBgraScalar(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params,
+                                         uint8_t* out_bgra, uint32_t out_stride_bytes) {
     if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
         src.v_plane == nullptr || out_bgra == nullptr)
         return;
@@ -219,23 +257,145 @@ void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvTo
         const uint8_t* u_row = src.u_plane + static_cast<size_t>(row / 2u) * src.u_stride_bytes;
         const uint8_t* v_row = src.v_plane + static_cast<size_t>(row / 2u) * src.v_stride_bytes;
         uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
-        for (uint32_t col = 0; col < src.width; col += 2u) {
-            const int32_t u_val = static_cast<int32_t>(u_row[col / 2u]) - c.c_off;
-            const int32_t v_val = static_cast<int32_t>(v_row[col / 2u]) - c.c_off;
-            const int32_t b_term = c.c_bu * u_val;
-            const int32_t g_term = -c.c_gu * u_val - c.c_gv * v_val;
-            const int32_t r_term = c.c_rv * v_val;
-            const uint32_t pair_end = (col + 2u <= src.width) ? (col + 2u) : src.width;
-            for (uint32_t p = col; p < pair_end; ++p) {
-                const int32_t luma = c.c_y * (static_cast<int32_t>(y_row[p]) - c.y_off);
-                uint8_t* px = out_row + static_cast<size_t>(p) * 4u;
-                px[0] = ClampFixedToByte(luma + b_term); // B
-                px[1] = ClampFixedToByte(luma + g_term); // G
-                px[2] = ClampFixedToByte(luma + r_term); // R
-                px[3] = 255u;                            // A
-            }
-        }
+        for (uint32_t col = 0; col < src.width; col += 2u)
+            ConvertFullPlanarPair8(y_row, u_row, v_row, out_row, col, src.width, c);
     }
+}
+
+bool CpuSupportsYuvToBgraSimd() noexcept {
+#if EXOSNAP_YUV_TO_BGRA_HAS_SIMD
+    // Queried once: CPUID is not free, and the answer cannot change while the
+    // process runs. SSE4.1 is CPUID leaf 1, ECX bit 19.
+    static const bool supported = []() noexcept {
+        int regs[4] = {0, 0, 0, 0};
+#if defined(_MSC_VER)
+        __cpuid(regs, 1);
+#else
+        __get_cpuid(1, reinterpret_cast<unsigned*>(&regs[0]), reinterpret_cast<unsigned*>(&regs[1]),
+                    reinterpret_cast<unsigned*>(&regs[2]), reinterpret_cast<unsigned*>(&regs[3]));
+#endif
+        return (regs[2] & (1 << 19)) != 0;
+    }();
+    return supported;
+#else
+    return false;
+#endif
+}
+
+#if EXOSNAP_YUV_TO_BGRA_HAS_SIMD
+
+namespace {
+
+// Rounds, shifts, clamps to [0,255] and narrows two vectors of four int32
+// lanes into one register holding the eight resulting bytes twice over --
+// the layout the unpacklo-based BGRA interleave below consumes.
+inline __m128i ClampFixedToBytesDuplicated(__m128i lo4, __m128i hi4) noexcept {
+    const __m128i round = _mm_set1_epi32(kFixedRound);
+    const __m128i zero = _mm_setzero_si128();
+    const __m128i maxv = _mm_set1_epi32(255);
+    __m128i rl = _mm_srai_epi32(_mm_add_epi32(lo4, round), kFixedShift);
+    __m128i rh = _mm_srai_epi32(_mm_add_epi32(hi4, round), kFixedShift);
+    rl = _mm_min_epi32(_mm_max_epi32(rl, zero), maxv);
+    rh = _mm_min_epi32(_mm_max_epi32(rh, zero), maxv);
+    const __m128i packed16 = _mm_packus_epi32(rl, rh);
+    return _mm_packus_epi16(packed16, packed16);
+}
+
+} // namespace
+
+void ConvertFullPlanarYuv420ToBgraSimd(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params,
+                                       uint8_t* out_bgra, uint32_t out_stride_bytes) {
+    if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
+        src.v_plane == nullptr || out_bgra == nullptr)
+        return;
+    if (src.bits_per_sample > 8) {
+        // 10-bit is not the hot path (no measurement justifies a second
+        // vectorised kernel yet) -- hand it to the reference implementation.
+        ConvertFullPlanarYuv420ToBgraScalar(src, params, out_bgra, out_stride_bytes);
+        return;
+    }
+
+    const FixedCoefs c = ComputeCoefs(params.matrix, params.range, src.bits_per_sample);
+
+    const __m128i alpha = _mm_set1_epi8(static_cast<char>(255));
+    const __m128i c_off = _mm_set1_epi32(c.c_off);
+    const __m128i y_off = _mm_set1_epi32(c.y_off);
+    const __m128i c_y = _mm_set1_epi32(c.c_y);
+    const __m128i c_bu = _mm_set1_epi32(c.c_bu);
+    const __m128i c_gu = _mm_set1_epi32(c.c_gu);
+    const __m128i c_gv = _mm_set1_epi32(c.c_gv);
+    const __m128i c_rv = _mm_set1_epi32(c.c_rv);
+
+    // Whole 8-pixel blocks only; the remainder is finished pair-by-pair below
+    // with the exact same arithmetic the scalar reference uses.
+    const uint32_t width_aligned = src.width - (src.width % 8u);
+
+    for (uint32_t row = 0; row < src.height; ++row) {
+        const uint8_t* y_row = src.y_plane + static_cast<size_t>(row) * src.y_stride_bytes;
+        const uint8_t* u_row = src.u_plane + static_cast<size_t>(row / 2u) * src.u_stride_bytes;
+        const uint8_t* v_row = src.v_plane + static_cast<size_t>(row / 2u) * src.v_stride_bytes;
+        uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
+
+        uint32_t col = 0;
+        for (; col < width_aligned; col += 8u) {
+            // 8 luma samples, and the 4 chroma pairs they share.
+            const __m128i y_bytes = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(y_row + col));
+            int32_t u_tmp = 0;
+            int32_t v_tmp = 0;
+            std::memcpy(&u_tmp, u_row + col / 2u, sizeof(u_tmp));
+            std::memcpy(&v_tmp, v_row + col / 2u, sizeof(v_tmp));
+
+            const __m128i y_lo = _mm_cvtepu8_epi32(y_bytes);                    // pixels 0-3
+            const __m128i y_hi = _mm_cvtepu8_epi32(_mm_srli_si128(y_bytes, 4)); // pixels 4-7
+            const __m128i u32 = _mm_sub_epi32(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(u_tmp)), c_off);
+            const __m128i v32 = _mm_sub_epi32(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(v_tmp)), c_off);
+
+            const __m128i b_pair = _mm_mullo_epi32(c_bu, u32);
+            const __m128i g_pair = _mm_sub_epi32(_mm_setzero_si128(),
+                                                 _mm_add_epi32(_mm_mullo_epi32(c_gu, u32), _mm_mullo_epi32(c_gv, v32)));
+            const __m128i r_pair = _mm_mullo_epi32(c_rv, v32);
+
+            // Each chroma term serves two horizontal pixels (4:2:0), so widen
+            // [t0,t1,t2,t3] to [t0,t0,t1,t1] and [t2,t2,t3,t3].
+            const __m128i luma_lo = _mm_mullo_epi32(c_y, _mm_sub_epi32(y_lo, y_off));
+            const __m128i luma_hi = _mm_mullo_epi32(c_y, _mm_sub_epi32(y_hi, y_off));
+
+            const __m128i b = ClampFixedToBytesDuplicated(_mm_add_epi32(luma_lo, _mm_unpacklo_epi32(b_pair, b_pair)),
+                                                          _mm_add_epi32(luma_hi, _mm_unpackhi_epi32(b_pair, b_pair)));
+            const __m128i g = ClampFixedToBytesDuplicated(_mm_add_epi32(luma_lo, _mm_unpacklo_epi32(g_pair, g_pair)),
+                                                          _mm_add_epi32(luma_hi, _mm_unpackhi_epi32(g_pair, g_pair)));
+            const __m128i r = ClampFixedToBytesDuplicated(_mm_add_epi32(luma_lo, _mm_unpacklo_epi32(r_pair, r_pair)),
+                                                          _mm_add_epi32(luma_hi, _mm_unpackhi_epi32(r_pair, r_pair)));
+
+            const __m128i bg = _mm_unpacklo_epi8(b, g);
+            const __m128i ra = _mm_unpacklo_epi8(r, alpha);
+
+            uint8_t* out = out_row + static_cast<size_t>(col) * 4u;
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(out), _mm_unpacklo_epi16(bg, ra));      // pixels 0-3
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(out + 16), _mm_unpackhi_epi16(bg, ra)); // pixels 4-7
+        }
+
+        for (; col < src.width; col += 2u)
+            ConvertFullPlanarPair8(y_row, u_row, v_row, out_row, col, src.width, c);
+    }
+}
+
+#else // !EXOSNAP_YUV_TO_BGRA_HAS_SIMD
+
+void ConvertFullPlanarYuv420ToBgraSimd(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params,
+                                       uint8_t* out_bgra, uint32_t out_stride_bytes) {
+    ConvertFullPlanarYuv420ToBgraScalar(src, params, out_bgra, out_stride_bytes);
+}
+
+#endif
+
+void ConvertFullPlanarYuv420ToBgra(const FullPlanarYuv420Frame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
+                                   uint32_t out_stride_bytes) {
+    if (src.bits_per_sample <= 8 && CpuSupportsYuvToBgraSimd()) {
+        ConvertFullPlanarYuv420ToBgraSimd(src, params, out_bgra, out_stride_bytes);
+        return;
+    }
+    ConvertFullPlanarYuv420ToBgraScalar(src, params, out_bgra, out_stride_bytes);
 }
 
 void ConvertAyuvToBgra(const PackedAyuvFrame& src, const YuvToBgraParams& params, uint8_t* out_bgra,
