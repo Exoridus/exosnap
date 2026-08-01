@@ -12,9 +12,8 @@
 // product's own internal mix-bus format).
 //
 // This header covers Open/Close/stream-discovery/single-frame seek-decode
-// (the scrub and trim-handle-drag path). Continuous playback decode
-// (StartPlaybackDecode/StopPlaybackDecode) is declared here too but
-// implemented alongside this class's .cpp in the next task.
+// (the scrub and trim-handle-drag path) as well as continuous playback decode
+// (StartPlaybackDecode/StopPlaybackDecode).
 
 #include <recorder_core/color_metadata.h>
 
@@ -40,7 +39,11 @@ struct DecodedVideoFrame {
     // Shared (not unique) because frames cross from the engine's decode
     // thread to the UI thread via a queued call, which copies the callback's
     // arguments -- a shared_ptr avoids an extra full-frame copy on that hop.
-    std::shared_ptr<const std::vector<uint8_t>> bgra;
+    //
+    // A raw array rather than a vector on purpose: the conversion overwrites
+    // every byte immediately, so a vector's value-initialization would memset
+    // the whole frame (~15 MB at 1440p) for nothing on every single frame.
+    std::shared_ptr<const uint8_t[]> bgra;
 };
 
 // One block of decoded audio: 48 kHz stereo interleaved float32 PCM.
@@ -72,6 +75,30 @@ class EditPlayerEngine {
     [[nodiscard]] bool HasVideoStream() const noexcept;
     [[nodiscard]] bool HasAudioStream() const noexcept;
 
+    // The opened clip's own frame rate in frames per second, or 0.0 when it is
+    // unknown (not open, no video stream, or a container that declares no
+    // usable rate). Callers use it to pace presentation and to size buffers
+    // that hold "some number of frames worth of time" -- neither may assume a
+    // fixed rate, since ExoSnap records anything the user configures.
+    [[nodiscard]] double VideoFrameRate() const noexcept;
+
+    // The opened clip's coded frame size, or 0 when it is unknown (not open,
+    // no video stream). Callers use it to size buffers by memory rather than
+    // by frame count -- a depth that is sensible at 1080p can be a gigabyte at
+    // 2160p, and the decoded frames this engine delivers are BGRA.
+    [[nodiscard]] int VideoWidth() const noexcept;
+    [[nodiscard]] int VideoHeight() const noexcept;
+
+    // Whether the CURRENT playback run actually produces audio blocks. Valid
+    // once StartPlaybackDecode() has returned; false before any run.
+    //
+    // Distinct from HasAudioStream(), which only says the file has a decodable
+    // audio track: building the playback resampler happens per run and can
+    // fail on its own, after which this engine delivers video only. A caller
+    // that paces video off an audio clock MUST consult this rather than
+    // HasAudioStream(), or it will wait forever on a clock nothing advances.
+    [[nodiscard]] bool PlaybackDeliversAudio() const noexcept;
+
     // Seeks to the keyframe at or before target_us and decodes forward to the
     // first frame at or after target_us. Synchronous; intended for the scrub
     // / trim-handle-drag path, called from a caller-owned worker thread (see
@@ -79,14 +106,38 @@ class EditPlayerEngine {
     // nullopt if not open, there is no video stream, or decode fails.
     [[nodiscard]] std::optional<DecodedVideoFrame> DecodeFrameAt(int64_t target_us);
 
-    // ---- Continuous playback decode (implemented in Task 6) ----
+    // ---- Continuous playback decode ----
 
-    // Starts a background thread that decodes forward continuously from
-    // `start_us`, delivering frames/audio via the callbacks below until
-    // StopPlaybackDecode() is called. No-op if not open or already running.
-    void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio);
+    // Starts decoding forward continuously from `start_us`, delivering frames
+    // and audio via the callbacks below until StopPlaybackDecode() is called.
+    // No-op if not open or already running.
+    //
+    // Runs on THREE threads -- demux, video decode+convert, audio
+    // decode+resample -- so that audio never depends on video keeping up
+    // (docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md).
+    // Consequences for callers:
+    //
+    // - on_video and on_audio are invoked from two DIFFERENT threads and may
+    //   run concurrently. Each is called serially with respect to itself.
+    // - Both callbacks MAY BLOCK; that is how the caller paces this engine.
+    //   on_audio blocking (a full audio ring) no longer holds up video, and
+    //   on_video blocking (a full frame queue) no longer holds up audio.
+    // - Because of that, a caller whose callback can block must release it
+    //   before calling StopPlaybackDecode(), or the join inside will hang: the
+    //   engine can wake its own waits, not the caller's. See
+    //   EditPlayerSession::Pause().
+    //
+    // current_media_time_us reports the playback clock in absolute media time
+    // (the caller's audio clock), or any NEGATIVE value when no clock is
+    // available. The video thread discards a decoded frame before the colour
+    // conversion when that clock has already passed the frame's timestamp --
+    // the conversion is the expensive part and the frame would only be dropped
+    // on presentation anyway. With no clock, nothing is discarded. An empty
+    // std::function is treated the same as "no clock".
+    void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
+                             std::function<int64_t()> current_media_time_us);
 
-    // Stops and joins the playback decode thread, if running. Safe to call
+    // Stops and joins the playback decode threads, if running. Safe to call
     // even if not running (no-op). Called from Close() and the destructor.
     void StopPlaybackDecode();
 

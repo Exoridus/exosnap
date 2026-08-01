@@ -264,9 +264,8 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   keyframe-accurate lossless trim and markers, and exports via stream-copy (MKV/MP4). It also plays
   back real decoded video and audio (`EditPlayerSession`/`EditPlayerEngine`, avcodec-based; pixel
   format conversion is hand-rolled, not `swscale` — the bundled FFmpeg build still ships only the
-  mux-only DLL set) in sync through play/pause/scrub. The one exception: a clip recorded with the
-  Expert 4:4:4 chroma option shows a "Preview unavailable" placeholder instead of a decoded frame
-  (export via stream-copy is unaffected). There is no chapter/container-metadata export (a JSON
+  mux-only DLL set) in sync through play/pause/scrub, for 4:2:0 recordings and for a clip recorded
+  with the Expert 4:4:4 chroma option alike. There is no chapter/container-metadata export (a JSON
   marker sidecar is written instead; see ADR 0042).
 - **HDR handling covers both monitor and window/game capture** (expert opt-in
   for native HDR10; tone-mapped SDR is the default for HDR desktops). A window on

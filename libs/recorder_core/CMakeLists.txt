@@ -356,6 +356,7 @@ add_library(recorder_core STATIC
     src/mp4_remuxer.cpp
     include/recorder_core/edit_player_engine.h
     src/edit_player_engine.cpp
+    src/edit_playback_pacing.h
     src/playback_clock.h
     src/playback_clock.cpp
     include/recorder_core/edit_player_session.h

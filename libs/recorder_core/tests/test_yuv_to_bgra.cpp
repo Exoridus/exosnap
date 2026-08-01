@@ -34,8 +34,10 @@ namespace {
 
 using recorder_core::ColorRange;
 using recorder_core::ConvertAyuvToBgra;
+using recorder_core::ConvertFullPlanar444ToBgra;
 using recorder_core::ConvertFullPlanarYuv420ToBgra;
 using recorder_core::ConvertYuv420ToBgra;
+using recorder_core::FullPlanar444Frame;
 using recorder_core::FullPlanarYuv420Frame;
 using recorder_core::MatrixCoefficients;
 using recorder_core::PackedAyuvFrame;
@@ -155,6 +157,45 @@ void ExpectGoldenAyuv(const Golden& gold, MatrixCoefficients matrix, ColorRange 
         << "G for AYUV(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
     EXPECT_NEAR(static_cast<int>(out[0]), static_cast<int>(gold.b), tolerance)
         << "B for AYUV(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
+    EXPECT_EQ(out[3], 255);
+}
+
+// Converts a minimal uniform 2x2 fully-planar 4:4:4 frame (separate Y/U/V
+// planes, each full resolution) and checks the result against the
+// hand-computed golden pixel. Because 4:4:4 carries full chroma per pixel,
+// the golden RGB is identical to the NV12/AYUV vectors with the same Y/U/V
+// samples.
+void ExpectGolden444(const Golden& gold, MatrixCoefficients matrix, ColorRange range, int tolerance = 1) {
+    const auto y8 = static_cast<uint8_t>(gold.y);
+    const auto u8 = static_cast<uint8_t>(gold.cb);
+    const auto v8 = static_cast<uint8_t>(gold.cr);
+    std::vector<uint8_t> y_plane = {y8, y8, y8, y8};
+    std::vector<uint8_t> u_plane = {u8, u8, u8, u8};
+    std::vector<uint8_t> v_plane = {v8, v8, v8, v8};
+
+    FullPlanar444Frame src;
+    src.y_plane = y_plane.data();
+    src.y_stride_bytes = 2;
+    src.u_plane = u_plane.data();
+    src.u_stride_bytes = 2;
+    src.v_plane = v_plane.data();
+    src.v_stride_bytes = 2;
+    src.width = 2;
+    src.height = 2;
+
+    YuvToBgraParams params;
+    params.matrix = matrix;
+    params.range = range;
+
+    std::vector<uint8_t> out(2 * 2 * 4, 0);
+    ConvertFullPlanar444ToBgra(src, params, out.data(), 2 * 4);
+
+    EXPECT_NEAR(static_cast<int>(out[2]), static_cast<int>(gold.r), tolerance)
+        << "R for 444(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
+    EXPECT_NEAR(static_cast<int>(out[1]), static_cast<int>(gold.g), tolerance)
+        << "G for 444(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
+    EXPECT_NEAR(static_cast<int>(out[0]), static_cast<int>(gold.b), tolerance)
+        << "B for 444(" << gold.y << "," << gold.cb << "," << gold.cr << ")";
     EXPECT_EQ(out[3], 255);
 }
 
@@ -321,6 +362,245 @@ TEST(AyuvToBgra, DegenerateInputsAreNoOps) {
     ConvertAyuvToBgra(src, params, out.data(), 4);
     for (uint8_t b : out)
         EXPECT_EQ(b, 0xAB);
+}
+
+// --- Fully-planar 4:4:4 (separate Y/U/V planes, each full resolution --
+// FFmpeg AV_PIX_FMT_YUV444P, the software H.264/HEVC decoder output for a
+// clip recorded with the Expert 4:4:4 chroma option) golden vectors. Reuses
+// the exact NV12/AYUV goldens above -- same normalized Y'/Cb'/Cr' values,
+// different memory layout.
+
+TEST(FullPlanar444ToBgra, GoldenBt709Limited) {
+    ExpectGolden444({16, 128, 128, 0, 0, 0}, MatrixCoefficients::Bt709, ColorRange::Limited, 0);
+    ExpectGolden444({235, 128, 128, 255, 255, 255}, MatrixCoefficients::Bt709, ColorRange::Limited, 0);
+    // Saturated Cr: (126,128,180) -> (221,100,128), same as the NV12/AYUV golden.
+    ExpectGolden444({126, 128, 180, 221, 100, 128}, MatrixCoefficients::Bt709, ColorRange::Limited);
+    // Saturated Cb: (126,180,128) -> (128,117,238).
+    ExpectGolden444({126, 180, 128, 128, 117, 238}, MatrixCoefficients::Bt709, ColorRange::Limited);
+}
+
+TEST(FullPlanar444ToBgra, GoldenBt601Limited) {
+    ExpectGolden444({126, 128, 202, 246, 68, 128}, MatrixCoefficients::Bt601, ColorRange::Limited);
+    ExpectGolden444({126, 180, 128, 128, 108, 233}, MatrixCoefficients::Bt601, ColorRange::Limited);
+}
+
+TEST(FullPlanar444ToBgra, GoldenBt709Full) {
+    ExpectGolden444({0, 128, 128, 0, 0, 0}, MatrixCoefficients::Bt709, ColorRange::Full, 0);
+    ExpectGolden444({255, 128, 128, 255, 255, 255}, MatrixCoefficients::Bt709, ColorRange::Full, 0);
+    ExpectGolden444({128, 128, 180, 210, 104, 128}, MatrixCoefficients::Bt709, ColorRange::Full);
+    ExpectGolden444({128, 180, 128, 128, 118, 224}, MatrixCoefficients::Bt709, ColorRange::Full);
+}
+
+// The AYUV path is packed, the 444 path is fully-planar; both feed the same
+// Y/U/V samples through the same 8-bit fixed-point math. This directly proves
+// the two produce IDENTICAL RGB, independent of the hand-computed goldens --
+// an independent cross-check, not just "the goldens agree with themselves".
+TEST(FullPlanar444ToBgra, MatchesTheAyuvPathByteForByte) {
+    for (const auto matrix : {MatrixCoefficients::Bt709, MatrixCoefficients::Bt601, MatrixCoefficients::Bt2020Ncl}) {
+        for (const auto range : {ColorRange::Limited, ColorRange::Full}) {
+            const std::array<uint8_t, 6> ys = {0, 16, 126, 128, 200, 255};
+            for (uint32_t i = 0; i < ys.size(); ++i) {
+                const uint8_t y = ys[i];
+                const uint8_t u = static_cast<uint8_t>(60 + i * 37);
+                const uint8_t v = static_cast<uint8_t>(220 - i * 29);
+
+                PackedAyuvFrame ayuv_src;
+                const std::array<uint8_t, 4> px = {v, u, y, 0xFF};
+                std::vector<uint8_t> ayuv_data(px.begin(), px.end());
+                ayuv_src.data = ayuv_data.data();
+                ayuv_src.stride_bytes = 4;
+                ayuv_src.width = 1;
+                ayuv_src.height = 1;
+
+                FullPlanar444Frame planar_src;
+                std::vector<uint8_t> yp = {y}, up = {u}, vp = {v};
+                planar_src.y_plane = yp.data();
+                planar_src.y_stride_bytes = 1;
+                planar_src.u_plane = up.data();
+                planar_src.u_stride_bytes = 1;
+                planar_src.v_plane = vp.data();
+                planar_src.v_stride_bytes = 1;
+                planar_src.width = 1;
+                planar_src.height = 1;
+
+                YuvToBgraParams params;
+                params.matrix = matrix;
+                params.range = range;
+
+                std::vector<uint8_t> ayuv_out(4, 0);
+                std::vector<uint8_t> planar_out(4, 0);
+                ConvertAyuvToBgra(ayuv_src, params, ayuv_out.data(), 4);
+                ConvertFullPlanar444ToBgra(planar_src, params, planar_out.data(), 4);
+
+                EXPECT_EQ(ayuv_out, planar_out)
+                    << "y=" << +y << " u=" << +u << " v=" << +v << " matrix=" << static_cast<int>(matrix)
+                    << " range=" << static_cast<int>(range);
+            }
+        }
+    }
+}
+
+TEST(FullPlanar444ToBgra, NonUniformPerPixelChromaEveryPixel) {
+    // 2x2 frame, each pixel a DISTINCT (Y,U,V) triple -- pins down that 4:4:4
+    // addressing reads U/V at the pixel's own (row,col), never row/2,col/2.
+    constexpr uint32_t kW = 2, kH = 2;
+    const std::vector<uint8_t> y_plane = {16, 235, 126, 126};
+    const std::vector<uint8_t> u_plane = {128, 128, 180, 128};
+    const std::vector<uint8_t> v_plane = {128, 128, 128, 180};
+    // Expected, BT.709 limited: (16,128,128)->(0,0,0); (235,128,128)->(255,255,255);
+    // (126,180,128)->(128,117,238); (126,128,180)->(221,100,128).
+    struct Rgb {
+        int r, g, b;
+    };
+    const Rgb expected[4] = {{0, 0, 0}, {255, 255, 255}, {128, 117, 238}, {221, 100, 128}};
+
+    FullPlanar444Frame src;
+    src.y_plane = y_plane.data();
+    src.y_stride_bytes = kW;
+    src.u_plane = u_plane.data();
+    src.u_stride_bytes = kW;
+    src.v_plane = v_plane.data();
+    src.v_stride_bytes = kW;
+    src.width = kW;
+    src.height = kH;
+
+    YuvToBgraParams params;
+    params.matrix = MatrixCoefficients::Bt709;
+    params.range = ColorRange::Limited;
+
+    std::vector<uint8_t> out(kW * kH * 4, 0);
+    ConvertFullPlanar444ToBgra(src, params, out.data(), kW * 4);
+
+    for (uint32_t i = 0; i < kW * kH; ++i) {
+        const uint8_t* px = out.data() + i * 4;
+        EXPECT_NEAR(static_cast<int>(px[2]), expected[i].r, 1) << "R at pixel " << i;
+        EXPECT_NEAR(static_cast<int>(px[1]), expected[i].g, 1) << "G at pixel " << i;
+        EXPECT_NEAR(static_cast<int>(px[0]), expected[i].b, 1) << "B at pixel " << i;
+        EXPECT_EQ(px[3], 255);
+    }
+}
+
+TEST(FullPlanar444ToBgra, PaddedStrideDistinctPixels) {
+    constexpr uint32_t kW = 4, kH = 3;
+    constexpr uint32_t kYStride = kW + 5;
+    constexpr uint32_t kUvStride = kW + 3;
+    constexpr uint32_t kOutStride = kW * 4 + 4;
+
+    std::vector<uint8_t> y_plane(kYStride * kH, 0xEE);
+    std::vector<uint8_t> u_plane(kUvStride * kH, 0xEE);
+    std::vector<uint8_t> v_plane(kUvStride * kH, 0xEE);
+    for (uint32_t r = 0; r < kH; ++r) {
+        for (uint32_t c = 0; c < kW; ++c) {
+            y_plane[r * kYStride + c] = static_cast<uint8_t>(10 + r * 40 + c * 5);
+            u_plane[r * kUvStride + c] = 128; // neutral: R=G=B=Y
+            v_plane[r * kUvStride + c] = 128;
+        }
+    }
+
+    FullPlanar444Frame src;
+    src.y_plane = y_plane.data();
+    src.y_stride_bytes = kYStride;
+    src.u_plane = u_plane.data();
+    src.u_stride_bytes = kUvStride;
+    src.v_plane = v_plane.data();
+    src.v_stride_bytes = kUvStride;
+    src.width = kW;
+    src.height = kH;
+
+    YuvToBgraParams params;
+    params.matrix = MatrixCoefficients::Bt709;
+    params.range = ColorRange::Full;
+
+    std::vector<uint8_t> out(kOutStride * kH, 0);
+    ConvertFullPlanar444ToBgra(src, params, out.data(), kOutStride);
+
+    for (uint32_t r = 0; r < kH; ++r) {
+        for (uint32_t c = 0; c < kW; ++c) {
+            const int expected = 10 + static_cast<int>(r) * 40 + static_cast<int>(c) * 5;
+            const uint8_t* px = out.data() + r * kOutStride + c * 4;
+            EXPECT_EQ(static_cast<int>(px[0]), expected) << "B at (" << r << "," << c << ")";
+            EXPECT_EQ(static_cast<int>(px[1]), expected) << "G at (" << r << "," << c << ")";
+            EXPECT_EQ(static_cast<int>(px[2]), expected) << "R at (" << r << "," << c << ")";
+            EXPECT_EQ(px[3], 255);
+        }
+    }
+}
+
+TEST(FullPlanar444ToBgra, DegenerateInputsAreNoOps) {
+    std::vector<uint8_t> out(16, 0xAB);
+    FullPlanar444Frame src; // all zero/null by default
+    YuvToBgraParams params;
+    ConvertFullPlanar444ToBgra(src, params, out.data(), 4);
+    for (uint8_t b : out)
+        EXPECT_EQ(b, 0xAB);
+}
+
+// --- SIMD path equals the scalar reference, byte for byte (4:4:4) ---------
+namespace {
+
+struct Reference444Frame {
+    std::vector<uint8_t> y, u, v;
+    FullPlanar444Frame src;
+};
+
+Reference444Frame MakeReference444Frame(uint32_t width, uint32_t height) {
+    Reference444Frame f;
+    const size_t n = static_cast<size_t>(width) * height;
+    f.y.resize(n);
+    f.u.resize(n);
+    f.v.resize(n);
+    uint32_t state = 0x9E3779B9u;
+    const auto next = [&state]() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<uint8_t>(state >> 24);
+    };
+    for (size_t i = 0; i < n; ++i) {
+        f.y[i] = (i % 97u == 0) ? 0u : ((i % 89u == 0) ? 255u : next());
+        f.u[i] = (i % 41u == 0) ? 0u : ((i % 37u == 0) ? 255u : next());
+        f.v[i] = (i % 43u == 0) ? 255u : ((i % 31u == 0) ? 0u : next());
+    }
+    f.src.y_plane = f.y.data();
+    f.src.y_stride_bytes = width;
+    f.src.u_plane = f.u.data();
+    f.src.u_stride_bytes = width;
+    f.src.v_plane = f.v.data();
+    f.src.v_stride_bytes = width;
+    f.src.width = width;
+    f.src.height = height;
+    return f;
+}
+
+} // namespace
+
+TEST(FullPlanar444ToBgraSimd, MatchesTheScalarReferenceByteForByte) {
+    if (!recorder_core::CpuSupportsYuvToBgraSimd())
+        GTEST_SKIP() << "CPU lacks SSE4.1; the dispatcher never selects the SIMD path here";
+
+    // Widths straddling the 8-pixel vector width: exact multiples, remainders
+    // that leave a partial block, and odd widths.
+    for (const uint32_t width : {8u, 16u, 24u, 9u, 11u, 15u, 17u, 1u, 2u, 6u}) {
+        for (const uint32_t height : {2u, 5u}) {
+            for (const auto matrix :
+                 {MatrixCoefficients::Bt709, MatrixCoefficients::Bt601, MatrixCoefficients::Bt2020Ncl}) {
+                for (const auto range : {ColorRange::Limited, ColorRange::Full}) {
+                    const Reference444Frame f = MakeReference444Frame(width, height);
+                    YuvToBgraParams params;
+                    params.matrix = matrix;
+                    params.range = range;
+
+                    const uint32_t stride = width * 4u;
+                    std::vector<uint8_t> expected(static_cast<size_t>(stride) * height, 0u);
+                    std::vector<uint8_t> actual(expected.size(), 0u);
+                    recorder_core::ConvertFullPlanar444ToBgraScalar(f.src, params, expected.data(), stride);
+                    recorder_core::ConvertFullPlanar444ToBgraSimd(f.src, params, actual.data(), stride);
+
+                    ASSERT_EQ(actual, expected)
+                        << "SIMD output diverged at width=" << width << " height=" << height
+                        << " matrix=" << static_cast<int>(matrix) << " range=" << static_cast<int>(range);
+                }
+            }
+        }
+    }
 }
 
 // --- Addressing coverage: non-uniform frames, every pixel checked ----------
@@ -579,4 +859,115 @@ TEST(FullPlanarYuv420ToBgra, DegenerateInputsAreNoOps) {
     ConvertFullPlanarYuv420ToBgra(src, params, out.data(), 4);
     for (uint8_t b : out)
         EXPECT_EQ(b, 0xAB);
+}
+
+// --- SIMD path equals the scalar reference, byte for byte -------------------
+//
+// The 8-bit path has a hand-written SSE4.1 implementation because the scalar
+// one is the editor player's dominant per-frame cost. It is only ever
+// acceptable if it is INDISTINGUISHABLE from the reference, so that is
+// asserted directly rather than through the dispatcher (which on any given
+// machine only ever runs one of the two).
+namespace {
+
+// Deterministic pseudo-random planes, deliberately including the extremes
+// (0 and 255) that drive the conversion into its clamping branches.
+struct ReferenceFrame {
+    std::vector<uint8_t> y, u, v;
+    recorder_core::FullPlanarYuv420Frame src;
+};
+
+ReferenceFrame MakeReferenceFrame(uint32_t width, uint32_t height) {
+    const uint32_t chroma_w = (width + 1u) / 2u;
+    const uint32_t chroma_h = (height + 1u) / 2u;
+    ReferenceFrame f;
+    f.y.resize(static_cast<size_t>(width) * height);
+    f.u.resize(static_cast<size_t>(chroma_w) * chroma_h);
+    f.v.resize(f.u.size());
+    uint32_t state = 0x12345678u;
+    const auto next = [&state]() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<uint8_t>(state >> 24);
+    };
+    for (size_t i = 0; i < f.y.size(); ++i)
+        f.y[i] = (i % 97u == 0) ? 0u : ((i % 89u == 0) ? 255u : next());
+    for (size_t i = 0; i < f.u.size(); ++i) {
+        f.u[i] = (i % 41u == 0) ? 0u : ((i % 37u == 0) ? 255u : next());
+        f.v[i] = (i % 43u == 0) ? 255u : ((i % 31u == 0) ? 0u : next());
+    }
+    f.src.y_plane = f.y.data();
+    f.src.y_stride_bytes = width;
+    f.src.u_plane = f.u.data();
+    f.src.u_stride_bytes = chroma_w;
+    f.src.v_plane = f.v.data();
+    f.src.v_stride_bytes = chroma_w;
+    f.src.width = width;
+    f.src.height = height;
+    f.src.bits_per_sample = 8;
+    return f;
+}
+
+} // namespace
+
+TEST(FullPlanarYuv420ToBgraSimd, MatchesTheScalarReferenceByteForByte) {
+    if (!recorder_core::CpuSupportsYuvToBgraSimd())
+        GTEST_SKIP() << "CPU lacks SSE4.1; the dispatcher never selects the SIMD path here";
+
+    // Widths straddling the 8-pixel vector width: exact multiples, remainders
+    // that leave a partial block, and odd widths where the last chroma pair
+    // covers a single pixel.
+    for (const uint32_t width : {8u, 16u, 24u, 9u, 11u, 15u, 17u, 2u, 6u}) {
+        for (const uint32_t height : {2u, 5u}) {
+            for (const auto matrix :
+                 {recorder_core::MatrixCoefficients::Bt709, recorder_core::MatrixCoefficients::Bt601,
+                  recorder_core::MatrixCoefficients::Bt2020Ncl}) {
+                for (const auto range : {recorder_core::ColorRange::Limited, recorder_core::ColorRange::Full}) {
+                    const ReferenceFrame f = MakeReferenceFrame(width, height);
+                    recorder_core::YuvToBgraParams params;
+                    params.matrix = matrix;
+                    params.range = range;
+
+                    const uint32_t stride = width * 4u;
+                    std::vector<uint8_t> expected(static_cast<size_t>(stride) * height, 0u);
+                    std::vector<uint8_t> actual(expected.size(), 0u);
+                    recorder_core::ConvertFullPlanarYuv420ToBgraScalar(f.src, params, expected.data(), stride);
+                    recorder_core::ConvertFullPlanarYuv420ToBgraSimd(f.src, params, actual.data(), stride);
+
+                    ASSERT_EQ(actual, expected)
+                        << "SIMD output diverged at width=" << width << " height=" << height
+                        << " matrix=" << static_cast<int>(matrix) << " range=" << static_cast<int>(range);
+                }
+            }
+        }
+    }
+}
+
+TEST(FullPlanarYuv420ToBgraSimd, TenBitInputGoesThroughTheScalarReference) {
+    // The vectorised kernel covers 8-bit only; 10-bit must still convert
+    // correctly rather than silently produce nothing.
+    constexpr uint32_t kWidth = 8;
+    constexpr uint32_t kHeight = 2;
+    std::vector<uint16_t> y(static_cast<size_t>(kWidth) * kHeight, 600u);
+    std::vector<uint16_t> u((kWidth / 2u) * (kHeight / 2u), 512u);
+    std::vector<uint16_t> v(u.size(), 512u);
+
+    recorder_core::FullPlanarYuv420Frame src;
+    src.y_plane = reinterpret_cast<const uint8_t*>(y.data());
+    src.y_stride_bytes = kWidth * 2u;
+    src.u_plane = reinterpret_cast<const uint8_t*>(u.data());
+    src.u_stride_bytes = (kWidth / 2u) * 2u;
+    src.v_plane = reinterpret_cast<const uint8_t*>(v.data());
+    src.v_stride_bytes = src.u_stride_bytes;
+    src.width = kWidth;
+    src.height = kHeight;
+    src.bits_per_sample = 10;
+
+    recorder_core::YuvToBgraParams params;
+    const uint32_t stride = kWidth * 4u;
+    std::vector<uint8_t> expected(static_cast<size_t>(stride) * kHeight, 0u);
+    std::vector<uint8_t> actual(expected.size(), 0u);
+    recorder_core::ConvertFullPlanarYuv420ToBgraScalar(src, params, expected.data(), stride);
+    recorder_core::ConvertFullPlanarYuv420ToBgraSimd(src, params, actual.data(), stride);
+    EXPECT_EQ(actual, expected);
+    EXPECT_NE(actual[0], 0u) << "a mid-grey 10-bit frame must not convert to black";
 }

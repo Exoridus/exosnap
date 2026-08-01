@@ -99,7 +99,7 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 | Container | MKV |
 | Video codec | AV1 (NVENC) |
 | Audio codec | Opus |
-| Frame rate | CFR 60 fps (Default list: 15/30/60 fps, plus 120 fps shown disabled; Expert mode swaps the list for a free-entry field capped at the fastest monitor's refresh rate; an off-list rate gets its own "`<n>` fps (Custom)" entry — see §6) |
+| Frame rate | CFR 60 fps (Default list: 15/30/60/120 fps, 120 enabled only when a display can feed it; Expert mode swaps the list for a free-entry field capped at the fastest monitor's refresh rate; an off-list rate gets its own "`<n>` fps (Custom)" entry — see §6) |
 | Rate control | Constant quality (CQ), quality "High" |
 | NVENC encoder preset | P4 (all codecs) |
 | Frame pacing | Phase-correct |
@@ -302,8 +302,13 @@ capability-gated (only the recording lock disables it). The **default is P4 for 
 takes effect from the next recording.
 
 **Frame rate and pacing.** The default is **CFR 60 fps**. The Default frame-rate control is a fixed
-list — **15 / 30 / 60 fps** (the older 24 fps cinema and 25 fps PAL entries are dropped) plus
-**120 fps**, present but shown disabled ("unavailable") until a hardware-proven path exists. Expert
+list — **15 / 30 / 60 / 120 fps** (the older 24 fps cinema and 25 fps PAL entries are dropped).
+**120 fps is selectable only when an attached display can actually feed it**: capture never produces
+more frames than the screen refreshes, so on a slower panel the entry stays visible but disabled,
+with a hint naming the fastest attached display's actual rate. Disabled rather than hidden, because
+a missing entry reads as "the product cannot do this at all" instead of "this hardware cannot". The
+same rule guards the model: a listed rate above the ceiling never reaches it, since the disabled
+item state alone only stops interactive selection. Expert
 mode replaces the list with a **free-entry fps field**, not capability-checked at entry. Its maximum
 is **the highest refresh rate of any attached monitor, rounded to whole fps, but never below 60**; the
 minimum is 1. Capture never delivers more frames than the compositor/monitor rate, so a CFR target
@@ -330,7 +335,7 @@ preset that carries such a rate — the Default combo grows an extra entry label
 selected. The combo therefore never claims a frame rate the recorder is not using. The custom entry
 disappears as soon as the configured rate is back on a listed value, whether because the user picked a
 listed entry or because a preset set one; selecting the custom entry itself changes nothing. The
-disabled 120 fps entry is unaffected. The current-format footer always shows the true configured
+current-format footer always shows the true configured
 value. An expert **"Frame pacing"** control offers
 **"Phase-correct"** (default) and **"Lowest latency"**. Phase-correct selects frames by
 present time (it does not blend), so uncapped VRR / high-refresh sources record to smooth,
@@ -800,12 +805,13 @@ original recording is never mutated during export; not-yet-exported edits are di
 
 **Current boundary:** trim, markers, stream-copy export, and real decoded-frame preview (video +
 synchronized audio, FFmpeg-decode + Qt-paint) are implemented and reachable end to end, including
-the playhead/scrub/trim-handle interactions against the real decoder. The one exception is a
-4:4:4-chroma recording (Section 6's Expert 4:4:4 option, H.264/HEVC 8-bit only): the player's
-decoder does not yet handle that pixel format, so those clips show the "Preview unavailable"
-placeholder instead of a decoded frame — trim, markers, and export are unaffected, since export is
-pure stream-copy and never depends on the preview decoder. The Split Chapter action remains
-deferred to a later release (0.11 per ADR 0022).
+the playhead/scrub/trim-handle interactions against the real decoder. This covers 4:2:0 recordings
+(8- and 10-bit) as well as a 4:4:4-chroma recording (Section 6's Expert 4:4:4 option, H.264/HEVC
+8-bit only) — the player's decoder converts the fully-planar 4:4:4 pixel format the same
+software decoders produce for that option, with no chroma-upsampling step since 4:4:4 carries full
+color resolution per pixel. Export is unaffected by any of this, since export is pure stream-copy
+and never depends on the preview decoder. The Split Chapter action remains deferred to a later
+release (0.11 per ADR 0022).
 
 ---
 

@@ -48,6 +48,22 @@ uint64_t ClockPositionToFrames(uint64_t position, uint64_t frequency, uint32_t t
 uint64_t InterpolateClockPosition(uint64_t position, uint64_t frequency, uint64_t qpc_position_100ns,
                                   uint64_t qpc_now_100ns, uint64_t max_extrapolation_100ns) noexcept;
 
+// How many audio frames at the FRONT of a decoded block belong to the preroll
+// before `start_us` and must not be handed to the renderer.
+//
+// A playback seek positions on the keyframe at or before the requested start,
+// so decoding begins earlier than asked on BOTH streams. The video side
+// already discards what it decoded too early; without the same trim on audio,
+// the ring receives sound starting at the keyframe while the clock is seeded
+// to start_us, and video leads audio by that difference for the entire run --
+// up to a full keyframe interval (2 s at the product default).
+//
+// Returns 0 (keep everything) when the rate is unknown or the block is empty:
+// a slightly offset soundtrack beats replacing it with silence. Never returns
+// more than block_frame_count.
+size_t AudioPrerollFramesToDrop(int64_t block_pts_us, size_t block_frame_count, uint32_t sample_rate_hz,
+                                int64_t start_us) noexcept;
+
 struct FrameSelection {
     // Index into the caller's available_pts_ms of the frame to display, or
     // nullopt if the clock is before the first available frame (nothing to
@@ -62,5 +78,49 @@ struct FrameSelection {
 // Picks the LATEST frame whose pts is <= clock_ms. If clock_ms is before the
 // first entry, returns {nullopt, 0} (nothing selected, nothing to drop yet).
 FrameSelection SelectFrameForClock(std::span<const int64_t> available_pts_ms, int64_t clock_ms) noexcept;
+
+// Ceiling on the memory the decoded-frame queue may hold. The queue stores
+// BGRA frames, so a depth that is reasonable as a COUNT can be enormous as a
+// SIZE: the same 0.2 s window is ~235 MB at 1440p60 but over a gigabyte at
+// 2160p120. And because the decode thread blocks only once the queue is full,
+// that depth is the steady state during playback, not a transient peak.
+//
+// 512 MB is chosen to leave every ordinary case (up to 1440p144) on its
+// rate-derived depth and bind only on 4K-at-high-rate and on misdeclared
+// frame rates.
+inline constexpr size_t kDefaultMaxVideoQueueBytes = 512ull * 1024ull * 1024ull;
+
+// Floor the byte budget may never push the queue below: under a handful of
+// frames there is no decode-ahead left to ride out a stall, so an oversized
+// frame gets a shallow queue rather than none at all.
+inline constexpr size_t kMinVideoQueueFrames = 4;
+
+// Frame rates above this are taken as a declaration error rather than a real
+// capture rate (Matroska with a millisecond timebase routinely reports
+// r_frame_rate = 1000/1). 240 is the highest rate the product offers, so
+// anything beyond it cannot have come from one of our own recordings.
+inline constexpr double kMaxPlausibleFrameRate = 240.0;
+
+// How many decoded frames the queue between the video decode thread and
+// PollFrame() must be able to hold.
+//
+// That queue is the video pipeline's decode-ahead buffer: the decode thread
+// fills it and blocks when it is full, so its depth is how much decoded video
+// is banked against a hitch before presentation runs dry. Expressed as a
+// duration (`decode_ahead_seconds`) rather than a frame count, because the
+// useful amount is "enough time to ride out a stall", which is the same
+// wall-clock span whatever the clip's frame rate happens to be. The result
+// adds a third again as headroom and never falls below a floor, so a clip
+// declaring a nonsensical rate still plays.
+//
+// Deliberately a function of the CLIP's rate rather than a constant: a fixed
+// capacity is only ever correct for the one frame rate it was computed for.
+//
+// bytes_per_frame caps that count against max_queue_bytes, because the rate
+// alone says nothing about how much memory the depth costs. Pass 0 when the
+// frame size is not known yet (before the first frame is decoded) -- that
+// means "no byte information", not "budget for zero frames".
+size_t VideoQueueCapacityForFrameRate(double fps, double decode_ahead_seconds, size_t bytes_per_frame,
+                                      size_t max_queue_bytes) noexcept;
 
 } // namespace recorder_core

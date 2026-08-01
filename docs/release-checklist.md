@@ -212,8 +212,10 @@ prerelease from §3, in addition to the automated gates and the updater RC live-
 - [ ] **Edit overlay real decoded playback.** In the same walkthrough, confirm the player actually
       shows decoded video (not a placeholder) and that audio is present and stays in sync with the
       picture through a play/pause/scrub cycle, for a clip that has an audio track. Also open a
-      clip recorded with the Expert 4:4:4 chroma option and confirm it shows the documented
-      "Preview unavailable" placeholder instead of a decoded frame (trim/markers/export still work).
+      clip recorded with the Expert 4:4:4 chroma option and confirm it now plays decoded video too
+      (it used to show a "Preview unavailable" placeholder). 4:4:4 has no hardware decoder on any
+      vendor, so this clip is the software path's worst case — watch specifically for audio holes
+      or stutter, not just for a picture appearing.
       Not automatable (real audio-clock pacing and a real decoder, no mock seam).
 - [ ] **Audio-endpoint loss mid-recording degrades to silence and keeps recording (ADR 0046).**
       During a `SYS`-row recording, remove or switch the playback endpoint device: the recording

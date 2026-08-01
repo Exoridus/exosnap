@@ -447,20 +447,41 @@ TEST_F(ConfigPageTest, FrameRate_ExpertRoundTripKeepsCustomValueVisible) {
     EXPECT_EQ(combo->currentData().toInt(), 73);
 }
 
-// The 120 entry stays exactly as it is: present, disabled, never selectable as a
-// listed value.
-TEST_F(ConfigPageTest, FrameRate_DisabledHundredTwentyEntryUnchanged) {
+// 120 is a normal listed rate, gated on the attached displays being able to
+// feed it: unreachable ceiling -> disabled and never reaching the model.
+TEST_F(ConfigPageTest, FrameRate_HundredTwentyStaysOutOfReachBelowItsCeiling) {
     ConfigPage page(output_defaults_, video_defaults_);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(combo, nullptr);
+    page.applyMaxFrameRate(60); // no attached display can feed 120
 
     const int idx120 = combo->findData(120);
     ASSERT_GE(idx120, 0);
-    EXPECT_EQ(combo->itemText(idx120), QStringLiteral("120 fps (unavailable)"));
+    EXPECT_EQ(combo->itemText(idx120), QStringLiteral("120 fps"));
     auto* model = qobject_cast<QStandardItemModel*>(combo->model());
     ASSERT_NE(model, nullptr);
     ASSERT_NE(model->item(idx120), nullptr);
     EXPECT_FALSE(model->item(idx120)->isEnabled());
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel&) { emitted = true; });
+    combo->setCurrentIndex(idx120);
+    EXPECT_FALSE(emitted) << "a rate the displays cannot feed must never reach the model";
+}
+
+// ...and with a display that can feed it, it behaves like any other entry.
+TEST_F(ConfigPageTest, FrameRate_HundredTwentySelectableOnAFastEnoughDisplay) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(combo, nullptr);
+    page.applyMaxFrameRate(144);
+
+    const int idx120 = combo->findData(120);
+    ASSERT_GE(idx120, 0);
+    auto* model = qobject_cast<QStandardItemModel*>(combo->model());
+    ASSERT_NE(model, nullptr);
+    ASSERT_NE(model->item(idx120), nullptr);
+    EXPECT_TRUE(model->item(idx120)->isEnabled());
 
     VideoSettingsModel changed;
     bool emitted = false;
@@ -469,7 +490,10 @@ TEST_F(ConfigPageTest, FrameRate_DisabledHundredTwentyEntryUnchanged) {
         changed = settings;
     });
     combo->setCurrentIndex(idx120);
-    EXPECT_FALSE(emitted) << "the disabled 120 entry must never reach the model";
+    EXPECT_TRUE(emitted);
+    EXPECT_EQ(changed.frame_rate_num, 120u);
+    EXPECT_EQ(changed.frame_rate_den, 1u);
+    EXPECT_EQ(combo->currentText(), QStringLiteral("120 fps"));
 }
 
 // ── Expert frame-rate ceiling derived from the attached displays ─────────────
