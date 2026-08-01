@@ -1936,6 +1936,7 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
     current_frame_rate_num_ = settings.frame_rate_num == 0 ? 60 : settings.frame_rate_num;
     current_frame_rate_den_ = settings.frame_rate_den == 0 ? 1 : settings.frame_rate_den;
     current_cfr_ = settings.cfr;
+    current_video_settings_ = settings;
     if (coordinator_) {
         coordinator_->SetVideoSettings(settings);
         coordinator_->RevalidateCapabilities();
@@ -2911,6 +2912,18 @@ void RecordPage::initCoordinator() {
             emit safeSelf->webcamFrameReady(frame);
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
+    // Output/video settings arrive from MainWindow's ctor (setOutputSettings/
+    // setVideoSettings, called immediately after `new RecordPage(...)`, before
+    // this coordinator exists) and are cached in current_output_settings_/
+    // current_video_settings_ because that early push is a no-op (see the
+    // `if (coordinator_)` guard in both setters). Without replaying them here,
+    // a freshly constructed coordinator keeps its own default-constructed
+    // OutputSettingsModel (H.264, not the documented AV1 default) until the
+    // user happens to touch a Settings control — silently wrong for anyone who
+    // records immediately after launch. current_webcam_settings_ already got
+    // this treatment above; output/video settings did not.
+    coordinator_->SetOutputSettings(current_output_settings_);
+    coordinator_->SetVideoSettings(current_video_settings_);
 
     // WYSIWYG preview during recording: when the engine publishes its shared,
     // pre-encode source texture, switch the live DXGI preview to consume it (which
