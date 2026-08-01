@@ -11,6 +11,10 @@
 //   exosnap-soak --clapper --seconds 120         (emit start/end flash+beep; live only)
 //   exosnap-soak --clapper --seconds 7200 --markers 3 --start-margin-seconds 10
 //                --end-margin-seconds 10         (emit start/middle/end markers)
+//   exosnap-soak --minutes 120 --audio-sources sys,mic --out C:\tmp\soak.mkv
+//                                                 (SYS + MIC as separate tracks, not merged;
+//                                                 omit --audio-sources for the legacy default of
+//                                                 a single merged loopback track)
 //
 // Runtime gate: the REAL path needs an NVIDIA GPU. With no capture target it fails
 // fast (non-zero exit) instead of hanging — a stray CI invocation dies deterministically.
@@ -91,6 +95,41 @@ bool ParseVideo(const std::string& s, VideoCodec& out) {
     }
     return false;
 }
+// Parses a comma-separated list of audio source names ("app", "sys", "mic")
+// into un-merged AudioSourceRow entries (one resolved track per source, per
+// the 0.9 release-gate soak requirement of SYS + MIC as separate tracks).
+// Row order follows the given token order. Rejects empty/unknown tokens.
+bool ParseAudioSources(const std::string& s, std::vector<AudioSourceRow>& out, std::string& error) {
+    out.clear();
+    std::size_t start = 0;
+    while (start <= s.size()) {
+        const std::size_t comma = s.find(',', start);
+        const std::string token = s.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        AudioSourceRow row;
+        row.enabled = true;
+        row.merge_with_above = false;
+        if (token == "app")
+            row.kind = AudioSourceKind::App;
+        else if (token == "sys")
+            row.kind = AudioSourceKind::Sys;
+        else if (token == "mic")
+            row.kind = AudioSourceKind::Mic;
+        else {
+            error = "unknown audio source '" + token + "' (expected app, sys, or mic)";
+            return false;
+        }
+        out.push_back(row);
+        if (comma == std::string::npos)
+            break;
+        start = comma + 1;
+    }
+    if (out.empty()) {
+        error = "--audio-sources requires at least one source";
+        return false;
+    }
+    return true;
+}
+
 bool ParseAudio(const std::string& s, AudioCodec& out) {
     if (s == "opus") {
         out = AudioCodec::Opus;
@@ -214,7 +253,7 @@ int main(int argc, char* argv[]) {
     bool seconds_set = false, minutes_set = false;
     std::int64_t minutes = 0, seconds = 0, start_margin_seconds = 0, end_margin_seconds = 0;
     int marker_count = 2, flash_ms = 120, sample_ms = 1000;
-    std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s, report_dir;
+    std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s, report_dir, audio_sources_s;
     exosnap::soak::SoakThresholds thresholds;
 
     for (int i = 1; i < argc; ++i) {
@@ -276,6 +315,8 @@ int main(int argc, char* argv[]) {
             out_s = next();
         else if (a == "--report-dir")
             report_dir = next();
+        else if (a == "--audio-sources")
+            audio_sources_s = next();
         else if (a == "--max-drift-ms")
             thresholds.av_drift_abort_ms = std::atof(next().c_str());
         else if (a == "--max-skew-ms")
@@ -330,6 +371,14 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "[soak] bad container/vcodec/acodec\n");
         return 64;
     }
+    std::vector<AudioSourceRow> audio_rows;
+    if (!audio_sources_s.empty()) {
+        std::string audio_error;
+        if (!ParseAudioSources(audio_sources_s, audio_rows, audio_error)) {
+            std::fprintf(stderr, "[soak] --audio-sources: %s\n", audio_error.c_str());
+            return 64;
+        }
+    }
     if (out_s.empty()) {
         char tmp[MAX_PATH] = {};
         GetTempPathA(MAX_PATH, tmp);
@@ -347,6 +396,7 @@ int main(int argc, char* argv[]) {
         {"container", container_s},
         {"vcodec", vcodec_s},
         {"acodec", acodec_s},
+        {"audio_sources", audio_sources_s.empty() ? "legacy-single-track" : audio_sources_s},
         {"target_seconds", std::to_string(duration_s)},
         {"volume", std::filesystem::path(out_s).root_name().string()},
         {"advisory", "thresholds advisory for 0.10 — not a release gate"},
@@ -388,6 +438,10 @@ int main(int argc, char* argv[]) {
         cfg.frame_rate_num = 60;
         cfg.frame_rate_den = 1;
         cfg.cfr = true;
+        if (!audio_rows.empty()) {
+            const bool window_target = cfg.target.kind == CaptureTarget::Kind::Window;
+            cfg.audio_track_plan = ResolveAudioTracks(NormalizeSourceRowsForTarget(audio_rows, window_target));
+        }
 
         RecorderSession session;
         RecorderResult vr{};
