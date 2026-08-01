@@ -195,35 +195,55 @@ TEST_F(ExoSliderTest, RightClickOnGroove_IsIgnoredForClickToJump) {
 
 // ── Vertical slider should fall back to base class ─────────────────────────────
 
-TEST_F(ExoSliderTest, VerticalSlider_ClicksAreIgnored) {
+// What a groove click does to a plain QSlider is decided by the STYLE, not by
+// Qt in general: SH_Slider_AbsoluteSetButtons names the buttons that jump
+// straight to the clicked position, and it differs between styles. Windows 11
+// puts the left button in it, so a groove click sets an absolute value; Fusion
+// does not, so the same click is a page step. Asserting either outcome pins the
+// test to whichever style happens to be active -- which is how this test came
+// to fail reliably on a Windows desktop while passing in CI.
+//
+// The claim worth testing is not "a click does X". It is that ExoSlider adds
+// nothing of its own on the vertical axis: its click-to-jump override is
+// horizontal-only and must hand a vertical click to the base class untouched.
+// So give a plain QSlider the same geometry and the same click, and let
+// whatever the style does be the expected value.
+TEST_F(ExoSliderTest, VerticalSlider_BehavesExactlyLikeAPlainQSlider) {
     ui::widgets::ExoSlider slider(Qt::Vertical);
-    slider.setRange(0, 100);
-    slider.setValue(0);
-    slider.setMinimumHeight(200);
-    slider.show();
+    QSlider reference(Qt::Vertical);
+    for (QSlider* s : {static_cast<QSlider*>(&slider), &reference}) {
+        s->setRange(0, 100);
+        s->setValue(0);
+        // An explicit size, not just a minimum: shown without a layout the two
+        // widgets take their own size hints (ExoSlider reserves width for its
+        // tick labels), and a groove of a different size would make the click
+        // below land at a different fraction of the track on each.
+        s->resize(40, 200);
+        s->show();
+    }
 
     const QRect groove_rect = GrooveRectFor(slider);
     if (groove_rect.isEmpty()) {
         GTEST_SKIP() << "Groove rect is empty; skipping (may occur in headless/offscreen rendering).";
     }
+    // A fair comparison needs both widgets laid out identically; otherwise the
+    // click lands somewhere different on each and a mismatch below would say
+    // nothing about delegation.
+    ASSERT_EQ(GrooveRectFor(reference), groove_rect);
 
-    // Value is 0 (minimum), which for a non-inverted vertical QSlider sits at the
-    // BOTTOM of the groove. Click near the TOP of the groove -- well above the
-    // handle -- so Qt's default groove-click delivers a single page-step-add,
-    // not a page-step-subtract (which would leave value at 0, indistinguishable
-    // from "nothing happened").
-    const int click_x = groove_rect.center().x();
-    const int click_y = groove_rect.top() + 5;
-    QMouseEvent press_event(QEvent::MouseButtonPress, QPoint(click_x, click_y), QPoint(click_x, click_y),
-                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(&slider, &press_event);
+    // Value is 0 (minimum), which for a non-inverted vertical QSlider sits at
+    // the BOTTOM of the groove. Click near the TOP -- well clear of the handle,
+    // so the press lands on the groove under either style's hit-testing.
+    const QPoint click(groove_rect.center().x(), groove_rect.top() + 5);
+    for (QSlider* s : {static_cast<QSlider*>(&slider), &reference}) {
+        QMouseEvent press(QEvent::MouseButtonPress, click, click, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(s, &press);
+    }
 
-    // For vertical sliders, our click-to-jump override does not run (delegates to
-    // QSlider::mousePressEvent). The base class' own default groove-click behavior
-    // (a single page-step increment, not an absolute jump) still applies — that's
-    // expected Qt behavior, not our feature. Assert it's a page step, not the
-    // click-to-jump absolute value our override would have produced.
-    EXPECT_EQ(slider.value(), slider.pageStep());
+    EXPECT_EQ(slider.value(), reference.value());
+    // Guard against passing vacuously: if the style moved neither widget, the
+    // comparison above proves nothing about delegation.
+    EXPECT_NE(reference.value(), 0) << "the active style ignored the groove click entirely";
 }
 
 } // namespace
