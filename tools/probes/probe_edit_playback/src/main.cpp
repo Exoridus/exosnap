@@ -50,6 +50,18 @@
 //      the runtime-available av_hwdevice_iterate_types() list, three real
 //      av_hwdevice_ctx_create() attempts (D3D11VA/DXVA2/CUDA), and the
 //      exact avcodec_configuration()/version strings baked into this build.
+//   H) The actual point of the 2026-08-01 decoupled-decode topology (see
+//      docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md,
+//      "Testing"): does audio delivery stay continuous while video is
+//      artificially throttled to far below real time? StartPlaybackDecode()
+//      from t=600s with on_video sleeping 120ms/frame (a deliberately
+//      pathological ~8fps video path) and on_audio dropping data immediately
+//      but logging each block's wall-clock arrival time plus pts_us.
+//      current_media_time_us is wired to a real wall-clock-driven function
+//      (start_us + elapsed wall time), matching how the shipped player drives
+//      the conversion-skip gate. Stops after 10s wall clock and reports block
+//      count, total media duration covered, the largest/p50/p99 gap between
+//      consecutive audio arrivals, and how many gaps exceeded 50ms.
 //
 // Exit code 0 if step A's Open() succeeded (regardless of what the
 // measurements themselves show), 1 on a hard failure (bad args, Open failed).
@@ -67,11 +79,14 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 }
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -513,6 +528,153 @@ void StepG_SimdVariants() {
     }
 }
 
+// ---- Step H: audio continuity while video is artificially throttled ----
+//
+// This is the measurement the design doc's "Testing" section names as still
+// missing: not that the three-thread topology runs (step B2) or that it's
+// fast (step B), but that AUDIO KEEPS FLOWING when video is pathologically
+// slow. Before the decoupled-decode change, demux+video+audio shared one
+// thread, so a slow video callback stalled audio in lockstep. After it,
+// video is paced by a bounded frame queue and audio by the WASAPI ring (here:
+// nothing -- on_audio drops immediately), and the two are independent.
+//
+// on_video sleeps 120ms/frame -- ~8fps, far below any real playback rate,
+// deliberately pathological. on_audio never blocks; it logs each block's
+// wall-clock arrival time (steady_clock) and pts_us, then drops the data.
+// current_media_time_us is wired to start_us + elapsed wall time, so the
+// video thread's late-frame discard-before-convert gate behaves exactly as
+// it does in the shipped player (unlike steps B/B2, which pass no clock at
+// all to get a max-throughput number).
+//
+// Interpretation note (see the task brief this backs): the real app paces
+// audio delivery through the WASAPI ring. This probe has no ring, so
+// on_audio fires as fast as the demuxer can hand the audio thread packets --
+// i.e. NOT "in real time". The expected-healthy shape is therefore a burst
+// (draining up to ~1s of buffered audio packets, per the design doc's queue
+// capacity) followed by steady, demuxer-paced delivery -- not silence, not a
+// stutter pattern tied to the 120ms video cadence. The regression this
+// guards against is audio gaps correlated with the video stall, which would
+// mean the two paths are still coupled somewhere.
+void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine) {
+    printf("=== [H] Audio continuity while video is artificially throttled (120ms/frame, 10s wall clock) ===\n");
+
+    struct AudioArrival {
+        std::chrono::steady_clock::time_point t;
+        int64_t pts_us;
+        uint32_t frame_count;
+    };
+
+    std::mutex arrivalsMutex;
+    std::vector<AudioArrival> arrivals;
+    arrivals.reserve(8192);
+
+    std::atomic<uint64_t> videoFrames{0};
+
+    auto onVideo = [&](recorder_core::DecodedVideoFrame /*frame*/) {
+        videoFrames.fetch_add(1, std::memory_order_relaxed);
+        // Simulates a video path that cannot keep up -- e.g. an unusually
+        // large keyframe, a page fault, another process taking the core, or
+        // (per the design doc) 4:4:4/high-frame-rate material permanently on
+        // the software path. 120ms/frame is ~8fps, well beyond any of those
+        // individually, chosen to make the effect unmistakable rather than
+        // marginal.
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    };
+
+    auto onAudio = [&](recorder_core::DecodedAudioBlock block) {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(arrivalsMutex);
+        arrivals.push_back(AudioArrival{now, block.pts_us, block.frame_count});
+        // block (and its shared_ptr sample buffer) is dropped here on scope
+        // exit -- no WASAPI ring in this probe, per the interpretation note
+        // above. We only need the arrival timestamp and pts/frame_count.
+    };
+
+    constexpr int64_t kStartUs = 600'000'000; // 600s, same reference point as steps B/B2
+    const auto t0 = std::chrono::steady_clock::now();
+    auto mediaClock = [t0]() -> int64_t {
+        const auto elapsedUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+        return kStartUs + elapsedUs;
+    };
+
+    engine.StartPlaybackDecode(kStartUs, onVideo, onAudio, mediaClock);
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    engine.StopPlaybackDecode();
+
+    std::vector<AudioArrival> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(arrivalsMutex);
+        snapshot = arrivals;
+    }
+
+    printf("[H] video_frames_delivered=%llu (throttled ~8fps -> expect roughly 80 over 10s at 120ms/frame)\n",
+           static_cast<unsigned long long>(videoFrames.load()));
+    printf("[H] audio_blocks_delivered=%zu\n", snapshot.size());
+
+    if (snapshot.empty()) {
+        printf("[H] VERDICT: NO audio blocks delivered at all -- audio delivery is fully blocked by the "
+               "throttled video path. FAIL: the decoupling did not work.\n");
+        return;
+    }
+
+    double mediaSecondsCovered = 0.0;
+    for (const auto& a : snapshot) {
+        mediaSecondsCovered += static_cast<double>(a.frame_count) / 48000.0;
+    }
+    printf("[H] media_duration_covered=%.3fs (sum(frame_count)/48000)\n", mediaSecondsCovered);
+
+    std::vector<double> gapsMs;
+    gapsMs.reserve(snapshot.size());
+    for (size_t i = 1; i < snapshot.size(); ++i) {
+        const double ms = std::chrono::duration<double, std::milli>(snapshot[i].t - snapshot[i - 1].t).count();
+        gapsMs.push_back(ms);
+    }
+
+    if (gapsMs.empty()) {
+        printf("[H] only one audio block delivered -- no inter-arrival gaps to measure.\n");
+        printf("[H] VERDICT: INCONCLUSIVE -- too few blocks to assess continuity.\n");
+        return;
+    }
+
+    std::vector<double> sortedGaps = gapsMs;
+    std::sort(sortedGaps.begin(), sortedGaps.end());
+    const double maxGapMs = sortedGaps.back();
+
+    auto percentile = [&sortedGaps](double pct) -> double {
+        const size_t n = sortedGaps.size();
+        size_t idx = static_cast<size_t>(std::ceil(pct / 100.0 * static_cast<double>(n)));
+        idx = std::clamp<size_t>(idx, 1, n);
+        return sortedGaps[idx - 1];
+    };
+    const double p50Ms = percentile(50.0);
+    const double p99Ms = percentile(99.0);
+    const uint64_t over50ms =
+        static_cast<uint64_t>(std::count_if(gapsMs.begin(), gapsMs.end(), [](double ms) { return ms > 50.0; }));
+
+    printf("[H] audio_arrival_gaps: n=%zu max=%.2fms p50=%.2fms p99=%.2fms gaps_over_50ms=%llu\n", gapsMs.size(),
+           maxGapMs, p50Ms, p99Ms, static_cast<unsigned long long>(over50ms));
+
+    // Packet-queue high-water mark (the design doc's own "Open question") is
+    // deliberately NOT reported here: PacketQueue is a private implementation
+    // detail of edit_player_engine.cpp's pImpl (no accessor on the public
+    // EditPlayerEngine type), and this probe is scoped to measurement only --
+    // it must not add instrumentation hooks to libs/. That question stays
+    // open per the design doc.
+
+    if (over50ms == 0) {
+        printf("[H] VERDICT: audio delivery stayed continuous (no gap > 50ms) while video was throttled to "
+               "~8fps -- the decoupling holds.\n");
+    } else if (over50ms <= 2 && maxGapMs < 300.0) {
+        printf("[H] VERDICT: audio delivery was continuous with a small number of gaps just over 50ms (likely "
+               "the packet-queue-drained-to-demuxer-pace transition, not a stall) -- the decoupling holds.\n");
+    } else {
+        printf("[H] VERDICT: audio delivery shows repeated gaps > 50ms (n=%llu, max=%.1fms) while video was "
+               "throttled -- this looks like audio is still coupled to the slow video path. FAIL.\n",
+               static_cast<unsigned long long>(over50ms), maxGapMs);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -538,6 +700,7 @@ int main(int argc, char** argv) {
     StepD_AllocationCost();
     StepE_FfmpegThreading(path);
     StepF_HardwareDecodeSupport();
+    StepH_AudioContinuityUnderSlowVideo(engine);
 
     printf("=== [probe] DONE ===\n");
     return 0;
