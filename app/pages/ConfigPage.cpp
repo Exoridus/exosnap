@@ -680,10 +680,16 @@ capability::AudioCodec IntToAudioCodec(int value) {
     return capability::AudioCodec::Aac;
 }
 
-// The frame-rate values the Default-tier combo offers out of the box. The
-// disabled "120 fps (unavailable)" entry is deliberately not part of this set:
-// it exists to explain an absence, not to be selectable.
-constexpr int kListedFrameRates[] = {15, 30, 60};
+// The frame-rate values the Default-tier combo offers out of the box.
+// 120 is selectable only when an attached display can actually deliver it --
+// the capture pipeline cannot produce more frames than the screen refreshes,
+// so offering it on a 60 Hz panel would promise a rate the recording could
+// never honour. updateFrameRateSelection() enables/disables that one entry
+// against the derived ceiling; the rest are always available.
+constexpr int kListedFrameRates[] = {15, 30, 60, 120};
+
+// The listed rate that is conditional on the display ceiling (see above).
+constexpr int kDisplayGatedFrameRate = 120;
 
 // Item-data role marking the dynamic "<n> fps (Custom)" entry the combo grows
 // when the model carries a frame rate the list does not offer (e.g. one entered
@@ -1135,13 +1141,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     for (const int fps : kListedFrameRates) {
         frame_rate_combo_->addItem(QStringLiteral("%1 fps").arg(fps), fps);
     }
-    frame_rate_combo_->addItem(QStringLiteral("120 fps (unavailable)"), 120);
-    if (auto* model = qobject_cast<QStandardItemModel*>(frame_rate_combo_->model())) {
-        if (auto* item = model->item(frame_rate_combo_->count() - 1)) {
-            item->setEnabled(false);
-            item->setToolTip(QStringLiteral("120 fps is hidden from runtime use until hardware support is proven."));
-        }
-    }
+    // The display-gated entry's state is established by
+    // updateFrameRateSelection(), which runs once the ceiling has been derived.
 
     // Expert-only free-entry frame rate. Swapped in for the combo by
     // updateExpertModeVisibility(); hidden by default (non-expert / at construction).
@@ -2342,11 +2343,13 @@ void ConfigPage::onFrameRateChanged(int index) {
     if (fps <= 0)
         return;
     // The dynamic custom entry mirrors the model's own frame rate, so landing on
-    // it changes nothing -- and it must not be mistaken for the disabled 120
-    // entry below when the custom value happens to be 120.
+    // it changes nothing.
     if (frame_rate_combo_->itemData(index, kFrameRateCustomRole).toBool())
         return;
-    if (fps == 120)
+    // A listed rate the attached displays cannot feed never reaches the model.
+    // The disabled item state alone only stops interactive selection, so the
+    // rule is enforced here too rather than trusted to the widget.
+    if (fps > max_frame_rate_)
         return;
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
@@ -3267,7 +3270,23 @@ void ConfigPage::updateFrameRateSelection() {
 
     const int fps = static_cast<int>(video_settings_.frame_rate_num);
 
-    // Truthful reporting: the combo statically offers {15, 30, 60} only, but the
+    // Gate the display-dependent entry against the current ceiling. Disabled
+    // rather than hidden: an absent entry looks like the product cannot do it
+    // at all, a disabled one with a reason says which hardware it needs.
+    if (auto* model = qobject_cast<QStandardItemModel*>(frame_rate_combo_->model())) {
+        const int gated_idx = frame_rate_combo_->findData(kDisplayGatedFrameRate);
+        if (auto* item = (gated_idx >= 0) ? model->item(gated_idx) : nullptr) {
+            const bool reachable = max_frame_rate_ >= kDisplayGatedFrameRate;
+            item->setEnabled(reachable);
+            item->setToolTip(reachable ? QString()
+                                       : QStringLiteral("Needs a display running at %1 Hz or more; the "
+                                                        "fastest attached display reports %2 Hz.")
+                                             .arg(kDisplayGatedFrameRate)
+                                             .arg(max_frame_rate_));
+        }
+    }
+
+    // Truthful reporting: the combo statically offers a fixed set only, but the
     // model can legitimately carry any 1-240 fps value entered in Expert mode.
     // Snapping the display to the nearest listed entry would claim a frame rate
     // the app is not recording at, so grow a dedicated entry for the real value
@@ -3283,8 +3302,8 @@ void ConfigPage::updateFrameRateSelection() {
         }
         frame_rate_combo_->insertItem(insert_at, QStringLiteral("%1 fps (Custom)").arg(fps), fps);
         frame_rate_combo_->setItemData(insert_at, true, kFrameRateCustomRole);
-        // Select by position, not findData(): a custom 120 would otherwise match
-        // the disabled "120 fps (unavailable)" entry.
+        // Select by position, not findData(): findData would match the fixed
+        // entry carrying the same value instead of the custom one just added.
         frame_rate_combo_->setCurrentIndex(insert_at);
         return;
     }
