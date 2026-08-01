@@ -123,7 +123,7 @@ capability::UserRecorderConfig BuildUserRecorderConfig(const AutoRecordOptions& 
     config.chroma = MapChroma(options.chroma);
     config.bit_depth = MapBitDepth(options.bit_depth);
     config.hdr_mode = MapHdrMode(options.hdr_mode);
-    config.frame_rate_num = 60;
+    config.frame_rate_num = options.frame_rate;
     config.frame_rate_den = 1;
     return config;
 }
@@ -214,7 +214,13 @@ int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator&
     // the recording thread reads, so this — not the resolver seed above — decides the
     // container/codec the file is written with.
     coordinator.SetOutputSettings(BuildOutputSettings(options));
-    coordinator.SetVideoSettings(VideoSettingsModel::Defaults());
+    // The frame rate has to travel through the video settings, not the resolver
+    // seed above: RecordingCoordinator stamps the recording config from
+    // video_settings, so a rate set anywhere else is silently replaced by 60.
+    VideoSettingsModel video_settings = VideoSettingsModel::Defaults();
+    video_settings.frame_rate_num = static_cast<uint32_t>(options.frame_rate);
+    video_settings.frame_rate_den = 1;
+    coordinator.SetVideoSettings(video_settings);
 
     // Select a capture target.
     //   Monitor → the first display-kind target.

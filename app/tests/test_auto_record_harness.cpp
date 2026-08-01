@@ -85,6 +85,40 @@ TEST(AutoRecordHarness, ParsesFullOptionSet) {
     EXPECT_EQ(opts.capture_frame_at_seconds, 3);
 }
 
+// Frame rate was hard-coded to 60 in the harness, which made every rate the
+// product offers except 60 unreachable from the command line -- and so
+// unverifiable without driving the UI by hand.
+TEST(AutoRecordHarness, ParsesFrameRate) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                              QStringLiteral("--frame-rate"), QStringLiteral("120")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_EQ(opts.frame_rate, 120);
+}
+
+TEST(AutoRecordHarness, FrameRateDefaultsToSixty) {
+    AutoRecordOptions opts;
+    QString error;
+    const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record")};
+    ASSERT_TRUE(ParseAutoRecordOptions(args, &opts, &error)) << error.toStdString();
+    EXPECT_EQ(opts.frame_rate, 60);
+}
+
+TEST(AutoRecordHarness, RejectsFrameRateOutsideWhatTheProductOffers) {
+    // The Expert frame-rate field accepts 1-240; anything outside that is a
+    // typo, and silently recording at 60 instead would make a verification run
+    // claim to prove something it never exercised.
+    AutoRecordOptions opts;
+    QString error;
+    for (const auto& bad : {QStringLiteral("0"), QStringLiteral("-1"), QStringLiteral("241"), QStringLiteral("abc")}) {
+        const QStringList args = {QStringLiteral("exosnap.exe"), QStringLiteral("--auto-record"),
+                                  QStringLiteral("--frame-rate"), bad};
+        EXPECT_FALSE(ParseAutoRecordOptions(args, &opts, &error)) << "accepted " << bad.toStdString();
+        EXPECT_FALSE(error.isEmpty());
+    }
+}
+
 TEST(AutoRecordHarness, ParsesCaptureFrameInReadyFlag) {
     AutoRecordOptions opts;
     QString error;

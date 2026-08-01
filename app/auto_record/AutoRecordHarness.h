@@ -27,6 +27,7 @@ struct AutoRecordOptions {
     int chroma = 420;                             // 420 | 444
     int bit_depth = 8;                            // 8 | 10
     HdrMode hdr_mode = HdrMode::Off;
+    int frame_rate = 60; // 1-240; the product's own Expert range
     int duration_seconds = 10;
     int capture_frame_at_seconds = -1; // -1 = disabled
     // Preview mode only: capture a frame while the coordinator is still Ready
