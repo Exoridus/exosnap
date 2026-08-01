@@ -19,6 +19,37 @@ mkdir -p "$EXOSNAP_OUTPUT_DIR"
 ./exosnap.exe --auto-record --target monitor --audio-rows sys --duration 5
 ```
 
+## Verifying a specific capture format
+
+The same mode reaches formats that otherwise need the Expert UI, which makes them
+checkable without driving the application by hand:
+
+```
+# 4:4:4 chroma (H.264/HEVC, 8-bit only -- see docs/product-spec.md "Chroma")
+exosnap.exe --auto-record --target monitor --audio-rows sys --duration 6 \
+    --chroma 444 --video-codec h264 --bit-depth 8
+
+# A frame rate other than the default 60 (accepts 1-240, the product's own range)
+exosnap.exe --auto-record --target monitor --audio-rows sys --duration 20 \
+    --frame-rate 120 --video-codec h264
+```
+
+Confirm what actually landed in the file rather than trusting the flag:
+
+```
+ffprobe -hide_banner -v error -select_streams v:0 \
+    -show_entries stream=codec_name,pix_fmt,r_frame_rate,avg_frame_rate "<output_path>"
+```
+
+`pix_fmt=yuv444p` and `r_frame_rate=120/1` are the respective proofs. For a frame
+rate, also count packets against the duration — a container can declare a rate it
+never delivered:
+
+```
+ffprobe -hide_banner -v error -select_streams v:0 -count_packets \
+    -show_entries stream=nb_read_packets -of csv=p=0 "<output_path>"
+```
+
 ## Expected
 
 - The process runs headless (no window, no interaction) for ~5 seconds plus a short

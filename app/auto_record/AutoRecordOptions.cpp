@@ -142,6 +142,20 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
                     *error = QStringLiteral("--duration requires a positive integer");
                 return false;
             }
+        } else if (arg == QStringLiteral("--frame-rate")) {
+            QString value;
+            if (!require_value(&value))
+                return false;
+            bool ok = false;
+            parsed.frame_rate = value.toInt(&ok);
+            // Bounded by what the product itself offers (the Expert frame-rate
+            // field accepts 1-240). Falling back to 60 on a typo would let a
+            // verification run claim a rate it never exercised.
+            if (!ok || parsed.frame_rate < 1 || parsed.frame_rate > 240) {
+                if (error)
+                    *error = QStringLiteral("--frame-rate requires an integer between 1 and 240");
+                return false;
+            }
         } else if (arg == QStringLiteral("--repeat-cycles")) {
             QString value;
             if (!require_value(&value))

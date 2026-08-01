@@ -13,7 +13,7 @@
 // for the FFmpeg-threading check in step E. Writes nothing.
 //
 // Usage:
-//   probe_edit_playback.exe <path-to-mkv>
+//   probe_edit_playback.exe <path-to-mkv> [start_us]
 //
 // Measures, in order:
 //   A) EditPlayerEngine::Open() — success/error, HasVideoStream, HasAudioStream.
@@ -67,6 +67,18 @@
 //      the conversion-skip gate. Stops after 10s wall clock and reports block
 //      count, total media duration covered, the largest/p50/p99 gap between
 //      consecutive audio arrivals, and how many gaps exceeded 50ms.
+//   I) Seek alignment: the first video and audio PTS actually delivered after
+//      StartPlaybackDecode(start_us), reported as offsets from the position
+//      that was requested. A seek lands on the preceding keyframe, so both
+//      streams start early; audio must be trimmed back to the requested
+//      position or it plays ahead of the caller's clock for the whole run.
+//      A negative audio offset is the failure. No other step compares what was
+//      delivered against what was asked for -- only against each other.
+//
+// The timed steps (B, B2, H, I) all start at `start_us`, which defaults to
+// 600s to match the long reference clip these measurements were first taken
+// on. Pass a position inside the file when probing a short recording, or every
+// timed step starts past its end and measures nothing.
 //
 // Exit code 0 if step A's Open() succeeded (regardless of what the
 // measurements themselves show), 1 on a hard failure (bad args, Open failed).
@@ -126,8 +138,9 @@ bool StepA_Open(recorder_core::EditPlayerEngine& engine, const std::string& path
 }
 
 // ---- Step B: real playback-decode throughput, max speed, 10s wall clock ----
-void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine) {
-    printf("=== [B] Playback-decode throughput (start_us=600000000, 10s wall clock, no pacing) ===\n");
+void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t kStartUs) {
+    printf("=== [B] Playback-decode throughput (start_us=%lld, 10s wall clock, no pacing) ===\n",
+           static_cast<long long>(kStartUs));
 
     std::atomic<uint64_t> videoFrames{0};
     std::atomic<uint64_t> audioBlocks{0};
@@ -150,7 +163,6 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine) {
         audioBlocks.fetch_add(1, std::memory_order_relaxed);
     };
 
-    constexpr int64_t kStartUs = 600'000'000; // 600s
     const auto t0 = std::chrono::steady_clock::now();
     // No media clock: nothing is presenting these frames, so nothing is
     // "late" and the engine discards nothing before conversion. That keeps
@@ -187,7 +199,7 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine) {
 // design most likely to regress into a hang. A single start/stop (step B)
 // does not exercise the reap path a SECOND start takes. Each cycle here must
 // terminate; if one hangs, this probe hangs, which is the signal.
-void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine) {
+void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine, int64_t kStartUs) {
     printf("=== [B2] Repeated start/stop on the same open engine (3 cycles, 300ms each) ===\n");
 
     constexpr int kCycles = 3;
@@ -196,7 +208,7 @@ void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine) {
         std::atomic<uint64_t> audioBlocks{0};
         const auto t0 = std::chrono::steady_clock::now();
         engine.StartPlaybackDecode(
-            600'000'000, [&](recorder_core::DecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
+            kStartUs, [&](recorder_core::DecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
             [&](recorder_core::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         engine.StopPlaybackDecode();
@@ -632,7 +644,7 @@ void StepG_SimdVariants() {
 // stutter pattern tied to the 120ms video cadence. The regression this
 // guards against is audio gaps correlated with the video stall, which would
 // mean the two paths are still coupled somewhere.
-void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine) {
+void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine, int64_t kStartUs) {
     printf("=== [H] Audio continuity while video is artificially throttled (120ms/frame, 10s wall clock) ===\n");
 
     struct AudioArrival {
@@ -667,9 +679,8 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
         // above. We only need the arrival timestamp and pts/frame_count.
     };
 
-    constexpr int64_t kStartUs = 600'000'000; // 600s, same reference point as steps B/B2
     const auto t0 = std::chrono::steady_clock::now();
-    auto mediaClock = [t0]() -> int64_t {
+    auto mediaClock = [t0, kStartUs]() -> int64_t {
         const auto elapsedUs =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
         return kStartUs + elapsedUs;
@@ -754,21 +765,117 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Step I: seek accuracy / audio-video start alignment.
+//
+// A playback seek positions on the KEYFRAME at or before the requested start,
+// so both streams begin decoding earlier than asked. Video discards the
+// difference against the media clock; audio has no clock comparison to make
+// and must be trimmed by timestamp instead. If that trim is missing or wrong,
+// the renderer receives sound starting at the keyframe while the caller's
+// clock is seeded to the requested position -- and video leads audio by that
+// gap for the whole run, up to a full keyframe interval.
+//
+// This is the one thing the other steps cannot see: they all start at a fixed
+// position and only ever compare deliveries against each other, never against
+// the position that was actually asked for.
+void StepI_SeekAlignment(recorder_core::EditPlayerEngine& engine, int64_t startUs) {
+    printf("=== [I] Seek alignment (start_us=%lld) ===\n", static_cast<long long>(startUs));
+
+    std::mutex m;
+    bool haveVideo = false;
+    bool haveAudio = false;
+    int64_t firstVideoPts = 0;
+    int64_t firstAudioPts = 0;
+
+    auto onVideo = [&](recorder_core::DecodedVideoFrame frame) {
+        std::lock_guard<std::mutex> lock(m);
+        if (!haveVideo) {
+            haveVideo = true;
+            firstVideoPts = frame.pts_us;
+        }
+    };
+    auto onAudio = [&](recorder_core::DecodedAudioBlock block) {
+        std::lock_guard<std::mutex> lock(m);
+        if (!haveAudio) {
+            haveAudio = true;
+            firstAudioPts = block.pts_us;
+        }
+    };
+
+    // No media clock on purpose: this measures what the ENGINE delivers, not
+    // what a consumer would have kept afterwards.
+    engine.StartPlaybackDecode(startUs, onVideo, onAudio, {});
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    engine.StopPlaybackDecode();
+
+    std::lock_guard<std::mutex> lock(m);
+    if (!haveVideo && !haveAudio) {
+        printf("[I] nothing delivered -- is start_us past the end of this clip?\n");
+        return;
+    }
+    if (haveVideo) {
+        printf("[I] first_video_pts=%lld offset=%+.3fms\n", static_cast<long long>(firstVideoPts),
+               static_cast<double>(firstVideoPts - startUs) / 1000.0);
+    } else {
+        printf("[I] first_video_pts=N/A\n");
+    }
+    if (!haveAudio) {
+        printf("[I] first_audio_pts=N/A (no audio stream, or none delivered)\n");
+        return;
+    }
+    const int64_t audioOff = firstAudioPts - startUs;
+    printf("[I] first_audio_pts=%lld offset=%+.3fms\n", static_cast<long long>(firstAudioPts),
+           static_cast<double>(audioOff) / 1000.0);
+
+    // A negative offset is the failure: audio older than the requested start
+    // reached the caller, and every later sample inherits that shift.
+    if (audioOff < 0) {
+        printf("[I] VERDICT: FAIL -- audio starts %.3fms BEFORE the requested position; video leads audio by that "
+               "much for the entire run.\n",
+               static_cast<double>(-audioOff) / 1000.0);
+    } else if (haveVideo) {
+        // The video offset being negative here is EXPECTED and not a defect:
+        // this step deliberately passes no media clock, so the engine has
+        // nothing to judge "already in the past" against and delivers its
+        // keyframe preroll instead of discarding it. The shipped player does
+        // pass a clock and drops exactly those frames.
+        printf("[I] VERDICT: PASS -- audio starts at or after the requested position. (Video's own negative offset is "
+               "expected: no media clock is supplied here, so its preroll is delivered rather than discarded; the "
+               "player supplies one and drops it.)\n");
+    } else {
+        printf("[I] VERDICT: PASS -- audio starts at or after the requested position.\n");
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printf("usage: probe_edit_playback.exe <path-to-mkv>\n");
+        printf("usage: probe_edit_playback.exe <path-to-mkv> [start_us]\n");
+        printf("  start_us: playback start position for the timed steps, default 600000000 (600s).\n");
+        printf("            Pass a position inside the clip when probing a short recording.\n");
         return 1;
     }
     const std::string path = argv[1];
-    printf("[probe] path=%s\n", path.c_str());
+    // The historical default matches the long reference clip the earlier
+    // measurements were taken on. A short recording needs an explicit value,
+    // or every timed step starts past its end and measures nothing.
+    int64_t startUs = 600'000'000;
+    if (argc >= 3) {
+        startUs = std::strtoll(argv[2], nullptr, 10);
+        if (startUs < 0) {
+            printf("[probe] start_us must not be negative\n");
+            return 1;
+        }
+    }
+    printf("[probe] path=%s start_us=%lld\n", path.c_str(), static_cast<long long>(startUs));
 
     recorder_core::EditPlayerEngine engine;
     if (!StepA_Open(engine, path)) {
         return 1;
     }
 
-    StepB_PlaybackThroughput(engine);
-    StepB2_RepeatedStartStop(engine);
+    StepB_PlaybackThroughput(engine, startUs);
+    StepB2_RepeatedStartStop(engine, startUs);
     StepC_ConvertCost();
     StepC2_Convert444Cost();
     // Runs immediately after C -- same real ConvertFullPlanarYuv420ToBgra
@@ -778,7 +885,8 @@ int main(int argc, char** argv) {
     StepD_AllocationCost();
     StepE_FfmpegThreading(path);
     StepF_HardwareDecodeSupport();
-    StepH_AudioContinuityUnderSlowVideo(engine);
+    StepH_AudioContinuityUnderSlowVideo(engine, startUs);
+    StepI_SeekAlignment(engine, startUs);
 
     printf("=== [probe] DONE ===\n");
     return 0;
