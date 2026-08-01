@@ -141,6 +141,10 @@ include(cmake/exosnap_static_analysis.cmake)
 
 # Auto-configure the git hooks path so pre-commit and pre-push are picked up
 # automatically after every fresh clone, without a separate install step.
+# pull.ff is set here for the same reason: it is per-clone local config that
+# cannot be committed, so configure is the only place that can carry it. With
+# "only", a pull that would need a merge fails loudly instead of quietly
+# recording one — which is how a stale local main goes unnoticed.
 find_package(Git QUIET)
 if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     execute_process(
@@ -151,6 +155,15 @@ if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     )
     if(NOT _exosnap_git_hooks_result EQUAL 0)
         message(STATUS "Git hooks path was not updated during configure; continuing.")
+    endif()
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} config pull.ff only
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        RESULT_VARIABLE _exosnap_git_pull_ff_result
+        ERROR_QUIET
+    )
+    if(NOT _exosnap_git_pull_ff_result EQUAL 0)
+        message(STATUS "pull.ff was not updated during configure; continuing.")
     endif()
 endif()
 
