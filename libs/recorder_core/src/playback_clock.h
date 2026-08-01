@@ -97,8 +97,9 @@ inline constexpr size_t kMinVideoQueueFrames = 4;
 
 // Frame rates above this are taken as a declaration error rather than a real
 // capture rate (Matroska with a millisecond timebase routinely reports
-// r_frame_rate = 1000/1). High-speed capture at 240 or 480 fps stays below it.
-inline constexpr double kMaxPlausibleFrameRate = 480.0;
+// r_frame_rate = 1000/1). 240 is the highest rate the product offers, so
+// anything beyond it cannot have come from one of our own recordings.
+inline constexpr double kMaxPlausibleFrameRate = 240.0;
 
 // How many decoded frames the queue between the video decode thread and
 // PollFrame() must be able to hold.

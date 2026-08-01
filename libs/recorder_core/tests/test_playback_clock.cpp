@@ -79,6 +79,16 @@ TEST(VideoQueueCapacityForFrameRate, HighResolutionHighRateClipStaysWithinTheByt
     EXPECT_LE(capacity * k2160p, kDefaultMaxVideoQueueBytes);
 }
 
+TEST(VideoQueueCapacityForFrameRate, RatesBeyondWhatTheProductRecordsAreTreatedAsMisdeclared) {
+    // 240 fps is the highest the product offers, so it must still size from the
+    // rate rather than being written off as a bad declaration.
+    EXPECT_GT(VideoQueueCapacityForFrameRate(240.0, kDecodeAhead, kTinyFrame, kDefaultMaxVideoQueueBytes), 16u);
+    // Above it, no capture path could have produced the number, so the queue is
+    // sized off the floor instead of off whatever the container claims.
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(241.0, kDecodeAhead, kTinyFrame, kDefaultMaxVideoQueueBytes), 16u);
+    EXPECT_EQ(VideoQueueCapacityForFrameRate(480.0, kDecodeAhead, kTinyFrame, kDefaultMaxVideoQueueBytes), 16u);
+}
+
 TEST(VideoQueueCapacityForFrameRate, MisdeclaredFrameRateCannotAllocateGigabytes) {
     // A Matroska file with a millisecond timebase routinely declares
     // r_frame_rate = 1000/1. That is 200 frames in the window -- 2.9 GB at
