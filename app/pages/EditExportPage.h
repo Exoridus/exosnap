@@ -138,6 +138,10 @@ class EditExportPage : public QWidget {
     void applyThemeStyles();
     void refreshPhase();
     void loadMarkers();
+    // Asks before an export that replaces the original recording. Returns true
+    // when the export may proceed (either it writes a new file, or the user
+    // confirmed the replacement).
+    bool confirmOverwrite();
     void runExport();
     void refreshPlayButton();
     // Retunes the preview timer to the open clip's frame rate, capped at the

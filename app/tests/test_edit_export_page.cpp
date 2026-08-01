@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFrame>
@@ -62,6 +64,56 @@ void SendMouse(QWidget* w, QEvent::Type type, const QPoint& pos) {
     const Qt::MouseButtons buttons = (type == QEvent::MouseButtonRelease) ? Qt::NoButton : Qt::MouseButtons(button);
     QMouseEvent ev(type, QPointF(pos), QPointF(w->mapToGlobal(pos)), button, buttons, Qt::NoModifier);
     QCoreApplication::sendEvent(w, &ev);
+}
+
+// Answers the modal confirmation from outside. QDialog::exec() spins its own
+// event loop, so the click has to come from a timer that fires inside it; the
+// watchdog closes anything still standing so a missing button fails the
+// assertions below instead of hanging the suite.
+void AnswerModalDialog(const QString& button_text, bool* out_appeared) {
+    auto* timer = new QTimer;
+    auto* attempts = new int(0);
+    timer->setInterval(10);
+    QObject::connect(timer, &QTimer::timeout, timer, [timer, button_text, out_appeared, attempts]() {
+        auto finish = [timer, attempts]() {
+            timer->stop();
+            delete attempts;
+            timer->deleteLater();
+        };
+        if (++*attempts > 200) { // ~2 s
+            if (auto* stuck = QApplication::activeModalWidget())
+                stuck->close();
+            finish();
+            return;
+        }
+        auto* modal = QApplication::activeModalWidget();
+        if (modal == nullptr)
+            return;
+        for (auto* btn : modal->findChildren<QAbstractButton*>()) {
+            if (QString(btn->text()).remove(QLatin1Char('&')) != button_text)
+                continue;
+            if (out_appeared != nullptr)
+                *out_appeared = true;
+            btn->click();
+            finish();
+            return;
+        }
+    });
+    timer->start();
+}
+
+// Puts the page in the phase whose primary button starts the export, with the
+// save mode set to `mode_key` ("overwrite" / "new").
+QPushButton* ArmExportButton(EditExportPage& page, const QString& mode_key) {
+    page.setPhase(EditExportPage::Phase::Output);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"));
+    if (combo == nullptr)
+        return nullptr;
+    const int index = combo->findData(mode_key);
+    if (index < 0)
+        return nullptr;
+    combo->setCurrentIndex(index);
+    return page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
 }
 
 EditContext MakeContext(double duration_seconds, std::vector<RecordingMarker> markers = {}) {
@@ -190,6 +242,53 @@ TEST_F(EditExportPageTest, PrimaryButton_FromEdit_AdvancesToOutput) {
     ASSERT_NE(primary, nullptr);
     primary->click();
     EXPECT_EQ(page.phase(), EditExportPage::Phase::Output);
+}
+
+// "Overwrite original" replaces the user's only copy of the recording, so it
+// must not run off a single click. Declining leaves the page exactly where it
+// was -- not half-started, not Failed.
+TEST_F(EditExportPageTest, OverwriteExport_Declined_DoesNotStart) {
+    EditExportPage page;
+    auto* primary = ArmExportButton(page, QStringLiteral("overwrite"));
+    ASSERT_NE(primary, nullptr);
+
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Keep original"), &asked);
+    primary->click();
+
+    EXPECT_TRUE(asked) << "overwriting the original must be confirmed first";
+    EXPECT_EQ(page.phase(), EditExportPage::Phase::Output) << "declining must leave the export unstarted";
+}
+
+// Confirming actually proceeds. The export then fails for want of an edit
+// master (none is set in this fixture) -- reaching Failed is precisely what
+// proves runExport() was entered rather than skipped.
+TEST_F(EditExportPageTest, OverwriteExport_Confirmed_Starts) {
+    EditExportPage page;
+    auto* primary = ArmExportButton(page, QStringLiteral("overwrite"));
+    ASSERT_NE(primary, nullptr);
+
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Overwrite"), &asked);
+    primary->click();
+
+    EXPECT_TRUE(asked);
+    EXPECT_NE(page.phase(), EditExportPage::Phase::Output) << "confirming must start the export";
+}
+
+// Writing a new file destroys nothing, so it must not interrupt the user with
+// a question at all.
+TEST_F(EditExportPageTest, NewFileExport_StartsWithoutAsking) {
+    EditExportPage page;
+    auto* primary = ArmExportButton(page, QStringLiteral("new"));
+    ASSERT_NE(primary, nullptr);
+
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Keep original"), &asked);
+    primary->click();
+
+    EXPECT_FALSE(asked) << "a new-file export replaces nothing and must not prompt";
+    EXPECT_NE(page.phase(), EditExportPage::Phase::Output) << "the export must start straight away";
 }
 
 TEST_F(EditExportPageTest, BackButton_FromEdit_ReturnsToReview) {
