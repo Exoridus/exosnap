@@ -60,12 +60,30 @@ engine's existing single-writer contract intact rather than bolting locks onto i
   **bounded-and-blocking**. The video decode thread waits when the queue is full and is woken by
   `PollFrame()` draining it, or by stop. Presentation therefore paces decode, and a video thread
   that falls behind cannot race through the file converting frames nobody will see.
-- **Demux** is paced by both packet queues, each bounded by buffered media duration
-  (target: 1 s per stream). The demuxer waits when the queue it must push into is full.
+- **Demux** is paced by the **playback position**, not by queue occupancy: it reads until both
+  streams are one second ahead of the clock, then waits for the clock to advance. With no clock
+  available (throughput probes, video-only sessions) it never waits and runs at full speed.
 
-The one-second packet buffer is what buys the guarantee: if video decode stalls entirely, audio
-still has roughly a second of packets queued ahead of it. Every hitch this design is meant to
-absorb is orders of magnitude shorter than that.
+  Pacing on occupancy instead was measured and rejected. A single demuxer reads in container
+  interleave order, so a wait in front of a video packet also withholds the audio packets sitting
+  right behind it. Once *any* occupancy bound saturates — and it saturates within tens of
+  milliseconds, because the demuxer reads roughly a hundred times faster than a consumer drains —
+  the demuxer's forward progress is gated 1:1 by the slowest consumer, which stamps that consumer's
+  cadence onto the *other* stream's delivery. Raising the bound does not help: the extra headroom is
+  spent in the first few tens of milliseconds and the coupling returns (measured: growing the bound
+  from 1 s to 30 s raised the audio delivered during the probe's step H from 11.3 s to 41.5 s of
+  media, and left the number of >50 ms delivery gaps at 74 of 74).
+
+- **The packet queues** keep a **soft** capacity (1 s per stream, the normal buffer target) and a
+  **hard** one (8 s / 8192 packets, a memory backstop that never binds in normal playback). At or
+  above the soft capacity the demuxer keeps inserting as long as the *other* stream is below a
+  250 ms low-water mark, and only genuinely waits at the hard capacity. The rule is symmetric —
+  neither stream is privileged — and it is what lets the clock-paced read-ahead above actually
+  govern while one consumer sits inside a long callback.
+
+Together these buy the guarantee: audio packet delivery follows the clock, not the video
+consumer's cadence, and a fully stalled video path still leaves audio the whole hard-capacity
+read-ahead to keep going on rather than one second.
 
 ### Conversion follows the clock, not the file
 
@@ -92,6 +110,14 @@ condition variable, the frame-queue wait the same way, and the audio ring by
 `audio.Stop()` before stopping decode). Any thread still blocked when its join runs is a hang, so
 each wait predicate must include the stop flag rather than only the space/data condition.
 
+Two of the demuxer's waits depend on state that its own condition variable does not own — the
+*other* queue's level, and the playback clock, which is a plain function with nothing to be
+notified by. Both are therefore time-bounded (5 ms and 2 ms) and re-read the stop flag on every
+iteration, so no notification or predicate mistake can turn either into a permanent stall. The
+peer queue still notifies on every pop, so the timeout is a backstop and not the mechanism. The
+queues are also peered through lock-free level mirrors rather than each other's mutexes, so the
+two mutexes are never held at once and no lock cycle can exist.
+
 ## Non-goals
 
 - No change to the clock, frame selection, or drop accounting (`playback_clock.h`) — all of it is
@@ -104,20 +130,35 @@ each wait predicate must include the stop flag rather than only the space/data c
 
 ## Testing
 
-- The queue bound and the "is this frame still worth converting" predicate are pure functions and
-  are unit-tested as such, alongside the existing pacing math.
+- The three decisions the demuxer and the video thread make — "is this frame still worth
+  converting", "may I read another packet yet", "may I insert past the soft capacity" — are pure
+  functions in `edit_playback_pacing.h` and are unit-tested as such (`test_edit_player_engine.cpp`),
+  including the boundary cases: soft capacity reached with a fed peer waits, soft capacity reached
+  with a starving peer keeps going, hard capacity always waits, abort beats everything.
 - Thread topology itself has no unit-test seam without a real file and a real device — the same
   boundary `test_edit_player_engine.cpp` already draws. It is verified with
   `probe_edit_playback`, which drives the real engine on a real recording, and by live playback.
 - The regression this exists to prevent — audio hitching when video is slow — is reproducible by
-  measurement: with the video thread artificially throttled, audio block delivery must stay
-  continuous. That is the probe's job, not a unit test's.
+  measurement, which is the probe's step H job and not a unit test's: with the video callback
+  throttled to 120 ms/frame for 10 s, audio block delivery must stay continuous.
 
-## Open question
+  Measured on the 1440p60 reference clip:
 
-Packet-queue capacity is stated as 1 second per stream. That is a starting value chosen to be
-comfortably longer than any hitch this addresses, not a measured one; the probe can report the
-high-water mark actually reached and it can be tuned from that. It is shipped unmeasured.
+  | | gaps > 50 ms | max gap | p50 gap | verdict |
+  |---|---|---|---|---|
+  | occupancy-paced demux (1 s bound) | 71 | 142.6 ms | 0.09 ms | FAIL |
+  | occupancy-paced demux (30 s bound) | 74 | 141.4 ms | 0.02 ms | FAIL |
+  | clock-paced demux + soft/hard queues | 0 (8 of 8 runs) | 34.2–37.7 ms | 16–21 ms | PASS |
+
+  The shape of the failure is the tell: 71 gaps against 72 delivered video frames, i.e. one audio
+  gap per video callback. After the change the median gap is roughly one Opus packet — audio
+  arrives a packet at a time, paced by the clock, with the largest gap comfortably under the
+  threshold and no run producing a single gap over it.
+
+  Step B (maximum decode throughput) did not regress: 181.6 fps before, median 197.5 fps over the
+  eight runs after (spread 121–218 fps — that spread is machine load, not the change; the low
+  readings all came from runs immediately following a rebuild). Step B2's start/stop cycles kept
+  terminating in ~320 ms each, every run.
 
 ## Cost, measured
 

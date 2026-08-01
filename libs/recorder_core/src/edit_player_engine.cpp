@@ -13,6 +13,7 @@ extern "C" {
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <memory>
@@ -135,21 +136,44 @@ ColorRange MapRange(AVColorRange r) noexcept {
 
 // ---- Bounded packet queue (demux thread -> one decode thread) -------------
 //
-// How much media each queue may hold before the demuxer has to wait. One
-// second is the starting value from the design: comfortably longer than any
-// hitch this topology exists to absorb, so a video-side stall leaves audio
-// roughly a second of already-demuxed packets to keep going on.
+// How much media each queue holds. The SOFT capacity is the normal buffer
+// target from the design: one second per stream, comfortably longer than any
+// hitch this topology exists to absorb. The HARD capacity is a pure memory
+// backstop -- generous enough that it never binds in normal playback -- and is
+// the only limit the demuxer will genuinely wait at while the other stream is
+// running dry (see ShouldAdmitDemuxedPacket).
 //
 // Bounded by buffered DURATION rather than packet count on purpose -- a second
 // of Opus is ~50 tiny packets and a second of 1440p60 video is 60 much larger
 // ones, so any single count would either starve one stream or over-buffer the
-// other.
-constexpr int64_t kPacketQueueCapacityUs = 1'000'000;
+// other. The packet COUNT bound exists only for containers that declare no
+// packet durations at all (pkt->duration == 0), where the duration bound can
+// never trip.
+constexpr PacketQueueLimits kPacketQueueLimits{
+    /*soft_capacity_us=*/1'000'000,
+    /*hard_capacity_us=*/8'000'000,
+    /*hard_capacity_packets=*/8192,
+    /*peer_low_water_us=*/250'000,
+};
 
-// Memory backstop for containers that declare no packet durations at all
-// (pkt->duration == 0), where the duration bound above can never trip. Large
-// enough that it is never the binding limit for real material.
-constexpr size_t kPacketQueueMaxPackets = 1024;
+// How far ahead of the playback position the demuxer reads. Matches the soft
+// queue capacity: in normal playback both streams' consumers keep up, so the
+// demuxer settles about one second ahead of the clock either way.
+constexpr int64_t kDemuxReadAheadUs = 1'000'000;
+
+// Granularity of the demuxer's read-ahead wait. The playback clock is a plain
+// function, not an event source, so there is nothing to be notified by -- the
+// demuxer re-checks it on this interval. Short enough to be invisible next to
+// the one-second read-ahead budget, and every iteration re-reads the cancel
+// flag, so a stop is never delayed by more than this.
+constexpr auto kDemuxReadAheadPollInterval = std::chrono::milliseconds(2);
+
+// Upper bound on how long a Push waits before re-evaluating its admission
+// rule. That rule depends on the OTHER queue's level, which changes without
+// this queue's condition variable being involved; the peer notifies it (see
+// Pop), and this timeout makes a missed notification a 5 ms delay rather than
+// a stall.
+constexpr auto kPacketQueuePushRecheckInterval = std::chrono::milliseconds(5);
 
 enum class PopResult {
     Packet,      // a packet was moved into the caller's AVPacket
@@ -160,9 +184,17 @@ enum class PopResult {
 // Single-producer / single-consumer queue of refcounted packets. Packets are
 // handed over with av_packet_move_ref, never copied.
 //
-// EVERY wait predicate below includes `aborted_`, and Abort() notifies both
-// condition variables: a thread still parked in here when its join runs would
-// be a hang, so waking it is not optional (see the design's shutdown section).
+// The two queues of one playback run are PEERED (SetPeer): the producer's
+// admission rule reads the other queue's level, because a wait here withholds
+// the other stream's packets too. That cross-read goes through a lock-free
+// atomic mirror of the level, never through the peer's mutex, so the two
+// mutexes are never held at once and no lock cycle can exist.
+//
+// EVERY wait below includes `aborted_`, and Abort() notifies both condition
+// variables: a thread still parked in here when its join runs would be a hang,
+// so waking it is not optional (see the design's shutdown section). The
+// producer's wait is additionally time-bounded, so no admission-rule or
+// notification mistake can turn into a permanent stall.
 class PacketQueue {
   public:
     explicit PacketQueue(AVRational time_base) noexcept : time_base_(time_base) {
@@ -175,23 +207,38 @@ class PacketQueue {
     PacketQueue(const PacketQueue&) = delete;
     PacketQueue& operator=(const PacketQueue&) = delete;
 
+    // Set once, before any thread is spawned.
+    void SetPeer(PacketQueue* peer) noexcept {
+        peer_ = peer;
+    }
+
+    // Lock-free readers used by the peer's admission rule.
+    [[nodiscard]] int64_t LevelUs() const noexcept {
+        return level_us_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] bool ConsumerAlive() const noexcept {
+        return consumer_alive_.load(std::memory_order_relaxed);
+    }
+
     // Producer side. Takes ownership of *src's payload on success (src is left
     // blank, as if unreferenced). Returns false when the queue is aborted or
     // its consumer has already left -- the caller then drops the packet.
     bool Push(AVPacket* src) {
         std::unique_lock<std::mutex> lock(mutex_);
-        not_full_.wait(lock, [this] {
-            return aborted_ || consumer_gone_ ||
-                   (buffered_us_ < kPacketQueueCapacityUs && packets_.size() < kPacketQueueMaxPackets);
-        });
-        if (aborted_ || consumer_gone_)
-            return false;
+        while (true) {
+            if (aborted_ || consumer_gone_)
+                return false;
+            if (ShouldAdmitDemuxedPacket(AdmissionStateLocked(), kPacketQueueLimits))
+                break;
+            not_full_.wait_for(lock, kPacketQueuePushRecheckInterval);
+        }
         AVPacket* owned = av_packet_alloc();
         if (owned == nullptr)
             return false;
         av_packet_move_ref(owned, src);
         buffered_us_ += DurationUs(owned);
         packets_.push_back(owned);
+        level_us_.store(buffered_us_, std::memory_order_relaxed);
         lock.unlock();
         not_empty_.notify_one();
         return true;
@@ -219,10 +266,15 @@ class PacketQueue {
         buffered_us_ -= DurationUs(front);
         if (buffered_us_ < 0)
             buffered_us_ = 0;
+        level_us_.store(buffered_us_, std::memory_order_relaxed);
         av_packet_move_ref(dst, front);
         av_packet_free(&front);
         lock.unlock();
         not_full_.notify_one();
+        // This pop may have taken THIS stream below its low-water mark, which
+        // is a condition the producer evaluates while parked on the OTHER
+        // queue. Nothing else would wake it there.
+        NotifyPeerProducer();
         return PopResult::Packet;
     }
 
@@ -235,6 +287,7 @@ class PacketQueue {
         }
         not_empty_.notify_all();
         not_full_.notify_all();
+        NotifyPeerProducer();
     }
 
     // Consumer side, on the way out. A decode thread that ends early (decode
@@ -244,12 +297,29 @@ class PacketQueue {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             consumer_gone_ = true;
+            consumer_alive_.store(false, std::memory_order_relaxed);
             ClearLocked();
         }
         not_full_.notify_all();
+        NotifyPeerProducer();
     }
 
   private:
+    void NotifyPeerProducer() noexcept {
+        if (peer_ != nullptr)
+            peer_->not_full_.notify_one();
+    }
+
+    [[nodiscard]] PacketAdmissionState AdmissionStateLocked() const noexcept {
+        PacketAdmissionState state;
+        state.aborted = aborted_;
+        state.queued_us = buffered_us_;
+        state.queued_packets = packets_.size();
+        state.peer_consuming = peer_ != nullptr && peer_->ConsumerAlive();
+        state.peer_queued_us = (peer_ != nullptr) ? peer_->LevelUs() : 0;
+        return state;
+    }
+
     [[nodiscard]] int64_t DurationUs(const AVPacket* pkt) const noexcept {
         if (pkt->duration <= 0)
             return 0; // unknown: the packet-count backstop bounds this case
@@ -261,6 +331,7 @@ class PacketQueue {
             av_packet_free(&pkt);
         packets_.clear();
         buffered_us_ = 0;
+        level_us_.store(0, std::memory_order_relaxed);
     }
 
     AVRational time_base_{1, AV_TIME_BASE};
@@ -272,6 +343,11 @@ class PacketQueue {
     bool end_of_stream_ = false;
     bool aborted_ = false;
     bool consumer_gone_ = false;
+    // Peer-readable mirrors of the two fields the other queue's admission rule
+    // needs, so that read never touches this queue's mutex.
+    std::atomic<int64_t> level_us_{0};
+    std::atomic<bool> consumer_alive_{true};
+    PacketQueue* peer_ = nullptr;
 };
 
 // How many consecutive already-late frames the video thread tolerates before
@@ -646,6 +722,20 @@ int64_t FramePtsUs(const AVFrame* frame, AVRational tb) noexcept {
     return av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE});
 }
 
+// Moves one stream's demux read position forward to cover this packet. Uses
+// pts, falling back to dts; a packet with neither leaves the position
+// untouched (ShouldDemuxMorePackets then simply never paces, which is the safe
+// direction -- the queue limits still bound memory). Monotonic by max() so a
+// small container reordering cannot walk the position backwards.
+void AdvanceDemuxPosition(int64_t& position_us, const AVPacket* pkt, AVRational tb) noexcept {
+    const int64_t raw = (pkt->pts != AV_NOPTS_VALUE) ? pkt->pts : pkt->dts;
+    if (raw == AV_NOPTS_VALUE)
+        return;
+    const int64_t pts_us = av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE});
+    if (position_us == kUnknownDemuxPositionUs || pts_us > position_us)
+        position_us = pts_us;
+}
+
 } // namespace
 
 std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_us) {
@@ -724,8 +814,13 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
         audio_enabled ? fmt_ctx->streams[impl->audio_stream_idx]->time_base : AVRational{1, AV_TIME_BASE};
 
     impl->video_packets = std::make_unique<PacketQueue>(vtb);
-    if (audio_enabled)
+    if (audio_enabled) {
         impl->audio_packets = std::make_unique<PacketQueue>(atb);
+        // Peered both ways: the "may I go past the soft limit?" rule is
+        // symmetric, neither stream is privileged.
+        impl->video_packets->SetPeer(impl->audio_packets.get());
+        impl->audio_packets->SetPeer(impl->video_packets.get());
+    }
 
     impl->playback_cancel.store(false);
     impl->playback_running.store(true);
@@ -734,10 +829,32 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // ---- Demux thread: owns the AVFormatContext ----
     const int video_idx = impl->video_stream_idx;
     const int audio_idx = audio_enabled ? impl->audio_stream_idx : -1;
-    impl->demux_thread = std::thread([impl, fmt_ctx, video_idx, audio_idx]() {
+    impl->demux_thread = std::thread([impl, fmt_ctx, video_idx, audio_idx, media_clock_us = current_media_time_us]() {
         PacketGuard pkt(av_packet_alloc());
+        // Largest presentation timestamp handed on so far, per stream. Only
+        // the two streams actually played contribute; a stray third stream's
+        // timestamps must not move the read position.
+        int64_t video_pos_us = kUnknownDemuxPositionUs;
+        int64_t audio_pos_us = kUnknownDemuxPositionUs;
         if (pkt.pkt != nullptr) {
             while (!impl->playback_cancel.load()) {
+                const int64_t demuxed_through_us =
+                    (audio_idx >= 0) ? DemuxedThroughUs(video_pos_us, audio_pos_us) : video_pos_us;
+                // Read-ahead gate. Bounded by the playback position, NOT by
+                // queue occupancy: an occupancy bound makes the demuxer's
+                // forward progress follow whichever consumer drains slowest,
+                // which stamps that consumer's cadence onto the other
+                // stream's delivery -- precisely the coupling this topology
+                // exists to remove. With no clock (throughput probes,
+                // video-only sessions) this never waits.
+                while (!impl->playback_cancel.load() &&
+                       !ShouldDemuxMorePackets(demuxed_through_us, media_clock_us ? media_clock_us() : -1,
+                                               kDemuxReadAheadUs)) {
+                    std::this_thread::sleep_for(kDemuxReadAheadPollInterval);
+                }
+                if (impl->playback_cancel.load())
+                    break;
+
                 const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
                 if (read_ret < 0)
                     break; // EOF or a terminal read error: both decoders drain below
@@ -745,9 +862,11 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                 // only fails when the queue is aborted or its decode thread
                 // has already left, in which case the packet is dropped.
                 if (pkt.pkt->stream_index == video_idx) {
+                    AdvanceDemuxPosition(video_pos_us, pkt.pkt, fmt_ctx->streams[video_idx]->time_base);
                     if (!impl->video_packets->Push(pkt.pkt))
                         av_packet_unref(pkt.pkt);
                 } else if (audio_idx >= 0 && pkt.pkt->stream_index == audio_idx) {
+                    AdvanceDemuxPosition(audio_pos_us, pkt.pkt, fmt_ctx->streams[audio_idx]->time_base);
                     if (!impl->audio_packets->Push(pkt.pkt))
                         av_packet_unref(pkt.pkt);
                 } else {
