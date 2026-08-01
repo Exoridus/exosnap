@@ -499,6 +499,7 @@ class RecordPage : public QWidget {
     uint32_t current_frame_rate_num_ = 60;
     uint32_t current_frame_rate_den_ = 1;
     bool current_cfr_ = true;
+    VideoSettingsModel current_video_settings_{};
     WebcamSettings current_webcam_settings_{};
     std::wstring active_profile_name_;
     float preflight_mic_rms_ = 0.0f;
