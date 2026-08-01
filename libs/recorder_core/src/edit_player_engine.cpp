@@ -559,41 +559,59 @@ namespace {
 
 // True when the decoder emitted a frame layout this engine can convert
 // (fully-planar 4:2:0, 8- or 10-bit -- what our h264/hevc/av1 software
-// decoders produce for the product's own recordings).
+// decoders produce for the product's own 4:2:0 recordings; plus fully-planar
+// 4:4:4, 8-bit only -- what our h264/hevc software decoders produce for a
+// clip recorded with the Expert 4:4:4 chroma option, docs/product-spec.md
+// "Chroma": H.264/HEVC 8-bit only, no AV1, no 10-bit, no HDR10).
 bool IsConvertibleFrame(const AVFrame* frame) noexcept {
     return frame->width > 0 && frame->height > 0 &&
-           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUV420P10LE);
+           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUV420P10LE ||
+            frame->format == AV_PIX_FMT_YUV444P);
 }
 
 // Converts one held decoder frame to a ready-to-paint DecodedVideoFrame.
 DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix,
                                         ColorRange range) {
-    FullPlanarYuv420Frame src;
-    src.y_plane = frame->data[0];
-    src.y_stride_bytes = static_cast<uint32_t>(frame->linesize[0]);
-    src.u_plane = frame->data[1];
-    src.u_stride_bytes = static_cast<uint32_t>(frame->linesize[1]);
-    src.v_plane = frame->data[2];
-    src.v_stride_bytes = static_cast<uint32_t>(frame->linesize[2]);
-    src.width = static_cast<uint32_t>(frame->width);
-    src.height = static_cast<uint32_t>(frame->height);
-    src.bits_per_sample = (frame->format == AV_PIX_FMT_YUV420P10LE) ? 10u : 8u;
-
     YuvToBgraParams params;
     params.matrix = matrix;
     params.range = range;
 
     DecodedVideoFrame out;
     out.pts_us = pts_us;
-    out.width = src.width;
-    out.height = src.height;
-    out.stride_bytes = src.width * 4u;
+    out.width = static_cast<uint32_t>(frame->width);
+    out.height = static_cast<uint32_t>(frame->height);
+    out.stride_bytes = out.width * 4u;
     // new[] default-initializes (no zero fill); the conversion below writes
     // every byte anyway, so zeroing first would be a pure ~15 MB memset per
     // frame at 1440p -- measured at 2.2 ms/frame, on a 16.7 ms budget.
     const size_t bgra_bytes = static_cast<size_t>(out.stride_bytes) * out.height;
     std::shared_ptr<uint8_t[]> bgra(new uint8_t[bgra_bytes]);
-    ConvertFullPlanarYuv420ToBgra(src, params, bgra.get(), out.stride_bytes);
+
+    if (frame->format == AV_PIX_FMT_YUV444P) {
+        FullPlanar444Frame src;
+        src.y_plane = frame->data[0];
+        src.y_stride_bytes = static_cast<uint32_t>(frame->linesize[0]);
+        src.u_plane = frame->data[1];
+        src.u_stride_bytes = static_cast<uint32_t>(frame->linesize[1]);
+        src.v_plane = frame->data[2];
+        src.v_stride_bytes = static_cast<uint32_t>(frame->linesize[2]);
+        src.width = out.width;
+        src.height = out.height;
+        ConvertFullPlanar444ToBgra(src, params, bgra.get(), out.stride_bytes);
+    } else {
+        FullPlanarYuv420Frame src;
+        src.y_plane = frame->data[0];
+        src.y_stride_bytes = static_cast<uint32_t>(frame->linesize[0]);
+        src.u_plane = frame->data[1];
+        src.u_stride_bytes = static_cast<uint32_t>(frame->linesize[1]);
+        src.v_plane = frame->data[2];
+        src.v_stride_bytes = static_cast<uint32_t>(frame->linesize[2]);
+        src.width = out.width;
+        src.height = out.height;
+        src.bits_per_sample = (frame->format == AV_PIX_FMT_YUV420P10LE) ? 10u : 8u;
+        ConvertFullPlanarYuv420ToBgra(src, params, bgra.get(), out.stride_bytes);
+    }
+
     out.bgra = std::move(bgra);
     return out;
 }

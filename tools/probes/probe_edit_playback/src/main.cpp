@@ -27,6 +27,11 @@
 //      terminate; a hang here IS the failure.
 //   C) Isolated cost of ConvertFullPlanarYuv420ToBgra on a 2560x1440 8-bit
 //      dummy YUV420P frame, 100 iterations, averaged.
+//   C2) Same measurement for ConvertFullPlanar444ToBgra (2026-08-01 follow-up:
+//      the editor player's decode path for the Expert 4:4:4 chroma option's
+//      recordings, AV_PIX_FMT_YUV444P, 8-bit only), scalar and SIMD, on a
+//      2560x1440 dummy frame, 100 iterations each, reported against the
+//      4:2:0 step C numbers.
 //   G) SIMD-vs-scalar comparison for the step C conversion (2026-08-01
 //      follow-up), run immediately after C for a comparable CPU clock state
 //      (see the call site in main() for why): the real baseline plus three
@@ -248,6 +253,78 @@ void StepC_ConvertCost() {
     const auto t1 = std::chrono::steady_clock::now();
     const double totalMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("[C] iters=%d total=%.3fms avg=%.4fms/frame\n", kIters, totalMs, totalMs / kIters);
+}
+
+// ---- Step C2: isolated YUV444 (fully-planar, 4:4:4, 8-bit) conversion cost ----
+//
+// 2026-08-01 follow-up: the editor player just gained a decode path for the
+// Expert 4:4:4 chroma option's recordings (AV_PIX_FMT_YUV444P, 8-bit only --
+// see recorder_core::ConvertFullPlanar444ToBgra). Same measurement shape as
+// step C, same resolution and iteration count, so the two numbers are
+// directly comparable. No a-priori estimate here: the per-pixel arithmetic
+// drops the 4:2:0 pair/block bookkeeping (less work), but the chroma INPUT
+// doubles (full-resolution U and V instead of quarter-resolution), and the
+// kernel is bandwidth-bound -- which effect wins is exactly what this
+// measures, not something to guess from the pixel math alone.
+void StepC2_Convert444Cost() {
+    printf("=== [C2] ConvertFullPlanar444ToBgra isolated cost (2560x1440 8-bit, 100 iters) ===\n");
+
+    constexpr uint32_t kWidth = 2560;
+    constexpr uint32_t kHeight = 1440;
+
+    std::vector<uint8_t> yPlane(static_cast<size_t>(kWidth) * kHeight);
+    std::vector<uint8_t> uPlane(static_cast<size_t>(kWidth) * kHeight);
+    std::vector<uint8_t> vPlane(static_cast<size_t>(kWidth) * kHeight);
+    for (size_t i = 0; i < yPlane.size(); ++i)
+        yPlane[i] = static_cast<uint8_t>(i & 0xFF);
+    for (size_t i = 0; i < uPlane.size(); ++i)
+        uPlane[i] = static_cast<uint8_t>((i * 3) & 0xFF);
+    for (size_t i = 0; i < vPlane.size(); ++i)
+        vPlane[i] = static_cast<uint8_t>((i * 7) & 0xFF);
+
+    std::vector<uint8_t> bgra(static_cast<size_t>(kWidth) * kHeight * 4);
+
+    recorder_core::FullPlanar444Frame src;
+    src.y_plane = yPlane.data();
+    src.y_stride_bytes = kWidth;
+    src.u_plane = uPlane.data();
+    src.u_stride_bytes = kWidth;
+    src.v_plane = vPlane.data();
+    src.v_stride_bytes = kWidth;
+    src.width = kWidth;
+    src.height = kHeight;
+
+    recorder_core::YuvToBgraParams params; // defaults: Bt709 / Limited
+
+    constexpr int kIters = 100;
+
+    const auto tScalar0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < kIters; ++i)
+        recorder_core::ConvertFullPlanar444ToBgraScalar(src, params, bgra.data(), kWidth * 4);
+    const auto tScalar1 = std::chrono::steady_clock::now();
+    const double scalarMs = std::chrono::duration<double, std::milli>(tScalar1 - tScalar0).count() / kIters;
+
+    const bool simdSupported = recorder_core::CpuSupportsYuvToBgraSimd();
+    double simdMs = -1.0;
+    if (simdSupported) {
+        const auto tSimd0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < kIters; ++i)
+            recorder_core::ConvertFullPlanar444ToBgraSimd(src, params, bgra.data(), kWidth * 4);
+        const auto tSimd1 = std::chrono::steady_clock::now();
+        simdMs = std::chrono::duration<double, std::milli>(tSimd1 - tSimd0).count() / kIters;
+    }
+
+    printf("[C2] scalar: iters=%d avg=%.4fms/frame\n", kIters, scalarMs);
+    if (simdSupported) {
+        printf("[C2] simd (SSE4.1): iters=%d avg=%.4fms/frame (factor=%.2fx)\n", kIters, simdMs,
+               simdMs > 0.0 ? scalarMs / simdMs : 0.0);
+    } else {
+        printf("[C2] simd (SSE4.1): SKIPPED -- this CPU does not report SSE4.1 support\n");
+    }
+    printf("[C2] vs 4:2:0 reference (scalar 13.3ms/frame, simd 2.86ms/frame): "
+           "444 scalar %.4fms/frame (%.2fx of 420), 444 simd %.4fms/frame (%.2fx of 420)\n",
+           scalarMs, scalarMs > 0.0 ? scalarMs / 13.3 : 0.0, simdSupported ? simdMs : 0.0,
+           (simdSupported && simdMs > 0.0) ? simdMs / 2.86 : 0.0);
 }
 
 // ---- Step D: isolated per-frame allocation cost ----
@@ -693,6 +770,7 @@ int main(int argc, char** argv) {
     StepB_PlaybackThroughput(engine);
     StepB2_RepeatedStartStop(engine);
     StepC_ConvertCost();
+    StepC2_Convert444Cost();
     // Runs immediately after C -- same real ConvertFullPlanarYuv420ToBgra
     // call, same frame shape. Kept adjacent purely for readability; the
     // ordering itself does not affect the timing (verified locally).
