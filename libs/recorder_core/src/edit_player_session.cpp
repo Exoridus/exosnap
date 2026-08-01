@@ -28,6 +28,16 @@ constexpr double kDecodeAheadSeconds = static_cast<double>(kDefaultRingCapacityF
 // playback_clock.h alongside the rest of the pacing arithmetic.
 constexpr size_t kMinVideoQueueCapacity = 16;
 
+// Bytes one queued frame occupies. DecodedVideoFrame carries BGRA, so this is
+// the clip's coded size regardless of its source chroma. Returns 0 when the
+// size is not known, which VideoQueueCapacityForFrameRate reads as "no byte
+// information" rather than "no budget".
+size_t QueuedFrameBytes(int width, int height) noexcept {
+    if (width <= 0 || height <= 0)
+        return 0;
+    return static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+}
+
 } // namespace
 
 struct EditPlayerSession::Impl {
@@ -139,7 +149,9 @@ bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out
     if (!impl_->engine.Open(path, out_error))
         return false;
 
-    impl_->video_queue_capacity = VideoQueueCapacityForFrameRate(impl_->engine.VideoFrameRate(), kDecodeAheadSeconds);
+    impl_->video_queue_capacity = VideoQueueCapacityForFrameRate(
+        impl_->engine.VideoFrameRate(), kDecodeAheadSeconds,
+        QueuedFrameBytes(impl_->engine.VideoWidth(), impl_->engine.VideoHeight()), kDefaultMaxVideoQueueBytes);
     impl_->has_audio = impl_->engine.HasAudioStream();
     if (impl_->has_audio) {
         std::string audio_err;
@@ -231,6 +243,20 @@ void EditPlayerSession::Play(int64_t start_us) {
                 impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
         },
         [this]() -> int64_t { return impl_->media_clock_us.load(); });
+
+    // The engine builds its playback resampler inside StartPlaybackDecode, and
+    // that can fail on a file whose audio stream opened perfectly well. This
+    // class paces video off the audio clock, so believing in audio that never
+    // arrives would leave FramesPlayed() at 0 forever: the clock would stay
+    // pinned to start_us, PollFrame would keep selecting the same frame, and
+    // playback would present as a frozen picture with a stationary playhead.
+    // Fall back to the same video-only path a file without an audio stream
+    // takes (see PollFrame) instead.
+    if (impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
+        impl_->has_audio = false;
+        impl_->audio.Stop();
+        impl_->media_clock_us.store(-1); // no clock: the decode thread stops discarding against it
+    }
 }
 
 void EditPlayerSession::Pause() {

@@ -60,6 +60,15 @@ engine's existing single-writer contract intact rather than bolting locks onto i
   **bounded-and-blocking**. The video decode thread waits when the queue is full and is woken by
   `PollFrame()` draining it, or by stop. Presentation therefore paces decode, and a video thread
   that falls behind cannot race through the file converting frames nobody will see.
+
+  That queue is bounded **twice**, and both bounds are necessary. The first is the clip's own frame
+  rate: the depth has to cover the decode-ahead window, which is a fixed span of time and therefore
+  a different number of frames at 60 fps than at 144. The second is a **memory budget**, because
+  the queue holds decoded BGRA and a blocking producer makes the bound the steady state rather than
+  a peak — the same 0.2 s window is ~235 MB at 1440p60 but over a gigabyte at 2160p120. Without the
+  byte bound the depth is also only as trustworthy as the rate the container declares, and Matroska
+  with a millisecond timebase routinely declares `r_frame_rate = 1000/1`. Sizing lives in
+  `VideoQueueCapacityForFrameRate` (`playback_clock.h`) and is unit-tested there.
 - **Demux** is paced by the **playback position**, not by queue occupancy: it reads until both
   streams are one second ahead of the clock, then waits for the clock to advance. With no clock
   available (throughput probes, video-only sessions) it never waits and runs at full speed.
@@ -96,6 +105,15 @@ This makes the expensive work scale with the **presentation rate** rather than t
 rate, which matters exactly where the old design hurt most: on a 144 Hz display, a 240 fps clip
 needs 144 conversions per second, not 240.
 
+The same rule has to apply to **audio**, for a different reason. A playback seek positions on the
+keyframe at or before the requested start, so both streams begin decoding earlier than asked. Video
+discards the difference by the rule above; audio has no clock comparison to make, because its
+samples *are* the clock. Its preroll is therefore trimmed by timestamp instead — sample-accurately,
+including the one block that straddles the boundary (`AudioPrerollFramesToDrop`). Handing the
+untrimmed block over would start the sound at the keyframe while the clock is seeded to the
+requested start, and video would lead audio by that gap for the entire run — up to a full keyframe
+interval, 2 s at the product default, on every resume from a position mid-clip.
+
 Under sustained overload the decoder itself is allowed to skip work: `AVCodecContext::skip_frame`
 is raised to `AVDISCARD_NONREF` while the video thread is behind and lowered again once it catches
 up. Non-reference frames are the ones nothing else depends on, so skipping them degrades smoothness
@@ -120,13 +138,13 @@ two mutexes are never held at once and no lock cycle can exist.
 
 ## Non-goals
 
-- No change to the clock, frame selection, or drop accounting (`playback_clock.h`) — all of it is
-  independent of how many threads produce the frames.
+- No change to the clock itself, to frame selection, or to drop accounting — all of it is
+  independent of how many threads produce the frames. `playback_clock.h` did gain two sizing/
+  trimming helpers that the topology needs (`VideoQueueCapacityForFrameRate`,
+  `AudioPrerollFramesToDrop`), but the clock arithmetic is untouched.
 - No change to scrub/seek. `DecodeFrameAt` stays synchronous on a caller-owned worker, and
   `EditPlayerSession::Play()` keeps joining that worker before starting playback.
 - No hardware decode here. It is the next slice and lands behind the same interface.
-- No 4:4:4 support here. It is a separate, smaller change (`IsConvertibleFrame` plus a converter
-  for the layout) that this design makes worth doing.
 
 ## Testing
 
@@ -135,9 +153,18 @@ two mutexes are never held at once and no lock cycle can exist.
   functions in `edit_playback_pacing.h` and are unit-tested as such (`test_edit_player_engine.cpp`),
   including the boundary cases: soft capacity reached with a fed peer waits, soft capacity reached
   with a starving peer keeps going, hard capacity always waits, abort beats everything.
+- Queue sizing and audio preroll trimming are likewise pure (`playback_clock.h`,
+  `test_playback_clock.cpp`), covering the cases that only show up on other people's hardware:
+  a 4K clip at a high frame rate staying inside the memory budget, a container declaring a
+  nonsensical rate, and the audio block that straddles the requested start being cut on the
+  right sample rather than dropped or kept whole.
 - Thread topology itself has no unit-test seam without a real file and a real device — the same
   boundary `test_edit_player_engine.cpp` already draws. It is verified with
   `probe_edit_playback`, which drives the real engine on a real recording, and by live playback.
+  Two paths inside it are therefore asserted only by construction and not by a test: the
+  video-only fallback when the playback resampler fails to build (`PlaybackDeliversAudio`, which
+  the session must consult instead of `HasAudioStream` before pacing on the audio clock), and the
+  allocation-failure guards around both decode-thread bodies.
 - The regression this exists to prevent — audio hitching when video is slow — is reproducible by
   measurement, which is the probe's step H job and not a unit test's: with the video callback
   throttled to 120 ms/frame for 10 s, audio block delivery must stay continuous.

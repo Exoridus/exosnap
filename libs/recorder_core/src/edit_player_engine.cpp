@@ -1,6 +1,7 @@
 #include "recorder_core/edit_player_engine.h"
 
 #include "edit_playback_pacing.h"
+#include "playback_clock.h"
 #include "recorder_core/logging/logging.h"
 #include "yuv_to_bgra.h"
 
@@ -382,6 +383,10 @@ struct EditPlayerEngine::Impl {
     std::atomic<int> threads_alive{0};
     std::atomic<bool> playback_running{false};
     std::atomic<bool> playback_cancel{false};
+    // Whether the run started by StartPlaybackDecode actually produces audio.
+    // Written there before any thread is spawned, read by the caller after it
+    // returns -- see EditPlayerEngine::PlaybackDeliversAudio.
+    std::atomic<bool> playback_audio_active{false};
     std::mutex playback_mutex; // guards start/stop against concurrent calls
     // Playback audio resampler (decoder-native -> 48 kHz stereo float32).
     // Owned by the audio thread while it runs; only ever freed/rebuilt after
@@ -545,6 +550,22 @@ double EditPlayerEngine::VideoFrameRate() const noexcept {
     if (!impl_->IsOpen() || impl_->frame_rate.num <= 0 || impl_->frame_rate.den <= 0)
         return 0.0;
     return av_q2d(impl_->frame_rate);
+}
+
+int EditPlayerEngine::VideoWidth() const noexcept {
+    if (!impl_->IsOpen() || impl_->video_codec.ctx == nullptr)
+        return 0;
+    return impl_->video_codec.ctx->width;
+}
+
+int EditPlayerEngine::VideoHeight() const noexcept {
+    if (!impl_->IsOpen() || impl_->video_codec.ctx == nullptr)
+        return 0;
+    return impl_->video_codec.ctx->height;
+}
+
+bool EditPlayerEngine::PlaybackDeliversAudio() const noexcept {
+    return impl_->playback_audio_active.load();
 }
 
 bool EditPlayerEngine::HasVideoStream() const noexcept {
@@ -826,6 +847,11 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     if (actx != nullptr)
         impl->resampler.ctx = BuildPlaybackResampler(actx);
     const bool audio_enabled = (actx != nullptr && impl->resampler.ctx != nullptr);
+    // Publish it before any thread starts, so a caller reading it right after
+    // StartPlaybackDecode() returns sees this run's real answer.
+    impl->playback_audio_active.store(audio_enabled);
+    if (actx != nullptr && !audio_enabled)
+        LogWarn("playback audio resampler unavailable -- this run is video-only");
 
     const AVRational vtb = vst->time_base;
     const AVRational atb =
@@ -905,80 +931,90 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
         FrameGuard frame(av_frame_alloc());
         int late_streak = 0;
         bool skipping_nonref = false;
-        if (pkt.pkt != nullptr && frame.frame != nullptr) {
-            bool draining = false;
-            while (!impl->playback_cancel.load()) {
-                if (!draining) {
-                    const PopResult pop = impl->video_packets->Pop(pkt.pkt);
-                    if (pop == PopResult::Aborted)
-                        break;
-                    if (pop == PopResult::EndOfStream) {
-                        draining = true;
-                        avcodec_send_packet(vctx, nullptr); // enter drain mode
-                    } else {
-                        // EAGAIN cannot happen: the receive loop below always
-                        // empties the decoder before the next send (same
-                        // contract note as DecodeForwardToTarget). A real send
-                        // error (e.g. a corrupt packet) is logged and skipped.
-                        const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
-                        av_packet_unref(pkt.pkt);
-                        if (send_ret < 0)
-                            LogWarn(
-                                (std::string("playback avcodec_send_packet (video) failed: ") + av_err2str(send_ret))
-                                    .c_str());
-                    }
-                }
-
+        // A decoded 1440p frame is ~15 MB of BGRA and this thread allocates one
+        // per frame. An allocation failure escaping a thread body is a hard
+        // std::terminate, with none of the diagnostics a normal failure path
+        // produces -- so it ends THIS run's video instead, leaving teardown and
+        // the caller's own error handling intact.
+        try {
+            if (pkt.pkt != nullptr && frame.frame != nullptr) {
+                bool draining = false;
                 while (!impl->playback_cancel.load()) {
-                    const int recv_ret = avcodec_receive_frame(vctx, frame.frame);
-                    if (recv_ret < 0)
-                        break; // EAGAIN (need more input) or EOF (fully drained)
-
-                    const int64_t pts_us = FramePtsUs(frame.frame, vtb);
-                    // A negative clock reading means "nobody is presenting
-                    // this" -- then nothing is known to be late and nothing is
-                    // discarded (see ShouldConvertDecodedFrame).
-                    const int64_t now_us = media_clock_us ? media_clock_us() : -1;
-                    const bool worth_converting = ShouldConvertDecodedFrame(pts_us, now_us);
-                    // The frames between the keyframe the demuxer seeked to
-                    // and start_us are behind the clock by construction, not
-                    // because this thread is struggling. Counting them would
-                    // raise the overload valve at the start of every play,
-                    // which could then drop real frames just after start_us.
-                    const bool preroll = pts_us < start_us;
-                    if (worth_converting)
-                        late_streak = 0;
-                    else if (!preroll)
-                        ++late_streak;
-
-                    if (worth_converting && IsConvertibleFrame(frame.frame)) {
-                        // Convert and release the decoder's frame BEFORE
-                        // handing the result on: on_video is allowed to block
-                        // on the consumer's bounded queue, and holding a
-                        // decoder frame reference across that would pin a
-                        // buffer the decoder wants back.
-                        DecodedVideoFrame out = ConvertToDecodedFrame(frame.frame, pts_us, impl->matrix, impl->range);
-                        av_frame_unref(frame.frame);
-                        on_video(std::move(out));
-                    } else {
-                        av_frame_unref(frame.frame);
+                    if (!draining) {
+                        const PopResult pop = impl->video_packets->Pop(pkt.pkt);
+                        if (pop == PopResult::Aborted)
+                            break;
+                        if (pop == PopResult::EndOfStream) {
+                            draining = true;
+                            avcodec_send_packet(vctx, nullptr); // enter drain mode
+                        } else {
+                            // EAGAIN cannot happen: the receive loop below always
+                            // empties the decoder before the next send (same
+                            // contract note as DecodeForwardToTarget). A real send
+                            // error (e.g. a corrupt packet) is logged and skipped.
+                            const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
+                            av_packet_unref(pkt.pkt);
+                            if (send_ret < 0)
+                                LogWarn((std::string("playback avcodec_send_packet (video) failed: ") +
+                                         av_err2str(send_ret))
+                                            .c_str());
+                        }
                     }
 
-                    // Overload valve: while the thread is genuinely behind,
-                    // let the decoder itself drop the frames nothing else
-                    // references, and take that back the moment it catches up.
-                    if (!skipping_nonref && late_streak >= kLateFramesBeforeSkippingNonRef) {
-                        vctx->skip_frame = AVDISCARD_NONREF;
-                        skipping_nonref = true;
-                    } else if (skipping_nonref && late_streak == 0) {
-                        vctx->skip_frame = AVDISCARD_DEFAULT;
-                        skipping_nonref = false;
+                    while (!impl->playback_cancel.load()) {
+                        const int recv_ret = avcodec_receive_frame(vctx, frame.frame);
+                        if (recv_ret < 0)
+                            break; // EAGAIN (need more input) or EOF (fully drained)
+
+                        const int64_t pts_us = FramePtsUs(frame.frame, vtb);
+                        // A negative clock reading means "nobody is presenting
+                        // this" -- then nothing is known to be late and nothing is
+                        // discarded (see ShouldConvertDecodedFrame).
+                        const int64_t now_us = media_clock_us ? media_clock_us() : -1;
+                        const bool worth_converting = ShouldConvertDecodedFrame(pts_us, now_us);
+                        // The frames between the keyframe the demuxer seeked to
+                        // and start_us are behind the clock by construction, not
+                        // because this thread is struggling. Counting them would
+                        // raise the overload valve at the start of every play,
+                        // which could then drop real frames just after start_us.
+                        const bool preroll = pts_us < start_us;
+                        if (worth_converting)
+                            late_streak = 0;
+                        else if (!preroll)
+                            ++late_streak;
+
+                        if (worth_converting && IsConvertibleFrame(frame.frame)) {
+                            // Convert and release the decoder's frame BEFORE
+                            // handing the result on: on_video is allowed to block
+                            // on the consumer's bounded queue, and holding a
+                            // decoder frame reference across that would pin a
+                            // buffer the decoder wants back.
+                            DecodedVideoFrame out =
+                                ConvertToDecodedFrame(frame.frame, pts_us, impl->matrix, impl->range);
+                            av_frame_unref(frame.frame);
+                            on_video(std::move(out));
+                        } else {
+                            av_frame_unref(frame.frame);
+                        }
+
+                        // Overload valve: while the thread is genuinely behind,
+                        // let the decoder itself drop the frames nothing else
+                        // references, and take that back the moment it catches up.
+                        if (!skipping_nonref && late_streak >= kLateFramesBeforeSkippingNonRef) {
+                            vctx->skip_frame = AVDISCARD_NONREF;
+                            skipping_nonref = true;
+                        } else if (skipping_nonref && late_streak == 0) {
+                            vctx->skip_frame = AVDISCARD_DEFAULT;
+                            skipping_nonref = false;
+                        }
                     }
+
+                    if (draining)
+                        break; // EOF reached and the decoder fully drained above
                 }
-
-                if (draining)
-                    break; // EOF reached and the decoder fully drained above
             }
+        } catch (const std::bad_alloc&) {
+            LogWarn("playback video decode ran out of memory -- ending this run's video");
         }
         if (skipping_nonref)
             vctx->skip_frame = AVDISCARD_DEFAULT;
@@ -989,58 +1025,86 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // ---- Audio thread: owns the audio AVCodecContext and the resampler ----
     if (audio_enabled) {
         SwrContext* const swr = impl->resampler.ctx;
-        impl->audio_thread = std::thread([impl, actx, atb, swr, on_audio = std::move(on_audio)]() {
+        impl->audio_thread = std::thread([impl, actx, atb, swr, start_us, on_audio = std::move(on_audio)]() {
             PacketGuard pkt(av_packet_alloc());
             FrameGuard frame(av_frame_alloc());
-            if (pkt.pkt != nullptr && frame.frame != nullptr) {
-                bool draining = false;
-                while (!impl->playback_cancel.load()) {
-                    if (!draining) {
-                        const PopResult pop = impl->audio_packets->Pop(pkt.pkt);
-                        if (pop == PopResult::Aborted)
-                            break;
-                        if (pop == PopResult::EndOfStream) {
-                            draining = true;
-                            avcodec_send_packet(actx, nullptr);
-                        } else {
-                            const int send_ret = avcodec_send_packet(actx, pkt.pkt);
-                            av_packet_unref(pkt.pkt);
-                            if (send_ret < 0)
-                                LogWarn((std::string("playback avcodec_send_packet (audio) failed: ") +
-                                         av_err2str(send_ret))
-                                            .c_str());
-                        }
-                    }
-
+            // Same reasoning as the video thread: an allocation failure here
+            // must end this run's audio, not the process.
+            try {
+                if (pkt.pkt != nullptr && frame.frame != nullptr) {
+                    bool draining = false;
                     while (!impl->playback_cancel.load()) {
-                        if (avcodec_receive_frame(actx, frame.frame) < 0)
-                            break;
-                        // Capture the pts BEFORE av_frame_unref resets the frame.
-                        const int64_t pts_us = FramePtsUs(frame.frame, atb);
-                        const int64_t max_out_frames = swr_get_out_samples(swr, frame.frame->nb_samples);
-                        if (max_out_frames <= 0) {
-                            av_frame_unref(frame.frame);
-                            continue;
+                        if (!draining) {
+                            const PopResult pop = impl->audio_packets->Pop(pkt.pkt);
+                            if (pop == PopResult::Aborted)
+                                break;
+                            if (pop == PopResult::EndOfStream) {
+                                draining = true;
+                                avcodec_send_packet(actx, nullptr);
+                            } else {
+                                const int send_ret = avcodec_send_packet(actx, pkt.pkt);
+                                av_packet_unref(pkt.pkt);
+                                if (send_ret < 0)
+                                    LogWarn((std::string("playback avcodec_send_packet (audio) failed: ") +
+                                             av_err2str(send_ret))
+                                                .c_str());
+                            }
                         }
-                        auto pcm = std::make_shared<std::vector<float>>(static_cast<size_t>(max_out_frames) *
-                                                                        kPlaybackOutChannels);
-                        uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm->data());
-                        const int produced = swr_convert(swr, &out_ptr, static_cast<int>(max_out_frames),
-                                                         frame.frame->extended_data, frame.frame->nb_samples);
-                        av_frame_unref(frame.frame);
-                        if (produced <= 0)
-                            continue;
-                        pcm->resize(static_cast<size_t>(produced) * kPlaybackOutChannels);
-                        DecodedAudioBlock block;
-                        block.pts_us = pts_us;
-                        block.frame_count = static_cast<uint32_t>(produced);
-                        block.interleaved_stereo = std::move(pcm);
-                        on_audio(std::move(block)); // may block on a full WASAPI ring -- only THIS thread
-                    }
 
-                    if (draining)
-                        break;
+                        while (!impl->playback_cancel.load()) {
+                            if (avcodec_receive_frame(actx, frame.frame) < 0)
+                                break;
+                            // Capture the pts BEFORE av_frame_unref resets the frame.
+                            const int64_t pts_us = FramePtsUs(frame.frame, atb);
+                            const int64_t max_out_frames = swr_get_out_samples(swr, frame.frame->nb_samples);
+                            if (max_out_frames <= 0) {
+                                av_frame_unref(frame.frame);
+                                continue;
+                            }
+                            auto pcm = std::make_shared<std::vector<float>>(static_cast<size_t>(max_out_frames) *
+                                                                            kPlaybackOutChannels);
+                            uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm->data());
+                            const int produced = swr_convert(swr, &out_ptr, static_cast<int>(max_out_frames),
+                                                             frame.frame->extended_data, frame.frame->nb_samples);
+                            av_frame_unref(frame.frame);
+                            if (produced <= 0)
+                                continue;
+                            pcm->resize(static_cast<size_t>(produced) * kPlaybackOutChannels);
+
+                            // Trim the preroll the seek forced on us. av_seek_frame
+                            // positioned on the keyframe at or before start_us, so
+                            // the first blocks out of the decoder are older than
+                            // the caller asked for. The video side discards its
+                            // equivalent frames (ShouldConvertDecodedFrame); if
+                            // audio did not, the ring would start at the keyframe
+                            // while the clock is seeded to start_us and video would
+                            // lead audio by that gap for the entire run.
+                            const auto frames_out = static_cast<size_t>(produced);
+                            const size_t preroll =
+                                AudioPrerollFramesToDrop(pts_us, frames_out, kPlaybackOutSampleRate, start_us);
+                            if (preroll >= frames_out)
+                                continue; // entirely before the start: nothing to hand over
+                            int64_t block_pts_us = pts_us;
+                            if (preroll > 0) {
+                                pcm->erase(pcm->begin(),
+                                           pcm->begin() + static_cast<std::ptrdiff_t>(preroll * kPlaybackOutChannels));
+                                block_pts_us += static_cast<int64_t>(preroll) * 1'000'000 /
+                                                static_cast<int64_t>(kPlaybackOutSampleRate);
+                            }
+
+                            DecodedAudioBlock block;
+                            block.pts_us = block_pts_us;
+                            block.frame_count = static_cast<uint32_t>(frames_out - preroll);
+                            block.interleaved_stereo = std::move(pcm);
+                            on_audio(std::move(block)); // may block on a full WASAPI ring -- only THIS thread
+                        }
+
+                        if (draining)
+                            break;
+                    }
                 }
+            } catch (const std::bad_alloc&) {
+                LogWarn("playback audio decode ran out of memory -- ending this run's audio");
             }
             impl->audio_packets->CloseForConsumer();
             impl->NotePlaybackThreadFinished();
@@ -1056,6 +1120,7 @@ void EditPlayerEngine::StopPlaybackDecode() {
     impl_->playback_cancel.store(true);
     impl_->JoinPlaybackThreads();
     impl_->playback_running.store(false);
+    impl_->playback_audio_active.store(false); // no run, no audio -- next Start decides afresh
 }
 
 } // namespace recorder_core

@@ -82,6 +82,23 @@ class EditPlayerEngine {
     // fixed rate, since ExoSnap records anything the user configures.
     [[nodiscard]] double VideoFrameRate() const noexcept;
 
+    // The opened clip's coded frame size, or 0 when it is unknown (not open,
+    // no video stream). Callers use it to size buffers by memory rather than
+    // by frame count -- a depth that is sensible at 1080p can be a gigabyte at
+    // 2160p, and the decoded frames this engine delivers are BGRA.
+    [[nodiscard]] int VideoWidth() const noexcept;
+    [[nodiscard]] int VideoHeight() const noexcept;
+
+    // Whether the CURRENT playback run actually produces audio blocks. Valid
+    // once StartPlaybackDecode() has returned; false before any run.
+    //
+    // Distinct from HasAudioStream(), which only says the file has a decodable
+    // audio track: building the playback resampler happens per run and can
+    // fail on its own, after which this engine delivers video only. A caller
+    // that paces video off an audio clock MUST consult this rather than
+    // HasAudioStream(), or it will wait forever on a clock nothing advances.
+    [[nodiscard]] bool PlaybackDeliversAudio() const noexcept;
+
     // Seeks to the keyframe at or before target_us and decodes forward to the
     // first frame at or after target_us. Synchronous; intended for the scrub
     // / trim-handle-drag path, called from a caller-owned worker thread (see

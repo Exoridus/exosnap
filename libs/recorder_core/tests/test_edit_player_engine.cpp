@@ -42,6 +42,31 @@ TEST(EditPlayerEngine, ClosedEngineReportsNoStreams) {
     EXPECT_FALSE(engine.HasAudioStream());
 }
 
+TEST(EditPlayerEngine, ClosedEngineReportsNoFrameSize) {
+    EditPlayerEngine engine;
+    EXPECT_EQ(engine.VideoWidth(), 0);
+    EXPECT_EQ(engine.VideoHeight(), 0);
+}
+
+// The caller paces video off the audio clock whenever it believes audio is
+// playing. Building the playback resampler can fail after the file has opened
+// with a perfectly good audio stream, and then no audio is delivered at all --
+// so "this file has an audio stream" and "this playback run produces audio"
+// are different questions, and the caller has to be able to ask the second one.
+TEST(EditPlayerEngine, PlaybackDeliversNoAudioBeforeAnyPlaybackStarts) {
+    EditPlayerEngine engine;
+    EXPECT_FALSE(engine.PlaybackDeliversAudio());
+}
+
+TEST(EditPlayerEngine, PlaybackDeliversNoAudioAfterStartingWithoutAnOpenFile) {
+    EditPlayerEngine engine;
+    engine.StartPlaybackDecode(
+        0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {},
+        [] { return int64_t{-1}; });
+    EXPECT_FALSE(engine.PlaybackDeliversAudio());
+    engine.StopPlaybackDecode();
+}
+
 TEST(EditPlayerEngine, DecodeFrameAtWithoutOpenReturnsNullopt) {
     EditPlayerEngine engine;
     EXPECT_FALSE(engine.DecodeFrameAt(0).has_value());
