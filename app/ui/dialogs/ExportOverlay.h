@@ -51,6 +51,8 @@ class ExportOverlay : public QWidget {
 
   signals:
     void exportRequested();
+    // Abort the running export. Only ever emitted from Running — in every other
+    // state the same button dismisses the card via closeRequested().
     void cancelRequested();
     void retryRequested();
     void openFolderRequested();

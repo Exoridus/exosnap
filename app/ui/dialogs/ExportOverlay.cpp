@@ -231,8 +231,12 @@ void ExportOverlay::buildCard() {
         else if (state_ == State::Failed)
             emit retryRequested();
     });
+    // cancelRequested() means one thing only: abort the export that is running.
+    // In Options nothing is running, so the same button dismisses the card —
+    // otherwise it would reach the page's abort handler, which leaves the card
+    // open, and the button would do nothing a user can see.
     connect(cancel_btn_, &QPushButton::clicked, this, [this]() {
-        if (state_ == State::Options || state_ == State::Running)
+        if (state_ == State::Running)
             emit cancelRequested();
         else
             emit closeRequested();

@@ -264,20 +264,26 @@ TEST_F(ExportOverlayTest, RetryButton_EmitsRetryRequested_InFailedState) {
     EXPECT_EQ(count, 1);
 }
 
-TEST_F(ExportOverlayTest, CancelButton_EmitsCancelRequested_InOptionsState) {
+// Nothing is running in Options, so Cancel dismisses the card. Routing it to
+// cancelRequested() instead would reach the page's abort handler, which keeps
+// the card open — leaving the button with no visible effect.
+TEST_F(ExportOverlayTest, CancelButton_EmitsCloseRequested_InOptionsState) {
     QWidget host;
     host.resize(800, 600);
     ExportOverlay overlay(&host);
     overlay.openCard();
 
-    int count = 0;
-    QObject::connect(&overlay, &ExportOverlay::cancelRequested, [&]() { ++count; });
+    int close_count = 0;
+    int cancel_count = 0;
+    QObject::connect(&overlay, &ExportOverlay::closeRequested, [&]() { ++close_count; });
+    QObject::connect(&overlay, &ExportOverlay::cancelRequested, [&]() { ++cancel_count; });
     auto* cancel = overlay.findChild<QPushButton*>(QStringLiteral("exportCancelBtn"));
     ASSERT_NE(cancel, nullptr);
     EXPECT_EQ(cancel->text(), QStringLiteral("Cancel"));
     cancel->click();
 
-    EXPECT_EQ(count, 1);
+    EXPECT_EQ(close_count, 1);
+    EXPECT_EQ(cancel_count, 0);
 }
 
 TEST_F(ExportOverlayTest, CancelButton_EmitsCancelRequested_InRunningState) {
