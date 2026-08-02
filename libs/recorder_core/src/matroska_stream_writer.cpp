@@ -371,6 +371,14 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             libebml::GetChild<libmatroska::KaxTrackType>(aud).SetValue(2);
             libebml::GetChild<libmatroska::KaxTrackFlagLacing>(aud).SetValue(0);
 
+            // Track name (see StreamAudioTrack::name): omitted entirely when the
+            // caller did not resolve one, rather than writing an empty element --
+            // an older reader falling back to positional labels needs "absent",
+            // not "named the empty string".
+            if (const std::string& name = m_config.audio_tracks[i].name; !name.empty()) {
+                libebml::GetChild<libmatroska::KaxTrackName>(aud).SetValueUTF8(name);
+            }
+
             const auto& slot = m_config.audio_tracks[i].codec_private;
             if (m_config.audio_codec == StreamAudioCodec::Opus) {
                 if (slot.size() < 19) {

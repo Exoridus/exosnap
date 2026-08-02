@@ -111,6 +111,14 @@ enum class StreamAudioCodec {
 // Per-audio-track codec private payload.
 struct StreamAudioTrack {
     std::vector<uint8_t> codec_private;
+
+    // Track name (KaxTrackName), e.g. "System" or "System + Microphone" for a
+    // merged track. The writer has no notion of AudioSourceKind or how a track
+    // was resolved -- the caller derives this string (see
+    // recorder_core::DeriveAudioTrackName) and hands it over ready to write.
+    // Empty means "no name known"; the writer then omits KaxTrackName entirely
+    // rather than writing an empty element.
+    std::string name;
 };
 
 // Static configuration resolved once before Open().

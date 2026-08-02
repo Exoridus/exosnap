@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -342,6 +343,34 @@ double ReadFloat(const std::vector<uint8_t>& d, const EbmlNode& n) {
     double v = 0.0;
     std::memcpy(&v, &bits, sizeof(v));
     return v;
+}
+
+// One entry per TrackEntry under Segment -> Tracks, in document order (video
+// first, then audio tracks in track_num order). nullopt means the TrackEntry
+// has no Name (KaxTrackName, EBML id 0x536E) child at all, distinct from an
+// empty-but-present one -- the writer must produce the former for an unnamed
+// track, never the latter.
+std::vector<std::optional<std::string>> TrackEntryNames(const std::vector<uint8_t>& d) {
+    constexpr uint64_t kIdTrackEntry = 0xAEULL;
+    constexpr uint64_t kIdName = 0x536EULL;
+    std::vector<std::optional<std::string>> out;
+    for (const auto& seg : SegmentChildren(d)) {
+        if (seg.id != kIdTracks)
+            continue;
+        for (const auto& te : ParseChildren(d, seg.data_off, seg.data_off + seg.data_size)) {
+            if (te.id != kIdTrackEntry)
+                continue;
+            std::optional<std::string> name;
+            for (const auto& tc : ParseChildren(d, te.data_off, te.data_off + te.data_size)) {
+                if (tc.id == kIdName) {
+                    name = std::string(reinterpret_cast<const char*>(d.data() + tc.data_off),
+                                       static_cast<size_t>(tc.data_size));
+                }
+            }
+            out.push_back(name);
+        }
+    }
+    return out;
 }
 
 MatroskaStreamConfig MakeConfig(const std::string& path, bool h264, bool opus) {
@@ -1287,6 +1316,51 @@ TEST_F(StreamWriterTest, ProgressSinkAdvancesThroughFinalizeBackPatch) {
     // And it must reflect the true finalized file size, not an earlier
     // checkpoint frozen mid-Finalize().
     EXPECT_EQ(post_finalize_sink, file_size) << "Progress sink does not reflect the finalized file's true size";
+}
+
+// 14. Track names round-trip: mux a two-audio-track recording and read the
+// names back out of the file. The video track carries no name -- the writer
+// never invents one for a track it wasn't handed semantics for -- and the
+// merged-source name ("System + Microphone") proves the literal separator
+// survives the UTF-8 round trip, not just single-word names.
+TEST_F(StreamWriterTest, AudioTrackNames_RoundTripThroughTheFile) {
+    auto cfg = MakeConfig(tmp_, /*h264=*/true, /*opus=*/false);
+    cfg.audio_track_count = 2;
+    cfg.audio_tracks[0].codec_private = FakeAacCp();
+    cfg.audio_tracks[0].name = "System + Microphone";
+    cfg.audio_tracks[1].codec_private = FakeAacCp();
+    cfg.audio_tracks[1].name = "Application";
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg)) << w.error();
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const auto names = TrackEntryNames(d);
+    ASSERT_EQ(names.size(), 3u) << "video + two audio tracks";
+    EXPECT_FALSE(names[0].has_value()) << "video track must not carry a name";
+    ASSERT_TRUE(names[1].has_value());
+    EXPECT_EQ(*names[1], "System + Microphone");
+    ASSERT_TRUE(names[2].has_value());
+    EXPECT_EQ(*names[2], "Application");
+}
+
+// 15. A track whose name is left unset (the StreamAudioTrack::name default)
+// writes no KaxTrackName element at all -- not an empty one. The read side
+// falls back to positional labels for an old recording and needs "absent" to
+// tell that apart from "named the empty string".
+TEST_F(StreamWriterTest, AudioTrackWithoutName_WritesNoTrackNameElement) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, true, false))); // audio_tracks[0].name left default-empty
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    const auto names = TrackEntryNames(d);
+    ASSERT_EQ(names.size(), 2u) << "video + one audio track";
+    EXPECT_FALSE(names[0].has_value());
+    EXPECT_FALSE(names[1].has_value()) << "an unset name must not render an (empty) KaxTrackName element";
 }
 
 } // namespace

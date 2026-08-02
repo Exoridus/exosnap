@@ -89,9 +89,26 @@ try {
         }
     }
 
+    # Passing every source file in one invocation eventually exceeds the command
+    # line length limit ("Der Dateiname oder die Erweiterung ist zu lang") — the
+    # file list grows with the repository, and a deep checkout path pushes it
+    # over sooner. Chunk it so the limit is a function of the batch, not of how
+    # many files the project has.
+    $batchSize = 100
+
+    function Invoke-InBatches {
+        param([string[]]$Files, [string[]]$Arguments)
+        for ($i = 0; $i -lt $Files.Count; $i += $batchSize) {
+            $batch = $Files[$i..([Math]::Min($i + $batchSize - 1, $Files.Count - 1))]
+            & $clangFormat @Arguments @batch
+            if ($LASTEXITCODE -ne 0) { return $LASTEXITCODE }
+        }
+        return 0
+    }
+
     if ($Fix) {
-        & $clangFormat -i @srcFiles
-        if ($LASTEXITCODE -ne 0) { throw "clang-format failed." }
+        $code = Invoke-InBatches -Files $srcFiles -Arguments @('-i')
+        if ($code -ne 0) { throw "clang-format failed." }
 
         if ($Staged) {
             git -C $repoRoot add -- @srcFiles
@@ -104,8 +121,8 @@ try {
         exit 0
     }
 
-    & $clangFormat --dry-run --Werror @srcFiles
-    if ($LASTEXITCODE -ne 0) {
+    $code = Invoke-InBatches -Files $srcFiles -Arguments @('--dry-run', '--Werror')
+    if ($code -ne 0) {
         Write-Error "clang-format violations found. Fix with: clang-format -i <file>"
     }
     if ($VerboseOutput) {

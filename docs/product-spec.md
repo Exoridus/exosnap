@@ -772,6 +772,19 @@ page's transport actions), which opens the export card described below.
 Trimming is **direct manipulation on the timeline** under the player — there is no button row
 or duration readout above the strip:
 
+- **Rows.** The timeline is a stack: one video row, then one row per audio track the recording
+  carries. Audio rows show the track's name as muxed (`System`, `Microphone`, `Application`, or a
+  combined name for a merged track); a recording written before track names were muxed falls back
+  to `Audio 1`, `Audio 2` rather than guessing a source from the track order. A recording with no
+  audio has no audio rows. Audio rows carry a **label and a fill only — never a waveform**, since
+  a peak envelope means decoding the whole soundtrack and an approximated one would state
+  something about the audio that was never measured. Handles, markers and the playhead span every
+  row: a trim applies to the whole clip.
+- **Thumbnails.** The video row shows frames decoded from the recording, each drawn **left-aligned
+  at its own timestamp** so a tile answers "from here on it looks like this". Tile width follows
+  the recording's aspect ratio and the number of tiles follows the available width, so resizing
+  the window re-lays the strip. Tiles appear as they finish decoding; a position whose frame is
+  not (yet) available leaves the row empty there rather than showing a placeholder.
 - **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the
   trimmed-away ranges are dimmed. The handles constrain each other (they can never cross), and on
   release the cut point snaps to the nearest keyframe at or before the requested time and, within

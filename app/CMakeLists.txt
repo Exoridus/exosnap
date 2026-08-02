@@ -297,6 +297,8 @@ qt_add_executable(exosnap WIN32
     services/RecordingCountdownController.cpp
     services/PageHydrationController.h
     services/PageHydrationController.cpp
+    services/TimelineThumbnailSource.h
+    services/TimelineThumbnailSource.cpp
     services/RecoveryService.h
     services/RecoveryService.cpp
     services/AtomicFileOps.h
@@ -1398,6 +1400,8 @@ exosnap_add_gtest(
         tests/test_edit_export_page.cpp
         pages/EditExportPage.cpp
         ui/widgets/EditTimeline.cpp
+        services/TimelineThumbnailSource.h
+        services/TimelineThumbnailSource.cpp
         ui/widgets/EditPlayerSurface.h
         ui/widgets/EditPlayerSurface.cpp
         ui/widgets/EditDetailsRail.h
@@ -1422,6 +1426,8 @@ exosnap_add_gtest(
         ui/dialogs/EditExportOverlay.cpp
         pages/EditExportPage.cpp
         ui/widgets/EditTimeline.cpp
+        services/TimelineThumbnailSource.h
+        services/TimelineThumbnailSource.cpp
         ui/widgets/EditPlayerSurface.h
         ui/widgets/EditPlayerSurface.cpp
         ui/widgets/EditDetailsRail.h
@@ -1464,6 +1470,20 @@ exosnap_add_gtest(
 )
 target_include_directories(edit_details_rail_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(edit_details_rail_tests PROPERTIES AUTOMOC ON)
+
+# Strip layout + tile loop behind the Edit timeline's thumbnails. The decoder is
+# injected, so these cases run without a clip, a worker thread, or FFmpeg.
+exosnap_add_gtest(
+    NAME timeline_thumbnail_source_tests
+    TEST_PREFIX timeline_thumbnails.
+    SOURCES
+        tests/test_timeline_thumbnail_source.cpp
+        services/TimelineThumbnailSource.h
+        services/TimelineThumbnailSource.cpp
+    LIBRARIES Qt6::Core Qt6::Gui recorder_core
+)
+target_include_directories(timeline_thumbnail_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(timeline_thumbnail_source_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME test_edit_context

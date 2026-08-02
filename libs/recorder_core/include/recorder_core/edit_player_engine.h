@@ -9,7 +9,9 @@
 // exposed here, since decoders emit fully-planar YUV420/YUV420P10LE that this
 // engine converts before handing anything to a caller), and decodes audio to
 // a fixed 48 kHz stereo interleaved float32 PCM stream (matching the
-// product's own internal mix-bus format).
+// product's own internal mix-bus format). A recording carrying several audio
+// tracks -- system and microphone sound kept separate -- plays ALL of them,
+// summed into that one stream.
 //
 // This header covers Open/Close/stream-discovery/single-frame seek-decode
 // (the scrub and trim-handle-drag path) as well as continuous playback decode
@@ -46,11 +48,21 @@ struct DecodedVideoFrame {
     std::shared_ptr<const uint8_t[]> bgra;
 };
 
-// One block of decoded audio: 48 kHz stereo interleaved float32 PCM.
+// One block of decoded audio: 48 kHz stereo interleaved float32 PCM. When the
+// file carries several audio tracks this is their MIX, not one of them -- the
+// engine hands out a single stream whatever the recording's track count.
 struct DecodedAudioBlock {
     int64_t pts_us = 0;
     uint32_t frame_count = 0; // sample frames (2 floats each)
     std::shared_ptr<const std::vector<float>> interleaved_stereo;
+};
+
+// One audio track of an open file. Recordings written before track names were
+// muxed carry no name; a caller labels those positionally instead of inferring
+// a source from the track order, which the container does not guarantee.
+struct AudioTrackDescription {
+    int stream_index = -1;
+    std::string name;
 };
 
 using VideoFrameCallback = std::function<void(DecodedVideoFrame)>;
@@ -73,6 +85,9 @@ class EditPlayerEngine {
     void Close();
 
     [[nodiscard]] bool HasVideoStream() const noexcept;
+    // Whether the open file has AT LEAST ONE audio track whose decoder opened.
+    // Says nothing about how many, nor about whether a given playback run
+    // actually delivers audio -- see AudioTracks() and PlaybackDeliversAudio().
     [[nodiscard]] bool HasAudioStream() const noexcept;
 
     // The opened clip's own frame rate in frames per second, or 0.0 when it is
@@ -89,14 +104,23 @@ class EditPlayerEngine {
     [[nodiscard]] int VideoWidth() const noexcept;
     [[nodiscard]] int VideoHeight() const noexcept;
 
-    // Whether the CURRENT playback run actually produces audio blocks. Valid
+    // Whether the CURRENT playback run produces audio blocks AT ALL. Valid
     // once StartPlaybackDecode() has returned; false before any run.
     //
     // Distinct from HasAudioStream(), which only says the file has a decodable
-    // audio track: building the playback resampler happens per run and can
-    // fail on its own, after which this engine delivers video only. A caller
-    // that paces video off an audio clock MUST consult this rather than
+    // audio track: building a playback resampler happens per run and can fail
+    // on its own, after which this engine delivers video only. A caller that
+    // paces video off an audio clock MUST consult this rather than
     // HasAudioStream(), or it will wait forever on a clock nothing advances.
+    //
+    // With several audio tracks the answer is deliberately "at least one", not
+    // "all of them": one track failing to build its resampler must not silence
+    // the tracks that did, and the audio clock this exists to protect advances
+    // just as well on one track as on three. The delivered blocks are then the
+    // mix of the tracks that DID initialize -- the failing one is logged and
+    // stays silent for the run. A caller cannot tell from this return value
+    // how many tracks are audible, and does not need to: the question it
+    // answers is only "will a clock advance if I start one".
     [[nodiscard]] bool PlaybackDeliversAudio() const noexcept;
 
     // Seeks to the keyframe at or before target_us and decodes forward to the
@@ -106,6 +130,24 @@ class EditPlayerEngine {
     // nullopt if not open, there is no video stream, or decode fails.
     [[nodiscard]] std::optional<DecodedVideoFrame> DecodeFrameAt(int64_t target_us);
 
+    // Every audio track the open file carries, in stream order. `name` comes
+    // from the container's track name and is empty for recordings written
+    // before names were muxed — callers fall back to a positional label rather
+    // than guessing a source from the track order. An empty vector means the
+    // file has no audio at all.
+    //
+    // A track whose decoder could not be opened is still listed: the question
+    // is what the RECORDING carries, and leaving a track out would
+    // misrepresent the recording rather than the failure. Such a track
+    // contributes nothing to playback (HasAudioStream() answers that side).
+    //
+    // Returns a copy, not a reference to the member: callers read this from
+    // another thread than the one running playback, and Close() clears the
+    // member -- a reference handed across that boundary could outlive what it
+    // points at. The vector holds at most a handful of entries.
+    // cppcheck-suppress returnByReference
+    [[nodiscard]] std::vector<AudioTrackDescription> AudioTracks() const;
+
     // ---- Continuous playback decode ----
 
     // Starts decoding forward continuously from `start_us`, delivering frames
@@ -113,8 +155,10 @@ class EditPlayerEngine {
     // No-op if not open or already running.
     //
     // Runs on THREE threads -- demux, video decode+convert, audio
-    // decode+resample -- so that audio never depends on video keeping up
+    // decode+resample+mix -- so that audio never depends on video keeping up
     // (docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md).
+    // Every audio track decodes on that one audio thread and is summed there,
+    // so the track count changes what a block CONTAINS, never how many arrive.
     // Consequences for callers:
     //
     // - on_video and on_audio are invoked from two DIFFERENT threads and may

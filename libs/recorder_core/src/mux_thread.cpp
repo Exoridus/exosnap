@@ -181,6 +181,14 @@ void MuxThread::Run() {
     sw_config_template.audio_track_count = track_count;
     for (uint32_t i = 0; i < track_count; ++i) {
         sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;
+        // Track name, muxed into the container as KaxTrackName. Only the
+        // resolved-plan path carries source semantics -- the legacy empty-plan
+        // single-loopback-track path (see recorder_session.cpp) has no
+        // ResolvedAudioTrack to name, so that track is left unnamed rather than
+        // guessed at.
+        if (i < m_state.config.audio_track_plan.tracks.size()) {
+            sw_config_template.audio_tracks[i].name = DeriveAudioTrackName(m_state.config.audio_track_plan.tracks[i]);
+        }
     }
     // Thread audio format from RecorderConfig into the stream writer config (ADR 0030).
     // Opus is locked to 48 kHz by Validate(); all other codecs use the configured rate.

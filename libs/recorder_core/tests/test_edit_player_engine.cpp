@@ -3,17 +3,195 @@
 #include "edit_playback_pacing.h"
 #include "recorder_core/edit_player_engine.h"
 
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/dict.h>
+#include <libavutil/log.h>
+}
+
 #include <atomic>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <vector>
 
 namespace {
 
+using recorder_core::AudioTrackDescription;
 using recorder_core::DemuxedThroughUs;
 using recorder_core::EditPlayerEngine;
 using recorder_core::ShouldAdmitDemuxedPacket;
 using recorder_core::ShouldConvertDecodedFrame;
 using recorder_core::ShouldDemuxMorePackets;
+
+// ---- A real container to ask about its audio tracks -----------------------
+//
+// A genuine Matroska file the engine opens through its ordinary path. The
+// video track carries a valid H.264 parameter set and packets of nothing --
+// Open() opens the decoders, it does not decode, and this FFmpeg build ships
+// no video encoder that could produce a real bitstream (LGPL, hardware-only
+// by ADR 0007). Audio is PCM for the same reason: no encoder needed.
+
+constexpr int kTestWidth = 16;
+constexpr int kTestHeight = 16;
+constexpr int kTestAudioRate = 48000;
+constexpr int kTestVideoFrames = 5;
+constexpr int64_t kTestVideoFrameMs = 100;
+constexpr int64_t kTestAudioBlockMs = 10;
+
+// AVCDecoderConfigurationRecord for a minimal 16x16 baseline stream: one SPS,
+// one PPS, 4-byte NAL length prefixes. Real parameter sets, so opening the
+// H.264 decoder against them succeeds.
+const uint8_t kTestAvcC[] = {
+    0x01, 0x42, 0x00, 0x0A,                         // version, profile, compat, level
+    0xFF,                                           // lengthSizeMinusOne = 3
+    0xE1, 0x00, 0x07, 0x67, 0x42, 0x00, 0x0A, 0xF8, // 1 SPS
+    0x41, 0xA2,                                     //
+    0x01, 0x00, 0x04, 0x68, 0xCE, 0x38, 0x80,       // 1 PPS
+};
+
+// Silences libav's own logging for the duration of one fixture's life. The
+// filler bitstream makes the H.264 decoder complain loudly and correctly; left
+// on, those lines are the bulk of this binary's output and would bury a real
+// failure among them.
+class ScopedQuietAvLog {
+  public:
+    ScopedQuietAvLog() : previous_(av_log_get_level()) {
+        av_log_set_level(AV_LOG_QUIET);
+    }
+    ~ScopedQuietAvLog() {
+        av_log_set_level(previous_);
+    }
+    ScopedQuietAvLog(const ScopedQuietAvLog&) = delete;
+    ScopedQuietAvLog& operator=(const ScopedQuietAvLog&) = delete;
+
+  private:
+    int previous_;
+};
+
+// One audio track per entry; an EMPTY name writes no container track name at
+// all, which is exactly what a recording made before names were muxed looks
+// like.
+bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::string>& audio_names) {
+    AVFormatContext* fmt = nullptr;
+    if (avformat_alloc_output_context2(&fmt, nullptr, "matroska", nullptr) < 0 || fmt == nullptr)
+        return false;
+
+    AVStream* vst = avformat_new_stream(fmt, nullptr);
+    if (vst == nullptr) {
+        avformat_free_context(fmt);
+        return false;
+    }
+    vst->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    vst->codecpar->codec_id = AV_CODEC_ID_H264;
+    vst->codecpar->width = kTestWidth;
+    vst->codecpar->height = kTestHeight;
+    vst->codecpar->extradata = static_cast<uint8_t*>(av_mallocz(sizeof(kTestAvcC) + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (vst->codecpar->extradata == nullptr) {
+        avformat_free_context(fmt);
+        return false;
+    }
+    std::memcpy(vst->codecpar->extradata, kTestAvcC, sizeof(kTestAvcC));
+    vst->codecpar->extradata_size = static_cast<int>(sizeof(kTestAvcC));
+    vst->time_base = AVRational{1, 1000};
+
+    for (const std::string& name : audio_names) {
+        AVStream* ast = avformat_new_stream(fmt, nullptr);
+        if (ast == nullptr) {
+            avformat_free_context(fmt);
+            return false;
+        }
+        ast->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        ast->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
+        ast->codecpar->format = AV_SAMPLE_FMT_S16;
+        ast->codecpar->sample_rate = kTestAudioRate;
+        ast->codecpar->bits_per_coded_sample = 16;
+        av_channel_layout_default(&ast->codecpar->ch_layout, 2);
+        ast->time_base = AVRational{1, 1000};
+        if (!name.empty())
+            av_dict_set(&ast->metadata, "title", name.c_str(), 0);
+    }
+
+    if (avio_open(&fmt->pb, path.string().c_str(), AVIO_FLAG_WRITE) < 0) {
+        avformat_free_context(fmt);
+        return false;
+    }
+
+    bool ok = avformat_write_header(fmt, nullptr) >= 0;
+    AVPacket* pkt = av_packet_alloc();
+    ok = ok && pkt != nullptr;
+
+    // AVCC-shaped: a 4-byte big-endian length followed by that many bytes, the
+    // layout the container declares. The payload itself is filler.
+    constexpr int kNalBytes = 32;
+    const int video_bytes = 4 + kNalBytes;
+    const int audio_bytes = static_cast<int>(kTestAudioRate * kTestAudioBlockMs / 1000) * 2 * 2;
+    const int blocks_per_frame = static_cast<int>(kTestVideoFrameMs / kTestAudioBlockMs);
+
+    for (int i = 0; i < kTestVideoFrames && ok; ++i) {
+        const int64_t frame_ms = i * kTestVideoFrameMs;
+        ok = av_new_packet(pkt, video_bytes) >= 0;
+        if (!ok)
+            break;
+        pkt->data[0] = 0;
+        pkt->data[1] = 0;
+        pkt->data[2] = 0;
+        pkt->data[3] = static_cast<uint8_t>(kNalBytes);
+        std::memset(pkt->data + 4, 0x65, static_cast<size_t>(kNalBytes));
+        pkt->stream_index = 0;
+        pkt->pts = pkt->dts = frame_ms;
+        pkt->duration = kTestVideoFrameMs;
+        pkt->flags |= AV_PKT_FLAG_KEY;
+        ok = av_interleaved_write_frame(fmt, pkt) >= 0;
+        av_packet_unref(pkt);
+
+        for (size_t track = 0; track < audio_names.size() && ok; ++track) {
+            for (int block = 0; block < blocks_per_frame && ok; ++block) {
+                ok = av_new_packet(pkt, audio_bytes) >= 0;
+                if (!ok)
+                    break;
+                std::memset(pkt->data, 0, static_cast<size_t>(audio_bytes));
+                pkt->stream_index = static_cast<int>(track) + 1;
+                pkt->pts = pkt->dts = frame_ms + block * kTestAudioBlockMs;
+                pkt->duration = kTestAudioBlockMs;
+                pkt->flags |= AV_PKT_FLAG_KEY;
+                ok = av_interleaved_write_frame(fmt, pkt) >= 0;
+                av_packet_unref(pkt);
+            }
+        }
+    }
+
+    av_packet_free(&pkt);
+    if (ok)
+        ok = av_write_trailer(fmt) >= 0;
+    avio_closep(&fmt->pb);
+    avformat_free_context(fmt);
+    return ok;
+}
+
+// Names the file and removes it again, however the test ends.
+class ScopedTestMkv {
+  public:
+    explicit ScopedTestMkv(const char* stem) : path_(std::filesystem::temp_directory_path() / stem) {
+    }
+    ~ScopedTestMkv() {
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+    ScopedTestMkv(const ScopedTestMkv&) = delete;
+    ScopedTestMkv& operator=(const ScopedTestMkv&) = delete;
+
+    [[nodiscard]] const std::filesystem::path& path() const noexcept {
+        return path_;
+    }
+
+  private:
+    ScopedQuietAvLog quiet_;
+    std::filesystem::path path_;
+};
 
 TEST(EditPlayerEngine, OpenNonexistentFileFails) {
     EditPlayerEngine engine;
@@ -65,6 +243,98 @@ TEST(EditPlayerEngine, PlaybackDeliversNoAudioAfterStartingWithoutAnOpenFile) {
         [] { return int64_t{-1}; });
     EXPECT_FALSE(engine.PlaybackDeliversAudio());
     engine.StopPlaybackDecode();
+}
+
+// ---- AudioTracks: what the file carries ----------------------------------
+
+TEST(EditPlayerEngine, ClosedEngineReportsNoAudioTracks) {
+    EditPlayerEngine engine;
+    EXPECT_TRUE(engine.AudioTracks().empty());
+}
+
+TEST(EditPlayerEngine, AudioTracksListsEveryTrackWithItsContainerName) {
+    // The case this whole change exists for: a recording that kept system and
+    // microphone sound apart carries TWO tracks, and both of them are the
+    // file's -- picking one would drop half the recording on the floor.
+    ScopedTestMkv file("edit_player_engine_two_named_tracks.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"System", "Microphone"}));
+
+    EditPlayerEngine engine;
+    std::string err;
+    ASSERT_TRUE(engine.Open(file.path(), err)) << err;
+
+    const std::vector<AudioTrackDescription> tracks = engine.AudioTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    EXPECT_EQ(tracks[0].name, "System");
+    EXPECT_EQ(tracks[1].name, "Microphone");
+    EXPECT_NE(tracks[0].stream_index, tracks[1].stream_index);
+    EXPECT_GE(tracks[0].stream_index, 0);
+    EXPECT_GE(tracks[1].stream_index, 0);
+    EXPECT_TRUE(engine.HasAudioStream());
+}
+
+TEST(EditPlayerEngine, AudioTracksLeaveUnnamedTracksEmptyRatherThanGuessing) {
+    // Recordings written before track names were muxed carry none. The name
+    // stays empty: the positional mapping is our own muxing convention, not
+    // something the container promises, and a track can merge sources -- so
+    // deriving "System" from "it is the first one" would be an invention.
+    ScopedTestMkv file("edit_player_engine_two_unnamed_tracks.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"", ""}));
+
+    EditPlayerEngine engine;
+    std::string err;
+    ASSERT_TRUE(engine.Open(file.path(), err)) << err;
+
+    const std::vector<AudioTrackDescription> tracks = engine.AudioTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    EXPECT_TRUE(tracks[0].name.empty());
+    EXPECT_TRUE(tracks[1].name.empty());
+}
+
+TEST(EditPlayerEngine, AudioTracksMixesNamedAndUnnamedTracksWithoutFillingGaps) {
+    ScopedTestMkv file("edit_player_engine_partly_named_tracks.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"System", ""}));
+
+    EditPlayerEngine engine;
+    std::string err;
+    ASSERT_TRUE(engine.Open(file.path(), err)) << err;
+
+    const std::vector<AudioTrackDescription> tracks = engine.AudioTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    EXPECT_EQ(tracks[0].name, "System");
+    EXPECT_TRUE(tracks[1].name.empty());
+}
+
+TEST(EditPlayerEngine, AFileWithoutAudioReportsNoTracks) {
+    ScopedTestMkv file("edit_player_engine_no_audio.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {}));
+
+    EditPlayerEngine engine;
+    std::string err;
+    ASSERT_TRUE(engine.Open(file.path(), err)) << err;
+
+    EXPECT_TRUE(engine.AudioTracks().empty());
+    EXPECT_FALSE(engine.HasAudioStream());
+    EXPECT_TRUE(engine.HasVideoStream());
+}
+
+TEST(EditPlayerEngine, ClosingForgetsThePreviousFilesTracks) {
+    ScopedTestMkv file("edit_player_engine_tracks_reopen.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"System", "Microphone"}));
+
+    EditPlayerEngine engine;
+    std::string err;
+    ASSERT_TRUE(engine.Open(file.path(), err)) << err;
+    ASSERT_EQ(engine.AudioTracks().size(), 2u);
+
+    engine.Close();
+    EXPECT_TRUE(engine.AudioTracks().empty());
+
+    // ...and a second Open must not append to the first one's list.
+    ScopedTestMkv single("edit_player_engine_tracks_reopen_single.mkv");
+    ASSERT_TRUE(WriteTestMkv(single.path(), {"System"}));
+    ASSERT_TRUE(engine.Open(single.path(), err)) << err;
+    EXPECT_EQ(engine.AudioTracks().size(), 1u);
 }
 
 TEST(EditPlayerEngine, DecodeFrameAtWithoutOpenReturnsNullopt) {

@@ -225,4 +225,71 @@ TEST(NormalizeSourceRowsForTargetTest, DisplayTargetPlanNeverAsksForAProcessId) 
     EXPECT_FALSE(plan.tracks.empty()) << "system audio and the microphone survive";
 }
 
+// ---------------------------------------------------------------------------
+// AudioSourceKindDisplayName / DeriveAudioTrackName
+//
+// The muxed-file track name (KaxTrackName, see matroska_stream_writer.cpp) is
+// built from these two pure functions rather than from an if-chain inside the
+// writer, so the source->name mapping is testable independent of the
+// container format.
+// ---------------------------------------------------------------------------
+
+using recorder_core::AudioSourceKindDisplayName;
+using recorder_core::DeriveAudioTrackName;
+using recorder_core::ResolvedAudioTrack;
+
+ResolvedAudioTrack MakeTrack(const std::initializer_list<AudioSourceKind> sources) {
+    ResolvedAudioTrack track;
+    track.sources = std::vector<AudioSourceKind>(sources);
+    track.source_gain_linear.assign(track.sources.size(), 1.0f);
+    return track;
+}
+
+TEST(AudioSourceKindDisplayNameTest, EachKindHasItsOwnLabel) {
+    EXPECT_EQ(AudioSourceKindDisplayName(AudioSourceKind::App), "Application");
+    EXPECT_EQ(AudioSourceKindDisplayName(AudioSourceKind::Mic), "Microphone");
+    EXPECT_EQ(AudioSourceKindDisplayName(AudioSourceKind::Sys), "System");
+}
+
+TEST(AudioSourceKindDisplayNameTest, SystemOutputSharesSysLabel) {
+    // SystemOutput is the pid-free stand-in NormalizeSourceRowsForTarget swaps
+    // in for Sys on a Display/Region target -- to the user it is still "the
+    // system", so it must not surface a different label.
+    EXPECT_EQ(AudioSourceKindDisplayName(AudioSourceKind::SystemOutput),
+              AudioSourceKindDisplayName(AudioSourceKind::Sys));
+}
+
+TEST(DeriveAudioTrackNameTest, SingleSourceIsJustItsDisplayName) {
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::App})), "Application");
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::Mic})), "Microphone");
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::Sys})), "System");
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::SystemOutput})), "System");
+}
+
+TEST(DeriveAudioTrackNameTest, MergedSourcesJoinInResolutionOrder) {
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::Sys, AudioSourceKind::Mic})), "System + Microphone");
+    // Reversed input order produces a reversed name -- the join must follow
+    // ResolvedAudioTrack::sources exactly, never re-sort it (e.g. alphabetically).
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::Mic, AudioSourceKind::Sys})), "Microphone + System");
+}
+
+TEST(DeriveAudioTrackNameTest, ThreeMergedSourcesJoinAll) {
+    EXPECT_EQ(DeriveAudioTrackName(MakeTrack({AudioSourceKind::App, AudioSourceKind::Sys, AudioSourceKind::Mic})),
+              "Application + System + Microphone");
+}
+
+TEST(DeriveAudioTrackNameTest, EndToEnd_FollowsResolveAudioTracksMergeOrder) {
+    // The name a real merged row config produces, driven through the actual
+    // resolver rather than a hand-built ResolvedAudioTrack.
+    const std::vector<AudioSourceRow> rows = {
+        {AudioSourceKind::App, true, false},
+        {AudioSourceKind::Mic, true, true},
+        {AudioSourceKind::Sys, true, false},
+    };
+    const AudioTrackPlan plan = ResolveAudioTracks(rows);
+    ASSERT_EQ(plan.tracks.size(), 2u);
+    EXPECT_EQ(DeriveAudioTrackName(plan.tracks[0]), "Application + Microphone");
+    EXPECT_EQ(DeriveAudioTrackName(plan.tracks[1]), "System");
+}
+
 } // namespace

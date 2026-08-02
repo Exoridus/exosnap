@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QLabel>
@@ -12,6 +13,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSize>
+#include <QThread>
 #include <QTimer>
 #include <QWidget>
 
@@ -98,11 +100,16 @@ void StartDoomedExport(EditExportPage* page) {
 }
 
 // Lets a started export's queued completion callback land before the fixture
-// tears the page down.
-void DrainExport() {
-    QEventLoop loop;
-    QTimer::singleShot(50, &loop, &QEventLoop::quit);
-    loop.exec();
+// tears the page down. The export runs on a real worker thread, so how long it
+// needs is the machine's business — wait for the page to report it finished
+// instead of guessing a sleep (a fixed 50 ms lost that race on a loaded runner).
+void DrainExport(EditExportPage* page) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (page->isExportRunning() && elapsed.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
     for (int i = 0; i < 8; ++i)
         QCoreApplication::processEvents();
 }
@@ -274,7 +281,7 @@ TEST_F(EditExportOverlayTest, Escape_DoesNotClose_WhileAnExportRuns) {
     QCoreApplication::sendEvent(&overlay, &esc);
 
     EXPECT_TRUE(overlay.isOpen()) << "Escape must not dismiss the overlay mid-export";
-    DrainExport();
+    DrainExport(overlay.page());
 }
 
 TEST_F(EditExportOverlayTest, BackdropClick_ClosesOverlay_WhenNotExporting) {
@@ -305,7 +312,7 @@ TEST_F(EditExportOverlayTest, BackdropClick_DoesNotClose_WhileAnExportRuns) {
     QCoreApplication::sendEvent(&overlay, &press);
 
     EXPECT_TRUE(overlay.isOpen()) << "Backdrop click must not dismiss the overlay mid-export";
-    DrainExport();
+    DrainExport(overlay.page());
 }
 
 TEST_F(EditExportOverlayTest, IsDismissBlocked_TracksTheRunningExport) {
@@ -317,7 +324,7 @@ TEST_F(EditExportOverlayTest, IsDismissBlocked_TracksTheRunningExport) {
     StartDoomedExport(overlay.page());
     EXPECT_TRUE(overlay.isDismissBlocked());
 
-    DrainExport();
+    DrainExport(overlay.page());
     EXPECT_FALSE(overlay.isDismissBlocked());
 }
 

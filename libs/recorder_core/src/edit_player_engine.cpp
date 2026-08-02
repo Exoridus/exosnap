@@ -1,5 +1,6 @@
 #include "recorder_core/edit_player_engine.h"
 
+#include "edit_audio_mix.h"
 #include "edit_playback_pacing.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
@@ -197,6 +198,20 @@ enum class PopResult {
     Aborted,     // shutdown: stop immediately
 };
 
+// One stream carried by a PacketQueue.
+//
+// A queue can carry more than one: every audio track of the file shares a
+// single queue and a single consumer, because they must be summed anyway and
+// the file already delivers them in one interleaved order. That costs the
+// queue two things it would not need for a single stream -- each packet's own
+// time base to account for its duration, and the number of streams sharing it,
+// since PacketQueueLimits is written per stream while the buffer holds the sum
+// over all of them.
+struct QueuedStream {
+    int stream_index = -1;
+    AVRational time_base{1, AV_TIME_BASE};
+};
+
 // Single-producer / single-consumer queue of refcounted packets. Packets are
 // handed over with av_packet_move_ref, never copied.
 //
@@ -213,7 +228,7 @@ enum class PopResult {
 // notification mistake can turn into a permanent stall.
 class PacketQueue {
   public:
-    explicit PacketQueue(AVRational time_base) noexcept : time_base_(time_base) {
+    explicit PacketQueue(std::vector<QueuedStream> streams) : streams_(std::move(streams)) {
     }
     ~PacketQueue() {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -254,7 +269,7 @@ class PacketQueue {
         av_packet_move_ref(owned, src);
         buffered_us_ += DurationUs(owned);
         packets_.push_back(owned);
-        level_us_.store(buffered_us_, std::memory_order_relaxed);
+        level_us_.store(PerStreamLevelUsLocked(), std::memory_order_relaxed);
         lock.unlock();
         not_empty_.notify_one();
         return true;
@@ -282,7 +297,7 @@ class PacketQueue {
         buffered_us_ -= DurationUs(front);
         if (buffered_us_ < 0)
             buffered_us_ = 0;
-        level_us_.store(buffered_us_, std::memory_order_relaxed);
+        level_us_.store(PerStreamLevelUsLocked(), std::memory_order_relaxed);
         av_packet_move_ref(dst, front);
         av_packet_free(&front);
         lock.unlock();
@@ -329,17 +344,31 @@ class PacketQueue {
     [[nodiscard]] PacketAdmissionState AdmissionStateLocked() const noexcept {
         PacketAdmissionState state;
         state.aborted = aborted_;
-        state.queued_us = buffered_us_;
+        state.queued_us = PerStreamLevelUsLocked();
         state.queued_packets = packets_.size();
         state.peer_consuming = peer_ != nullptr && peer_->ConsumerAlive();
         state.peer_queued_us = (peer_ != nullptr) ? peer_->LevelUs() : 0;
         return state;
     }
 
+    // Buffered media time PER STREAM, which is what PacketQueueLimits and the
+    // peer low-water mark are expressed in. A queue carrying two audio tracks
+    // holds two packets' worth of duration for every second of media, so
+    // reporting the raw sum would silently halve the demuxer's read-ahead the
+    // moment a recording has a second track.
+    [[nodiscard]] int64_t PerStreamLevelUsLocked() const noexcept {
+        const auto stream_count = static_cast<int64_t>(std::max<size_t>(streams_.size(), 1));
+        return buffered_us_ / stream_count;
+    }
+
     [[nodiscard]] int64_t DurationUs(const AVPacket* pkt) const noexcept {
         if (pkt->duration <= 0)
             return 0; // unknown: the packet-count backstop bounds this case
-        return av_rescale_q(pkt->duration, time_base_, AVRational{1, AV_TIME_BASE});
+        for (const QueuedStream& stream : streams_) {
+            if (stream.stream_index == pkt->stream_index)
+                return av_rescale_q(pkt->duration, stream.time_base, AVRational{1, AV_TIME_BASE});
+        }
+        return 0; // not a stream this queue carries: cannot happen, costs nothing to survive
     }
 
     void ClearLocked() noexcept {
@@ -350,7 +379,9 @@ class PacketQueue {
         level_us_.store(0, std::memory_order_relaxed);
     }
 
-    AVRational time_base_{1, AV_TIME_BASE};
+    // Set once at construction; a linear scan over one or two entries costs
+    // less than a map and keeps the queue allocation-free per packet.
+    std::vector<QueuedStream> streams_;
     std::mutex mutex_;
     std::condition_variable not_empty_;
     std::condition_variable not_full_;
@@ -371,14 +402,35 @@ class PacketQueue {
 // react within a few frames, long enough that a single hitch does not trip it.
 constexpr int kLateFramesBeforeSkippingNonRef = 4;
 
+// One audio track of the open file, with everything the playback path needs to
+// turn its packets into the engine's fixed output format.
+//
+// Held by unique_ptr in Impl: the guards below are deliberately non-copyable
+// and non-movable, so a vector of them could not reallocate.
+struct AudioTrack {
+    int stream_index = -1;
+    AVRational time_base{1, AV_TIME_BASE};
+    CodecCtxGuard codec;
+    // Rebuilt per playback run. Owned by the audio thread while it runs; only
+    // ever freed or rebuilt after that thread has been joined.
+    SwrCtxGuard resampler;
+};
+
 } // namespace
 
 struct EditPlayerEngine::Impl {
     InputCtxGuard fmt;
     CodecCtxGuard video_codec;
-    CodecCtxGuard audio_codec;
+    // Every audio track whose decoder opened, in stream order. All of them are
+    // played, summed before the renderer -- a recording with system and
+    // microphone sound on separate tracks is one recording, not a choice.
+    std::vector<std::unique_ptr<AudioTrack>> audio_tracks;
+    // Snapshot of what AudioTracks() reports, taken at Open while no playback
+    // thread exists. A snapshot rather than a live read of the format context,
+    // because that context belongs to the demux thread for the whole of a
+    // playback run and this getter is callable at any time.
+    std::vector<AudioTrackDescription> audio_track_descriptions;
     int video_stream_idx = -1;
-    int audio_stream_idx = -1;
     ColorRange range = ColorRange::Limited;
     MatrixCoefficients matrix = MatrixCoefficients::Bt709;
     // Non-null only while a natively-HDR10 clip is open. Its transfer tables are
@@ -389,11 +441,16 @@ struct EditPlayerEngine::Impl {
 
     // Playback runs on three threads with strictly separate ownership (see
     // docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md):
-    // demux owns `fmt`, video owns `video_codec`, audio owns `audio_codec` and
-    // `resampler`. No context is touched by two threads, which keeps the
+    // demux owns `fmt`, video owns `video_codec`, audio owns every entry of
+    // `audio_tracks`. No context is touched by two threads, which keeps the
     // engine's single-writer contract intact instead of covering it with locks.
     // Everything below is set up (seek, flushes, resampler build) on the
     // caller's thread inside StartPlaybackDecode, while no thread exists.
+    //
+    // Several audio tracks stay on ONE thread and ONE queue rather than
+    // becoming a thread each: they arrive in a single interleaved read anyway,
+    // they have to be summed on one thread in the end, and audio decode is
+    // cheap next to the video side that this topology exists to decouple from.
     std::thread demux_thread;
     std::thread video_thread;
     std::thread audio_thread;
@@ -402,16 +459,11 @@ struct EditPlayerEngine::Impl {
     std::atomic<int> threads_alive{0};
     std::atomic<bool> playback_running{false};
     std::atomic<bool> playback_cancel{false};
-    // Whether the run started by StartPlaybackDecode actually produces audio.
-    // Written there before any thread is spawned, read by the caller after it
-    // returns -- see EditPlayerEngine::PlaybackDeliversAudio.
+    // Whether the run started by StartPlaybackDecode produces audio from AT
+    // LEAST ONE track. Written there before any thread is spawned, read by the
+    // caller after it returns -- see EditPlayerEngine::PlaybackDeliversAudio.
     std::atomic<bool> playback_audio_active{false};
     std::mutex playback_mutex; // guards start/stop against concurrent calls
-    // Playback audio resampler (decoder-native -> 48 kHz stereo float32).
-    // Owned by the audio thread while it runs; only ever freed/rebuilt after
-    // that thread has been joined (StartPlaybackDecode/Close), never
-    // concurrently with it.
-    SwrCtxGuard resampler;
 
     [[nodiscard]] bool IsOpen() const noexcept {
         return fmt.ctx != nullptr;
@@ -478,11 +530,12 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         return false;
     }
 
-    // Locate the best video and audio streams (av_find_best_stream picks the
-    // most likely primary stream of each type -- correct for our own
-    // single-video-track, up-to-N-audio-track recordings).
+    // The best video stream (av_find_best_stream picks the most likely primary
+    // stream of a type -- correct for our own single-video-track recordings).
+    // Audio deliberately does NOT go through it: a recording can carry system
+    // and microphone sound on separate tracks and all of them are played, so
+    // every audio stream is enumerated below instead of one being elected.
     const int video_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    const int audio_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
 
     if (video_idx < 0) {
         out_error = "no decodable video stream found";
@@ -538,23 +591,45 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
                               ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f))
                               : nullptr;
 
-    if (audio_idx >= 0) {
-        AVStream* ast = fmt_ctx->streams[audio_idx];
+    for (unsigned int i = 0; i < fmt_ctx->nb_streams; ++i) {
+        AVStream* ast = fmt_ctx->streams[i];
+        if (ast->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+
+        // Reported whether or not its decoder opens below. The description is
+        // an answer about the FILE -- a track that exists but cannot be
+        // decoded is still a track the recording carries, and hiding its row
+        // would misrepresent the recording rather than the failure.
+        AudioTrackDescription description;
+        description.stream_index = static_cast<int>(i);
+        // Matroska's KaxTrackName surfaces as the stream metadata key "title".
+        // Absent for recordings written before track names were muxed; the
+        // name then stays EMPTY -- deriving one from the track order would be
+        // a guess the container does not support (the mapping is positional
+        // only by our own muxing convention, and a track can merge sources).
+        if (const AVDictionaryEntry* title = av_dict_get(ast->metadata, "title", nullptr, 0);
+            title != nullptr && title->value != nullptr)
+            description.name = title->value;
+        impl_->audio_track_descriptions.push_back(std::move(description));
+
         const AVCodec* acodec = avcodec_find_decoder(ast->codecpar->codec_id);
-        if (acodec != nullptr) {
-            AVCodecContext* actx = avcodec_alloc_context3(acodec);
-            if (actx != nullptr && avcodec_parameters_to_context(actx, ast->codecpar) >= 0 &&
-                avcodec_open2(actx, acodec, nullptr) >= 0) {
-                impl_->audio_codec.ctx = actx;
-                impl_->audio_stream_idx = audio_idx;
-            } else {
-                if (actx)
-                    avcodec_free_context(&actx);
-                LogWarn("failed to open the audio decoder -- continuing video-only");
-            }
-        } else {
-            LogWarn("no decoder available for the audio codec -- continuing video-only");
+        if (acodec == nullptr) {
+            LogWarn("no decoder available for an audio track's codec -- that track stays silent");
+            continue;
         }
+        AVCodecContext* actx = avcodec_alloc_context3(acodec);
+        if (actx == nullptr || avcodec_parameters_to_context(actx, ast->codecpar) < 0 ||
+            avcodec_open2(actx, acodec, nullptr) < 0) {
+            if (actx)
+                avcodec_free_context(&actx);
+            LogWarn("failed to open an audio track's decoder -- that track stays silent");
+            continue;
+        }
+        auto track = std::make_unique<AudioTrack>();
+        track->stream_index = static_cast<int>(i);
+        track->time_base = ast->time_base;
+        track->codec.ctx = actx;
+        impl_->audio_tracks.push_back(std::move(track));
     }
 
     return true;
@@ -562,18 +637,15 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
 
 void EditPlayerEngine::Close() {
     StopPlaybackDecode();
-    // Safe only after the join above: the playback thread owns the resampler
-    // while it runs.
-    if (impl_->resampler.ctx)
-        swr_free(&impl_->resampler.ctx);
+    // Safe only after the join above: the audio thread owns every track's
+    // decoder and resampler while it runs.
+    impl_->audio_tracks.clear();
+    impl_->audio_track_descriptions.clear();
     if (impl_->video_codec.ctx)
         avcodec_free_context(&impl_->video_codec.ctx);
-    if (impl_->audio_codec.ctx)
-        avcodec_free_context(&impl_->audio_codec.ctx);
     if (impl_->fmt.ctx)
         avformat_close_input(&impl_->fmt.ctx);
     impl_->video_stream_idx = -1;
-    impl_->audio_stream_idx = -1;
     impl_->frame_rate = AVRational{0, 1};
     impl_->pq_converter.reset();
 }
@@ -605,7 +677,7 @@ bool EditPlayerEngine::HasVideoStream() const noexcept {
 }
 
 bool EditPlayerEngine::HasAudioStream() const noexcept {
-    return impl_->IsOpen() && impl_->audio_stream_idx >= 0;
+    return impl_->IsOpen() && !impl_->audio_tracks.empty();
 }
 
 namespace {
@@ -782,7 +854,8 @@ constexpr uint32_t kPlaybackOutChannels = 2;
 // Builds the playback audio resampler (decoder-native format -> the fixed
 // output format above), following the same swr_alloc_set_opts2 + swr_init
 // convention as OutputFormatAudioSrc::BuildSwrContext. Returns nullptr on
-// failure; playback then continues video-only for the session.
+// failure; the CALLER decides what that costs -- one track of several drops
+// out, the last one leaves the run video-only.
 SwrContext* BuildPlaybackResampler(AVCodecContext* actx) {
     AVChannelLayout out_layout{};
     av_channel_layout_default(&out_layout, static_cast<int>(kPlaybackOutChannels));
@@ -791,12 +864,12 @@ SwrContext* BuildPlaybackResampler(AVCodecContext* actx) {
                                         &actx->ch_layout, actx->sample_fmt, actx->sample_rate, 0, nullptr);
     av_channel_layout_uninit(&out_layout);
     if (ret < 0 || swr == nullptr) {
-        LogWarn("swr_alloc_set_opts2 failed -- continuing video-only for this playback session");
+        LogWarn("swr_alloc_set_opts2 failed -- this audio track cannot be played back");
         return nullptr;
     }
     if (swr_init(swr) < 0) {
         swr_free(&swr);
-        LogWarn("swr_init failed -- continuing video-only for this playback session");
+        LogWarn("swr_init failed -- this audio track cannot be played back");
         return nullptr;
     }
     return swr;
@@ -808,6 +881,17 @@ SwrContext* BuildPlaybackResampler(AVCodecContext* actx) {
 int64_t FramePtsUs(const AVFrame* frame, AVRational tb) noexcept {
     const int64_t raw = (frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame->best_effort_timestamp : 0;
     return av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE});
+}
+
+// Index of the track carrying `stream_index`, or tracks.size() when none does
+// (a stream this run does not play -- the demuxer already filters those out,
+// so this is the belt to that pair of braces).
+size_t TrackIndexForStream(const std::vector<AudioTrack*>& tracks, int stream_index) noexcept {
+    for (size_t i = 0; i < tracks.size(); ++i) {
+        if (tracks[i]->stream_index == stream_index)
+            return i;
+    }
+    return tracks.size();
 }
 
 // Moves one stream's demux read position forward to cover this packet. Uses
@@ -854,6 +938,10 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
                                  impl_->pq_converter.get());
 }
 
+std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
+    return impl_->audio_track_descriptions;
+}
+
 void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
                                            std::function<int64_t()> current_media_time_us) {
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
@@ -869,15 +957,14 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     Impl* const impl = impl_.get();
     AVFormatContext* const fmt_ctx = impl->fmt.ctx;
     AVCodecContext* const vctx = impl->video_codec.ctx;
-    AVCodecContext* const actx = impl->audio_codec.ctx;
     AVStream* const vst = fmt_ctx->streams[impl->video_stream_idx];
     start_us = std::max<int64_t>(start_us, 0);
 
     // Everything from here to the thread spawns runs on the CALLER's thread,
     // while no playback thread exists: the seek touches the format context,
-    // the flushes touch both codec contexts and the resampler is rebuilt --
-    // all of which are handed to exactly one thread each below and never
-    // touched from here again.
+    // the flushes touch every codec context and each track's resampler is
+    // rebuilt -- all of which are handed to exactly one thread each below and
+    // never touched from here again.
     //
     // A failed seek is logged and playback continues from the demuxer's
     // current position rather than producing nothing (same convention as
@@ -889,29 +976,44 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     avcodec_flush_buffers(vctx);
     // A previous run may have left the overload valve raised.
     vctx->skip_frame = AVDISCARD_DEFAULT;
-    if (actx != nullptr)
-        avcodec_flush_buffers(actx);
 
-    if (impl->resampler.ctx != nullptr)
-        swr_free(&impl->resampler.ctx);
-    if (actx != nullptr)
-        impl->resampler.ctx = BuildPlaybackResampler(actx);
-    const bool audio_enabled = (actx != nullptr && impl->resampler.ctx != nullptr);
+    // Every track gets its own resampler, rebuilt per run. A track whose
+    // resampler cannot be built is simply left out of this run: it must not
+    // take the tracks that DID build down with it, and the mix must not wait
+    // for a track that will never submit anything.
+    std::vector<AudioTrack*> playing_tracks;
+    std::vector<QueuedStream> audio_streams;
+    for (const auto& track : impl->audio_tracks) {
+        avcodec_flush_buffers(track->codec.ctx);
+        if (track->resampler.ctx != nullptr)
+            swr_free(&track->resampler.ctx);
+        track->resampler.ctx = BuildPlaybackResampler(track->codec.ctx);
+        if (track->resampler.ctx == nullptr)
+            continue;
+        playing_tracks.push_back(track.get());
+        audio_streams.push_back(QueuedStream{track->stream_index, track->time_base});
+    }
+    const bool audio_enabled = !playing_tracks.empty();
     // Publish it before any thread starts, so a caller reading it right after
     // StartPlaybackDecode() returns sees this run's real answer.
     impl->playback_audio_active.store(audio_enabled);
-    if (actx != nullptr && !audio_enabled)
-        LogWarn("playback audio resampler unavailable -- this run is video-only");
+    if (!impl->audio_tracks.empty() && !audio_enabled)
+        LogWarn("no playback audio resampler could be built -- this run is video-only");
+    else if (playing_tracks.size() < impl->audio_tracks.size())
+        LogWarn("an audio track has no usable playback resampler -- it stays silent this run");
 
     const AVRational vtb = vst->time_base;
-    const AVRational atb =
-        audio_enabled ? fmt_ctx->streams[impl->audio_stream_idx]->time_base : AVRational{1, AV_TIME_BASE};
+    const int video_idx = impl->video_stream_idx;
 
-    impl->video_packets = std::make_unique<PacketQueue>(vtb);
+    impl->video_packets = std::make_unique<PacketQueue>(std::vector<QueuedStream>{QueuedStream{video_idx, vtb}});
     if (audio_enabled) {
-        impl->audio_packets = std::make_unique<PacketQueue>(atb);
+        // One queue for every audio track: they arrive in a single interleaved
+        // read and are summed by a single consumer, so splitting them would
+        // only add queues the peering rule would then have to arbitrate
+        // between.
+        impl->audio_packets = std::make_unique<PacketQueue>(std::move(audio_streams));
         // Peered both ways: the "may I go past the soft limit?" rule is
-        // symmetric, neither stream is privileged.
+        // symmetric, neither side is privileged.
         impl->video_packets->SetPeer(impl->audio_packets.get());
         impl->audio_packets->SetPeer(impl->video_packets.get());
     }
@@ -921,58 +1023,66 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     impl->threads_alive.store(audio_enabled ? 3 : 2);
 
     // ---- Demux thread: owns the AVFormatContext ----
-    const int video_idx = impl->video_stream_idx;
-    const int audio_idx = audio_enabled ? impl->audio_stream_idx : -1;
-    impl->demux_thread = std::thread([impl, fmt_ctx, video_idx, audio_idx, media_clock_us = current_media_time_us]() {
-        PacketGuard pkt(av_packet_alloc());
-        // Largest presentation timestamp handed on so far, per stream. Only
-        // the two streams actually played contribute; a stray third stream's
-        // timestamps must not move the read position.
-        int64_t video_pos_us = kUnknownDemuxPositionUs;
-        int64_t audio_pos_us = kUnknownDemuxPositionUs;
-        if (pkt.pkt != nullptr) {
-            while (!impl->playback_cancel.load()) {
-                const int64_t demuxed_through_us =
-                    (audio_idx >= 0) ? DemuxedThroughUs(video_pos_us, audio_pos_us) : video_pos_us;
-                // Read-ahead gate. Bounded by the playback position, NOT by
-                // queue occupancy: an occupancy bound makes the demuxer's
-                // forward progress follow whichever consumer drains slowest,
-                // which stamps that consumer's cadence onto the other
-                // stream's delivery -- precisely the coupling this topology
-                // exists to remove. With no clock (throughput probes,
-                // video-only sessions) this never waits.
-                while (!impl->playback_cancel.load() &&
-                       !ShouldDemuxMorePackets(demuxed_through_us, media_clock_us ? media_clock_us() : -1,
-                                               kDemuxReadAheadUs)) {
-                    std::this_thread::sleep_for(kDemuxReadAheadPollInterval);
-                }
-                if (impl->playback_cancel.load())
-                    break;
+    std::vector<int> audio_indices;
+    audio_indices.reserve(playing_tracks.size());
+    for (const AudioTrack* track : playing_tracks)
+        audio_indices.push_back(track->stream_index);
+    impl->demux_thread = std::thread(
+        [impl, fmt_ctx, video_idx, audio_indices = std::move(audio_indices), media_clock_us = current_media_time_us]() {
+            PacketGuard pkt(av_packet_alloc());
+            // Largest presentation timestamp handed on so far, video vs. audio.
+            // Only the streams actually played contribute; a stray stream's
+            // timestamps must not move the read position. All audio tracks share
+            // one position because they share one queue and one consumer -- and
+            // because the muxer emits every track in one global timestamp order,
+            // so the leading audio track is the read position for all of them.
+            int64_t video_pos_us = kUnknownDemuxPositionUs;
+            int64_t audio_pos_us = kUnknownDemuxPositionUs;
+            const bool has_audio = !audio_indices.empty();
+            if (pkt.pkt != nullptr) {
+                while (!impl->playback_cancel.load()) {
+                    const int64_t demuxed_through_us =
+                        has_audio ? DemuxedThroughUs(video_pos_us, audio_pos_us) : video_pos_us;
+                    // Read-ahead gate. Bounded by the playback position, NOT by
+                    // queue occupancy: an occupancy bound makes the demuxer's
+                    // forward progress follow whichever consumer drains slowest,
+                    // which stamps that consumer's cadence onto the other
+                    // stream's delivery -- precisely the coupling this topology
+                    // exists to remove. With no clock (throughput probes,
+                    // video-only sessions) this never waits.
+                    while (!impl->playback_cancel.load() &&
+                           !ShouldDemuxMorePackets(demuxed_through_us, media_clock_us ? media_clock_us() : -1,
+                                                   kDemuxReadAheadUs)) {
+                        std::this_thread::sleep_for(kDemuxReadAheadPollInterval);
+                    }
+                    if (impl->playback_cancel.load())
+                        break;
 
-                const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
-                if (read_ret < 0)
-                    break; // EOF or a terminal read error: both decoders drain below
-                // Push moves the payload (refcounted hand-off, no copy); it
-                // only fails when the queue is aborted or its decode thread
-                // has already left, in which case the packet is dropped.
-                if (pkt.pkt->stream_index == video_idx) {
-                    AdvanceDemuxPosition(video_pos_us, pkt.pkt, fmt_ctx->streams[video_idx]->time_base);
-                    if (!impl->video_packets->Push(pkt.pkt))
-                        av_packet_unref(pkt.pkt);
-                } else if (audio_idx >= 0 && pkt.pkt->stream_index == audio_idx) {
-                    AdvanceDemuxPosition(audio_pos_us, pkt.pkt, fmt_ctx->streams[audio_idx]->time_base);
-                    if (!impl->audio_packets->Push(pkt.pkt))
-                        av_packet_unref(pkt.pkt);
-                } else {
-                    av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
+                    const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
+                    if (read_ret < 0)
+                        break; // EOF or a terminal read error: both decoders drain below
+                    // Push moves the payload (refcounted hand-off, no copy); it
+                    // only fails when the queue is aborted or its decode thread
+                    // has already left, in which case the packet is dropped.
+                    if (pkt.pkt->stream_index == video_idx) {
+                        AdvanceDemuxPosition(video_pos_us, pkt.pkt, fmt_ctx->streams[video_idx]->time_base);
+                        if (!impl->video_packets->Push(pkt.pkt))
+                            av_packet_unref(pkt.pkt);
+                    } else if (std::find(audio_indices.begin(), audio_indices.end(), pkt.pkt->stream_index) !=
+                               audio_indices.end()) {
+                        AdvanceDemuxPosition(audio_pos_us, pkt.pkt, fmt_ctx->streams[pkt.pkt->stream_index]->time_base);
+                        if (!impl->audio_packets->Push(pkt.pkt))
+                            av_packet_unref(pkt.pkt);
+                    } else {
+                        av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
+                    }
                 }
             }
-        }
-        impl->video_packets->SignalEndOfStream();
-        if (audio_idx >= 0)
-            impl->audio_packets->SignalEndOfStream();
-        impl->NotePlaybackThreadFinished();
-    });
+            impl->video_packets->SignalEndOfStream();
+            if (has_audio)
+                impl->audio_packets->SignalEndOfStream();
+            impl->NotePlaybackThreadFinished();
+        });
 
     // ---- Video thread: owns the video AVCodecContext ----
     impl->video_thread = std::thread([impl, vctx, vtb, start_us, on_video = std::move(on_video),
@@ -1072,90 +1182,127 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
         impl->NotePlaybackThreadFinished();
     });
 
-    // ---- Audio thread: owns the audio AVCodecContext and the resampler ----
+    // ---- Audio thread: owns every track's AVCodecContext and resampler ----
     if (audio_enabled) {
-        SwrContext* const swr = impl->resampler.ctx;
-        impl->audio_thread = std::thread([impl, actx, atb, swr, start_us, on_audio = std::move(on_audio)]() {
+        impl->audio_thread = std::thread([impl, tracks = std::move(playing_tracks), start_us,
+                                          on_audio = std::move(on_audio)]() {
             PacketGuard pkt(av_packet_alloc());
             FrameGuard frame(av_frame_alloc());
+            // Sums the tracks by timestamp before anything reaches the
+            // renderer. See EditAudioMixer for why that is an alignment
+            // and a limiter rather than "add the two newest blocks".
+            EditAudioMixer mixer;
+            mixer.Reset(tracks.size(), start_us);
+            // Resample scratch, reused across frames: this thread converts
+            // one block per packet per track and the mix copies out of it
+            // immediately, so a fresh allocation per frame would be pure
+            // churn. Only ever grown, never shrunk.
+            std::vector<float> pcm;
+
+            // Hands over everything the mix is complete through. on_audio
+            // may block on a full WASAPI ring -- that is the pacing, and
+            // it holds up only this thread.
+            const auto deliver = [&](bool end_of_stream) {
+                for (;;) {
+                    std::optional<EditAudioMixer::MixedBlock> mixed =
+                        end_of_stream ? mixer.TakeRemainder() : mixer.Take();
+                    if (!mixed.has_value())
+                        break;
+                    DecodedAudioBlock block;
+                    block.pts_us = mixed->pts_us;
+                    block.frame_count = mixed->frame_count;
+                    block.interleaved_stereo =
+                        std::make_shared<const std::vector<float>>(std::move(mixed->interleaved_stereo));
+                    on_audio(std::move(block));
+                }
+            };
+
+            // Pulls every frame one track's decoder currently has ready,
+            // resamples it to the output format and submits it to the mix.
+            const auto pump_track = [&](size_t index) {
+                AudioTrack* const track = tracks[index];
+                while (!impl->playback_cancel.load()) {
+                    if (avcodec_receive_frame(track->codec.ctx, frame.frame) < 0)
+                        break; // EAGAIN (need more input) or EOF (fully drained)
+                    // Capture the pts BEFORE av_frame_unref resets the frame.
+                    const int64_t pts_us = FramePtsUs(frame.frame, track->time_base);
+                    const int64_t max_out_frames = swr_get_out_samples(track->resampler.ctx, frame.frame->nb_samples);
+                    if (max_out_frames <= 0) {
+                        av_frame_unref(frame.frame);
+                        continue;
+                    }
+                    const size_t capacity = static_cast<size_t>(max_out_frames) * kPlaybackOutChannels;
+                    if (pcm.size() < capacity)
+                        pcm.resize(capacity);
+                    uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm.data());
+                    const int produced = swr_convert(track->resampler.ctx, &out_ptr, static_cast<int>(max_out_frames),
+                                                     frame.frame->extended_data, frame.frame->nb_samples);
+                    av_frame_unref(frame.frame);
+                    if (produced <= 0)
+                        continue;
+
+                    // Trim the preroll the seek forced on us. av_seek_frame
+                    // positioned on the keyframe at or before start_us, so
+                    // the first blocks out of the decoder are older than the
+                    // caller asked for. The video side discards its
+                    // equivalent frames (ShouldConvertDecodedFrame); if audio
+                    // did not, the ring would start at the keyframe while the
+                    // clock is seeded to start_us and video would lead audio
+                    // by that gap for the entire run.
+                    const auto frames_out = static_cast<size_t>(produced);
+                    const size_t preroll =
+                        AudioPrerollFramesToDrop(pts_us, frames_out, kPlaybackOutSampleRate, start_us);
+                    if (preroll >= frames_out)
+                        continue; // entirely before the start: nothing to hand over
+                    const int64_t block_pts_us = pts_us + static_cast<int64_t>(preroll) * 1'000'000 /
+                                                              static_cast<int64_t>(kPlaybackOutSampleRate);
+                    mixer.Submit(index, block_pts_us, pcm.data() + preroll * kPlaybackOutChannels,
+                                 frames_out - preroll);
+                }
+            };
+
             // Same reasoning as the video thread: an allocation failure here
             // must end this run's audio, not the process.
             try {
                 if (pkt.pkt != nullptr && frame.frame != nullptr) {
-                    bool draining = false;
                     while (!impl->playback_cancel.load()) {
-                        if (!draining) {
-                            const PopResult pop = impl->audio_packets->Pop(pkt.pkt);
-                            if (pop == PopResult::Aborted)
-                                break;
-                            if (pop == PopResult::EndOfStream) {
-                                draining = true;
-                                avcodec_send_packet(actx, nullptr);
-                            } else {
-                                const int send_ret = avcodec_send_packet(actx, pkt.pkt);
-                                av_packet_unref(pkt.pkt);
-                                if (send_ret < 0)
-                                    LogWarn((std::string("playback avcodec_send_packet (audio) failed: ") +
-                                             av_err2str(send_ret))
-                                                .c_str());
-                            }
-                        }
-
-                        while (!impl->playback_cancel.load()) {
-                            if (avcodec_receive_frame(actx, frame.frame) < 0)
-                                break;
-                            // Capture the pts BEFORE av_frame_unref resets the frame.
-                            const int64_t pts_us = FramePtsUs(frame.frame, atb);
-                            const int64_t max_out_frames = swr_get_out_samples(swr, frame.frame->nb_samples);
-                            if (max_out_frames <= 0) {
-                                av_frame_unref(frame.frame);
-                                continue;
-                            }
-                            auto pcm = std::make_shared<std::vector<float>>(static_cast<size_t>(max_out_frames) *
-                                                                            kPlaybackOutChannels);
-                            uint8_t* out_ptr = reinterpret_cast<uint8_t*>(pcm->data());
-                            const int produced = swr_convert(swr, &out_ptr, static_cast<int>(max_out_frames),
-                                                             frame.frame->extended_data, frame.frame->nb_samples);
-                            av_frame_unref(frame.frame);
-                            if (produced <= 0)
-                                continue;
-                            pcm->resize(static_cast<size_t>(produced) * kPlaybackOutChannels);
-
-                            // Trim the preroll the seek forced on us. av_seek_frame
-                            // positioned on the keyframe at or before start_us, so
-                            // the first blocks out of the decoder are older than
-                            // the caller asked for. The video side discards its
-                            // equivalent frames (ShouldConvertDecodedFrame); if
-                            // audio did not, the ring would start at the keyframe
-                            // while the clock is seeded to start_us and video would
-                            // lead audio by that gap for the entire run.
-                            const auto frames_out = static_cast<size_t>(produced);
-                            const size_t preroll =
-                                AudioPrerollFramesToDrop(pts_us, frames_out, kPlaybackOutSampleRate, start_us);
-                            if (preroll >= frames_out)
-                                continue; // entirely before the start: nothing to hand over
-                            int64_t block_pts_us = pts_us;
-                            if (preroll > 0) {
-                                pcm->erase(pcm->begin(),
-                                           pcm->begin() + static_cast<std::ptrdiff_t>(preroll * kPlaybackOutChannels));
-                                block_pts_us += static_cast<int64_t>(preroll) * 1'000'000 /
-                                                static_cast<int64_t>(kPlaybackOutSampleRate);
-                            }
-
-                            DecodedAudioBlock block;
-                            block.pts_us = block_pts_us;
-                            block.frame_count = static_cast<uint32_t>(frames_out - preroll);
-                            block.interleaved_stereo = std::move(pcm);
-                            on_audio(std::move(block)); // may block on a full WASAPI ring -- only THIS thread
-                        }
-
-                        if (draining)
+                        const PopResult pop = impl->audio_packets->Pop(pkt.pkt);
+                        if (pop == PopResult::Aborted)
                             break;
+                        if (pop == PopResult::EndOfStream) {
+                            // One shared queue means one end-of-stream for
+                            // all tracks: drain every decoder, then hand
+                            // over what is left in the mix regardless of
+                            // which track reached how far -- nothing more
+                            // can arrive to complete it.
+                            for (size_t i = 0; i < tracks.size(); ++i) {
+                                avcodec_send_packet(tracks[i]->codec.ctx, nullptr);
+                                pump_track(i);
+                            }
+                            deliver(/*end_of_stream=*/true);
+                            break;
+                        }
+
+                        const size_t index = TrackIndexForStream(tracks, pkt.pkt->stream_index);
+                        if (index >= tracks.size()) {
+                            av_packet_unref(pkt.pkt); // not a track of this run
+                            continue;
+                        }
+                        const int send_ret = avcodec_send_packet(tracks[index]->codec.ctx, pkt.pkt);
+                        av_packet_unref(pkt.pkt);
+                        if (send_ret < 0)
+                            LogWarn(
+                                (std::string("playback avcodec_send_packet (audio) failed: ") + av_err2str(send_ret))
+                                    .c_str());
+                        pump_track(index);
+                        deliver(/*end_of_stream=*/false);
                     }
                 }
             } catch (const std::bad_alloc&) {
                 LogWarn("playback audio decode ran out of memory -- ending this run's audio");
             }
+            if (mixer.LateFramesDropped() > 0)
+                LogWarn("playback audio mix discarded late sample frames -- a track lagged past the lookbehind");
             impl->audio_packets->CloseForConsumer();
             impl->NotePlaybackThreadFinished();
         });

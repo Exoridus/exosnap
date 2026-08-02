@@ -1,5 +1,6 @@
 #include "EditExportPage.h"
 
+#include "../services/TimelineThumbnailSource.h"
 #include "../ui/dialogs/ExportOverlay.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
@@ -248,6 +249,7 @@ void EditExportPage::buildUi() {
     // strip — there is no button row or duration readout above it.
     timeline_ = new ui::widgets::EditTimeline(left_widget);
     timeline_->setObjectName(QStringLiteral("editTimeline"));
+    timeline_->installEventFilter(this);
     left_layout->addWidget(timeline_);
 
     connect(timeline_, &ui::widgets::EditTimeline::trimHandleReleased, this, &EditExportPage::onTrimHandleReleased);
@@ -512,7 +514,7 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
                 // below). Never touch player_surface_ here; marshal onto the
                 // UI thread.
                 QMetaObject::invokeMethod(this, "onDecodedFrameReady", Qt::QueuedConnection,
-                                          Q_ARG(QImage, DecodedFrameToQImage(frame)));
+                                          Q_ARG(QImage, WrapDecodedFrame(frame)));
             });
             // Show the clip's first frame as a poster instead of the
             // placeholder while the user is still reviewing.
@@ -526,8 +528,14 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     duration_seconds_ = ctx_.duration_seconds;
     setPreviewPlaying(false);
     preview_position_ms_ = 0;
-    if (timeline_)
+    if (timeline_) {
         timeline_->setDurationMs(durationMs());
+        // The timeline decodes its own thumbnail strip and discovers the clip's
+        // audio tracks; it is handed the keyframe table this page already read
+        // rather than opening the master a second time to find the cues again.
+        timeline_->setAudioTrackLabels({});
+        timeline_->setClip(ctx_.mkv_master_path, keyframe_timestamps_);
+    }
 
     // --- Load markers from sidecar (falls back to session markers) ---
     loadMarkers();
@@ -623,22 +631,21 @@ void EditExportPage::setTrimRangeMs(qint64 start_ms, qint64 end_ms) {
         timeline_->trimEndMs() < durationMs() ? timeline_->trimEndMs() * 1000 : recorder_core::TrimRange::kNoTimestamp;
 }
 
+void EditExportPage::setTimelineFixture(const QStringList& audio_track_labels, int tile_count) {
+    if (!timeline_)
+        return;
+    timeline_->setAudioTrackLabels(audio_track_labels);
+    timeline_->setThumbnailFixture(tile_count);
+    // The row stack just changed height; the player above it has to give the
+    // space back rather than push the timeline out of view.
+    updatePlayerHeight();
+}
+
 void EditExportPage::refreshPlayButton() {
     if (!play_pause_btn_)
         return;
     const QString glyph = preview_playing_ ? QStringLiteral("pause") : QStringLiteral("play");
     play_pause_btn_->setIcon(QIcon(renderEditIcon(glyph, 24, themeColor(ActiveTheme().ink))));
-}
-
-QImage EditExportPage::DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame) {
-    // No copy: the QImage keeps its own reference to the decoded buffer and
-    // releases it via the cleanup hook. Copying instead would memcpy the whole
-    // frame (~15 MB at 1440p) on the UI thread for every displayed frame.
-    auto* keep_alive = new std::shared_ptr<const uint8_t[]>(frame.bgra);
-    return QImage(
-        frame.bgra.get(), static_cast<int>(frame.width), static_cast<int>(frame.height),
-        static_cast<int>(frame.stride_bytes), QImage::Format_ARGB32,
-        [](void* owner) { delete static_cast<std::shared_ptr<const uint8_t[]>*>(owner); }, keep_alive);
 }
 
 void EditExportPage::refreshPreviewTickInterval() {
@@ -660,7 +667,7 @@ void EditExportPage::onPreviewTick() {
         // -- no independent wall-clock estimate to keep in sync with it.
         preview_position_ms_ = ClampPlayheadMs(player_session_->CurrentPositionMs(), durationMs());
         if (auto frame = player_session_->PollFrame())
-            onDecodedFrameReady(DecodedFrameToQImage(*frame)); // already on the UI thread: direct call
+            onDecodedFrameReady(WrapDecodedFrame(*frame)); // already on the UI thread: direct call
     } else {
         preview_position_ms_ += preview_elapsed_->restart();
         if (player_session_)
@@ -785,6 +792,11 @@ bool EditExportPage::confirmDiscardEdits() {
 }
 
 bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
+    // The timeline grows with the clip's audio track count, and the player's
+    // height budget is what is left after it — so a taller row stack has to
+    // re-run the same calculation a player resize does.
+    if (obj == timeline_ && event->type() == QEvent::Resize)
+        QMetaObject::invokeMethod(this, &EditExportPage::updatePlayerHeight, Qt::QueuedConnection);
     if (obj == player_frame_ && event->type() == QEvent::Resize) {
         // Defer to the next event-loop tick: setFixedHeight() from inside the
         // frame's own Resize delivery triggers a nested resize whose layout
@@ -797,18 +809,17 @@ bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
 }
 
 void EditExportPage::updatePlayerHeight() {
-    // Aim for 16:9 relative to the player's current width, but cap the height so
-    // the trim timeline below it stays reachable without scrolling — a real video
-    // view letterboxes inside the frame anyway.
+    // The frame takes the height left over above the timeline, and the video
+    // letterboxes inside it. Deriving the height from the width instead — 16:9
+    // of however wide the player happens to be — made a narrow window leave an
+    // empty band between the timeline and the action bar, because a narrow
+    // player is also a short one and nothing claimed the rest.
     if (!player_frame_)
         return;
-    const int w = player_frame_->width();
-    int target = qRound(w * 9.0 / 16.0);
     int reserved = 52 /* mode bar */ + 64 /* action bar */ + 2 * M::kSpaceMd;
     if (timeline_ && !timeline_->isHidden())
         reserved += timeline_->height() + M::kSpaceMd;
-    const int max_h = std::max(180, height() - reserved);
-    target = std::min(target, max_h);
+    const int target = std::max(180, height() - reserved);
     if (target > 0 && player_frame_->height() != target)
         player_frame_->setFixedHeight(target);
 }
@@ -826,6 +837,10 @@ void EditExportPage::hideEvent(QHideEvent* event) {
     // overlay is shown for a clip.
     if (player_session_)
         player_session_->Close();
+    // Same for the timeline's own decoder: a dismissed surface must not leave a
+    // second reader sitting on the recording.
+    if (timeline_)
+        timeline_->setClip(QString(), {});
     QWidget::hideEvent(event);
 }
 
