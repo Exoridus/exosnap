@@ -791,7 +791,10 @@ or duration readout above the strip:
 - **Thumbnails.** The video row shows frames decoded from the recording, each drawn **left-aligned
   at its own timestamp** so a tile answers "from here on it looks like this". Tile width follows
   the recording's aspect ratio and the number of tiles follows the available width, so resizing
-  the window re-lays the strip. Tiles appear as they finish decoding; a position whose frame is
+  the window re-lays the strip. While tiles are still arriving, a muted **"Generating previews…"**
+  hint sits in the quiet zone above the row stack and disappears once every tile the current width
+  can hold has landed — no spinner, and no placeholder/skeleton tiles in the meantime. Tiles appear
+  as they finish decoding; a position whose frame is
   not (yet) available leaves the row empty there rather than showing a placeholder.
 - **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the
   trimmed-away ranges are dimmed. The handles constrain each other (they can never cross), and on
@@ -806,9 +809,11 @@ or duration readout above the strip:
 - **Drag feedback.** While a handle or the playhead is being dragged, it scales slightly and a
   centered time label appears above it: `MM:SS.mmm`, with an hour field (`HH:MM:SS.mmm`) only when
   the recording is one hour or longer.
-- **Markers.** Markers placed during recording render as thin caution-colored verticals across
-  the timeline, positioned proportionally (a recording with unknown duration shows an inert
-  timeline rather than guessing). Marker editing is not part of the edit surface.
+- **Markers.** Markers placed during recording render as thin secondary-accent (violet) verticals
+  across the timeline, positioned proportionally (a recording with unknown duration shows an inert
+  timeline rather than guessing). The caution color is deliberately not used here — it stays
+  reserved for a real diagnostic warning elsewhere in the app, and Studio Mint stays reserved for
+  the active trim handles/playhead. Marker editing is not part of the edit surface.
 
 Markers are **never written as container chapters**. Instead, a trimmed/remuxed export writes a
 JSON **marker sidecar** (`<export>.markers.json`, ADR 0042) next to the exported file — but only
