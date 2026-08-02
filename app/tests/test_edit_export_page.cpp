@@ -16,6 +16,7 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "models/EditTimelineModel.h"
@@ -760,6 +761,141 @@ TEST_F(EditExportPageTest, BackButton_WithEdits_DiscardClosesTheSurface) {
 
     EXPECT_TRUE(asked);
     EXPECT_EQ(signal_count, 1);
+}
+
+// ---- Row stack (video row + one row per audio track) ----
+
+TEST_F(EditExportPageTest, TimelineHeightFollowsTheAudioTrackCount) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(800, timeline.height());
+    SettleLayout();
+
+    const int video_only = timeline.height();
+    EXPECT_GT(video_only, 0);
+
+    timeline.setAudioTrackLabels({QStringLiteral("System")});
+    SettleLayout();
+    const int one_track = timeline.height();
+    EXPECT_EQ(one_track, video_only + timeline.audioRowHeight() + 2 /* row gap */);
+
+    timeline.setAudioTrackLabels({QStringLiteral("System"), QStringLiteral("Microphone")});
+    SettleLayout();
+    EXPECT_GT(timeline.height(), one_track);
+
+    // A clip with no audio gets no audio rows at all.
+    timeline.setAudioTrackLabels({});
+    SettleLayout();
+    EXPECT_EQ(timeline.height(), video_only);
+}
+
+TEST_F(EditExportPageTest, AudioRowsShareTheirHeightBudget) {
+    // Three tracks must not push the player out at the 700 px minimum window
+    // height, so the rows share a fixed budget instead of each claiming 20 px.
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(800, timeline.height());
+
+    timeline.setAudioTrackLabels({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")});
+    const int three = timeline.height();
+
+    timeline.setAudioTrackLabels({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D"),
+                                  QStringLiteral("E"), QStringLiteral("F")});
+    EXPECT_LT(timeline.audioRowHeight(), 20);
+    // Six tracks are allowed to be taller than three, but not six times a row.
+    EXPECT_LT(timeline.height(), three + 6 * 20);
+}
+
+TEST_F(EditExportPageTest, TimeMappingStillAgreesWithMultipleRows) {
+    // xForMs()/msForX() map against the whole row stack; adding audio rows
+    // changes its height but must not move a timestamp horizontally.
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(800, timeline.height());
+    timeline.setDurationMs(100000);
+    SettleLayout();
+
+    const int x_before = timeline.xForMs(50000);
+    timeline.setAudioTrackLabels({QStringLiteral("System"), QStringLiteral("Microphone")});
+    SettleLayout();
+    EXPECT_EQ(timeline.xForMs(50000), x_before);
+
+    for (const qint64 ms : {qint64{0}, qint64{25000}, qint64{50000}, qint64{100000}}) {
+        const int x = timeline.xForMs(ms);
+        // Round-trip within one pixel's worth of clip time.
+        const qint64 per_px = 100000 / std::max(timeline.width(), 1);
+        EXPECT_NEAR(static_cast<double>(timeline.msForX(x)), static_cast<double>(ms), static_cast<double>(per_px + 1));
+    }
+}
+
+// ---- Thumbnail strip ----
+
+TEST_F(EditExportPageTest, ThumbnailStripFillsTheVideoRowAndFollowsTheWidth) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(800, timeline.height());
+    timeline.show();
+    SettleLayout();
+    timeline.setDurationMs(100000);
+
+    timeline.setThumbnailFixture(-1);
+    const int wide = timeline.thumbnailCount();
+    EXPECT_GT(wide, 0);
+
+    // A narrower track holds fewer tiles: the strip is laid out on the width,
+    // not on a fixed tile count.
+    timeline.resize(400, timeline.height());
+    SettleLayout();
+    EXPECT_LT(timeline.thumbnailCount(), wide);
+    EXPECT_GT(timeline.thumbnailCount(), 0);
+}
+
+TEST_F(EditExportPageTest, APartlyDecodedStripDrawsOnlyTheTilesItHas) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(800, timeline.height());
+    timeline.setDurationMs(100000);
+    SettleLayout();
+
+    timeline.setThumbnailFixture(-1);
+    const int full = timeline.thumbnailCount();
+    ASSERT_GT(full, 4);
+
+    timeline.setThumbnailFixture(4);
+    EXPECT_EQ(timeline.thumbnailCount(), 4);
+
+    // Nothing decoded yet is an empty row, not a placeholder pattern.
+    timeline.setThumbnailFixture(0);
+    EXPECT_EQ(timeline.thumbnailCount(), 0);
+}
+
+TEST_F(EditExportPageTest, TimelineFixtureFlowsThroughThePage) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    const int video_only = timeline->height();
+
+    page.setTimelineFixture({QStringLiteral("System"), QStringLiteral("Microphone")}, -1);
+    SettleLayout();
+
+    EXPECT_EQ(timeline->audioTrackLabels().size(), 2);
+    EXPECT_GT(timeline->height(), video_only);
+    EXPECT_GT(timeline->thumbnailCount(), 0);
+}
+
+TEST_F(EditExportPageTest, AClipWithoutAMasterPathLeavesTheStripEmpty) {
+    // No master (the legacy toast path) means nothing to decode; the video row
+    // stays blank rather than showing anything invented.
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    EXPECT_EQ(timeline->thumbnailCount(), 0);
+    EXPECT_TRUE(timeline->audioTrackLabels().isEmpty());
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {
