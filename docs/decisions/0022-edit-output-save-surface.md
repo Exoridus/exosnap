@@ -3,24 +3,32 @@
 ## Status
 
 Accepted — UI shell implemented in Production Suite wave; engine implemented in 0.9.0 wave
-(Review post-flight report, Edit keyframe-accurate trim, Output real stream-copy export).
+(post-flight report, keyframe-accurate trim, real stream-copy export).
 
 **Superseded surface shape (EDIT-OVERLAY-R1, UI-redesign-port wave):** the surface was
 originally an in-window *stack page* (Record → EditExportPage swap, Back returns to Record).
 Per the redesign IA (`suite-ia.jsx` decision 5 / `suite-edit.jsx`: "an overlay over Record, not
-a nav tab"), it is now an **overlay over the Record page** — `EditExportOverlay` hosts the same,
-functionally-unchanged `EditExportPage` instead of swapping it into the `QStackedWidget`. See
+a nav tab"), it is now an **overlay over the Record page** — `EditExportOverlay` hosts
+`EditExportPage` instead of swapping it into the `QStackedWidget`. See
 "Surface shape (current): overlay" below; the original "In-window mode" rationale is kept
 for history but no longer describes the shipped shape.
 
 **Amended (UI-polish round): opaque backdrop.** The overlay's backdrop was originally
 semi-transparent (the SourcePickerOverlay dim, alpha 158), leaving the Record page dimly
-visible underneath. It is now painted **fully opaque**: any alpha below 255 lets the window
-chrome (logo, notification bell) bleed through the margin band around the hosted page, in
-every phase. The "Record page dimly visible underneath" property is deliberately given up —
-the transient over-Record relationship is carried by the overlay's structure (parenting,
-dismiss behavior), not by see-through pixels. Passages below that described the backdrop as
-"dimmed" have been updated accordingly.
+visible underneath. It is now painted **fully opaque**. The original justification was that any
+alpha below 255 let the window chrome bleed through the margin band; with the title bar no
+longer covered (see below) that reason is spent, but a translucent backdrop would show the
+Record page underneath, which is not wanted either. The "Record page dimly visible underneath"
+property is deliberately given up — the transient over-Record relationship is carried by the
+overlay's structure (parenting, dismiss behavior), not by see-through pixels. Passages below
+that described the backdrop as "dimmed" have been updated accordingly.
+
+**Amended (2026-08-02): one view instead of a three-step stepper.** The `Review → Edit →
+Output` stepper is gone, and with it `EditExportPage::Phase`. The surface is a single view —
+player, trim timeline, details rail, post-flight report icon — with the output choice and the
+export progress/result in a nested **export card** over it. The overlay also no longer covers
+the real title bar. See "Surface structure" and "Export card" below; the sections describing
+the phases and the stepper have been replaced.
 
 ## Context
 
@@ -55,42 +63,41 @@ verified empirically — for the backdrop to correctly composite over the native
 child window (Qt promotes the overlapping sibling to its own native window).
 
 Consequences of the shape change vs. the original in-window mode:
-- The main nav (including window controls) is covered by the overlay's backdrop while it is
-  open — same as when `SourcePickerOverlay` is open. This is a deliberate trade vs. the original
-  ADR text ("nav items remain accessible"): the surface is now a full-focus overlay, not a page.
-- `EditExportPage`'s own internals (phases, trim, output, markers, export) are **unchanged** —
-  this is a re-hosting change only. All existing object names (`editExportProgressBar`,
-  `editFactDuration`, `editExportPrimaryBtn`, `editExportBackBtn`, …) are preserved.
+- The overlay spans the client area **minus a top inset equal to the title bar height**
+  (`EditExportOverlay::setTopInset()`, pushed in by MainWindow and re-applied on every parent
+  resize). Nav tabs and window controls stay visible and clickable for the whole edit session;
+  navigating away closes the overlay through the discard guard below.
 - The overlay is built lazily on first use (`MainWindow::buildEditExportOverlay()`), same timing
   as the former `buildEditExportPage()` in the staged post-show hydration sequence.
 
 ### Dismiss rules
 
-Escape or a click on the backdrop (outside the hosted page's framed panel) closes the overlay in
-every phase **except** `Phase::Exporting`, where a running export must not be silently abandoned
-— only the page's own controls (Cancel / Retry) can end that flow
-(`EditExportOverlay::isDismissBlocked()`). Navigating to a different top-level page while the
-overlay is open dismisses it for the same reason and under the same exception (a nav click
-during an active export is ignored, not queued).
+Escape or a click on the backdrop (outside the hosted page's framed panel) closes the overlay
+**except while an export runs**, where it must not be silently abandoned — only the export
+card's own Cancel can end that flow (`EditExportOverlay::isDismissBlocked()`, which reads
+`EditExportPage::isExportRunning()`). Navigating to a different top-level page while the overlay
+is open dismisses it for the same reason and under the same exception (a nav click during an
+active export is ignored, not queued).
 
-Not-yet-exported trim edits are discarded on dismiss without a confirmation prompt. This mirrors
-the page's pre-existing Back-button behavior (`onBackClicked()`/`onDoneClicked()` have never
-guarded against unsaved trim state) — introducing a confirmation only for Escape/backdrop would
-be inconsistent with Back already discarding silently. Markers are unaffected: the edit surface
-is a marker *consumer* only (markers are placed during recording), so nothing already-committed
-is at risk.
+**Discard guard.** With the title bar and the nav tabs reachable there are more ways to leave the
+surface, so closing it with trim points or markers set asks first: `Discard edits?`, with
+`Keep editing` as the default button and `Discard` as the reject-role choice — the same shape as
+the overwrite confirmation. `EditExportPage::hasUnsavedEdits()` is the gate (a trim range is set,
+or the clip carries markers). It guards the back arrow, Escape, a backdrop click, and nav-away;
+on `Keep editing` from nav-away the navigation is cancelled outright rather than deferred.
 
 **Recording start dismisses the overlay.** A capture start (recording or countdown) closes the
 Edit overlay — on the stack-page shape this happened implicitly via the swap-back to Record;
 with the overlay it is explicit in `onRecordChromeStateChanged`. This dismissal deliberately
-applies **during `Phase::Exporting` too**: closing the overlay only hides the progress UI — the
+applies **during a running export too**: closing the overlay only hides the progress UI — the
 hosted page and its export worker thread live on, and re-entering the editor after Stop re-shows
 the running export instead of resetting the page (`navigateToEditExportPage` re-opens without
-touching the context while `isDismissBlocked()`). Conversely, `navigateToEditExportPage` is a
-no-op while a recording or countdown is active, so a stale toast's Edit action can never open the
-editor over a live capture.
+touching the context while `isDismissBlocked()`). It is also the one close that **skips the
+discard guard**: a modal that blocks a hotkey-triggered recording is worse than a lost trim.
+Conversely, `navigateToEditExportPage` is a no-op while a recording or countdown is active, so a
+stale toast's Edit action can never open the editor over a live capture.
 
-**App close during an export.** `MainWindow::closeEvent` guards `Phase::Exporting` the same way
+**App close during an export.** `MainWindow::closeEvent` guards a running export the same way
 it guards the post-stop MP4 remux: a dialog offers "Wait for export to finish" (default) or
 "Cancel export and close". Cancelling is data-safe — an export never mutates the original
 recording; at most a partial temp/`_edit` file is abandoned. The close-to-tray path is unaffected
@@ -103,10 +110,12 @@ it the Windows microphone-in-use indicator when navigating away) never fires. Th
 suspends/resumes the visibility-gated meter monitoring explicitly. A mic that is enabled as a
 recording source is unaffected — identical semantics to navigating to another page.
 
-**Known interaction trade:** while the overlay is open it also covers the custom title bar, so
-the window cannot be moved/minimized with the mouse during an edit session (including during
-`Exporting`, where Escape/backdrop dismiss is blocked). Alt+Space / Win+Arrow keyboard window
-management still works; accepted as consistent with the SourcePickerOverlay precedent.
+**Title bar stays reachable.** The overlay originally covered the custom title bar, so the
+window could not be moved or minimized with the mouse for the whole edit session — including
+during an export, where Escape/backdrop dismiss is blocked. That trade is reversed: the overlay
+now starts below the title bar (`setTopInset()`), and window management works normally
+throughout. The SourcePickerOverlay precedent still applies to that overlay, which is a short
+modal choice rather than a session-length surface.
 
 ### Entry points (current)
 
@@ -129,27 +138,53 @@ All three entry points call `MainWindow::navigateToEditExportPage()`, which now 
 
 ### Surface structure
 
-`EditExportPage` replaces the main content area after recording stops. The surface has three linear
-phases stepped by a top stepper bar:
+The surface is **one view** — trimming a clip and writing it out is a single task, and stepping
+through it made a re-layout look like a decision. It carries:
+
+- **Header** — back arrow, title, filename, and the post-flight report at its right end (see
+  below). Always visible.
+- **Player** — decoded video with a centred play/pause toggle. No longer gated behind a step; it
+  is present from the moment the surface opens.
+- **Timeline** — direct manipulation (`app/ui/widgets/EditTimeline`): draggable trim in/out
+  handles (trimmed-away ranges dimmed; keyframe-accurate — see "Trim implementation"), marker
+  verticals, and a scrubbable playhead that follows the preview clock. There is no button row
+  above the strip. Split Chapter deferred to 0.11.
+- **Details rail** — `app/ui/widgets/EditDetailsRail`: fixed 280 px column of duration / size /
+  resolution / frame rate / video / audio / container as right-aligned mono values.
+- **Action bar** — one button, `Export…`, bottom-right like the Record page's transport actions.
+  It opens the export card.
+
+**Post-flight report.** The three numbers the Review step used to show — real frame drops, peak
+A/V drift, pipeline health — live in an icon at the right end of the header (`editReportIcon`),
+with the values in its tooltip. The computation is unchanged, including the em-dash treatment for
+unavailable values and the real-versus-benign drop definition. A hover-only tooltip would swallow
+a genuine finding, so the icon carries the severity: a muted `info` glyph for Good/Unavailable, an
+amber warning triangle plus a short label for Warning, coral for Critical.
+
+### Export card
+
+`app/ui/dialogs/ExportOverlay` is a nested overlay inside the edit view, one card with four
+states:
 
 ```
-Review → Edit → Output
+Options ──Export──> Running ──┬── ok ──> Done
+                              └── err ─> Failed ──Retry──> Running
 ```
 
-- **Review**: post-flight report (frame-drop %, peak A/V drift, pipeline health) populated from
-  `RecordingDiagnosticsSnapshot` and peak-drift tracking in `RecordPage`. Video player
-  placeholder (decoded frames deferred to 0.11; the play/pause toggle drives a real position
-  clock). Duration / size / codec / container Details card on the right (right-aligned mono
-  values).
-- **Edit**: direct manipulation on the timeline under the player (`app/ui/widgets/EditTimeline`):
-  draggable trim in/out handles (trimmed-away ranges dimmed; keyframe-accurate — see "Trim
-  implementation"), marker verticals, and a scrubbable playhead that follows the preview clock.
-  There is no button row above the strip. Split Chapter deferred to 0.11. The primary action
-  ("Save & export" in Output) sits in a bottom action bar, bottom-right like the Record page's
-  transport actions.
-- **Output**: container combo (MKV / MP4, both stream-copy / lossless) + save-mode combo
-  (new file = `<name>_edit.<ext>` / overwrite original = atomic rename). After clicking Export:
-  Exporting phase (real progress bar from `RemuxProgressCallback`) → Done or Failed result panel.
+- **Options** — container combo (MKV / MP4, both stream-copy / lossless), save-mode combo (new
+  file = `<name>_edit.<ext>` / overwrite original = atomic rename), a static destination label,
+  `Cancel` / `Export`.
+- **Running** — status line, real progress from `RemuxProgressCallback`, `Cancel`.
+- **Done** — output filename, `Open folder` / `Show in Explorer` / `Close`.
+- **Failed** — the remuxer's own error text, `Close` / `Retry`.
+
+The card is presentation only. Export execution — thread, trim range, marker sidecar, atomic
+rename (`EditExportPage::runExport()`) — stays in the page, which drives the card through its
+`showRunning()` / `setProgress()` / `showDone()` / `showFailed()` slots and reacts to its
+signals. The overwrite confirmation still runs before the export starts.
+
+Escape and a backdrop click close the card, not the session, and both are blocked while it is
+Running — `Cancel` is the only way out of a running export.
 
 ### Format / cost model
 
@@ -212,8 +247,8 @@ The player area's play/pause toggle drives a position clock (`QTimer`-advanced, 
 yet — the 0.11 frame view will attach to the same position). The timeline playhead follows the
 clock. Scrubbing (dragging the playhead or pressing on the track) seeks the position; playback
 pauses for the duration of the drag and resumes on release only if it was playing when the scrub
-began (paused stays paused). Reaching the end of the clip pauses at the end. Hiding the page (or
-leaving the player phases) stops the clock.
+began (paused stays paused). Reaching the end of the clip pauses at the end. Hiding the page
+stops the clock.
 
 ### Marker sidecar — single canonical format and writer
 
@@ -268,16 +303,6 @@ tab"; updated for "overlay" vs. the original "mode/stack replacement"):
 - Back / Done / dismissing the overlay all resolve to the same `closeOverlay()`, cleanly, without
   touching nav history (there was never any to pollute, but the overlay makes this structurally
   true rather than just behaviorally true).
-
-### Phase stepper
-
-The three-step stepper (Review / Edit / Output) dynamically highlights the current phase:
-- Review phase → "Review" highlighted (accent underline).
-- Edit phase → "Edit" highlighted.
-- Output / Exporting / Done / Failed → "Output" highlighted.
-
-(Unchanged by EDIT-OVERLAY-R1 — this is internal to `EditExportPage`, which was re-hosted, not
-rewritten.)
 
 ## Consequences
 
