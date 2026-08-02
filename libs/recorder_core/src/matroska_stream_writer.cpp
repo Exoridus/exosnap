@@ -577,8 +577,11 @@ bool MatroskaStreamWriter::FlushCluster() {
         PublishProgress();
         // CueClusterPosition must be relative to the Segment data start (Matroska spec
         // §8.1.6.1): relative = absolute - Segment_element_start - Segment_head_bytes.
-        const uint64_t cluster_abs = m_cluster->GetPosition();
-        const uint64_t cluster_rel = m_segment->GetRelativePosition(cluster_abs);
+        // KaxCluster::GetPosition() ALREADY returns that -- it is defined as
+        // ParentSegment->GetRelativePosition(*this). Running it through
+        // GetRelativePosition() again would subtract the Segment header twice and
+        // point every cue that many bytes short of its cluster.
+        const uint64_t cluster_rel = m_cluster->GetPosition();
         for (const uint64_t cue_ms : m_pending_cue_ms) {
             auto& point = libebml::AddNewChild<libmatroska::KaxCuePoint>(*m_cues);
             libebml::GetChild<libmatroska::KaxCueTime>(point).SetValue(cue_ms);
