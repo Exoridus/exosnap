@@ -6,6 +6,7 @@ class QComboBox;
 class QLabel;
 class QProgressBar;
 class QPushButton;
+class QVBoxLayout;
 class QWidget;
 
 namespace exosnap::ui::widgets {
@@ -31,6 +32,11 @@ namespace exosnap::ui::widgets {
 //
 // The output rows stay in place across all four states (disabled while a run is
 // in flight), so the panel never swaps its content out from under the pointer.
+//
+// Order inside the card is title -> status -> output rows. The status area is
+// what changes, so it sits where the card is anchored; at the 860x700 minimum
+// window it is then readable without scrolling and the output rows are what
+// scrolls out of view instead. Nothing above the status moves between states.
 class ExportPanel : public QFrame {
     Q_OBJECT
   public:
@@ -63,14 +69,11 @@ class ExportPanel : public QFrame {
     void openFolderRequested();
     void revealFileRequested();
 
-    // The panel now has progress or a result to show. The host owns what that
-    // means for the surface around it — at the minimum window height the rail
-    // has to scroll the status into view, and a report the user has to go
-    // looking for is not a report.
-    void statusShown();
-
   private:
     void buildPanel();
+    // Progress and result, built directly under the title so a state change
+    // never has to move anything above it to be seen.
+    void buildStatusArea(QVBoxLayout* root);
     // Shows the status group for the current state and enables/disables the
     // output rows (a run in flight must not have its target changed under it).
     void refreshStateVisibility();
@@ -89,9 +92,7 @@ class ExportPanel : public QFrame {
     QComboBox* save_mode_combo_ = nullptr;
     QLabel* dest_label_ = nullptr;
 
-    // ---- Status area (hidden in Options) ----
-    QFrame* status_separator_ = nullptr;
-
+    // ---- Status area (hidden in Options), above the output rows ----
     QWidget* running_content_ = nullptr;
     QLabel* status_label_ = nullptr;
     QProgressBar* progress_bar_ = nullptr;
@@ -106,6 +107,9 @@ class ExportPanel : public QFrame {
     QPushButton* open_folder_btn_ = nullptr;
     QPushButton* reveal_btn_ = nullptr;
     QPushButton* retry_btn_ = nullptr;
+
+    // Divides the status area from the output rows; shown with the status.
+    QFrame* status_separator_ = nullptr;
 };
 
 } // namespace exosnap::ui::widgets

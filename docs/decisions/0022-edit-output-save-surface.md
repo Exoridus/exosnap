@@ -39,6 +39,18 @@ being a fixed 280 px: it narrows across width breakpoints (but is never hidden �
 export controls) and scrolls vertically, and the page recomputes that layout from `resizeEvent`
 and `showEvent`. See "Surface structure" and "Export panel" below.
 
+**Amended (2026-08-03, second pass): the rail never auto-scrolls, and it densifies instead.** The
+first pass answered "the status is below the fold at 860 × 700" by scrolling the rail to the
+panel's bottom edge when a run reported something (`ExportPanel::statusShown` →
+`EditExportPage::revealExportPanel()`). At the minimum window the panel is taller than the
+viewport, so that scroll was a jump by construction, it landed each of the three states at a
+different offset, and it moved the details card along with it. Both the signal and the method are
+**gone**: the status area now sits at the *top* of the export card, directly under its heading and
+above the output rows, so there is nothing to scroll to. The rail's scroll position is left to the
+user in every state. Alongside it the details card gained a **compact density** for the narrow
+breakpoint only, freeing roughly 50 px for the export card at the minimum window. See "Export
+panel" and "Surface structure" below.
+
 ## Context
 
 After a recording stops, users need to decide what to do with the captured file: keep the MKV
@@ -162,6 +174,13 @@ through it made a re-layout look like a decision. It carries:
   (duration / size / resolution / frame rate / video / audio / container as right-aligned mono
   values) and the export panel below it. It scrolls because the two cards together outgrow the
   column at the 700 px minimum window height, and a clipped result action would be unreachable.
+  Scrolling is the *user's*: the surface never scrolls the rail on its own (see the 2026-08-03
+  second-pass amendment). The details card has two densities — `EditDetailsRail::setCompact()`,
+  driven from `updateResponsiveLayout()` and enabled only at the narrow rail breakpoint. Compact
+  trims the card's vertical padding, the fact rows' padding and the title gap, and keeps rule lines
+  only between fact groups (duration/size · resolution/frame rate · video/audio/container). It
+  drops no fact and shrinks no type — the seven facts are worth their space in a tall window and
+  not at the enforced minimum, where they left the export panel with almost no usable height.
 - **Action bar** — one button, `Export`, bottom-right like the Record page's transport actions.
   It starts the export against the panel's current settings; it is disabled while a run is in
   flight, since a second `runExport()` would block the UI thread joining the first worker.
@@ -194,13 +213,23 @@ Options ──(action bar)──> Running ──┬── ok ──> Done
                                     └── err ─> Failed ──Retry──> Running
 ```
 
+Order inside the card is **title → status → output rows**. The status area is the part that
+changes, so it sits where the card is anchored: at 860 × 700 it is then readable without scrolling,
+and the output rows are what scrolls out of view instead. A `QBoxLayout` skips hidden items and the
+spacing around them, so the resting card reserves no empty band where the status will appear.
+
 - **Output rows** — container combo (MKV / MP4, both stream-copy / lossless), save-mode combo
-  (new file = `<name>_edit.<ext>` / overwrite original = atomic rename), and a destination line
-  that states what the selected mode does. These are present in **every** state and only
-  *disabled* while a run is in flight, so nothing swaps out from under the pointer mid-export and
-  the settings are already in place for the next run.
+  (new file = `<name>_edit.<ext>` / overwrite original = atomic rename), and a two-line destination
+  statement (`Lossless stream copy` + what the selected mode does with the file). It is set in the
+  **muted** text step rather than the dimmest one: it states what pressing Export does to the
+  user's file, which is a different weight of information from ordinary help text, and as a single
+  running sentence it was the one thing in the rail that ran out of column. These rows are present
+  in **every** state and only *disabled* while a run is in flight, so nothing swaps out from under
+  the pointer mid-export and the settings are already in place for the next run.
 - **Running** — status line, real progress from `RemuxProgressCallback`, `Cancel`.
-- **Done** — output filename, `Open folder` / `Show in Explorer`.
+- **Done** — output filename, `Open folder` / `Show in Explorer`. The two actions stay stacked (a
+  240 px rail cannot hold them side by side without eliding one away) but at a reduced height and
+  gap, so Done is not conspicuously taller than the other three states.
 - **Failed** — the remuxer's own error text, `Retry`.
 
 The panel carries **no Export button of its own**: the trigger is the action bar's, so that two

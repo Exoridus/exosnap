@@ -3,11 +3,15 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QFrame>
 #include <QLabel>
+#include <QMetaMethod>
+#include <QMetaObject>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QWidget>
 
+#include "ui/theme/ExoSnapTheme.h"
 #include "ui/widgets/ExportPanel.h"
 
 namespace exosnap::ui::widgets {
@@ -115,6 +119,44 @@ TEST_F(ExportPanelTest, DestinationLine_FollowsTheSaveMode) {
 
     panel.findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"))->setCurrentIndex(1);
     EXPECT_TRUE(dest->text().contains(QStringLiteral("Replaces the original"))) << dest->text().toStdString();
+}
+
+// One running sentence was the one thing in the rail that ran out of column, and
+// it broke mid-phrase at the minimum window. Two short lines, with the same lead
+// in both modes so switching modes only changes the line that differs.
+TEST_F(ExportPanelTest, DestinationLine_IsTwoShortLinesInBothSaveModes) {
+    QWidget host;
+    ExportPanel panel(&host);
+
+    auto* dest = panel.findChild<QLabel*>(QStringLiteral("editExportDestFolder"));
+    ASSERT_NE(dest, nullptr);
+
+    const QStringList new_file = dest->text().split(QLatin1Char('\n'));
+    ASSERT_EQ(new_file.size(), 2) << dest->text().toStdString();
+    EXPECT_EQ(new_file.at(0), QStringLiteral("Lossless stream copy"));
+    EXPECT_TRUE(new_file.at(1).startsWith(QStringLiteral("Saved beside the source as")))
+        << new_file.at(1).toStdString();
+
+    panel.findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"))->setCurrentIndex(1);
+    const QStringList overwrite = dest->text().split(QLatin1Char('\n'));
+    ASSERT_EQ(overwrite.size(), 2) << dest->text().toStdString();
+    EXPECT_EQ(overwrite.at(0), QStringLiteral("Lossless stream copy"));
+    EXPECT_EQ(overwrite.at(1), QStringLiteral("Replaces the original recording"));
+}
+
+// It states what pressing Export does to the user's file, which is a different
+// weight of information from ordinary help text -- muted (#9C9C9A), not dim.
+TEST_F(ExportPanelTest, DestinationLine_IsMutedRatherThanTheWeakestTextStep) {
+    QWidget host;
+    ExportPanel panel(&host);
+
+    auto* dest = panel.findChild<QLabel*>(QStringLiteral("editExportDestFolder"));
+    ASSERT_NE(dest, nullptr);
+    const QString style = dest->styleSheet();
+    EXPECT_TRUE(style.contains(QString::fromUtf8(theme::ActiveTheme().mut), Qt::CaseInsensitive))
+        << style.toStdString();
+    EXPECT_FALSE(style.contains(QString::fromUtf8(theme::ActiveTheme().dim), Qt::CaseInsensitive))
+        << style.toStdString();
 }
 
 TEST_F(ExportPanelTest, DestinationLine_NamesTheSelectedContainerExtension) {
@@ -313,6 +355,122 @@ TEST_F(ExportPanelTest, FitsTheNarrowestRailWidthWithoutOverflowing) {
     EXPECT_LE(panel.minimumSizeHint().width(), 225) << "panel demands " << panel.minimumSizeHint().width() << " px";
     for (auto* combo : panel.findChildren<QComboBox*>())
         EXPECT_LE(combo->minimumSizeHint().width(), 225) << combo->objectName().toStdString();
+}
+
+// ---- The status area is anchored under the title, above the settings ----
+
+// The point of the layout order: what changes sits where the card is anchored,
+// so a state change never has to move anything above it to be seen.
+TEST_F(ExportPanelTest, StatusAreaSitsBetweenTheTitleAndTheOutputRows) {
+    QWidget host;
+    host.resize(240, 900);
+    ExportPanel panel(&host);
+    panel.resize(225, 900);
+    host.show();
+    panel.showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+
+    auto* title = panel.findChild<QLabel*>(QStringLiteral("exportPanelTitle"));
+    auto* options = panel.findChild<QWidget*>(QStringLiteral("exportPanelOptions"));
+    ASSERT_NE(title, nullptr);
+    ASSERT_NE(options, nullptr);
+
+    EXPECT_GT(Result(panel)->y(), title->y());
+    EXPECT_LT(Result(panel)->y(), options->y()) << "the result must not sit below the settings";
+
+    panel.showRunning();
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+    EXPECT_GT(Running(panel)->y(), title->y());
+    EXPECT_LT(Running(panel)->y(), options->y()) << "progress must not sit below the settings";
+}
+
+// A card that reserved room for a status it is not showing would read as a gap.
+TEST_F(ExportPanelTest, TheRestingCardReservesNoRoomForTheStatusArea) {
+    QWidget host;
+    host.resize(240, 900);
+    ExportPanel panel(&host);
+    panel.resize(225, 900);
+    host.show();
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+
+    auto* title = panel.findChild<QLabel*>(QStringLiteral("exportPanelTitle"));
+    auto* options = panel.findChild<QWidget*>(QStringLiteral("exportPanelOptions"));
+    ASSERT_NE(title, nullptr);
+    ASSERT_NE(options, nullptr);
+    ASSERT_EQ(panel.state(), ExportPanel::State::Options);
+
+    const int gap = options->y() - (title->y() + title->height());
+    EXPECT_LE(gap, 12) << "an empty band of " << gap << " px under the title";
+    auto* separator = panel.findChild<QFrame*>(QStringLiteral("exportPanelSeparator"));
+    ASSERT_NE(separator, nullptr);
+    EXPECT_FALSE(separator->isVisibleTo(&panel)) << "nothing above the line to separate in Options";
+}
+
+// The panel no longer asks its host to scroll: it reports where the eye already
+// is, and the host leaves the rail's scroll position alone.
+TEST_F(ExportPanelTest, CarriesNoScrollRequestSignal) {
+    const QMetaObject* mo = &ExportPanel::staticMetaObject;
+    for (int i = 0; i < mo->methodCount(); ++i) {
+        if (mo->method(i).methodType() != QMetaMethod::Signal)
+            continue;
+        EXPECT_NE(QByteArray(mo->method(i).name()), QByteArray("statusShown"));
+    }
+}
+
+// ---- The Done state must not tower over the other three ----
+
+// Two stacked full-width buttons at full control height made the finished state
+// visibly taller than Running and Failed, for no reason the user can act on.
+TEST_F(ExportPanelTest, DoneStateFollowUpActionsAreCompact) {
+    QWidget host;
+    host.resize(240, 900);
+    ExportPanel panel(&host);
+    panel.resize(225, 900);
+    host.show();
+    panel.showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+
+    auto* open_folder = panel.findChild<QPushButton*>(QStringLiteral("exportOpenFolderBtn"));
+    auto* reveal = panel.findChild<QPushButton*>(QStringLiteral("exportRevealBtn"));
+    ASSERT_NE(open_folder, nullptr);
+    ASSERT_NE(reveal, nullptr);
+
+    EXPECT_EQ(open_folder->height(), 32);
+    EXPECT_EQ(reveal->height(), 32);
+    // Still stacked -- at 240 px of rail they do not fit side by side.
+    EXPECT_EQ(open_folder->x(), reveal->x());
+    const int gap = reveal->y() - (open_folder->y() + open_folder->height());
+    EXPECT_EQ(gap, 6) << "gap between the stacked follow-up actions";
+}
+
+TEST_F(ExportPanelTest, TheFourStatesStayCloseInHeight) {
+    QWidget host;
+    host.resize(240, 900);
+    ExportPanel panel(&host);
+    panel.resize(225, 900);
+    host.show();
+
+    const auto settle = [&]() {
+        for (int i = 0; i < 8; ++i)
+            QCoreApplication::processEvents();
+        return panel.sizeHint().height();
+    };
+
+    panel.showRunning();
+    const int running = settle();
+    panel.showFailed(QStringLiteral("Could not open the edit master."));
+    const int failed = settle();
+    panel.showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    const int done = settle();
+
+    // Done inherently carries one follow-up action more than Failed; what must
+    // not come on top of that is a full control height and a full gap for each.
+    EXPECT_LE(done - running, 60) << "done " << done << " px vs running " << running << " px";
+    EXPECT_LE(done - failed, 50) << "done " << done << " px vs failed " << failed << " px";
 }
 
 } // namespace

@@ -5,6 +5,8 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSizePolicy>
+#include <QSpacerItem>
 #include <QVBoxLayout>
 
 namespace exosnap::ui::widgets {
@@ -15,6 +17,28 @@ using exosnap::ui::theme::ActiveTheme;
 namespace {
 // Unified empty-value glyph, shared with EditExportPage's own fact rows.
 const QString kEmptyValue = QStringLiteral("\xe2\x80\x94");
+
+// ---- Density ----
+// Roomy is the original card. Compact keeps every fact and every value at the
+// same size; it only spends less on the space between them, which is what the
+// export panel below it needs at the 860x700 minimum window.
+constexpr int kCardMarginVRoomy = M::kSpaceMd; // 14
+constexpr int kCardMarginVCompact = 10;
+constexpr int kRowPadVRoomy = 7;
+constexpr int kRowPadVCompact = 4;
+constexpr int kTitleGapRoomy = M::kSpaceSm; // 8
+constexpr int kTitleGapCompact = 3;
+
+// Compact keeps only the separators that divide the facts into groups -- how
+// long and how big, what the picture is, what it is encoded as -- instead of
+// ruling off every single row. Indices into separators_, which holds one entry
+// per row after the first (0 = before "Size", 1 = before "Resolution", ...).
+constexpr int kGroupSeparatorAfterSize = 1;      // Size | Resolution
+constexpr int kGroupSeparatorAfterFrameRate = 3; // Frame rate | Video
+
+bool IsGroupSeparator(int index) noexcept {
+    return index == kGroupSeparatorAfterSize || index == kGroupSeparatorAfterFrameRate;
+}
 } // namespace
 
 EditDetailsRail::EditDetailsRail(QWidget* parent) : QFrame(parent) {
@@ -24,13 +48,16 @@ EditDetailsRail::EditDetailsRail(QWidget* parent) : QFrame(parent) {
     // would push it past the column it sits in.
 
     rail_layout_ = new QVBoxLayout(this);
-    rail_layout_->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
+    rail_layout_->setContentsMargins(M::kSpaceMd, kCardMarginVRoomy, M::kSpaceMd, kCardMarginVRoomy);
     rail_layout_->setSpacing(0);
 
     title_label_ = new QLabel(QStringLiteral("Details"), this);
     title_label_->setObjectName(QStringLiteral("editDetailsRailTitle"));
     rail_layout_->addWidget(title_label_);
-    rail_layout_->addSpacing(M::kSpaceSm);
+    // Kept as a member so the density can retune it; addSpacing() would hand
+    // the item to the layout with no way back to it.
+    title_gap_ = new QSpacerItem(0, kTitleGapRoomy, QSizePolicy::Minimum, QSizePolicy::Fixed);
+    rail_layout_->addItem(title_gap_);
 
     addFactRow(QStringLiteral("Duration"), duration_value_, /*first=*/true);
     duration_value_->setObjectName(QStringLiteral("factDurationValue"));
@@ -66,7 +93,7 @@ void EditDetailsRail::addFactRow(const QString& key_text, QLabel*& value_out, bo
 
     auto* row = new QWidget(this);
     auto* row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(0, 7, 0, 7);
+    row_layout->setContentsMargins(0, kRowPadVRoomy, 0, kRowPadVRoomy);
     row_layout->setSpacing(M::kSpaceSm);
 
     auto* key = new QLabel(key_text, row);
@@ -77,7 +104,35 @@ void EditDetailsRail::addFactRow(const QString& key_text, QLabel*& value_out, bo
     row_layout->addWidget(value_out, 1);
     rail_layout_->addWidget(row);
 
-    rows_.push_back(FactRow{key, value_out});
+    rows_.push_back(FactRow{key, value_out, row});
+}
+
+void EditDetailsRail::setCompact(bool compact) {
+    if (compact_ == compact)
+        return;
+    compact_ = compact;
+    applyDensity();
+}
+
+void EditDetailsRail::applyDensity() {
+    const int card_v = compact_ ? kCardMarginVCompact : kCardMarginVRoomy;
+    const int row_pad = compact_ ? kRowPadVCompact : kRowPadVRoomy;
+
+    rail_layout_->setContentsMargins(M::kSpaceMd, card_v, M::kSpaceMd, card_v);
+    if (title_gap_)
+        title_gap_->changeSize(0, compact_ ? kTitleGapCompact : kTitleGapRoomy, QSizePolicy::Minimum,
+                               QSizePolicy::Fixed);
+
+    for (const FactRow& row : rows_) {
+        if (auto* row_layout = row.host ? row.host->layout() : nullptr)
+            row_layout->setContentsMargins(0, row_pad, 0, row_pad);
+    }
+
+    for (int i = 0; i < separators_.size(); ++i)
+        separators_[i]->setVisible(!compact_ || IsGroupSeparator(i));
+
+    rail_layout_->invalidate();
+    updateGeometry();
 }
 
 void EditDetailsRail::setFacts(const Facts& facts) {

@@ -166,10 +166,6 @@ class EditExportPage : public QWidget {
     // The action bar's Export button is the only way to start a run, so it has
     // to be out of reach while one is already in flight.
     void refreshExportAction();
-    // Scrolls the rail so the export panel's status is on screen. At the minimum
-    // window height the panel sits below the fold, and progress or a result the
-    // user has to go looking for is not a report.
-    void revealExportPanel();
     // Retunes the preview timer to the open clip's frame rate, capped at the
     // refresh rate of the screen the window is on.
     void refreshPreviewTickInterval();

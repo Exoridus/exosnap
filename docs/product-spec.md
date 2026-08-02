@@ -773,9 +773,16 @@ transport actions; it starts the export straight away and is unavailable while o
 
 The surface scales with the window. The right rail narrows as the window gets tighter and scrolls
 when its two cards need more height than the window offers, but it is never hidden — it carries
-the export controls, and the surface stays fully usable down to the minimum window size. The
-export never covers the clip it was started from: the only thing that ever interrupts the view is
-the overwrite confirmation.
+the export controls, and the surface stays fully usable down to the minimum window size. At the
+narrowest rail the **Details** card tightens — smaller card padding, shorter fact rows, and rule
+lines only between fact groups rather than under every row — which hands roughly 50 px to the
+**Export** card below it. No fact is dropped and no value gets smaller; only the space between
+them. A wider window keeps the roomier card. The export never covers the clip it was started from:
+the only thing that ever interrupts the view is the overwrite confirmation.
+
+**Nothing in the rail moves when an export changes state.** The rail's scroll position is the
+user's; starting, finishing or failing a run never scrolls it, and the tops of the Details and
+Export cards stay exactly where they were.
 
 Trimming is **direct manipulation on the timeline** under the player — there is no button row
 or duration readout above the strip:
@@ -818,15 +825,22 @@ stale sidecar at the destination instead of writing an empty one.
 
 The **Export** card in the rail offers container **MKV / MP4** (both stream-copy, lossless) and a
 save mode of new file (`<name>_edit.<ext>`, saved beside the source) or overwrite-original (atomic
-rename in place); a line under them states what the current choice writes and where. The save mode
-alone determines the destination — there is no separate destination-folder picker, since the model
-leaves nothing else for the user to choose. Overwrite-original asks for confirmation before the
-export starts, naming the file it will replace; the destructive choice is not the default button.
+rename in place); two short lines under them state what the current choice writes and where —
+`Lossless stream copy` followed by either `Saved beside the source as "<name>_edit.mkv"` or
+`Replaces the original recording`. The save mode alone determines the destination — there is no
+separate destination-folder picker, since the model leaves nothing else for the user to choose.
+Overwrite-original asks for confirmation before the export starts, naming the file it will
+replace; the destructive choice is not the default button.
 
-The same card reports the run: a progress bar with **Cancel** while it is going, the output
-filename with **Open folder** / **Show in Explorer** when it succeeds, and the real error text with
-**Retry** when it does not. The output choices stay visible throughout — greyed out while a run is
-in flight — so a finished export leaves the settings in place for the next one. A **keyframe
+The same card reports the run, and it reports it **directly under the card's heading, above the
+output choices** — so a result is visible without scrolling and without anything above it shifting.
+There is a progress bar with **Cancel** while it is going, the output filename with **Open folder**
+/ **Show in Explorer** when it succeeds, and the real error text with **Retry** when it does not.
+The follow-up actions stay stacked (the rail is too narrow for them side by side) but are kept
+compact, so the finished state is not conspicuously taller than the other three. In the resting
+state the card reserves no space for the status it is not showing. The output choices stay visible
+throughout — greyed out while a run is in flight — so a finished export leaves the settings in
+place for the next one; at the minimum window size they are what scrolls out of view. A **keyframe
 interval** selector (Settings →
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.

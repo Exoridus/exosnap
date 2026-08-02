@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFrame>
 #include <QLabel>
@@ -14,6 +15,8 @@
 #include <QPoint>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QThread>
 #include <QTimer>
 #include <QWidget>
 
@@ -62,6 +65,19 @@ void WaitMs(int ms) {
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+// The export runs on a real worker thread and reports back through a queued
+// callback, so how long it takes is the machine's business. Wait for the page
+// to say it finished rather than guessing a duration -- a fixed 50 ms wait here
+// lost that race whenever the machine was under load.
+void WaitForExportToFinish(EditExportPage& page) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (page.isExportRunning() && elapsed.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
 }
 
 // Synthesize mouse events directly (the test binaries link gtest, not Qt Test).
@@ -257,7 +273,7 @@ TEST_F(EditExportPageTest, ExportButtonIsOutOfReachWhileARunIsInFlight) {
     ASSERT_TRUE(page.isExportRunning());
     EXPECT_FALSE(ExportButton(page)->isEnabled());
 
-    WaitMs(50);
+    WaitForExportToFinish(page);
     SettleLayout();
     ASSERT_FALSE(page.isExportRunning());
     EXPECT_TRUE(ExportButton(page)->isEnabled());
@@ -359,7 +375,7 @@ TEST_F(EditExportPageTest, ExportRunsUntilItsCompletionCallbackLands) {
     EXPECT_TRUE(page.isExportRunning()) << "the running flag must be set before the worker is joined";
 
     // The completion callback is a queued invoke: pumping the loop lets it land.
-    WaitMs(50);
+    WaitForExportToFinish(page);
     SettleLayout();
     EXPECT_FALSE(page.isExportRunning());
 
@@ -1043,10 +1059,113 @@ TEST_F(EditExportPageTest, RailScrollsInsteadOfClippingTheExportPanel) {
     EXPECT_GT(reveal->height(), 0);
 }
 
-// Scrolling is only an acceptable answer to the short column if the thing the
-// user needs to see is scrolled to. A result reported below the fold that the
-// user has to go looking for is not a report.
-TEST_F(EditExportPageTest, AReportedResultIsScrolledIntoViewAtTheMinimumWindowSize) {
+// The panel reports at its own top, so a state change needs no scrolling at all
+// -- and must not do any. Scrolling to a panel that is taller than the viewport
+// was a jump by construction, and it took the details card with it.
+TEST_F(EditExportPageTest, ExportStateChangesNeverMoveTheRailScrollPosition) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+
+    const int resting = rail->verticalScrollBar()->value();
+
+    panel->showRunning();
+    SettleLayout();
+    WaitMs(30); // a deferred (zero-timer) scroll would have landed by now
+    SettleLayout();
+    EXPECT_EQ(rail->verticalScrollBar()->value(), resting) << "starting a run must not scroll the rail";
+
+    panel->showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    SettleLayout();
+    WaitMs(30);
+    SettleLayout();
+    EXPECT_EQ(rail->verticalScrollBar()->value(), resting) << "a finished run must not scroll the rail";
+
+    panel->showFailed(QStringLiteral("Could not open the edit master."));
+    SettleLayout();
+    WaitMs(30);
+    SettleLayout();
+    EXPECT_EQ(rail->verticalScrollBar()->value(), resting) << "a failed run must not scroll the rail";
+}
+
+// A scroll position the user set themselves is theirs, in every state. Done is
+// the tallest state, so that is where the rail actually has somewhere to scroll.
+TEST_F(EditExportPageTest, AUserScrolledRailStaysWhereTheUserPutIt) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+
+    panel->showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    SettleLayout();
+    ASSERT_GT(rail->verticalScrollBar()->maximum(), 0) << "precondition: the rail actually scrolls here";
+
+    const int scrolled = rail->verticalScrollBar()->maximum() / 2;
+    rail->verticalScrollBar()->setValue(scrolled);
+    SettleLayout();
+    ASSERT_EQ(rail->verticalScrollBar()->value(), scrolled);
+
+    panel->showFailed(QStringLiteral("boom"));
+    SettleLayout();
+    WaitMs(30);
+    SettleLayout();
+
+    // Failed is shorter than Done, so the range itself may shrink; the only
+    // movement allowed is that clamp, never a scroll of the surface's own.
+    EXPECT_EQ(rail->verticalScrollBar()->value(), std::min(scrolled, rail->verticalScrollBar()->maximum()));
+}
+
+// The visible anchor of the whole rework: whatever the export is doing, the two
+// cards keep their tops. Measured against the viewport, so it covers both the
+// column layout and the scroll offset.
+TEST_F(EditExportPageTest, BothCardsKeepTheirTopEdgeAcrossEveryExportState) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+    auto* details = page.findChild<ui::widgets::EditDetailsRail*>();
+    ASSERT_NE(details, nullptr);
+
+    const auto detailsTop = [&]() { return details->mapTo(rail->viewport(), QPoint(0, 0)).y(); };
+    const auto panelTop = [&]() { return panel->mapTo(rail->viewport(), QPoint(0, 0)).y(); };
+    const int details_top = detailsTop();
+    const int panel_top = panelTop();
+
+    panel->showRunning();
+    SettleLayout();
+    EXPECT_EQ(detailsTop(), details_top) << "Running moved the details card";
+    EXPECT_EQ(panelTop(), panel_top) << "Running moved the export card";
+
+    panel->showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    SettleLayout();
+    EXPECT_EQ(detailsTop(), details_top) << "Done moved the details card";
+    EXPECT_EQ(panelTop(), panel_top) << "Done moved the export card";
+
+    panel->showFailed(QStringLiteral("Could not open the edit master."));
+    SettleLayout();
+    EXPECT_EQ(detailsTop(), details_top) << "Failed moved the details card";
+    EXPECT_EQ(panelTop(), panel_top) << "Failed moved the export card";
+}
+
+// Scrolling is still the answer for the settings below the status -- but the
+// status itself has to be readable without any.
+TEST_F(EditExportPageTest, TheExportStatusIsVisibleWithoutScrollingAtTheMinimumWindowSize) {
     EditExportPage page;
     page.show();
     page.resize(820, 660);
@@ -1070,6 +1189,54 @@ TEST_F(EditExportPageTest, AReportedResultIsScrolledIntoViewAtTheMinimumWindowSi
     EXPECT_TRUE(rail->viewport()->rect().contains(in_viewport))
         << "Retry at " << in_viewport.top() << ".." << in_viewport.bottom() << " in a viewport of "
         << rail->viewport()->height() << " px";
+}
+
+// ---- Details card density ----
+
+// The seven facts are worth their space in a tall window and not at the
+// enforced minimum, where they left the export panel below them with nothing.
+TEST_F(EditExportPageTest, DetailsCardTightensOnlyAtTheNarrowRailBreakpoint) {
+    EditExportPage page;
+    page.show();
+    page.resize(1400, 800);
+    SettleLayout();
+
+    auto* details = page.findChild<ui::widgets::EditDetailsRail*>();
+    ASSERT_NE(details, nullptr);
+    EXPECT_FALSE(details->isCompact()) << "a wide window keeps the roomier card";
+    const int roomy = details->sizeHint().height();
+
+    page.resize(820, 660);
+    SettleLayout();
+    EXPECT_TRUE(details->isCompact());
+    const int compact = details->sizeHint().height();
+
+    EXPECT_GE(roomy - compact, 40) << "roomy " << roomy << " px vs compact " << compact << " px";
+
+    page.resize(1400, 800);
+    SettleLayout();
+    EXPECT_FALSE(details->isCompact()) << "widening again must restore the roomier card";
+}
+
+// Tightening must not cost a fact: the compact card still states all seven.
+TEST_F(EditExportPageTest, TheCompactDetailsCardStillCarriesEveryFact) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+
+    auto* details = page.findChild<ui::widgets::EditDetailsRail*>();
+    ASSERT_NE(details, nullptr);
+    ASSERT_TRUE(details->isCompact());
+
+    for (const char* name : {"factDurationValue", "factSizeValue", "factResolutionValue", "factFpsValue",
+                             "factVideoValue", "factAudioValue", "factContainerValue"}) {
+        auto* value = details->findChild<QLabel*>(QString::fromUtf8(name));
+        ASSERT_NE(value, nullptr) << name;
+        EXPECT_TRUE(value->isVisibleTo(details)) << name;
+    }
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {
