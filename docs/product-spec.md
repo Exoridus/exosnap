@@ -799,7 +799,9 @@ stale sidecar at the destination instead of writing an empty one.
 Output offers container **MKV / MP4** (both stream-copy, lossless) and a save mode of new file
 (`<name>_edit.<ext>`, saved beside the source) or overwrite-original (atomic rename in place). The
 save mode alone determines the destination — there is no separate destination-folder picker, since
-the model leaves nothing else for the user to choose. A **keyframe interval** selector (Settings →
+the model leaves nothing else for the user to choose. Overwrite-original asks for confirmation
+before the export starts, naming the file it will replace; the destructive choice is not the default
+button. A **keyframe interval** selector (Settings →
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
 

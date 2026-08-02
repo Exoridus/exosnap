@@ -6,6 +6,7 @@
 #include "../ui/widgets/EditPlayerSurface.h"
 #include "../ui/widgets/EditTimeline.h"
 
+#include <QAbstractButton>
 #include <QByteArray>
 #include <QColor>
 #include <QComboBox>
@@ -13,12 +14,14 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEvent>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QIcon>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QProcess>
@@ -1225,7 +1228,40 @@ void EditExportPage::onBackClicked() {
 }
 
 void EditExportPage::onExportClicked() {
+    if (!confirmOverwrite())
+        return;
     runExport();
+}
+
+// "Overwrite original" replaces the recording this overlay was opened for, and
+// the export finishes with an atomic replace -- once it succeeds no copy of the
+// original is left anywhere on disk. So the question has to come before the
+// export starts, not as a report afterwards.
+//
+// Deliberately not gated on std::filesystem::exists(): in overwrite mode the
+// target IS that recording, so it is there by construction, and a probe would
+// only add a branch that never runs.
+bool EditExportPage::confirmOverwrite() {
+    const bool overwrite =
+        output_save_mode_combo_ && output_save_mode_combo_->currentData().toString() == QStringLiteral("overwrite");
+    if (!overwrite)
+        return true;
+
+    const QString name = QFileInfo(ctx_.output_path).fileName();
+    QMessageBox box(this);
+    box.setWindowTitle(QStringLiteral("Overwrite original recording"));
+    box.setText(name.isEmpty()
+                    ? QStringLiteral("The original recording will be replaced by the exported result.")
+                    : QStringLiteral("\xe2\x80\x9c%1\xe2\x80\x9d will be replaced by the exported result.").arg(name));
+    box.setInformativeText(QStringLiteral("The original cannot be recovered afterwards."));
+    box.setIcon(QMessageBox::Warning);
+
+    auto* keep_btn = box.addButton(QStringLiteral("Keep original"), QMessageBox::RejectRole);
+    auto* overwrite_btn = box.addButton(QStringLiteral("Overwrite"), QMessageBox::AcceptRole);
+    // The destructive choice is never what a stray Enter key lands on.
+    box.setDefaultButton(keep_btn);
+    box.exec();
+    return box.clickedButton() == static_cast<QAbstractButton*>(overwrite_btn);
 }
 
 void EditExportPage::onCancelExportClicked() {
