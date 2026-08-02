@@ -72,8 +72,9 @@ Top-level navigation is **six items**, in order:
   SHA-256 — the hash is computed lazily off the UI thread on first click).
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
-recording stops, the surface opens over Record as **one view**: player, trim timeline, details
-rail, and the post-flight report as an icon at the right end of its header. The overlay spans the
+recording stops, the surface opens over Record as **one view**: player, trim timeline, a right
+rail with the details and export cards, and the post-flight report as an icon at the right end of
+its header. The overlay spans the
 client area below the real title bar, so the window can be moved and minimized and the nav tabs
 stay clickable for the whole edit session. Its backdrop is opaque, so the Record page does not
 show through. **Back** (or Escape / backdrop click, except while exporting) closes the overlay and
@@ -764,10 +765,17 @@ recordings, segments finalized before an interruption remain usable; an interrup
 may not be recoverable.
 
 **Edit / Output / Save (post-stop surface).** A single overlay view lets the user trim and export
-without leaving the app: the player and its trim timeline on the left, a **Details** card on the
-right listing duration / size / resolution / frame rate / video / audio / container as
-right-aligned mono values, and one action — **Export…** — **bottom-right** (matching the Record
-page's transport actions), which opens the export card described below.
+without leaving the app: the player and its trim timeline on the left, and a right rail with two
+cards — **Details** (duration / size / resolution / frame rate / video / audio / container as
+right-aligned mono values) and **Export** (the output choices plus the progress and result of a
+run, described below). One action — **Export** — sits **bottom-right**, matching the Record page's
+transport actions; it starts the export straight away and is unavailable while one is running.
+
+The surface scales with the window. The right rail narrows as the window gets tighter and scrolls
+when its two cards need more height than the window offers, but it is never hidden — it carries
+the export controls, and the surface stays fully usable down to the minimum window size. The
+export never covers the clip it was started from: the only thing that ever interrupts the view is
+the overwrite confirmation.
 
 Trimming is **direct manipulation on the timeline** under the player — there is no button row
 or duration readout above the strip:
@@ -808,12 +816,18 @@ when markers survive the trim. Surviving markers are re-based to the trimmed cli
 markers cut away by the trim are dropped, and an export with no surviving markers removes any
 stale sidecar at the destination instead of writing an empty one.
 
-Output offers container **MKV / MP4** (both stream-copy, lossless) and a save mode of new file
-(`<name>_edit.<ext>`, saved beside the source) or overwrite-original (atomic rename in place). The
-save mode alone determines the destination — there is no separate destination-folder picker, since
-the model leaves nothing else for the user to choose. Overwrite-original asks for confirmation
-before the export starts, naming the file it will replace; the destructive choice is not the default
-button. A **keyframe interval** selector (Settings →
+The **Export** card in the rail offers container **MKV / MP4** (both stream-copy, lossless) and a
+save mode of new file (`<name>_edit.<ext>`, saved beside the source) or overwrite-original (atomic
+rename in place); a line under them states what the current choice writes and where. The save mode
+alone determines the destination — there is no separate destination-folder picker, since the model
+leaves nothing else for the user to choose. Overwrite-original asks for confirmation before the
+export starts, naming the file it will replace; the destructive choice is not the default button.
+
+The same card reports the run: a progress bar with **Cancel** while it is going, the output
+filename with **Open folder** / **Show in Explorer** when it succeeds, and the real error text with
+**Retry** when it does not. The output choices stay visible throughout — greyed out while a run is
+in flight — so a finished export leaves the settings in place for the next one. A **keyframe
+interval** selector (Settings →
 Advanced → Video: 2 s default / 1 s / 0.5 s) trades a little file size for finer trim accuracy. The
 original recording is never mutated during export; not-yet-exported edits are discarded on dismiss.
 

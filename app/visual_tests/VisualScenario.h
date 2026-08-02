@@ -272,10 +272,10 @@ struct VisualScenario {
     QString settings_update_version;
 
     // --- EditExport scenarios (PHASE-G-EDIT-EXPORT-R1) ---
-    // Export card over the edit view: "" (card closed) | "options" | "running" |
-    // "done". Driven through the card's own API — the page's export path would
-    // start a real remux.
-    QString edit_export_card_state;
+    // Export panel in the edit surface's right rail: "" (leave at its default) |
+    // "options" | "running" | "done" | "failed". Driven through the panel's own
+    // API — the page's export path would start a real remux.
+    QString edit_export_panel_state;
     // Post-flight report severity for the header icon: "" (derive from the
     // scenario's own data, i.e. no snapshot) | "good" | "warning" | "critical".
     // Applied as a diagnostics snapshot so the real computation runs.

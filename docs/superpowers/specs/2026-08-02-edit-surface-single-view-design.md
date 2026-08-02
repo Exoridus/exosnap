@@ -1,6 +1,8 @@
 # Edit surface: one view instead of a three-step stepper
 
-Status: approved 2026-08-02. Supersedes the phase model in ADR 0022 §"Phases".
+Status: approved 2026-08-02. Supersedes the phase model in ADR 0022 §"Phases". The export card
+described here was itself superseded on 2026-08-03 by an embedded rail panel — see
+`2026-08-03-edit-export-panel-responsive-design.md`; everything else below still holds.
 
 ## Problem
 

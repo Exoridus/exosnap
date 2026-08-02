@@ -24,7 +24,6 @@
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/EditExportOverlay.h"
-#include "ui/dialogs/ExportOverlay.h"
 #include "ui/dialogs/FinalizingOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
@@ -43,6 +42,7 @@
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "ui/widgets/EditPlayerSurface.h"
+#include "ui/widgets/ExportPanel.h"
 #include "visual_tests/VisualScenario.h"
 
 #include <QToolButton>
@@ -4650,17 +4650,19 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     edit_export_overlay_->page()->setTimelineFixture(scenario.edit_export_audio_track_labels,
                                                      scenario.edit_export_thumbnail_tiles);
 
-    // Export card states are driven straight through the card's own API — the
+    // Export panel states are driven straight through the panel's own API — the
     // page's export path would start a real remux, which the harness must not do.
-    if (!scenario.edit_export_card_state.isEmpty()) {
-        if (auto* card =
-                edit_export_overlay_->page()->findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay"))) {
-            card->openCard();
-            if (scenario.edit_export_card_state == QStringLiteral("running")) {
-                card->showRunning();
-                card->setProgress(62); // fixed mid-run value: the capture must be deterministic
-            } else if (scenario.edit_export_card_state == QStringLiteral("done")) {
-                card->showDone(scenario.edit_export_file_path);
+    if (!scenario.edit_export_panel_state.isEmpty()) {
+        if (auto* panel =
+                edit_export_overlay_->page()->findChild<ui::widgets::ExportPanel*>(QStringLiteral("exportPanel"))) {
+            panel->reset();
+            if (scenario.edit_export_panel_state == QStringLiteral("running")) {
+                panel->showRunning();
+                panel->setProgress(62); // fixed mid-run value: the capture must be deterministic
+            } else if (scenario.edit_export_panel_state == QStringLiteral("done")) {
+                panel->showDone(scenario.edit_export_file_path);
+            } else if (scenario.edit_export_panel_state == QStringLiteral("failed")) {
+                panel->showFailed(QStringLiteral("Could not write the output file: the disk is full."));
             }
         }
     }

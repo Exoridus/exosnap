@@ -135,8 +135,8 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("paused-split-available"),
         QStringLiteral("completed-recording-segments"),
         QStringLiteral("completed-recording-segment-missing"),
-        // EditExport scenarios: one view plus the four states of the export card
-        // over it, and the header report icon in its warning state.
+        // EditExport scenarios: one view plus the four states of the export panel
+        // in its right rail, and the header report icon in its warning state.
         QStringLiteral("edit-main"),
         QStringLiteral("edit-trimmed"),
         QStringLiteral("edit-timeline-multitrack"),
@@ -144,6 +144,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("edit-export-options"),
         QStringLiteral("edit-export-running"),
         QStringLiteral("edit-export-done"),
+        QStringLiteral("edit-export-failed"),
         QStringLiteral("edit-report-warning"),
         // EditPlayerSurface scenarios (EDIT-VIDEO-PLAYER Task 9).
         QStringLiteral("edit-player-surface-empty"),
