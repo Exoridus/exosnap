@@ -265,8 +265,12 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   back real decoded video and audio (`EditPlayerSession`/`EditPlayerEngine`, avcodec-based; pixel
   format conversion is hand-rolled, not `swscale` — the bundled FFmpeg build still ships only the
   mux-only DLL set) in sync through play/pause/scrub, for 4:2:0 recordings and for a clip recorded
-  with the Expert 4:4:4 chroma option alike. There is no chapter/container-metadata export (a JSON
-  marker sidecar is written instead; see ADR 0042).
+  with the Expert 4:4:4 chroma option alike. A natively-HDR10 recording is tone-mapped to SDR for
+  the preview through the same reference curve as the recording preview (ADR 0040), but against the
+  **reference display peak (1000 nits), not the peak of the screen the editor is actually on** — the
+  player engine is UI-agnostic and has no display to query. That shifts where the highlight roll-off
+  begins, not whether the image reads correctly. There is no chapter/container-metadata export (a
+  JSON marker sidecar is written instead; see ADR 0042).
 - **HDR handling covers both monitor and window/game capture** (expert opt-in
   for native HDR10; tone-mapped SDR is the default for HDR desktops). A window on
   an HDR display captures via a scRGB FP16 frame pool and follows the same HDR

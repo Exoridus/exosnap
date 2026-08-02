@@ -811,7 +811,12 @@ the playhead/scrub/trim-handle interactions against the real decoder. This cover
 (8- and 10-bit) as well as a 4:4:4-chroma recording (Section 6's Expert 4:4:4 option, H.264/HEVC
 8-bit only) — the player's decoder converts the fully-planar 4:4:4 pixel format the same
 software decoders produce for that option, with no chroma-upsampling step since 4:4:4 carries full
-color resolution per pixel. Export is unaffected by any of this, since export is pure stream-copy
+color resolution per pixel. A recording made in native HDR10 (PQ / BT.2020, 10-bit) is tone-mapped
+to SDR for the preview through the same reference curve the recording preview uses, so the same
+frame does not change colour between the two views; the tone-map is applied only for unambiguously
+PQ-tagged 10-bit material, and anything else takes the SDR path. The tone-map targets the reference
+display peak rather than the peak of the screen the editor happens to be on (see
+`KNOWN_LIMITATIONS.md`). Export is unaffected by any of this, since export is pure stream-copy
 and never depends on the preview decoder. The Split Chapter action remains deferred to a later
 release (0.11 per ADR 0022).
 

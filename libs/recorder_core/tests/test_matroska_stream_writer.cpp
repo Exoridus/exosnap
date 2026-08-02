@@ -955,6 +955,47 @@ TEST_F(StreamWriterTest, WritesConfiguredColourValuesIncludingHdr) {
            "even though other HDR fields (MaxCLL/MaxFALL) are present";
 }
 
+// The PQ tag has to survive as far as a DEMUXER, not just as bytes in the
+// Colour element. The editor's player decides whether to tone-map a clip purely
+// from codecpar->color_trc; if the demuxer did not surface the transfer
+// characteristic, every HDR10 recording would silently take the SDR path and
+// render flat. The byte-level test above cannot see that -- it never asks a
+// reader what it makes of those bytes.
+TEST_F(StreamWriterTest, Hdr10TransferTagIsReadableByFfmpegMatroskaDemuxer) {
+    auto cfg = MakeConfig(tmp_, /*h264=*/false, /*opus=*/true);
+    cfg.color.primaries = recorder_core::ColorPrimaries::Bt2020;
+    cfg.color.transfer = recorder_core::TransferCharacteristics::SmpteSt2084;
+    cfg.color.matrix = recorder_core::MatrixCoefficients::Bt2020Ncl;
+    cfg.color.bits_per_channel = 10;
+    cfg.color.hdr = true;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg));
+    FeedSeconds(w, 1.0, 30, 64);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    AVFormatContext* fmt_ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&fmt_ctx, tmp_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(fmt_ctx, nullptr), 0);
+
+    int video_stream_idx = -1;
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            video_stream_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    ASSERT_NE(video_stream_idx, -1) << "No video stream found by the demuxer";
+    const AVCodecParameters* par = fmt_ctx->streams[static_cast<unsigned>(video_stream_idx)]->codecpar;
+    EXPECT_EQ(par->color_trc, AVCOL_TRC_SMPTE2084)
+        << "the demuxer did not surface the PQ transfer characteristic -- the editor player would "
+           "take the SDR path for this HDR10 recording";
+    EXPECT_EQ(par->color_space, AVCOL_SPC_BT2020_NCL);
+
+    avformat_close_input(&fmt_ctx);
+}
+
 // Mastering display metadata (SMPTE ST 2086) round-trips into
 // KaxVideoColourMasterMeta when has_mastering_display is set. Uses
 // representative BT.2020 primaries + D65 white point. Independent of the

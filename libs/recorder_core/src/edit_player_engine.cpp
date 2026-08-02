@@ -1,6 +1,8 @@
 #include "recorder_core/edit_player_engine.h"
 
 #include "edit_playback_pacing.h"
+#include "hdr_preview.h"
+#include "hdr_tonemap.h"
 #include "playback_clock.h"
 #include "recorder_core/logging/logging.h"
 #include "yuv_to_bgra.h"
@@ -133,6 +135,19 @@ ColorRange MapRange(AVColorRange r) noexcept {
     default:
         return ColorRange::Limited; // product SDR default
     }
+}
+
+// Whether this clip is native HDR10 and must be tone-mapped for an SDR screen
+// rather than converted as if its samples were plain gamma-encoded.
+//
+// The test is deliberately narrow -- unambiguous PQ tagging AND the 10-bit
+// pixel format PQ is only ever recorded in. A file carrying odd or missing
+// color_trc tags then falls through to the SDR path (BT.709/Limited by
+// MapMatrix/MapRange), which is the recoverable direction: an SDR clip run
+// through the tone-mapper would look wrong, while a mistagged HDR clip looks
+// exactly as flat as it does today.
+bool IsPqTonemapSource(AVColorTransferCharacteristic trc, int pix_fmt) noexcept {
+    return trc == AVCOL_TRC_SMPTE2084 && pix_fmt == AV_PIX_FMT_YUV420P10LE;
 }
 
 // ---- Bounded packet queue (demux thread -> one decode thread) -------------
@@ -366,6 +381,10 @@ struct EditPlayerEngine::Impl {
     int audio_stream_idx = -1;
     ColorRange range = ColorRange::Limited;
     MatrixCoefficients matrix = MatrixCoefficients::Bt709;
+    // Non-null only while a natively-HDR10 clip is open. Its transfer tables are
+    // built once per clip (they depend only on the display peak), never per
+    // frame, and it is read-only from every decode thread afterwards.
+    std::unique_ptr<P010PqMonitorConverter> pq_converter;
     AVRational frame_rate{0, 1}; // the opened clip's own rate; {0,1} when unknown
 
     // Playback runs on three threads with strictly separate ownership (see
@@ -506,6 +525,18 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     impl_->frame_rate = av_guess_frame_rate(fmt_ctx, vst, nullptr);
     impl_->matrix = MapMatrix(vst->codecpar->color_space);
     impl_->range = MapRange(vst->codecpar->color_range);
+    // Assigned unconditionally, so opening an SDR clip after an HDR one cannot
+    // leave the tone-mapper standing.
+    //
+    // Same reference tone-map curve as the capture preview and snapshot path
+    // (ADR 0040: one colour truth, no second invented tone-map). Display peak:
+    // the engine is UI-agnostic and has no screen to ask, so this is the
+    // reference-peak fallback (kHdrFallbackPeakNits) -- that shifts only where
+    // the highlight roll-off begins, not whether the image is readable at all.
+    // Recorded in KNOWN_LIMITATIONS.
+    impl_->pq_converter = IsPqTonemapSource(vst->codecpar->color_trc, vst->codecpar->format)
+                              ? std::make_unique<P010PqMonitorConverter>(HdrPeakScale(false, 0.0f))
+                              : nullptr;
 
     if (audio_idx >= 0) {
         AVStream* ast = fmt_ctx->streams[audio_idx];
@@ -544,6 +575,7 @@ void EditPlayerEngine::Close() {
     impl_->video_stream_idx = -1;
     impl_->audio_stream_idx = -1;
     impl_->frame_rate = AVRational{0, 1};
+    impl_->pq_converter.reset();
 }
 
 double EditPlayerEngine::VideoFrameRate() const noexcept {
@@ -591,8 +623,12 @@ bool IsConvertibleFrame(const AVFrame* frame) noexcept {
 }
 
 // Converts one held decoder frame to a ready-to-paint DecodedVideoFrame.
+//
+// `pq` is non-null only for a natively-HDR10 clip (see IsPqTonemapSource); its
+// samples then take the tone-mapping path instead of the linear matrix/range
+// conversion, which would render PQ material flat and washed out.
 DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix,
-                                        ColorRange range) {
+                                        ColorRange range, const P010PqMonitorConverter* pq) {
     YuvToBgraParams params;
     params.matrix = matrix;
     params.range = range;
@@ -608,7 +644,19 @@ DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, Ma
     const size_t bgra_bytes = static_cast<size_t>(out.stride_bytes) * out.height;
     std::shared_ptr<uint8_t[]> bgra(new uint8_t[bgra_bytes]);
 
-    if (frame->format == AV_PIX_FMT_YUV444P) {
+    if (pq != nullptr && frame->format == AV_PIX_FMT_YUV420P10LE) {
+        FullPlanarYuv420Frame src;
+        src.y_plane = frame->data[0];
+        src.y_stride_bytes = static_cast<uint32_t>(frame->linesize[0]);
+        src.u_plane = frame->data[1];
+        src.u_stride_bytes = static_cast<uint32_t>(frame->linesize[1]);
+        src.v_plane = frame->data[2];
+        src.v_stride_bytes = static_cast<uint32_t>(frame->linesize[2]);
+        src.width = out.width;
+        src.height = out.height;
+        src.bits_per_sample = 10u;
+        pq->Convert(src, bgra.get(), out.stride_bytes);
+    } else if (frame->format == AV_PIX_FMT_YUV444P) {
         FullPlanar444Frame src;
         src.y_plane = frame->data[0];
         src.y_stride_bytes = static_cast<uint32_t>(frame->linesize[0]);
@@ -650,7 +698,8 @@ DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, Ma
 // conversion the caller actually needs.
 std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx, AVCodecContext* vctx,
                                                        int video_stream_idx, int64_t target_us,
-                                                       MatrixCoefficients matrix, ColorRange range) {
+                                                       MatrixCoefficients matrix, ColorRange range,
+                                                       const P010PqMonitorConverter* pq) {
     PacketGuard pkt(av_packet_alloc());
     FrameGuard frame(av_frame_alloc());
     FrameGuard held(av_frame_alloc());
@@ -664,7 +713,7 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
     const auto finish = [&]() -> std::optional<DecodedVideoFrame> {
         if (!have_candidate)
             return std::nullopt;
-        return ConvertToDecodedFrame(held.frame, candidate_pts_us, matrix, range);
+        return ConvertToDecodedFrame(held.frame, candidate_pts_us, matrix, range, pq);
     };
 
     while (true) {
@@ -801,7 +850,8 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
     // Discard any decoder-buffered frames from before the seek.
     avcodec_flush_buffers(vctx);
 
-    return DecodeForwardToTarget(fmt_ctx, vctx, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range);
+    return DecodeForwardToTarget(fmt_ctx, vctx, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range,
+                                 impl_->pq_converter.get());
 }
 
 void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
@@ -989,8 +1039,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                             // on the consumer's bounded queue, and holding a
                             // decoder frame reference across that would pin a
                             // buffer the decoder wants back.
-                            DecodedVideoFrame out =
-                                ConvertToDecodedFrame(frame.frame, pts_us, impl->matrix, impl->range);
+                            DecodedVideoFrame out = ConvertToDecodedFrame(frame.frame, pts_us, impl->matrix,
+                                                                          impl->range, impl->pq_converter.get());
                             av_frame_unref(frame.frame);
                             on_video(std::move(out));
                         } else {

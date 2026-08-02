@@ -97,7 +97,20 @@ class P010PqMonitorConverter {
     // (P010).
     void Convert(const PlanarYuv420Frame& src, uint8_t* out_bgra, uint32_t out_stride_bytes) const;
 
+    // Same conversion for the fully-planar 10-bit layout FFmpeg's software
+    // decoders produce (AV_PIX_FMT_YUV420P10LE: separate U and V planes, plain
+    // [0, 1023] samples with no P010 <<6 justification) -- what the editor's
+    // player hands over for a natively-HDR10 recording. Repacking to P010 to
+    // reuse the overload above would cost a full extra frame copy on a path
+    // that is already the editor's measured bottleneck.
+    void Convert(const FullPlanarYuv420Frame& src, uint8_t* out_bgra, uint32_t out_stride_bytes) const;
+
   private:
+    // One output pixel from PQ-encoded Y'CbCr components that have already been
+    // dequantised to their nominal ranges. Both overloads go through this, so
+    // the two input layouts cannot drift apart in colour.
+    void WriteMonitorPixel(float yv, float cr_r, float cb_b, float g_chroma, uint8_t* px) const;
+
     // Table resolution for the per-channel transfer stages. 1024 entries is
     // ample for an 8-bit monitoring output and keeps both tables in L1/L2.
     static constexpr int kLutSize = 1024;
