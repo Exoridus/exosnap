@@ -80,16 +80,25 @@ void ExportOverlay::buildCard() {
     auto* card_layout = new QVBoxLayout(card_);
     card_layout->setContentsMargins(M::kSpaceXl, M::kSpaceLg, M::kSpaceXl, M::kSpaceLg);
     card_layout->setSpacing(M::kSpaceMd);
-    // The overlay centres the card via heightForWidth(), which under-reports a
-    // wrapped-label card's real height — force the layout's minimum to match
-    // its actual content instead of letting it compress the button row.
-    card_layout->setSizeConstraint(QLayout::SetMinimumSize);
+    // Deliberately no SetMinimumSize here: it calls setMinimumSize() on the
+    // card, overriding the minimum that setFixedWidth() just established, so
+    // the card would shrink to whichever content is currently visible and
+    // visibly snap between widths as the state changes. The wrapped error
+    // label carries its own heightForWidth policy, so nothing else needs it.
 
     // ---- Options content: container + save-mode + static destination ----
     options_content_ = new QWidget(card_);
     auto* options_layout = new QVBoxLayout(options_content_);
     options_layout->setContentsMargins(0, 0, 0, 0);
     options_layout->setSpacing(M::kSpaceSm);
+
+    // Running and Done open with a heading of their own ("Exporting…", "Export
+    // complete"); without this one, Options would be the only state that starts
+    // straight into a form field.
+    options_title_label_ = new QLabel(QStringLiteral("Export"), options_content_);
+    options_title_label_->setObjectName(QStringLiteral("exportOptionsTitle"));
+    options_layout->addWidget(options_title_label_);
+    options_layout->addSpacing(M::kSpaceSm);
 
     container_label_ = new QLabel(QStringLiteral("Container:"), options_content_);
     options_layout->addWidget(container_label_);
@@ -335,6 +344,11 @@ void ExportOverlay::applyThemeStyles() {
                                         "border-radius:%3px; }")
                              .arg(tok(t.surf), tok(t.line2))
                              .arg(M::kRadiusLg));
+
+    // Same weight and size as the Running/Done headings, so the card reads as
+    // one surface across its states rather than three different dialogs.
+    options_title_label_->setStyleSheet(
+        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:14px; }").arg(tok(t.ink)));
 
     const QString label_style = QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(tok(t.mut));
     container_label_->setStyleSheet(label_style);

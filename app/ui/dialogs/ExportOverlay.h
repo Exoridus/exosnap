@@ -77,6 +77,7 @@ class ExportOverlay : public QWidget {
 
     // ---- Options content ----
     QWidget* options_content_ = nullptr;
+    QLabel* options_title_label_ = nullptr;
     QLabel* container_label_ = nullptr;
     QComboBox* container_combo_ = nullptr;
     QLabel* save_mode_label_ = nullptr;
