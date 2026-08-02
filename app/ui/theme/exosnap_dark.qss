@@ -75,7 +75,10 @@ QPushButton#titlebarWindowButton {
     color: ${text2};
     font-family: ${font-mono};
     font-size: 11px;
-    margin: 6px 10px;
+    /* 56 - 2*12 = 32 tall, 46 - 2*7 = 32 wide: a square field. Insetting the
+       46 x 56 cell evenly on all sides instead would leave a tall, narrow pill,
+       which reads as its own odd shape rather than as a quieter button. */
+    margin: 12px 7px;
     padding: 0;
     min-height: 0;
     min-width: 0;
