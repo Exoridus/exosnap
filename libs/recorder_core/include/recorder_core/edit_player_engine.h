@@ -140,6 +140,12 @@ class EditPlayerEngine {
     // is what the RECORDING carries, and leaving a track out would
     // misrepresent the recording rather than the failure. Such a track
     // contributes nothing to playback (HasAudioStream() answers that side).
+    //
+    // Returns a copy, not a reference to the member: callers read this from
+    // another thread than the one running playback, and Close() clears the
+    // member -- a reference handed across that boundary could outlive what it
+    // points at. The vector holds at most a handful of entries.
+    // cppcheck-suppress returnByReference
     [[nodiscard]] std::vector<AudioTrackDescription> AudioTracks() const;
 
     // ---- Continuous playback decode ----
