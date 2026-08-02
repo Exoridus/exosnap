@@ -57,6 +57,13 @@ class OperationalTitleBar : public QWidget {
 
     void setMaximizedState(bool maximized);
 
+    // Visual-test only: forces one window control button ("minimize" / "maximize" /
+    // "close") to paint its hover state, so a static screenshot can show it without a
+    // real OS mouse move. Any other value (including empty) clears hover from all
+    // three buttons. A real mouse hover is unaffected and keeps using the normal
+    // :hover QSS path.
+    void applyVisualWindowButtonHover(const QString& which);
+
     // PS-PHASE-B: notification bell API.
     void setBellUnreadCount(int count);
     ui::widgets::NotificationBell* bellWidget() const {

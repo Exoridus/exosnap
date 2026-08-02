@@ -3157,6 +3157,8 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
 
     if (title_bar_ && stack_)
         title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
+    if (title_bar_)
+        title_bar_->applyVisualWindowButtonHover(scenario.titlebar_hover_button);
 
     // Deterministic keyboard focus (VR-004): give the named widget tab focus so
     // :focus styling is visible in screenshots.

@@ -360,6 +360,13 @@ struct VisualScenario {
     // Trailing field so existing positional initializers stay valid.
     bool webcam_default_placement = false;
 
+    // --- Titlebar window-button hover (titlebar-window-buttons-*) ---
+    // Forces one window control button (minimize / maximize / close) to paint its
+    // hover state, so a static grab() can show it without a real OS mouse move.
+    // "" = rest state (no button forced). Trailing field so existing positional
+    // initializers stay valid.
+    QString titlebar_hover_button;
+
     // --- Notification hub open (notifications-open) ---
     // When true, the harness embeds the NotificationHubPanel as a child overlay
     // of the main window (top-right, under the bell) pre-populated with a fixture
