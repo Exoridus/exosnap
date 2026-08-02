@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFrame>
 #include <QLabel>
@@ -15,6 +16,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QThread>
 #include <QTimer>
 #include <QWidget>
 
@@ -63,6 +65,19 @@ void WaitMs(int ms) {
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+// The export runs on a real worker thread and reports back through a queued
+// callback, so how long it takes is the machine's business. Wait for the page
+// to say it finished rather than guessing a duration -- a fixed 50 ms wait here
+// lost that race whenever the machine was under load.
+void WaitForExportToFinish(EditExportPage& page) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (page.isExportRunning() && elapsed.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
 }
 
 // Synthesize mouse events directly (the test binaries link gtest, not Qt Test).
@@ -258,7 +273,7 @@ TEST_F(EditExportPageTest, ExportButtonIsOutOfReachWhileARunIsInFlight) {
     ASSERT_TRUE(page.isExportRunning());
     EXPECT_FALSE(ExportButton(page)->isEnabled());
 
-    WaitMs(50);
+    WaitForExportToFinish(page);
     SettleLayout();
     ASSERT_FALSE(page.isExportRunning());
     EXPECT_TRUE(ExportButton(page)->isEnabled());
@@ -360,7 +375,7 @@ TEST_F(EditExportPageTest, ExportRunsUntilItsCompletionCallbackLands) {
     EXPECT_TRUE(page.isExportRunning()) << "the running flag must be set before the worker is joined";
 
     // The completion callback is a queued invoke: pumping the loop lets it land.
-    WaitMs(50);
+    WaitForExportToFinish(page);
     SettleLayout();
     EXPECT_FALSE(page.isExportRunning());
 
