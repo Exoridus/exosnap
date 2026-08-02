@@ -20,7 +20,7 @@
 #include "models/RecordingMarker.h"
 #include "pages/EditExportPage.h"
 #include "ui/dialogs/EditExportOverlay.h"
-#include "ui/dialogs/ExportOverlay.h"
+#include "ui/widgets/ExportPanel.h"
 
 namespace exosnap {
 namespace {
@@ -94,9 +94,9 @@ void StartDoomedExport(EditExportPage* page) {
     ctx.output_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-overlay-test.mkv"));
     ctx.mkv_master_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-overlay-missing.mkv"));
     page->setEditContext(ctx);
-    auto* card = page->findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay"));
-    ASSERT_NE(card, nullptr);
-    emit card->exportRequested();
+    auto* button = page->findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
+    ASSERT_NE(button, nullptr);
+    button->click();
 }
 
 // Lets a started export's queued completion callback land before the fixture
@@ -397,19 +397,19 @@ TEST_F(EditExportOverlayTest, CloseOverlay_WithEdits_NeverAsks) {
 }
 
 // Object-name stability: test_edit_export_page.cpp's findChild-based assertions
-// (editExportPrimaryBtn, editReportIcon, exportOverlay, ...) must keep working
+// (editExportPrimaryBtn, editReportIcon, exportPanel, ...) must keep working
 // when the page is hosted inside the overlay — re-hosting must not rename or
 // rebuild any of EditExportPage's internal widgets.
 TEST_F(EditExportOverlayTest, HostedPage_PreservesInternalObjectNames) {
     ui::dialogs::EditExportOverlay overlay;
 
-    EXPECT_NE(overlay.page()->findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay")), nullptr);
+    EXPECT_NE(overlay.page()->findChild<ui::widgets::ExportPanel*>(QStringLiteral("exportPanel")), nullptr);
     EXPECT_NE(overlay.page()->findChild<QLabel*>(QStringLiteral("editReportIcon")), nullptr);
     EXPECT_NE(overlay.page()->findChild<QWidget*>(QStringLiteral("editDetailsRail")), nullptr);
 
     auto* primary = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
     ASSERT_NE(primary, nullptr);
-    EXPECT_EQ(primary->text(), QString::fromUtf8("Export\xe2\x80\xa6"));
+    EXPECT_EQ(primary->text(), QStringLiteral("Export"));
 
     auto* back_btn = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
     EXPECT_NE(back_btn, nullptr);

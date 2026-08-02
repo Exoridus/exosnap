@@ -19,9 +19,12 @@ class QElapsedTimer;
 class QLabel;
 class QPushButton;
 class QFrame;
+class QScrollArea;
 class QTimer;
 class QEvent;
 class QObject;
+class QResizeEvent;
+class QShowEvent;
 
 namespace exosnap {
 
@@ -29,11 +32,8 @@ namespace ui::widgets {
 class EditTimeline;
 class EditPlayerSurface;
 class EditDetailsRail;
+class ExportPanel;
 } // namespace ui::widgets
-
-namespace ui::dialogs {
-class ExportOverlay;
-} // namespace ui::dialogs
 
 // Context passed to EditExportPage when opening the edit surface.
 // Contains everything needed to populate the edit view and run an export.
@@ -64,10 +64,11 @@ struct EditContext {
     double duration_seconds = 0.0;
 };
 
-// Edit/Export surface: one view — player, trim timeline, details rail, and the
-// post-flight report as a header icon — plus an export card over it that the
-// page drives. Export itself is a real stream-copy via mp4_remuxer; markers ride
-// along as a retimed JSON sidecar (never container chapters).
+// Edit/Export surface: one view — player, trim timeline, and a right rail
+// carrying the details card plus the export panel the page drives; the
+// post-flight report rides as a header icon. Export itself is a real stream-copy
+// via mp4_remuxer; markers ride along as a retimed JSON sidecar (never container
+// chapters). The only modal left in the flow is the overwrite confirmation.
 class EditExportPage : public QWidget {
     Q_OBJECT
   public:
@@ -141,6 +142,8 @@ class EditExportPage : public QWidget {
   protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
   private:
     // Severity of the post-flight report, as carried by the header icon.
@@ -160,10 +163,20 @@ class EditExportPage : public QWidget {
     bool confirmOverwrite();
     void runExport();
     void refreshPlayButton();
+    // The action bar's Export button is the only way to start a run, so it has
+    // to be out of reach while one is already in flight.
+    void refreshExportAction();
+    // Scrolls the rail so the export panel's status is on screen. At the minimum
+    // window height the panel sits below the fold, and progress or a result the
+    // user has to go looking for is not a report.
+    void revealExportPanel();
     // Retunes the preview timer to the open clip's frame rate, capped at the
     // refresh rate of the screen the window is on.
     void refreshPreviewTickInterval();
     void updatePlayerHeight();
+    // Width-driven layout: the rail keeps the details card and the export panel,
+    // so it is narrowed rather than dropped as the surface gets tighter.
+    void updateResponsiveLayout();
     [[nodiscard]] qint64 durationMs() const noexcept;
 
     // Full context set by setEditContext (primary path).
@@ -218,9 +231,6 @@ class EditExportPage : public QWidget {
     QFrame* action_bar_ = nullptr;
     QPushButton* primary_action_btn_ = nullptr;
 
-    // Export card over the view: presentation only, driven from runExport().
-    ui::dialogs::ExportOverlay* export_card_ = nullptr;
-
     // Player-Area
     QFrame* player_frame_ = nullptr;
     QPushButton* play_pause_btn_ = nullptr;
@@ -236,8 +246,14 @@ class EditExportPage : public QWidget {
     // Timeline (interactive: trim handles, markers, playhead)
     ui::widgets::EditTimeline* timeline_ = nullptr;
 
-    // Details card (right rail)
+    // Right rail: a scroll area (a short window must scroll the column rather
+    // than clip the export panel out of reach) around the details card and the
+    // export panel.
+    QScrollArea* rail_scroll_ = nullptr;
     ui::widgets::EditDetailsRail* detail_rail_ = nullptr;
+
+    // Export panel: presentation only, driven from runExport().
+    ui::widgets::ExportPanel* export_panel_ = nullptr;
 };
 
 } // namespace exosnap

@@ -30,6 +30,15 @@ export progress/result in a nested **export card** over it. The overlay also no 
 the real title bar. See "Surface structure" and "Export card" below; the sections describing
 the phases and the stepper have been replaced.
 
+**Amended (2026-08-03): the export card becomes a rail panel, and the surface scales.** The
+nested export card is gone (`ui::dialogs::ExportOverlay` deleted). Container, save mode,
+destination, progress and result now live in an **embedded panel in the right rail**, under the
+details card, and the action bar's button starts the export directly instead of opening
+anything. The overwrite confirmation is the only modal left in the flow. The rail also stops
+being a fixed 280 px: it narrows across width breakpoints (but is never hidden — it carries the
+export controls) and scrolls vertically, and the page recomputes that layout from `resizeEvent`
+and `showEvent`. See "Surface structure" and "Export panel" below.
+
 ## Context
 
 After a recording stops, users need to decide what to do with the captured file: keep the MKV
@@ -149,10 +158,22 @@ through it made a re-layout look like a decision. It carries:
   handles (trimmed-away ranges dimmed; keyframe-accurate — see "Trim implementation"), marker
   verticals, and a scrubbable playhead that follows the preview clock. There is no button row
   above the strip. Split Chapter deferred to 0.11.
-- **Details rail** — `app/ui/widgets/EditDetailsRail`: fixed 280 px column of duration / size /
-  resolution / frame rate / video / audio / container as right-aligned mono values.
-- **Action bar** — one button, `Export…`, bottom-right like the Record page's transport actions.
-  It opens the export card.
+- **Right rail** — a scrollable column carrying two cards: `app/ui/widgets/EditDetailsRail`
+  (duration / size / resolution / frame rate / video / audio / container as right-aligned mono
+  values) and the export panel below it. It scrolls because the two cards together outgrow the
+  column at the 700 px minimum window height, and a clipped result action would be unreachable.
+- **Action bar** — one button, `Export`, bottom-right like the Record page's transport actions.
+  It starts the export against the panel's current settings; it is disabled while a run is in
+  flight, since a second `runExport()` would block the UI thread joining the first worker.
+
+**Responsive layout.** `EditExportPage::updateResponsiveLayout()` runs from `resizeEvent`, from
+`showEvent`, and once more deferred by a zero-timer — the same pattern `RecordPage` uses, and for
+the same reason: a surface that is hidden while the window is resized receives no resize event and
+would otherwise re-open with a stale layout. The rail width follows the page width (320 px at
+≥ 1180, 280 px at ≥ 960, 240 px below), measured against the page, i.e. the client area minus the
+overlay's 20 px margin band per side. The rail is **never** collapsed away: unlike a purely
+informational sidebar it carries the export controls, and the surface has to stay fully usable at
+the enforced 860 × 700 minimum window.
 
 **Post-flight report.** The three numbers the Review step used to show — real frame drops, peak
 A/V drift, pipeline health — live in an icon at the right end of the header (`editReportIcon`),
@@ -161,30 +182,40 @@ unavailable values and the real-versus-benign drop definition. A hover-only tool
 a genuine finding, so the icon carries the severity: a muted `info` glyph for Good/Unavailable, an
 amber warning triangle plus a short label for Warning, coral for Critical.
 
-### Export card
+### Export panel
 
-`app/ui/dialogs/ExportOverlay` is a nested overlay inside the edit view, one card with four
-states:
+`app/ui/widgets/ExportPanel` is an embedded card in the right rail, under the details card. Two
+combo boxes and a static destination line never justified covering the clip being exported with a
+modal, and carrying the progress and the result in that same modal hid the clip for the whole run;
+the rail had the vertical room standing empty. Four states:
 
 ```
-Options ──Export──> Running ──┬── ok ──> Done
-                              └── err ─> Failed ──Retry──> Running
+Options ──(action bar)──> Running ──┬── ok ──> Done
+                                    └── err ─> Failed ──Retry──> Running
 ```
 
-- **Options** — container combo (MKV / MP4, both stream-copy / lossless), save-mode combo (new
-  file = `<name>_edit.<ext>` / overwrite original = atomic rename), a static destination label,
-  `Cancel` / `Export`.
+- **Output rows** — container combo (MKV / MP4, both stream-copy / lossless), save-mode combo
+  (new file = `<name>_edit.<ext>` / overwrite original = atomic rename), and a destination line
+  that states what the selected mode does. These are present in **every** state and only
+  *disabled* while a run is in flight, so nothing swaps out from under the pointer mid-export and
+  the settings are already in place for the next run.
 - **Running** — status line, real progress from `RemuxProgressCallback`, `Cancel`.
-- **Done** — output filename, `Open folder` / `Show in Explorer` / `Close`.
-- **Failed** — the remuxer's own error text, `Close` / `Retry`.
+- **Done** — output filename, `Open folder` / `Show in Explorer`.
+- **Failed** — the remuxer's own error text, `Retry`.
 
-The card is presentation only. Export execution — thread, trim range, marker sidecar, atomic
-rename (`EditExportPage::runExport()`) — stays in the page, which drives the card through its
-`showRunning()` / `setProgress()` / `showDone()` / `showFailed()` slots and reacts to its
-signals. The overwrite confirmation still runs before the export starts.
+The panel carries **no Export button of its own**: the trigger is the action bar's, so that two
+equal-weight Export buttons a hand's width apart never make the choice ambiguous. `Retry` is the
+exception, and it repeats a run rather than starting a fresh one.
 
-Escape and a backdrop click close the card, not the session, and both are blocked while it is
-Running — `Cancel` is the only way out of a running export.
+The panel is presentation only. Export execution — thread, trim range, marker sidecar, atomic
+rename (`EditExportPage::runExport()`) — stays in the page, which drives the panel through its
+`showRunning()` / `setProgress()` / `showDone()` / `showFailed()` slots and reacts to its signals.
+The overwrite confirmation still runs before the export starts and is now the **only** modal in
+this flow.
+
+Dismissing the surface leaves the panel as it is: a run still in flight behind the dismissed
+overlay must be found in the state it was in when the editor is re-entered (see "Recording start
+dismisses the overlay" above). Handing the surface a different clip resets it.
 
 ### Format / cost model
 

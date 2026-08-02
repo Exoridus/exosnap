@@ -13,6 +13,7 @@
 #include <QMouseEvent>
 #include <QPoint>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTimer>
 #include <QWidget>
 
@@ -22,9 +23,10 @@
 #include "models/EditTimelineModel.h"
 #include "models/RecordingMarker.h"
 #include "pages/EditExportPage.h"
-#include "ui/dialogs/ExportOverlay.h"
 #include "ui/theme/ExoSnapTheme.h"
+#include "ui/widgets/EditDetailsRail.h"
 #include "ui/widgets/EditTimeline.h"
+#include "ui/widgets/ExportPanel.h"
 
 namespace exosnap {
 namespace {
@@ -106,26 +108,33 @@ void AnswerModalDialog(const QString& button_text, bool* out_appeared) {
     timer->start();
 }
 
-ui::dialogs::ExportOverlay* ExportCard(EditExportPage& page) {
-    return page.findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay"));
+ui::widgets::ExportPanel* ExportPanelOf(EditExportPage& page) {
+    return page.findChild<ui::widgets::ExportPanel*>(QStringLiteral("exportPanel"));
 }
 
-// Selects a save mode on the export card and asks it to export. Returns false
-// when the card carries no save-mode combo, so the overwrite cases can report
-// that rather than assert against a control that is not there.
+QPushButton* ExportButton(EditExportPage& page) {
+    return page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
+}
+
+// Selects a save mode on the export panel and presses the action bar's Export
+// button — the whole path a user takes now that no card sits in between.
+// Returns false when the panel carries no save-mode combo, so the overwrite
+// cases can report that rather than assert against a control that is not there.
 bool RequestExport(EditExportPage& page, const QString& mode_key) {
-    auto* card = ExportCard(page);
-    if (card == nullptr)
+    auto* panel = ExportPanelOf(page);
+    if (panel == nullptr)
         return false;
-    card->openCard();
-    auto* combo = card->findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"));
+    auto* combo = panel->findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"));
     if (combo == nullptr)
         return false;
     const int index = combo->findData(mode_key);
     if (index < 0)
         return false;
     combo->setCurrentIndex(index);
-    emit card->exportRequested();
+    auto* button = ExportButton(page);
+    if (button == nullptr)
+        return false;
+    button->click();
     return true;
 }
 
@@ -146,9 +155,9 @@ void StartDoomedExport(EditExportPage& page) {
     ctx.output_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-export-test.mkv"));
     ctx.mkv_master_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-export-missing.mkv"));
     page.setEditContext(ctx);
-    auto* card = ExportCard(page);
-    ASSERT_NE(card, nullptr);
-    emit card->exportRequested();
+    auto* button = ExportButton(page);
+    ASSERT_NE(button, nullptr);
+    button->click();
 }
 
 QString ReportTooltip(EditExportPage& page) {
@@ -192,26 +201,66 @@ TEST_F(EditExportPageTest, StepperAndPhasePanelsAreGone) {
 
 TEST_F(EditExportPageTest, ExportButtonLivesInTheBottomActionBar) {
     // The single action sits bottom-right, like the Record page's transport
-    // actions — not in the top mode bar.
+    // actions — not in the top mode bar. No ellipsis: it starts the export
+    // rather than opening anything.
     EditExportPage page;
-    auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
+    auto* primary = ExportButton(page);
     ASSERT_NE(primary, nullptr);
     ASSERT_NE(primary->parentWidget(), nullptr);
     EXPECT_EQ(primary->parentWidget()->objectName(), QStringLiteral("editExportActionBar"));
-    EXPECT_EQ(primary->text(), QString::fromUtf8("Export\xe2\x80\xa6"));
+    EXPECT_EQ(primary->text(), QStringLiteral("Export"));
     EXPECT_FALSE(primary->isHidden());
 }
 
-TEST_F(EditExportPageTest, ExportButtonOpensTheExportCard) {
-    EditExportPage page;
-    auto* card = ExportCard(page);
-    ASSERT_NE(card, nullptr);
-    EXPECT_FALSE(card->isCardOpen());
+// ---- Export settings live in the rail, not in a card over the view ----
 
-    auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
-    ASSERT_NE(primary, nullptr);
-    primary->click();
-    EXPECT_EQ(card->state(), ui::dialogs::ExportOverlay::State::Options);
+TEST_F(EditExportPageTest, ExportPanelIsEmbeddedInTheRailUnderTheDetailsCard) {
+    EditExportPage page;
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+    auto* rail = page.findChild<ui::widgets::EditDetailsRail*>(QStringLiteral("editDetailsRail"));
+    ASSERT_NE(rail, nullptr);
+
+    // Same column, and below the details card in it.
+    ASSERT_EQ(panel->parentWidget(), rail->parentWidget());
+    EXPECT_GT(panel->y(), rail->y());
+    // Visible from the start: nothing has to be opened to reach the settings.
+    EXPECT_TRUE(panel->isVisibleTo(&page));
+}
+
+TEST_F(EditExportPageTest, NoExportCardOverlayIsLeftOnTheSurface) {
+    // The floating export card is gone; the only overlay-shaped thing that may
+    // sit over the view is nothing at all.
+    EditExportPage page;
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("exportOverlay")), nullptr);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("exportOverlayCard")), nullptr);
+}
+
+TEST_F(EditExportPageTest, ExportButtonStartsTheExportDirectly) {
+    // No intermediate card: one click on the action bar runs the export against
+    // the panel's current settings (and fails here for want of a master, which
+    // is what proves runExport() was entered).
+    EditExportPage page;
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+    ASSERT_EQ(panel->state(), ui::widgets::ExportPanel::State::Options);
+
+    ExportButton(page)->click();
+    EXPECT_NE(panel->state(), ui::widgets::ExportPanel::State::Options);
+}
+
+TEST_F(EditExportPageTest, ExportButtonIsOutOfReachWhileARunIsInFlight) {
+    // A second click would reach runExport(), whose join() on the previous
+    // thread blocks the UI thread.
+    EditExportPage page;
+    StartDoomedExport(page);
+    ASSERT_TRUE(page.isExportRunning());
+    EXPECT_FALSE(ExportButton(page)->isEnabled());
+
+    WaitMs(50);
+    SettleLayout();
+    ASSERT_FALSE(page.isExportRunning());
+    EXPECT_TRUE(ExportButton(page)->isEnabled());
 }
 
 TEST_F(EditExportPageTest, DetailsRailReceivesTheRecordingFacts) {
@@ -264,6 +313,7 @@ TEST_F(EditExportPageTest, OverwriteExport_Declined_DoesNotStart) {
 
     EXPECT_TRUE(asked) << "overwriting the original must be confirmed first";
     EXPECT_FALSE(page.isExportRunning()) << "declining must leave the export unstarted";
+    EXPECT_EQ(ExportPanelOf(page)->state(), ui::widgets::ExportPanel::State::Options);
 }
 
 // Confirming actually proceeds. The export then fails for want of an edit
@@ -278,9 +328,9 @@ TEST_F(EditExportPageTest, OverwriteExport_Confirmed_Starts) {
         GTEST_SKIP() << "export card carries no save-mode combo in this build";
 
     EXPECT_TRUE(asked);
-    auto* card = ExportCard(page);
-    ASSERT_NE(card, nullptr);
-    EXPECT_NE(card->state(), ui::dialogs::ExportOverlay::State::Options) << "confirming must start the export";
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+    EXPECT_NE(panel->state(), ui::widgets::ExportPanel::State::Options) << "confirming must start the export";
 }
 
 // Writing a new file destroys nothing, so it must not interrupt the user with
@@ -294,9 +344,9 @@ TEST_F(EditExportPageTest, NewFileExport_StartsWithoutAsking) {
         GTEST_SKIP() << "export card carries no save-mode combo in this build";
 
     EXPECT_FALSE(asked) << "a new-file export replaces nothing and must not prompt";
-    auto* card = ExportCard(page);
-    ASSERT_NE(card, nullptr);
-    EXPECT_NE(card->state(), ui::dialogs::ExportOverlay::State::Options) << "the export must start straight away";
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+    EXPECT_NE(panel->state(), ui::widgets::ExportPanel::State::Options) << "the export must start straight away";
 }
 
 // ---- Export execution drives the card ----
@@ -313,9 +363,9 @@ TEST_F(EditExportPageTest, ExportRunsUntilItsCompletionCallbackLands) {
     SettleLayout();
     EXPECT_FALSE(page.isExportRunning());
 
-    auto* card = ExportCard(page);
-    ASSERT_NE(card, nullptr);
-    EXPECT_EQ(card->state(), ui::dialogs::ExportOverlay::State::Failed);
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+    EXPECT_EQ(panel->state(), ui::widgets::ExportPanel::State::Failed);
 }
 
 // ---- Dead/placeholder controls removed ----
@@ -896,6 +946,130 @@ TEST_F(EditExportPageTest, AClipWithoutAMasterPathLeavesTheStripEmpty) {
     ASSERT_NE(timeline, nullptr);
     EXPECT_EQ(timeline->thumbnailCount(), 0);
     EXPECT_TRUE(timeline->audioTrackLabels().isEmpty());
+}
+
+// ---- Responsive layout ----
+
+// The rail is the one column that must never be dropped: it carries the export
+// panel. It narrows instead, so a tight window does not crush the player.
+TEST_F(EditExportPageTest, RailNarrowsWithTheWindowButNeverDisappears) {
+    EditExportPage page;
+    page.show();
+
+    page.resize(1400, 800);
+    SettleLayout();
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    const int wide = rail->width();
+
+    page.resize(1000, 800);
+    SettleLayout();
+    const int medium = rail->width();
+
+    // 820 px is what a 860 px window (the enforced minimum) leaves the page
+    // after the edit overlay's 20 px margin band on each side.
+    page.resize(820, 660);
+    SettleLayout();
+    const int narrow = rail->width();
+
+    EXPECT_GT(wide, medium);
+    EXPECT_GT(medium, narrow);
+    EXPECT_GT(narrow, 0);
+    EXPECT_TRUE(rail->isVisibleTo(&page)) << "hiding the rail would hide the export controls with it";
+}
+
+// At the enforced minimum window the player must keep the larger share of the
+// width, and still have real height left under the timeline.
+TEST_F(EditExportPageTest, PlayerKeepsTheBulkOfTheWidthAtTheMinimumWindowSize) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+    WaitMs(50);
+    SettleLayout();
+
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    auto* player = page.findChild<QFrame*>(QStringLiteral("editExportPlayer"));
+    ASSERT_NE(player, nullptr);
+
+    EXPECT_GT(page.width() - rail->width(), rail->width() * 2);
+    EXPECT_GE(player->height(), 180);
+}
+
+// A hidden overlay page gets no resizeEvent, so a window resized while the edit
+// surface was dismissed would otherwise re-open at the stale rail width.
+TEST_F(EditExportPageTest, ShowEventReappliesTheResponsiveLayout) {
+    EditExportPage page;
+    page.show();
+    page.resize(1400, 800);
+    SettleLayout();
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    const int wide = rail->width();
+
+    page.hide();
+    // Resizing while hidden delivers no resizeEvent to the page.
+    page.resize(820, 660);
+    EXPECT_EQ(rail->width(), wide) << "precondition: the stale width survives the hidden resize";
+
+    page.show();
+    SettleLayout();
+    EXPECT_LT(rail->width(), wide) << "showEvent must re-run the responsive layout";
+}
+
+// The details card and the export panel together outgrow the column at the
+// minimum window height, so the rail scrolls rather than clipping the result
+// actions out of reach.
+TEST_F(EditExportPageTest, RailScrollsInsteadOfClippingTheExportPanel) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+
+    panel->showDone(QStringLiteral("C:\\Videos\\clip_edit.mkv"));
+    SettleLayout();
+
+    ASSERT_NE(rail->widget(), nullptr);
+    EXPECT_GE(rail->widget()->height(), panel->y() + panel->height())
+        << "the scrolled column must be tall enough to hold the whole panel";
+    auto* reveal = panel->findChild<QPushButton*>(QStringLiteral("exportRevealBtn"));
+    ASSERT_NE(reveal, nullptr);
+    EXPECT_GT(reveal->height(), 0);
+}
+
+// Scrolling is only an acceptable answer to the short column if the thing the
+// user needs to see is scrolled to. A result reported below the fold that the
+// user has to go looking for is not a report.
+TEST_F(EditExportPageTest, AReportedResultIsScrolledIntoViewAtTheMinimumWindowSize) {
+    EditExportPage page;
+    page.show();
+    page.resize(820, 660);
+    SettleLayout();
+
+    auto* rail = page.findChild<QScrollArea*>(QStringLiteral("editExportRail"));
+    ASSERT_NE(rail, nullptr);
+    auto* panel = ExportPanelOf(page);
+    ASSERT_NE(panel, nullptr);
+
+    StartDoomedExport(page);
+    WaitMs(80);
+    SettleLayout();
+    WaitMs(20);
+    SettleLayout();
+    ASSERT_EQ(panel->state(), ui::widgets::ExportPanel::State::Failed);
+
+    auto* retry = panel->findChild<QPushButton*>(QStringLiteral("exportRetryBtn"));
+    ASSERT_NE(retry, nullptr);
+    const QRect in_viewport(retry->mapTo(rail->viewport(), QPoint(0, 0)), retry->size());
+    EXPECT_TRUE(rail->viewport()->rect().contains(in_viewport))
+        << "Retry at " << in_viewport.top() << ".." << in_viewport.bottom() << " in a viewport of "
+        << rail->viewport()->height() << " px";
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {

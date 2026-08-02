@@ -133,8 +133,6 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerWindowRules.h
     ui/dialogs/EditExportOverlay.h
     ui/dialogs/EditExportOverlay.cpp
-    ui/dialogs/ExportOverlay.h
-    ui/dialogs/ExportOverlay.cpp
     ui/dialogs/FinalizingOverlay.h
     ui/dialogs/FinalizingOverlay.cpp
     ui/dialogs/CrashReportPanel.h
@@ -163,6 +161,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/EditPlayerSurface.cpp
     ui/widgets/EditDetailsRail.h
     ui/widgets/EditDetailsRail.cpp
+    ui/widgets/ExportPanel.h
+    ui/widgets/ExportPanel.cpp
     ui/widgets/WebcamSetupPanel.h
     ui/widgets/WebcamSetupPanel.cpp
     ui/widgets/CaptureTargetCard.h
@@ -1406,8 +1406,8 @@ exosnap_add_gtest(
         ui/widgets/EditPlayerSurface.cpp
         ui/widgets/EditDetailsRail.h
         ui/widgets/EditDetailsRail.cpp
-        ui/dialogs/ExportOverlay.h
-        ui/dialogs/ExportOverlay.cpp
+        ui/widgets/ExportPanel.h
+        ui/widgets/ExportPanel.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
@@ -1432,8 +1432,8 @@ exosnap_add_gtest(
         ui/widgets/EditPlayerSurface.cpp
         ui/widgets/EditDetailsRail.h
         ui/widgets/EditDetailsRail.cpp
-        ui/dialogs/ExportOverlay.h
-        ui/dialogs/ExportOverlay.cpp
+        ui/widgets/ExportPanel.h
+        ui/widgets/ExportPanel.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
@@ -1441,21 +1441,21 @@ exosnap_add_gtest(
 target_include_directories(edit_export_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(edit_export_overlay_tests PROPERTIES AUTOMOC ON)
 
-# Export card hosted over the edit view; presentation only, the export itself
-# stays in EditExportPage (2026-08-02 edit-surface-single-view design).
+# Export panel embedded in the edit surface's right rail; presentation only, the
+# export itself stays in EditExportPage (2026-08-03 edit-export-panel design).
 exosnap_add_gtest(
-    NAME export_overlay_tests
-    TEST_PREFIX export_overlay.
+    NAME export_panel_tests
+    TEST_PREFIX export_panel.
     SOURCES
-        tests/test_export_overlay.cpp
-        ui/dialogs/ExportOverlay.h
-        ui/dialogs/ExportOverlay.cpp
+        tests/test_export_panel.cpp
+        ui/widgets/ExportPanel.h
+        ui/widgets/ExportPanel.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
-target_include_directories(export_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(export_overlay_tests PROPERTIES AUTOMOC ON)
+target_include_directories(export_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(export_panel_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME edit_details_rail_tests

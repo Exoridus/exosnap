@@ -1,13 +1,13 @@
 #include "EditExportPage.h"
 
 #include "../services/TimelineThumbnailSource.h"
-#include "../ui/dialogs/ExportOverlay.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
 #include "../ui/widgets/EditDetailsRail.h"
 #include "../ui/widgets/EditPlayerSurface.h"
 #include "../ui/widgets/EditTimeline.h"
+#include "../ui/widgets/ExportPanel.h"
 
 #include <QAbstractButton>
 #include <QByteArray>
@@ -29,8 +29,11 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRectF>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QShowEvent>
 #include <QSize>
 #include <QSvgRenderer>
 #include <QTimer>
@@ -103,6 +106,28 @@ QColor themeColor(const char* css) {
 // container declares no usable frame rate). The real interval comes from the
 // clip itself -- see EditExportPage::refreshPreviewTickInterval().
 constexpr int kFallbackPreviewTickMs = 16;
+
+// ---- Rail breakpoints (see updateResponsiveLayout()) ----
+// The rail carries the details card AND the export panel, so unlike a purely
+// informational sidebar it can never be dropped: hiding it would take the
+// export controls with it, and the surface has to stay fully usable at the
+// 860x700 minimum window. It gives width back to the player instead.
+constexpr int kRailWidthWide = 320;
+constexpr int kRailWidthDefault = 280;
+constexpr int kRailWidthNarrow = 240;
+// Measured against the page, which is the client area minus the edit overlay's
+// 20 px margin band on each side -- so a 860 px window reaches the page as
+// 820 px and lands on the narrow rail.
+constexpr int kRailWideFromWidth = 1180;
+constexpr int kRailDefaultFromWidth = 960;
+
+int RailWidthFor(int page_width) noexcept {
+    if (page_width >= kRailWideFromWidth)
+        return kRailWidthWide;
+    if (page_width >= kRailDefaultFromWidth)
+        return kRailWidthDefault;
+    return kRailWidthNarrow;
+}
 
 // Presentation cadence for a clip at `clip_fps`, capped at `screen_hz`.
 // Painting more often than the display refreshes cannot show more motion, it
@@ -261,20 +286,36 @@ void EditExportPage::buildUi() {
 
     left_scroll->setWidget(left_widget);
 
-    // ---- Right pane: Details card (right-aligned mono values) ----
-    auto* rail_column = new QWidget(content_area);
-    rail_column->setFixedWidth(280);
+    // ---- Right rail: Details card (right-aligned mono values) + export panel ----
+    // Scrollable, because the two cards together outgrow the column at the
+    // 700 px minimum window height once an export reports a result — a clipped
+    // "Show in Explorer" would be unreachable, a scrolled one is not.
+    rail_scroll_ = new QScrollArea(content_area);
+    rail_scroll_->setObjectName(QStringLiteral("editExportRail"));
+    rail_scroll_->setWidgetResizable(true);
+    rail_scroll_->setFrameShape(QFrame::NoFrame);
+    rail_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    rail_scroll_->setFixedWidth(kRailWidthDefault);
+
+    auto* rail_column = new QWidget(rail_scroll_);
     auto* rail_column_layout = new QVBoxLayout(rail_column);
     rail_column_layout->setContentsMargins(M::kSpaceSm, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
-    rail_column_layout->setSpacing(0);
+    rail_column_layout->setSpacing(M::kSpaceMd);
 
     detail_rail_ = new ui::widgets::EditDetailsRail(rail_column);
+    // Export settings, progress and result: an embedded panel, not a card over
+    // the view. Two combos and a destination line never justified a modal, and
+    // the rail had this space standing empty.
+    export_panel_ = new ui::widgets::ExportPanel(rail_column);
 
     rail_column_layout->addWidget(detail_rail_);
+    rail_column_layout->addWidget(export_panel_);
     rail_column_layout->addStretch();
 
+    rail_scroll_->setWidget(rail_column);
+
     content_layout->addWidget(left_scroll, 1);
-    content_layout->addWidget(rail_column);
+    content_layout->addWidget(rail_scroll_);
 
     root_layout->addWidget(content_area, 1);
 
@@ -290,8 +331,9 @@ void EditExportPage::buildUi() {
     action_layout->addStretch();
 
     // The single action of the surface: everything else is direct manipulation
-    // on the view itself.
-    primary_action_btn_ = new QPushButton(QStringLiteral("Export…"), action_bar_);
+    // on the view itself. No ellipsis — it starts the export against the panel's
+    // current settings rather than opening anything.
+    primary_action_btn_ = new QPushButton(QStringLiteral("Export"), action_bar_);
     primary_action_btn_->setObjectName(QStringLiteral("editExportPrimaryBtn"));
     primary_action_btn_->setProperty("role", "primary");
     primary_action_btn_->setMinimumWidth(150);
@@ -300,22 +342,21 @@ void EditExportPage::buildUi() {
 
     root_layout->addWidget(action_bar_);
 
-    // ---- Export card (over the view; presentation only) ----
-    export_card_ = new ui::dialogs::ExportOverlay(this);
-
     // Wire signals
     connect(back_btn_, &QPushButton::clicked, this, &EditExportPage::onBackClicked);
     connect(play_pause_btn_, &QPushButton::clicked, this, [this]() { setPreviewPlaying(!preview_playing_); });
-    connect(primary_action_btn_, &QPushButton::clicked, this, [this]() { export_card_->openCard(); });
+    connect(primary_action_btn_, &QPushButton::clicked, this, &EditExportPage::onExportClicked);
 
-    // The card decides what the user asked for; the page owns what actually
+    // The panel carries what the user asked for; the page owns what actually
     // happens (confirmation, thread, sidecar, atomic rename).
-    connect(export_card_, &ui::dialogs::ExportOverlay::exportRequested, this, &EditExportPage::onExportClicked);
-    connect(export_card_, &ui::dialogs::ExportOverlay::cancelRequested, this, &EditExportPage::onCancelExportClicked);
-    connect(export_card_, &ui::dialogs::ExportOverlay::retryRequested, this, &EditExportPage::onRetryExportClicked);
-    connect(export_card_, &ui::dialogs::ExportOverlay::openFolderRequested, this, &EditExportPage::onOpenFolderClicked);
-    connect(export_card_, &ui::dialogs::ExportOverlay::revealFileRequested, this, &EditExportPage::onRevealFileClicked);
-    connect(export_card_, &ui::dialogs::ExportOverlay::closeRequested, this, [this]() { export_card_->closeCard(); });
+    connect(export_panel_, &ui::widgets::ExportPanel::cancelRequested, this, &EditExportPage::onCancelExportClicked);
+    connect(export_panel_, &ui::widgets::ExportPanel::retryRequested, this, &EditExportPage::onRetryExportClicked);
+    connect(export_panel_, &ui::widgets::ExportPanel::openFolderRequested, this, &EditExportPage::onOpenFolderClicked);
+    connect(export_panel_, &ui::widgets::ExportPanel::revealFileRequested, this, &EditExportPage::onRevealFileClicked);
+    // Progress and results are reported in the rail, which at a short window is
+    // partly below the fold — the panel says it has something to show, the page
+    // makes sure it is on screen.
+    connect(export_panel_, &ui::widgets::ExportPanel::statusShown, this, &EditExportPage::revealExportPanel);
 
     // Applies the theme-derived inline styling now, and re-applies it on every
     // theme switch so nothing keeps the old palette's colours or icon tints.
@@ -372,9 +413,9 @@ void EditExportPage::applyThemeStyles() {
     // (player_surface_ paints its own panel/placeholder; no QSS involvement.)
     player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(t.dim));
 
-    // ---- Details card (right rail) / export card ----
+    // ---- Right rail: details card + export panel ----
     detail_rail_->applyThemeStyles();
-    export_card_->applyThemeStyles();
+    export_panel_->applyThemeStyles();
 
     // ---- Bottom action bar ----
     action_bar_->setStyleSheet(QStringLiteral("QFrame#editExportActionBar {"
@@ -537,6 +578,13 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
         timeline_->setClip(ctx_.mkv_master_path, keyframe_timestamps_);
     }
 
+    // --- A different clip means the last run's result no longer describes it ---
+    // Guarded on the running flag: a re-entry while an export is in flight must
+    // keep showing that run (ADR 0022), not blank it back to the options.
+    if (export_panel_ && !export_running_)
+        export_panel_->reset();
+    refreshExportAction();
+
     // --- Load markers from sidecar (falls back to session markers) ---
     loadMarkers();
 }
@@ -646,6 +694,35 @@ void EditExportPage::refreshPlayButton() {
         return;
     const QString glyph = preview_playing_ ? QStringLiteral("pause") : QStringLiteral("play");
     play_pause_btn_->setIcon(QIcon(renderEditIcon(glyph, 24, themeColor(ActiveTheme().ink))));
+}
+
+void EditExportPage::refreshExportAction() {
+    if (!primary_action_btn_)
+        return;
+    // A second click while a run is in flight would reach runExport(), whose
+    // join() on the previous thread blocks the UI thread outright.
+    primary_action_btn_->setEnabled(!export_running_);
+}
+
+void EditExportPage::revealExportPanel() {
+    if (!rail_scroll_ || !export_panel_)
+        return;
+    // Deferred: the status area has just been shown, so the panel's new height
+    // is only known after the pending layout pass — scrolling now would aim at
+    // the old geometry and stop short of the buttons.
+    QTimer::singleShot(0, this, [this]() {
+        if (!rail_scroll_ || !export_panel_ || !rail_scroll_->widget())
+            return;
+        // ensureWidgetVisible() centres the panel, which leaves the status area
+        // (its bottom) off screen whenever the panel is taller than the
+        // viewport. Aim at the bottom edge instead, and only ever scroll down to
+        // it: a status that is already on screen must not make the rail jump.
+        QScrollBar* bar = rail_scroll_->verticalScrollBar();
+        const int panel_bottom = export_panel_->mapTo(rail_scroll_->widget(), QPoint(0, export_panel_->height())).y();
+        const int target = panel_bottom - rail_scroll_->viewport()->height();
+        if (target > bar->value())
+            bar->setValue(std::min(target, bar->maximum()));
+    });
 }
 
 void EditExportPage::refreshPreviewTickInterval() {
@@ -824,17 +901,41 @@ void EditExportPage::updatePlayerHeight() {
         player_frame_->setFixedHeight(target);
 }
 
+// Same pattern the Record page uses (updateResponsiveLayout + a deferred re-run
+// from showEvent): this surface is an overlay that is built long before it is
+// first shown, so a window resized while it was hidden delivers no resizeEvent
+// here and the layout would stay at whatever size it was constructed with.
+void EditExportPage::updateResponsiveLayout() {
+    if (rail_scroll_) {
+        const int rail = RailWidthFor(width());
+        if (rail_scroll_->width() != rail)
+            rail_scroll_->setFixedWidth(rail);
+    }
+    updatePlayerHeight();
+}
+
+void EditExportPage::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    updateResponsiveLayout();
+}
+
+void EditExportPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    updateResponsiveLayout();
+    // Deferred once more: the overlay sizes the page from its own showEvent, so
+    // at this point the page can still be carrying its pre-show geometry.
+    QTimer::singleShot(0, this, [this]() { updateResponsiveLayout(); });
+}
+
 void EditExportPage::hideEvent(QHideEvent* event) {
     // Overlay dismissed / page hidden: the preview clock must not keep running.
     setPreviewPlaying(false);
-    // A card left standing would come back on top of the next clip. closeCard()
-    // is a no-op while an export runs, which is exactly right — that session is
-    // still live behind the dismissed overlay.
-    if (export_card_)
-        export_card_->closeCard();
-    // ...and neither must the decoder session's worker threads (or its WASAPI
-    // renderer). setEditContext() opens a fresh session the next time the
-    // overlay is shown for a clip.
+    // The export panel keeps whatever it is showing: a run that is still in
+    // flight behind the dismissed overlay must be found again as it was when the
+    // surface is re-entered (ADR 0022), and a fresh clip resets it anyway.
+    // The decoder session's worker threads (and its WASAPI renderer) must stop
+    // too. setEditContext() opens a fresh session the next time the overlay is
+    // shown for a clip.
     if (player_session_)
         player_session_->Close();
     // Same for the timeline's own decoder: a dismissed surface must not leave a
@@ -867,7 +968,7 @@ void EditExportPage::onExportClicked() {
 // target IS that recording, so it is there by construction, and a probe would
 // only add a branch that never runs.
 bool EditExportPage::confirmOverwrite() {
-    const bool overwrite = export_card_ && export_card_->saveModeKey() == QStringLiteral("overwrite");
+    const bool overwrite = export_panel_ && export_panel_->saveModeKey() == QStringLiteral("overwrite");
     if (!overwrite)
         return true;
 
@@ -890,11 +991,12 @@ bool EditExportPage::confirmOverwrite() {
 
 void EditExportPage::onCancelExportClicked() {
     export_cancel_.store(true);
-    // The background thread will detect the cancel and stop; the card snaps back
-    // to its options immediately so the surface is usable again at once.
+    // The background thread will detect the cancel and stop; the panel drops its
+    // status area immediately so the surface is usable again at once.
     export_running_ = false;
-    if (export_card_)
-        export_card_->openCard();
+    if (export_panel_)
+        export_panel_->reset();
+    refreshExportAction();
 }
 
 void EditExportPage::onOpenFolderClicked() {
@@ -943,18 +1045,20 @@ void EditExportPage::loadMarkers() {
 
 void EditExportPage::runExport() {
     export_running_ = true;
-    if (export_card_)
-        export_card_->showRunning();
+    refreshExportAction();
+    if (export_panel_)
+        export_panel_->showRunning();
 
-    const QString container_key = export_card_ ? export_card_->containerKey() : QStringLiteral("mkv");
-    const bool overwrite = export_card_ && export_card_->saveModeKey() == QStringLiteral("overwrite");
+    const QString container_key = export_panel_ ? export_panel_->containerKey() : QStringLiteral("mkv");
+    const bool overwrite = export_panel_ && export_panel_->saveModeKey() == QStringLiteral("overwrite");
     const bool to_mp4 = (container_key == QStringLiteral("mp4"));
 
     if (ctx_.mkv_master_path.isEmpty()) {
         last_export_error_ = QStringLiteral("No edit master available for export.");
         export_running_ = false;
-        if (export_card_)
-            export_card_->showFailed(last_export_error_);
+        refreshExportAction();
+        if (export_panel_)
+            export_panel_->showFailed(last_export_error_);
         return;
     }
 
@@ -1000,8 +1104,8 @@ void EditExportPage::runExport() {
             QMetaObject::invokeMethod(
                 this,
                 [this, fraction]() {
-                    if (export_card_)
-                        export_card_->setProgress(static_cast<int>(fraction * 100.0f));
+                    if (export_panel_)
+                        export_panel_->setProgress(static_cast<int>(fraction * 100.0f));
                 },
                 Qt::QueuedConnection);
             return true;
@@ -1044,16 +1148,17 @@ void EditExportPage::runExport() {
             [this, ok, err_msg, output_path]() {
                 export_output_path_ = output_path;
                 export_running_ = false;
+                refreshExportAction();
                 if (ok) {
-                    // The card shows the real output path, not a placeholder.
-                    if (export_card_)
-                        export_card_->showDone(QString::fromStdWString(output_path.wstring()));
+                    // The panel shows the real output path, not a placeholder.
+                    if (export_panel_)
+                        export_panel_->showDone(QString::fromStdWString(output_path.wstring()));
                     emit exportCompleted(QString::fromStdWString(output_path.wstring()));
                 } else {
                     // ...and the real remuxer error, not a hardcoded one.
                     last_export_error_ = QString::fromStdString(err_msg);
-                    if (export_card_)
-                        export_card_->showFailed(last_export_error_);
+                    if (export_panel_)
+                        export_panel_->showFailed(last_export_error_);
                 }
             },
             Qt::QueuedConnection);
