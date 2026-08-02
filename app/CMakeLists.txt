@@ -2335,6 +2335,32 @@ target_include_directories(theme_switch_visual_proof_tests PRIVATE ${CMAKE_CURRE
 target_compile_definitions(theme_switch_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(theme_switch_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
+# Titlebar window-button hover/click-target proof with the *real* shipping theme
+# applied (QSS + bundled fonts) — the plain operational_title_bar_tests target has
+# no stylesheet loaded at all, so it cannot see stylesheet-only regressions (a
+# generic QPushButton rule's min-height/padding, combined with the buttons' own
+# margin, silently grew the real widget past its click target and separately
+# produced a degenerate paint rect). Writes PNGs under
+# .workspace/screenshots/titlebar-window-buttons/.
+exosnap_add_gtest(
+    NAME titlebar_window_buttons_visual_proof_tests
+    TEST_PREFIX chrome.proof.
+    SOURCES
+        tests/titlebar_window_buttons_visual_proof.cpp
+        ui/chrome/OperationalTitleBar.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/widgets/NotificationBell.cpp
+        ui/widgets/StatusPill.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
+)
+target_include_directories(titlebar_window_buttons_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(titlebar_window_buttons_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(titlebar_window_buttons_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
+
 # ---------------------------------------------------------------------------
 # Install / windeployqt
 # ---------------------------------------------------------------------------

@@ -56,13 +56,29 @@ QPushButton[titlebarNavTab="true"]:checked {
     font-weight: 600;
 }
 
+/* The button widget itself stays the full 46 x kHeight hit target (fixed in
+   OperationalTitleBar.cpp) so a click into the top-right screen corner still lands —
+   margin only insets the PAINTED box (background + border), leaving the click area
+   untouched. This is what makes the buttons read as small/quiet without shrinking
+   the Fitts's-law corner target.
+   padding/min-height/min-width reset the generic QPushButton rule below: that rule's
+   padding + min-height otherwise still apply here (an ID selector only overrides the
+   properties it actually sets, not the ones it omits) and, combined with margin, left
+   the computed content box degenerate — the buttons stopped painting anything at all
+   even though their real geometry (setFixedSize) was still correct. Verified by
+   bisecting the property list: margin alone reproduced it, resetting these three
+   fixed it. */
 QPushButton#titlebarWindowButton {
     border: none;
-    border-radius: 0;
+    border-radius: 6px;
     background: transparent;
     color: ${text2};
     font-family: ${font-mono};
-    font-size: 13px;
+    font-size: 11px;
+    margin: 6px 10px;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
 }
 
 QPushButton#titlebarWindowButton:hover {

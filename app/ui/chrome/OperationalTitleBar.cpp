@@ -19,9 +19,51 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QStyleOptionButton>
+#include <QStylePainter>
 #include <QWindow>
 
 namespace exosnap::ui::chrome {
+
+namespace {
+
+// A window control button (minimize/maximize/close) that can be told to paint
+// itself as hovered regardless of the real mouse position. Qt::WA_UnderMouse
+// does not reliably flip QStyleSheetStyle's :hover pseudo-state for this widget
+// (verified empirically), so this sets QStyle::State_MouseOver directly on the
+// style option used for painting instead — the same flag the style itself
+// would set from a real hover, so it renders identically. Used only by
+// OperationalTitleBar::applyVisualWindowButtonHover() (visual-test only); a
+// real mouse hover is unaffected and keeps using the normal :hover path.
+class WindowControlButton : public QPushButton {
+  public:
+    using QPushButton::QPushButton;
+
+    void setForcedHoverForVisualTest(bool hovered) {
+        if (forced_hover_ == hovered)
+            return;
+        forced_hover_ = hovered;
+        update();
+    }
+
+  protected:
+    void paintEvent(QPaintEvent* event) override {
+        if (!forced_hover_) {
+            QPushButton::paintEvent(event);
+            return;
+        }
+        QStylePainter painter(this);
+        QStyleOptionButton option;
+        initStyleOption(&option);
+        option.state |= QStyle::State_MouseOver;
+        painter.drawControl(QStyle::CE_PushButton, option);
+    }
+
+  private:
+    bool forced_hover_ = false;
+};
+
+} // namespace
 
 OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     setObjectName("operationalTitleBar");
@@ -94,9 +136,9 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     controls_layout->setContentsMargins(0, 0, 0, 0);
     controls_layout->setSpacing(0);
 
-    minimize_btn_ = new QPushButton("−", controls); // − MINUS SIGN
-    maximize_btn_ = new QPushButton("□", controls); // □ WHITE SQUARE
-    close_btn_ = new QPushButton("×", controls);    // × MULTIPLICATION SIGN
+    minimize_btn_ = new WindowControlButton("−", controls); // − MINUS SIGN
+    maximize_btn_ = new WindowControlButton("□", controls); // □ WHITE SQUARE
+    close_btn_ = new WindowControlButton("×", controls);    // × MULTIPLICATION SIGN
 
     for (QPushButton* button : {minimize_btn_, maximize_btn_, close_btn_}) {
         button->setObjectName("titlebarWindowButton");
@@ -191,6 +233,25 @@ void OperationalTitleBar::setStatusLabel(const QString& status_text) {
 
 void OperationalTitleBar::setMaximizedState(bool maximized) {
     maximize_btn_->setText(maximized ? "⧉" : "□"); // ⧉ TWO JOINED SQUARES — same visual weight as □
+}
+
+void OperationalTitleBar::applyVisualWindowButtonHover(const QString& which) {
+    // Neither Qt::WA_UnderMouse nor a dynamic property + unpolish()/polish() reliably
+    // forced the CSS :hover pseudo-state for this button under the real stylesheet
+    // (verified empirically — both left the style reading the widget as not-hovered).
+    // minimize_btn_/maximize_btn_/close_btn_ are actually WindowControlButton
+    // instances (declared above), which paint QStyle::State_MouseOver directly when
+    // told to — the exact flag the style itself sets for a real hover, so the result
+    // is pixel-identical. A real mouse hover is untouched and keeps using the normal
+    // :hover path.
+    const auto apply_hover = [](QPushButton* button, bool hovered) {
+        if (button == nullptr)
+            return;
+        static_cast<WindowControlButton*>(button)->setForcedHoverForVisualTest(hovered);
+    };
+    apply_hover(minimize_btn_, which == QStringLiteral("minimize"));
+    apply_hover(maximize_btn_, which == QStringLiteral("maximize"));
+    apply_hover(close_btn_, which == QStringLiteral("close"));
 }
 
 void OperationalTitleBar::mousePressEvent(QMouseEvent* event) {

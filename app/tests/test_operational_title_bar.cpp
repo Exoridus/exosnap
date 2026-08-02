@@ -3,8 +3,11 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QList>
+#include <QPoint>
 #include <QPushButton>
+#include <QRect>
 #include <QSet>
+#include <QSize>
 #include <QString>
 
 #include "ui/chrome/OperationalTitleBar.h"
@@ -351,6 +354,52 @@ TEST_F(OperationalTitleBarTest, Bell_SetUnreadCountPropagates) {
     bar.setBellUnreadCount(3);
     ASSERT_NE(bar.bellWidget(), nullptr);
     EXPECT_EQ(bar.bellWidget()->unreadCount(), 3);
+}
+
+// ── Window-button click target (quiet-controls polish) ──────────────────────
+// The buttons were made to look smaller/quieter by shrinking the QSS-painted
+// box (margin) only. The widget rect they occupy — and therefore the click
+// target — must stay the full 46 x kHeight, flush to the titlebar's right
+// edge, so a mouse flick into the screen corner still lands on Close when the
+// window is maximized. Assert on widget geometry (a layout fact), never on
+// anything QSS/style-rendering derived, so this holds under any QStyle
+// backend (Windows11Style locally, a different style in CI).
+
+TEST_F(OperationalTitleBarTest, WindowButtons_KeepFullClickTarget) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.resize(1600, ui::chrome::OperationalTitleBar::kHeight);
+    bar.show();
+    QCoreApplication::processEvents();
+
+    const QList<QPushButton*> window_buttons = bar.findChildren<QPushButton*>(QStringLiteral("titlebarWindowButton"));
+    ASSERT_EQ(window_buttons.size(), 3);
+
+    for (const QPushButton* button : window_buttons)
+        EXPECT_EQ(button->size(), QSize(46, ui::chrome::OperationalTitleBar::kHeight))
+            << "window button lost its fixed 46 x kHeight click target";
+}
+
+TEST_F(OperationalTitleBarTest, CloseButton_ClickTargetReachesTitlebarRightEdge) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.resize(1600, ui::chrome::OperationalTitleBar::kHeight);
+    bar.show();
+    QCoreApplication::processEvents();
+
+    QPushButton* close_button = nullptr;
+    for (QPushButton* button : bar.findChildren<QPushButton*>(QStringLiteral("titlebarWindowButton"))) {
+        if (button->property("windowControlRole").toString() == QStringLiteral("close"))
+            close_button = button;
+    }
+    ASSERT_NE(close_button, nullptr);
+
+    const QRect close_rect_in_bar(close_button->mapTo(&bar, QPoint(0, 0)), close_button->size());
+    // A maximized-window click into the absolute top-right screen corner must still
+    // hit Close: its widget rect has to reach the titlebar's own right/top/bottom edges.
+    EXPECT_EQ(close_rect_in_bar.right(), bar.width() - 1);
+    EXPECT_EQ(close_rect_in_bar.top(), 0);
+    EXPECT_EQ(close_rect_in_bar.bottom(), bar.height() - 1);
 }
 
 TEST_F(OperationalTitleBarTest, Bell_ClickEmitsBellClickedSignal) {

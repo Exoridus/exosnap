@@ -2009,6 +2009,29 @@ const QVector<VisualScenario> kNotificationHubScenarios = {
      .notifications_open = true},
 };
 
+// Titlebar window-button hover states. The buttons keep their full 46 x kHeight
+// click target (Fitts's-law corner target for maximized windows); only the
+// painted box shrinks via QSS margin. These scenarios exist because a static
+// grab() cannot otherwise show the :hover-painted state — there is no real OS
+// mouse move in the harness.
+const QVector<VisualScenario> kTitleBarScenarios = {
+    {.id = QStringLiteral("titlebar-window-buttons-rest"),
+     .title = QStringLiteral("Titlebar / window buttons at rest"),
+     .page = VisualPage::Record},
+    {.id = QStringLiteral("titlebar-window-buttons-hover-minimize"),
+     .title = QStringLiteral("Titlebar / minimize button hovered"),
+     .page = VisualPage::Record,
+     .titlebar_hover_button = QStringLiteral("minimize")},
+    {.id = QStringLiteral("titlebar-window-buttons-hover-maximize"),
+     .title = QStringLiteral("Titlebar / maximize button hovered"),
+     .page = VisualPage::Record,
+     .titlebar_hover_button = QStringLiteral("maximize")},
+    {.id = QStringLiteral("titlebar-window-buttons-hover-close"),
+     .title = QStringLiteral("Titlebar / close button hovered"),
+     .page = VisualPage::Record,
+     .titlebar_hover_button = QStringLiteral("close")},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -2026,6 +2049,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kDevicePageScenarios);
         merged.append(kAudioDegradedNotificationScenarios);
         merged.append(kNotificationHubScenarios);
+        merged.append(kTitleBarScenarios);
     }
     return merged;
 }
@@ -2133,6 +2157,12 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
             return fail(QStringLiteral("Webcam PiP size out of bounds"));
         if (x < 0.0f || y < 0.0f || x + w > 1.0f + 1e-4f || y + h > 1.0f + 1e-4f)
             return fail(QStringLiteral("Webcam PiP rectangle escapes the content frame"));
+    }
+
+    if (!scenario.titlebar_hover_button.isEmpty() && scenario.titlebar_hover_button != QStringLiteral("minimize") &&
+        scenario.titlebar_hover_button != QStringLiteral("maximize") &&
+        scenario.titlebar_hover_button != QStringLiteral("close")) {
+        return fail(QStringLiteral("Invalid visual-test titlebar hover button"));
     }
 
     return true;
