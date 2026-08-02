@@ -53,6 +53,14 @@ struct DecodedAudioBlock {
     std::shared_ptr<const std::vector<float>> interleaved_stereo;
 };
 
+// One audio track of an open file. Recordings written before track names were
+// muxed carry no name; a caller labels those positionally instead of inferring
+// a source from the track order, which the container does not guarantee.
+struct AudioTrackDescription {
+    int stream_index = -1;
+    std::string name;
+};
+
 using VideoFrameCallback = std::function<void(DecodedVideoFrame)>;
 using AudioBlockCallback = std::function<void(DecodedAudioBlock)>;
 
@@ -105,6 +113,13 @@ class EditPlayerEngine {
     // EditPlayerSession, Task 8) so it never blocks the UI thread. Returns
     // nullopt if not open, there is no video stream, or decode fails.
     [[nodiscard]] std::optional<DecodedVideoFrame> DecodeFrameAt(int64_t target_us);
+
+    // Every audio track the open file carries, in stream order. `name` comes
+    // from the container's track name and is empty for recordings written
+    // before names were muxed — callers fall back to a positional label rather
+    // than guessing a source from the track order. An empty vector means the
+    // file has no audio at all.
+    [[nodiscard]] std::vector<AudioTrackDescription> AudioTracks() const;
 
     // ---- Continuous playback decode ----
 

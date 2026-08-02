@@ -854,6 +854,10 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
                                  impl_->pq_converter.get());
 }
 
+std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
+    return {};
+}
+
 void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
                                            std::function<int64_t()> current_media_time_us) {
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
