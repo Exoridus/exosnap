@@ -24,6 +24,7 @@
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/EditExportOverlay.h"
+#include "ui/dialogs/ExportOverlay.h"
 #include "ui/dialogs/FinalizingOverlay.h"
 #include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
@@ -1991,9 +1992,11 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     // above; with the overlay the stack usually already shows Record, so the
     // dismissal must be explicit — otherwise a recording started by hotkey would
     // run invisibly underneath an editor opened on an old file. Deliberate: this
-    // closes even during Phase::Exporting — closing only hides the progress UI,
-    // the hosted page and its export worker thread live on, and re-entering after
+    // closes even while an export runs — closing only hides the progress UI, the
+    // hosted page and its export worker thread live on, and re-entering after
     // Stop re-shows the running export (see navigateToEditExportPage; ADR 0022).
+    // It is also the one close that skips the discard guard: a modal blocking a
+    // hotkey-triggered recording is worse than a lost trim.
     if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && edit_export_overlay_ &&
         edit_export_overlay_->isOpen())
         edit_export_overlay_->closeOverlay();
@@ -2240,6 +2243,13 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    // The Edit overlay spans the client area below the real title bar, so the
+    // window stays movable and minimizable during an edit session. The height of
+    // that band is pushed in from here — the overlay must not reach up for the
+    // title bar itself — and re-applied whenever the client area changes size.
+    if (event->type() == QEvent::Resize && watched == centralWidget() && edit_export_overlay_ && title_bar_)
+        edit_export_overlay_->setTopInset(title_bar_->height());
+
     // A press outside an open Qt::Popup hub closes it (Qt auto-dismiss on
     // mouse-DOWN). If that press lands on the bell, flag it so the bell's
     // clicked() (fired on mouse-UP) does not immediately re-open the hub —
@@ -2347,8 +2357,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     saveWindowGeometry();
 
     if (update_handoff_phase_ == UpdateHandoffPhase::ClosingForHandoff) {
-        const bool export_active = edit_export_overlay_ && edit_export_overlay_->page() &&
-                                   edit_export_overlay_->page()->phase() == EditExportPage::Phase::Exporting;
+        const bool export_active =
+            edit_export_overlay_ && edit_export_overlay_->page() && edit_export_overlay_->page()->isExportRunning();
         const bool handoff_blocked = record_status_label_ == QStringLiteral("STOPPING") || remuxing_active_ ||
                                      recording_active_ || export_active;
         if (handoff_blocked) {
@@ -2445,8 +2455,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // would cancel it in ~EditExportPage without a word — ask, mirroring the remux
     // guard above. Data-wise "cancel and close" is safe: an export never mutates
     // the original recording; at most a partial .tmp/_edit file is abandoned.
-    if (edit_export_overlay_ && edit_export_overlay_->page() &&
-        edit_export_overlay_->page()->phase() == EditExportPage::Phase::Exporting) {
+    if (edit_export_overlay_ && edit_export_overlay_->page() && edit_export_overlay_->page()->isExportRunning()) {
         QMessageBox msgBox(this);
         msgBox.setWindowTitle(QStringLiteral("Export in progress"));
         msgBox.setText(QStringLiteral("ExoSnap is exporting your edited recording. Closing now will cancel the "
@@ -2610,13 +2619,16 @@ void MainWindow::navigateToPage(int index) {
 
     // EDIT-OVERLAY-R1: navigating to any page other than Record dismisses the Edit
     // overlay — it is only meaningful "over Record", never left floating above a
-    // different page. Mid-export (Phase::Exporting) is the one exception: the same
-    // rule that blocks Escape/backdrop dismiss also blocks nav-away, so a running
-    // export is never silently abandoned by clicking another nav item.
+    // different page. A running export is the one exception: the same rule that
+    // blocks Escape/backdrop dismiss also blocks nav-away, so it is never silently
+    // abandoned by clicking another nav item. Unexported trim/marker work asks
+    // first, and "Keep editing" cancels the navigation outright rather than
+    // deferring it.
     if (edit_export_overlay_ && edit_export_overlay_->isOpen() && index != kRecordPageIndex) {
         if (edit_export_overlay_->isDismissBlocked())
             return; // stay put — the export keeps running
-        edit_export_overlay_->closeOverlay();
+        if (!edit_export_overlay_->requestCloseOverlay())
+            return;
     }
 
     setCurrentPage(index);
@@ -4584,7 +4596,6 @@ void MainWindow::navigateToEditExportPage(const EditContext& ctx) {
     // meaningful "over Record" — then populate and open the overlay itself.
     navigateToPage(kRecordPageIndex);
     edit_export_overlay_->page()->setEditContext(ctx);
-    edit_export_overlay_->page()->setPhase(EditExportPage::Phase::Review);
     edit_export_overlay_->openOverlay();
 }
 
@@ -4612,9 +4623,20 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
         marker.time_ms = time_ms;
         ctx.markers.push_back(marker);
     }
+    // The header report icon derives its severity from the snapshot the page is
+    // given, so the scenario drives the real computation rather than the icon.
+    if (!scenario.edit_export_report_severity.isEmpty()) {
+        ctx.completed_snapshot.valid = true;
+        if (scenario.edit_export_report_severity == QStringLiteral("warning"))
+            ctx.completed_snapshot.health = recorder_core::PipelineHealth::Warning;
+        else if (scenario.edit_export_report_severity == QStringLiteral("critical"))
+            ctx.completed_snapshot.health = recorder_core::PipelineHealth::Critical;
+        else
+            ctx.completed_snapshot.health = recorder_core::PipelineHealth::Good;
+    }
     edit_export_overlay_->page()->setEditContext(ctx);
 
-    // Deterministic timeline state (trim handles + playhead) for the Edit phase.
+    // Deterministic timeline state (trim handles + playhead).
     if (scenario.edit_export_trim_start_ms >= 0 || scenario.edit_export_trim_end_ms >= 0) {
         const qint64 duration_ms = static_cast<qint64>(scenario.edit_export_duration_seconds * 1000.0);
         const qint64 start_ms = std::max<qint64>(scenario.edit_export_trim_start_ms, 0);
@@ -4623,18 +4645,20 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     }
     edit_export_overlay_->page()->setPreviewPositionMs(scenario.edit_export_playhead_ms);
 
-    EditExportPage::Phase phase = EditExportPage::Phase::Review;
-    if (scenario.edit_export_phase == QStringLiteral("edit"))
-        phase = EditExportPage::Phase::Edit;
-    else if (scenario.edit_export_phase == QStringLiteral("output"))
-        phase = EditExportPage::Phase::Output;
-    else if (scenario.edit_export_phase == QStringLiteral("exporting"))
-        phase = EditExportPage::Phase::Exporting;
-    else if (scenario.edit_export_phase == QStringLiteral("done"))
-        phase = EditExportPage::Phase::Done;
-    else if (scenario.edit_export_phase == QStringLiteral("failed"))
-        phase = EditExportPage::Phase::Failed;
-    edit_export_overlay_->page()->setPhase(phase);
+    // Export card states are driven straight through the card's own API — the
+    // page's export path would start a real remux, which the harness must not do.
+    if (!scenario.edit_export_card_state.isEmpty()) {
+        if (auto* card =
+                edit_export_overlay_->page()->findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay"))) {
+            card->openCard();
+            if (scenario.edit_export_card_state == QStringLiteral("running")) {
+                card->showRunning();
+                card->setProgress(62); // fixed mid-run value: the capture must be deterministic
+            } else if (scenario.edit_export_card_state == QStringLiteral("done")) {
+                card->showDone(scenario.edit_export_file_path);
+            }
+        }
+    }
     edit_export_overlay_->openOverlay();
     // stack_->currentIndex() is now kRecordPageIndex, so the shared post-switch
     // title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex())) in
@@ -5336,6 +5360,10 @@ void MainWindow::buildEditExportOverlay() {
     // page's backRequested -> closeOverlay() internally (see EditExportOverlay ctor).
     edit_export_overlay_ = new ui::dialogs::EditExportOverlay(centralWidget());
     edit_export_overlay_->hide();
+    // Leave the real title bar uncovered (ADR 0022): the window stays movable and
+    // minimizable for the whole edit session, export included.
+    if (title_bar_)
+        edit_export_overlay_->setTopInset(title_bar_->height());
     // Mic privacy (review): the overlay covers the Record page without hiding it,
     // so RecordPage's hideEvent gating never fires — suspend/resume the
     // visibility-gated meter monitoring (mic-in-use indicator) explicitly.

@@ -1,17 +1,24 @@
 #include <gtest/gtest.h>
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QDir>
+#include <QEventLoop>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
-#include <QProgressBar>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QSize>
+#include <QTimer>
 #include <QWidget>
 
+#include "models/RecordingMarker.h"
 #include "pages/EditExportPage.h"
 #include "ui/dialogs/EditExportOverlay.h"
+#include "ui/dialogs/ExportOverlay.h"
 
 namespace exosnap {
 namespace {
@@ -32,6 +39,73 @@ class EditExportOverlayTest : public ::testing::Test {
         EnsureApplication();
     }
 };
+
+// Answers the modal confirmation from outside; QDialog::exec() spins its own
+// event loop, so the click has to come from a timer that fires inside it.
+void AnswerModalDialog(const QString& button_text, bool* out_appeared) {
+    auto* timer = new QTimer;
+    auto* attempts = new int(0);
+    timer->setInterval(10);
+    QObject::connect(timer, &QTimer::timeout, timer, [timer, button_text, out_appeared, attempts]() {
+        auto finish = [timer, attempts]() {
+            timer->stop();
+            delete attempts;
+            timer->deleteLater();
+        };
+        if (++*attempts > 200) { // ~2 s
+            if (auto* stuck = QApplication::activeModalWidget())
+                stuck->close();
+            finish();
+            return;
+        }
+        auto* modal = QApplication::activeModalWidget();
+        if (modal == nullptr)
+            return;
+        for (auto* btn : modal->findChildren<QAbstractButton*>()) {
+            if (QString(btn->text()).remove(QLatin1Char('&')) != button_text)
+                continue;
+            if (out_appeared != nullptr)
+                *out_appeared = true;
+            btn->click();
+            finish();
+            return;
+        }
+    });
+    timer->start();
+}
+
+// Gives the hosted page a trim range, so every dismiss path has to go through
+// the discard guard.
+void GivePageUnsavedEdits(EditExportPage* page) {
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.duration_seconds = 100.0;
+    page->setEditContext(ctx);
+    page->setTrimRangeMs(10000, 90000);
+}
+
+// Starts a real export against a master that cannot be opened. The running flag
+// is set synchronously; it is only cleared from a queued completion callback, so
+// as long as the test does not pump the loop the overlay stays dismiss-blocked.
+void StartDoomedExport(EditExportPage* page) {
+    EditContext ctx;
+    ctx.output_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-overlay-test.mkv"));
+    ctx.mkv_master_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-overlay-missing.mkv"));
+    page->setEditContext(ctx);
+    auto* card = page->findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay"));
+    ASSERT_NE(card, nullptr);
+    emit card->exportRequested();
+}
+
+// Lets a started export's queued completion callback land before the fixture
+// tears the page down.
+void DrainExport() {
+    QEventLoop loop;
+    QTimer::singleShot(50, &loop, &QEventLoop::quit);
+    loop.exec();
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+}
 
 TEST_F(EditExportOverlayTest, RendersInWindowNotAsNativeDialog) {
     ui::dialogs::EditExportOverlay overlay;
@@ -58,6 +132,38 @@ TEST_F(EditExportOverlayTest, OpenOverlay_MakesOverlayVisible) {
 
     overlay.openOverlay();
     EXPECT_TRUE(overlay.isOpen());
+}
+
+// The overlay leaves the real title bar uncovered so the window stays movable
+// and minimizable for the whole edit session (ADR 0022).
+TEST_F(EditExportOverlayTest, TopInsetKeepsTheTitleBarBandFree) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
+
+    overlay.setTopInset(48);
+    overlay.openOverlay();
+
+    EXPECT_EQ(overlay.geometry().top(), 48);
+    EXPECT_EQ(overlay.geometry().height(), 820 - 48);
+    EXPECT_EQ(overlay.geometry().width(), 1280);
+}
+
+TEST_F(EditExportOverlayTest, TopInsetSurvivesAParentResize) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
+    overlay.setTopInset(48);
+    overlay.openOverlay();
+
+    // A hidden host defers its own resize event until it is shown, so deliver it
+    // directly — the overlay's parent-watching event filter is what is under test.
+    host.resize(1000, 700);
+    QResizeEvent resized(QSize(1000, 700), QSize(1280, 820));
+    QCoreApplication::sendEvent(&host, &resized);
+
+    EXPECT_EQ(overlay.geometry().top(), 48);
+    EXPECT_EQ(overlay.geometry().height(), 700 - 48);
 }
 
 TEST_F(EditExportOverlayTest, CloseOverlay_HidesOverlayAndEmitsClosedSignal) {
@@ -148,7 +254,7 @@ TEST_F(EditExportOverlayTest, Escape_ClosesOverlay_WhenNotExporting) {
     host.resize(1280, 820);
     ui::dialogs::EditExportOverlay overlay(&host);
     overlay.openOverlay();
-    ASSERT_EQ(overlay.page()->phase(), EditExportPage::Phase::Review);
+    ASSERT_FALSE(overlay.page()->isExportRunning());
 
     QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(&overlay, &esc);
@@ -156,18 +262,19 @@ TEST_F(EditExportOverlayTest, Escape_ClosesOverlay_WhenNotExporting) {
     EXPECT_TRUE(overlay.isHidden());
 }
 
-TEST_F(EditExportOverlayTest, Escape_DoesNotClose_WhenExporting) {
+TEST_F(EditExportOverlayTest, Escape_DoesNotClose_WhileAnExportRuns) {
     QWidget host;
     host.resize(1280, 820);
     ui::dialogs::EditExportOverlay overlay(&host);
-    overlay.page()->setPhase(EditExportPage::Phase::Exporting);
     overlay.openOverlay();
+    StartDoomedExport(overlay.page());
     ASSERT_TRUE(overlay.isDismissBlocked());
 
     QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(&overlay, &esc);
 
     EXPECT_TRUE(overlay.isOpen()) << "Escape must not dismiss the overlay mid-export";
+    DrainExport();
 }
 
 TEST_F(EditExportOverlayTest, BackdropClick_ClosesOverlay_WhenNotExporting) {
@@ -185,12 +292,12 @@ TEST_F(EditExportOverlayTest, BackdropClick_ClosesOverlay_WhenNotExporting) {
     EXPECT_TRUE(overlay.isHidden());
 }
 
-TEST_F(EditExportOverlayTest, BackdropClick_DoesNotClose_WhenExporting) {
+TEST_F(EditExportOverlayTest, BackdropClick_DoesNotClose_WhileAnExportRuns) {
     QWidget host;
     host.resize(1280, 820);
     ui::dialogs::EditExportOverlay overlay(&host);
-    overlay.page()->setPhase(EditExportPage::Phase::Exporting);
     overlay.openOverlay();
+    StartDoomedExport(overlay.page());
     ASSERT_TRUE(overlay.isDismissBlocked());
 
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(2, 2), QPointF(2, 2), QPointF(2, 2), Qt::LeftButton,
@@ -198,69 +305,104 @@ TEST_F(EditExportOverlayTest, BackdropClick_DoesNotClose_WhenExporting) {
     QCoreApplication::sendEvent(&overlay, &press);
 
     EXPECT_TRUE(overlay.isOpen()) << "Backdrop click must not dismiss the overlay mid-export";
+    DrainExport();
 }
 
-TEST_F(EditExportOverlayTest, BackButton_FromEditPhase_StepsToReviewWithoutClosingOverlay) {
-    // The three-step flow's Back navigation is internal to EditExportPage for
-    // Edit/Output; only Review's Back closes the overlay (ADR 0022).
+TEST_F(EditExportOverlayTest, IsDismissBlocked_TracksTheRunningExport) {
     QWidget host;
     host.resize(1280, 820);
     ui::dialogs::EditExportOverlay overlay(&host);
-    overlay.page()->setPhase(EditExportPage::Phase::Edit);
+    EXPECT_FALSE(overlay.isDismissBlocked());
+
+    StartDoomedExport(overlay.page());
+    EXPECT_TRUE(overlay.isDismissBlocked());
+
+    DrainExport();
+    EXPECT_FALSE(overlay.isDismissBlocked());
+}
+
+// ---- Discard guard on the dismiss paths ----
+
+TEST_F(EditExportOverlayTest, Escape_WithEdits_AsksAndKeepEditingStaysOpen) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
     overlay.openOverlay();
+    GivePageUnsavedEdits(overlay.page());
+    ASSERT_TRUE(overlay.page()->hasUnsavedEdits());
 
-    bool closed_fired = false;
-    QObject::connect(&overlay, &ui::dialogs::EditExportOverlay::closed, [&]() { closed_fired = true; });
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Keep editing"), &asked);
+    QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(&overlay, &esc);
 
-    auto* back_btn = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
-    ASSERT_NE(back_btn, nullptr);
-    back_btn->click();
-
-    EXPECT_EQ(overlay.page()->phase(), EditExportPage::Phase::Review);
-    EXPECT_FALSE(closed_fired);
+    EXPECT_TRUE(asked);
     EXPECT_TRUE(overlay.isOpen());
 }
 
-TEST_F(EditExportOverlayTest, IsDismissBlocked_TrueOnlyDuringExportingPhase) {
-    ui::dialogs::EditExportOverlay overlay;
+TEST_F(EditExportOverlayTest, BackdropClick_WithEdits_AsksAndDiscardCloses) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
+    overlay.openOverlay();
+    GivePageUnsavedEdits(overlay.page());
+    ASSERT_TRUE(overlay.page()->hasUnsavedEdits());
 
-    overlay.page()->setPhase(EditExportPage::Phase::Review);
-    EXPECT_FALSE(overlay.isDismissBlocked());
-    overlay.page()->setPhase(EditExportPage::Phase::Edit);
-    EXPECT_FALSE(overlay.isDismissBlocked());
-    overlay.page()->setPhase(EditExportPage::Phase::Output);
-    EXPECT_FALSE(overlay.isDismissBlocked());
-    overlay.page()->setPhase(EditExportPage::Phase::Exporting);
-    EXPECT_TRUE(overlay.isDismissBlocked());
-    overlay.page()->setPhase(EditExportPage::Phase::Done);
-    EXPECT_FALSE(overlay.isDismissBlocked());
-    overlay.page()->setPhase(EditExportPage::Phase::Failed);
-    EXPECT_FALSE(overlay.isDismissBlocked());
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Discard"), &asked);
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(2, 2), QPointF(2, 2), QPointF(2, 2), Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&overlay, &press);
+
+    EXPECT_TRUE(asked);
+    EXPECT_TRUE(overlay.isHidden());
+}
+
+// requestCloseOverlay() is what a nav-away goes through: "Keep editing" must
+// report the refusal so MainWindow can cancel the navigation outright.
+TEST_F(EditExportOverlayTest, RequestClose_WithEdits_ReportsARefusedClose) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
+    overlay.openOverlay();
+    GivePageUnsavedEdits(overlay.page());
+
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Keep editing"), &asked);
+    EXPECT_FALSE(overlay.requestCloseOverlay());
+    EXPECT_TRUE(asked);
+    EXPECT_TRUE(overlay.isOpen());
+}
+
+// A recording start closes the overlay without a word: a modal that blocks a
+// hotkey-triggered recording is worse than the lost trim (ADR 0022).
+TEST_F(EditExportOverlayTest, CloseOverlay_WithEdits_NeverAsks) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::EditExportOverlay overlay(&host);
+    overlay.openOverlay();
+    GivePageUnsavedEdits(overlay.page());
+    ASSERT_TRUE(overlay.page()->hasUnsavedEdits());
+
+    overlay.closeOverlay();
+    EXPECT_TRUE(overlay.isHidden());
+    EXPECT_EQ(QApplication::activeModalWidget(), nullptr);
 }
 
 // Object-name stability: test_edit_export_page.cpp's findChild-based assertions
-// (editExportProgressBar, editFactDuration, editExportPrimaryBtn, ...) must keep
-// working when the page is hosted inside the overlay — re-hosting must not
-// rename/rebuild any of EditExportPage's internal widgets.
+// (editExportPrimaryBtn, editReportIcon, exportOverlay, ...) must keep working
+// when the page is hosted inside the overlay — re-hosting must not rename or
+// rebuild any of EditExportPage's internal widgets.
 TEST_F(EditExportOverlayTest, HostedPage_PreservesInternalObjectNames) {
     ui::dialogs::EditExportOverlay overlay;
-    overlay.page()->setPhase(EditExportPage::Phase::Exporting);
 
-    auto* bar = overlay.page()->findChild<QProgressBar*>(QStringLiteral("editExportProgressBar"));
-    EXPECT_NE(bar, nullptr);
+    EXPECT_NE(overlay.page()->findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay")), nullptr);
+    EXPECT_NE(overlay.page()->findChild<QLabel*>(QStringLiteral("editReportIcon")), nullptr);
+    EXPECT_NE(overlay.page()->findChild<QWidget*>(QStringLiteral("editDetailsRail")), nullptr);
 
-    overlay.page()->setRecordingInfo(QStringLiteral("C:\\test\\recording.mkv"), QStringLiteral("00:04:18"),
-                                     QStringLiteral("612 MB"), QStringLiteral("2560 x 1440"),
-                                     QStringLiteral("60 fps CFR"), QStringLiteral("AV1"), QStringLiteral("Opus"),
-                                     QStringLiteral("MKV"));
-    auto* dur = overlay.page()->findChild<QLabel*>(QStringLiteral("editFactDuration"));
-    ASSERT_NE(dur, nullptr);
-    EXPECT_EQ(dur->text(), QStringLiteral("00:04:18"));
-
-    overlay.page()->setPhase(EditExportPage::Phase::Output);
     auto* primary = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
     ASSERT_NE(primary, nullptr);
-    EXPECT_EQ(primary->text(), QStringLiteral("Save && export"));
+    EXPECT_EQ(primary->text(), QString::fromUtf8("Export\xe2\x80\xa6"));
 
     auto* back_btn = overlay.page()->findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
     EXPECT_NE(back_btn, nullptr);

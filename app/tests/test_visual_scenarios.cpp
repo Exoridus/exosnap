@@ -135,15 +135,14 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("paused-split-available"),
         QStringLiteral("completed-recording-segments"),
         QStringLiteral("completed-recording-segment-missing"),
-        // EditExport scenarios (EDIT-OVERLAY-R1 / ADR 0022 update): still registered
-        // under VisualPage::EditExport after the surface moved from a stack page to
-        // an in-window overlay over Record — only how MainWindow applies them
-        // (open the overlay instead of a stack swap) changed, not the scenario data.
-        QStringLiteral("edit-review"),
-        QStringLiteral("edit-edit"),
+        // EditExport scenarios: one view plus the four states of the export card
+        // over it, and the header report icon in its warning state.
+        QStringLiteral("edit-main"),
         QStringLiteral("edit-trimmed"),
-        QStringLiteral("edit-output"),
-        QStringLiteral("edit-done"),
+        QStringLiteral("edit-export-options"),
+        QStringLiteral("edit-export-running"),
+        QStringLiteral("edit-export-done"),
+        QStringLiteral("edit-report-warning"),
         // EditPlayerSurface scenarios (EDIT-VIDEO-PLAYER Task 9).
         QStringLiteral("edit-player-surface-empty"),
         QStringLiteral("edit-player-surface-frame"),

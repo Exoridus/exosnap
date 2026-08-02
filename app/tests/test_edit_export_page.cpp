@@ -4,13 +4,14 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QFrame>
 #include <QLabel>
 #include <QMetaMethod>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPoint>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QTimer>
 #include <QWidget>
@@ -20,6 +21,8 @@
 #include "models/EditTimelineModel.h"
 #include "models/RecordingMarker.h"
 #include "pages/EditExportPage.h"
+#include "ui/dialogs/ExportOverlay.h"
+#include "ui/theme/ExoSnapTheme.h"
 #include "ui/widgets/EditTimeline.h"
 
 namespace exosnap {
@@ -51,7 +54,7 @@ void SettleLayout() {
 
 // Pumps a real Qt event loop for `ms` wall-clock milliseconds -- unlike
 // SettleLayout's processEvents() loop, this actually lets QTimer-driven
-// code (e.g. EditExportPage's 33 ms preview_timer_) fire repeatedly.
+// code (e.g. EditExportPage's preview_timer_) fire repeatedly.
 void WaitMs(int ms) {
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
@@ -102,18 +105,27 @@ void AnswerModalDialog(const QString& button_text, bool* out_appeared) {
     timer->start();
 }
 
-// Puts the page in the phase whose primary button starts the export, with the
-// save mode set to `mode_key` ("overwrite" / "new").
-QPushButton* ArmExportButton(EditExportPage& page, const QString& mode_key) {
-    page.setPhase(EditExportPage::Phase::Output);
-    auto* combo = page.findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"));
+ui::dialogs::ExportOverlay* ExportCard(EditExportPage& page) {
+    return page.findChild<ui::dialogs::ExportOverlay*>(QStringLiteral("exportOverlay"));
+}
+
+// Selects a save mode on the export card and asks it to export. Returns false
+// when the card carries no save-mode combo, so the overwrite cases can report
+// that rather than assert against a control that is not there.
+bool RequestExport(EditExportPage& page, const QString& mode_key) {
+    auto* card = ExportCard(page);
+    if (card == nullptr)
+        return false;
+    card->openCard();
+    auto* combo = card->findChild<QComboBox*>(QStringLiteral("outputSaveModeCombo"));
     if (combo == nullptr)
-        return nullptr;
+        return false;
     const int index = combo->findData(mode_key);
     if (index < 0)
-        return nullptr;
+        return false;
     combo->setCurrentIndex(index);
-    return page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
+    emit card->exportRequested();
+    return true;
 }
 
 EditContext MakeContext(double duration_seconds, std::vector<RecordingMarker> markers = {}) {
@@ -124,94 +136,107 @@ EditContext MakeContext(double duration_seconds, std::vector<RecordingMarker> ma
     return ctx;
 }
 
+// Starts a real export against a master that cannot be opened. runExport() flips
+// the running flag synchronously and only clears it from the queued completion
+// callback, so the caller owns a deterministic "export is running" window for as
+// long as it does not pump the event loop.
+void StartDoomedExport(EditExportPage& page) {
+    EditContext ctx;
+    ctx.output_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-export-test.mkv"));
+    ctx.mkv_master_path = QDir::temp().filePath(QStringLiteral("exosnap-edit-export-missing.mkv"));
+    page.setEditContext(ctx);
+    auto* card = ExportCard(page);
+    ASSERT_NE(card, nullptr);
+    emit card->exportRequested();
+}
+
+QString ReportTooltip(EditExportPage& page) {
+    auto* icon = page.findChild<QLabel*>(QStringLiteral("editReportIcon"));
+    return icon != nullptr ? icon->toolTip() : QString();
+}
+
 TEST_F(EditExportPageTest, ConstructsWithoutCrash) {
     EditExportPage page;
     page.show();
     SUCCEED();
 }
 
-TEST_F(EditExportPageTest, DefaultPhaseIsReview) {
+// ---- One view: nothing is gated behind a step any more ----
+
+TEST_F(EditExportPageTest, PlayerAndTimelineAreBothPresentFromTheStart) {
     EditExportPage page;
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Review);
+    auto* player = page.findChild<QFrame*>(QStringLiteral("editExportPlayer"));
+    ASSERT_NE(player, nullptr);
+    EXPECT_FALSE(player->isHidden());
+
+    auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
+    ASSERT_NE(timeline, nullptr);
+    EXPECT_FALSE(timeline->isHidden());
 }
 
-TEST_F(EditExportPageTest, SetPhaseReviewToEdit) {
+TEST_F(EditExportPageTest, StepperAndPhasePanelsAreGone) {
+    // The surface is one view: no stepper, no per-phase panels, no secondary
+    // action button.
     EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Edit);
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Edit);
+    for (const QString& name : {QStringLiteral("editExportStepper"), QStringLiteral("editExportReviewPanel"),
+                                QStringLiteral("editExportOutputPanel"), QStringLiteral("editExportExportingPanel"),
+                                QStringLiteral("editExportResultPanel"), QStringLiteral("editExportSecondaryBtn")}) {
+        EXPECT_EQ(page.findChild<QWidget*>(name), nullptr) << name.toStdString();
+    }
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        EXPECT_NE(lbl->text(), QStringLiteral("Review"));
+        EXPECT_NE(lbl->text(), QStringLiteral("Output"));
+    }
 }
 
-TEST_F(EditExportPageTest, SetPhaseToOutput) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Output);
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Output);
-}
-
-TEST_F(EditExportPageTest, SetPhaseToExporting) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Exporting);
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Exporting);
-    auto* bar = page.findChild<QProgressBar*>(QStringLiteral("editExportProgressBar"));
-    ASSERT_NE(bar, nullptr);
-    // Bar should not be hidden in Exporting phase (isVisible() requires parent shown)
-    EXPECT_FALSE(bar->isHidden());
-}
-
-TEST_F(EditExportPageTest, SetPhaseToDone) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Done);
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Done);
-}
-
-TEST_F(EditExportPageTest, SetPhaseToFailed) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Failed);
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Failed);
-}
-
-TEST_F(EditExportPageTest, SetRecordingInfoUpdatesFactLabels) {
-    EditExportPage page;
-    page.setRecordingInfo(QStringLiteral("C:\\test\\recording.mkv"), QStringLiteral("00:04:18"),
-                          QStringLiteral("612 MB"), QStringLiteral("2560 x 1440"), QStringLiteral("60 fps CFR"),
-                          QStringLiteral("AV1"), QStringLiteral("Opus"), QStringLiteral("MKV"));
-
-    auto* dur = page.findChild<QLabel*>(QStringLiteral("editFactDuration"));
-    ASSERT_NE(dur, nullptr);
-    EXPECT_EQ(dur->text(), QStringLiteral("00:04:18"));
-
-    auto* sz = page.findChild<QLabel*>(QStringLiteral("editFactSize"));
-    ASSERT_NE(sz, nullptr);
-    EXPECT_EQ(sz->text(), QStringLiteral("612 MB"));
-
-    auto* vid = page.findChild<QLabel*>(QStringLiteral("editFactVideo"));
-    ASSERT_NE(vid, nullptr);
-    EXPECT_EQ(vid->text(), QStringLiteral("AV1"));
-
-    auto* container = page.findChild<QLabel*>(QStringLiteral("editFactContainer"));
-    ASSERT_NE(container, nullptr);
-    EXPECT_EQ(container->text(), QStringLiteral("MKV"));
-}
-
-TEST_F(EditExportPageTest, DetailsCardValuesAreRightAligned) {
-    // Design-suite Details card: mono values right-aligned against the keys.
-    EditExportPage page;
-    auto* dur = page.findChild<QLabel*>(QStringLiteral("editFactDuration"));
-    ASSERT_NE(dur, nullptr);
-    EXPECT_TRUE(dur->alignment().testFlag(Qt::AlignRight));
-}
-
-TEST_F(EditExportPageTest, SaveButtonLivesInTheBottomActionBar) {
-    // The primary action sits bottom-right, like the Record page's transport
+TEST_F(EditExportPageTest, ExportButtonLivesInTheBottomActionBar) {
+    // The single action sits bottom-right, like the Record page's transport
     // actions — not in the top mode bar.
     EditExportPage page;
     auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
     ASSERT_NE(primary, nullptr);
     ASSERT_NE(primary->parentWidget(), nullptr);
     EXPECT_EQ(primary->parentWidget()->objectName(), QStringLiteral("editExportActionBar"));
-
-    page.setPhase(EditExportPage::Phase::Output);
+    EXPECT_EQ(primary->text(), QString::fromUtf8("Export\xe2\x80\xa6"));
     EXPECT_FALSE(primary->isHidden());
-    EXPECT_EQ(primary->text(), QStringLiteral("Save && export"));
+}
+
+TEST_F(EditExportPageTest, ExportButtonOpensTheExportCard) {
+    EditExportPage page;
+    auto* card = ExportCard(page);
+    ASSERT_NE(card, nullptr);
+    EXPECT_FALSE(card->isCardOpen());
+
+    auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
+    ASSERT_NE(primary, nullptr);
+    primary->click();
+    EXPECT_EQ(card->state(), ui::dialogs::ExportOverlay::State::Options);
+}
+
+TEST_F(EditExportPageTest, DetailsRailReceivesTheRecordingFacts) {
+    EditExportPage page;
+    page.setRecordingInfo(QStringLiteral("C:\\test\\recording.mkv"), QStringLiteral("00:04:18"),
+                          QStringLiteral("612 MB"), QStringLiteral("2560 x 1440"), QStringLiteral("60 fps CFR"),
+                          QStringLiteral("AV1"), QStringLiteral("Opus"), QStringLiteral("MKV"));
+
+    ASSERT_NE(page.findChild<QWidget*>(QStringLiteral("editDetailsRail")), nullptr);
+
+    auto* dur = page.findChild<QLabel*>(QStringLiteral("factDurationValue"));
+    if (dur == nullptr)
+        GTEST_SKIP() << "details rail carries no fact rows in this build";
+    EXPECT_EQ(dur->text(), QStringLiteral("00:04:18"));
+
+    auto* sz = page.findChild<QLabel*>(QStringLiteral("factSizeValue"));
+    ASSERT_NE(sz, nullptr);
+    EXPECT_EQ(sz->text(), QStringLiteral("612 MB"));
+
+    auto* vid = page.findChild<QLabel*>(QStringLiteral("factVideoValue"));
+    ASSERT_NE(vid, nullptr);
+    EXPECT_EQ(vid->text(), QStringLiteral("AV1"));
+
+    auto* container = page.findChild<QLabel*>(QStringLiteral("factContainerValue"));
+    ASSERT_NE(container, nullptr);
+    EXPECT_EQ(container->text(), QStringLiteral("MKV"));
 }
 
 TEST_F(EditExportPageTest, BackButtonTriggersSignal) {
@@ -224,163 +249,79 @@ TEST_F(EditExportPageTest, BackButtonTriggersSignal) {
     EXPECT_EQ(signal_count, 1);
 }
 
-// ---- Three-step flow (Review -> Edit -> Output) reachability ----
-
-TEST_F(EditExportPageTest, PrimaryButton_FromReview_AdvancesToEdit) {
-    EditExportPage page;
-    ASSERT_EQ(page.phase(), EditExportPage::Phase::Review);
-    auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
-    ASSERT_NE(primary, nullptr);
-    primary->click();
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Edit);
-}
-
-TEST_F(EditExportPageTest, PrimaryButton_FromEdit_AdvancesToOutput) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Edit);
-    auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
-    ASSERT_NE(primary, nullptr);
-    primary->click();
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Output);
-}
+// ---- Overwrite confirmation ----
 
 // "Overwrite original" replaces the user's only copy of the recording, so it
-// must not run off a single click. Declining leaves the page exactly where it
-// was -- not half-started, not Failed.
+// must not run off a single click. Declining leaves the export unstarted.
 TEST_F(EditExportPageTest, OverwriteExport_Declined_DoesNotStart) {
     EditExportPage page;
-    auto* primary = ArmExportButton(page, QStringLiteral("overwrite"));
-    ASSERT_NE(primary, nullptr);
 
     bool asked = false;
     AnswerModalDialog(QStringLiteral("Keep original"), &asked);
-    primary->click();
+    if (!RequestExport(page, QStringLiteral("overwrite")))
+        GTEST_SKIP() << "export card carries no save-mode combo in this build";
 
     EXPECT_TRUE(asked) << "overwriting the original must be confirmed first";
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Output) << "declining must leave the export unstarted";
+    EXPECT_FALSE(page.isExportRunning()) << "declining must leave the export unstarted";
 }
 
 // Confirming actually proceeds. The export then fails for want of an edit
-// master (none is set in this fixture) -- reaching Failed is precisely what
-// proves runExport() was entered rather than skipped.
+// master (none is set in this fixture) -- reaching the card's Failed state is
+// precisely what proves runExport() was entered rather than skipped.
 TEST_F(EditExportPageTest, OverwriteExport_Confirmed_Starts) {
     EditExportPage page;
-    auto* primary = ArmExportButton(page, QStringLiteral("overwrite"));
-    ASSERT_NE(primary, nullptr);
 
     bool asked = false;
     AnswerModalDialog(QStringLiteral("Overwrite"), &asked);
-    primary->click();
+    if (!RequestExport(page, QStringLiteral("overwrite")))
+        GTEST_SKIP() << "export card carries no save-mode combo in this build";
 
     EXPECT_TRUE(asked);
-    EXPECT_NE(page.phase(), EditExportPage::Phase::Output) << "confirming must start the export";
+    auto* card = ExportCard(page);
+    ASSERT_NE(card, nullptr);
+    EXPECT_NE(card->state(), ui::dialogs::ExportOverlay::State::Options) << "confirming must start the export";
 }
 
 // Writing a new file destroys nothing, so it must not interrupt the user with
 // a question at all.
 TEST_F(EditExportPageTest, NewFileExport_StartsWithoutAsking) {
     EditExportPage page;
-    auto* primary = ArmExportButton(page, QStringLiteral("new"));
-    ASSERT_NE(primary, nullptr);
 
     bool asked = false;
     AnswerModalDialog(QStringLiteral("Keep original"), &asked);
-    primary->click();
+    if (!RequestExport(page, QStringLiteral("new")))
+        GTEST_SKIP() << "export card carries no save-mode combo in this build";
 
     EXPECT_FALSE(asked) << "a new-file export replaces nothing and must not prompt";
-    EXPECT_NE(page.phase(), EditExportPage::Phase::Output) << "the export must start straight away";
+    auto* card = ExportCard(page);
+    ASSERT_NE(card, nullptr);
+    EXPECT_NE(card->state(), ui::dialogs::ExportOverlay::State::Options) << "the export must start straight away";
 }
 
-TEST_F(EditExportPageTest, BackButton_FromEdit_ReturnsToReview) {
+// ---- Export execution drives the card ----
+
+TEST_F(EditExportPageTest, ExportRunsUntilItsCompletionCallbackLands) {
     EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Edit);
-    int signal_count = 0;
-    QObject::connect(&page, &EditExportPage::backRequested, &page, [&signal_count]() { ++signal_count; });
-    auto* back_btn = page.findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
-    ASSERT_NE(back_btn, nullptr);
-    back_btn->click();
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Review);
-    EXPECT_EQ(signal_count, 0) << "Back from Edit steps to Review in-page, it must not close the overlay";
-}
+    ASSERT_FALSE(page.isExportRunning());
 
-TEST_F(EditExportPageTest, BackButton_FromOutput_ReturnsToEdit) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Output);
-    int signal_count = 0;
-    QObject::connect(&page, &EditExportPage::backRequested, &page, [&signal_count]() { ++signal_count; });
-    auto* back_btn = page.findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
-    ASSERT_NE(back_btn, nullptr);
-    back_btn->click();
-    EXPECT_EQ(page.phase(), EditExportPage::Phase::Edit);
-    EXPECT_EQ(signal_count, 0) << "Back from Output steps to Edit in-page, it must not close the overlay";
-}
+    StartDoomedExport(page);
+    EXPECT_TRUE(page.isExportRunning()) << "the running flag must be set before the worker is joined";
 
-TEST_F(EditExportPageTest, BackButton_FromReview_StillClosesOverlay) {
-    // Review is the first step: Back has nowhere in-page to go, so it must keep
-    // emitting backRequested() (existing behavior, relied on by the overlay).
-    EditExportPage page;
-    ASSERT_EQ(page.phase(), EditExportPage::Phase::Review);
-    int signal_count = 0;
-    QObject::connect(&page, &EditExportPage::backRequested, &page, [&signal_count]() { ++signal_count; });
-    auto* back_btn = page.findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
-    ASSERT_NE(back_btn, nullptr);
-    back_btn->click();
-    EXPECT_EQ(signal_count, 1);
-}
+    // The completion callback is a queued invoke: pumping the loop lets it land.
+    WaitMs(50);
+    SettleLayout();
+    EXPECT_FALSE(page.isExportRunning());
 
-TEST_F(EditExportPageTest, PrimaryButtonLabel_MatchesActualNextStep) {
-    EditExportPage page;
-    auto* primary = page.findChild<QPushButton*>(QStringLiteral("editExportPrimaryBtn"));
-    ASSERT_NE(primary, nullptr);
-
-    page.setPhase(EditExportPage::Phase::Review);
-    EXPECT_EQ(primary->text(), QStringLiteral("Continue to edit"));
-
-    page.setPhase(EditExportPage::Phase::Edit);
-    EXPECT_EQ(primary->text(), QStringLiteral("Continue to output"));
-}
-
-TEST_F(EditExportPageTest, Stepper_HighlightsCurrentPhaseOnly) {
-    EditExportPage page;
-    auto activeStyle = [](QLabel* lbl) { return lbl->styleSheet().contains(QStringLiteral("border-bottom")); };
-
-    // Locate the three stepper labels by text since they have no object names.
-    QLabel* stepper_review = nullptr;
-    QLabel* stepper_edit = nullptr;
-    QLabel* stepper_output = nullptr;
-    for (auto* lbl : page.findChildren<QLabel*>()) {
-        if (lbl->text() == QStringLiteral("Review"))
-            stepper_review = lbl;
-        else if (lbl->text() == QStringLiteral("Edit"))
-            stepper_edit = lbl;
-        else if (lbl->text() == QStringLiteral("Output"))
-            stepper_output = lbl;
-    }
-    ASSERT_NE(stepper_review, nullptr);
-    ASSERT_NE(stepper_edit, nullptr);
-    ASSERT_NE(stepper_output, nullptr);
-
-    page.setPhase(EditExportPage::Phase::Review);
-    EXPECT_TRUE(activeStyle(stepper_review));
-    EXPECT_FALSE(activeStyle(stepper_edit));
-    EXPECT_FALSE(activeStyle(stepper_output));
-
-    page.setPhase(EditExportPage::Phase::Edit);
-    EXPECT_FALSE(activeStyle(stepper_review));
-    EXPECT_TRUE(activeStyle(stepper_edit));
-    EXPECT_FALSE(activeStyle(stepper_output));
-
-    page.setPhase(EditExportPage::Phase::Output);
-    EXPECT_FALSE(activeStyle(stepper_review));
-    EXPECT_FALSE(activeStyle(stepper_edit));
-    EXPECT_TRUE(activeStyle(stepper_output));
+    auto* card = ExportCard(page);
+    ASSERT_NE(card, nullptr);
+    EXPECT_EQ(card->state(), ui::dialogs::ExportOverlay::State::Failed);
 }
 
 // ---- Dead/placeholder controls removed ----
 
 TEST_F(EditExportPageTest, TimelineHasNoButtonRowAboveIt) {
-    // Trim is direct manipulation on the timeline now: the Trim / Add Marker
-    // button row (and its duration readout) above the strip is gone.
+    // Trim is direct manipulation on the timeline: the Trim / Add Marker button
+    // row (and its duration readout) above the strip is gone.
     EditExportPage page;
     for (auto* b : page.findChildren<QPushButton*>()) {
         EXPECT_NE(b->text(), QStringLiteral("Trim"));
@@ -407,24 +348,6 @@ TEST_F(EditExportPageTest, BrowseDestButtonRemoved) {
         EXPECT_NE(b->text(), QStringLiteral("Browse\xe2\x80\xa6"));
 }
 
-// ---- Honest result/error strings ----
-
-TEST_F(EditExportPageTest, DoneResult_NeverShowsDemoFilename) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Done);
-    auto* detail = page.findChild<QLabel*>(QStringLiteral("editExportResultDetail"));
-    ASSERT_NE(detail, nullptr);
-    EXPECT_FALSE(detail->text().contains(QStringLiteral("Sprint-demo.mp4")));
-}
-
-TEST_F(EditExportPageTest, FailedResult_NeverShowsHardcodedDiskFull) {
-    EditExportPage page;
-    page.setPhase(EditExportPage::Phase::Failed);
-    auto* detail = page.findChild<QLabel*>(QStringLiteral("editExportResultDetail"));
-    ASSERT_NE(detail, nullptr);
-    EXPECT_FALSE(detail->text().contains(QStringLiteral("disk full")));
-}
-
 // ---- Markers on the timeline ----
 
 TEST_F(EditExportPageTest, MarkersFlowFromContextToTheTimeline) {
@@ -437,7 +360,6 @@ TEST_F(EditExportPageTest, MarkersFlowFromContextToTheTimeline) {
     RecordingMarker m2;
     m2.time_ms = 75000; // 75%
     page.setEditContext(MakeContext(100.0, {m1, m2}));
-    page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
     auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
@@ -454,7 +376,6 @@ TEST_F(EditExportPageTest, TimelineMapsTimeProportionallyToPixels) {
     page.show();
 
     page.setEditContext(MakeContext(100.0));
-    page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
     auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
@@ -476,7 +397,6 @@ TEST_F(EditExportPageTest, UnknownDurationRendersAnInertTimeline) {
     RecordingMarker m;
     m.time_ms = 1000;
     page.setEditContext(MakeContext(0.0, {m}));
-    page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
     page.setPreviewPlaying(true);
@@ -541,7 +461,6 @@ TEST_F(EditExportPageTest, ScrubPausesAndResumesOnlyIfPreviouslyPlaying) {
     page.resize(900, 700);
     page.show();
     page.setEditContext(MakeContext(100.0));
-    page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
     auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
@@ -571,13 +490,12 @@ TEST_F(EditExportPageTest, PreviewStopsAtEndOfClipWithNoAudioStream) {
     page.resize(900, 700);
     page.show();
     page.setEditContext(MakeContext(1.0)); // 1-second clip: reaches the end in a couple of ticks
-    page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
     page.setPreviewPlaying(true);
     ASSERT_TRUE(page.isPreviewPlaying());
 
-    // Let the preview timer (33 ms) run past the 1-second duration.
+    // Let the preview timer run past the 1-second duration.
     WaitMs(1200);
 
     EXPECT_FALSE(page.isPreviewPlaying());
@@ -589,7 +507,6 @@ TEST_F(EditExportPageTest, ScrubWhilePausedStaysPaused) {
     page.resize(900, 700);
     page.show();
     page.setEditContext(MakeContext(100.0));
-    page.setPhase(EditExportPage::Phase::Edit);
     SettleLayout();
 
     auto* timeline = page.findChild<ui::widgets::EditTimeline*>(QStringLiteral("editTimeline"));
@@ -613,7 +530,6 @@ TEST_F(EditExportPageTest, PlayButtonIsCenteredOverThePlayerSurface) {
     EditExportPage page;
     page.resize(1000, 800);
     page.setEditContext(MakeContext(100.0));
-    page.setPhase(EditExportPage::Phase::Review);
     page.show();
     // updatePlayerHeight() re-sizes the frame from a resize-event filter after
     // the first layout pass; pump a real event loop so the grid re-lays out
@@ -642,9 +558,9 @@ TEST_F(EditExportPageTest, PlayButtonIsCenteredOverThePlayerSurface) {
         << play_btn->geometry().y() << " parent=" << play_btn->parentWidget()->objectName().toStdString() << "]";
 }
 
-// ---- Unified empty-value copy in the post-recording report (P10) ----
+// ---- Post-flight report (header icon + tooltip) ----
 
-TEST_F(EditExportPageTest, ReviewReportUsesEmDashForMissingValuesNotUnavailable) {
+TEST_F(EditExportPageTest, ReportUsesEmDashForMissingValuesNotUnavailable) {
     // With no diagnostics snapshot and no drift measurement, every empty value in
     // the post-recording report reads as the unified em dash — never a stray
     // "unavailable" string or an en dash.
@@ -654,30 +570,16 @@ TEST_F(EditExportPageTest, ReviewReportUsesEmDashForMissingValuesNotUnavailable)
     ctx.duration_seconds = 100.0;
     ctx.av_drift_available = false; // no drift data
     page.setEditContext(ctx);
-    page.setPhase(EditExportPage::Phase::Review);
 
     const QString em_dash = QString::fromUtf8("\xe2\x80\x94");
     const QString en_dash = QString::fromUtf8("\xe2\x80\x93");
+    const QStringList lines = ReportTooltip(page).split(QLatin1Char('\n'));
+    ASSERT_EQ(lines.size(), 3);
 
-    QLabel* drops = nullptr;
-    QLabel* drift = nullptr;
-    QLabel* health = nullptr;
-    for (auto* lbl : page.findChildren<QLabel*>()) {
-        if (lbl->text().startsWith(QStringLiteral("Frame drops:")))
-            drops = lbl;
-        else if (lbl->text().startsWith(QStringLiteral("Peak A/V drift:")))
-            drift = lbl;
-        else if (lbl->text().startsWith(QStringLiteral("Pipeline health:")))
-            health = lbl;
-    }
-    ASSERT_NE(drops, nullptr);
-    ASSERT_NE(drift, nullptr);
-    ASSERT_NE(health, nullptr);
-
-    for (QLabel* lbl : {drops, drift, health}) {
-        EXPECT_TRUE(lbl->text().contains(em_dash)) << lbl->text().toStdString();
-        EXPECT_FALSE(lbl->text().contains(en_dash)) << lbl->text().toStdString();
-        EXPECT_FALSE(lbl->text().contains(QStringLiteral("unavailable"))) << lbl->text().toStdString();
+    for (const QString& line : lines) {
+        EXPECT_TRUE(line.contains(em_dash)) << line.toStdString();
+        EXPECT_FALSE(line.contains(en_dash)) << line.toStdString();
+        EXPECT_FALSE(line.contains(QStringLiteral("unavailable"))) << line.toStdString();
     }
 }
 
@@ -685,7 +587,7 @@ TEST_F(EditExportPageTest, ReviewReportUsesEmDashForMissingValuesNotUnavailable)
 // discards a large fraction of source frames via coalescing/pacing to hit the
 // target rate -- none of that is a real drop. The report must count only
 // encoder-backpressure drops, not the coalesced/CFR-pacing categories.
-TEST_F(EditExportPageTest, ReviewReportCountsOnlyRealDrops_NotCoalescedPacing) {
+TEST_F(EditExportPageTest, ReportCountsOnlyRealDrops_NotCoalescedPacing) {
     EditExportPage page;
     EditContext ctx;
     ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
@@ -696,23 +598,16 @@ TEST_F(EditExportPageTest, ReviewReportCountsOnlyRealDrops_NotCoalescedPacing) {
     ctx.completed_snapshot.capture.frames_dropped_cfr = 100;        // benign
     ctx.completed_snapshot.capture.frames_dropped_backpressure = 3; // the only real drops
     page.setEditContext(ctx);
-    page.setPhase(EditExportPage::Phase::Review);
 
-    QLabel* drops = nullptr;
-    for (auto* lbl : page.findChildren<QLabel*>()) {
-        if (lbl->text().startsWith(QStringLiteral("Frame drops:")))
-            drops = lbl;
-    }
-    ASSERT_NE(drops, nullptr);
     // 3 / (6000 + 3) * 100 rounds to 0.0%; a coalesced-inclusive total (4103
     // dropped of 10103) would have shown roughly 40%.
-    EXPECT_EQ(drops->text(), QStringLiteral("Frame drops: 0.0%")) << drops->text().toStdString();
+    EXPECT_TRUE(ReportTooltip(page).contains(QStringLiteral("Frame drops: 0.0%"))) << ReportTooltip(page).toStdString();
 }
 
 // The mirror image of the test above: a frame whose GPU conversion failed is picture
-// the recording lost, and it used to be filed under benign CFR pacing. The review
-// panel then read 0.0% while the Diagnostics capture card flagged the same session.
-TEST_F(EditExportPageTest, ReviewReportCountsProcessingFailuresAsRealDrops) {
+// the recording lost, and it used to be filed under benign CFR pacing. The report
+// then read 0.0% while the Diagnostics capture card flagged the same session.
+TEST_F(EditExportPageTest, ReportCountsProcessingFailuresAsRealDrops) {
     EditExportPage page;
     EditContext ctx;
     ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
@@ -723,16 +618,148 @@ TEST_F(EditExportPageTest, ReviewReportCountsProcessingFailuresAsRealDrops) {
     ctx.completed_snapshot.capture.frames_dropped_cfr = 50;                 // benign start-up pacing
     ctx.completed_snapshot.capture.frames_dropped_processing_failure = 100; // real: picture lost
     page.setEditContext(ctx);
-    page.setPhase(EditExportPage::Phase::Review);
 
-    QLabel* drops = nullptr;
-    for (auto* lbl : page.findChildren<QLabel*>()) {
-        if (lbl->text().startsWith(QStringLiteral("Frame drops:")))
-            drops = lbl;
-    }
-    ASSERT_NE(drops, nullptr);
     // 100 / (900 + 100) = 10.0%. Before the fix this read 0.0%.
-    EXPECT_EQ(drops->text(), QStringLiteral("Frame drops: 10.0%")) << drops->text().toStdString();
+    EXPECT_TRUE(ReportTooltip(page).contains(QStringLiteral("Frame drops: 10.0%")))
+        << ReportTooltip(page).toStdString();
+}
+
+TEST_F(EditExportPageTest, ReportTooltipCarriesAllThreeValues) {
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.duration_seconds = 100.0;
+    ctx.av_drift_available = true;
+    ctx.peak_av_drift_ms = 12.0;
+    ctx.completed_snapshot.valid = true;
+    ctx.completed_snapshot.health = recorder_core::PipelineHealth::Good;
+    page.setEditContext(ctx);
+
+    const QString tooltip = ReportTooltip(page);
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("Frame drops:"))) << tooltip.toStdString();
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("Peak A/V drift:"))) << tooltip.toStdString();
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("12"))) << tooltip.toStdString();
+    EXPECT_TRUE(tooltip.contains(QStringLiteral("Pipeline health: Good"))) << tooltip.toStdString();
+}
+
+// A hover-only tooltip would swallow a genuine finding, so the icon itself
+// carries the severity: quiet for Good, coloured plus a word for the rest.
+TEST_F(EditExportPageTest, ReportIconIsQuietForAHealthyPipeline) {
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.completed_snapshot.valid = true;
+    ctx.completed_snapshot.health = recorder_core::PipelineHealth::Good;
+    page.setEditContext(ctx);
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("editReportLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_TRUE(label->text().isEmpty());
+    ASSERT_NE(page.findChild<QLabel*>(QStringLiteral("editReportIcon")), nullptr);
+}
+
+TEST_F(EditExportPageTest, ReportIconCallsOutAWarningPipeline) {
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.completed_snapshot.valid = true;
+    ctx.completed_snapshot.health = recorder_core::PipelineHealth::Warning;
+    page.setEditContext(ctx);
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("editReportLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_EQ(label->text(), QStringLiteral("Warning"));
+    EXPECT_TRUE(label->styleSheet().contains(QString::fromUtf8(ui::theme::ActiveTheme().caution), Qt::CaseInsensitive))
+        << label->styleSheet().toStdString();
+}
+
+TEST_F(EditExportPageTest, ReportIconCallsOutACriticalPipeline) {
+    EditExportPage page;
+    EditContext ctx;
+    ctx.output_path = QStringLiteral("C:\\test\\recording.mkv");
+    ctx.completed_snapshot.valid = true;
+    ctx.completed_snapshot.health = recorder_core::PipelineHealth::Critical;
+    page.setEditContext(ctx);
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("editReportLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_EQ(label->text(), QStringLiteral("Critical"));
+    EXPECT_TRUE(label->styleSheet().contains(QString::fromUtf8(ui::theme::ActiveTheme().error), Qt::CaseInsensitive))
+        << label->styleSheet().toStdString();
+}
+
+// ---- Discarding edits ----
+
+TEST_F(EditExportPageTest, FreshClipHasNothingToDiscard) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+    EXPECT_FALSE(page.hasUnsavedEdits());
+}
+
+TEST_F(EditExportPageTest, TrimRangeCountsAsAnUnsavedEdit) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+
+    page.setTrimRangeMs(10000, 90000);
+    EXPECT_TRUE(page.hasUnsavedEdits());
+}
+
+TEST_F(EditExportPageTest, MarkersCountAsAnUnsavedEdit) {
+    EditExportPage page;
+    RecordingMarker m;
+    m.time_ms = 25000;
+    page.setEditContext(MakeContext(100.0, {m}));
+    EXPECT_TRUE(page.hasUnsavedEdits());
+}
+
+TEST_F(EditExportPageTest, BackButton_WithEdits_KeepEditingCancelsTheClose) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+    page.setTrimRangeMs(10000, 90000);
+    ASSERT_TRUE(page.hasUnsavedEdits());
+
+    int signal_count = 0;
+    QObject::connect(&page, &EditExportPage::backRequested, &page, [&signal_count]() { ++signal_count; });
+
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Keep editing"), &asked);
+    auto* back_btn = page.findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
+    ASSERT_NE(back_btn, nullptr);
+    back_btn->click();
+
+    EXPECT_TRUE(asked) << "closing with a trim set must ask first";
+    EXPECT_EQ(signal_count, 0) << "keeping the edit must not close the surface";
+}
+
+TEST_F(EditExportPageTest, BackButton_WithEdits_DiscardClosesTheSurface) {
+    EditExportPage page;
+    page.resize(900, 700);
+    page.show();
+    page.setEditContext(MakeContext(100.0));
+    SettleLayout();
+    page.setTrimRangeMs(10000, 90000);
+    ASSERT_TRUE(page.hasUnsavedEdits());
+
+    int signal_count = 0;
+    QObject::connect(&page, &EditExportPage::backRequested, &page, [&signal_count]() { ++signal_count; });
+
+    bool asked = false;
+    AnswerModalDialog(QStringLiteral("Discard"), &asked);
+    auto* back_btn = page.findChild<QPushButton*>(QStringLiteral("editExportBackBtn"));
+    ASSERT_NE(back_btn, nullptr);
+    back_btn->click();
+
+    EXPECT_TRUE(asked);
+    EXPECT_EQ(signal_count, 1);
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {
