@@ -370,6 +370,19 @@ struct VisualScenario {
     // window purely so it can be judged on rendered pixels. Trailing field so
     // existing positional initializers stay valid.
     bool notifications_open = false;
+
+    // --- EditExport timeline rows + thumbnail strip ---
+    // One audio row per label, in track order; an empty list renders the video
+    // row alone. An empty label is drawn positionally ("Audio 1"), matching how
+    // a recording written before track names were muxed comes back.
+    // Trailing fields so existing positional initializers stay valid.
+    QStringList edit_export_audio_track_labels;
+    // How much of the tile strip carries a thumbnail: -1 fills it, 0 leaves it
+    // empty (the state a real decode passes through while its tiles are still
+    // arriving), anything between renders it partly filled. The harness has no
+    // clip to decode, so the tiles are deterministic placeholders -- they pin
+    // placement and row layout, not decode fidelity.
+    int edit_export_thumbnail_tiles = 0;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

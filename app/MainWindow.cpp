@@ -4645,6 +4645,11 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     }
     edit_export_overlay_->page()->setPreviewPositionMs(scenario.edit_export_playhead_ms);
 
+    // Timeline rows + tile strip: both come from the opened clip in production,
+    // and the harness has none, so the scenario injects them.
+    edit_export_overlay_->page()->setTimelineFixture(scenario.edit_export_audio_track_labels,
+                                                     scenario.edit_export_thumbnail_tiles);
+
     // Export card states are driven straight through the card's own API — the
     // page's export path would start a real remux, which the harness must not do.
     if (!scenario.edit_export_card_state.isEmpty()) {

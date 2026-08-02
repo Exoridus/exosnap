@@ -139,6 +139,8 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         // over it, and the header report icon in its warning state.
         QStringLiteral("edit-main"),
         QStringLiteral("edit-trimmed"),
+        QStringLiteral("edit-timeline-multitrack"),
+        QStringLiteral("edit-timeline-loading"),
         QStringLiteral("edit-export-options"),
         QStringLiteral("edit-export-running"),
         QStringLiteral("edit-export-done"),
@@ -660,6 +662,32 @@ TEST(VisualScenarioTest, EditPlayerSurfaceScenariosCarryDeterministicState) {
     ASSERT_NE(frame, nullptr);
     EXPECT_EQ(frame->page, VisualPage::EditExport);
     EXPECT_EQ(frame->edit_player_surface_mode, QStringLiteral("frame"));
+}
+
+// The timeline scenarios pin the two states the row stack and the tile strip
+// cannot reach on their own in a harness that has no clip to decode.
+TEST(VisualScenarioTest, EditTimelineScenariosCarryRowsAndTiles) {
+    const VisualScenario* multitrack = FindVisualScenario(QStringLiteral("edit-timeline-multitrack"));
+    ASSERT_NE(multitrack, nullptr);
+    EXPECT_EQ(multitrack->page, VisualPage::EditExport);
+    ASSERT_EQ(multitrack->edit_export_audio_track_labels.size(), 2);
+    EXPECT_EQ(multitrack->edit_export_audio_track_labels.at(0), QStringLiteral("System"));
+    EXPECT_EQ(multitrack->edit_export_audio_track_labels.at(1), QStringLiteral("Microphone"));
+    EXPECT_EQ(multitrack->edit_export_thumbnail_tiles, -1);
+
+    // "Still arriving": some tiles, deliberately fewer than the row holds.
+    const VisualScenario* loading = FindVisualScenario(QStringLiteral("edit-timeline-loading"));
+    ASSERT_NE(loading, nullptr);
+    EXPECT_EQ(loading->page, VisualPage::EditExport);
+    EXPECT_TRUE(loading->edit_export_audio_track_labels.isEmpty());
+    EXPECT_GT(loading->edit_export_thumbnail_tiles, 0);
+
+    // The two main views show a fully decoded strip.
+    for (const QString& id : {QStringLiteral("edit-main"), QStringLiteral("edit-trimmed")}) {
+        const VisualScenario* s = FindVisualScenario(id);
+        ASSERT_NE(s, nullptr) << id.toStdString();
+        EXPECT_EQ(s->edit_export_thumbnail_tiles, -1) << id.toStdString();
+    }
 }
 
 TEST(VisualScenarioTest, OtherScenarios_DoNotDriveEditPlayerSurface) {

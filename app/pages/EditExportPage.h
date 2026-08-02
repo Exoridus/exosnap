@@ -1,6 +1,7 @@
 #pragma once
 #include <QImage>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 #include <atomic>
 #include <cstdint>
@@ -112,6 +113,13 @@ class EditExportPage : public QWidget {
     // interactive path is the timeline's own handles).
     void setTrimRangeMs(qint64 start_ms, qint64 end_ms);
 
+    // Visual-harness / test injection for the timeline's row stack and its
+    // thumbnail strip. Both normally come from the opened clip, which no
+    // fixture carries: `tile_count` of -1 fills the strip, 0 leaves it empty
+    // (the state a real decode passes through while its tiles are still
+    // arriving), and anything between renders a partly filled strip.
+    void setTimelineFixture(const QStringList& audio_track_labels, int tile_count);
+
   signals:
     void backRequested();
     void exportCompleted(const QString& output_path);
@@ -157,7 +165,6 @@ class EditExportPage : public QWidget {
     void refreshPreviewTickInterval();
     void updatePlayerHeight();
     [[nodiscard]] qint64 durationMs() const noexcept;
-    static QImage DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame);
 
     // Full context set by setEditContext (primary path).
     EditContext ctx_;
