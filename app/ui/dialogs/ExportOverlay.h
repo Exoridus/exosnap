@@ -64,7 +64,45 @@ class ExportOverlay : public QWidget {
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
+    void buildCard();
+    void syncGeometryToParent();
+    // Shows the content group for the current state and relabels/repositions
+    // the shared button row (Options/Failed share the primary button; every
+    // state but Done shares the cancel-or-close button).
+    void refreshStateVisibility();
+
     State state_ = State::Options;
+
+    QFrame* card_ = nullptr;
+
+    // ---- Options content ----
+    QWidget* options_content_ = nullptr;
+    QLabel* container_label_ = nullptr;
+    QComboBox* container_combo_ = nullptr;
+    QLabel* save_mode_label_ = nullptr;
+    QComboBox* save_mode_combo_ = nullptr;
+    QLabel* dest_title_label_ = nullptr;
+    QLabel* dest_folder_label_ = nullptr;
+
+    // ---- Running content ----
+    QWidget* running_content_ = nullptr;
+    QLabel* status_label_ = nullptr;
+    QProgressBar* progress_bar_ = nullptr;
+
+    // ---- Result content (Done and Failed share the same layout shape) ----
+    QWidget* result_content_ = nullptr;
+    QLabel* result_icon_label_ = nullptr;
+    QLabel* result_title_label_ = nullptr;
+    QLabel* result_detail_label_ = nullptr;
+
+    // ---- Shared button row ----
+    // exportPrimaryBtn: "Export" in Options, "Retry" in Failed, hidden otherwise.
+    // exportCancelBtn: "Cancel" in Options/Running, "Close" in Done/Failed —
+    // always present, its meaning follows its current label.
+    QPushButton* primary_btn_ = nullptr;
+    QPushButton* cancel_btn_ = nullptr;
+    QPushButton* open_folder_btn_ = nullptr;
+    QPushButton* reveal_btn_ = nullptr;
 };
 
 } // namespace exosnap::ui::dialogs
