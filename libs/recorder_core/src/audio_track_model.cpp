@@ -62,4 +62,28 @@ AudioTrackPlan ResolveAudioTracks(const std::vector<AudioSourceRow>& rows) {
     return plan;
 }
 
+std::string AudioSourceKindDisplayName(AudioSourceKind kind) {
+    switch (kind) {
+    case AudioSourceKind::App:
+        return "Application";
+    case AudioSourceKind::Mic:
+        return "Microphone";
+    case AudioSourceKind::Sys:
+    case AudioSourceKind::SystemOutput:
+        return "System";
+    }
+    return "";
+}
+
+std::string DeriveAudioTrackName(const ResolvedAudioTrack& track) {
+    std::string name;
+    for (const AudioSourceKind kind : track.sources) {
+        if (!name.empty()) {
+            name += " + ";
+        }
+        name += AudioSourceKindDisplayName(kind);
+    }
+    return name;
+}
+
 } // namespace recorder_core

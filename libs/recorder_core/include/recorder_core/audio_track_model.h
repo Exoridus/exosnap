@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace recorder_core {
@@ -66,5 +67,19 @@ struct AudioTrackPlan {
                                                                        bool window_target);
 
 [[nodiscard]] AudioTrackPlan ResolveAudioTracks(const std::vector<AudioSourceRow>& rows);
+
+// Human-readable label for a single source, used to build the track name
+// muxed into a recording (see DeriveAudioTrackName below). SystemOutput is the
+// pid-free stand-in for Sys on a Display/Region target (see
+// NormalizeSourceRowsForTarget) and shares its label -- to the user it is
+// still "the system", regardless of which WASAPI path captured it.
+[[nodiscard]] std::string AudioSourceKindDisplayName(AudioSourceKind kind);
+
+// Name for a resolved audio track, derived from its sources: the display name
+// of a single-source track, or its sources' display names joined with " + "
+// in resolution order (the order NormalizeSourceRowsForTarget/ResolveAudioTracks
+// pushed them onto the track) for a merged one. Empty only if the track itself
+// has no sources, which ResolveAudioTracks never produces.
+[[nodiscard]] std::string DeriveAudioTrackName(const ResolvedAudioTrack& track);
 
 } // namespace recorder_core
