@@ -23,13 +23,16 @@ namespace exosnap::ui::widgets {
 // of the clip, then one row per audio track. On top of all of them
 //   - draggable trim handles at the in/out points (the trimmed-away ranges
 //     are dimmed); handles constrain each other and never cross,
-//   - marker lines rendered exactly like the record timeline in the design
-//     suite (thin caution-coloured verticals),
+//   - marker lines rendered as thin secondary-accent verticals — deliberately
+//     not the caution color, which the app reserves for a real diagnostic
+//     warning,
 //   - a playhead (white line + knob) that follows preview playback and can be
 //     scrubbed by dragging,
 //   - a centred time label above the active handle/playhead while dragging
 //     ("MM:SS.mmm", hours only for recordings of one hour or longer),
-//   - a static mono time row underneath (start · in/out readout · duration).
+//   - a static mono time row underneath (start · in/out readout · duration),
+//   - a muted "Generating previews…" hint in the quiet zone above the stack
+//     while the video row has fewer tiles than the current width can hold.
 //
 // Handles, markers and the playhead span every row: a trim applies to the whole
 // clip, not to one of its tracks.

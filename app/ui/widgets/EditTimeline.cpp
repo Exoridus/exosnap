@@ -27,7 +27,7 @@ namespace {
 // Vertical layout: a quiet zone above the stack for the drag time label and the
 // playhead knob, the row stack itself, and a mono time row underneath.
 constexpr int kLabelZoneH = 22;
-constexpr int kVideoRowH = 40;
+constexpr int kVideoRowH = 48;
 constexpr int kAudioRowH = 20;
 // Floor for a shared audio row. Below this the label no longer fits, and a row
 // too small to name is worse than one row fewer.
@@ -48,7 +48,7 @@ constexpr int kHandleWActive = 10; // "leicht gescaled" while dragging
 constexpr int kHandleOverhang = 2; // handles extend past the track edges
 constexpr int kHandleHitSlop = 4;
 constexpr int kPlayheadKnobD = 10;
-constexpr int kAudioLabelInset = 8;
+constexpr int kAudioLabelInset = 10;
 
 // A resize changes the tile count, so every intermediate width of a drag would
 // otherwise start (and cancel) its own decode run.
@@ -398,12 +398,16 @@ void EditTimeline::paintEvent(QPaintEvent* /*event*/) {
     const QColor line2 = ParseThemeColor(theme.line2);
     const QColor bg = ParseThemeColor(theme.bg);
     const QColor accent = ParseThemeColor(theme.ac);
-    const QColor caution = ParseThemeColor(theme.caution);
+    // Secondary accent, not caution: a marker is a cut point, not a warning,
+    // and the caution color stays exclusive to a real diagnostic blocker.
+    QColor marker_color = ParseThemeColor(theme.ac2);
+    marker_color.setAlphaF(0.85f);
     const QColor dim = ParseThemeColor(theme.dim);
     const QColor mut = ParseThemeColor(theme.mut);
     const QColor ink = ParseThemeColor(theme.ink);
 
     const QRect track = trackRect();
+    const bool interactive = duration_ms_ > 0;
     QPainterPath track_path;
     track_path.addRoundedRect(QRectF(track).adjusted(0.5, 0.5, -0.5, -0.5), kTrackRadius, kTrackRadius);
 
@@ -460,14 +464,12 @@ void EditTimeline::paintEvent(QPaintEvent* /*event*/) {
             const QRect text_area = row.adjusted(kAudioLabelInset, 0, -kAudioLabelInset, 0);
             const QRect text_rect = p.fontMetrics().boundingRect(text_area, Qt::AlignLeft | Qt::AlignVCenter, label);
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(8, 8, 10, 190));
+            p.setBrush(QColor(8, 8, 10, 130));
             p.drawRoundedRect(text_rect.adjusted(-3, -1, 3, 1), 3.0, 3.0);
             p.setPen(mut);
             p.drawText(text_area, Qt::AlignLeft | Qt::AlignVCenter, label);
         }
     }
-
-    const bool interactive = duration_ms_ > 0;
 
     // Trimmed-away ranges are dimmed across every row: a trim applies to the
     // whole clip, not to one of its tracks.
@@ -482,11 +484,13 @@ void EditTimeline::paintEvent(QPaintEvent* /*event*/) {
             p.drawRect(QRect(out_x, track.top(), track.right() - out_x + 1, track.height()));
     }
 
-    // Markers: thin caution-coloured verticals across the full stack height —
-    // the same reading as the record timeline in the design suite.
+    // Markers: thin secondary-accent verticals across the full stack height.
+    // Studio Mint (the primary accent) stays reserved for the active trim
+    // handles/playhead, and the caution color stays reserved for a real
+    // diagnostic warning elsewhere in the app — a cut marker is neither.
     if (interactive) {
         p.setPen(Qt::NoPen);
-        p.setBrush(caution);
+        p.setBrush(marker_color);
         for (const auto& marker : markers_) {
             const int x = xForMs(static_cast<qint64>(marker.time_ms));
             p.drawRect(QRect(x - 1, track.top(), 2, track.height()));
@@ -544,6 +548,24 @@ void EditTimeline::paintEvent(QPaintEvent* /*event*/) {
             p.setPen(ink);
             p.setFont(font);
             p.drawText(pill, Qt::AlignCenter, text);
+        }
+    }
+
+    // Loading hint: while the video row has fewer tiles than the current
+    // width can hold, say so in the quiet zone above the stack -- otherwise a
+    // strip that is merely mid-decode reads as broken or incomplete. No
+    // spinner (a redraw loop for a state that lasts a few seconds isn't worth
+    // it) and no skeleton tiles (a missing tile stays empty, deliberately).
+    // Suppressed while dragging, which already uses this zone for the time
+    // label.
+    if (interactive && drag_ == DragTarget::None && (thumbnail_fixture_.has_value() || thumbnails_source_)) {
+        const std::vector<qint64> expected_tile_times = thumbnailTimesMs();
+        if (!expected_tile_times.empty() && thumbnails_.size() < expected_tile_times.size()) {
+            const QFont font = monoFont(10);
+            p.setFont(font);
+            p.setPen(dim);
+            const QRect label_zone(track.left(), 0, track.width(), kLabelZoneH);
+            p.drawText(label_zone, Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Generating previews\xe2\x80\xa6"));
         }
     }
 
