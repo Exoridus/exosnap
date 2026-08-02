@@ -33,12 +33,12 @@ TEST_F(EditDetailsRailTest, CarriesItsObjectName) {
     EXPECT_EQ(rail.objectName(), QStringLiteral("editDetailsRail"));
 }
 
-TEST_F(EditDetailsRailTest, IsAFixed280pxColumn) {
+// The 280 px column width belongs to the host, which insets this card with its
+// own margins — a fixed width here would push the card past that column.
+TEST_F(EditDetailsRailTest, DoesNotImposeItsOwnFixedWidth) {
     QWidget host;
     EditDetailsRail rail(&host);
-    EXPECT_EQ(rail.width(), 280);
-    EXPECT_EQ(rail.minimumWidth(), 280);
-    EXPECT_EQ(rail.maximumWidth(), 280);
+    EXPECT_NE(rail.minimumWidth(), rail.maximumWidth());
 }
 
 TEST_F(EditDetailsRailTest, TitleCarriesItsObjectNameAndText) {

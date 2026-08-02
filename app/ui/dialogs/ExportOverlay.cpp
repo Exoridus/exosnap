@@ -167,6 +167,14 @@ void ExportOverlay::buildCard() {
     result_detail_label_ = new QLabel(result_content_);
     result_detail_label_->setObjectName(QStringLiteral("exportResultDetail"));
     result_detail_label_->setWordWrap(true);
+    // setWordWrap() alone leaves the label at a one-line minimum height, so a
+    // multi-line remuxer error would be clipped inside the fixed-width card.
+    // heightForWidth is what makes the layout grow for the wrapped text.
+    {
+        QSizePolicy policy = result_detail_label_->sizePolicy();
+        policy.setHeightForWidth(true);
+        result_detail_label_->setSizePolicy(policy);
+    }
 
     result_layout->addWidget(result_icon_label_, 0, Qt::AlignLeft);
     result_layout->addWidget(result_title_label_);
@@ -225,12 +233,24 @@ void ExportOverlay::buildCard() {
 }
 
 void ExportOverlay::openCard() {
+    // Reopening while an export runs would demote the state to Options and with
+    // it lift the dismiss block that closeCard(), Escape and the backdrop all
+    // derive from — the running export would become dismissable. Cancel stays
+    // the only way out.
+    if (state_ == State::Running) {
+        raise();
+        return;
+    }
     state_ = State::Options;
     progress_bar_->setValue(0);
     refreshStateVisibility();
     syncGeometryToParent();
     setVisible(true);
     raise();
+    // Without focus here the key event never reaches this card: it walks up from
+    // whatever still holds focus to EditExportOverlay, whose Escape handler
+    // closes the whole edit session instead of just this card.
+    setFocus(Qt::OtherFocusReason);
 }
 
 void ExportOverlay::closeCard() {

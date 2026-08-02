@@ -19,9 +19,9 @@ const QString kEmptyValue = QStringLiteral("\xe2\x80\x94");
 
 EditDetailsRail::EditDetailsRail(QWidget* parent) : QFrame(parent) {
     setObjectName(QStringLiteral("editDetailsRail"));
-    // The rail is a fixed-width column wherever it is embedded — the page that
-    // hosts it does not need to wrap it in its own fixed-width container.
-    setFixedWidth(280);
+    // No fixed width here: the 280 px belongs to the host's column, whose own
+    // margins inset this card to its actual 258 px. Fixing 280 on the card too
+    // would push it past the column it sits in.
 
     rail_layout_ = new QVBoxLayout(this);
     rail_layout_->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
