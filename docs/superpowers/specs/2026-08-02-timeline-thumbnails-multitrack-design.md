@@ -83,7 +83,14 @@ struct AudioTrackDescription {
 ```
 
 This is the seam between the engine and the timeline. Callers must tolerate an empty name and an
-empty vector.
+empty vector. A track whose decoder fails to open is still listed — the question the list answers
+is what the recording carries, and omitting it would misrepresent the recording rather than the
+failure.
+
+`PlaybackDeliversAudio()` comes to mean **at least one** track delivers audio, not all of them.
+The flag exists so a caller pacing video off the audio clock does not wait forever on a clock
+nothing advances, and that clock advances just as well on one track as on three. A track whose
+resampler fails to build is dropped from the run and logged; the remaining tracks still play.
 
 ## 4 · Multi-track rows
 
