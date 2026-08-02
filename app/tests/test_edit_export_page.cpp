@@ -7,12 +7,15 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFrame>
+#include <QImage>
 #include <QLabel>
 #include <QMetaMethod>
 #include <QMetaObject>
 #include <QMouseEvent>
+#include <QPixmap>
 #include <QPoint>
 #include <QPushButton>
+#include <QRect>
 #include <QScrollArea>
 #include <QTimer>
 #include <QWidget>
@@ -912,6 +915,81 @@ TEST_F(EditExportPageTest, APartlyDecodedStripDrawsOnlyTheTilesItHas) {
     // Nothing decoded yet is an empty row, not a placeholder pattern.
     timeline.setThumbnailFixture(0);
     EXPECT_EQ(timeline.thumbnailCount(), 0);
+}
+
+// ---- Loading hint ----
+
+// The quiet zone above the row stack, where the loading hint and the drag time
+// label both paint. Grabbed as pixels rather than asserted by string/color, so
+// the test does not depend on the exact wording or the theme's dim tone.
+QImage GrabLabelZone(ui::widgets::EditTimeline& timeline) {
+    return timeline.grab(QRect(0, 0, timeline.width(), 22)).toImage();
+}
+
+TEST_F(EditExportPageTest, LoadingHintAppearsOnlyWhileTilesAreStillPending) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(800, timeline.height());
+    timeline.show();
+    SettleLayout();
+    timeline.setDurationMs(100000);
+
+    timeline.setThumbnailFixture(-1);
+    const int full = timeline.thumbnailCount();
+    ASSERT_GT(full, 1);
+
+    // Short of capacity: the same test the real decode path uses
+    // (thumbnails_.size() < the row's expected tile count).
+    timeline.setThumbnailFixture(full - 1);
+    const QImage pending = GrabLabelZone(timeline);
+
+    // Filled back up: quiet again.
+    timeline.setThumbnailFixture(-1);
+    const QImage complete = GrabLabelZone(timeline);
+
+    EXPECT_NE(pending, complete) << "the hint must paint something while tiles are still pending";
+}
+
+TEST_F(EditExportPageTest, LoadingHintNeverAppearsWithoutAFixtureOrClip) {
+    ui::widgets::EditTimeline idle_timeline;
+    idle_timeline.resize(800, idle_timeline.height());
+    idle_timeline.show();
+    SettleLayout();
+    idle_timeline.setDurationMs(100000);
+    // Never given a fixture or a clip: a recording whose clip never opened
+    // must not show a hint for a decode that will never resolve.
+    const QImage idle = GrabLabelZone(idle_timeline);
+
+    ui::widgets::EditTimeline full_timeline;
+    full_timeline.resize(800, full_timeline.height());
+    full_timeline.show();
+    SettleLayout();
+    full_timeline.setDurationMs(100000);
+    full_timeline.setThumbnailFixture(-1); // filled to capacity: also quiet
+    const QImage full = GrabLabelZone(full_timeline);
+
+    EXPECT_EQ(idle, full) << "no fixture/clip must read the same as a fully decoded strip, not as pending";
+}
+
+TEST_F(EditExportPageTest, LoadingHintIsSuppressedWhileDraggingAHandle) {
+    ui::widgets::EditTimeline timeline;
+    timeline.resize(610, timeline.height());
+    timeline.show();
+    SettleLayout();
+    timeline.setDurationMs(100000);
+
+    timeline.setThumbnailFixture(-1);
+    const int full = timeline.thumbnailCount();
+    ASSERT_GT(full, 1);
+    timeline.setThumbnailFixture(full - 1); // pending -- the hint would show at rest
+    const QImage pending = GrabLabelZone(timeline);
+
+    const int track_y = 48;
+    SendMouse(&timeline, QEvent::MouseButtonPress, QPoint(timeline.xForMs(0), track_y));
+    SendMouse(&timeline, QEvent::MouseMove, QPoint(timeline.xForMs(20000), track_y));
+    const QImage dragging = GrabLabelZone(timeline);
+    SendMouse(&timeline, QEvent::MouseButtonRelease, QPoint(timeline.xForMs(20000), track_y));
+
+    EXPECT_NE(dragging, pending) << "the drag time label must take over the zone, not share it with the hint";
 }
 
 TEST_F(EditExportPageTest, TimelineFixtureFlowsThroughThePage) {
