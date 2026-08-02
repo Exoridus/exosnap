@@ -1,8 +1,10 @@
 #pragma once
 #include <QFrame>
 #include <QString>
+#include <QVector>
 
 class QLabel;
+class QVBoxLayout;
 
 namespace exosnap::ui::widgets {
 
@@ -27,6 +29,29 @@ class EditDetailsRail : public QFrame {
 
     void setFacts(const Facts& facts);
     void applyThemeStyles();
+
+  private:
+    // One row = a mono key label plus its right-aligned mono value label. A
+    // hairline separator precedes every row after the first.
+    struct FactRow {
+        QLabel* key = nullptr;
+        QLabel* value = nullptr;
+    };
+
+    void addFactRow(const QString& key_text, QLabel*& value_out, bool first);
+
+    QVBoxLayout* rail_layout_ = nullptr;
+    QLabel* title_label_ = nullptr;
+    QVector<FactRow> rows_;
+    QVector<QFrame*> separators_;
+
+    QLabel* duration_value_ = nullptr;
+    QLabel* size_value_ = nullptr;
+    QLabel* resolution_value_ = nullptr;
+    QLabel* fps_value_ = nullptr;
+    QLabel* video_value_ = nullptr;
+    QLabel* audio_value_ = nullptr;
+    QLabel* container_value_ = nullptr;
 };
 
 } // namespace exosnap::ui::widgets
