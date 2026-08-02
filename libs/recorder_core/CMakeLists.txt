@@ -356,6 +356,8 @@ add_library(recorder_core STATIC
     src/mp4_remuxer.cpp
     include/recorder_core/edit_player_engine.h
     src/edit_player_engine.cpp
+    src/edit_audio_mix.h
+    src/edit_audio_mix.cpp
     src/edit_playback_pacing.h
     src/playback_clock.h
     src/playback_clock.cpp
@@ -1191,21 +1193,35 @@ exosnap_add_gtest(
 )
 target_include_directories(test_playback_clock PRIVATE src)
 
-# EditPlayerEngine: file-open/stream-discovery/error-path coverage only (no
-# real compressed bitstream can be synthesized in this test environment --
-# real decode is user-live-verified, see the plan's Task 11). FFmpeg::mux is
-# listed explicitly because the test compiles src/edit_player_engine.cpp
-# itself and needs the libavformat/libavcodec headers at compile time
-# (recorder_core links FFmpeg PRIVATE, so its include dirs don't propagate).
+# EditPlayerEngine: file-open, stream discovery and error paths. The fixtures
+# are real containers written with libavformat, but carry no real compressed
+# bitstream -- this FFmpeg build ships no video encoder (LGPL, ADR 0007), so
+# real decode stays user-live-verified. FFmpeg::mux is listed explicitly
+# because the test compiles src/edit_player_engine.cpp itself and needs the
+# libavformat/libavcodec headers at compile time (recorder_core links FFmpeg
+# PRIVATE, so its include dirs don't propagate).
 exosnap_add_gtest(
     NAME test_edit_player_engine
     TEST_PREFIX recorder_core.
     SOURCES tests/test_edit_player_engine.cpp
             src/edit_player_engine.cpp
+            src/edit_audio_mix.cpp
             src/yuv_to_bgra.cpp
     LIBRARIES recorder_core FFmpeg::mux
 )
 target_include_directories(test_edit_player_engine PRIVATE src include)
+
+# EditAudioMixer: how several audio tracks of one recording are summed and how
+# the result behaves when it overloads or when one track stops. Self-contained
+# (no FFmpeg, no device) -- the whole reason the mix lives outside the engine.
+exosnap_add_gtest(
+    NAME test_edit_audio_mix
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_edit_audio_mix.cpp
+            src/edit_audio_mix.cpp
+            src/brickwall_limiter.cpp
+)
+target_include_directories(test_edit_audio_mix PRIVATE src)
 
 # EditPlayerSession: the top-level orchestrator's lifecycle safety (no real
 # file/device touched -- real playback is user-live-verified, see the plan's
