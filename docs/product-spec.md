@@ -72,14 +72,12 @@ Top-level navigation is **six items**, in order:
   SHA-256 — the hash is computed lazily off the UI thread on first click).
 
 **Edit / Output / Save** is a post-stop **overlay over the Record page**, not a nav item. After
-recording stops, the surface opens over Record on the Review step and is stepped
-forward in three linear phases — **Review → Edit → Output** — one at a time via the primary button,
-with a top stepper that always highlights the current phase. As a full-window editor surface, the
-overlay covers the entire client area — including the window chrome (logo and notification bell) —
-with an opaque backdrop, so no chrome shows through behind it. **Back** steps back one phase at a
-time (Output → Edit → Review); from Review, Back (or Escape / backdrop click, except while exporting)
-closes the overlay and returns to Record. The Review step consumes the post-flight diagnostic report
-produced during recording.
+recording stops, the surface opens over Record as **one view**: player, trim timeline, details
+rail, and the post-flight report as an icon at the right end of its header. The overlay spans the
+client area below the real title bar, so the window can be moved and minimized and the nav tabs
+stay clickable for the whole edit session. Its backdrop is opaque, so the Record page does not
+show through. **Back** (or Escape / backdrop click, except while exporting) closes the overlay and
+returns to Record; when trim points or markers are set it asks before discarding them.
 
 The default theme is **dark mode**.
 
@@ -692,7 +690,10 @@ mixes several device clocks).
 **Post-flight report card.** After each recording, a report card surfaces frame-drop %, peak A/V
 drift, and overall pipeline health. When a recording had **real** frame drops, a caution toast
 ("Frames dropped") appears alongside "Recording saved", with a "View diagnostics" action. (The
-fuller post-flight integrity review is the content of the Edit/Output/Save "Review" step.)
+same three values ride along into the Edit/Output/Save surface, as an icon at the right end of
+its header whose tooltip carries them. The icon is a quiet info glyph while the pipeline was
+healthy, and an amber or coral warning triangle with a short label beside it when it was not —
+so a real finding is not hidden behind a hover.)
 
 A drop counts as **real** when the recording lost picture it should have had: the encoder could not
 keep up (backpressure), or a captured frame failed to be processed into an encodable frame. Two
@@ -762,15 +763,13 @@ Continued sessions produce independent recording slices (no single-file concat).
 recordings, segments finalized before an interruption remain usable; an interrupted active segment
 may not be recoverable.
 
-**Edit / Output / Save (post-stop surface).** The three-phase Review → Edit → Output overlay lets the
-user trim and export without leaving the app. The primary button steps forward one phase at a time
-(Review → Edit → Output); Back steps back one phase at a time (Output → Edit → Review) before
-finally closing the overlay from Review. The stepper always highlights the current phase. The
-primary action sits **bottom-right** (matching the Record page's transport actions); a **Details**
-card on the right lists duration / size / resolution / frame rate / video / audio / container as
-right-aligned mono values.
+**Edit / Output / Save (post-stop surface).** A single overlay view lets the user trim and export
+without leaving the app: the player and its trim timeline on the left, a **Details** card on the
+right listing duration / size / resolution / frame rate / video / audio / container as
+right-aligned mono values, and one action — **Export…** — **bottom-right** (matching the Record
+page's transport actions), which opens the export card described below.
 
-The Edit phase is **direct manipulation on the timeline** under the player — there is no button row
+Trimming is **direct manipulation on the timeline** under the player — there is no button row
 or duration readout above the strip:
 
 - **Trim handles.** Draggable in/out handles sit at the start and end of the timeline; the

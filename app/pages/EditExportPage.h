@@ -1,7 +1,6 @@
 #pragma once
 #include <QImage>
 #include <QString>
-#include <QVector>
 #include <QWidget>
 #include <atomic>
 #include <cstdint>
@@ -15,13 +14,10 @@
 #include <recorder_core/mp4_remuxer.h>
 #include <recorder_core/pipeline_diagnostics.h>
 
-class QComboBox;
 class QElapsedTimer;
 class QLabel;
 class QPushButton;
 class QFrame;
-class QProgressBar;
-class QScrollArea;
 class QTimer;
 class QEvent;
 class QObject;
@@ -31,10 +27,15 @@ namespace exosnap {
 namespace ui::widgets {
 class EditTimeline;
 class EditPlayerSurface;
+class EditDetailsRail;
 } // namespace ui::widgets
 
+namespace ui::dialogs {
+class ExportOverlay;
+} // namespace ui::dialogs
+
 // Context passed to EditExportPage when opening the edit surface.
-// Contains everything needed for the Review, Edit, and Output phases.
+// Contains everything needed to populate the edit view and run an export.
 struct EditContext {
     // File metadata (from the completed recording result)
     QString output_path;     // final output (MP4 or MKV)
@@ -62,22 +63,13 @@ struct EditContext {
     double duration_seconds = 0.0;
 };
 
-// Edit/Export-Surface: Review (post-flight report), Edit (trim handles +
-// playhead directly on the timeline), Output (container/save-mode choice), and
-// real stream-copy export via mp4_remuxer. Markers ride along an export as a
-// retimed JSON sidecar (never container chapters).
+// Edit/Export surface: one view — player, trim timeline, details rail, and the
+// post-flight report as a header icon — plus an export card over it that the
+// page drives. Export itself is a real stream-copy via mp4_remuxer; markers ride
+// along as a retimed JSON sidecar (never container chapters).
 class EditExportPage : public QWidget {
     Q_OBJECT
   public:
-    enum class Phase {
-        Review,    // Post-flight report; read-only
-        Edit,      // Trim handles + playhead on the timeline
-        Output,    // Container / save-mode choice
-        Exporting, // Real stream-copy export running
-        Done,      // Export complete
-        Failed,    // Export failed
-    };
-
     explicit EditExportPage(QWidget* parent = nullptr);
     ~EditExportPage() override;
 
@@ -89,10 +81,20 @@ class EditExportPage : public QWidget {
                           const QString& resolution, const QString& fps, const QString& video_codec,
                           const QString& audio_codec, const QString& container);
 
-    [[nodiscard]] Phase phase() const noexcept {
-        return phase_;
+    // True while a stream-copy export is actually running. Dismissing the surface
+    // (Escape, backdrop click, nav-away) is blocked for exactly this window, so a
+    // running export is never silently abandoned.
+    [[nodiscard]] bool isExportRunning() const noexcept {
+        return export_running_;
     }
-    void setPhase(Phase phase);
+
+    // True when closing would drop work: a trim range is set, or the clip carries
+    // markers.
+    [[nodiscard]] bool hasUnsavedEdits() const;
+
+    // Asks before that work is dropped. Returns true when closing may proceed
+    // (nothing to lose, or the user chose to discard).
+    [[nodiscard]] bool confirmDiscardEdits();
 
     // Preview playback clock: drives the timeline playhead. The decoded frame
     // itself is driven by player_session_ (real decode); this clock stays the
@@ -118,7 +120,6 @@ class EditExportPage : public QWidget {
     void onBackClicked();
     void onExportClicked();
     void onCancelExportClicked();
-    void onDoneClicked();
     void onOpenFolderClicked();
     void onRevealFileClicked();
     void onRetryExportClicked();
@@ -134,9 +135,16 @@ class EditExportPage : public QWidget {
     void hideEvent(QHideEvent* event) override;
 
   private:
+    // Severity of the post-flight report, as carried by the header icon.
+    enum class ReportSeverity {
+        Neutral,  // Good / Unavailable / no snapshot: quiet info glyph
+        Warning,  // amber triangle + short label
+        Critical, // coral triangle + short label
+    };
+
     void buildUi();
     void applyThemeStyles();
-    void refreshPhase();
+    void refreshReportIcon();
     void loadMarkers();
     // Asks before an export that replaces the original recording. Returns true
     // when the export may proceed (either it writes a new file, or the user
@@ -151,8 +159,6 @@ class EditExportPage : public QWidget {
     [[nodiscard]] qint64 durationMs() const noexcept;
     static QImage DecodedFrameToQImage(const recorder_core::DecodedVideoFrame& frame);
 
-    Phase phase_ = Phase::Review;
-
     // Full context set by setEditContext (primary path).
     EditContext ctx_;
 
@@ -165,16 +171,12 @@ class EditExportPage : public QWidget {
     QString audio_codec_;
     QString container_;
 
-    // Review Panel (post-flight report)
-    QWidget* review_panel_ = nullptr;
-    QLabel* review_title_ = nullptr;
-    QLabel* review_drop_label_ = nullptr;
-    QLabel* review_drift_label_ = nullptr;
-    QLabel* review_health_label_ = nullptr;
-
-    // Output combos (container + save mode)
-    QComboBox* output_container_combo_ = nullptr;
-    QComboBox* output_save_mode_combo_ = nullptr;
+    // Post-flight report, computed in setEditContext() and shown as the header
+    // icon's tooltip (severity rides on the icon itself).
+    QString report_drops_text_;
+    QString report_drift_text_;
+    QString report_health_text_;
+    ReportSeverity report_severity_ = ReportSeverity::Neutral;
 
     // Trim state
     std::vector<int64_t> keyframe_timestamps_; // sorted keyframe PTS in microseconds
@@ -193,6 +195,7 @@ class EditExportPage : public QWidget {
     // Export thread + output path tracking
     std::thread export_thread_;
     std::atomic<bool> export_cancel_{false};
+    bool export_running_ = false;
     std::filesystem::path export_output_path_;
     QString last_export_error_; // real error message from the last failed export
 
@@ -201,17 +204,15 @@ class EditExportPage : public QWidget {
     QPushButton* back_btn_ = nullptr;
     QLabel* title_label_ = nullptr;
     QLabel* filename_label_ = nullptr;
+    QLabel* report_icon_ = nullptr;
+    QLabel* report_label_ = nullptr; // only populated for Warning / Critical
 
-    // Bottom action bar (Save button bottom-right, like the Record page dock)
+    // Bottom action bar (Export button bottom-right, like the Record page dock)
     QFrame* action_bar_ = nullptr;
     QPushButton* primary_action_btn_ = nullptr;
-    QPushButton* secondary_action_btn_ = nullptr;
 
-    // Phase-Stepper
-    QWidget* stepper_widget_ = nullptr;
-    QLabel* stepper_review_lbl_ = nullptr;
-    QLabel* stepper_edit_lbl_ = nullptr;
-    QLabel* stepper_output_lbl_ = nullptr;
+    // Export card over the view: presentation only, driven from runExport().
+    ui::dialogs::ExportOverlay* export_card_ = nullptr;
 
     // Player-Area
     QFrame* player_frame_ = nullptr;
@@ -228,40 +229,8 @@ class EditExportPage : public QWidget {
     // Timeline (interactive: trim handles, markers, playhead)
     ui::widgets::EditTimeline* timeline_ = nullptr;
 
-    // Output-Panel
-    QWidget* output_panel_ = nullptr;
-    QLabel* output_title_ = nullptr;
-    QLabel* container_lbl_ = nullptr;
-    QLabel* savemode_lbl_ = nullptr;
-    QLabel* dest_lbl_title_ = nullptr;
-    QLabel* dest_folder_label_ = nullptr;
-
-    // Exporting-Panel
-    QWidget* exporting_panel_ = nullptr;
-    QLabel* exporting_status_label_ = nullptr;
-    QProgressBar* exporting_bar_ = nullptr;
-    QLabel* exporting_detail_label_ = nullptr;
-
-    // Done/Failed-Panel
-    QWidget* result_panel_ = nullptr;
-    QLabel* result_icon_label_ = nullptr;
-    QLabel* result_title_label_ = nullptr;
-    QLabel* result_detail_label_ = nullptr;
-    QPushButton* result_open_folder_btn_ = nullptr;
-    QPushButton* result_reveal_btn_ = nullptr;
-
     // Details card (right rail)
-    QFrame* detail_rail_ = nullptr;
-    QLabel* rail_title_ = nullptr;
-    QVector<QFrame*> fact_separators_;
-    QVector<QLabel*> fact_keys_;
-    QLabel* fact_duration_val_ = nullptr;
-    QLabel* fact_size_val_ = nullptr;
-    QLabel* fact_res_val_ = nullptr;
-    QLabel* fact_fps_val_ = nullptr;
-    QLabel* fact_video_val_ = nullptr;
-    QLabel* fact_audio_val_ = nullptr;
-    QLabel* fact_container_val_ = nullptr;
+    ui::widgets::EditDetailsRail* detail_rail_ = nullptr;
 };
 
 } // namespace exosnap

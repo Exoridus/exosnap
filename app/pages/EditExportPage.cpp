@@ -1,15 +1,16 @@
 #include "EditExportPage.h"
 
+#include "../ui/dialogs/ExportOverlay.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/widgets/EditDetailsRail.h"
 #include "../ui/widgets/EditPlayerSurface.h"
 #include "../ui/widgets/EditTimeline.h"
 
 #include <QAbstractButton>
 #include <QByteArray>
 #include <QColor>
-#include <QComboBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QElapsedTimer>
@@ -25,13 +26,11 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QProcess>
-#include <QProgressBar>
 #include <QPushButton>
 #include <QRectF>
 #include <QScreen>
 #include <QScrollArea>
 #include <QSize>
-#include <QStyle>
 #include <QSvgRenderer>
 #include <QTimer>
 #include <QUrl>
@@ -61,10 +60,11 @@ QByteArray editIconPathFor(const QString& key) {
         return QByteArrayLiteral("M6 4l14 8-14 8V4z");
     if (key == QLatin1String("pause"))
         return QByteArrayLiteral("M9 5v14M15 5v14");
-    if (key == QLatin1String("checkCircle"))
-        return QByteArrayLiteral("M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM8 12l3 3 5-6");
-    if (key == QLatin1String("error"))
-        return QByteArrayLiteral("M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM15 9l-6 6M9 9l6 6");
+    if (key == QLatin1String("info"))
+        return QByteArrayLiteral("M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01");
+    if (key == QLatin1String("alertTriangle"))
+        return QByteArrayLiteral("M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"
+                                 "M12 9v4M12 17h.01");
     return {};
 }
 
@@ -96,24 +96,6 @@ QPixmap renderEditIcon(const QString& key, int px, const QColor& color) {
 
 QColor themeColor(const char* css) {
     return QColor(QString::fromUtf8(css));
-}
-
-// Derived alpha tokens (mirrors BuildTokens() in ExoSnapTheme.cpp).
-QString okDimToken() {
-    const auto& t = ActiveTheme();
-    return ThemeRgba(themeColor(t.success), t.kind == ThemeKind::Dark ? 0.13 : 0.12);
-}
-QString okBToken() {
-    const auto& t = ActiveTheme();
-    return ThemeRgba(themeColor(t.success), t.kind == ThemeKind::Dark ? 0.44 : 0.42);
-}
-QString errDimToken() {
-    const auto& t = ActiveTheme();
-    return ThemeRgba(themeColor(t.error), t.kind == ThemeKind::Dark ? 0.13 : 0.12);
-}
-QString errBToken() {
-    const auto& t = ActiveTheme();
-    return ThemeRgba(themeColor(t.error), t.kind == ThemeKind::Dark ? 0.44 : 0.42);
 }
 
 // Fallback preview tick, used only until a clip is open (or when its
@@ -184,39 +166,25 @@ void EditExportPage::buildUi() {
     filename_label_->setObjectName(QStringLiteral("editExportFilename"));
     filename_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
+    // Post-flight report: quiet by default (an info glyph whose tooltip carries
+    // the three numbers), loud only when the recording actually had a problem —
+    // a hover-only tooltip would swallow a genuine finding.
+    report_label_ = new QLabel(mode_bar_);
+    report_label_->setObjectName(QStringLiteral("editReportLabel"));
+
+    report_icon_ = new QLabel(mode_bar_);
+    report_icon_->setObjectName(QStringLiteral("editReportIcon"));
+    report_icon_->setFixedSize(20, 20);
+    report_icon_->setAlignment(Qt::AlignCenter);
+
     mode_bar_layout->addWidget(back_btn_);
     mode_bar_layout->addWidget(title_label_);
     mode_bar_layout->addWidget(filename_label_, 1);
     mode_bar_layout->addStretch();
+    mode_bar_layout->addWidget(report_label_);
+    mode_bar_layout->addWidget(report_icon_);
 
     root_layout->addWidget(mode_bar_);
-
-    // ---- Phase Stepper ----
-    stepper_widget_ = new QWidget(this);
-    stepper_widget_->setObjectName(QStringLiteral("editExportStepper"));
-    stepper_widget_->setFixedHeight(40);
-
-    auto* stepper_layout = new QHBoxLayout(stepper_widget_);
-    stepper_layout->setContentsMargins(M::kSpaceLg, 0, M::kSpaceLg, 0);
-    stepper_layout->setSpacing(24);
-
-    const auto makeStep = [&](const QString& text) -> QLabel* {
-        auto* lbl = new QLabel(text, stepper_widget_);
-        // Initial style: inactive (refreshPhase() will set the active one).
-        lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().dim));
-        return lbl;
-    };
-
-    stepper_review_lbl_ = makeStep(QStringLiteral("Review"));
-    stepper_edit_lbl_ = makeStep(QStringLiteral("Edit"));
-    stepper_output_lbl_ = makeStep(QStringLiteral("Output"));
-
-    stepper_layout->addWidget(stepper_review_lbl_);
-    stepper_layout->addWidget(stepper_edit_lbl_);
-    stepper_layout->addWidget(stepper_output_lbl_);
-    stepper_layout->addStretch();
-
-    root_layout->addWidget(stepper_widget_);
 
     // ---- Main Content Area (splitter-like HBox) ----
     auto* content_area = new QWidget(this);
@@ -224,7 +192,7 @@ void EditExportPage::buildUi() {
     content_layout->setContentsMargins(0, 0, 0, 0);
     content_layout->setSpacing(0);
 
-    // ---- Left pane (player + timeline + output + exporting + result panels) ----
+    // ---- Left pane (player + timeline) ----
     auto* left_scroll = new QScrollArea(content_area);
     left_scroll->setWidgetResizable(true);
     left_scroll->setFrameShape(QFrame::NoFrame);
@@ -276,27 +244,6 @@ void EditExportPage::buildUi() {
 
     left_layout->addWidget(player_frame_);
 
-    // Review Panel (post-flight report, shown only in Review phase)
-    review_panel_ = new QWidget(left_widget);
-    review_panel_->setObjectName(QStringLiteral("editExportReviewPanel"));
-    auto* review_layout = new QVBoxLayout(review_panel_);
-    review_layout->setContentsMargins(0, 0, 0, 0);
-    review_layout->setSpacing(M::kSpaceSm);
-
-    review_title_ = new QLabel(QStringLiteral("Post-recording report"), review_panel_);
-
-    review_drop_label_ = new QLabel(QStringLiteral("Frame drops: \xe2\x80\x94"), review_panel_);
-
-    review_drift_label_ = new QLabel(QStringLiteral("Peak A/V drift: \xe2\x80\x94"), review_panel_);
-
-    review_health_label_ = new QLabel(QStringLiteral("Pipeline health: \xe2\x80\x94"), review_panel_);
-
-    review_layout->addWidget(review_title_);
-    review_layout->addWidget(review_drop_label_);
-    review_layout->addWidget(review_drift_label_);
-    review_layout->addWidget(review_health_label_);
-    left_layout->addWidget(review_panel_);
-
     // Timeline: trim handles, markers, and the playhead live directly on the
     // strip — there is no button row or duration readout above it.
     timeline_ = new ui::widgets::EditTimeline(left_widget);
@@ -308,129 +255,6 @@ void EditExportPage::buildUi() {
     connect(timeline_, &ui::widgets::EditTimeline::scrubMoved, this, &EditExportPage::onScrubMoved);
     connect(timeline_, &ui::widgets::EditTimeline::scrubFinished, this, &EditExportPage::onScrubFinished);
 
-    // Output Panel (container + save-mode selectors)
-    output_panel_ = new QWidget(left_widget);
-    output_panel_->setObjectName(QStringLiteral("editExportOutputPanel"));
-    auto* output_panel_layout = new QVBoxLayout(output_panel_);
-    output_panel_layout->setContentsMargins(0, 0, 0, 0);
-    output_panel_layout->setSpacing(M::kSpaceSm);
-
-    output_title_ = new QLabel(QStringLiteral("Output format"), output_panel_);
-    output_panel_layout->addWidget(output_title_);
-
-    // Container selection (stream-copy only — no re-encode per ADR-0014)
-    container_lbl_ = new QLabel(QStringLiteral("Container:"), output_panel_);
-    output_panel_layout->addWidget(container_lbl_);
-
-    output_container_combo_ = new QComboBox(output_panel_);
-    output_container_combo_->setObjectName(QStringLiteral("outputContainerCombo"));
-    output_container_combo_->addItem(QStringLiteral("MKV  \xe2\x80\x93  stream-copy, lossless"), QStringLiteral("mkv"));
-    output_container_combo_->addItem(QStringLiteral("MP4  \xe2\x80\x93  stream-copy, lossless (ADR\xc2\xa0"
-                                                    "0014)"),
-                                     QStringLiteral("mp4"));
-    output_panel_layout->addWidget(output_container_combo_);
-
-    // Save mode: new file or overwrite original
-    savemode_lbl_ = new QLabel(QStringLiteral("Save:"), output_panel_);
-    output_panel_layout->addWidget(savemode_lbl_);
-
-    output_save_mode_combo_ = new QComboBox(output_panel_);
-    output_save_mode_combo_->setObjectName(QStringLiteral("outputSaveModeCombo"));
-    output_save_mode_combo_->addItem(QStringLiteral("Save as new file  (\xe2\x80\x9c<name>_edit.<ext>\xe2\x80\x9d)"),
-                                     QStringLiteral("new"));
-    output_save_mode_combo_->addItem(QStringLiteral("Overwrite original  (atomic replace)"),
-                                     QStringLiteral("overwrite"));
-    output_panel_layout->addWidget(output_save_mode_combo_);
-
-    // Destination row. The save mode above fully determines the destination
-    // (new file = beside the source; overwrite = the source's own location) —
-    // there is no user-choosable destination folder in this model, so this row
-    // is informational only (no Browse button; see ADR 0022).
-    auto* dest_row = new QWidget(output_panel_);
-    auto* dest_layout = new QHBoxLayout(dest_row);
-    dest_layout->setContentsMargins(0, 0, 0, 0);
-    dest_layout->setSpacing(M::kSpaceSm);
-
-    dest_lbl_title_ = new QLabel(QStringLiteral("Destination:"), dest_row);
-
-    dest_folder_label_ = new QLabel(QStringLiteral("Same folder as source"), dest_row);
-    dest_folder_label_->setObjectName(QStringLiteral("editExportDestFolder"));
-
-    dest_layout->addWidget(dest_lbl_title_);
-    dest_layout->addWidget(dest_folder_label_, 1);
-
-    output_panel_layout->addWidget(dest_row);
-
-    left_layout->addWidget(output_panel_);
-
-    // Exporting Panel
-    exporting_panel_ = new QWidget(left_widget);
-    exporting_panel_->setObjectName(QStringLiteral("editExportExportingPanel"));
-    auto* exporting_layout = new QVBoxLayout(exporting_panel_);
-    exporting_layout->setContentsMargins(0, 0, 0, 0);
-    exporting_layout->setSpacing(M::kSpaceSm);
-
-    exporting_status_label_ = new QLabel(QStringLiteral("Exporting…"), exporting_panel_);
-    exporting_status_label_->setObjectName(QStringLiteral("editExportExportingStatus"));
-
-    exporting_bar_ = new QProgressBar(exporting_panel_);
-    exporting_bar_->setObjectName(QStringLiteral("editExportProgressBar"));
-    exporting_bar_->setRange(0, 100);
-    exporting_bar_->setValue(62);
-    exporting_bar_->setFixedHeight(6);
-    exporting_bar_->setTextVisible(false);
-
-    exporting_detail_label_ = new QLabel(QStringLiteral("Stream-copy \xc2\xb7 no quality loss"), exporting_panel_);
-
-    exporting_layout->addWidget(exporting_status_label_);
-    exporting_layout->addWidget(exporting_bar_);
-    exporting_layout->addWidget(exporting_detail_label_);
-
-    left_layout->addWidget(exporting_panel_);
-
-    // Result Panel (Done / Failed)
-    result_panel_ = new QWidget(left_widget);
-    result_panel_->setObjectName(QStringLiteral("editExportResultPanel"));
-    result_panel_->setAttribute(Qt::WA_StyledBackground, true);
-    auto* result_layout = new QVBoxLayout(result_panel_);
-    result_layout->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
-    result_layout->setSpacing(M::kSpaceSm);
-
-    // Status badge — 72×72 circle hosting a 34px check/error glyph (set per phase).
-    result_icon_label_ = new QLabel(result_panel_);
-    result_icon_label_->setObjectName(QStringLiteral("editExportResultIcon"));
-    result_icon_label_->setFixedSize(72, 72);
-    result_icon_label_->setAlignment(Qt::AlignCenter);
-    result_layout->addWidget(result_icon_label_, 0, Qt::AlignLeft);
-
-    result_title_label_ = new QLabel(result_panel_);
-    result_title_label_->setObjectName(QStringLiteral("editExportResultTitle"));
-    result_title_label_->setStyleSheet(QStringLiteral("QLabel { font-weight:600; font-size:16px; }"));
-
-    result_detail_label_ = new QLabel(result_panel_);
-    result_detail_label_->setObjectName(QStringLiteral("editExportResultDetail"));
-    result_detail_label_->setWordWrap(true);
-
-    auto* result_actions_row = new QWidget(result_panel_);
-    auto* result_actions_layout = new QHBoxLayout(result_actions_row);
-    result_actions_layout->setContentsMargins(0, 0, 0, 0);
-    result_actions_layout->setSpacing(M::kSpaceSm);
-
-    result_open_folder_btn_ = new QPushButton(QStringLiteral("Open folder"), result_actions_row);
-    result_open_folder_btn_->setProperty("role", "ghost");
-
-    result_reveal_btn_ = new QPushButton(QStringLiteral("Reveal file"), result_actions_row);
-    result_reveal_btn_->setProperty("role", "ghost");
-
-    result_actions_layout->addWidget(result_open_folder_btn_);
-    result_actions_layout->addWidget(result_reveal_btn_);
-    result_actions_layout->addStretch();
-
-    result_layout->addWidget(result_title_label_);
-    result_layout->addWidget(result_detail_label_);
-    result_layout->addWidget(result_actions_row);
-
-    left_layout->addWidget(result_panel_);
     left_layout->addStretch();
 
     left_scroll->setWidget(left_widget);
@@ -442,60 +266,7 @@ void EditExportPage::buildUi() {
     rail_column_layout->setContentsMargins(M::kSpaceSm, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
     rail_column_layout->setSpacing(0);
 
-    detail_rail_ = new QFrame(rail_column);
-    detail_rail_->setObjectName(QStringLiteral("editExportDetailRail"));
-
-    auto* rail_layout = new QVBoxLayout(detail_rail_);
-    rail_layout->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
-    rail_layout->setSpacing(0);
-
-    rail_title_ = new QLabel(QStringLiteral("Details"), detail_rail_);
-    rail_layout->addWidget(rail_title_);
-    rail_layout->addSpacing(M::kSpaceSm);
-
-    const auto makeFactRow = [&](const QString& key_text, QLabel*& val_label_ref, bool first) {
-        if (!first) {
-            auto* sep = new QFrame(detail_rail_);
-            sep->setFixedHeight(1);
-            fact_separators_.push_back(sep);
-            rail_layout->addWidget(sep);
-        }
-        auto* row = new QWidget(detail_rail_);
-        auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(0, 7, 0, 7);
-        row_layout->setSpacing(M::kSpaceSm);
-
-        auto* key = new QLabel(key_text, row);
-        fact_keys_.push_back(key);
-
-        val_label_ref = new QLabel(QStringLiteral("\xe2\x80\x94"), row);
-        val_label_ref->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-        row_layout->addWidget(key);
-        row_layout->addWidget(val_label_ref, 1);
-        rail_layout->addWidget(row);
-    };
-
-    makeFactRow(QStringLiteral("Duration"), fact_duration_val_, true);
-    fact_duration_val_->setObjectName(QStringLiteral("editFactDuration"));
-
-    makeFactRow(QStringLiteral("Size"), fact_size_val_, false);
-    fact_size_val_->setObjectName(QStringLiteral("editFactSize"));
-
-    makeFactRow(QStringLiteral("Resolution"), fact_res_val_, false);
-    fact_res_val_->setObjectName(QStringLiteral("editFactResolution"));
-
-    makeFactRow(QStringLiteral("Frame rate"), fact_fps_val_, false);
-    fact_fps_val_->setObjectName(QStringLiteral("editFactFps"));
-
-    makeFactRow(QStringLiteral("Video"), fact_video_val_, false);
-    fact_video_val_->setObjectName(QStringLiteral("editFactVideo"));
-
-    makeFactRow(QStringLiteral("Audio"), fact_audio_val_, false);
-    fact_audio_val_->setObjectName(QStringLiteral("editFactAudio"));
-
-    makeFactRow(QStringLiteral("Container"), fact_container_val_, false);
-    fact_container_val_->setObjectName(QStringLiteral("editFactContainer"));
+    detail_rail_ = new ui::widgets::EditDetailsRail(rail_column);
 
     rail_column_layout->addWidget(detail_rail_);
     rail_column_layout->addStretch();
@@ -505,7 +276,7 @@ void EditExportPage::buildUi() {
 
     root_layout->addWidget(content_area, 1);
 
-    // ---- Bottom action bar: the Save action sits bottom-right, in the same
+    // ---- Bottom action bar: the Export action sits bottom-right, in the same
     // position the Record page keeps its primary transport actions. ----
     action_bar_ = new QFrame(this);
     action_bar_->setObjectName(QStringLiteral("editExportActionBar"));
@@ -516,54 +287,36 @@ void EditExportPage::buildUi() {
     action_layout->setSpacing(M::kSpaceSm);
     action_layout->addStretch();
 
-    secondary_action_btn_ = new QPushButton(action_bar_);
-    secondary_action_btn_->setObjectName(QStringLiteral("editExportSecondaryBtn"));
-    secondary_action_btn_->setProperty("role", "ghost");
-    secondary_action_btn_->hide();
-
-    // "&&" renders as a literal ampersand (a single "&" would become a mnemonic).
-    primary_action_btn_ = new QPushButton(QStringLiteral("Save && export"), action_bar_);
+    // The single action of the surface: everything else is direct manipulation
+    // on the view itself.
+    primary_action_btn_ = new QPushButton(QStringLiteral("Export…"), action_bar_);
     primary_action_btn_->setObjectName(QStringLiteral("editExportPrimaryBtn"));
     primary_action_btn_->setProperty("role", "primary");
     primary_action_btn_->setMinimumWidth(150);
 
-    action_layout->addWidget(secondary_action_btn_);
     action_layout->addWidget(primary_action_btn_);
 
     root_layout->addWidget(action_bar_);
 
+    // ---- Export card (over the view; presentation only) ----
+    export_card_ = new ui::dialogs::ExportOverlay(this);
+
     // Wire signals
     connect(back_btn_, &QPushButton::clicked, this, &EditExportPage::onBackClicked);
     connect(play_pause_btn_, &QPushButton::clicked, this, [this]() { setPreviewPlaying(!preview_playing_); });
-    connect(primary_action_btn_, &QPushButton::clicked, this, [this]() {
-        switch (phase_) {
-        case Phase::Review:
-            setPhase(Phase::Edit);
-            break;
-        case Phase::Edit:
-            setPhase(Phase::Output);
-            break;
-        case Phase::Output:
-            onExportClicked();
-            break;
-        case Phase::Exporting:
-            onCancelExportClicked();
-            break;
-        case Phase::Done:
-            onDoneClicked();
-            break;
-        case Phase::Failed:
-            onRetryExportClicked();
-            break;
-        }
-    });
-    connect(secondary_action_btn_, &QPushButton::clicked, this, &EditExportPage::onOpenFolderClicked);
-    connect(result_open_folder_btn_, &QPushButton::clicked, this, &EditExportPage::onOpenFolderClicked);
-    connect(result_reveal_btn_, &QPushButton::clicked, this, &EditExportPage::onRevealFileClicked);
+    connect(primary_action_btn_, &QPushButton::clicked, this, [this]() { export_card_->openCard(); });
 
-    // Applies the theme-derived inline styling (and the initial phase via
-    // refreshPhase()) now, and re-applies it on every theme switch so nothing
-    // keeps the old palette's colours or icon tints.
+    // The card decides what the user asked for; the page owns what actually
+    // happens (confirmation, thread, sidecar, atomic rename).
+    connect(export_card_, &ui::dialogs::ExportOverlay::exportRequested, this, &EditExportPage::onExportClicked);
+    connect(export_card_, &ui::dialogs::ExportOverlay::cancelRequested, this, &EditExportPage::onCancelExportClicked);
+    connect(export_card_, &ui::dialogs::ExportOverlay::retryRequested, this, &EditExportPage::onRetryExportClicked);
+    connect(export_card_, &ui::dialogs::ExportOverlay::openFolderRequested, this, &EditExportPage::onOpenFolderClicked);
+    connect(export_card_, &ui::dialogs::ExportOverlay::revealFileRequested, this, &EditExportPage::onRevealFileClicked);
+    connect(export_card_, &ui::dialogs::ExportOverlay::closeRequested, this, [this]() { export_card_->closeCard(); });
+
+    // Applies the theme-derived inline styling now, and re-applies it on every
+    // theme switch so nothing keeps the old palette's colours or icon tints.
     ui::theme::OnThemeChanged(this, [this]() { applyThemeStyles(); });
 }
 
@@ -592,13 +345,6 @@ void EditExportPage::applyThemeStyles() {
         QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12.5px; }")
             .arg(t.ac));
 
-    // ---- Phase Stepper ----
-    stepper_widget_->setStyleSheet(QStringLiteral("QWidget#editExportStepper {"
-                                                  "background:%1;"
-                                                  "border-bottom: 1px solid %2;"
-                                                  "}")
-                                       .arg(t.surf, t.line));
-
     // ---- Player-Area ----
     player_frame_->setStyleSheet(QStringLiteral("QFrame#editExportPlayer {"
                                                 "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
@@ -624,51 +370,9 @@ void EditExportPage::applyThemeStyles() {
     // (player_surface_ paints its own panel/placeholder; no QSS involvement.)
     player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(t.dim));
 
-    // ---- Review Panel ----
-    review_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(t.ink));
-    review_drop_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.mut));
-    review_drift_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.mut));
-    review_health_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(t.mut));
-
-    // ---- Output Panel ----
-    output_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(t.ink));
-    container_lbl_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
-    savemode_lbl_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
-    dest_lbl_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
-    dest_folder_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ThemeText1Color(t)));
-
-    // ---- Exporting Panel ----
-    exporting_status_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:14px; }").arg(t.ink));
-    exporting_bar_->setStyleSheet(QStringLiteral("QProgressBar { background:%1; border-radius:3px; border:none; }"
-                                                 "QProgressBar::chunk { background:%2; border-radius:3px; }")
-                                      .arg(t.raise, t.ac));
-    exporting_detail_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
-
-    // ---- Result Panel (title/icon/badge are phase-dependent → refreshPhase) ----
-    result_detail_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(t.mut));
-
-    // ---- Details card (right rail) ----
-    detail_rail_->setStyleSheet(QStringLiteral("QFrame#editExportDetailRail {"
-                                               "background:%1;"
-                                               "border: 1px solid %2;"
-                                               "border-radius: %3px;"
-                                               "}")
-                                    .arg(t.surf, t.line)
-                                    .arg(M::kRadiusLg));
-    rail_title_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-weight:700; font-size:13.5px; }").arg(t.ink));
-
-    for (QFrame* sep : fact_separators_)
-        sep->setStyleSheet(QStringLiteral("QFrame { background:%1; border:none; }").arg(t.line));
-    for (QLabel* key : fact_keys_)
-        key->setStyleSheet(
-            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:11px; }")
-                .arg(t.dim));
-    for (QLabel* val : {fact_duration_val_, fact_size_val_, fact_res_val_, fact_fps_val_, fact_video_val_,
-                        fact_audio_val_, fact_container_val_})
-        val->setStyleSheet(
-            QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12px; }")
-                .arg(t.ink));
+    // ---- Details card (right rail) / export card ----
+    detail_rail_->applyThemeStyles();
+    export_card_->applyThemeStyles();
 
     // ---- Bottom action bar ----
     action_bar_->setStyleSheet(QStringLiteral("QFrame#editExportActionBar {"
@@ -677,9 +381,48 @@ void EditExportPage::applyThemeStyles() {
                                               "}")
                                    .arg(t.surf, t.line));
 
-    // Re-derive the phase-dependent stepper/result/title/button styling and icons
-    // for the current phase from ActiveTheme().
-    refreshPhase();
+    // The report icon's glyph and tint are severity-dependent, so they are
+    // re-derived from ActiveTheme() here rather than baked at construction.
+    refreshReportIcon();
+}
+
+// Quiet by default, visible when it matters: Good/Unavailable get a muted info
+// glyph whose tooltip carries the three numbers; a Warning or Critical pipeline
+// also gets a coloured triangle and a word beside it, so a real finding is not
+// hidden behind a hover.
+void EditExportPage::refreshReportIcon() {
+    if (!report_icon_ || !report_label_)
+        return;
+    const auto& t = ActiveTheme();
+
+    QString glyph = QStringLiteral("info");
+    QColor tint = themeColor(t.dim);
+    QString label;
+    switch (report_severity_) {
+    case ReportSeverity::Neutral:
+        break;
+    case ReportSeverity::Warning:
+        glyph = QStringLiteral("alertTriangle");
+        tint = themeColor(t.caution);
+        label = QStringLiteral("Warning");
+        break;
+    case ReportSeverity::Critical:
+        glyph = QStringLiteral("alertTriangle");
+        tint = themeColor(t.error);
+        label = QStringLiteral("Critical");
+        break;
+    }
+
+    report_icon_->setPixmap(renderEditIcon(glyph, 16, tint));
+    report_label_->setText(label);
+    report_label_->setVisible(!label.isEmpty());
+    report_label_->setStyleSheet(
+        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:11px; }").arg(tint.name(QColor::HexRgb)));
+
+    const QString tooltip =
+        QStringLiteral("%1\n%2\n%3").arg(report_drops_text_, report_drift_text_, report_health_text_);
+    report_icon_->setToolTip(tooltip);
+    report_label_->setToolTip(tooltip);
 }
 
 void EditExportPage::setEditContext(const EditContext& ctx) {
@@ -687,11 +430,11 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     setRecordingInfo(ctx_.output_path, ctx_.duration, ctx_.size, ctx_.resolution, ctx_.fps, ctx_.video_codec,
                      ctx_.audio_codec, ctx_.container);
 
-    // --- Populate review panel ---
+    // --- Post-flight report (header icon + tooltip) ---
     const auto& snap = ctx_.completed_snapshot;
     const bool has_snap = snap.valid || snap.session_generation > 0;
 
-    if (review_drop_label_) {
+    {
         // REAL drops only (encoder backpressure plus frame-processing failures) --
         // not deliberate CFR pacing/coalescing, which is intentional frame
         // selection (e.g. downsampling a 144 Hz source to a 60 fps CFR target),
@@ -700,47 +443,47 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
         const uint64_t total_frames = snap.capture.frames_emitted + total_dropped;
         if (has_snap && total_frames > 0) {
             const double pct = 100.0 * static_cast<double>(total_dropped) / static_cast<double>(total_frames);
-            review_drop_label_->setText(QStringLiteral("Frame drops: %1%").arg(pct, 0, 'f', 1));
+            report_drops_text_ = QStringLiteral("Frame drops: %1%").arg(pct, 0, 'f', 1);
         } else {
-            review_drop_label_->setText(QStringLiteral("Frame drops: \xe2\x80\x94"));
+            report_drops_text_ = QStringLiteral("Frame drops: \xe2\x80\x94");
         }
     }
 
-    if (review_drift_label_) {
-        if (ctx_.av_drift_available) {
-            review_drift_label_->setText(
-                QStringLiteral("Peak A/V drift: \xc2\xb1%1\xc2\xa0ms").arg(ctx_.peak_av_drift_ms, 0, 'f', 0));
-        } else {
-            // No drift measurement is "no data" (same as MainWindow's own drift
-            // readout), not a distinct state — show the unified empty-value glyph.
-            review_drift_label_->setText(QStringLiteral("Peak A/V drift: \xe2\x80\x94"));
-        }
+    if (ctx_.av_drift_available) {
+        report_drift_text_ =
+            QStringLiteral("Peak A/V drift: \xc2\xb1%1\xc2\xa0ms").arg(ctx_.peak_av_drift_ms, 0, 'f', 0);
+    } else {
+        // No drift measurement is "no data" (same as MainWindow's own drift
+        // readout), not a distinct state — show the unified empty-value glyph.
+        report_drift_text_ = QStringLiteral("Peak A/V drift: \xe2\x80\x94");
     }
 
-    if (review_health_label_) {
-        if (has_snap) {
-            const char* health_str = "Unknown";
-            switch (snap.health) {
-            case recorder_core::PipelineHealth::Good:
-                health_str = "Good";
-                break;
-            case recorder_core::PipelineHealth::Warning:
-                health_str = "Warning";
-                break;
-            case recorder_core::PipelineHealth::Critical:
-                health_str = "Critical";
-                break;
-            case recorder_core::PipelineHealth::Unavailable:
-                health_str = "Unavailable";
-                break;
-            default:
-                break;
-            }
-            review_health_label_->setText(QStringLiteral("Pipeline health: %1").arg(QLatin1String(health_str)));
-        } else {
-            review_health_label_->setText(QStringLiteral("Pipeline health: \xe2\x80\x94"));
+    report_severity_ = ReportSeverity::Neutral;
+    if (has_snap) {
+        const char* health_str = "Unknown";
+        switch (snap.health) {
+        case recorder_core::PipelineHealth::Good:
+            health_str = "Good";
+            break;
+        case recorder_core::PipelineHealth::Warning:
+            health_str = "Warning";
+            report_severity_ = ReportSeverity::Warning;
+            break;
+        case recorder_core::PipelineHealth::Critical:
+            health_str = "Critical";
+            report_severity_ = ReportSeverity::Critical;
+            break;
+        case recorder_core::PipelineHealth::Unavailable:
+            health_str = "Unavailable";
+            break;
+        default:
+            break;
         }
+        report_health_text_ = QStringLiteral("Pipeline health: %1").arg(QLatin1String(health_str));
+    } else {
+        report_health_text_ = QStringLiteral("Pipeline health: \xe2\x80\x94");
     }
+    refreshReportIcon();
 
     // --- Load keyframe timestamps from MKV master (background is fine; fast for short clips) ---
     keyframe_timestamps_.clear();
@@ -808,30 +551,23 @@ void EditExportPage::setRecordingInfo(const QString& file_path, const QString& d
         filename_label_->setText(sep >= 0 ? file_path.mid(sep + 1) : file_path);
     }
 
-    // Update detail rail
-    if (fact_duration_val_)
-        fact_duration_val_->setText(duration_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : duration_);
-    if (fact_size_val_)
-        fact_size_val_->setText(size_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : size_);
-    if (fact_res_val_)
-        fact_res_val_->setText(resolution_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : resolution_);
-    if (fact_fps_val_)
-        fact_fps_val_->setText(fps_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : fps_);
-    if (fact_video_val_)
-        fact_video_val_->setText(video_codec_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : video_codec_);
-    if (fact_audio_val_)
-        fact_audio_val_->setText(audio_codec_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : audio_codec_);
-    if (fact_container_val_)
-        fact_container_val_->setText(container_.isEmpty() ? QStringLiteral("\xe2\x80\x94") : container_);
+    // Update detail rail. The rail renders an empty fact as the unified em dash,
+    // so unset values need no special-casing here.
+    if (detail_rail_) {
+        ui::widgets::EditDetailsRail::Facts facts;
+        facts.duration = duration_;
+        facts.size = size_;
+        facts.resolution = resolution_;
+        facts.fps = fps_;
+        facts.video_codec = video_codec_;
+        facts.audio_codec = audio_codec_;
+        facts.container = container_;
+        detail_rail_->setFacts(facts);
+    }
 
     // Update player meta
     if (player_meta_label_)
         player_meta_label_->setText(QStringLiteral("%1  %2  %3").arg(resolution_, fps_, container_));
-}
-
-void EditExportPage::setPhase(Phase phase) {
-    phase_ = phase;
-    refreshPhase();
 }
 
 // ---- Preview playback clock ----
@@ -1020,150 +756,32 @@ void EditExportPage::onScrubFinished() {
     resume_after_scrub_ = false;
 }
 
-void EditExportPage::refreshPhase() {
-    // ---- Stepper highlight ----
-    // Each phase highlights its own step; Exporting/Done/Failed keep "Output" active.
-    const auto stepStyle = [&](bool active) -> QString {
-        return active ? QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; "
-                                       "border-bottom: 2px solid %1; padding-bottom:2px; }")
-                            .arg(ActiveTheme().ac)
-                      : QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().dim);
-    };
-    const bool step_review = (phase_ == Phase::Review);
-    const bool step_edit = (phase_ == Phase::Edit);
-    const bool step_output =
-        (phase_ == Phase::Output || phase_ == Phase::Exporting || phase_ == Phase::Done || phase_ == Phase::Failed);
-    if (stepper_review_lbl_)
-        stepper_review_lbl_->setStyleSheet(stepStyle(step_review));
-    if (stepper_edit_lbl_)
-        stepper_edit_lbl_->setStyleSheet(stepStyle(step_edit));
-    if (stepper_output_lbl_)
-        stepper_output_lbl_->setStyleSheet(stepStyle(step_output));
+// True when closing would throw away work the user did on this surface. Markers
+// count: the surface is where they become part of an exported clip, and a
+// dismiss drops the retimed sidecar that export would have written.
+bool EditExportPage::hasUnsavedEdits() const {
+    const bool trimmed = trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ||
+                         trim_end_us_ != recorder_core::TrimRange::kNoTimestamp;
+    return trimmed || !markers_.empty();
+}
 
-    // ---- Show/hide panels ----
-    const bool show_review_panel = (phase_ == Phase::Review);
-    const bool show_player = (phase_ == Phase::Review || phase_ == Phase::Edit);
-    const bool show_timeline = (phase_ == Phase::Edit);
-    const bool show_output = (phase_ == Phase::Output);
-    const bool show_exporting = (phase_ == Phase::Exporting);
-    const bool show_result = (phase_ == Phase::Done || phase_ == Phase::Failed);
+// Same shape and tone as confirmOverwrite(): the non-destructive choice is the
+// default button, so a stray Enter never discards the edit.
+bool EditExportPage::confirmDiscardEdits() {
+    if (!hasUnsavedEdits())
+        return true;
 
-    if (review_panel_)
-        review_panel_->setVisible(show_review_panel);
-    if (player_frame_)
-        player_frame_->setVisible(show_player);
-    if (timeline_)
-        timeline_->setVisible(show_timeline);
-    if (output_panel_)
-        output_panel_->setVisible(show_output);
-    if (exporting_panel_)
-        exporting_panel_->setVisible(show_exporting);
-    if (result_panel_)
-        result_panel_->setVisible(show_result);
+    QMessageBox box(this);
+    box.setWindowTitle(QStringLiteral("Discard edits"));
+    box.setText(QStringLiteral("Discard edits?"));
+    box.setInformativeText(QStringLiteral("The trim points and markers on this clip are not exported yet."));
+    box.setIcon(QMessageBox::Warning);
 
-    // The preview clock only makes sense while the player is on screen.
-    if (!show_player)
-        setPreviewPlaying(false);
-
-    // Panel visibility changed: the height budget for the player moved too.
-    updatePlayerHeight();
-
-    // Update primary/secondary buttons
-    if (!primary_action_btn_ || !secondary_action_btn_)
-        return;
-
-    secondary_action_btn_->hide();
-
-    switch (phase_) {
-    case Phase::Review:
-        primary_action_btn_->setText(QStringLiteral("Continue to edit"));
-        primary_action_btn_->setProperty("role", "ghost");
-        break;
-    case Phase::Edit:
-        primary_action_btn_->setText(QStringLiteral("Continue to output"));
-        primary_action_btn_->setProperty("role", "ghost");
-        break;
-    case Phase::Output:
-        // "&&" renders as a literal ampersand (a single "&" would become a mnemonic).
-        primary_action_btn_->setText(QStringLiteral("Save && export"));
-        primary_action_btn_->setProperty("role", "primary");
-        break;
-    case Phase::Exporting:
-        primary_action_btn_->setText(QStringLiteral("Cancel"));
-        primary_action_btn_->setProperty("role", "ghost");
-        if (exporting_status_label_)
-            exporting_status_label_->setText(QStringLiteral("Exporting…"));
-        break;
-    case Phase::Done:
-        primary_action_btn_->setText(QStringLiteral("Done"));
-        primary_action_btn_->setProperty("role", "primary");
-        secondary_action_btn_->setText(QStringLiteral("Open folder"));
-        secondary_action_btn_->show();
-        if (result_panel_)
-            result_panel_->setStyleSheet(QStringLiteral("QWidget#editExportResultPanel {"
-                                                        "background:%1;"
-                                                        "border: 1px solid %2;"
-                                                        "border-radius: 13px;"
-                                                        "}")
-                                             .arg(okDimToken(), okBToken()));
-        if (result_icon_label_) {
-            result_icon_label_->setPixmap(
-                renderEditIcon(QStringLiteral("checkCircle"), 34, themeColor(ActiveTheme().success)));
-            result_icon_label_->setStyleSheet(QStringLiteral("QLabel#editExportResultIcon {"
-                                                             "background:%1;"
-                                                             "border: 1px solid %2;"
-                                                             "border-radius: 36px;"
-                                                             "}")
-                                                  .arg(okDimToken(), okBToken()));
-        }
-        if (result_title_label_) {
-            result_title_label_->setText(QStringLiteral("Export complete"));
-            result_title_label_->setStyleSheet(
-                QStringLiteral("QLabel { color:%1; font-weight:600; font-size:16px; }").arg(ActiveTheme().success));
-        }
-        if (result_detail_label_) {
-            const QString file_name = !export_output_path_.empty()
-                                          ? QString::fromStdWString(export_output_path_.filename().wstring())
-                                          : QStringLiteral("Export");
-            result_detail_label_->setText(QStringLiteral("%1 \xc2\xb7 stream-copy \xc2\xb7 lossless").arg(file_name));
-        }
-        break;
-    case Phase::Failed:
-        primary_action_btn_->setText(QStringLiteral("Retry export"));
-        primary_action_btn_->setProperty("role", "primary");
-        if (result_panel_)
-            result_panel_->setStyleSheet(QStringLiteral("QWidget#editExportResultPanel {"
-                                                        "background:%1;"
-                                                        "border: 1px solid %2;"
-                                                        "border-radius: 13px;"
-                                                        "}")
-                                             .arg(errDimToken(), errBToken()));
-        if (result_icon_label_) {
-            result_icon_label_->setPixmap(renderEditIcon(QStringLiteral("error"), 34, themeColor(ActiveTheme().error)));
-            result_icon_label_->setStyleSheet(QStringLiteral("QLabel#editExportResultIcon {"
-                                                             "background:%1;"
-                                                             "border: 1px solid %2;"
-                                                             "border-radius: 36px;"
-                                                             "}")
-                                                  .arg(errDimToken(), errBToken()));
-        }
-        if (result_title_label_) {
-            result_title_label_->setText(QStringLiteral("Export failed"));
-            result_title_label_->setStyleSheet(
-                QStringLiteral("QLabel { color:%1; font-weight:600; font-size:16px; }").arg(ActiveTheme().error));
-        }
-        if (result_detail_label_) {
-            const QString reason = last_export_error_.isEmpty() ? QStringLiteral("unknown error") : last_export_error_;
-            result_detail_label_->setText(QStringLiteral("Export failed \xe2\x80\x94 %1").arg(reason));
-        }
-        break;
-    }
-
-    // Force style refresh for property-driven QSS
-    if (primary_action_btn_) {
-        primary_action_btn_->style()->unpolish(primary_action_btn_);
-        primary_action_btn_->style()->polish(primary_action_btn_);
-    }
+    auto* keep_btn = box.addButton(QStringLiteral("Keep editing"), QMessageBox::RejectRole);
+    auto* discard_btn = box.addButton(QStringLiteral("Discard"), QMessageBox::AcceptRole);
+    box.setDefaultButton(keep_btn);
+    box.exec();
+    return box.clickedButton() == static_cast<QAbstractButton*>(discard_btn);
 }
 
 bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
@@ -1179,19 +797,16 @@ bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
 }
 
 void EditExportPage::updatePlayerHeight() {
-    // Aim for 16:9 relative to the player's current width, but cap the height
-    // so the content below it (post-recording report / trim timeline) stays
-    // reachable without scrolling — a real video view letterboxes inside the
-    // frame anyway.
+    // Aim for 16:9 relative to the player's current width, but cap the height so
+    // the trim timeline below it stays reachable without scrolling — a real video
+    // view letterboxes inside the frame anyway.
     if (!player_frame_)
         return;
     const int w = player_frame_->width();
     int target = qRound(w * 9.0 / 16.0);
-    int reserved = 52 /* mode bar */ + 40 /* stepper */ + 64 /* action bar */ + 2 * M::kSpaceMd;
+    int reserved = 52 /* mode bar */ + 64 /* action bar */ + 2 * M::kSpaceMd;
     if (timeline_ && !timeline_->isHidden())
         reserved += timeline_->height() + M::kSpaceMd;
-    if (review_panel_ && !review_panel_->isHidden())
-        reserved += review_panel_->sizeHint().height() + M::kSpaceMd;
     const int max_h = std::max(180, height() - reserved);
     target = std::min(target, max_h);
     if (target > 0 && player_frame_->height() != target)
@@ -1201,6 +816,11 @@ void EditExportPage::updatePlayerHeight() {
 void EditExportPage::hideEvent(QHideEvent* event) {
     // Overlay dismissed / page hidden: the preview clock must not keep running.
     setPreviewPlaying(false);
+    // A card left standing would come back on top of the next clip. closeCard()
+    // is a no-op while an export runs, which is exactly right — that session is
+    // still live behind the dismissed overlay.
+    if (export_card_)
+        export_card_->closeCard();
     // ...and neither must the decoder session's worker threads (or its WASAPI
     // renderer). setEditContext() opens a fresh session the next time the
     // overlay is shown for a clip.
@@ -1212,18 +832,8 @@ void EditExportPage::hideEvent(QHideEvent* event) {
 // ---- Slots ----
 
 void EditExportPage::onBackClicked() {
-    // Three-step flow (ADR 0022): Back steps to the previous phase for Edit and
-    // Output. Review is the first step, so its Back keeps closing the overlay.
-    switch (phase_) {
-    case Phase::Edit:
-        setPhase(Phase::Review);
+    if (!confirmDiscardEdits())
         return;
-    case Phase::Output:
-        setPhase(Phase::Edit);
-        return;
-    default:
-        break;
-    }
     emit backRequested();
 }
 
@@ -1242,8 +852,7 @@ void EditExportPage::onExportClicked() {
 // target IS that recording, so it is there by construction, and a probe would
 // only add a branch that never runs.
 bool EditExportPage::confirmOverwrite() {
-    const bool overwrite =
-        output_save_mode_combo_ && output_save_mode_combo_->currentData().toString() == QStringLiteral("overwrite");
+    const bool overwrite = export_card_ && export_card_->saveModeKey() == QStringLiteral("overwrite");
     if (!overwrite)
         return true;
 
@@ -1266,12 +875,11 @@ bool EditExportPage::confirmOverwrite() {
 
 void EditExportPage::onCancelExportClicked() {
     export_cancel_.store(true);
-    // The background thread will detect the cancel and stop; we snap back to Output immediately.
-    setPhase(Phase::Output);
-}
-
-void EditExportPage::onDoneClicked() {
-    emit backRequested();
+    // The background thread will detect the cancel and stop; the card snaps back
+    // to its options immediately so the surface is usable again at once.
+    export_running_ = false;
+    if (export_card_)
+        export_card_->openCard();
 }
 
 void EditExportPage::onOpenFolderClicked() {
@@ -1319,17 +927,19 @@ void EditExportPage::loadMarkers() {
 // ---- Real stream-copy export ----
 
 void EditExportPage::runExport() {
-    setPhase(Phase::Exporting);
+    export_running_ = true;
+    if (export_card_)
+        export_card_->showRunning();
 
-    const QString container_key =
-        output_container_combo_ ? output_container_combo_->currentData().toString() : QStringLiteral("mkv");
-    const bool overwrite =
-        output_save_mode_combo_ && output_save_mode_combo_->currentData().toString() == QStringLiteral("overwrite");
+    const QString container_key = export_card_ ? export_card_->containerKey() : QStringLiteral("mkv");
+    const bool overwrite = export_card_ && export_card_->saveModeKey() == QStringLiteral("overwrite");
     const bool to_mp4 = (container_key == QStringLiteral("mp4"));
 
     if (ctx_.mkv_master_path.isEmpty()) {
         last_export_error_ = QStringLiteral("No edit master available for export.");
-        setPhase(Phase::Failed);
+        export_running_ = false;
+        if (export_card_)
+            export_card_->showFailed(last_export_error_);
         return;
     }
 
@@ -1375,8 +985,8 @@ void EditExportPage::runExport() {
             QMetaObject::invokeMethod(
                 this,
                 [this, fraction]() {
-                    if (exporting_bar_)
-                        exporting_bar_->setValue(static_cast<int>(fraction * 100.0f));
+                    if (export_card_)
+                        export_card_->setProgress(static_cast<int>(fraction * 100.0f));
                 },
                 Qt::QueuedConnection);
             return true;
@@ -1418,18 +1028,17 @@ void EditExportPage::runExport() {
             this,
             [this, ok, err_msg, output_path]() {
                 export_output_path_ = output_path;
+                export_running_ = false;
                 if (ok) {
-                    // refreshPhase() derives the Done detail text from
-                    // export_output_path_ (set just above) — the real output
-                    // filename, not a placeholder.
-                    setPhase(Phase::Done);
+                    // The card shows the real output path, not a placeholder.
+                    if (export_card_)
+                        export_card_->showDone(QString::fromStdWString(output_path.wstring()));
                     emit exportCompleted(QString::fromStdWString(output_path.wstring()));
                 } else {
-                    // refreshPhase() derives the Failed detail text from
-                    // last_export_error_ (set just below) — the real remuxer
-                    // error, not a hardcoded placeholder.
+                    // ...and the real remuxer error, not a hardcoded one.
                     last_export_error_ = QString::fromStdString(err_msg);
-                    setPhase(Phase::Failed);
+                    if (export_card_)
+                        export_card_->showFailed(last_export_error_);
                 }
             },
             Qt::QueuedConnection);
