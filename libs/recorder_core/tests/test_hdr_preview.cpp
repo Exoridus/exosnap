@@ -135,6 +135,80 @@ TEST(HdrPreview, FrameConverterIgnoresDegenerateInput) {
         EXPECT_EQ(b, 7); // untouched
 }
 
+// ---- The fully-planar overload is the same picture, different memory --------
+
+// The editor's decoder hands over YUV420P10LE (separate U and V planes, plain
+// [0, 1023] samples), not the P010 layout the capture path reads back. Both
+// must resolve to the same picture -- otherwise the editor preview and the
+// recording preview disagree about colour for the very same frame.
+//
+// Deliberately a non-uniform patch: a flat one would pass even with the chroma
+// or luma indexing wrong.
+TEST(HdrPreview, FullPlanarConverterMatchesTheP010Converter) {
+    const P010Codes left = ScrgbToP010(LinearRgb{1.0f, 0.2f, 0.05f});  // warm
+    const P010Codes right = ScrgbToP010(LinearRgb{0.05f, 0.3f, 1.2f}); // cool, above reference white
+    constexpr uint32_t w = 4, h = 2;
+    // One chroma sample per 2x2 block: columns 0-1 take `left`, columns 2-3 `right`.
+    const uint16_t y_codes[w * h] = {64, 200, 400, 550, 700, 850, 940, 1023};
+
+    std::vector<uint16_t> p010_y(w * h);
+    std::vector<uint16_t> p010_uv(static_cast<size_t>(w) * (h / 2));
+    std::vector<uint16_t> planar_y(w * h);
+    std::vector<uint16_t> planar_u(static_cast<size_t>(w / 2) * (h / 2));
+    std::vector<uint16_t> planar_v(static_cast<size_t>(w / 2) * (h / 2));
+    for (size_t i = 0; i < p010_y.size(); ++i) {
+        planar_y[i] = y_codes[i];
+        p010_y[i] = static_cast<uint16_t>(y_codes[i] << 6); // P010 left-justifies
+    }
+    p010_uv[0] = static_cast<uint16_t>(left.cb << 6);
+    p010_uv[1] = static_cast<uint16_t>(left.cr << 6);
+    p010_uv[2] = static_cast<uint16_t>(right.cb << 6);
+    p010_uv[3] = static_cast<uint16_t>(right.cr << 6);
+    planar_u[0] = left.cb;
+    planar_u[1] = right.cb;
+    planar_v[0] = left.cr;
+    planar_v[1] = right.cr;
+
+    PlanarYuv420Frame p010;
+    p010.y_plane = reinterpret_cast<const uint8_t*>(p010_y.data());
+    p010.y_stride_bytes = w * sizeof(uint16_t);
+    p010.uv_plane = reinterpret_cast<const uint8_t*>(p010_uv.data());
+    p010.uv_stride_bytes = w * sizeof(uint16_t);
+    p010.width = w;
+    p010.height = h;
+    p010.bits_per_sample = 10;
+
+    FullPlanarYuv420Frame planar;
+    planar.y_plane = reinterpret_cast<const uint8_t*>(planar_y.data());
+    planar.y_stride_bytes = w * sizeof(uint16_t);
+    planar.u_plane = reinterpret_cast<const uint8_t*>(planar_u.data());
+    planar.u_stride_bytes = (w / 2) * sizeof(uint16_t);
+    planar.v_plane = reinterpret_cast<const uint8_t*>(planar_v.data());
+    planar.v_stride_bytes = (w / 2) * sizeof(uint16_t);
+    planar.width = w;
+    planar.height = h;
+    planar.bits_per_sample = 10;
+
+    const P010PqMonitorConverter converter(kPeak1000);
+    std::vector<uint8_t> from_p010(static_cast<size_t>(w) * h * 4u, 0);
+    std::vector<uint8_t> from_planar(static_cast<size_t>(w) * h * 4u, 0);
+    converter.Convert(p010, from_p010.data(), w * 4u);
+    converter.Convert(planar, from_planar.data(), w * 4u);
+
+    EXPECT_EQ(from_planar, from_p010) << "the two input layouts must produce identical pixels";
+    // Guard against both paths quietly producing nothing at all.
+    EXPECT_NE(from_planar, std::vector<uint8_t>(static_cast<size_t>(w) * h * 4u, 0));
+}
+
+TEST(HdrPreview, FullPlanarConverterIgnoresDegenerateInput) {
+    std::vector<uint8_t> out(16, 7);
+    FullPlanarYuv420Frame src; // all-zero: null planes / zero size
+    const P010PqMonitorConverter converter(kPeak1000);
+    converter.Convert(src, out.data(), 8);
+    for (uint8_t b : out)
+        EXPECT_EQ(b, 7); // untouched
+}
+
 // ---- Native HDR10 requires a 10-bit encode target — guard fails fast --------
 
 TEST(HdrPreview, NativeHdr10BitDepthGuard) {

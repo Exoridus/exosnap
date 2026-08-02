@@ -48,19 +48,53 @@ P010PqMonitorConverter::P010PqMonitorConverter(float peak_scale) {
     }
 }
 
+namespace {
+
+// Chroma constants for the inverse Y'CbCr (BT.2020 NCL) recombination.
+constexpr float kCrToR = 2.0f * (1.0f - kKr2020);
+constexpr float kCbToB = 2.0f * (1.0f - kKb2020);
+constexpr float kInvKg = 1.0f / kKg2020;
+
+// The chroma-derived terms of one 4:2:0 chroma pair, shared by the two
+// horizontal pixels that sample it. g' = (y' - kr*r' - kb*b') / kg with
+// r'=y'+cr_r and b'=y'+cb_b, so the y'-independent part of g' is constant
+// across the pair too.
+struct ChromaTerms {
+    float cr_r;
+    float cb_b;
+    float g_chroma;
+};
+
+inline ChromaTerms ChromaTermsFrom(float cb, float cr) {
+    const float cr_r = cr * kCrToR;
+    const float cb_b = cb * kCbToB;
+    return ChromaTerms{cr_r, cb_b, -(kKr2020 * cr_r + kKb2020 * cb_b) * kInvKg};
+}
+
+} // namespace
+
+void P010PqMonitorConverter::WriteMonitorPixel(float yv, float cr_r, float cb_b, float g_chroma, uint8_t* px) const {
+    // Inverse Y'CbCr -> PQ-encoded R'G'B'.
+    const float rp = yv + cr_r;
+    const float bp = yv + cb_b;
+    const float gp = yv + g_chroma;
+    // PQ EOTF -> BT.2020 normalised linear.
+    const LinearRgb lin2020{eotf_lut_[LutIndex(ClampUnit(rp))], eotf_lut_[LutIndex(ClampUnit(gp))],
+                            eotf_lut_[LutIndex(ClampUnit(bp))]};
+    // Gamut to BT.709 linear, then tone-map + OETF via the SDR table.
+    const LinearRgb lin709 = Bt2020ToBt709(lin2020);
+    px[0] = sdr_lut_[LutIndex(ClampUnit(lin709.b))]; // B
+    px[1] = sdr_lut_[LutIndex(ClampUnit(lin709.g))]; // G
+    px[2] = sdr_lut_[LutIndex(ClampUnit(lin709.r))]; // R
+    px[3] = 255u;                                    // A
+}
+
 void P010PqMonitorConverter::Convert(const PlanarYuv420Frame& src, uint8_t* out_bgra, uint32_t out_stride_bytes) const {
     if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.uv_plane == nullptr || out_bgra == nullptr)
         return;
 
-    // Chroma constants for the inverse Y'CbCr (BT.2020 NCL) recombination.
-    constexpr float kCrToR = 2.0f * (1.0f - kKr2020);
-    constexpr float kCbToB = 2.0f * (1.0f - kKb2020);
-    constexpr float kInvKg = 1.0f / kKg2020;
-
     // P010: 16-bit little-endian words, 10 active bits left-justified in bits
-    // 15:6 (low 6 bits zero per the DXGI_FORMAT_P010 definition). 4:2:0 shares one
-    // chroma pair across two horizontal pixels, so the chroma-derived terms are
-    // computed once per pair; only the luma term varies within the pair.
+    // 15:6 (low 6 bits zero per the DXGI_FORMAT_P010 definition).
     for (uint32_t row = 0; row < src.height; ++row) {
         const auto* y_row =
             reinterpret_cast<const uint16_t*>(src.y_plane + static_cast<size_t>(row) * src.y_stride_bytes);
@@ -68,30 +102,43 @@ void P010PqMonitorConverter::Convert(const PlanarYuv420Frame& src, uint8_t* out_
             reinterpret_cast<const uint16_t*>(src.uv_plane + static_cast<size_t>(row / 2u) * src.uv_stride_bytes);
         uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
         for (uint32_t col = 0; col < src.width; col += 2u) {
-            const float cb = DequantC10Limited(static_cast<uint16_t>(uv_row[col] >> 6));
-            const float cr = DequantC10Limited(static_cast<uint16_t>(uv_row[col + 1u] >> 6));
-            const float cr_r = cr * kCrToR;
-            const float cb_b = cb * kCbToB;
-            // g' = (y' - kr*r' - kb*b') / kg, with r'=y'+cr_r, b'=y'+cb_b, so the
-            // y'-independent part of g' is a per-pair constant.
-            const float g_chroma = -(kKr2020 * cr_r + kKb2020 * cb_b) * kInvKg;
+            const ChromaTerms ct = ChromaTermsFrom(DequantC10Limited(static_cast<uint16_t>(uv_row[col] >> 6)),
+                                                   DequantC10Limited(static_cast<uint16_t>(uv_row[col + 1u] >> 6)));
             const uint32_t pair_end = (col + 2u <= src.width) ? (col + 2u) : src.width;
             for (uint32_t p = col; p < pair_end; ++p) {
                 const float yv = DequantY10Limited(static_cast<uint16_t>(y_row[p] >> 6));
-                // Inverse Y'CbCr -> PQ-encoded R'G'B'.
-                const float rp = yv + cr_r;
-                const float bp = yv + cb_b;
-                const float gp = yv + g_chroma;
-                // PQ EOTF -> BT.2020 normalised linear.
-                const LinearRgb lin2020{eotf_lut_[LutIndex(ClampUnit(rp))], eotf_lut_[LutIndex(ClampUnit(gp))],
-                                        eotf_lut_[LutIndex(ClampUnit(bp))]};
-                // Gamut to BT.709 linear, then tone-map + OETF via the SDR table.
-                const LinearRgb lin709 = Bt2020ToBt709(lin2020);
-                uint8_t* px = out_row + static_cast<size_t>(p) * 4u;
-                px[0] = sdr_lut_[LutIndex(ClampUnit(lin709.b))]; // B
-                px[1] = sdr_lut_[LutIndex(ClampUnit(lin709.g))]; // G
-                px[2] = sdr_lut_[LutIndex(ClampUnit(lin709.r))]; // R
-                px[3] = 255u;                                    // A
+                WriteMonitorPixel(yv, ct.cr_r, ct.cb_b, ct.g_chroma, out_row + static_cast<size_t>(p) * 4u);
+            }
+        }
+    }
+}
+
+void P010PqMonitorConverter::Convert(const FullPlanarYuv420Frame& src, uint8_t* out_bgra,
+                                     uint32_t out_stride_bytes) const {
+    if (src.width == 0 || src.height == 0 || src.y_plane == nullptr || src.u_plane == nullptr ||
+        src.v_plane == nullptr || out_bgra == nullptr)
+        return;
+
+    // YUV420P10LE: plain 16-bit little-endian samples in [0, 1023] (no P010
+    // left-justification), U and V in planes of their own at half resolution in
+    // both axes -- so one chroma sample serves a 2x2 pixel block and is indexed
+    // by col/2, where the P010 layout above walks an interleaved row.
+    for (uint32_t row = 0; row < src.height; ++row) {
+        const auto* y_row =
+            reinterpret_cast<const uint16_t*>(src.y_plane + static_cast<size_t>(row) * src.y_stride_bytes);
+        const auto* u_row =
+            reinterpret_cast<const uint16_t*>(src.u_plane + static_cast<size_t>(row / 2u) * src.u_stride_bytes);
+        const auto* v_row =
+            reinterpret_cast<const uint16_t*>(src.v_plane + static_cast<size_t>(row / 2u) * src.v_stride_bytes);
+        uint8_t* out_row = out_bgra + static_cast<size_t>(row) * out_stride_bytes;
+        for (uint32_t col = 0; col < src.width; col += 2u) {
+            const uint32_t chroma_col = col / 2u;
+            const ChromaTerms ct =
+                ChromaTermsFrom(DequantC10Limited(u_row[chroma_col]), DequantC10Limited(v_row[chroma_col]));
+            const uint32_t pair_end = (col + 2u <= src.width) ? (col + 2u) : src.width;
+            for (uint32_t p = col; p < pair_end; ++p) {
+                WriteMonitorPixel(DequantY10Limited(y_row[p]), ct.cr_r, ct.cb_b, ct.g_chroma,
+                                  out_row + static_cast<size_t>(p) * 4u);
             }
         }
     }
