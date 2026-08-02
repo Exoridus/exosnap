@@ -114,5 +114,60 @@ TEST_F(EditDetailsRailTest, ApplyThemeStyles_DoesNotCrash) {
     rail.applyThemeStyles(); // idempotent — re-applying on a theme switch must be safe
 }
 
+// ---- Density ----
+
+TEST_F(EditDetailsRailTest, StartsRoomyAndTogglesToCompact) {
+    QWidget host;
+    EditDetailsRail rail(&host);
+    EXPECT_FALSE(rail.isCompact());
+    rail.setCompact(true);
+    EXPECT_TRUE(rail.isCompact());
+    rail.setCompact(true); // idempotent
+    EXPECT_TRUE(rail.isCompact());
+    rail.setCompact(false);
+    EXPECT_FALSE(rail.isCompact());
+}
+
+// The point of the tighter card is the height it hands to the export panel
+// below it. Measure it rather than trust the constants.
+TEST_F(EditDetailsRailTest, CompactGivesBackAMeaningfulAmountOfHeight) {
+    QWidget host;
+    host.resize(240, 900);
+    EditDetailsRail rail(&host);
+    rail.resize(210, rail.sizeHint().height());
+    host.show();
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+    const int roomy = rail.sizeHint().height();
+
+    rail.setCompact(true);
+    for (int i = 0; i < 8; ++i)
+        QCoreApplication::processEvents();
+    const int compact = rail.sizeHint().height();
+
+    EXPECT_GE(roomy - compact, 40) << "roomy " << roomy << " px vs compact " << compact << " px";
+    EXPECT_LE(roomy - compact, 80) << "roomy " << roomy << " px vs compact " << compact << " px";
+}
+
+// Not one fact fewer, and not one value smaller — only the space between them.
+TEST_F(EditDetailsRailTest, CompactKeepsEverySevenFactsAndTheirFonts) {
+    QWidget host;
+    EditDetailsRail rail(&host);
+    auto* duration = rail.findChild<QLabel*>(QStringLiteral("factDurationValue"));
+    ASSERT_NE(duration, nullptr);
+    const QString roomy_style = duration->styleSheet();
+
+    rail.setCompact(true);
+    for (const QString& name :
+         {QStringLiteral("factDurationValue"), QStringLiteral("factSizeValue"), QStringLiteral("factResolutionValue"),
+          QStringLiteral("factFpsValue"), QStringLiteral("factVideoValue"), QStringLiteral("factAudioValue"),
+          QStringLiteral("factContainerValue")}) {
+        auto* label = rail.findChild<QLabel*>(name);
+        ASSERT_NE(label, nullptr) << name.toStdString();
+        EXPECT_TRUE(label->isVisibleTo(&rail)) << name.toStdString();
+    }
+    EXPECT_EQ(duration->styleSheet(), roomy_style) << "compact must not shrink the type";
+}
+
 } // namespace
 } // namespace exosnap::ui::widgets

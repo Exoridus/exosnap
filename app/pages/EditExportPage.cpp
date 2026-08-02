@@ -32,7 +32,6 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QScrollArea>
-#include <QScrollBar>
 #include <QShowEvent>
 #include <QSize>
 #include <QSvgRenderer>
@@ -348,15 +347,15 @@ void EditExportPage::buildUi() {
     connect(primary_action_btn_, &QPushButton::clicked, this, &EditExportPage::onExportClicked);
 
     // The panel carries what the user asked for; the page owns what actually
-    // happens (confirmation, thread, sidecar, atomic rename).
+    // happens (confirmation, thread, sidecar, atomic rename). It reports
+    // progress and results at its own top, so there is deliberately no signal
+    // here that asks the page to scroll: the rail's position stays where the
+    // user put it. Scrolling to a panel taller than the viewport was a jump by
+    // construction, and it moved the details card for every state change.
     connect(export_panel_, &ui::widgets::ExportPanel::cancelRequested, this, &EditExportPage::onCancelExportClicked);
     connect(export_panel_, &ui::widgets::ExportPanel::retryRequested, this, &EditExportPage::onRetryExportClicked);
     connect(export_panel_, &ui::widgets::ExportPanel::openFolderRequested, this, &EditExportPage::onOpenFolderClicked);
     connect(export_panel_, &ui::widgets::ExportPanel::revealFileRequested, this, &EditExportPage::onRevealFileClicked);
-    // Progress and results are reported in the rail, which at a short window is
-    // partly below the fold — the panel says it has something to show, the page
-    // makes sure it is on screen.
-    connect(export_panel_, &ui::widgets::ExportPanel::statusShown, this, &EditExportPage::revealExportPanel);
 
     // Applies the theme-derived inline styling now, and re-applies it on every
     // theme switch so nothing keeps the old palette's colours or icon tints.
@@ -704,27 +703,6 @@ void EditExportPage::refreshExportAction() {
     primary_action_btn_->setEnabled(!export_running_);
 }
 
-void EditExportPage::revealExportPanel() {
-    if (!rail_scroll_ || !export_panel_)
-        return;
-    // Deferred: the status area has just been shown, so the panel's new height
-    // is only known after the pending layout pass — scrolling now would aim at
-    // the old geometry and stop short of the buttons.
-    QTimer::singleShot(0, this, [this]() {
-        if (!rail_scroll_ || !export_panel_ || !rail_scroll_->widget())
-            return;
-        // ensureWidgetVisible() centres the panel, which leaves the status area
-        // (its bottom) off screen whenever the panel is taller than the
-        // viewport. Aim at the bottom edge instead, and only ever scroll down to
-        // it: a status that is already on screen must not make the rail jump.
-        QScrollBar* bar = rail_scroll_->verticalScrollBar();
-        const int panel_bottom = export_panel_->mapTo(rail_scroll_->widget(), QPoint(0, export_panel_->height())).y();
-        const int target = panel_bottom - rail_scroll_->viewport()->height();
-        if (target > bar->value())
-            bar->setValue(std::min(target, bar->maximum()));
-    });
-}
-
 void EditExportPage::refreshPreviewTickInterval() {
     if (!preview_timer_)
         return;
@@ -906,11 +884,14 @@ void EditExportPage::updatePlayerHeight() {
 // first shown, so a window resized while it was hidden delivers no resizeEvent
 // here and the layout would stay at whatever size it was constructed with.
 void EditExportPage::updateResponsiveLayout() {
-    if (rail_scroll_) {
-        const int rail = RailWidthFor(width());
-        if (rail_scroll_->width() != rail)
-            rail_scroll_->setFixedWidth(rail);
-    }
+    const int rail = RailWidthFor(width());
+    if (rail_scroll_ && rail_scroll_->width() != rail)
+        rail_scroll_->setFixedWidth(rail);
+    // Only the narrowest breakpoint tightens the details card. That is where the
+    // seven facts left the export panel below them without usable height; a wide
+    // window has the room and keeps the roomier card.
+    if (detail_rail_)
+        detail_rail_->setCompact(rail == kRailWidthNarrow);
     updatePlayerHeight();
 }
 

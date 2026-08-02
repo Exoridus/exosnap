@@ -38,6 +38,12 @@ QString borderToken(const char* base_css) {
 
 const QString kEmptyDetail = QStringLiteral("\xe2\x80\x94");
 
+// Vertical rhythm of the result group. The follow-up actions are stacked (a
+// 240 px rail cannot hold them side by side), so their own height and the gap
+// between them decide how much taller Done is than the other three states.
+constexpr int kResultSpacing = 6;
+constexpr int kResultButtonHeight = 32;
+
 // A combo in a 240-320 px rail must not demand the width of its longest item:
 // its size hint would push the whole column wider than the breakpoint allows.
 void MakeRailCombo(QComboBox* combo) {
@@ -64,6 +70,15 @@ void ExportPanel::buildPanel() {
     title_label_ = new QLabel(QStringLiteral("Export"), this);
     title_label_->setObjectName(QStringLiteral("exportPanelTitle"));
     root->addWidget(title_label_);
+
+    // ---- Status area: directly under the title, above the settings ----
+    // Progress and result belong where the eye already is when the export
+    // starts. Below the settings they were past the fold at the minimum window
+    // height, and the only way to show them was to scroll the whole rail — which
+    // moved the details card and the card heading out from under the pointer for
+    // every state change. Here nothing above them moves, and the settings are
+    // what scrolls away instead.
+    buildStatusArea(root);
 
     // ---- Output rows: container + save mode + what the destination will be ----
     options_content_ = new QWidget(this);
@@ -121,12 +136,16 @@ void ExportPanel::buildPanel() {
     connect(save_mode_combo_, &QComboBox::currentIndexChanged, this, [this](int) { refreshDestinationText(); });
     connect(container_combo_, &QComboBox::currentIndexChanged, this, [this](int) { refreshDestinationText(); });
 
-    // ---- Status area: hidden until a run has something to report ----
-    status_separator_ = new QFrame(this);
-    status_separator_->setObjectName(QStringLiteral("exportPanelSeparator"));
-    status_separator_->setFixedHeight(1);
-    root->addWidget(status_separator_);
+    // ---- Wiring: buttons only ever emit — the page owns every transition ----
+    connect(cancel_btn_, &QPushButton::clicked, this, &ExportPanel::cancelRequested);
+    connect(retry_btn_, &QPushButton::clicked, this, &ExportPanel::retryRequested);
+    connect(open_folder_btn_, &QPushButton::clicked, this, &ExportPanel::openFolderRequested);
+    connect(reveal_btn_, &QPushButton::clicked, this, &ExportPanel::revealFileRequested);
+}
 
+// Hidden until a run has something to report. A QBoxLayout skips hidden items
+// and the spacing around them, so the resting card reserves no empty band here.
+void ExportPanel::buildStatusArea(QVBoxLayout* root) {
     running_content_ = new QWidget(this);
     running_content_->setObjectName(QStringLiteral("exportPanelRunning"));
     auto* running_layout = new QVBoxLayout(running_content_);
@@ -158,7 +177,10 @@ void ExportPanel::buildPanel() {
     result_content_->setObjectName(QStringLiteral("exportPanelResult"));
     auto* result_layout = new QVBoxLayout(result_content_);
     result_layout->setContentsMargins(0, 0, 0, 0);
-    result_layout->setSpacing(M::kSpaceSm);
+    // Tighter than the running group's rhythm: this one carries two stacked
+    // full-width buttons, and at the standard gap the Done state stood visibly
+    // taller than Running and Failed for no reason the user can act on.
+    result_layout->setSpacing(kResultSpacing);
 
     // Badge and headline on one line: a 56 px circular badge (the card version's
     // shape) would eat a quarter of the rail's width on its own.
@@ -194,17 +216,23 @@ void ExportPanel::buildPanel() {
 
     // Stacked, not side by side: "Open folder" and "Show in Explorer" next to
     // each other do not fit the narrow rail without eliding one of them away.
+    // The height is fixed rather than left to the control metric — stacked in a
+    // column these are secondary follow-ups, not two full-size form controls,
+    // and setFixedHeight keeps that identical under every platform style.
     open_folder_btn_ = new QPushButton(QStringLiteral("Open folder"), result_content_);
     open_folder_btn_->setObjectName(QStringLiteral("exportOpenFolderBtn"));
     open_folder_btn_->setProperty("role", "ghost");
+    open_folder_btn_->setFixedHeight(kResultButtonHeight);
 
     reveal_btn_ = new QPushButton(QStringLiteral("Show in Explorer"), result_content_);
     reveal_btn_->setObjectName(QStringLiteral("exportRevealBtn"));
     reveal_btn_->setProperty("role", "ghost");
+    reveal_btn_->setFixedHeight(kResultButtonHeight);
 
     retry_btn_ = new QPushButton(QStringLiteral("Retry"), result_content_);
     retry_btn_->setObjectName(QStringLiteral("exportRetryBtn"));
     retry_btn_->setProperty("role", "ghost");
+    retry_btn_->setFixedHeight(kResultButtonHeight);
 
     result_layout->addWidget(result_head);
     result_layout->addWidget(result_detail_label_);
@@ -214,11 +242,12 @@ void ExportPanel::buildPanel() {
 
     root->addWidget(result_content_);
 
-    // ---- Wiring: buttons only ever emit — the page owns every transition ----
-    connect(cancel_btn_, &QPushButton::clicked, this, &ExportPanel::cancelRequested);
-    connect(retry_btn_, &QPushButton::clicked, this, &ExportPanel::retryRequested);
-    connect(open_folder_btn_, &QPushButton::clicked, this, &ExportPanel::openFolderRequested);
-    connect(reveal_btn_, &QPushButton::clicked, this, &ExportPanel::revealFileRequested);
+    // Divides the run's status from the settings below it, and is shown with
+    // them: in Options there is nothing above the line to separate.
+    status_separator_ = new QFrame(this);
+    status_separator_->setObjectName(QStringLiteral("exportPanelSeparator"));
+    status_separator_->setFixedHeight(1);
+    root->addWidget(status_separator_);
 }
 
 ExportPanel::State ExportPanel::state() const noexcept {
@@ -244,7 +273,6 @@ void ExportPanel::showRunning() {
     status_label_->setText(QStringLiteral("Exporting\xe2\x80\xa6"));
     progress_bar_->setValue(0);
     refreshStateVisibility();
-    emit statusShown();
 }
 
 void ExportPanel::setProgress(int percent) {
@@ -260,7 +288,6 @@ void ExportPanel::showDone(const QString& output_path) {
     result_detail_label_->setText(file_name);
     refreshStateVisibility();
     applyThemeStyles(); // re-derive the badge/title colours for the new state
-    emit statusShown();
 }
 
 void ExportPanel::showFailed(const QString& error_message) {
@@ -269,7 +296,6 @@ void ExportPanel::showFailed(const QString& error_message) {
     result_detail_label_->setText(error_message.isEmpty() ? QStringLiteral("Unknown error") : error_message);
     refreshStateVisibility();
     applyThemeStyles(); // re-derive the badge/title colours for the new state
-    emit statusShown();
 }
 
 void ExportPanel::refreshStateVisibility() {
@@ -292,9 +318,13 @@ void ExportPanel::refreshStateVisibility() {
 void ExportPanel::refreshDestinationText() {
     const bool overwrite = saveModeKey() == QStringLiteral("overwrite");
     const QString ext = containerKey() == QStringLiteral("mp4") ? QStringLiteral("mp4") : QStringLiteral("mkv");
-    dest_label_->setText(overwrite ? QStringLiteral("Stream-copy, lossless. Replaces the original recording in place.")
-                                   : QStringLiteral("Stream-copy, lossless. Written beside the source as "
-                                                    "\xe2\x80\x9c<name>_edit.%1\xe2\x80\x9d.")
+    // Two short lines rather than one running sentence: this is the consequence
+    // of the save-mode choice, and in the rail a flowing sentence was the one
+    // thing that ran out of column. The lead line is the same in both modes, so
+    // switching modes changes only the line that actually differs.
+    dest_label_->setText(overwrite ? QStringLiteral("Lossless stream copy\nReplaces the original recording")
+                                   : QStringLiteral("Lossless stream copy\n"
+                                                    "Saved beside the source as \xe2\x80\x9c<name>_edit.%1\xe2\x80\x9d")
                                          .arg(ext));
 }
 
@@ -317,7 +347,9 @@ void ExportPanel::applyThemeStyles() {
     const QString label_style = QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(tok(t.mut));
     container_label_->setStyleSheet(label_style);
     save_mode_label_->setStyleSheet(label_style);
-    dest_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(tok(t.dim)));
+    // Muted, not dim: the line states what pressing Export will do to the user's
+    // file, which is a different weight of information from ordinary help text.
+    dest_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(tok(t.mut)));
 
     status_separator_->setStyleSheet(QStringLiteral("QFrame { background:%1; border:none; }").arg(tok(t.line)));
 
