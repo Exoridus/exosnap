@@ -452,10 +452,18 @@ void EditTimeline::paintEvent(QPaintEvent* /*event*/) {
             QString label = audio_track_labels_.at(i);
             if (label.isEmpty())
                 label = QStringLiteral("Audio %1").arg(i + 1);
-            p.setPen(mut);
             p.setFont(label_font);
-            p.drawText(row.adjusted(kAudioLabelInset, 0, -kAudioLabelInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
-                       label);
+            // Markers are drawn after this block and cross every row, so a
+            // marker near the start of the clip would otherwise strike straight
+            // through the track name. A backdrop the width of the text keeps it
+            // readable without hiding where the marker sits.
+            const QRect text_area = row.adjusted(kAudioLabelInset, 0, -kAudioLabelInset, 0);
+            const QRect text_rect = p.fontMetrics().boundingRect(text_area, Qt::AlignLeft | Qt::AlignVCenter, label);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(8, 8, 10, 190));
+            p.drawRoundedRect(text_rect.adjusted(-3, -1, 3, 1), 3.0, 3.0);
+            p.setPen(mut);
+            p.drawText(text_area, Qt::AlignLeft | Qt::AlignVCenter, label);
         }
     }
 

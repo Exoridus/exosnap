@@ -809,18 +809,17 @@ bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
 }
 
 void EditExportPage::updatePlayerHeight() {
-    // Aim for 16:9 relative to the player's current width, but cap the height so
-    // the trim timeline below it stays reachable without scrolling — a real video
-    // view letterboxes inside the frame anyway.
+    // The frame takes the height left over above the timeline, and the video
+    // letterboxes inside it. Deriving the height from the width instead — 16:9
+    // of however wide the player happens to be — made a narrow window leave an
+    // empty band between the timeline and the action bar, because a narrow
+    // player is also a short one and nothing claimed the rest.
     if (!player_frame_)
         return;
-    const int w = player_frame_->width();
-    int target = qRound(w * 9.0 / 16.0);
     int reserved = 52 /* mode bar */ + 64 /* action bar */ + 2 * M::kSpaceMd;
     if (timeline_ && !timeline_->isHidden())
         reserved += timeline_->height() + M::kSpaceMd;
-    const int max_h = std::max(180, height() - reserved);
-    target = std::min(target, max_h);
+    const int target = std::max(180, height() - reserved);
     if (target > 0 && player_frame_->height() != target)
         player_frame_->setFixedHeight(target);
 }
