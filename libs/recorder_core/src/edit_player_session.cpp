@@ -244,14 +244,18 @@ void EditPlayerSession::Play(int64_t start_us) {
         },
         [this]() -> int64_t { return impl_->media_clock_us.load(); });
 
-    // The engine builds its playback resampler inside StartPlaybackDecode, and
-    // that can fail on a file whose audio stream opened perfectly well. This
-    // class paces video off the audio clock, so believing in audio that never
-    // arrives would leave FramesPlayed() at 0 forever: the clock would stay
-    // pinned to start_us, PollFrame would keep selecting the same frame, and
-    // playback would present as a frozen picture with a stationary playhead.
-    // Fall back to the same video-only path a file without an audio stream
-    // takes (see PollFrame) instead.
+    // The engine builds a playback resampler per audio track inside
+    // StartPlaybackDecode, and those can fail on a file whose audio streams
+    // opened perfectly well. This class paces video off the audio clock, so
+    // believing in audio that never arrives would leave FramesPlayed() at 0
+    // forever: the clock would stay pinned to start_us, PollFrame would keep
+    // selecting the same frame, and playback would present as a frozen picture
+    // with a stationary playhead. Fall back to the same video-only path a file
+    // without an audio stream takes (see PollFrame) instead.
+    //
+    // PlaybackDeliversAudio() answers "at least one track", which is exactly
+    // the question this needs: one surviving track advances the clock just as
+    // well as three, and the blocks arriving here are their mix either way.
     if (impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
         impl_->has_audio = false;
         impl_->audio.Stop();
