@@ -278,11 +278,8 @@ void StepC_ConvertCost() {
 // doubles (full-resolution U and V instead of quarter-resolution), and the
 // kernel is bandwidth-bound -- which effect wins is exactly what this
 // measures, not something to guess from the pixel math alone.
-void StepC2_Convert444Cost() {
-    printf("=== [C2] ConvertFullPlanar444ToBgra isolated cost (2560x1440 8-bit, 100 iters) ===\n");
-
-    constexpr uint32_t kWidth = 2560;
-    constexpr uint32_t kHeight = 1440;
+void StepC2_Convert444CostAt(uint32_t kWidth, uint32_t kHeight) {
+    printf("=== [C2] ConvertFullPlanar444ToBgra isolated cost (%ux%u 8-bit, 100 iters) ===\n", kWidth, kHeight);
 
     std::vector<uint8_t> yPlane(static_cast<size_t>(kWidth) * kHeight);
     std::vector<uint8_t> uPlane(static_cast<size_t>(kWidth) * kHeight);
@@ -333,10 +330,12 @@ void StepC2_Convert444Cost() {
     } else {
         printf("[C2] simd (SSE4.1): SKIPPED -- this CPU does not report SSE4.1 support\n");
     }
-    printf("[C2] vs 4:2:0 reference (scalar 13.3ms/frame, simd 2.86ms/frame): "
-           "444 scalar %.4fms/frame (%.2fx of 420), 444 simd %.4fms/frame (%.2fx of 420)\n",
-           scalarMs, scalarMs > 0.0 ? scalarMs / 13.3 : 0.0, simdSupported ? simdMs : 0.0,
-           (simdSupported && simdMs > 0.0) ? simdMs / 2.86 : 0.0);
+    if (kWidth == 2560 && kHeight == 1440) {
+        printf("[C2] vs 4:2:0 reference (scalar 13.3ms/frame, simd 2.86ms/frame): "
+               "444 scalar %.4fms/frame (%.2fx of 420), 444 simd %.4fms/frame (%.2fx of 420)\n",
+               scalarMs, scalarMs > 0.0 ? scalarMs / 13.3 : 0.0, simdSupported ? simdMs : 0.0,
+               (simdSupported && simdMs > 0.0) ? simdMs / 2.86 : 0.0);
+    }
 }
 
 // ---- Step D: isolated per-frame allocation cost ----
@@ -877,7 +876,13 @@ int main(int argc, char** argv) {
     StepB_PlaybackThroughput(engine, startUs);
     StepB2_RepeatedStartStop(engine, startUs);
     StepC_ConvertCost();
-    StepC2_Convert444Cost();
+    StepC2_Convert444CostAt(2560, 1440);
+    // 2026-08-03 follow-up: is the 4:4:4-at-4K-at-240fps edge case (permanently
+    // software-decoded, no hardware decoder accepts 4:4:4) survivable by the
+    // conversion path alone? Budget at 240fps is 4.1667ms/frame for the WHOLE
+    // frame (demux+decode+convert+alloc), so this isolates whether conversion
+    // by itself already blows that budget before decode is even counted.
+    StepC2_Convert444CostAt(3840, 2160);
     // Runs immediately after C -- same real ConvertFullPlanarYuv420ToBgra
     // call, same frame shape. Kept adjacent purely for readability; the
     // ordering itself does not affect the timing (verified locally).
