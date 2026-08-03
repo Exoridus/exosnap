@@ -4,7 +4,10 @@
 // GpuTextureHandle lets the encoder operate zero-copy on GPU memory when
 // both capture and encoder share the same GPU context.
 
+#include <recorder_core/codec_types.h>
+#include <recorder_core/color_metadata.h>
 #include <recorder_core/packet_types.h>
+#include <recorder_core/pipeline_diagnostics.h>
 
 #include <cstdint>
 #include <string>
@@ -20,6 +23,23 @@ using GpuTextureHandle = void*;
 class IVideoEncoder {
   public:
     virtual ~IVideoEncoder() = default;
+
+    // --- Configuration, before Open()/Configure() ---
+    // NvencPreset stays the parameter type here (not a vendor-neutral scale) —
+    // see the IVideoEncoder-refactor design spec: canonicalizing it would only
+    // be checked against itself until a second vendor is really wired in.
+    virtual void SetCodec(VideoCodec codec) noexcept = 0;
+    virtual void SetBitDepth(BitDepth depth) noexcept = 0;
+    virtual void SetChroma(ChromaSubsampling chroma) noexcept = 0;
+    virtual void SetCq(uint32_t cq) noexcept = 0;
+    virtual void SetPreset(NvencPreset preset) noexcept = 0;
+    virtual void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept = 0;
+    virtual void SetColor(const ColorMetadata& color) noexcept = 0;
+    virtual void SetKeyframeIntervalSecs(float secs) noexcept = 0;
+    virtual void SetConstantFrameRate(bool cfr) noexcept = 0;
+
+    // Resolved encoder init parameters, valid after Configure().
+    [[nodiscard]] virtual EncoderInitInfo GetInitInfo() const noexcept = 0;
 
     // Open an encode session.
     // gpu_context: on Windows, an ID3D11Device* cast to void*. Null for CPU-only encoders.
@@ -37,6 +57,10 @@ class IVideoEncoder {
 
     // Acquire the next free input slot. Returns -1 if no slot is free.
     virtual int32_t AcquireFreeSlot() = 0;
+
+    // Release a slot that was acquired but never submitted via EncodeFrame
+    // (error-path callers only; EncodeFrame itself owns the slot afterward).
+    virtual void ReleaseSlot(int32_t slot_idx) noexcept = 0;
 
     // Submit one frame for encoding. Appends 0..k completed packets to
     // out_packets (0 -> buffered, need more input; today's sync encoders never

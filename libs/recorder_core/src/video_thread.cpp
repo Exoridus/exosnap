@@ -11,7 +11,6 @@
 #include "hdr_tonemap.h"
 #include <recorder_core/dxgi_od_capture_src.h>
 
-#include "nvenc_video_encoder.h"
 #include "preview_publish_gate.h"
 #include "session_internal.h"
 #include "split_sentinel_policy.h"
@@ -20,6 +19,7 @@
 #include <recorder_core/gpu_hdr_tonemap.h>
 #include <recorder_core/gpu_timestamp_profiler.h>
 #include <recorder_core/hdr_native.h>
+#include <recorder_core/interfaces/VideoEncoderFactory.h>
 #include <recorder_core/od_acquire_classify.h>
 #include <recorder_core/preview_shared_texture.h>
 #include <recorder_core/preview_tap.h>
@@ -555,25 +555,34 @@ void VideoThread::Run() {
     }
 
     // --- NVENC encoder ---
-    NvencVideoEncoder nvenc;
+    // Encoder dispatch (IVideoEncoder-refactor design spec). Vendor is
+    // hard-coded to Nvidia until the AMD wave threads real device selection
+    // from libs/capability through to this call.
+    std::unique_ptr<IVideoEncoder> encoder =
+        m_state.video_encoder_factory->Create(exosnap::capability::AdapterVendor::Nvidia);
+    if (!encoder) {
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare,
+                              "No video encoder available for the configured adapter vendor");
+        return;
+    }
     {
-        nvenc.SetCodec(m_state.config.video_codec);
-        nvenc.SetBitDepth(m_state.config.bit_depth);
-        nvenc.SetChroma(m_state.config.chroma);
-        nvenc.SetCq(m_state.config.cq);
-        nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
-        nvenc.SetPreset(m_state.config.nvenc_preset);
+        encoder->SetCodec(m_state.config.video_codec);
+        encoder->SetBitDepth(m_state.config.bit_depth);
+        encoder->SetChroma(m_state.config.chroma);
+        encoder->SetCq(m_state.config.cq);
+        encoder->SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
+        encoder->SetPreset(m_state.config.nvenc_preset);
         // Keyframe interval (Settings → Advanced → Video). Must be set before
         // Configure() so InitEncoder derives gopLength/idrPeriod from it; without
         // this the encoder silently stays at its 2 s default and the selector has
         // no effect.
-        nvenc.SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
+        encoder->SetKeyframeIntervalSecs(m_state.config.keyframe_interval_secs);
         // Submission regime. The keyframe cadence is media-time based either way;
         // this only decides whether NVENC's frame-counting gopLength/idrPeriod
         // backstop stays armed. Under VFR the loop below submits every frame the
         // source produces, so a source faster than the configured rate would trip
         // that counter before the media-time boundary — see ComputeNvencGopBackstop.
-        nvenc.SetConstantFrameRate(m_state.config.cfr);
+        encoder->SetConstantFrameRate(m_state.config.cfr);
         // Color signaling (fix for color-range-signaling bug): the encoded
         // bitstream itself must carry the same color description as the
         // VideoProcessor conversion below and the Matroska Colour element
@@ -581,15 +590,15 @@ void VideoThread::Run() {
         // the bitstream (all of them for AV1 — verified; container tags are
         // ignored) see an untagged/wrong-range stream regardless of correct
         // container tagging.
-        nvenc.SetColor(m_state.config.color);
+        encoder->SetColor(m_state.config.color);
 
         std::string err;
-        if (!nvenc.Open(d3dDevice.get(), err)) {
+        if (!encoder->Open(d3dDevice.get(), err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC open: " + err);
             return;
         }
-        if (!nvenc.Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
-                             err)) {
+        if (!encoder->Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
+                                err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
                                   "NVENC configure: " + err + "; preInit={" + diag.str() + "}");
             return;
@@ -600,7 +609,7 @@ void VideoThread::Run() {
         // structured event so they reach the JSONL even if a later failure means no
         // final snapshot is produced. hdr_mode is a session-level concept the
         // encoder does not know, so it is filled from the config here.
-        EncoderInitInfo enc_init = nvenc.GetInitInfo();
+        EncoderInitInfo enc_init = encoder->GetInitInfo();
         enc_init.hdr_mode = m_state.config.hdr_mode;
         m_state.diagnostics.SetEncoderInitInfo(enc_init);
 
@@ -767,7 +776,7 @@ void VideoThread::Run() {
             }
 
             std::string err;
-            if (!nvenc.RegisterSlotTexture(i, nv12Textures[i].get(), err)) {
+            if (!encoder->RegisterSlotTexture(i, nv12Textures[i].get(), err)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC register slot: " + err);
                 return;
             }
@@ -2038,7 +2047,7 @@ void VideoThread::Run() {
         split_armed_secondary_logged = false;
         split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
                                      : SplitTriggerSource::AutomaticDuration;
-        nvenc.RequestKeyframe();
+        encoder->RequestKeyframe();
         m_state.diagnostics.OnForcedKeyframe();
         m_state.diagnostics.SetSplitPending(true);
         // Both conditions can be true in the same call (e.g. a seq-based split --
@@ -2206,7 +2215,7 @@ void VideoThread::Run() {
     auto reapAndRoute = [&](uint32_t wait_head_ms) -> bool {
         std::vector<EncodedVideoPacket> reaped;
         std::string reapErr;
-        if (!nvenc.ReapCompleted(reaped, reapErr, wait_head_ms)) {
+        if (!encoder->ReapCompleted(reaped, reapErr, wait_head_ms)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC async reap: " + reapErr);
             return false;
         }
@@ -2903,13 +2912,13 @@ void VideoThread::Run() {
                 const auto tick_t0 = std::chrono::steady_clock::now();
                 const uint64_t pts_ns = cfr_frame_idx * frame_interval_ns;
 
-                int32_t slot = nvenc.AcquireFreeSlot();
+                int32_t slot = encoder->AcquireFreeSlot();
                 if (slot < 0) {
                     // No free input slot: give the async encoder a bounded chance to
                     // reap a completion and free one before counting a drop.
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
-                    slot = nvenc.AcquireFreeSlot();
+                    slot = encoder->AcquireFreeSlot();
                 }
                 if (slot < 0) {
                     ++slotStallCount;
@@ -3014,7 +3023,7 @@ void VideoThread::Run() {
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
                         needsGpuCompositor);
                     if (nativeSrc == nullptr) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     if (useOdCapture) {
@@ -3034,7 +3043,7 @@ void VideoThread::Run() {
 
                     const auto conv_t0 = std::chrono::steady_clock::now();
                     if (!encodeNativeHdrSlot(nativeSrc, slot)) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     const auto conv_t1 = std::chrono::steady_clock::now();
@@ -3059,7 +3068,7 @@ void VideoThread::Run() {
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(rawSourceTex);
                     if (sdrSourceTex == nullptr) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, overlay);
@@ -3068,7 +3077,7 @@ void VideoThread::Run() {
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
                         needsGpuCompositor);
                     if (vpInput == nullptr) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     if (useOdCapture) {
@@ -3110,7 +3119,7 @@ void VideoThread::Run() {
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
                             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
-                            nvenc.ReleaseSlot(slot);
+                            encoder->ReleaseSlot(slot);
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {
@@ -3162,7 +3171,7 @@ void VideoThread::Run() {
                     // and its conversion (input view / VideoProcessorBlt) failed, which
                     // costs real picture, versus nothing to encode yet at session start,
                     // which is benign pacing. See ClassifyCfrTickDrop.
-                    nvenc.ReleaseSlot(slot);
+                    encoder->ReleaseSlot(slot);
                     ++droppedFrames;
                     if (ClassifyCfrTickDrop(rawSourceTex != nullptr, refNv12 != nullptr) ==
                         CfrTickDropCause::ProcessingFailure) {
@@ -3184,7 +3193,7 @@ void VideoThread::Run() {
                 std::string encErr;
                 m_state.diagnostics.OnEncodeSubmitted();
                 const auto enc_t0 = std::chrono::steady_clock::now();
-                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkts, encErr);
+                bool encOk = encoder->EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkts, encErr);
                 const auto enc_t1 = std::chrono::steady_clock::now();
                 // Call-site CPU cost of the submit; the true submit->ready latency
                 // (P5-P7-correct) travels on each packet and is reported only when set.
@@ -3508,13 +3517,13 @@ void VideoThread::Run() {
                 const auto tick_t0 = std::chrono::steady_clock::now();
 
                 // Acquire a free input slot
-                int32_t slot = nvenc.AcquireFreeSlot();
+                int32_t slot = encoder->AcquireFreeSlot();
                 if (slot < 0) {
                     // No free input slot: give the async encoder a bounded chance to
                     // reap a completion and free one before counting a drop.
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
-                    slot = nvenc.AcquireFreeSlot();
+                    slot = encoder->AcquireFreeSlot();
                 }
 
                 if (slot >= 0 && hdrNativeActive) {
@@ -3528,7 +3537,7 @@ void VideoThread::Run() {
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
                         needsGpuCompositor);
                     if (nativeSrc == nullptr) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     if (useOdCapture) {
@@ -3541,7 +3550,7 @@ void VideoThread::Run() {
 
                     const auto conv_t0 = std::chrono::steady_clock::now();
                     if (!encodeNativeHdrSlot(nativeSrc, slot)) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     const auto conv_t1 = std::chrono::steady_clock::now();
@@ -3556,7 +3565,7 @@ void VideoThread::Run() {
                     std::string encErr;
                     m_state.diagnostics.OnEncodeSubmitted();
                     const auto enc_t0 = std::chrono::steady_clock::now();
-                    bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
+                    bool encOk = encoder->EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
                     const auto enc_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnEncodeSubmitCost(
                         enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
@@ -3579,7 +3588,7 @@ void VideoThread::Run() {
                     const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
                     if (sdrSourceTex == nullptr) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, overlay);
@@ -3588,7 +3597,7 @@ void VideoThread::Run() {
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
                         needsGpuCompositor);
                     if (vpInput == nullptr) {
-                        nvenc.ReleaseSlot(slot);
+                        encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
                     if (useOdCapture) {
@@ -3625,7 +3634,7 @@ void VideoThread::Run() {
                         std::string ayuvErr;
                         if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
                             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
-                            nvenc.ReleaseSlot(slot);
+                            encoder->ReleaseSlot(slot);
                             goto end_encode_loop;
                         }
                         if (SUCCEEDED(hr)) {
@@ -3639,7 +3648,8 @@ void VideoThread::Run() {
                             std::string encErr;
                             m_state.diagnostics.OnEncodeSubmitted();
                             const auto enc_t0 = std::chrono::steady_clock::now();
-                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
+                            bool encOk =
+                                encoder->EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
                             const auto enc_t1 = std::chrono::steady_clock::now();
                             m_state.diagnostics.OnEncodeSubmitCost(
                                 enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
@@ -3711,7 +3721,7 @@ end_encode_loop:
         std::string flushErr;
         // flushErr is not escalated — a partial drain is acceptable; any encoded
         // output already in the mux queue is preserved regardless of flush outcome.
-        nvenc.Flush(drainPkts, flushErr);
+        encoder->Flush(drainPkts, flushErr);
 
         for (auto& pkt : drainPkts) {
             if (pkt.bytes.empty())
@@ -3786,7 +3796,7 @@ end_encode_loop:
     }
 
     // --- Unregister NVENC resources + destroy ---
-    nvenc.Destroy();
+    encoder->Destroy();
 
     // --- Update final stats ---
     {
