@@ -1216,13 +1216,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_playback_clock PRIVATE src)
 
-# EditPlayerEngine: file-open, stream discovery and error paths. The fixtures
-# are real containers written with libavformat, but carry no real compressed
-# bitstream -- this FFmpeg build ships no video encoder (LGPL, ADR 0007), so
-# real decode stays user-live-verified. FFmpeg::mux is listed explicitly
-# because the test compiles src/edit_player_engine.cpp itself and needs the
-# libavformat/libavcodec headers at compile time (recorder_core links FFmpeg
-# PRIVATE, so its include dirs don't propagate).
+# EditPlayerEngine: file-open, stream discovery and error paths. Most of the
+# fixtures here are synthetic containers written with libavformat carrying no
+# real compressed bitstream -- this FFmpeg build ships no video encoder (LGPL,
+# ADR 0007) -- so those exercise Open()/track-discovery only. A handful of
+# tests actually decode (DecodeFrameAtRaw/StartPlaybackDecodeRaw), which needs
+# a real bitstream; those open a checked-in-locally (gitignored, .workspace/ is
+# scratch) fixture clip via EXOSNAP_SOURCE_DIR and GTEST_SKIP when it is not
+# present on the host, same convention as test_analyze_encode_perf.cpp.
+# FFmpeg::mux is listed explicitly because the test compiles
+# src/edit_player_engine.cpp itself and needs the libavformat/libavcodec
+# headers at compile time (recorder_core links FFmpeg PRIVATE, so its include
+# dirs don't propagate).
 exosnap_add_gtest(
     NAME test_edit_player_engine
     TEST_PREFIX recorder_core.
@@ -1233,6 +1238,7 @@ exosnap_add_gtest(
     LIBRARIES recorder_core FFmpeg::mux
 )
 target_include_directories(test_edit_player_engine PRIVATE src include)
+target_compile_definitions(test_edit_player_engine PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # EditAudioMixer: how several audio tracks of one recording are summed and how
 # the result behaves when it overloads or when one track stops. Self-contained
