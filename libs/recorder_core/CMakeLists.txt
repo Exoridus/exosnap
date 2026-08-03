@@ -1258,16 +1258,19 @@ exosnap_add_gtest(
 )
 target_include_directories(test_edit_player_session PRIVATE src include)
 
-# EditFrameGpuConverter (editor-playback GPU render path, prep task): WARP-backed
-# smoke test that Init() succeeds against a real D3D11 device/context. Convert()
-# itself is a Task 1 stub (clears to a fixed debug color) -- Task 2 replaces the
-# whole file and is expected to extend this test with real conversion coverage.
+# EditFrameGpuConverter (editor-playback GPU render path): WARP-backed proof that
+# the YUV->BGRA shader renders every DecodedPixelFormat exactly like the CPU
+# converters (yuv_to_bgra.cpp) for both the BT.709 and BT.601 matrices, and that
+# the HDR10 PQ tone-map shader renders the monitoring chain (hdr_preview.cpp) at
+# the session's display peak.
 exosnap_add_gtest(
     NAME test_edit_frame_gpu_converter
     TEST_PREFIX recorder_core.
     SOURCES tests/test_edit_frame_gpu_converter.cpp
             src/edit_frame_gpu_converter.cpp
-    LIBRARIES d3d11.lib dxgi.lib
+            src/yuv_to_bgra.cpp
+            src/hdr_preview.cpp
+    LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib
 )
 target_include_directories(test_edit_frame_gpu_converter PRIVATE src include)
 target_compile_definitions(test_edit_frame_gpu_converter PRIVATE NOMINMAX)
