@@ -1406,15 +1406,25 @@ exosnap_add_gtest(
         services/TimelineThumbnailSource.cpp
         ui/widgets/EditPlayerSurface.h
         ui/widgets/EditPlayerSurface.cpp
+        # Native child-HWND GPU render host EditPlayerSurface now owns (2026-08-03
+        # editor-playback-gpu-render design) -- see edit_player_surface_tests below
+        # for its own dedicated lifecycle/resize coverage.
+        services/EditPlayerRenderer.h
+        services/EditPlayerRenderer.cpp
+        diagnostics/AppLog.h
+        diagnostics/AppLog.cpp
         ui/widgets/EditDetailsRail.h
         ui/widgets/EditDetailsRail.cpp
         ui/widgets/ExportPanel.h
         ui/widgets/ExportPanel.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
+    LIBRARIES
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
+        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(edit_export_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(edit_export_page_tests PRIVATE NOMINMAX)
 set_target_properties(edit_export_page_tests PROPERTIES AUTOMOC ON)
 
 # EDIT-OVERLAY-R1: EditExportOverlay hosts EditExportPage as an overlay over Record
@@ -1432,16 +1442,50 @@ exosnap_add_gtest(
         services/TimelineThumbnailSource.cpp
         ui/widgets/EditPlayerSurface.h
         ui/widgets/EditPlayerSurface.cpp
+        services/EditPlayerRenderer.h
+        services/EditPlayerRenderer.cpp
+        diagnostics/AppLog.h
+        diagnostics/AppLog.cpp
         ui/widgets/EditDetailsRail.h
         ui/widgets/EditDetailsRail.cpp
         ui/widgets/ExportPanel.h
         ui/widgets/ExportPanel.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
+    LIBRARIES
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
+        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(edit_export_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(edit_export_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(edit_export_overlay_tests PROPERTIES AUTOMOC ON)
+
+# Native child-HWND GPU render host for the editor player (2026-08-03
+# editor-playback-gpu-render design, Task 4): EditPlayerSurface's own
+# lifecycle/resize coverage, dedicated (rather than folded into
+# edit_export_page_tests above) so it can run against a real hardware D3D11
+# device -- same live-hardware precedent as dxgi_preview_pushed_source_tests
+# (EditPlayerRenderer::InitD3D11() hardcodes D3D_DRIVER_TYPE_HARDWARE);
+# GTEST_SKIP covers headless/GPU-less runners.
+exosnap_add_gtest(
+    NAME edit_player_surface_tests
+    TEST_PREFIX edit_player.
+    SOURCES
+        tests/test_edit_player_surface.cpp
+        ui/widgets/EditPlayerSurface.h
+        ui/widgets/EditPlayerSurface.cpp
+        services/EditPlayerRenderer.h
+        services/EditPlayerRenderer.cpp
+        diagnostics/AppLog.h
+        diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core Qt6::Gui Qt6::Widgets recorder_core
+        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
+    LABELS live
+)
+target_include_directories(edit_player_surface_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(edit_player_surface_tests PRIVATE NOMINMAX)
+set_target_properties(edit_player_surface_tests PROPERTIES AUTOMOC ON)
 
 # Export panel embedded in the edit surface's right rail; presentation only, the
 # export itself stays in EditExportPage (2026-08-03 edit-export-panel design).

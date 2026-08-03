@@ -60,6 +60,14 @@ struct EditPlayerSession::Impl {
     std::function<void(DecodedVideoFrame)> on_frame;
     std::mutex callback_mutex; // guards on_frame against concurrent Set/invoke
 
+    // RAW/GPU render path (2026-08-03 design) -- the callback Play()/SeekTo()
+    // actually drive today; see SetOnFrameReadyRaw's doc comment. Delivered
+    // directly from the engine's own decode/seek thread, with no
+    // intermediate queue (unlike on_frame/video_queue above, which this
+    // supersedes).
+    std::function<void(RawDecodedVideoFrame)> on_frame_raw;
+    std::mutex callback_mutex_raw;
+
     // Scrub seek: only ever one in flight. A new SeekTo() bumps the
     // generation counter; the worker thread checks it before delivering a
     // frame so a superseded seek's result is silently dropped -- the
@@ -114,6 +122,12 @@ struct EditPlayerSession::Impl {
         std::lock_guard<std::mutex> lock(callback_mutex);
         if (on_frame)
             on_frame(std::move(frame));
+    }
+
+    void DeliverRawFrame(RawDecodedVideoFrame frame) {
+        std::lock_guard<std::mutex> lock(callback_mutex_raw);
+        if (on_frame_raw)
+            on_frame_raw(std::move(frame));
     }
 
     void EnqueueVideoFrame(DecodedVideoFrame frame) {
@@ -194,6 +208,11 @@ void EditPlayerSession::SetOnFrameReady(std::function<void(DecodedVideoFrame)> c
     impl_->on_frame = std::move(callback);
 }
 
+void EditPlayerSession::SetOnFrameReadyRaw(std::function<void(RawDecodedVideoFrame)> callback) {
+    std::lock_guard<std::mutex> lock(impl_->callback_mutex_raw);
+    impl_->on_frame_raw = std::move(callback);
+}
+
 void EditPlayerSession::Play(int64_t start_us) {
     if (impl_->playing)
         return;
@@ -236,8 +255,12 @@ void EditPlayerSession::Play(int64_t start_us) {
     if (impl_->has_audio)
         impl_->audio.Start();
 
-    impl_->engine.StartPlaybackDecode(
-        start_us, [this](DecodedVideoFrame frame) { impl_->EnqueueVideoFrame(std::move(frame)); },
+    // RAW/GPU render path (see SetOnFrameReadyRaw's doc comment): delivered
+    // straight to on_frame_raw from the engine's own decode thread, no
+    // intermediate queue -- EditPlayerRenderer::PresentFrame does the
+    // present-time clock gate that used to live in the queue/PollFrame() path.
+    impl_->engine.StartPlaybackDecodeRaw(
+        start_us, [this](RawDecodedVideoFrame frame) { impl_->DeliverRawFrame(std::move(frame)); },
         [this](DecodedAudioBlock block) {
             if (impl_->has_audio && block.interleaved_stereo)
                 impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
@@ -245,13 +268,12 @@ void EditPlayerSession::Play(int64_t start_us) {
         [this]() -> int64_t { return impl_->media_clock_us.load(); });
 
     // The engine builds a playback resampler per audio track inside
-    // StartPlaybackDecode, and those can fail on a file whose audio streams
+    // StartPlaybackDecodeRaw, and those can fail on a file whose audio streams
     // opened perfectly well. This class paces video off the audio clock, so
     // believing in audio that never arrives would leave FramesPlayed() at 0
-    // forever: the clock would stay pinned to start_us, PollFrame would keep
-    // selecting the same frame, and playback would present as a frozen picture
-    // with a stationary playhead. Fall back to the same video-only path a file
-    // without an audio stream takes (see PollFrame) instead.
+    // forever: the clock would stay pinned to start_us and playback would
+    // present as a frozen picture with a stationary playhead. Fall back to
+    // the same video-only path a file without an audio stream takes instead.
     //
     // PlaybackDeliversAudio() answers "at least one track", which is exactly
     // the question this needs: one surviving track advances the clock just as
@@ -290,10 +312,11 @@ void EditPlayerSession::SeekTo(int64_t target_us) {
     if (impl_->seek_thread.joinable())
         impl_->seek_thread.join(); // the previous seek already saw a bumped generation and is winding down
 
+    // RAW/GPU render path (see SetOnFrameReadyRaw's doc comment).
     impl_->seek_thread = std::thread([this, target_us, my_generation]() {
-        auto frame = impl_->engine.DecodeFrameAt(target_us);
+        auto frame = impl_->engine.DecodeFrameAtRaw(target_us);
         if (frame.has_value() && impl_->seek_generation.load() == my_generation)
-            impl_->DeliverFrame(std::move(*frame));
+            impl_->DeliverRawFrame(std::move(*frame));
     });
 }
 
@@ -333,6 +356,10 @@ std::optional<DecodedVideoFrame> EditPlayerSession::PollFrame() {
     // this queue is the thing pacing it.
     impl_->video_queue_cv.notify_one();
     return selected;
+}
+
+int64_t EditPlayerSession::ClockSnapshotUs() const noexcept {
+    return impl_->media_clock_us.load(std::memory_order_relaxed);
 }
 
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
