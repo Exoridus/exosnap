@@ -12,8 +12,8 @@
 # Only the mux-only DLL set (avformat, avcodec, avutil, swresample) is shipped.
 # The remaining DLLs (avfilter, swscale, avdevice) are NOT deployed.
 #
-# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r5 (upstream n8.1.1)
-# Release tag:  r5
+# FFmpeg build: Exoridus/exosnap-ffmpeg-build release r7 (upstream n8.1.1)
+# Release tag:  r7
 # License:      LGPL-2.1-or-later (compatible with ExoSnap GPL-3.0-or-later)
 #
 # r1 -> r2: added --enable-muxer=mp4. mp4 and mov share the movenc backend
@@ -37,18 +37,28 @@
 # See ADR 0007 -- ExoSnap's own build stays hardware-only; x264/x265 software
 # encoding, if ever offered, is a user-supplied FFmpeg install detected at
 # runtime, never bundled here.
+#
+# r5 -> r7: added the h264/hevc/av1 x d3d11va/d3d11va2/dxva2 hwaccels
+# (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+# Vendor-neutral (D3D11/DXVA are Windows APIs, not NVIDIA-specific): frames
+# come back as ID3D11Texture2D, no CUDA/vendor SDK linked in. Verified against
+# this codebase's TryAttachD3D11VA/DeinterleaveHwReadbackFrame on real
+# hardware (RTX 5070 Ti) before tagging: avcodec_get_hw_config() previously
+# returned nullptr for h264/hevc/av1 (no hwaccel compiled in at all, r5 and
+# earlier); r7 fixes that. r6 (GPL/libx264/libx265) was never on this line --
+# r7 branches from r5, same as this comment block's LGPL license note above.
 
 include(FetchContent)
 
-set(EXOSNAP_FFMPEG_VERSION "r5-n8.1.1"
+set(EXOSNAP_FFMPEG_VERSION "r7-n8.1.1"
     CACHE STRING "Pinned exosnap-ffmpeg-build release version (informational)")
 
 # IMPORTANT: pin an immutable release tag (r1, r2, …), never a rolling tag.
 # Assets under a versioned release tag are immutable; the SHA256 pin is stable.
 FetchContent_Declare(
     ffmpeg_prebuilt
-    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r5/ffmpeg-win64-lgpl-shared.zip"
-    URL_HASH "SHA256=D40D2B3D14CD6065B57AB7735E977B01FED447AC534A4E19B74C490E1C3BBEED"
+    URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/r7/ffmpeg-win64-lgpl-shared.zip"
+    URL_HASH "SHA256=E895E66FC9CE1871ABC09A09FD9B99B663971ADFDD2BC1F10B119942E656AFCB"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(ffmpeg_prebuilt)
