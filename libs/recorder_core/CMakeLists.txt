@@ -279,6 +279,9 @@ add_library(recorder_core STATIC
     src/frame_pacing.cpp
     src/nvenc_encoder.cpp
     src/nvenc_video_encoder.cpp
+    include/recorder_core/interfaces/IVideoEncoder.h
+    include/recorder_core/interfaces/VideoEncoderFactory.h
+    src/video_encoder_factory.cpp
     include/recorder_core/hdr_bitstream_metadata.h
     src/hdr_bitstream_metadata.cpp
     src/ffmpeg_aac_encoder.cpp
@@ -367,6 +370,12 @@ add_library(recorder_core STATIC
 
 target_include_directories(recorder_core
     PUBLIC  include
+            # Header-only: VideoEncoderFactory.h needs capability::AdapterVendor
+            # (adapter_enum.h, no compiled symbols). Include path only, deliberately
+            # NOT a target_link_libraries(recorder_core ... exosnap::capability) --
+            # exosnap_capability already links recorder_core PUBLICLY, so linking it
+            # back here would be a build-graph cycle.
+            "${CMAKE_SOURCE_DIR}/libs/capability/include"
     PRIVATE src
             "${CMAKE_SOURCE_DIR}/third_party/nvidia"
 )
@@ -595,6 +604,18 @@ exosnap_add_gtest(
 )
 target_include_directories(test_nvenc_video_encoder_interface PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
+# IVideoEncoder-refactor (encoder-tuning step 1/3): FakeVideoEncoder-backed
+# coverage of encoder dispatch paths video_thread.cpp only exercised via real
+# NVENC hardware before. Placeholder body on the parallel-split base commit;
+# Agent B fills it in alongside tests/fakes/fake_video_encoder.h.
+exosnap_add_gtest(
+    NAME test_video_thread_encoder_dispatch
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_video_thread_encoder_dispatch.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_video_thread_encoder_dispatch PRIVATE src)
 
 # test_nvenc_rc_params: pure unit tests for ComputeNvencRcParams (no GPU needed).
 exosnap_add_gtest(
