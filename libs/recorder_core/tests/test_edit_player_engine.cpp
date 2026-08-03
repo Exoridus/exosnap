@@ -242,7 +242,7 @@ TEST(EditPlayerEngine, PlaybackDeliversNoAudioBeforeAnyPlaybackStarts) {
 TEST(EditPlayerEngine, PlaybackDeliversNoAudioAfterStartingWithoutAnOpenFile) {
     EditPlayerEngine engine;
     engine.StartPlaybackDecode(
-        0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {},
+        0, [](recorder_core::RawDecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {},
         [] { return int64_t{-1}; });
     EXPECT_FALSE(engine.PlaybackDeliversAudio());
     engine.StopPlaybackDecode();
@@ -345,16 +345,6 @@ TEST(EditPlayerEngine, DecodeFrameAtWithoutOpenReturnsNullopt) {
     EXPECT_FALSE(engine.DecodeFrameAt(0).has_value());
 }
 
-TEST(EditPlayerEngine, StartStopPlaybackDecodeWithoutOpenIsSafeNoOp) {
-    EditPlayerEngine engine;
-    std::atomic<int> video_calls{0};
-    engine.StartPlaybackDecode(
-        0, [&](recorder_core::DecodedVideoFrame) { ++video_calls; }, [](recorder_core::DecodedAudioBlock) {},
-        [] { return int64_t{-1}; });
-    engine.StopPlaybackDecode();
-    EXPECT_EQ(video_calls.load(), 0);
-}
-
 TEST(EditPlayerEngine, StopPlaybackDecodeWithoutStartIsSafeNoOp) {
     EditPlayerEngine engine;
     engine.StopPlaybackDecode(); // must not crash / hang
@@ -367,7 +357,7 @@ TEST(EditPlayerEngine, RepeatedStartStopPlaybackDecodeWithoutOpenIsSafe) {
     EditPlayerEngine engine;
     for (int i = 0; i < 3; ++i) {
         engine.StartPlaybackDecode(
-            0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {}, {});
+            0, [](recorder_core::RawDecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {}, {});
         engine.StopPlaybackDecode();
         engine.StopPlaybackDecode(); // double-stop must be safe
     }
@@ -536,7 +526,7 @@ TEST(EditPlaybackPacing, UnknownDemuxPositionNeverPaces) {
     EXPECT_TRUE(ShouldDemuxMorePackets(recorder_core::kUnknownDemuxPositionUs, 600'000'000, 1'000'000));
 }
 
-// ---- Raw-frame decode path: DecodeFrameAtRaw / StartPlaybackDecodeRaw -----
+// ---- Raw-frame decode path: DecodeFrameAtRaw / StartPlaybackDecode -----
 //
 // Everything above opens a synthetic MKV whose video track carries no real
 // compressed bitstream (this FFmpeg build ships no video encoder -- ADR
@@ -570,10 +560,10 @@ TEST(EditPlayerEngine, DecodeFrameAtRawWithoutOpenReturnsNullopt) {
     EXPECT_FALSE(engine.DecodeFrameAtRaw(0).has_value());
 }
 
-TEST(EditPlayerEngine, StartStopPlaybackDecodeRawWithoutOpenIsSafeNoOp) {
+TEST(EditPlayerEngine, StartStopPlaybackDecodeWithoutOpenIsSafeNoOp) {
     EditPlayerEngine engine;
     std::atomic<int> video_calls{0};
-    engine.StartPlaybackDecodeRaw(
+    engine.StartPlaybackDecode(
         0, [&](recorder_core::RawDecodedVideoFrame) { ++video_calls; }, [](recorder_core::DecodedAudioBlock) {},
         [] { return int64_t{-1}; });
     engine.StopPlaybackDecode();
@@ -606,7 +596,7 @@ TEST(EditPlayerEngine, DecodeRawDeliversRefcountedFramesThatOutliveEngineTeardow
         // discarded before conversion (ShouldConvertDecodedFrame) -- every
         // decoded frame from t=0 is delivered, matching probe_edit_playback's
         // step B throughput-measurement convention.
-        engine.StartPlaybackDecodeRaw(
+        engine.StartPlaybackDecode(
             0,
             [&](recorder_core::RawDecodedVideoFrame frame) {
                 std::lock_guard<std::mutex> lock(mu);

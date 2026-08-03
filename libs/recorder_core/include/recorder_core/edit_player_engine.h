@@ -4,14 +4,26 @@
 // (docs/superpowers/specs/2026-07-14-edit-video-player-design.md).
 //
 // UI-agnostic (no Qt types) per CLAUDE.md. Opens the MKV edit master
-// (EditContext::mkv_master_path), decodes video frames to ready-to-paint BGRA
-// (internally reusing yuv_to_bgra.h -- a private recorder_core header never
-// exposed here, since decoders emit fully-planar YUV420/YUV420P10LE that this
-// engine converts before handing anything to a caller), and decodes audio to
-// a fixed 48 kHz stereo interleaved float32 PCM stream (matching the
-// product's own internal mix-bus format). A recording carrying several audio
-// tracks -- system and microphone sound kept separate -- plays ALL of them,
-// summed into that one stream.
+// (EditContext::mkv_master_path) and decodes video frames in TWO shapes,
+// depending on the caller:
+//
+// - DecodeFrameAt returns a ready-to-paint BGRA frame (internally reusing
+//   yuv_to_bgra.h -- a private recorder_core header never exposed here, since
+//   decoders emit fully-planar YUV420/YUV420P10LE that this engine converts
+//   before handing anything to a caller). Used by the timeline thumbnail
+//   strip (TimelineThumbnailSource), which needs a QImage and has no GPU
+//   converter of its own.
+// - DecodeFrameAtRaw/StartPlaybackDecode (this class's own scrub-seek and
+//   continuous playback, driven by EditPlayerSession) instead return/deliver
+//   RawDecodedVideoFrame -- unconverted decoder planes -- for the editor
+//   player's GPU render path
+//   (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md),
+//   which does the colour conversion itself, on the GPU.
+//
+// Also decodes audio to a fixed 48 kHz stereo interleaved float32 PCM stream
+// (matching the product's own internal mix-bus format). A recording carrying
+// several audio tracks -- system and microphone sound kept separate -- plays
+// ALL of them, summed into that one stream.
 //
 // This header covers Open/Close/stream-discovery/single-frame seek-decode
 // (the scrub and trim-handle-drag path) as well as continuous playback decode
@@ -65,7 +77,6 @@ struct AudioTrackDescription {
     std::string name;
 };
 
-using VideoFrameCallback = std::function<void(DecodedVideoFrame)>;
 using AudioBlockCallback = std::function<void(DecodedAudioBlock)>;
 
 // Pixel format of a RawDecodedVideoFrame's planes -- the decoder's own layout,
@@ -114,7 +125,7 @@ struct RawDecodedVideoFrame {
     std::shared_ptr<void> backing_frame;
 };
 
-using RawVideoFrameCallback = std::function<void(RawDecodedVideoFrame)>;
+using VideoFrameCallback = std::function<void(RawDecodedVideoFrame)>;
 
 class EditPlayerEngine {
   public:
@@ -148,7 +159,7 @@ class EditPlayerEngine {
     // The opened clip's coded frame size, or 0 when it is unknown (not open,
     // no video stream). Callers use it to size buffers by memory rather than
     // by frame count -- a depth that is sensible at 1080p can be a gigabyte at
-    // 2160p, and the decoded frames this engine delivers are BGRA.
+    // 2160p once multiplied out.
     [[nodiscard]] int VideoWidth() const noexcept;
     [[nodiscard]] int VideoHeight() const noexcept;
 
@@ -181,7 +192,13 @@ class EditPlayerEngine {
     // Same contract as DecodeFrameAt, but returns the frame unconverted (raw
     // decoder planes) for the GPU conversion path
     // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
-    // instead of CPU-converted BGRA. Not yet implemented -- returns nullopt.
+    // instead of CPU-converted BGRA -- EditPlayerSession drives this one for
+    // the editor player's own scrub/trim-handle-drag seeks, so its result can
+    // go straight to EditFrameGpuConverter without an extra CPU round trip.
+    // DecodeFrameAt above stays the one the timeline thumbnail strip uses
+    // (TimelineThumbnailSource): a QImage tile needs BGRA either way, and
+    // thumbnail decoding is off the playback critical path, so there is
+    // nothing for a GPU hop to save there.
     [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
 
     // Every audio track the open file carries, in stream order. `name` comes
@@ -208,7 +225,7 @@ class EditPlayerEngine {
     // and audio via the callbacks below until StopPlaybackDecode() is called.
     // No-op if not open or already running.
     //
-    // Runs on THREE threads -- demux, video decode+convert, audio
+    // Runs on THREE threads -- demux, video decode+wrap, audio
     // decode+resample+mix -- so that audio never depends on video keeping up
     // (docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md).
     // Every audio track decodes on that one audio thread and is summed there,
@@ -227,19 +244,20 @@ class EditPlayerEngine {
     //
     // current_media_time_us reports the playback clock in absolute media time
     // (the caller's audio clock), or any NEGATIVE value when no clock is
-    // available. The video thread discards a decoded frame before the colour
-    // conversion when that clock has already passed the frame's timestamp --
-    // the conversion is the expensive part and the frame would only be dropped
-    // on presentation anyway. With no clock, nothing is discarded. An empty
-    // std::function is treated the same as "no clock".
+    // available. The video thread discards a decoded frame before wrapping it
+    // (WrapRawDecodedFrame) when that clock has already passed the frame's
+    // timestamp -- the caller's GPU colour conversion is the expensive part,
+    // and the frame would only be dropped on presentation anyway, so there is
+    // no point paying for the wrap either. With no clock, nothing is
+    // discarded. An empty std::function is treated the same as "no clock".
+    //
+    // Delivers unconverted (RawDecodedVideoFrame) video for the editor
+    // player's GPU render path
+    // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
+    // -- the caller's own EditFrameGpuConverter does the colour conversion,
+    // not this engine.
     void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
                              std::function<int64_t()> current_media_time_us);
-
-    // Same contract as StartPlaybackDecode, but delivers unconverted
-    // (RawDecodedVideoFrame) video for the GPU conversion path instead of
-    // CPU-converted BGRA. Not yet implemented -- a no-op.
-    void StartPlaybackDecodeRaw(int64_t start_us, RawVideoFrameCallback on_video, AudioBlockCallback on_audio,
-                                std::function<int64_t()> current_media_time_us);
 
     // Stops and joins the playback decode threads, if running. Safe to call
     // even if not running (no-op). Called from Close() and the destructor.

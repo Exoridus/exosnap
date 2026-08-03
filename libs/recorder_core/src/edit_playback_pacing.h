@@ -16,9 +16,10 @@ namespace recorder_core {
 // The colour conversion is the expensive half of that thread's work (2.9 ms
 // per 1440p frame even vectorised), so a frame whose presentation time the
 // playback clock has already passed is discarded BEFORE it is converted --
-// PollFrame() would only drop it again, and the conversion would have bought
-// nothing. This makes the expensive work scale with the presentation rate
-// rather than with the clip's frame rate.
+// the caller's own present-gate (EditPlayerRenderer::PresentFrame) would only
+// drop it again, and the conversion would have bought nothing. This makes the
+// expensive work scale with the presentation rate rather than with the
+// clip's frame rate.
 
 // True when a decoded frame at pts_us is still worth converting.
 //

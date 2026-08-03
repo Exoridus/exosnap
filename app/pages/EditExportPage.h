@@ -1,5 +1,4 @@
 #pragma once
-#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -137,7 +136,6 @@ class EditExportPage : public QWidget {
     void onScrubMoved(qint64 position_ms);
     void onScrubFinished();
     void onPreviewTick();
-    void onDecodedFrameReady(QImage frame); // marshalled onto the UI thread via invokeMethod
 
   protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -240,8 +238,10 @@ class EditExportPage : public QWidget {
 
     // Real decoder session driving player_surface_. Opened per clip in
     // setEditContext(), closed in hideEvent(). Its frame callback fires on
-    // internal worker threads and is marshalled to the UI thread via
-    // onDecodedFrameReady (Qt::QueuedConnection).
+    // internal worker threads and is delivered straight into player_surface_'s
+    // GPU renderer -- see the SetOnFrameReady wiring in setEditContext() for
+    // why that stays off the UI thread instead of marshalling through
+    // QMetaObject::invokeMethod.
     std::unique_ptr<recorder_core::EditPlayerSession> player_session_;
 
     // Timeline (interactive: trim handles, markers, playhead)

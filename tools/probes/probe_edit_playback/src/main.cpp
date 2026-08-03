@@ -12,6 +12,17 @@
 // product uses) plus a small amount of standalone libavcodec/libavformat code
 // for the FFmpeg-threading check in step E. Writes nothing.
 //
+// 2026-08-03 update: StartPlaybackDecode now delivers RawDecodedVideoFrame
+// (unconverted decoder planes) instead of a CPU-converted BGRA frame -- the
+// editor playback GPU render path
+// (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
+// moved colour conversion out of the engine entirely, onto the caller's own
+// GPU converter. Steps B/B2/H/I below therefore now measure decode+demux
+// throughput WITHOUT the CPU YUV->BGRA conversion cost folded in (that cost
+// is still measured in isolation by steps C/C2, which call
+// ConvertFullPlanarYuv420ToBgra/ConvertFullPlanar444ToBgra directly and are
+// unaffected by this change).
+//
 // Usage:
 //   probe_edit_playback.exe <path-to-mkv> [start_us]
 //
@@ -155,16 +166,16 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t k
     std::atomic<uint32_t> firstWidth{0};
     std::atomic<uint32_t> firstHeight{0};
 
-    auto onVideo = [&](recorder_core::DecodedVideoFrame frame) {
+    auto onVideo = [&](recorder_core::RawDecodedVideoFrame frame) {
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         bool expected = false;
         if (gotFirstFrame.compare_exchange_strong(expected, true)) {
             firstWidth.store(frame.width, std::memory_order_relaxed);
             firstHeight.store(frame.height, std::memory_order_relaxed);
         }
-        // frame (and its BGRA buffer) is dropped here — destructed immediately,
-        // no WASAPI render, no pacing/sleep — this is the maximum throughput
-        // the decode path can sustain.
+        // frame (and its ref-counted AVFrame backing) is dropped here --
+        // destructed immediately, no WASAPI render, no pacing/sleep — this is
+        // the maximum throughput the decode path can sustain.
     };
     auto onAudio = [&](recorder_core::DecodedAudioBlock /*block*/) {
         audioBlocks.fetch_add(1, std::memory_order_relaxed);
@@ -215,7 +226,7 @@ void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine, int64_t k
         std::atomic<uint64_t> audioBlocks{0};
         const auto t0 = std::chrono::steady_clock::now();
         engine.StartPlaybackDecode(
-            kStartUs, [&](recorder_core::DecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
+            kStartUs, [&](recorder_core::RawDecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
             [&](recorder_core::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         engine.StopPlaybackDecode();
@@ -704,7 +715,7 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
 
     std::atomic<uint64_t> videoFrames{0};
 
-    auto onVideo = [&](recorder_core::DecodedVideoFrame /*frame*/) {
+    auto onVideo = [&](recorder_core::RawDecodedVideoFrame /*frame*/) {
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         // Simulates a video path that cannot keep up -- e.g. an unusually
         // large keyframe, a page fault, another process taking the core, or
@@ -833,7 +844,7 @@ void StepI_SeekAlignment(recorder_core::EditPlayerEngine& engine, int64_t startU
     int64_t firstVideoPts = 0;
     int64_t firstAudioPts = 0;
 
-    auto onVideo = [&](recorder_core::DecodedVideoFrame frame) {
+    auto onVideo = [&](recorder_core::RawDecodedVideoFrame frame) {
         std::lock_guard<std::mutex> lock(m);
         if (!haveVideo) {
             haveVideo = true;

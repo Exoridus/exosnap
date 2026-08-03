@@ -1,6 +1,6 @@
 # Editor Playback — GPU Render Path — Design
 
-Status: proposed, 2026-08-03.
+Status: implemented, 2026-08-03.
 
 Builds on `2026-08-01-edit-player-decoupled-decode-design.md` (thread topology, frame-queue
 backpressure, clock-gated conversion) and the throughput/threading measurements in

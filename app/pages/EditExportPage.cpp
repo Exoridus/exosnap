@@ -574,18 +574,17 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
 
             // GPU render path (2026-08-03 design): delivered directly from the
             // session's own decode/seek thread, straight into player_surface_'s
-            // renderer -- NOT marshaled through QMetaObject::invokeMethod the
-            // way the old BGRA onDecodedFrameReady(QImage) was, since
-            // EditPlayerSurface::presentFrame/EditPlayerRenderer are
+            // renderer -- NOT marshaled through QMetaObject::invokeMethod,
+            // since EditPlayerSurface::presentFrame/EditPlayerRenderer are
             // thread-safe by design (see EditPlayerRenderer's threading-model
-            // doc comment) and re-adding a per-frame UI-thread hop here would
+            // doc comment) and adding a per-frame UI-thread hop here would
             // undo the whole point of the GPU render path. player_surface_ is
             // safe to touch from this callback: player_session_ is destroyed
             // (and its decode/seek threads joined) strictly before
             // player_surface_ (see the member declaration order), and
             // hideEvent() closes the session synchronously before the page
             // hides.
-            player_session_->SetOnFrameReadyRaw([this](recorder_core::RawDecodedVideoFrame frame) {
+            player_session_->SetOnFrameReady([this](recorder_core::RawDecodedVideoFrame frame) {
                 if (player_surface_)
                     player_surface_->presentFrame(std::move(frame), kEditorHdrPeakScaleFallback);
             });
@@ -754,7 +753,7 @@ void EditExportPage::onPreviewTick() {
         // Audio is the pacing AND position source of truth while it exists
         // -- no independent wall-clock estimate to keep in sync with it.
         preview_position_ms_ = ClampPlayheadMs(player_session_->CurrentPositionMs(), durationMs());
-        // GPU render path: video frames arrive by push (SetOnFrameReadyRaw in
+        // GPU render path: video frames arrive by push (SetOnFrameReady in
         // setEditContext()), not by polling here -- this tick's only video-
         // relevant job left is refreshing the clock snapshot
         // EditPlayerRenderer::PresentFrame's present-gate reads, the same
@@ -776,11 +775,6 @@ void EditExportPage::onPreviewTick() {
     }
     if (timeline_)
         timeline_->setPositionMs(preview_position_ms_);
-}
-
-void EditExportPage::onDecodedFrameReady(QImage frame) {
-    if (player_surface_)
-        player_surface_->setFrame(std::move(frame));
 }
 
 // ---- Timeline interaction ----
