@@ -359,6 +359,8 @@ add_library(recorder_core STATIC
     src/mp4_remuxer.cpp
     include/recorder_core/edit_player_engine.h
     src/edit_player_engine.cpp
+    src/edit_player_hw_decode.h
+    src/edit_player_hw_decode.cpp
     include/recorder_core/edit_frame_gpu_converter.h
     src/edit_frame_gpu_converter.cpp
     src/edit_audio_mix.h
@@ -1233,12 +1235,27 @@ exosnap_add_gtest(
     TEST_PREFIX recorder_core.
     SOURCES tests/test_edit_player_engine.cpp
             src/edit_player_engine.cpp
+            src/edit_player_hw_decode.cpp
             src/edit_audio_mix.cpp
             src/yuv_to_bgra.cpp
     LIBRARIES recorder_core FFmpeg::mux
 )
 target_include_directories(test_edit_player_engine PRIVATE src include)
 target_compile_definitions(test_edit_player_engine PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+# Hardware-decode readback: semi-planar (NV12/P010) -> planar de-interleave,
+# including P010's <<6 left-justification rescale
+# (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+# Pure logic on hand-built synthetic frames -- no D3D11 adapter, no decoder,
+# no fixture clip needed to run these.
+exosnap_add_gtest(
+    NAME test_edit_player_hw_decode
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_edit_player_hw_decode.cpp
+            src/edit_player_hw_decode.cpp
+    LIBRARIES FFmpeg::mux
+)
+target_include_directories(test_edit_player_hw_decode PRIVATE src include)
 
 # EditAudioMixer: how several audio tracks of one recording are summed and how
 # the result behaves when it overloads or when one track stops. Self-contained
