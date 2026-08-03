@@ -172,6 +172,44 @@ HDR10 clip that reaches the PQ tonemap path reads garbage codes. Unlike the 4:4:
 isn't something to verify empirically first; it's a known required conversion step and should be
 implemented as such from the start.
 
+## Blocker found during implementation: the shipped FFmpeg build has no hwaccel compiled in at all
+
+Confirmed empirically 2026-08-03 while implementing the pieces above (`TryAttachD3D11VA`,
+`SelectD3D11HwFormat`, the `Open()` wiring, `DeinterleaveHwReadbackFrame` with the P010 fix) and
+exercising them against this machine's real HDR10 fixture clip (`hdr10_test_1080p60.mp4`, RTX 5070
+Ti). `av_hwdevice_ctx_create(AV_HWDEVICE_TYPE_D3D11VA, ...)` succeeds -- the device itself creates
+fine -- and `avcodec_open2` succeeds with `hw_device_ctx` still attached. But the `get_format`
+callback is invoked with **only** `AV_PIX_FMT_YUV420P10LE` in the offered list, never
+`AV_PIX_FMT_D3D11` -- meaning libavcodec's HEVC decoder never advertises a hardware path for this
+stream at all, so every frame decodes on the CPU exactly as before, regardless of anything in this
+design.
+
+`probe_edit_playback`'s Step F confirms the root cause directly:
+`avcodec_get_hw_config()` returns null at index 0 for h264, hevc, AND av1 -- "no hw config
+compiled in" -- while `av_hwdevice_ctx_create` for both D3D11VA and DXVA2 succeeds on their own
+(the GPU/driver/OS side is fine). `avcodec_configuration()` confirms why: this project's own
+minimal FFmpeg build ([[project_ffmpeg_build_repo]], `Exoridus/exosnap-ffmpeg-build`, currently
+pinned to r5) is compiled with `--disable-everything` plus an explicit
+`--enable-decoder=h264,hevc,av1,...` whitelist and **no** `--enable-d3d11va`, `--enable-dxva2`, or
+`--enable-hwaccel=...` flags anywhere. The decoders themselves were never built with hwaccel
+wiring, independent of what device or get_format logic this codebase supplies.
+
+**This blocks the whole feature, not a corner case of it.** Every piece of code in this design --
+`TryAttachD3D11VA`, the fallback retry, `DeinterleaveHwReadbackFrame` (including the P010 fix
+above, now implemented and unit-tested against synthetic frames) -- is correct and behaves exactly
+as designed: it degrades to today's software decode cleanly and safely, proven by the full
+`test_edit_player_engine` suite staying green against real fixture clips including the HDR10 one.
+But none of it can ever actually engage hardware decode on a machine running this FFmpeg build,
+because the decoders it links against were never compiled with a hwaccel to offer.
+
+**Fixing this is out of scope for this repository:** it requires a new release (`r7` or later) of
+the separate `Exoridus/exosnap-ffmpeg-build` repo/CI pipeline with `--enable-d3d11va
+--enable-dxva2` and the corresponding `--enable-hwaccel=...` entries for h264/hevc/av1 added to the
+whitelist, a fresh cross-compiled artifact, and this repo's CMake pin bumped to it -- the same
+release-and-verify workflow already used for r4 (decoders) through r6 (x264/x265, since reverted).
+Until that lands, this design's C++ side is complete, tested, and safe to merge as dormant
+scaffolding, but delivers zero performance benefit on any machine running the current r5 build.
+
 ## Fallback behavior
 
 Decided once, at `Open()`, per opened stream — never mid-playback. If `TryAttachD3D11VA` cannot

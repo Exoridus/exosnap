@@ -2,6 +2,7 @@
 
 #include "edit_audio_mix.h"
 #include "edit_playback_pacing.h"
+#include "edit_player_hw_decode.h"
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
 #include "playback_clock.h"
@@ -12,6 +13,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 #include <libswresample/swresample.h>
 }
 
@@ -416,6 +418,46 @@ struct AudioTrack {
     SwrCtxGuard resampler;
 };
 
+// get_format callback for a codec context with hw_device_ctx set to a
+// D3D11VA device (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+// Prefers AV_PIX_FMT_D3D11 when the decoder offers it -- meaning D3D11VA
+// negotiation accepted this stream's exact profile/chroma/bit-depth -- and
+// otherwise falls back to the LAST format libavcodec itself offered (never
+// AV_PIX_FMT_NONE, which would abort the open). That fallback also covers
+// Open()'s own hw_device_ctx-cleared retry below: with no hw_device_ctx, the
+// decoder never advertises AV_PIX_FMT_D3D11 in `pix_fmts` at all, so this
+// callback -- left installed, deliberately not reset -- degrades to picking
+// the plain software format exactly as if it had never been overridden.
+enum AVPixelFormat SelectD3D11HwFormat(AVCodecContext*, const enum AVPixelFormat* pix_fmts) {
+    enum AVPixelFormat fallback = AV_PIX_FMT_NONE;
+    for (const enum AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+        if (*p == AV_PIX_FMT_D3D11)
+            return AV_PIX_FMT_D3D11;
+        fallback = *p;
+    }
+    return fallback;
+}
+
+// Attempts to enable D3D11VA hardware decode for `vctx`, called immediately
+// before avcodec_open2 in Open() below. Creates a device-only (no shared
+// EditPlayerRenderer device -- see the design doc's "Why CPU-readback
+// interop") AV_HWDEVICE_TYPE_D3D11VA context and installs the get_format
+// callback above. Returns false, leaving vctx completely untouched, only
+// when no D3D11VA-capable adapter exists at all -- a true return says
+// nothing about whether THIS stream's profile/chroma/bit-depth will actually
+// be accepted; that negotiation happens lazily inside avcodec_open2/the
+// first avcodec_receive_frame, which is why Open() still checks
+// avcodec_open2's own return value afterwards and retries without hardware
+// on failure.
+bool TryAttachD3D11VA(AVCodecContext* vctx) {
+    AVBufferRef* device_ctx = nullptr;
+    if (av_hwdevice_ctx_create(&device_ctx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) < 0)
+        return false;
+    vctx->hw_device_ctx = device_ctx; // ownership transferred; avcodec_free_context releases it
+    vctx->get_format = SelectD3D11HwFormat;
+    return true;
+}
+
 } // namespace
 
 struct EditPlayerEngine::Impl {
@@ -565,7 +607,20 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
         // either way, which is irrelevant for a player paced by an audio clock.
         vctx->thread_count = 0;
         vctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+        // Attempt hardware decode for every clip, not narrowly gated to a
+        // specific codec/chroma combination -- see the design doc for why
+        // this is safe to try generically. TryAttachD3D11VA leaves vctx
+        // untouched when it cannot create a device at all; the per-stream
+        // profile/chroma/bit-depth negotiation happens inside avcodec_open2
+        // itself, so a hardware-incompatible stream simply fails to open
+        // here and falls back once, cleanly, to the exact call this codebase
+        // already made before hardware decode existed.
+        TryAttachD3D11VA(vctx);
         vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
+        if (!vctx_ready && vctx->hw_device_ctx != nullptr) {
+            av_buffer_unref(&vctx->hw_device_ctx);
+            vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
+        }
     }
     if (!vctx_ready) {
         if (vctx)
@@ -697,6 +752,35 @@ bool IsConvertibleFrame(const AVFrame* frame) noexcept {
     return frame->width > 0 && frame->height > 0 &&
            (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUV420P10LE ||
             frame->format == AV_PIX_FMT_YUV444P);
+}
+
+// Normalizes a D3D11 hardware-decode readback frame in place, so every call
+// site below can call IsConvertibleFrame/WrapRawDecodedFrame/
+// ConvertToDecodedFrame exactly as before regardless of which decode path
+// produced `frame` (docs/superpowers/specs/2026-08-03-editor-playback-hw-decode-design.md).
+// A no-op unless frame->format == AV_PIX_FMT_D3D11. Transfers the hardware
+// surface to system memory (av_hwframe_transfer_data) and de-interleaves it
+// via edit_player_hw_decode.h. On any failure -- including a 4:4:4 hardware
+// frame, which DeinterleaveHwReadbackFrame does not yet accept, see the
+// design doc's "Not yet verified" note -- `frame` is left unref'd (empty),
+// so the caller's existing not-IsConvertibleFrame handling drops this one
+// frame instead of the whole decode failing.
+void NormalizeHwFrame(AVFrame* frame) {
+    if (frame->format != AV_PIX_FMT_D3D11)
+        return;
+    FrameGuard sw(av_frame_alloc());
+    if (sw.frame == nullptr || av_hwframe_transfer_data(sw.frame, frame, 0) < 0) {
+        av_frame_unref(frame);
+        return;
+    }
+    AVFrame* planar = DeinterleaveHwReadbackFrame(sw.frame);
+    if (planar == nullptr) {
+        av_frame_unref(frame);
+        return;
+    }
+    av_frame_unref(frame);
+    av_frame_move_ref(frame, planar);
+    av_frame_free(&planar);
 }
 
 // Converts one held decoder frame to a ready-to-paint DecodedVideoFrame.
@@ -882,6 +966,10 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
                 return finish();
             }
 
+            // Hardware readback normalizes back to a plain software pixel
+            // format before anything below inspects frame.frame->format.
+            NormalizeHwFrame(frame.frame);
+
             // best_effort_timestamp already falls back from a missing pts to
             // the interpolated dts-based estimate; a frame with neither is
             // treated as t=0 rather than fed to av_rescale_q as
@@ -961,6 +1049,10 @@ std::optional<RawDecodedVideoFrame> DecodeForwardToTargetRaw(AVFormatContext* fm
                 // either way with the last frame decoded before it, if any.
                 return finish();
             }
+
+            // Hardware readback normalizes back to a plain software pixel
+            // format before anything below inspects frame.frame->format.
+            NormalizeHwFrame(frame.frame);
 
             // best_effort_timestamp already falls back from a missing pts to
             // the interpolated dts-based estimate; a frame with neither is
@@ -1308,6 +1400,11 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         const int recv_ret = avcodec_receive_frame(vctx, frame.frame);
                         if (recv_ret < 0)
                             break; // EAGAIN (need more input) or EOF (fully drained)
+
+                        // Hardware readback normalizes back to a plain
+                        // software pixel format before anything below
+                        // inspects frame.frame->format.
+                        NormalizeHwFrame(frame.frame);
 
                         const int64_t pts_us = FramePtsUs(frame.frame, vtb);
                         // A negative clock reading means "nobody is presenting
