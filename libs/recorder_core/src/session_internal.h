@@ -5,6 +5,7 @@
 
 #include <recorder_core/codec_types.h>
 #include <recorder_core/error_types.h>
+#include <recorder_core/interfaces/VideoEncoderFactory.h>
 #include <recorder_core/packet_types.h>
 #include <recorder_core/pipeline_diagnostics.h>
 #include <recorder_core/recorder_session.h>
@@ -21,6 +22,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -190,6 +192,14 @@ struct SessionState {
 
     // Set before Record(); invoked from the mux thread as each segment finalizes.
     SegmentCallback segment_callback;
+
+    // Encoder dispatch seam (IVideoEncoder-refactor design spec). VideoThread
+    // calls video_encoder_factory->Create(vendor) instead of constructing a
+    // concrete encoder itself. Production code never overrides this default;
+    // tests substitute a factory subclass that returns a FakeVideoEncoder to
+    // exercise VideoThread's slot/error-escalation paths without real NVENC
+    // hardware.
+    std::shared_ptr<VideoEncoderFactory> video_encoder_factory = std::make_shared<VideoEncoderFactory>();
 
     // Frame snapshot (CaptureFrame) — VideoThread reads the flag on its next real frame,
     // performs a one-shot NV12→BGRA readback, fires the callback, then clears the flag.
