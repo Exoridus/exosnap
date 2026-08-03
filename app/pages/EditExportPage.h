@@ -208,6 +208,11 @@ class EditExportPage : public QWidget {
     bool resume_after_scrub_ = false;
     qint64 preview_position_ms_ = 0;
 
+    // True once setEditContext() has successfully opened a clip's
+    // player_session_ -- gates whether showEvent() opts player_surface_ into
+    // the GPU render path (see that method's comment).
+    bool clip_open_ = false;
+
     // Export thread + output path tracking
     std::thread export_thread_;
     std::atomic<bool> export_cancel_{false};
