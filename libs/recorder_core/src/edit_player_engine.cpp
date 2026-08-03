@@ -777,8 +777,14 @@ DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, Ma
 // `is_pq_source` mirrors ConvertToDecodedFrame's `pq != nullptr` check: true
 // only for a natively-HDR10 (PQ) source, so the caller's GPU converter takes
 // the tone-map path instead of the ordinary matrix/range conversion.
-RawDecodedVideoFrame WrapRawDecodedFrame(AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix, ColorRange range,
-                                         bool is_pq_source) {
+//
+// Returns nullopt on an av_frame_alloc/av_frame_ref failure (OOM) -- matching
+// this file's own established pattern (every other av_frame_alloc call site
+// here is null-checked via FrameGuard, and DecodeForwardToTarget's finish()
+// lambda checks av_frame_ref's return before trusting the ref) rather than
+// dereferencing a possibly-null AVFrame*, which would crash inside libavutil.
+std::optional<RawDecodedVideoFrame> WrapRawDecodedFrame(AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix,
+                                                        ColorRange range, bool is_pq_source) {
     RawDecodedVideoFrame out;
     out.pts_us = pts_us;
     out.width = static_cast<uint32_t>(frame->width);
@@ -804,7 +810,12 @@ RawDecodedVideoFrame WrapRawDecodedFrame(AVFrame* frame, int64_t pts_us, MatrixC
     // gone; this path allocates only an AVFrame struct (a few hundred bytes),
     // not a multi-megabyte pixel buffer.
     AVFrame* ref = av_frame_alloc();
-    av_frame_ref(ref, frame);
+    if (ref == nullptr)
+        return std::nullopt;
+    if (av_frame_ref(ref, frame) != 0) {
+        av_frame_free(&ref);
+        return std::nullopt;
+    }
     out.backing_frame = std::shared_ptr<void>(ref, [](void* p) {
         AVFrame* f = static_cast<AVFrame*>(p);
         av_frame_free(&f);
@@ -1695,10 +1706,15 @@ void EditPlayerEngine::StartPlaybackDecodeRaw(int64_t start_us, RawVideoFrameCal
                             // does not invalidate it.
                             const bool is_pq =
                                 impl->pq_converter != nullptr && frame.frame->format == AV_PIX_FMT_YUV420P10LE;
-                            RawDecodedVideoFrame out =
+                            std::optional<RawDecodedVideoFrame> out =
                                 WrapRawDecodedFrame(frame.frame, pts_us, impl->matrix, impl->range, is_pq);
                             av_frame_unref(frame.frame);
-                            on_video(std::move(out));
+                            // nullopt only on an av_frame_alloc/av_frame_ref
+                            // OOM failure inside WrapRawDecodedFrame -- this
+                            // frame is silently dropped rather than crashing,
+                            // same as an unconvertible frame just above.
+                            if (out.has_value())
+                                on_video(std::move(*out));
                         } else {
                             av_frame_unref(frame.frame);
                         }
