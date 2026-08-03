@@ -282,6 +282,8 @@ qt_add_executable(exosnap WIN32
     services/WindowEvidenceProbe.cpp
     services/DxgiPreviewRenderer.h
     services/DxgiPreviewRenderer.cpp
+    services/EditPlayerRenderer.h
+    services/EditPlayerRenderer.cpp
     services/WebcamService.h
     services/WebcamService.cpp
     services/RecordingCoordinator.h

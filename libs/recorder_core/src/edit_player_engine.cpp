@@ -555,10 +555,17 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     if (vctx_ready) {
         // avcodec defaults thread_count to 1, i.e. no decoder threading at all
         // -- measured on a 2560x1440@60 recording, the whole playback path then
-        // peaks below realtime. 0 lets libavcodec pick a count from the host's
-        // core count; frame threading adds a few frames of decode latency,
-        // which is irrelevant for a player paced by an audio clock anyway.
-        vctx->thread_count = 0;
+        // peaks below realtime. Set explicitly to the host's core count
+        // (falling back to 1 on a report of 0, as the standard library allows)
+        // rather than leaving it to libavcodec's own 0-means-auto heuristic,
+        // matching the shipped decoders' actual thread-capability support
+        // (AV_CODEC_CAP_FRAME_THREADS/SLICE_THREADS) -- frame threading adds a
+        // few frames of decode latency, which is irrelevant for a player paced
+        // by an audio clock anyway.
+        vctx->thread_count = static_cast<int>(std::thread::hardware_concurrency());
+        if (vctx->thread_count <= 0) {
+            vctx->thread_count = 1;
+        }
         vctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
         vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
     }
@@ -938,6 +945,13 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
                                  impl_->pq_converter.get());
 }
 
+std::optional<RawDecodedVideoFrame> EditPlayerEngine::DecodeFrameAtRaw(int64_t /*target_us*/) {
+    // Prep stub (Task 1): the raw-frame decode path is not implemented yet --
+    // honestly reports "not implemented" rather than faking a frame. See the
+    // GPU render path plan's decode-side task for the real implementation.
+    return std::nullopt;
+}
+
 std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
     return impl_->audio_track_descriptions;
 }
@@ -1307,6 +1321,14 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
             impl->NotePlaybackThreadFinished();
         });
     }
+}
+
+void EditPlayerEngine::StartPlaybackDecodeRaw(int64_t /*start_us*/, RawVideoFrameCallback /*on_video*/,
+                                              AudioBlockCallback /*on_audio*/,
+                                              std::function<int64_t()> /*current_media_time_us*/) {
+    // Prep stub (Task 1): the raw-frame playback decode path is not
+    // implemented yet -- a no-op rather than faking a run. See the GPU render
+    // path plan's decode-side task for the real implementation.
 }
 
 void EditPlayerEngine::StopPlaybackDecode() {

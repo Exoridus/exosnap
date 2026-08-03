@@ -68,6 +68,54 @@ struct AudioTrackDescription {
 using VideoFrameCallback = std::function<void(DecodedVideoFrame)>;
 using AudioBlockCallback = std::function<void(DecodedAudioBlock)>;
 
+// Pixel format of a RawDecodedVideoFrame's planes -- the decoder's own layout,
+// not yet color-converted. Mirrors the three formats IsConvertibleFrame
+// already discriminates on in edit_player_engine.cpp.
+enum class DecodedPixelFormat : uint8_t {
+    Yuv420P8,  // AV_PIX_FMT_YUV420P
+    Yuv420P10, // AV_PIX_FMT_YUV420P10LE (10-bit codes in [0,1023], no P010 <<6 justification)
+    Yuv444P8,  // AV_PIX_FMT_YUV444P
+};
+
+// One decoded video frame, NOT yet color-converted: the raw planes plus enough
+// metadata for a GPU converter to do it. Deliberately FFmpeg-free (no AVFrame*,
+// no libavutil types) so this header stays includable from Qt/app code without
+// pulling in FFmpeg headers -- see `backing_frame` below.
+struct RawDecodedVideoFrame {
+    int64_t pts_us = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    DecodedPixelFormat format = DecodedPixelFormat::Yuv420P8;
+    // Row pitches in bytes, as reported by the decoder (may exceed the
+    // tight width-derived size when the source buffer is padded) -- same
+    // convention as FullPlanarYuv420Frame/FullPlanar444Frame in yuv_to_bgra.h.
+    uint32_t y_stride_bytes = 0;
+    uint32_t u_stride_bytes = 0;
+    uint32_t v_stride_bytes = 0;
+    const uint8_t* y_plane = nullptr;
+    const uint8_t* u_plane = nullptr;
+    const uint8_t* v_plane = nullptr;
+    // True for a natively-HDR10 (PQ) source that needs the tone-map path
+    // rather than the ordinary matrix/range conversion -- mirrors
+    // IsPqTonemapSource in edit_player_engine.cpp. Only meaningful when
+    // format == Yuv420P10.
+    bool is_pq_source = false;
+    // Color matrix/range to convert with (from the container's own tags, or
+    // ColorMetadata::Sdr709() when unspecified) -- same meaning as today's
+    // YuvToBgraParams-driven BGRA path.
+    MatrixCoefficients matrix = MatrixCoefficients::Bt709;
+    ColorRange range = ColorRange::Limited;
+    // Keeps the underlying decoder buffer (an FFmpeg AVFrame's ref-counted
+    // data) alive for as long as any copy of this struct references the plane
+    // pointers above. The pointee is meaningless to callers and MUST NOT be
+    // interpreted -- it exists only so the shared_ptr's deleter runs
+    // av_frame_free when the last reference drops. Callers must not retain
+    // y_plane/u_plane/v_plane past this frame's own lifetime.
+    std::shared_ptr<void> backing_frame;
+};
+
+using RawVideoFrameCallback = std::function<void(RawDecodedVideoFrame)>;
+
 class EditPlayerEngine {
   public:
     EditPlayerEngine();
@@ -130,6 +178,12 @@ class EditPlayerEngine {
     // nullopt if not open, there is no video stream, or decode fails.
     [[nodiscard]] std::optional<DecodedVideoFrame> DecodeFrameAt(int64_t target_us);
 
+    // Same contract as DecodeFrameAt, but returns the frame unconverted (raw
+    // decoder planes) for the GPU conversion path
+    // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
+    // instead of CPU-converted BGRA. Not yet implemented -- returns nullopt.
+    [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
+
     // Every audio track the open file carries, in stream order. `name` comes
     // from the container's track name and is empty for recordings written
     // before names were muxed — callers fall back to a positional label rather
@@ -180,6 +234,12 @@ class EditPlayerEngine {
     // std::function is treated the same as "no clock".
     void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
                              std::function<int64_t()> current_media_time_us);
+
+    // Same contract as StartPlaybackDecode, but delivers unconverted
+    // (RawDecodedVideoFrame) video for the GPU conversion path instead of
+    // CPU-converted BGRA. Not yet implemented -- a no-op.
+    void StartPlaybackDecodeRaw(int64_t start_us, RawVideoFrameCallback on_video, AudioBlockCallback on_audio,
+                                std::function<int64_t()> current_media_time_us);
 
     // Stops and joins the playback decode threads, if running. Safe to call
     // even if not running (no-op). Called from Close() and the destructor.

@@ -359,6 +359,8 @@ add_library(recorder_core STATIC
     src/mp4_remuxer.cpp
     include/recorder_core/edit_player_engine.h
     src/edit_player_engine.cpp
+    include/recorder_core/edit_frame_gpu_converter.h
+    src/edit_frame_gpu_converter.cpp
     src/edit_audio_mix.h
     src/edit_audio_mix.cpp
     src/edit_playback_pacing.h
@@ -1255,6 +1257,20 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_edit_player_session PRIVATE src include)
+
+# EditFrameGpuConverter (editor-playback GPU render path, prep task): WARP-backed
+# smoke test that Init() succeeds against a real D3D11 device/context. Convert()
+# itself is a Task 1 stub (clears to a fixed debug color) -- Task 2 replaces the
+# whole file and is expected to extend this test with real conversion coverage.
+exosnap_add_gtest(
+    NAME test_edit_frame_gpu_converter
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_edit_frame_gpu_converter.cpp
+            src/edit_frame_gpu_converter.cpp
+    LIBRARIES d3d11.lib dxgi.lib
+)
+target_include_directories(test_edit_frame_gpu_converter PRIVATE src include)
+target_compile_definitions(test_edit_frame_gpu_converter PRIVATE NOMINMAX)
 
 # Producer-side shared GPU texture for the WYSIWYG preview tap: create the
 # NT-handle keyed-mutex texture, publish a synthetic frame, open the handle on
