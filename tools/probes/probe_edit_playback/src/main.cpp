@@ -12,6 +12,17 @@
 // product uses) plus a small amount of standalone libavcodec/libavformat code
 // for the FFmpeg-threading check in step E. Writes nothing.
 //
+// 2026-08-03 update: StartPlaybackDecode now delivers RawDecodedVideoFrame
+// (unconverted decoder planes) instead of a CPU-converted BGRA frame -- the
+// editor playback GPU render path
+// (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md)
+// moved colour conversion out of the engine entirely, onto the caller's own
+// GPU converter. Steps B/B2/H/I below therefore now measure decode+demux
+// throughput WITHOUT the CPU YUV->BGRA conversion cost folded in (that cost
+// is still measured in isolation by steps C/C2, which call
+// ConvertFullPlanarYuv420ToBgra/ConvertFullPlanar444ToBgra directly and are
+// unaffected by this change).
+//
 // Usage:
 //   probe_edit_playback.exe <path-to-mkv> [start_us]
 //
@@ -45,10 +56,16 @@
 //   D) Isolated cost of the per-frame std::make_shared<std::vector<uint8_t>>
 //      allocation the real path pays (2560x1440x4 bytes), 100 iterations,
 //      averaged.
-//   E) FFmpeg's default H.264 decoder threading when opened exactly as
-//      EditPlayerEngine::Open() opens it (avcodec_open2 with no thread_count
-//      set): ctx->thread_count, ctx->active_thread_type, and the machine's
-//      std::thread::hardware_concurrency().
+//   E) FFmpeg's H.264 decoder threading when opened exactly as
+//      EditPlayerEngine::Open() opens it TODAY: thread_count = 0 (libavcodec's
+//      own auto heuristic -- av_cpu_count() capped at MAX_AUTO_THREADS,
+//      resolved and written back into ctx->thread_count during
+//      avcodec_open2) plus thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE.
+//      Reports the resolved ctx->thread_count, ctx->active_thread_type, and
+//      the machine's std::thread::hardware_concurrency() for comparison.
+//      ASSERTS that the resolved thread_count is > 1 on a multi-core host and
+//      contributes to this probe's exit code -- the one hard correctness
+//      check among these steps, the rest being pure measurements.
 //   F) Whether the shipped exosnap-ffmpeg-build (r5, n8.1.1 --
 //      cmake/VendorFFmpeg.cmake) was built with hardware-decode support at
 //      all: per-codec (h264/hevc/av1) avcodec_get_hw_config() enumeration,
@@ -80,8 +97,9 @@
 // on. Pass a position inside the file when probing a short recording, or every
 // timed step starts past its end and measures nothing.
 //
-// Exit code 0 if step A's Open() succeeded (regardless of what the
-// measurements themselves show), 1 on a hard failure (bad args, Open failed).
+// Exit code 0 if step A's Open() succeeded AND step E's thread_count > 1
+// assertion held (regardless of what the pure measurement steps themselves
+// show), 1 on a hard failure (bad args, Open failed, or step E's assertion).
 
 #include <recorder_core/edit_player_engine.h>
 
@@ -148,16 +166,16 @@ void StepB_PlaybackThroughput(recorder_core::EditPlayerEngine& engine, int64_t k
     std::atomic<uint32_t> firstWidth{0};
     std::atomic<uint32_t> firstHeight{0};
 
-    auto onVideo = [&](recorder_core::DecodedVideoFrame frame) {
+    auto onVideo = [&](recorder_core::RawDecodedVideoFrame frame) {
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         bool expected = false;
         if (gotFirstFrame.compare_exchange_strong(expected, true)) {
             firstWidth.store(frame.width, std::memory_order_relaxed);
             firstHeight.store(frame.height, std::memory_order_relaxed);
         }
-        // frame (and its BGRA buffer) is dropped here — destructed immediately,
-        // no WASAPI render, no pacing/sleep — this is the maximum throughput
-        // the decode path can sustain.
+        // frame (and its ref-counted AVFrame backing) is dropped here --
+        // destructed immediately, no WASAPI render, no pacing/sleep — this is
+        // the maximum throughput the decode path can sustain.
     };
     auto onAudio = [&](recorder_core::DecodedAudioBlock /*block*/) {
         audioBlocks.fetch_add(1, std::memory_order_relaxed);
@@ -208,7 +226,7 @@ void StepB2_RepeatedStartStop(recorder_core::EditPlayerEngine& engine, int64_t k
         std::atomic<uint64_t> audioBlocks{0};
         const auto t0 = std::chrono::steady_clock::now();
         engine.StartPlaybackDecode(
-            kStartUs, [&](recorder_core::DecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
+            kStartUs, [&](recorder_core::RawDecodedVideoFrame) { videoFrames.fetch_add(1, std::memory_order_relaxed); },
             [&](recorder_core::DecodedAudioBlock) { audioBlocks.fetch_add(1, std::memory_order_relaxed); }, {});
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         engine.StopPlaybackDecode();
@@ -278,11 +296,8 @@ void StepC_ConvertCost() {
 // doubles (full-resolution U and V instead of quarter-resolution), and the
 // kernel is bandwidth-bound -- which effect wins is exactly what this
 // measures, not something to guess from the pixel math alone.
-void StepC2_Convert444Cost() {
-    printf("=== [C2] ConvertFullPlanar444ToBgra isolated cost (2560x1440 8-bit, 100 iters) ===\n");
-
-    constexpr uint32_t kWidth = 2560;
-    constexpr uint32_t kHeight = 1440;
+void StepC2_Convert444CostAt(uint32_t kWidth, uint32_t kHeight) {
+    printf("=== [C2] ConvertFullPlanar444ToBgra isolated cost (%ux%u 8-bit, 100 iters) ===\n", kWidth, kHeight);
 
     std::vector<uint8_t> yPlane(static_cast<size_t>(kWidth) * kHeight);
     std::vector<uint8_t> uPlane(static_cast<size_t>(kWidth) * kHeight);
@@ -333,10 +348,12 @@ void StepC2_Convert444Cost() {
     } else {
         printf("[C2] simd (SSE4.1): SKIPPED -- this CPU does not report SSE4.1 support\n");
     }
-    printf("[C2] vs 4:2:0 reference (scalar 13.3ms/frame, simd 2.86ms/frame): "
-           "444 scalar %.4fms/frame (%.2fx of 420), 444 simd %.4fms/frame (%.2fx of 420)\n",
-           scalarMs, scalarMs > 0.0 ? scalarMs / 13.3 : 0.0, simdSupported ? simdMs : 0.0,
-           (simdSupported && simdMs > 0.0) ? simdMs / 2.86 : 0.0);
+    if (kWidth == 2560 && kHeight == 1440) {
+        printf("[C2] vs 4:2:0 reference (scalar 13.3ms/frame, simd 2.86ms/frame): "
+               "444 scalar %.4fms/frame (%.2fx of 420), 444 simd %.4fms/frame (%.2fx of 420)\n",
+               scalarMs, scalarMs > 0.0 ? scalarMs / 13.3 : 0.0, simdSupported ? simdMs : 0.0,
+               (simdSupported && simdMs > 0.0) ? simdMs / 2.86 : 0.0);
+    }
 }
 
 // ---- Step D: isolated per-frame allocation cost ----
@@ -357,30 +374,36 @@ void StepD_AllocationCost() {
            totalMs / kIters);
 }
 
-// ---- Step E: FFmpeg default decoder threading ----
-void StepE_FfmpegThreading(const std::string& path) {
-    printf("=== [E] FFmpeg default H.264 decoder threading (avcodec_open2 with no thread_count set) ===\n");
+// ---- Step E: FFmpeg decoder threading ------------------------------------
+//
+// Returns false on the one thing in this step that is a correctness
+// assertion rather than a measurement: the thread_count libavcodec resolves
+// for us is > 1 on a multi-core host. Everything else here (open failures
+// aside) just reports numbers.
+bool StepE_FfmpegThreading(const std::string& path) {
+    printf("=== [E] FFmpeg H.264 decoder threading, opened exactly as EditPlayerEngine::Open() opens it today ===\n");
 
-    printf("[E] hardware_concurrency=%u\n", std::thread::hardware_concurrency());
+    const unsigned int hwConcurrency = std::thread::hardware_concurrency();
+    printf("[E] hardware_concurrency=%u\n", hwConcurrency);
 
     AVFormatContext* fmt = nullptr;
     int ret = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
     if (ret < 0) {
         printf("[E] avformat_open_input failed: %s\n", av_err2str(ret));
-        return;
+        return false;
     }
     ret = avformat_find_stream_info(fmt, nullptr);
     if (ret < 0) {
         printf("[E] avformat_find_stream_info failed: %s\n", av_err2str(ret));
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     const int videoIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (videoIdx < 0) {
         printf("[E] no video stream found\n");
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     AVStream* vst = fmt->streams[videoIdx];
@@ -388,17 +411,28 @@ void StepE_FfmpegThreading(const std::string& path) {
     if (codec == nullptr) {
         printf("[E] no decoder available for codec id %d\n", static_cast<int>(vst->codecpar->codec_id));
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     AVCodecContext* ctx = avcodec_alloc_context3(codec);
-    if (ctx == nullptr || avcodec_parameters_to_context(ctx, vst->codecpar) < 0 ||
-        avcodec_open2(ctx, codec, nullptr) < 0) {
+    bool ctxReady = ctx != nullptr && avcodec_parameters_to_context(ctx, vst->codecpar) >= 0;
+    if (ctxReady) {
+        // Mirrors EditPlayerEngine::Open()'s threading setup
+        // (edit_player_engine.cpp) exactly, so this step measures what the
+        // shipped code actually does. thread_count = 0 asks libavcodec to
+        // resolve a count itself; it writes the resolved value back into
+        // ctx->thread_count inside avcodec_open2, which is what the read-back
+        // below reports and asserts on.
+        ctx->thread_count = 0;
+        ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+        ctxReady = avcodec_open2(ctx, codec, nullptr) >= 0;
+    }
+    if (!ctxReady) {
         printf("[E] failed to open the video decoder (%s)\n", codec->name);
         if (ctx)
             avcodec_free_context(&ctx);
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     printf("[E] decoder=%s\n", codec->name);
@@ -406,8 +440,33 @@ void StepE_FfmpegThreading(const std::string& path) {
     printf("[E] ctx->active_thread_type=%d (FF_THREAD_FRAME=%d, FF_THREAD_SLICE=%d, 0=none)\n",
            ctx->active_thread_type, FF_THREAD_FRAME, FF_THREAD_SLICE);
 
+    // On a single-core host there is nothing to parallelize across and
+    // libavcodec legitimately resolves thread_count to 1 -- the assertion is
+    // that decoder threading is actually ON, not a literal ">1" on hardware
+    // where that cannot hold. The resolved count may legitimately be BELOW
+    // hardware_concurrency(): libavcodec caps its own auto value, and that cap
+    // is deliberate (see edit_player_engine.cpp), so this asserts only that a
+    // count was resolved and threading engaged.
+    bool pass = true;
+    if (hwConcurrency > 1) {
+        if (ctx->thread_count > 1) {
+            printf("[E] VERDICT: PASS -- libavcodec resolved ctx->thread_count=%d > 1 from thread_count=0 "
+                   "(decoder threading is on).\n",
+                   ctx->thread_count);
+        } else {
+            printf("[E] VERDICT: FAIL -- ctx->thread_count=%d after open, expected > 1 on a %u-core host.\n",
+                   ctx->thread_count, hwConcurrency);
+            pass = false;
+        }
+    } else {
+        printf("[E] VERDICT: PASS (vacuous) -- host reports hardware_concurrency()=%u, so thread_count=1 is "
+               "correct rather than a regression.\n",
+               hwConcurrency);
+    }
+
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
+    return pass;
 }
 
 // ---- Step F: does this shipped FFmpeg build support hardware decode at all? ----
@@ -659,7 +718,7 @@ void StepH_AudioContinuityUnderSlowVideo(recorder_core::EditPlayerEngine& engine
 
     std::atomic<uint64_t> videoFrames{0};
 
-    auto onVideo = [&](recorder_core::DecodedVideoFrame /*frame*/) {
+    auto onVideo = [&](recorder_core::RawDecodedVideoFrame /*frame*/) {
         videoFrames.fetch_add(1, std::memory_order_relaxed);
         // Simulates a video path that cannot keep up -- e.g. an unusually
         // large keyframe, a page fault, another process taking the core, or
@@ -788,7 +847,7 @@ void StepI_SeekAlignment(recorder_core::EditPlayerEngine& engine, int64_t startU
     int64_t firstVideoPts = 0;
     int64_t firstAudioPts = 0;
 
-    auto onVideo = [&](recorder_core::DecodedVideoFrame frame) {
+    auto onVideo = [&](recorder_core::RawDecodedVideoFrame frame) {
         std::lock_guard<std::mutex> lock(m);
         if (!haveVideo) {
             haveVideo = true;
@@ -877,17 +936,23 @@ int main(int argc, char** argv) {
     StepB_PlaybackThroughput(engine, startUs);
     StepB2_RepeatedStartStop(engine, startUs);
     StepC_ConvertCost();
-    StepC2_Convert444Cost();
+    StepC2_Convert444CostAt(2560, 1440);
+    // 2026-08-03 follow-up: is the 4:4:4-at-4K-at-240fps edge case (permanently
+    // software-decoded, no hardware decoder accepts 4:4:4) survivable by the
+    // conversion path alone? Budget at 240fps is 4.1667ms/frame for the WHOLE
+    // frame (demux+decode+convert+alloc), so this isolates whether conversion
+    // by itself already blows that budget before decode is even counted.
+    StepC2_Convert444CostAt(3840, 2160);
     // Runs immediately after C -- same real ConvertFullPlanarYuv420ToBgra
     // call, same frame shape. Kept adjacent purely for readability; the
     // ordering itself does not affect the timing (verified locally).
     StepG_SimdVariants();
     StepD_AllocationCost();
-    StepE_FfmpegThreading(path);
+    const bool stepEPassed = StepE_FfmpegThreading(path);
     StepF_HardwareDecodeSupport();
     StepH_AudioContinuityUnderSlowVideo(engine, startUs);
     StepI_SeekAlignment(engine, startUs);
 
     printf("=== [probe] DONE ===\n");
-    return 0;
+    return stepEPassed ? 0 : 1;
 }

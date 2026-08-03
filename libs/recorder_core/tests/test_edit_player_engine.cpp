@@ -12,9 +12,12 @@ extern "C" {
 }
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -239,7 +242,7 @@ TEST(EditPlayerEngine, PlaybackDeliversNoAudioBeforeAnyPlaybackStarts) {
 TEST(EditPlayerEngine, PlaybackDeliversNoAudioAfterStartingWithoutAnOpenFile) {
     EditPlayerEngine engine;
     engine.StartPlaybackDecode(
-        0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {},
+        0, [](recorder_core::RawDecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {},
         [] { return int64_t{-1}; });
     EXPECT_FALSE(engine.PlaybackDeliversAudio());
     engine.StopPlaybackDecode();
@@ -342,16 +345,6 @@ TEST(EditPlayerEngine, DecodeFrameAtWithoutOpenReturnsNullopt) {
     EXPECT_FALSE(engine.DecodeFrameAt(0).has_value());
 }
 
-TEST(EditPlayerEngine, StartStopPlaybackDecodeWithoutOpenIsSafeNoOp) {
-    EditPlayerEngine engine;
-    std::atomic<int> video_calls{0};
-    engine.StartPlaybackDecode(
-        0, [&](recorder_core::DecodedVideoFrame) { ++video_calls; }, [](recorder_core::DecodedAudioBlock) {},
-        [] { return int64_t{-1}; });
-    engine.StopPlaybackDecode();
-    EXPECT_EQ(video_calls.load(), 0);
-}
-
 TEST(EditPlayerEngine, StopPlaybackDecodeWithoutStartIsSafeNoOp) {
     EditPlayerEngine engine;
     engine.StopPlaybackDecode(); // must not crash / hang
@@ -364,7 +357,7 @@ TEST(EditPlayerEngine, RepeatedStartStopPlaybackDecodeWithoutOpenIsSafe) {
     EditPlayerEngine engine;
     for (int i = 0; i < 3; ++i) {
         engine.StartPlaybackDecode(
-            0, [](recorder_core::DecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {}, {});
+            0, [](recorder_core::RawDecodedVideoFrame) {}, [](recorder_core::DecodedAudioBlock) {}, {});
         engine.StopPlaybackDecode();
         engine.StopPlaybackDecode(); // double-stop must be safe
     }
@@ -531,6 +524,146 @@ TEST(EditPlaybackPacing, UnknownDemuxPositionNeverPaces) {
     // measure the budget against.
     EXPECT_TRUE(ShouldDemuxMorePackets(recorder_core::kUnknownDemuxPositionUs, 0, 1'000'000));
     EXPECT_TRUE(ShouldDemuxMorePackets(recorder_core::kUnknownDemuxPositionUs, 600'000'000, 1'000'000));
+}
+
+// ---- Raw-frame decode path: DecodeFrameAtRaw / StartPlaybackDecode -----
+//
+// Everything above opens a synthetic MKV whose video track carries no real
+// compressed bitstream (this FFmpeg build ships no video encoder -- ADR
+// 0007), so it exercises Open()/track-discovery only. Actually decoding a
+// frame needs a REAL bitstream, which these tests get from checked-in-locally
+// (gitignored, .workspace/ is scratch -- see .gitignore) fixture clips.
+// Skipped gracefully (GTEST_SKIP) when a fixture is not present on the host,
+// same convention as test_analyze_encode_perf.cpp's Python-interpreter check.
+
+#ifndef EXOSNAP_SOURCE_DIR
+#define EXOSNAP_SOURCE_DIR "."
+#endif
+
+std::filesystem::path TestFixturePath(const char* filename) {
+    return std::filesystem::path(EXOSNAP_SOURCE_DIR) / ".workspace" / "test-fixtures" / filename;
+}
+
+// Sums the Y plane's first row. Not a meaningful image checksum by itself --
+// it exists only to prove the bytes behind y_plane are still the SAME real
+// decoded pixel data across two points in time (a freed/reused buffer would
+// almost certainly read differently, and a zeroed one would read as 0).
+uint64_t ChecksumFirstRow(const recorder_core::RawDecodedVideoFrame& frame) {
+    uint64_t sum = 0;
+    for (uint32_t x = 0; x < frame.width; ++x)
+        sum += frame.y_plane[x];
+    return sum;
+}
+
+TEST(EditPlayerEngine, DecodeFrameAtRawWithoutOpenReturnsNullopt) {
+    EditPlayerEngine engine;
+    EXPECT_FALSE(engine.DecodeFrameAtRaw(0).has_value());
+}
+
+TEST(EditPlayerEngine, StartStopPlaybackDecodeWithoutOpenIsSafeNoOp) {
+    EditPlayerEngine engine;
+    std::atomic<int> video_calls{0};
+    engine.StartPlaybackDecode(
+        0, [&](recorder_core::RawDecodedVideoFrame) { ++video_calls; }, [](recorder_core::DecodedAudioBlock) {},
+        [] { return int64_t{-1}; });
+    engine.StopPlaybackDecode();
+    EXPECT_EQ(video_calls.load(), 0);
+}
+
+// The actual regression this guards: RawDecodedVideoFrame's whole point is
+// that backing_frame (a ref-counted AVFrame, not a copy) keeps the decoder's
+// buffer alive for as long as ANY copy of the struct survives -- including
+// past StopPlaybackDecode() and past the engine itself being destroyed. The
+// old BGRA path's shared_ptr<uint8_t[]> gave callers exactly this guarantee;
+// this test is the same guarantee for the raw path.
+TEST(EditPlayerEngine, DecodeRawDeliversRefcountedFramesThatOutliveEngineTeardown) {
+    const std::filesystem::path fixture = TestFixturePath("audiotest_60fps.mkv");
+    if (!std::filesystem::exists(fixture))
+        GTEST_SKIP() << "fixture not present on this host: " << fixture.string();
+
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<recorder_core::RawDecodedVideoFrame> frames;
+    constexpr size_t kWanted = 5;
+
+    {
+        EditPlayerEngine engine;
+        std::string err;
+        ASSERT_TRUE(engine.Open(fixture, err)) << err;
+        ASSERT_TRUE(engine.HasVideoStream());
+
+        // No media clock: nothing is presenting these frames, so nothing is
+        // discarded before conversion (ShouldConvertDecodedFrame) -- every
+        // decoded frame from t=0 is delivered, matching probe_edit_playback's
+        // step B throughput-measurement convention.
+        engine.StartPlaybackDecode(
+            0,
+            [&](recorder_core::RawDecodedVideoFrame frame) {
+                std::lock_guard<std::mutex> lock(mu);
+                if (frames.size() < kWanted) {
+                    frames.push_back(std::move(frame));
+                    if (frames.size() == kWanted)
+                        cv.notify_one();
+                }
+            },
+            [](recorder_core::DecodedAudioBlock) {}, {});
+
+        {
+            std::unique_lock<std::mutex> lock(mu);
+            ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(30), [&] { return frames.size() >= kWanted; }))
+                << "timed out waiting for " << kWanted << " raw video frames from " << fixture.string();
+        }
+        engine.StopPlaybackDecode();
+
+        ASSERT_EQ(frames.size(), kWanted);
+        for (size_t i = 0; i < kWanted; ++i) {
+            const recorder_core::RawDecodedVideoFrame& f = frames[i];
+            EXPECT_NE(f.backing_frame, nullptr) << "frame " << i;
+            ASSERT_NE(f.y_plane, nullptr) << "frame " << i;
+            ASSERT_NE(f.u_plane, nullptr) << "frame " << i;
+            ASSERT_NE(f.v_plane, nullptr) << "frame " << i;
+            EXPECT_GT(f.width, 0u) << "frame " << i;
+            EXPECT_GT(f.height, 0u) << "frame " << i;
+            EXPECT_EQ(f.format, recorder_core::DecodedPixelFormat::Yuv420P8) << "frame " << i;
+        }
+        // engine goes out of scope here -- Close()/~EditPlayerEngine() frees
+        // the video AVCodecContext and AVFormatContext. `frames` is declared
+        // OUTSIDE this block and survives it.
+    }
+
+    std::vector<uint64_t> checksums(kWanted);
+    for (size_t i = 0; i < kWanted; ++i)
+        checksums[i] = ChecksumFirstRow(frames[i]);
+
+    // Re-read every retained frame's planes a second time. If backing_frame
+    // did not keep the decoder's buffer alive independent of the (now
+    // destroyed) engine, this reads freed memory -- a checksum mismatch (or a
+    // crash under ASan) is the failure signal.
+    for (size_t i = 0; i < kWanted; ++i)
+        EXPECT_EQ(ChecksumFirstRow(frames[i]), checksums[i]) << "frame " << i << " planes changed after teardown";
+}
+
+// A natively-HDR10 (PQ) source must be flagged for the caller's GPU converter
+// to take the tone-map path instead of the ordinary matrix/range conversion
+// (IsPqTonemapSource's contract in edit_player_engine.cpp).
+TEST(EditPlayerEngine, DecodeFrameAtRawDetectsNativeHdr10Source) {
+    const std::filesystem::path fixture = TestFixturePath("hdr10_test_1080p60.mp4");
+    if (!std::filesystem::exists(fixture))
+        GTEST_SKIP() << "no natively-HDR10 fixture present on this host: " << fixture.string();
+
+    EditPlayerEngine engine;
+    std::string err;
+    ASSERT_TRUE(engine.Open(fixture, err)) << err;
+    ASSERT_TRUE(engine.HasVideoStream());
+
+    const std::optional<recorder_core::RawDecodedVideoFrame> frame = engine.DecodeFrameAtRaw(0);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_TRUE(frame->is_pq_source);
+    EXPECT_EQ(frame->format, recorder_core::DecodedPixelFormat::Yuv420P10);
+    EXPECT_NE(frame->backing_frame, nullptr);
+    ASSERT_NE(frame->y_plane, nullptr);
+    EXPECT_GT(frame->width, 0u);
+    EXPECT_GT(frame->height, 0u);
 }
 
 } // namespace

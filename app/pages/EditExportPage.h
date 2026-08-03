@@ -1,5 +1,4 @@
 #pragma once
-#include <QImage>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -137,7 +136,6 @@ class EditExportPage : public QWidget {
     void onScrubMoved(qint64 position_ms);
     void onScrubFinished();
     void onPreviewTick();
-    void onDecodedFrameReady(QImage frame); // marshalled onto the UI thread via invokeMethod
 
   protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -169,6 +167,16 @@ class EditExportPage : public QWidget {
     // Retunes the preview timer to the open clip's frame rate, capped at the
     // refresh rate of the screen the window is on.
     void refreshPreviewTickInterval();
+    // Re-publishes the session's OWN playback clock into the render surface's
+    // present-gate. Must run after every Pause()/SeekTo(), not only on the
+    // playback tick: the session resets its clock to -1 on pause (and SeekTo
+    // pauses first), and without propagating that reset the renderer keeps the
+    // last clock value it was told about, so every frame with an earlier
+    // timestamp -- i.e. every backward scrub, every trim-handle preview, and
+    // everything after an end-of-clip pause -- is dropped by the gate before
+    // any GPU work and the picture stays frozen. Deliberately reads the
+    // session's own snapshot rather than inventing a second clock.
+    void syncPlayerClock();
     void updatePlayerHeight();
     // Width-driven layout: the rail keeps the details card and the export panel,
     // so it is narrowed rather than dropped as the surface gets tighter.
@@ -208,6 +216,11 @@ class EditExportPage : public QWidget {
     bool resume_after_scrub_ = false;
     qint64 preview_position_ms_ = 0;
 
+    // True once setEditContext() has successfully opened a clip's
+    // player_session_ -- gates whether showEvent() opts player_surface_ into
+    // the GPU render path (see that method's comment).
+    bool clip_open_ = false;
+
     // Export thread + output path tracking
     std::thread export_thread_;
     std::atomic<bool> export_cancel_{false};
@@ -235,8 +248,10 @@ class EditExportPage : public QWidget {
 
     // Real decoder session driving player_surface_. Opened per clip in
     // setEditContext(), closed in hideEvent(). Its frame callback fires on
-    // internal worker threads and is marshalled to the UI thread via
-    // onDecodedFrameReady (Qt::QueuedConnection).
+    // internal worker threads and is delivered straight into player_surface_'s
+    // GPU renderer -- see the SetOnFrameReady wiring in setEditContext() for
+    // why that stays off the UI thread instead of marshalling through
+    // QMetaObject::invokeMethod.
     std::unique_ptr<recorder_core::EditPlayerSession> player_session_;
 
     // Timeline (interactive: trim handles, markers, playhead)

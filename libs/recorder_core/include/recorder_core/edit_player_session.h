@@ -19,7 +19,7 @@
 // invoked from an internal thread (never the caller's thread) and may be
 // invoked from either the continuous-playback decode thread or a scrub-seek
 // worker thread, but never both at once -- this class enforces mutual
-// exclusion between EditPlayerEngine's DecodeFrameAt (scrub) and its
+// exclusion between EditPlayerEngine's DecodeFrameAtRaw (scrub) and its
 // playback decode thread, since the engine itself documents that as the
 // caller's responsibility, not something it guards internally.
 
@@ -59,9 +59,14 @@ class EditPlayerSession {
     [[nodiscard]] double VideoFrameRate() const noexcept;
 
     // Sets the callback invoked (from an internal thread -- NOT the caller's
-    // thread) whenever a new frame is ready to display, during both
-    // continuous playback and single-frame scrub/trim-drag seeks.
-    void SetOnFrameReady(std::function<void(DecodedVideoFrame)> callback);
+    // thread) with each newly decoded RAW video frame, during both continuous
+    // playback and single-frame scrub/trim-drag seeks -- the GPU render path
+    // (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md).
+    // Delivered directly, with no intermediate queue: pacing/drop decisions
+    // for this path live in EditPlayerRenderer::PresentFrame (present-gated
+    // against CurrentPositionMs(), which stays the clock source of truth),
+    // not in this class.
+    void SetOnFrameReady(std::function<void(RawDecodedVideoFrame)> callback);
 
     // Starts continuous playback (decode thread + audio renderer, if
     // present) from start_us. No-op if not open. The caller is responsible
@@ -69,6 +74,10 @@ class EditPlayerSession {
     // its own beyond what a live playback/seek thread is doing) -- pass the
     // caller's own last-known position (e.g. after a pause or a scrub) to
     // resume from there; pass 0 to start from the beginning.
+    //
+    // Drives the engine's RAW playback decode (EditPlayerEngine::
+    // StartPlaybackDecode) and delivers through SetOnFrameReady's callback --
+    // see that method's doc comment.
     void Play(int64_t start_us = 0);
 
     // Pauses continuous playback. No-op if not open or not playing.
@@ -79,27 +88,34 @@ class EditPlayerSession {
     // existing UI contract: scrubbing pauses, resume-on-release is the
     // caller's job, same as today's onScrubStarted/onScrubFinished). A newer
     // SeekTo() call supersedes an in-flight older one.
+    //
+    // Drives the engine's RAW seek (EditPlayerEngine::DecodeFrameAtRaw) and
+    // delivers through SetOnFrameReady's callback -- see that method's doc
+    // comment.
     void SeekTo(int64_t target_us);
-
-    // Pulls the next frame to display, paced by the audio master clock.
-    // Valid only while HasAudioStream() is true -- returns nullopt
-    // unconditionally otherwise (the caller must drive the no-audio
-    // fallback by calling SeekTo() itself once per tick instead; see
-    // docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md).
-    // Also returns nullopt if no frames are currently queued, or if the
-    // clock hasn't advanced to the next queued frame's timestamp yet.
-    // Intended to be polled from the caller's own UI-thread timer.
-    [[nodiscard]] std::optional<DecodedVideoFrame> PollFrame();
 
     // Current playback position derived from the audio master clock (0 if no
     // audio stream). While paused, holds steady at the position playback
     // was paused at -- the underlying audio clock (WasapiAudioRenderer::
     // FramesPlayed()) freezes at the paused position once Stop() is called, so
     // this naturally holds rather than needing a separate "not playing" check.
-    // Kept separate from PollFrame() because the caller needs to advance the
-    // displayed position on every tick, even the ones where PollFrame()
-    // itself returns nullopt (clock hasn't reached the next frame yet).
+    // Called once per presentation tick from the caller's UI thread, alongside
+    // ClockSnapshotUs() below.
     [[nodiscard]] int64_t CurrentPositionMs() const noexcept;
+
+    // Thread-safe atomic snapshot of the playback clock in absolute media
+    // time (microseconds), or a negative value when no clock is available --
+    // the SAME snapshot EditPlayerEngine's own decode thread already reads
+    // via the current_media_time_us callback Play() passes to
+    // StartPlaybackDecode. Refreshed as a side effect of CurrentPositionMs()
+    // (called once per presentation tick from the caller's UI thread). Unlike
+    // CurrentPositionMs(), which calls through to WasapiAudioRenderer::
+    // FramesPlayed(), a single-caller-thread API -- this is safe to call from
+    // ANY thread: the GPU render path's present-gate (EditPlayerRenderer::
+    // PresentFrame, fed via EditPlayerSurface::updateClockUs from the
+    // caller's UI thread) needs exactly that, so it never touches this
+    // class's own single-thread-only members directly.
+    [[nodiscard]] int64_t ClockSnapshotUs() const noexcept;
 
   private:
     struct Impl;

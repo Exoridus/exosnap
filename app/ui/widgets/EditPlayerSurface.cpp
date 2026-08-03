@@ -1,8 +1,13 @@
 #include "EditPlayerSurface.h"
 
+#include "../../services/EditPlayerRenderer.h"
+
+#include <QHideEvent>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
+#include <QResizeEvent>
+#include <QShowEvent>
 
 #include <algorithm>
 
@@ -14,31 +19,132 @@ EditPlayerSurface::EditPlayerSurface(QWidget* parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
+EditPlayerSurface::~EditPlayerSurface() {
+    // Unpublish before destroying, so a late presentFrame()/updateClockUs()
+    // sees nullptr rather than a dangling pointer. EditExportPage already
+    // guarantees the ordering that matters (the session and its decode/seek
+    // threads are torn down before this widget), so this is the belt to that
+    // pair of braces, not the primary guarantee.
+    renderer_published_.store(nullptr, std::memory_order_release);
+    // renderer_'s destructor (EditPlayerRenderer::~EditPlayerRenderer) calls
+    // Shutdown(), which stops+joins the render thread and destroys the child
+    // HWND -- explicit reset here only for readability, unique_ptr would do
+    // it anyway on scope exit.
+    renderer_.reset();
+}
+
 QSize EditPlayerSurface::sizeHint() const {
     return QSize(640, 360);
 }
 
+bool EditPlayerSurface::startGpuRendering() {
+    if (renderer_)
+        return true;
+
+    setAttribute(Qt::WA_NativeWindow);
+    winId();
+    HWND hwnd = reinterpret_cast<HWND>(effectiveWinId());
+    if (!hwnd)
+        return false;
+
+    // Win32 CreateWindowEx expects physical pixels for DPI-aware apps; Qt
+    // width()/height() are logical -- same convention as PreviewSurface::
+    // tryStartDxgiPreview.
+    const qreal dpr = devicePixelRatioF();
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+
+    auto candidate = std::make_unique<exosnap::EditPlayerRenderer>();
+    if (!candidate->Initialize(hwnd, hwndW, hwndH))
+        return false; // stays on the legacy QPainter path (no hardware D3D11 adapter, etc.)
+
+    renderer_ = std::move(candidate);
+    has_frame_.store(false, std::memory_order_relaxed);
+    frame_ = QImage{};
+    renderer_->ShowPlaceholder(placeholder_.toStdWString());
+    // Published only once Initialize() has succeeded and the object is fully
+    // constructed -- see the member's declaration comment.
+    renderer_published_.store(renderer_.get(), std::memory_order_release);
+    update(); // one more repaint so paintEvent's early-return takes over cleanly
+    return true;
+}
+
+void EditPlayerSurface::presentFrame(recorder_core::RawDecodedVideoFrame frame, float hdr_peak_scale) {
+    has_frame_.store(true, std::memory_order_relaxed);
+    if (EditPlayerRenderer* renderer = renderer_published_.load(std::memory_order_acquire))
+        renderer->PresentFrame(std::move(frame), hdr_peak_scale);
+}
+
+void EditPlayerSurface::updateClockUs(int64_t media_time_us) noexcept {
+    if (EditPlayerRenderer* renderer = renderer_published_.load(std::memory_order_acquire))
+        renderer->SetClockUs(media_time_us);
+}
+
 void EditPlayerSurface::setFrame(QImage frame) {
     frame_ = std::move(frame);
+    has_frame_.store(!frame_.isNull(), std::memory_order_relaxed);
+    if (renderer_) {
+        // GPU path active (harness-only in practice -- see the class
+        // comment): there is no raw YUV frame to hand the renderer here, so
+        // fall back to its placeholder instead of silently doing nothing.
+        renderer_->ShowPlaceholder(placeholder_.toStdWString());
+        return;
+    }
     update();
 }
 
 void EditPlayerSurface::clearFrame() {
-    if (frame_.isNull())
+    if (!has_frame_.exchange(false, std::memory_order_relaxed))
         return;
     frame_ = QImage{};
-    update();
+    if (renderer_)
+        renderer_->ShowPlaceholder(placeholder_.toStdWString());
+    else
+        update();
 }
 
 void EditPlayerSurface::setPlaceholderText(const QString& text) {
     if (placeholder_ == text)
         return;
     placeholder_ = text;
-    if (frame_.isNull())
+    if (has_frame_.load(std::memory_order_relaxed))
+        return; // never interrupts a frame already on screen
+    if (renderer_)
+        renderer_->ShowPlaceholder(placeholder_.toStdWString());
+    else
         update();
 }
 
+void EditPlayerSurface::applyResize() {
+    if (!renderer_)
+        return;
+    const qreal dpr = devicePixelRatioF();
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    renderer_->Resize(hwndW, hwndH);
+}
+
+void EditPlayerSurface::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    applyResize();
+}
+
+void EditPlayerSurface::hideEvent(QHideEvent* event) {
+    if (renderer_)
+        renderer_->SetChildWindowVisible(false);
+    QWidget::hideEvent(event);
+}
+
+void EditPlayerSurface::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (renderer_)
+        renderer_->SetChildWindowVisible(true);
+}
+
 void EditPlayerSurface::paintEvent(QPaintEvent* /*event*/) {
+    if (renderer_)
+        return; // native child HWND occludes this rect; nothing to paint
+
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 

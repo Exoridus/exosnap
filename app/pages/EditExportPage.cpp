@@ -106,6 +106,17 @@ QColor themeColor(const char* css) {
 // clip itself -- see EditExportPage::refreshPreviewTickInterval().
 constexpr int kFallbackPreviewTickMs = 16;
 
+// HDR10/PQ tone-map peak scale (reference-white multiples) passed to
+// EditPlayerRenderer::PresentFrame for a natively-HDR10 clip
+// (RawDecodedVideoFrame::is_pq_source). Mirrors the existing BGRA CPU path's
+// own static fallback -- edit_player_engine.cpp's HdrPeakScale(/*display_hdr_
+// active=*/false, 0.0f), i.e. kHdrFallbackPeakNits (1000) / kHdrReferenceWhiteNits
+// (80) -- since that function lives in a private recorder_core header
+// (hdr_tonemap.h) not includable from app/, and no live per-monitor HDR peak
+// query is wired for the Edit page (a real per-display query, like the Record
+// page's live preview has, is a follow-up, not part of this task).
+constexpr float kEditorHdrPeakScaleFallback = 12.5f;
+
 // ---- Rail breakpoints (see updateResponsiveLayout()) ----
 // The rail carries the details card AND the export panel, so unlike a purely
 // informational sidebar it can never be dropped: hiding it would take the
@@ -543,22 +554,52 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     if (player_surface_)
         player_surface_->clearFrame();
     player_session_ = std::make_unique<recorder_core::EditPlayerSession>();
+    // Drives whether showEvent() opts player_surface_ into the GPU render
+    // path below -- see that method's comment for why this is gated on an
+    // actually-open clip rather than firing on every show().
+    clip_open_ = false;
     if (!ctx_.mkv_master_path.isEmpty()) {
         std::string open_err;
         const bool opened = player_session_->Open(std::filesystem::path(ctx_.mkv_master_path.toStdWString()), open_err);
+        clip_open_ = opened;
         if (opened) {
-            player_session_->SetOnFrameReady([this](const recorder_core::DecodedVideoFrame& frame) {
-                // Invoked from the session's internal seek-worker thread
-                // (scrub/trim-drag path only -- continuous playback frames
-                // now go through PollFrame() in onPreviewTick() instead, see
-                // below). Never touch player_surface_ here; marshal onto the
-                // UI thread.
-                QMetaObject::invokeMethod(this, "onDecodedFrameReady", Qt::QueuedConnection,
-                                          Q_ARG(QImage, WrapDecodedFrame(frame)));
+            // Normally opts in via showEvent() (setEditContext() runs before
+            // openOverlay()/show() in production -- see that method's
+            // comment). Also try here, guarded on isVisible(), for the
+            // narrower case of a second clip opened while the page is
+            // already visible -- no further showEvent() fires then to catch
+            // it. Idempotent either way: a no-op if already started.
+            if (player_surface_ && isVisible())
+                player_surface_->startGpuRendering();
+
+            // GPU render path (2026-08-03 design): delivered directly from the
+            // session's own decode/seek thread, straight into player_surface_'s
+            // renderer -- NOT marshaled through QMetaObject::invokeMethod,
+            // since EditPlayerSurface::presentFrame/EditPlayerRenderer are
+            // thread-safe by design (see EditPlayerRenderer's threading-model
+            // doc comment) and adding a per-frame UI-thread hop here would
+            // undo the whole point of the GPU render path. player_surface_ is
+            // safe to touch from this callback: player_session_ is destroyed
+            // (and its decode/seek threads joined) strictly before
+            // player_surface_ -- not because of member declaration order (the
+            // two are unrelated fields), but because player_session_ is one of
+            // THIS class's own members while player_surface_ is a QObject child
+            // of this widget, and ~QWidget's child-deletion cascade runs after
+            // the derived class's own members have already been destroyed. On
+            // top of that, hideEvent() closes the session synchronously before
+            // the page hides.
+            player_session_->SetOnFrameReady([this](recorder_core::RawDecodedVideoFrame frame) {
+                if (player_surface_)
+                    player_surface_->presentFrame(std::move(frame), kEditorHdrPeakScaleFallback);
             });
             // Show the clip's first frame as a poster instead of the
-            // placeholder while the user is still reviewing.
+            // placeholder while the user is still reviewing. The clock sync
+            // matters here too: opening a SECOND clip while the page is
+            // already visible would otherwise leave the renderer's present-gate
+            // holding the previous clip's last clock value, which drops this
+            // poster frame outright.
             player_session_->SeekTo(0);
+            syncPlayerClock();
         }
     }
     // The new clip's own frame rate drives the presentation cadence.
@@ -659,6 +700,10 @@ void EditExportPage::setPreviewPlaying(bool playing) {
         if (player_session_)
             player_session_->Pause();
     }
+    // Both directions: Play() seeds the clock at start_us, Pause() resets it to
+    // -1. Either way the renderer's present-gate has to learn about it right
+    // now rather than at the next tick -- after a pause there IS no next tick.
+    syncPlayerClock();
     refreshPlayButton();
 }
 
@@ -715,20 +760,36 @@ void EditExportPage::refreshPreviewTickInterval() {
     preview_timer_->setInterval(PreviewTickMsFor(clip_fps, screen_hz));
 }
 
+void EditExportPage::syncPlayerClock() {
+    if (!player_surface_)
+        return;
+    player_surface_->updateClockUs(player_session_ ? player_session_->ClockSnapshotUs() : -1);
+}
+
 void EditExportPage::onPreviewTick() {
     const bool paced_by_audio = player_session_ && player_session_->HasAudioStream();
     if (paced_by_audio) {
         // Audio is the pacing AND position source of truth while it exists
         // -- no independent wall-clock estimate to keep in sync with it.
         preview_position_ms_ = ClampPlayheadMs(player_session_->CurrentPositionMs(), durationMs());
-        if (auto frame = player_session_->PollFrame())
-            onDecodedFrameReady(WrapDecodedFrame(*frame)); // already on the UI thread: direct call
+        // GPU render path: video frames arrive by push (SetOnFrameReady in
+        // setEditContext()), not by polling here -- this tick's only video-
+        // relevant job left is refreshing the clock snapshot
+        // EditPlayerRenderer::PresentFrame's present-gate reads, the same
+        // atomic CurrentPositionMs() above already just refreshed.
+        if (player_surface_)
+            player_surface_->updateClockUs(player_session_->ClockSnapshotUs());
     } else {
         preview_position_ms_ += preview_elapsed_->restart();
         if (player_session_)
             player_session_->SeekTo(preview_position_ms_ * 1000); // ms -> us: no-audio pacing fallback
                                                                   // (safe no-op if not open, matching
                                                                   // EditPlayerSession's own contract)
+        // No audio clock exists on this path, so the session's snapshot is -1
+        // and the gate stays open -- but a clip whose audio resampler failed
+        // mid-run lands here after having had a clock, so publish it rather
+        // than leaving the last positive value pinned.
+        syncPlayerClock();
     }
 
     const qint64 total = durationMs();
@@ -738,11 +799,6 @@ void EditExportPage::onPreviewTick() {
     }
     if (timeline_)
         timeline_->setPositionMs(preview_position_ms_);
-}
-
-void EditExportPage::onDecodedFrameReady(QImage frame) {
-    if (player_surface_)
-        player_surface_->setFrame(std::move(frame));
 }
 
 // ---- Timeline interaction ----
@@ -792,8 +848,10 @@ void EditExportPage::onTrimHandleReleased(qint64 start_ms, qint64 end_ms) {
     // Show the frame at the (possibly snapped) boundary the handle landed on.
     if (player_session_) {
         const int64_t shown_us = (start_ms <= 0) ? trim_end_us_ : trim_start_us_;
-        if (shown_us != recorder_core::TrimRange::kNoTimestamp)
+        if (shown_us != recorder_core::TrimRange::kNoTimestamp) {
             player_session_->SeekTo(shown_us);
+            syncPlayerClock(); // a seek result is the frame the user asked for: never gate it
+        }
     }
 }
 
@@ -808,8 +866,10 @@ void EditExportPage::onScrubMoved(qint64 position_ms) {
     // The preview position follows the drag; the decoder shows the frame at
     // the scrub target (a newer SeekTo supersedes an in-flight older one).
     preview_position_ms_ = ClampPlayheadMs(position_ms, durationMs());
-    if (player_session_)
+    if (player_session_) {
         player_session_->SeekTo(preview_position_ms_ * 1000); // ms -> us
+        syncPlayerClock(); // a seek result is the frame the user asked for: never gate it
+    }
 }
 
 void EditExportPage::onScrubFinished() {
@@ -906,6 +966,22 @@ void EditExportPage::showEvent(QShowEvent* event) {
     // Deferred once more: the overlay sizes the page from its own showEvent, so
     // at this point the page can still be carrying its pre-show geometry.
     QTimer::singleShot(0, this, [this]() { updateResponsiveLayout(); });
+
+    // Opt in to the GPU render path once the page (and so player_surface_) is
+    // realized in a shown window hierarchy -- a real D3D11 swap chain needs a
+    // genuinely realized top-level window, not merely a native HWND (same
+    // requirement PreviewSurfaceWebcamDxgiLiveTest's own live-hardware tests
+    // document), and setEditContext() (which opens the clip) always runs
+    // BEFORE openOverlay()/show() in production (see MainWindow's call
+    // sites). Gated on clip_open_ rather than firing unconditionally: most
+    // UI tests show() the page without ever opening a real clip (see
+    // MakeContext() in test_edit_export_page.cpp), and doing this
+    // unconditionally would make every one of those attempt a real D3D11
+    // device creation as an unrelated side effect. Idempotent; a failure (no
+    // hardware D3D11 adapter) silently keeps the surface on its QPainter
+    // fallback -- see EditPlayerSurface::startGpuRendering's doc comment.
+    if (clip_open_ && player_surface_)
+        player_surface_->startGpuRendering();
 }
 
 void EditExportPage::hideEvent(QHideEvent* event) {

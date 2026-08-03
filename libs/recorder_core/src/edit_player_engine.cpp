@@ -553,11 +553,16 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     AVCodecContext* vctx = avcodec_alloc_context3(vcodec);
     bool vctx_ready = vctx != nullptr && avcodec_parameters_to_context(vctx, vst->codecpar) >= 0;
     if (vctx_ready) {
-        // avcodec defaults thread_count to 1, i.e. no decoder threading at all
-        // -- measured on a 2560x1440@60 recording, the whole playback path then
-        // peaks below realtime. 0 lets libavcodec pick a count from the host's
-        // core count; frame threading adds a few frames of decode latency,
-        // which is irrelevant for a player paced by an audio clock anyway.
+        // 0 = let libavcodec pick the count itself: it derives one from
+        // av_cpu_count() (which honours this process's affinity mask) and caps
+        // it at its own MAX_AUTO_THREADS, then writes the resolved value back
+        // into thread_count during avcodec_open2. Deliberately NOT the host's
+        // raw std::thread::hardware_concurrency(): that removes the cap, and
+        // on a high-core-count machine more frame-threading depth means more
+        // in-flight decode latency on the latency-sensitive scrub path plus
+        // proportionally more decoder frame-pool memory at 4K, for no measured
+        // throughput gain. Frame threading costs a few frames of latency
+        // either way, which is irrelevant for a player paced by an audio clock.
         vctx->thread_count = 0;
         vctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
         vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
@@ -757,6 +762,65 @@ DecodedVideoFrame ConvertToDecodedFrame(const AVFrame* frame, int64_t pts_us, Ma
     return out;
 }
 
+// Wraps one held decoder frame as a RawDecodedVideoFrame instead of
+// converting it: ref-counts the AVFrame's own buffer (av_frame_alloc a fresh
+// AVFrame*, av_frame_ref it to `frame` -- bumps the buffer refcount, no pixel
+// copy) rather than color-converting into a new BGRA allocation. This is the
+// entire reason RawDecodedVideoFrame exists for the GPU conversion path
+// (docs/superpowers/specs/2026-08-03-editor-playback-gpu-render-design.md):
+// ConvertToDecodedFrame's `new uint8_t[bgra_bytes]` per frame above is gone
+// on this path, replaced by an AVFrame struct allocation (a few hundred
+// bytes), not a multi-megabyte pixel buffer.
+//
+// `is_pq_source` mirrors ConvertToDecodedFrame's `pq != nullptr` check: true
+// only for a natively-HDR10 (PQ) source, so the caller's GPU converter takes
+// the tone-map path instead of the ordinary matrix/range conversion.
+//
+// Returns nullopt on an av_frame_alloc/av_frame_ref failure (OOM) -- matching
+// this file's own established pattern (every other av_frame_alloc call site
+// here is null-checked via FrameGuard, and DecodeForwardToTarget's finish()
+// lambda checks av_frame_ref's return before trusting the ref) rather than
+// dereferencing a possibly-null AVFrame*, which would crash inside libavutil.
+std::optional<RawDecodedVideoFrame> WrapRawDecodedFrame(AVFrame* frame, int64_t pts_us, MatrixCoefficients matrix,
+                                                        ColorRange range, bool is_pq_source) {
+    RawDecodedVideoFrame out;
+    out.pts_us = pts_us;
+    out.width = static_cast<uint32_t>(frame->width);
+    out.height = static_cast<uint32_t>(frame->height);
+    out.matrix = matrix;
+    out.range = range;
+    out.is_pq_source = is_pq_source;
+    out.format = (frame->format == AV_PIX_FMT_YUV444P)       ? DecodedPixelFormat::Yuv444P8
+                 : (frame->format == AV_PIX_FMT_YUV420P10LE) ? DecodedPixelFormat::Yuv420P10
+                                                             : DecodedPixelFormat::Yuv420P8;
+    out.y_plane = frame->data[0];
+    out.y_stride_bytes = static_cast<uint32_t>(frame->linesize[0]);
+    out.u_plane = frame->data[1];
+    out.u_stride_bytes = static_cast<uint32_t>(frame->linesize[1]);
+    out.v_plane = frame->data[2];
+    out.v_stride_bytes = static_cast<uint32_t>(frame->linesize[2]);
+
+    // Ref-count the frame instead of copying its pixel data: av_frame_alloc a
+    // fresh AVFrame*, av_frame_ref it to the decoded frame (bumps the buffer
+    // refcount, no pixel copy), then hand it to shared_ptr<void> with a
+    // deleter that av_frame_free's it. This is the whole reason RawDecodedVideoFrame
+    // exists -- ConvertToDecodedFrame's `new uint8_t[bgra_bytes]` per frame is
+    // gone; this path allocates only an AVFrame struct (a few hundred bytes),
+    // not a multi-megabyte pixel buffer.
+    AVFrame* ref = av_frame_alloc();
+    if (ref == nullptr)
+        return std::nullopt;
+    if (av_frame_ref(ref, frame) != 0) {
+        av_frame_free(&ref);
+        return std::nullopt;
+    }
+    out.backing_frame = std::shared_ptr<void>(ref, [](void* p) {
+        AVFrame* f = static_cast<AVFrame*>(p);
+        av_frame_free(&f);
+    });
+    return out;
+}
+
 // Decodes forward from the decoder's current position until a frame with
 // pts_us >= target_us is produced (or EOF). Shared by DecodeFrameAt (Task 5)
 // and the continuous playback loop (Task 6, which calls the same primitive
@@ -786,6 +850,86 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
         if (!have_candidate)
             return std::nullopt;
         return ConvertToDecodedFrame(held.frame, candidate_pts_us, matrix, range, pq);
+    };
+
+    while (true) {
+        const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
+        if (read_ret < 0) {
+            avcodec_send_packet(vctx, nullptr); // enter drain mode (flush)
+        } else if (pkt.pkt->stream_index != video_stream_idx) {
+            av_packet_unref(pkt.pkt);
+            continue;
+        } else {
+            // EAGAIN cannot happen here: the inner loop below always drains
+            // the decoder to EAGAIN before the next send, which the avcodec
+            // API contract guarantees leaves the decoder accepting input. A
+            // real send error (e.g. a corrupt packet) is logged and skipped;
+            // the loop keeps reading forward.
+            const int send_ret = avcodec_send_packet(vctx, pkt.pkt);
+            av_packet_unref(pkt.pkt);
+            if (send_ret < 0)
+                LogWarn((std::string("avcodec_send_packet failed: ") + av_err2str(send_ret)).c_str());
+        }
+
+        for (;;) {
+            const int recv_ret = avcodec_receive_frame(vctx, frame.frame);
+            if (recv_ret == AVERROR(EAGAIN)) {
+                break; // need more input
+            }
+            if (recv_ret < 0) {
+                // AVERROR_EOF (fully drained) or a real decode error: stop
+                // either way with the last frame decoded before it, if any.
+                return finish();
+            }
+
+            // best_effort_timestamp already falls back from a missing pts to
+            // the interpolated dts-based estimate; a frame with neither is
+            // treated as t=0 rather than fed to av_rescale_q as
+            // AV_NOPTS_VALUE (which would rescale into garbage).
+            const int64_t raw_pts =
+                (frame.frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame.frame->best_effort_timestamp : 0;
+            const int64_t pts_us = av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE});
+
+            if (IsConvertibleFrame(frame.frame)) {
+                av_frame_unref(held.frame);
+                if (av_frame_ref(held.frame, frame.frame) == 0) {
+                    have_candidate = true;
+                    candidate_pts_us = pts_us;
+                }
+            }
+
+            if (pts_us >= target_us)
+                return finish();
+        }
+
+        if (read_ret < 0)
+            return finish(); // reached EOF while flushing
+    }
+}
+
+// Same shape and same GOP-spanning-decode strategy as DecodeForwardToTarget
+// above (DecodeFrameAt's own helper), but for DecodeFrameAtRaw: the candidate
+// frame is wrapped via WrapRawDecodedFrame instead of converted, so it stays
+// FFmpeg-refcounted rather than becoming a fresh BGRA allocation.
+std::optional<RawDecodedVideoFrame> DecodeForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx,
+                                                             int video_stream_idx, int64_t target_us,
+                                                             MatrixCoefficients matrix, ColorRange range,
+                                                             const P010PqMonitorConverter* pq) {
+    PacketGuard pkt(av_packet_alloc());
+    FrameGuard frame(av_frame_alloc());
+    FrameGuard held(av_frame_alloc());
+    if (pkt.pkt == nullptr || frame.frame == nullptr || held.frame == nullptr)
+        return std::nullopt;
+
+    bool have_candidate = false;
+    int64_t candidate_pts_us = 0;
+    const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
+
+    const auto finish = [&]() -> std::optional<RawDecodedVideoFrame> {
+        if (!have_candidate)
+            return std::nullopt;
+        const bool is_pq = pq != nullptr && held.frame->format == AV_PIX_FMT_YUV420P10LE;
+        return WrapRawDecodedFrame(held.frame, candidate_pts_us, matrix, range, is_pq);
     };
 
     while (true) {
@@ -938,12 +1082,48 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
                                  impl_->pq_converter.get());
 }
 
+std::optional<RawDecodedVideoFrame> EditPlayerEngine::DecodeFrameAtRaw(int64_t target_us) {
+    if (!impl_->IsOpen() || impl_->video_stream_idx < 0)
+        return std::nullopt;
+
+    target_us = std::max<int64_t>(target_us, 0);
+
+    AVFormatContext* fmt_ctx = impl_->fmt.ctx;
+    AVCodecContext* vctx = impl_->video_codec.ctx;
+    AVStream* vst = fmt_ctx->streams[impl_->video_stream_idx];
+
+    // Same seek convention as DecodeFrameAt: AVSEEK_FLAG_BACKWARD snaps to
+    // the keyframe at or before the target so decode-forward starts clean.
+    const int64_t seek_ts = av_rescale_q(target_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
+    const int seek_ret = av_seek_frame(fmt_ctx, impl_->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
+    if (seek_ret < 0) {
+        LogWarn((std::string("av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());
+        return std::nullopt;
+    }
+    // Discard any decoder-buffered frames from before the seek.
+    avcodec_flush_buffers(vctx);
+
+    return DecodeForwardToTargetRaw(fmt_ctx, vctx, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range,
+                                    impl_->pq_converter.get());
+}
+
 std::vector<AudioTrackDescription> EditPlayerEngine::AudioTracks() const {
     return impl_->audio_track_descriptions;
 }
 
 void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
                                            std::function<int64_t()> current_media_time_us) {
+    // Same demux/video/audio thread topology, same clock-gated skip decision,
+    // same PacketQueue backpressure as DecodeFrameAtRaw's single-frame
+    // sibling above -- docs/superpowers/specs/2026-08-01-edit-player-decoupled-decode-design.md.
+    // The video thread calls WrapRawDecodedFrame (ref-counts the decoder's
+    // own buffer) rather than ConvertToDecodedFrame (a fresh BGRA allocation
+    // + CPU colour conversion): this is the editor player's own continuous
+    // playback, feeding EditFrameGpuConverter downstream, so paying for a CPU
+    // conversion here would be pure waste. ConvertToDecodedFrame/
+    // DecodeFrameAt stay in this file for the timeline thumbnail strip
+    // (TimelineThumbnailSource), which has no GPU converter of its own and
+    // genuinely needs ready-to-paint BGRA.
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
     if (!impl_->IsOpen() || impl_->playback_running.load())
         return;
@@ -1091,11 +1271,14 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
         FrameGuard frame(av_frame_alloc());
         int late_streak = 0;
         bool skipping_nonref = false;
-        // A decoded 1440p frame is ~15 MB of BGRA and this thread allocates one
-        // per frame. An allocation failure escaping a thread body is a hard
-        // std::terminate, with none of the diagnostics a normal failure path
-        // produces -- so it ends THIS run's video instead, leaving teardown and
-        // the caller's own error handling intact.
+        // A decoded frame here is wrapped (WrapRawDecodedFrame) rather than
+        // converted into a fresh multi-megabyte allocation -- the per-frame
+        // cost is an AVFrame struct plus a shared_ptr control block, a few
+        // hundred bytes. The try/catch stays regardless: an allocation
+        // failure escaping a thread body is a hard std::terminate, with none
+        // of the diagnostics a normal failure path produces -- so it ends
+        // THIS run's video instead, leaving teardown and the caller's own
+        // error handling intact.
         try {
             if (pkt.pkt != nullptr && frame.frame != nullptr) {
                 bool draining = false;
@@ -1144,15 +1327,26 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                             ++late_streak;
 
                         if (worth_converting && IsConvertibleFrame(frame.frame)) {
-                            // Convert and release the decoder's frame BEFORE
-                            // handing the result on: on_video is allowed to block
-                            // on the consumer's bounded queue, and holding a
-                            // decoder frame reference across that would pin a
-                            // buffer the decoder wants back.
-                            DecodedVideoFrame out = ConvertToDecodedFrame(frame.frame, pts_us, impl->matrix,
-                                                                          impl->range, impl->pq_converter.get());
+                            // Wrap and release the decoder's frame BEFORE
+                            // handing the result on: on_video is allowed to
+                            // block on the consumer's bounded queue, and
+                            // holding a decoder frame reference across that
+                            // would pin a buffer the decoder wants back.
+                            // WrapRawDecodedFrame's own av_frame_ref already
+                            // gives the result its own reference on the
+                            // buffer, so unref-ing frame.frame right after
+                            // does not invalidate it.
+                            const bool is_pq =
+                                impl->pq_converter != nullptr && frame.frame->format == AV_PIX_FMT_YUV420P10LE;
+                            std::optional<RawDecodedVideoFrame> out =
+                                WrapRawDecodedFrame(frame.frame, pts_us, impl->matrix, impl->range, is_pq);
                             av_frame_unref(frame.frame);
-                            on_video(std::move(out));
+                            // nullopt only on an av_frame_alloc/av_frame_ref
+                            // OOM failure inside WrapRawDecodedFrame -- this
+                            // frame is silently dropped rather than crashing,
+                            // same as an unconvertible frame just above.
+                            if (out.has_value())
+                                on_video(std::move(*out));
                         } else {
                             av_frame_unref(frame.frame);
                         }
