@@ -45,10 +45,16 @@
 //   D) Isolated cost of the per-frame std::make_shared<std::vector<uint8_t>>
 //      allocation the real path pays (2560x1440x4 bytes), 100 iterations,
 //      averaged.
-//   E) FFmpeg's default H.264 decoder threading when opened exactly as
-//      EditPlayerEngine::Open() opens it (avcodec_open2 with no thread_count
-//      set): ctx->thread_count, ctx->active_thread_type, and the machine's
-//      std::thread::hardware_concurrency().
+//   E) FFmpeg's H.264 decoder threading when opened exactly as
+//      EditPlayerEngine::Open() opens it TODAY (2026-08-03 follow-up: that
+//      code used to leave thread_count at libavcodec's default of 1 -- no
+//      decoder threading at all -- which this step originally existed to
+//      demonstrate; Open() now explicitly sets thread_count to the host's
+//      core count, so this step mirrors that fix and asserts it took:
+//      ctx->thread_count, ctx->active_thread_type, and the machine's
+//      std::thread::hardware_concurrency(). ASSERTS thread_count > 1 and
+//      contributes to this probe's exit code -- the one hard correctness
+//      check among these steps, the rest being pure measurements.
 //   F) Whether the shipped exosnap-ffmpeg-build (r5, n8.1.1 --
 //      cmake/VendorFFmpeg.cmake) was built with hardware-decode support at
 //      all: per-codec (h264/hevc/av1) avcodec_get_hw_config() enumeration,
@@ -80,8 +86,9 @@
 // on. Pass a position inside the file when probing a short recording, or every
 // timed step starts past its end and measures nothing.
 //
-// Exit code 0 if step A's Open() succeeded (regardless of what the
-// measurements themselves show), 1 on a hard failure (bad args, Open failed).
+// Exit code 0 if step A's Open() succeeded AND step E's thread_count > 1
+// assertion held (regardless of what the pure measurement steps themselves
+// show), 1 on a hard failure (bad args, Open failed, or step E's assertion).
 
 #include <recorder_core/edit_player_engine.h>
 
@@ -356,30 +363,35 @@ void StepD_AllocationCost() {
            totalMs / kIters);
 }
 
-// ---- Step E: FFmpeg default decoder threading ----
-void StepE_FfmpegThreading(const std::string& path) {
-    printf("=== [E] FFmpeg default H.264 decoder threading (avcodec_open2 with no thread_count set) ===\n");
+// ---- Step E: FFmpeg decoder threading, post Task 1's threading fix --------
+//
+// Returns false on the one thing in this step that is a correctness
+// assertion rather than a measurement: ctx->thread_count > 1. Everything
+// else here (open failures aside) just reports numbers.
+bool StepE_FfmpegThreading(const std::string& path) {
+    printf("=== [E] FFmpeg H.264 decoder threading, opened exactly as EditPlayerEngine::Open() opens it today ===\n");
 
-    printf("[E] hardware_concurrency=%u\n", std::thread::hardware_concurrency());
+    const unsigned int hwConcurrency = std::thread::hardware_concurrency();
+    printf("[E] hardware_concurrency=%u\n", hwConcurrency);
 
     AVFormatContext* fmt = nullptr;
     int ret = avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
     if (ret < 0) {
         printf("[E] avformat_open_input failed: %s\n", av_err2str(ret));
-        return;
+        return false;
     }
     ret = avformat_find_stream_info(fmt, nullptr);
     if (ret < 0) {
         printf("[E] avformat_find_stream_info failed: %s\n", av_err2str(ret));
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     const int videoIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (videoIdx < 0) {
         printf("[E] no video stream found\n");
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     AVStream* vst = fmt->streams[videoIdx];
@@ -387,17 +399,30 @@ void StepE_FfmpegThreading(const std::string& path) {
     if (codec == nullptr) {
         printf("[E] no decoder available for codec id %d\n", static_cast<int>(vst->codecpar->codec_id));
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     AVCodecContext* ctx = avcodec_alloc_context3(codec);
-    if (ctx == nullptr || avcodec_parameters_to_context(ctx, vst->codecpar) < 0 ||
-        avcodec_open2(ctx, codec, nullptr) < 0) {
+    bool ctxReady = ctx != nullptr && avcodec_parameters_to_context(ctx, vst->codecpar) >= 0;
+    if (ctxReady) {
+        // Mirrors EditPlayerEngine::Open()'s post-Task-1 threading setup
+        // (edit_player_engine.cpp) exactly, so this step measures what the
+        // shipped code actually does rather than libavcodec's untouched
+        // default (thread_count=1, no decoder threading at all -- which is
+        // what this step used to demonstrate before that fix landed).
+        ctx->thread_count = static_cast<int>(std::thread::hardware_concurrency());
+        if (ctx->thread_count <= 0) {
+            ctx->thread_count = 1;
+        }
+        ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+        ctxReady = avcodec_open2(ctx, codec, nullptr) >= 0;
+    }
+    if (!ctxReady) {
         printf("[E] failed to open the video decoder (%s)\n", codec->name);
         if (ctx)
             avcodec_free_context(&ctx);
         avformat_close_input(&fmt);
-        return;
+        return false;
     }
 
     printf("[E] decoder=%s\n", codec->name);
@@ -405,8 +430,29 @@ void StepE_FfmpegThreading(const std::string& path) {
     printf("[E] ctx->active_thread_type=%d (FF_THREAD_FRAME=%d, FF_THREAD_SLICE=%d, 0=none)\n",
            ctx->active_thread_type, FF_THREAD_FRAME, FF_THREAD_SLICE);
 
+    // On a single-core host there is nothing to parallelize across and
+    // thread_count legitimately clamps to 1 -- the assertion is about the fix
+    // (use every core available), not a literal ">1" on hardware where that
+    // cannot hold.
+    bool pass = true;
+    if (hwConcurrency > 1) {
+        if (ctx->thread_count > 1) {
+            printf("[E] VERDICT: PASS -- ctx->thread_count=%d > 1 (Task 1 threading fix is in effect).\n",
+                   ctx->thread_count);
+        } else {
+            printf("[E] VERDICT: FAIL -- ctx->thread_count=%d, expected > 1 on a %u-core host.\n", ctx->thread_count,
+                   hwConcurrency);
+            pass = false;
+        }
+    } else {
+        printf("[E] VERDICT: PASS (vacuous) -- host reports hardware_concurrency()=%u, so thread_count=1 is "
+               "correct rather than a regression.\n",
+               hwConcurrency);
+    }
+
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
+    return pass;
 }
 
 // ---- Step F: does this shipped FFmpeg build support hardware decode at all? ----
@@ -888,11 +934,11 @@ int main(int argc, char** argv) {
     // ordering itself does not affect the timing (verified locally).
     StepG_SimdVariants();
     StepD_AllocationCost();
-    StepE_FfmpegThreading(path);
+    const bool stepEPassed = StepE_FfmpegThreading(path);
     StepF_HardwareDecodeSupport();
     StepH_AudioContinuityUnderSlowVideo(engine, startUs);
     StepI_SeekAlignment(engine, startUs);
 
     printf("=== [probe] DONE ===\n");
-    return 0;
+    return stepEPassed ? 0 : 1;
 }
