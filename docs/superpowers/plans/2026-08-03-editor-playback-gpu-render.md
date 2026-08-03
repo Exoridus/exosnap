@@ -751,6 +751,33 @@ carries).
       clears the 4.17 ms/frame budget once GPU upload/present and decode-with-threading costs are
       counted.
 
+      **Step 7 live-verify checklist** (nothing below is reachable by the widget tests or the
+      `--visual-test` harness — the harness deliberately never calls `startGpuRendering()`, so
+      every one of these needs a real run with a real clip open on the Edit page):
+
+      - [ ] **Qt controls over the native child HWND — visible AND clickable.**
+            `play_pause_btn_` and `player_meta_label_` share the player's grid cell with
+            `player_surface_`, deliberately floating over the video. `EditPlayerSurface` now sets
+            `WA_NativeWindow` and hosts a D3D11 child HWND, which occludes ordinary Qt painting
+            unless the siblings get auto-promoted to native windows and land above it in Z order.
+            The code already does the defensive thing (`SetWindowPos(childHwnd_, HWND_BOTTOM, …)`
+            in `EditPlayerRenderer::Initialize`, byte-for-byte the same call and timing
+            `DxgiPreviewRenderer` uses — verified during the final review, no discrepancy found),
+            but it has never been confirmed against *this* page's widget tree. If the button ends
+            up occluded it is also unclickable: a native child HWND swallows the input a Qt
+            sibling underneath would need, which breaks the Edit page's play control outright.
+            **Confirm the play/pause button and the meta label remain visible AND clickable over
+            the video surface once GPU rendering is active** — click play, click pause, watch the
+            glyph change.
+      - [ ] **Backward scrub / trim-handle preview updates the picture.** Play a clip with audio
+            well past its start, pause, then scrub backwards and drag both trim handles. Each
+            should repaint to the frame under the handle. (This is the regression the final
+            review's finding #1 fixed — a stale present-gate clock silently dropped every
+            backward-seeking frame. Covered by a unit test on the renderer's gate, but the
+            end-to-end path through `EditExportPage` is only observable live.)
+      - [ ] **Scrub after end-of-clip.** Let a clip play to its end (it pauses at `total`), then
+            scrub back. Same failure mode as above, different entry point.
+
 ---
 
 ## Self-Review Notes

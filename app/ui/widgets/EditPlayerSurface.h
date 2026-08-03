@@ -4,6 +4,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <atomic>
 #include <memory>
 
 #include <recorder_core/edit_player_engine.h> // RawDecodedVideoFrame
@@ -78,7 +79,7 @@ class EditPlayerSurface : public QWidget {
     void setPlaceholderText(const QString& text);
 
     [[nodiscard]] bool hasFrame() const noexcept {
-        return has_frame_;
+        return has_frame_.load(std::memory_order_relaxed);
     }
 
     // Test/diagnostic access to the owned renderer -- null unless
@@ -105,10 +106,25 @@ class EditPlayerSurface : public QWidget {
   private:
     void applyResize();
 
+    // Owns the renderer; only ever read/written on the UI thread.
     std::unique_ptr<EditPlayerRenderer> renderer_;
+    // The SAME renderer, published atomically for the two methods that are
+    // callable from the engine's decode/seek threads (presentFrame/
+    // updateClockUs). Those threads can genuinely be running before
+    // startGpuRendering() has assigned renderer_: EditExportPage installs the
+    // frame callback and fires its poster SeekTo() from setEditContext(),
+    // while startGpuRendering() runs later from showEvent(). Reading the
+    // unique_ptr from those threads would race that assignment, so they read
+    // this instead -- nullptr until the renderer is fully constructed and
+    // initialized, which is exactly the "no-op before startGpuRendering()"
+    // contract those methods already document.
+    std::atomic<EditPlayerRenderer*> renderer_published_{nullptr};
     QImage frame_; // legacy/harness path only
     QString placeholder_ = QStringLiteral("Preview unavailable");
-    bool has_frame_ = false;
+    // Written from the decode/seek thread (presentFrame) as well as the UI
+    // thread (setFrame/clearFrame/startGpuRendering), read on both -- a plain
+    // bool here is a data race, not merely a benign one on x86.
+    std::atomic<bool> has_frame_{false};
 };
 
 } // namespace exosnap::ui::widgets

@@ -1,6 +1,13 @@
 # Edit Video Player — Decoupled Decode — Design
 
-Status: implemented, 2026-08-01.
+Status: implemented, 2026-08-01. **Partly superseded 2026-08-03** by
+`2026-08-03-editor-playback-gpu-render-design.md`: that design removed the bounded video FRAME
+queue this document describes (decoded frames now go straight from the decode thread into the
+renderer's single-slot mailbox), and with it `VideoQueueCapacityForFrameRate`/
+`kDefaultMaxVideoQueueBytes`, referenced below. Everything else here — the three-thread topology,
+the per-stream PACKET queues, the demux read-ahead pacing (`ShouldDemuxMorePackets`), the audio
+ring and `AudioPrerollFramesToDrop` — is unchanged and still current; demux read-ahead is now the
+sole decode-ahead bound on the video side.
 
 Supersedes the threading model described in
 `2026-07-14-edit-video-player-pacing-design.md` (that document's audio-ring pacing, clock and

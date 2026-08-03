@@ -4,12 +4,14 @@
 // hardware precedent as test_preview_surface_webcam.cpp's
 // PreviewSurfaceWebcamDxgiLiveTest (DxgiPreviewRenderer::InitD3D11()
 // hardcodes D3D_DRIVER_TYPE_HARDWARE); GTEST_SKIP covers headless/GPU-less
-// runners. Since this worktree builds against Task 1's stub
-// EditFrameGpuConverter (clears to a fixed debug colour instead of
-// converting), these tests cannot and do not assert per-pixel correctness --
-// that is Task 2's job. They assert the pipeline runs: native child HWND
-// created, synthetic RawDecodedVideoFrames presented without crashing,
-// resize reaches the real Win32 window, Shutdown() tears down cleanly.
+// runners. These link the real recorder_core and so run the real
+// EditFrameGpuConverter shaders, but they deliberately do NOT assert per-pixel
+// correctness -- that is test_edit_frame_gpu_converter.cpp's job, where the
+// output is pinned against the CPU reference converters on a WARP device.
+// What these assert is that the pipeline runs and its lifecycle holds: native
+// child HWND created, synthetic RawDecodedVideoFrames presented without
+// crashing, the present-gate's clock behaves, resize reaches the real Win32
+// window, Shutdown() tears down cleanly.
 #include <gtest/gtest.h>
 
 #include <QApplication>
@@ -137,6 +139,44 @@ TEST_F(EditPlayerSurfaceGpuTest, PresentingSyntheticFramesDrawsWithoutCrashing) 
     // Shutdown (via the surface's destructor, below) must tear down cleanly:
     // stop+join the render thread, destroy the child HWND. Reaching the end
     // of this test without hanging or crashing IS the assertion.
+}
+
+// Regression guard for the present-gate going stale (final review, 2026-08-03).
+//
+// The gate drops a frame whose pts_us is behind the last clock value the
+// renderer was told about. That is correct DURING playback, but the clock
+// snapshot is only refreshed from the playback tick -- so after a pause (or an
+// end-of-clip pause at `total`) the renderer keeps holding the position
+// playback stopped at, and every subsequent backward scrub/trim-handle frame
+// arrives "in the past" and is dropped before any GPU work. The picture then
+// stays frozen at the paused position.
+//
+// EditPlayerSession resets its OWN clock to -1 on Pause() (and SeekTo() pauses
+// first); the fix is that EditExportPage republishes that reset through
+// updateClockUs(). This test drives exactly that sequence at the surface level:
+// a stale positive clock must drop the frame, and republishing the session's
+// post-pause -1 must let the very same frame through.
+TEST_F(EditPlayerSurfaceGpuTest, StaleClockDropsFrameUntilTheResetIsPropagated) {
+    exosnap::EditPlayerRenderer* renderer = surface_->rendererForTest();
+    ASSERT_NE(renderer, nullptr);
+    ASSERT_FALSE(renderer->HasPresentedFrame());
+
+    // "Played to 10s, then paused" -- the clock the renderer was last told.
+    surface_->updateClockUs(10'000'000);
+
+    // "Scrubbed back to 3s": the seek delivers a frame well behind that clock.
+    surface_->presentFrame(MakeSyntheticFrame(3'000'000, 16, 16, 90));
+    Sleep(200); // generous settle: the render thread wakes on the hand-off either way
+    EXPECT_FALSE(renderer->HasPresentedFrame())
+        << "a frame behind a non-negative clock must be dropped by the present-gate";
+
+    // The fix: EditPlayerSession::Pause() already reset its own clock to -1;
+    // propagating that snapshot reopens the gate.
+    surface_->updateClockUs(-1);
+    surface_->presentFrame(MakeSyntheticFrame(3'000'000, 16, 16, 90));
+
+    EXPECT_TRUE(WaitUntil([&] { return renderer->HasPresentedFrame(); }))
+        << "after the clock reset the scrub frame must be presented, not dropped";
 }
 
 TEST_F(EditPlayerSurfaceGpuTest, ShutdownTearsDownCleanly) {

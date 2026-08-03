@@ -234,13 +234,18 @@ class EditPlayerEngine {
     //
     // - on_video and on_audio are invoked from two DIFFERENT threads and may
     //   run concurrently. Each is called serially with respect to itself.
-    // - Both callbacks MAY BLOCK; that is how the caller paces this engine.
-    //   on_audio blocking (a full audio ring) no longer holds up video, and
-    //   on_video blocking (a full frame queue) no longer holds up audio.
-    // - Because of that, a caller whose callback can block must release it
-    //   before calling StopPlaybackDecode(), or the join inside will hang: the
-    //   engine can wake its own waits, not the caller's. See
-    //   EditPlayerSession::Pause().
+    // - This engine paces ITSELF, on the demux thread: it stops reading packets
+    //   once it has demuxed further ahead of current_media_time_us than the
+    //   read-ahead window (ShouldDemuxMorePackets, edit_playback_pacing.h),
+    //   which bounds how far ahead of the clock either decode thread can run.
+    //   No caller is required to block a callback to achieve that -- and since
+    //   the 2026-08-03 GPU render path removed EditPlayerSession's video frame
+    //   queue, on_video no longer blocks at all: it hands the frame to the
+    //   renderer's single-slot mailbox and returns.
+    // - A callback MAY still block (on_audio does, on a full WASAPI ring). A
+    //   caller whose callback can block must release it before calling
+    //   StopPlaybackDecode(), or the join inside will hang: the engine can wake
+    //   its own waits, not the caller's. See EditPlayerSession::Pause().
     //
     // current_media_time_us reports the playback clock in absolute media time
     // (the caller's audio clock), or any NEGATIVE value when no clock is

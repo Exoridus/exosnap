@@ -581,16 +581,25 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
             // undo the whole point of the GPU render path. player_surface_ is
             // safe to touch from this callback: player_session_ is destroyed
             // (and its decode/seek threads joined) strictly before
-            // player_surface_ (see the member declaration order), and
-            // hideEvent() closes the session synchronously before the page
-            // hides.
+            // player_surface_ -- not because of member declaration order (the
+            // two are unrelated fields), but because player_session_ is one of
+            // THIS class's own members while player_surface_ is a QObject child
+            // of this widget, and ~QWidget's child-deletion cascade runs after
+            // the derived class's own members have already been destroyed. On
+            // top of that, hideEvent() closes the session synchronously before
+            // the page hides.
             player_session_->SetOnFrameReady([this](recorder_core::RawDecodedVideoFrame frame) {
                 if (player_surface_)
                     player_surface_->presentFrame(std::move(frame), kEditorHdrPeakScaleFallback);
             });
             // Show the clip's first frame as a poster instead of the
-            // placeholder while the user is still reviewing.
+            // placeholder while the user is still reviewing. The clock sync
+            // matters here too: opening a SECOND clip while the page is
+            // already visible would otherwise leave the renderer's present-gate
+            // holding the previous clip's last clock value, which drops this
+            // poster frame outright.
             player_session_->SeekTo(0);
+            syncPlayerClock();
         }
     }
     // The new clip's own frame rate drives the presentation cadence.
@@ -691,6 +700,10 @@ void EditExportPage::setPreviewPlaying(bool playing) {
         if (player_session_)
             player_session_->Pause();
     }
+    // Both directions: Play() seeds the clock at start_us, Pause() resets it to
+    // -1. Either way the renderer's present-gate has to learn about it right
+    // now rather than at the next tick -- after a pause there IS no next tick.
+    syncPlayerClock();
     refreshPlayButton();
 }
 
@@ -747,6 +760,12 @@ void EditExportPage::refreshPreviewTickInterval() {
     preview_timer_->setInterval(PreviewTickMsFor(clip_fps, screen_hz));
 }
 
+void EditExportPage::syncPlayerClock() {
+    if (!player_surface_)
+        return;
+    player_surface_->updateClockUs(player_session_ ? player_session_->ClockSnapshotUs() : -1);
+}
+
 void EditExportPage::onPreviewTick() {
     const bool paced_by_audio = player_session_ && player_session_->HasAudioStream();
     if (paced_by_audio) {
@@ -766,6 +785,11 @@ void EditExportPage::onPreviewTick() {
             player_session_->SeekTo(preview_position_ms_ * 1000); // ms -> us: no-audio pacing fallback
                                                                   // (safe no-op if not open, matching
                                                                   // EditPlayerSession's own contract)
+        // No audio clock exists on this path, so the session's snapshot is -1
+        // and the gate stays open -- but a clip whose audio resampler failed
+        // mid-run lands here after having had a clock, so publish it rather
+        // than leaving the last positive value pinned.
+        syncPlayerClock();
     }
 
     const qint64 total = durationMs();
@@ -824,8 +848,10 @@ void EditExportPage::onTrimHandleReleased(qint64 start_ms, qint64 end_ms) {
     // Show the frame at the (possibly snapped) boundary the handle landed on.
     if (player_session_) {
         const int64_t shown_us = (start_ms <= 0) ? trim_end_us_ : trim_start_us_;
-        if (shown_us != recorder_core::TrimRange::kNoTimestamp)
+        if (shown_us != recorder_core::TrimRange::kNoTimestamp) {
             player_session_->SeekTo(shown_us);
+            syncPlayerClock(); // a seek result is the frame the user asked for: never gate it
+        }
     }
 }
 
@@ -840,8 +866,10 @@ void EditExportPage::onScrubMoved(qint64 position_ms) {
     // The preview position follows the drag; the decoder shows the frame at
     // the scrub target (a newer SeekTo supersedes an in-flight older one).
     preview_position_ms_ = ClampPlayheadMs(position_ms, durationMs());
-    if (player_session_)
+    if (player_session_) {
         player_session_->SeekTo(preview_position_ms_ * 1000); // ms -> us
+        syncPlayerClock(); // a seek result is the frame the user asked for: never gate it
+    }
 }
 
 void EditExportPage::onScrubFinished() {

@@ -167,6 +167,16 @@ class EditExportPage : public QWidget {
     // Retunes the preview timer to the open clip's frame rate, capped at the
     // refresh rate of the screen the window is on.
     void refreshPreviewTickInterval();
+    // Re-publishes the session's OWN playback clock into the render surface's
+    // present-gate. Must run after every Pause()/SeekTo(), not only on the
+    // playback tick: the session resets its clock to -1 on pause (and SeekTo
+    // pauses first), and without propagating that reset the renderer keeps the
+    // last clock value it was told about, so every frame with an earlier
+    // timestamp -- i.e. every backward scrub, every trim-handle preview, and
+    // everything after an end-of-clip pause -- is dropped by the gate before
+    // any GPU work and the picture stays frozen. Deliberately reads the
+    // session's own snapshot rather than inventing a second clock.
+    void syncPlayerClock();
     void updatePlayerHeight();
     // Width-driven layout: the rail keeps the details card and the export panel,
     // so it is narrowed rather than dropped as the surface gets tighter.

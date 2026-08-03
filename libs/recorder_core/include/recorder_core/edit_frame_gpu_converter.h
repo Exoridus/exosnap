@@ -6,7 +6,6 @@
 #include <winrt/base.h>
 
 #include <string>
-#include <unordered_map>
 
 namespace recorder_core {
 

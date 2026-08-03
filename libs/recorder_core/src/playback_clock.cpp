@@ -1,8 +1,5 @@
 #include "playback_clock.h"
 
-#include <algorithm>
-#include <cmath>
-
 namespace recorder_core {
 
 int64_t AudioClockMs(uint64_t frames_played, uint32_t sample_rate_hz) noexcept {
@@ -71,39 +68,6 @@ size_t AudioPrerollFramesToDrop(int64_t block_pts_us, size_t block_frame_count, 
     if (static_cast<uint64_t>(to_drop) >= static_cast<uint64_t>(block_frame_count))
         return block_frame_count; // the whole block is still before the start
     return static_cast<size_t>(to_drop);
-}
-
-size_t VideoQueueCapacityForFrameRate(double fps, double decode_ahead_seconds, size_t bytes_per_frame,
-                                      size_t max_queue_bytes) noexcept {
-    // Matches the original hand-computed 60 fps sizing: 60 x 0.2 s = 12 frames
-    // in the decode-ahead window, + 1/3 headroom = 16.
-    constexpr size_t kFloor = 16;
-
-    // Step 1: the depth the clip's rate asks for.
-    size_t frames = kFloor;
-    if (fps > 0.0 && decode_ahead_seconds > 0.0 && fps <= kMaxPlausibleFrameRate) {
-        const double in_window = std::ceil(fps * decode_ahead_seconds);
-        if (in_window > 0.0) {
-            const auto counted = static_cast<size_t>(in_window);
-            frames = std::max(kFloor, counted + counted / 3u);
-        }
-    }
-    // Anything else -- unknown, non-positive, or a rate no capture device
-    // produces (a millisecond timebase declaring 1000/1) -- keeps the floor
-    // rather than sizing the queue off a number the file made up.
-
-    // Step 2: cap that depth by memory. The rate says how many frames the
-    // window holds; it says nothing about what they cost, and these are BGRA.
-    // bytes_per_frame == 0 means the size is not known yet, so there is
-    // nothing to cap against.
-    if (bytes_per_frame > 0 && max_queue_bytes > 0) {
-        const size_t affordable = max_queue_bytes / bytes_per_frame;
-        // The minimum wins over the budget: a queue below a few frames has no
-        // decode-ahead left at all, which stalls playback outright rather than
-        // merely using more memory than we would like.
-        frames = std::max(kMinVideoQueueFrames, std::min(frames, affordable));
-    }
-    return frames;
 }
 
 } // namespace recorder_core

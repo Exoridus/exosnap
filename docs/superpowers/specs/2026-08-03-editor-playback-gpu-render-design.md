@@ -31,11 +31,15 @@ before decode, the ~2.3 ms/frame (1440p) `make_shared` allocation (scales with f
 so materially larger at 4K), or presentation are counted at all. This combination is not a
 near-miss to tune; the CPU path cannot reach it.
 
-**Separate finding, same measurement session:** step E shows the H.264 software decoder opened
-with `ctx->thread_count=1`, `active_thread_type=0` on a 16-logical-core machine — FFmpeg's own
-frame/slice threading is never enabled for the editor's decode. This is independent of the
-conversion cost above (it is upstream of it) but is a plain, low-risk gap on the same code path,
-so it is fixed alongside this design rather than filed separately.
+**Correction to a separate finding from the same measurement session** (recorded 2026-08-03 during
+the final review): step E was originally read as showing the H.264 software decoder opened with
+`ctx->thread_count=1`, `active_thread_type=0`, i.e. FFmpeg frame/slice threading never enabled for
+the editor's decode. That reading was wrong. `EditPlayerEngine::Open()` already set
+`thread_count = 0` with `thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE` before this design, so
+libavcodec's own auto heuristic was already active — there was no threading gap to close. The
+implementation therefore keeps `thread_count = 0` (libavcodec picks and caps the count itself);
+step E now reports and asserts on the value libavcodec *resolves*, rather than on one this code
+sets.
 
 ## Decision
 
@@ -43,8 +47,9 @@ Move color conversion (and, for HDR10 clips, tone-mapping) off the CPU entirely,
 not a special case gated on resolution/chroma. This also removes the per-frame heap allocation the
 CPU path pays today, since the GPU path never materializes a full CPU-side BGRA buffer.
 
-Enable FFmpeg's decoder threading (`AVCodecContext::thread_count` = hardware concurrency, default
-threading type) as a small, independent fix on the same decode path.
+Leave FFmpeg's decoder threading as it already was (`AVCodecContext::thread_count = 0` +
+`FF_THREAD_FRAME | FF_THREAD_SLICE`) — see the correction above; the "enable decoder threading"
+sub-goal this design originally carried turned out to be a no-op.
 
 ### Why GPU conversion and not hardware decode
 
@@ -80,16 +85,28 @@ FP16 surface.
 holding an owned, heap-allocated BGRA buffer (`edit_player_engine.cpp:702-758`,
 `ConvertToDecodedFrame`); instead it hands off the decoded `AVFrame` itself, ref-counted via
 FFmpeg's own `av_frame_ref`/`av_frame_unref` — no new allocation, since the frame already lives in
-the decoder's own frame pool. This flows through the existing bounded-and-blocking frame queue from
-the 2026-08-01 design unchanged in mechanism, only in payload: a ref-counted `AVFrame` handle is
-smaller than a full BGRA buffer for every format below (4:2:0 8-bit: half the bytes; 4:2:0 10-bit:
-about the same; 4:4:4 8-bit: three-quarters), so the existing byte-budget queue sizing
-(`VideoQueueCapacityForFrameRate`, `playback_clock.h`) gets more headroom at the same memory bound,
-not less.
+the decoder's own frame pool.
 
-The render thread pulls a queued frame, uploads its planes as GPU textures (one texture per plane;
-reused/resized only when the clip's format or dimensions change, not per frame), and runs the
-matching shader variant to write directly into the swap chain's back buffer.
+**As implemented, `EditPlayerSession`'s bounded video-frame queue is removed rather than re-pointed
+at the new payload** (this supersedes the original "unchanged in mechanism, only in payload"
+intent). A raw frame is delivered straight from the decode/seek thread into
+`EditPlayerRenderer`'s single-slot mailbox, where the newest frame supersedes any older undrawn
+one. The queue's two jobs are both already covered elsewhere:
+
+- *Decode-ahead pacing* is the demux thread's clock-based read-ahead gate
+  (`ShouldDemuxMorePackets`, `edit_playback_pacing.h`), which stops reading once the demuxer is
+  further ahead of the playback clock than the read-ahead window — the same bound the queue depth
+  used to express, applied one stage earlier and in time rather than in frames.
+- *Drop-the-stale-frame selection* is the present-gate in `EditPlayerRenderer::PresentFrame`
+  (see "Presentation cadence" below), which is where the decision now belongs: a mailbox that
+  always holds the newest frame cannot accumulate a backlog to select from in the first place.
+
+Consequently `VideoQueueCapacityForFrameRate`/`kDefaultMaxVideoQueueBytes` (`playback_clock.h`)
+lost their last production caller and were deleted along with the queue.
+
+The render thread takes the mailbox's frame, uploads its planes as GPU textures (one texture per
+plane; reused/resized only when the clip's format or dimensions change, not per frame), and runs
+the matching shader variant to write directly into the swap chain's back buffer.
 
 ### Pixel formats in scope
 
@@ -165,13 +182,14 @@ latency generally and narrows (without, on its own, closing) the 4:4:4/4K/240fps
   `ConvertFullPlanar444ToBgra`, `P010PqMonitorConverter`) they replace on the render path. The CPU
   functions stay in the tree as the pinned reference, not dead code.
 - **Queue payload change**: `test_edit_player_engine.cpp`'s existing pure-function tests
-  (`edit_playback_pacing.h`) are unaffected — they reason about queue occupancy and timing, not
-  payload type. A new test confirms `AVFrame` ref-counting across the queue boundary (no leak, no
-  use-after-unref) using a real short clip, the same boundary `probe_edit_playback` already
-  exercises for the existing queue.
-- **Decoder threading**: a probe-level assertion (extending step E) that `ctx->thread_count > 1`
-  and `active_thread_type != 0` after the fix, plus confirming step B's throughput does not
-  regress.
+  (`edit_playback_pacing.h`) are unaffected — they reason about demux read-ahead and timing, not
+  payload type, and that read-ahead gate is what paces the path now that the frame queue is gone
+  (see "Data flow change"). A new test confirms `AVFrame` ref-counting across the delivery
+  boundary (no leak, no use-after-unref) using a real short clip, the same boundary
+  `probe_edit_playback` already exercises.
+- **Decoder threading**: a probe-level assertion (step E) that the `thread_count` libavcodec
+  resolves from `thread_count = 0` is > 1 on a multi-core host and `active_thread_type != 0`,
+  plus confirming step B's throughput does not regress.
 - **What cannot be unit- or probe-tested**: whether the finished pipeline actually sustains
   real-time playback of an actual 4:4:4/4K/240fps recording. No such file exists today (it is an
   extreme, likely rare Expert combination) and creating one needs real capture hardware capable of

@@ -57,13 +57,13 @@
 //      allocation the real path pays (2560x1440x4 bytes), 100 iterations,
 //      averaged.
 //   E) FFmpeg's H.264 decoder threading when opened exactly as
-//      EditPlayerEngine::Open() opens it TODAY (2026-08-03 follow-up: that
-//      code used to leave thread_count at libavcodec's default of 1 -- no
-//      decoder threading at all -- which this step originally existed to
-//      demonstrate; Open() now explicitly sets thread_count to the host's
-//      core count, so this step mirrors that fix and asserts it took:
-//      ctx->thread_count, ctx->active_thread_type, and the machine's
-//      std::thread::hardware_concurrency(). ASSERTS thread_count > 1 and
+//      EditPlayerEngine::Open() opens it TODAY: thread_count = 0 (libavcodec's
+//      own auto heuristic -- av_cpu_count() capped at MAX_AUTO_THREADS,
+//      resolved and written back into ctx->thread_count during
+//      avcodec_open2) plus thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE.
+//      Reports the resolved ctx->thread_count, ctx->active_thread_type, and
+//      the machine's std::thread::hardware_concurrency() for comparison.
+//      ASSERTS that the resolved thread_count is > 1 on a multi-core host and
 //      contributes to this probe's exit code -- the one hard correctness
 //      check among these steps, the rest being pure measurements.
 //   F) Whether the shipped exosnap-ffmpeg-build (r5, n8.1.1 --
@@ -374,11 +374,12 @@ void StepD_AllocationCost() {
            totalMs / kIters);
 }
 
-// ---- Step E: FFmpeg decoder threading, post Task 1's threading fix --------
+// ---- Step E: FFmpeg decoder threading ------------------------------------
 //
 // Returns false on the one thing in this step that is a correctness
-// assertion rather than a measurement: ctx->thread_count > 1. Everything
-// else here (open failures aside) just reports numbers.
+// assertion rather than a measurement: the thread_count libavcodec resolves
+// for us is > 1 on a multi-core host. Everything else here (open failures
+// aside) just reports numbers.
 bool StepE_FfmpegThreading(const std::string& path) {
     printf("=== [E] FFmpeg H.264 decoder threading, opened exactly as EditPlayerEngine::Open() opens it today ===\n");
 
@@ -416,15 +417,13 @@ bool StepE_FfmpegThreading(const std::string& path) {
     AVCodecContext* ctx = avcodec_alloc_context3(codec);
     bool ctxReady = ctx != nullptr && avcodec_parameters_to_context(ctx, vst->codecpar) >= 0;
     if (ctxReady) {
-        // Mirrors EditPlayerEngine::Open()'s post-Task-1 threading setup
+        // Mirrors EditPlayerEngine::Open()'s threading setup
         // (edit_player_engine.cpp) exactly, so this step measures what the
-        // shipped code actually does rather than libavcodec's untouched
-        // default (thread_count=1, no decoder threading at all -- which is
-        // what this step used to demonstrate before that fix landed).
-        ctx->thread_count = static_cast<int>(std::thread::hardware_concurrency());
-        if (ctx->thread_count <= 0) {
-            ctx->thread_count = 1;
-        }
+        // shipped code actually does. thread_count = 0 asks libavcodec to
+        // resolve a count itself; it writes the resolved value back into
+        // ctx->thread_count inside avcodec_open2, which is what the read-back
+        // below reports and asserts on.
+        ctx->thread_count = 0;
         ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
         ctxReady = avcodec_open2(ctx, codec, nullptr) >= 0;
     }
@@ -442,17 +441,21 @@ bool StepE_FfmpegThreading(const std::string& path) {
            ctx->active_thread_type, FF_THREAD_FRAME, FF_THREAD_SLICE);
 
     // On a single-core host there is nothing to parallelize across and
-    // thread_count legitimately clamps to 1 -- the assertion is about the fix
-    // (use every core available), not a literal ">1" on hardware where that
-    // cannot hold.
+    // libavcodec legitimately resolves thread_count to 1 -- the assertion is
+    // that decoder threading is actually ON, not a literal ">1" on hardware
+    // where that cannot hold. The resolved count may legitimately be BELOW
+    // hardware_concurrency(): libavcodec caps its own auto value, and that cap
+    // is deliberate (see edit_player_engine.cpp), so this asserts only that a
+    // count was resolved and threading engaged.
     bool pass = true;
     if (hwConcurrency > 1) {
         if (ctx->thread_count > 1) {
-            printf("[E] VERDICT: PASS -- ctx->thread_count=%d > 1 (Task 1 threading fix is in effect).\n",
+            printf("[E] VERDICT: PASS -- libavcodec resolved ctx->thread_count=%d > 1 from thread_count=0 "
+                   "(decoder threading is on).\n",
                    ctx->thread_count);
         } else {
-            printf("[E] VERDICT: FAIL -- ctx->thread_count=%d, expected > 1 on a %u-core host.\n", ctx->thread_count,
-                   hwConcurrency);
+            printf("[E] VERDICT: FAIL -- ctx->thread_count=%d after open, expected > 1 on a %u-core host.\n",
+                   ctx->thread_count, hwConcurrency);
             pass = false;
         }
     } else {

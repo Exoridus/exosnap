@@ -1220,7 +1220,7 @@ target_include_directories(test_playback_clock PRIVATE src)
 # fixtures here are synthetic containers written with libavformat carrying no
 # real compressed bitstream -- this FFmpeg build ships no video encoder (LGPL,
 # ADR 0007) -- so those exercise Open()/track-discovery only. A handful of
-# tests actually decode (DecodeFrameAtRaw/StartPlaybackDecodeRaw), which needs
+# tests actually decode (DecodeFrameAtRaw/StartPlaybackDecode), which needs
 # a real bitstream; those open a checked-in-locally (gitignored, .workspace/ is
 # scratch) fixture clip via EXOSNAP_SOURCE_DIR and GTEST_SKIP when it is not
 # present on the host, same convention as test_analyze_encode_perf.cpp.

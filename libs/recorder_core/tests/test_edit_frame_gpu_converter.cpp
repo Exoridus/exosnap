@@ -350,6 +350,54 @@ TEST(EditFrameGpuConverterTest, Yuv420P10Bt601MatchesCpuReference) {
     ExpectBgraNear(gpu, Cpu420_10(p, MatrixCoefficients::Bt601, ColorRange::Limited), 2, "420p10 bt601 limited");
 }
 
+// The only 10-bit branch neither test above reaches: ComputeCoefs' full-range
+// 10-bit scales are 255/1023 for BOTH luma and chroma, where limited range uses
+// 255/876 and 255/896. A shader that hard-coded either the 8-bit full-range
+// scales (1.0) or the limited-range 10-bit ones passes every other SDR test in
+// this file and fails only here.
+TEST(EditFrameGpuConverterTest, Yuv420P10FullRangeMatchesCpuReference) {
+    D3DTestDevice warp = CreateWarpDevice();
+    ASSERT_NE(warp.device, nullptr);
+
+    const Planes10 p = MakePlanes10(/*pq=*/false);
+    const auto gpuFull = ConvertOnGpu(warp, Frame420P10(p, MatrixCoefficients::Bt709, ColorRange::Full,
+                                                        /*is_pq=*/false));
+    ExpectBgraNear(gpuFull, Cpu420_10(p, MatrixCoefficients::Bt709, ColorRange::Full), 2, "420p10 bt709 full");
+
+    // ...and the two ranges must not collapse to the same output, or the
+    // comparison above would hold for a shader that ignored range entirely.
+    const auto gpuLimited = ConvertOnGpu(warp, Frame420P10(p, MatrixCoefficients::Bt709, ColorRange::Limited,
+                                                           /*is_pq=*/false));
+    EXPECT_NE(gpuFull, gpuLimited) << "full and limited range 10-bit must not render identically";
+}
+
+// The SDR path's remaining two MatrixCoefficients values. Bt2020Ncl is only
+// otherwise exercised on the PQ tone-map path (where the matrix constants are
+// not even used the same way), and Unspecified must resolve to BT.709 -- the
+// documented fallback in BOTH yuv_to_bgra.cpp and edit_frame_gpu_converter.cpp,
+// so a shader table that dropped the fallback would silently render garbage for
+// any clip whose container omits the tag.
+TEST(EditFrameGpuConverterTest, Bt2020AndUnspecifiedMatricesMatchCpuReferenceOnTheSdrPath) {
+    D3DTestDevice warp = CreateWarpDevice();
+    ASSERT_NE(warp.device, nullptr);
+
+    const Planes8 p = MakePlanes8(kChromaW, kChromaH);
+
+    const auto gpu2020 = ConvertOnGpu(warp, Frame420P8(p, MatrixCoefficients::Bt2020Ncl, ColorRange::Limited));
+    ExpectBgraNear(gpu2020, Cpu420(p, MatrixCoefficients::Bt2020Ncl, ColorRange::Limited), 2,
+                   "420p8 bt2020ncl limited");
+
+    const auto gpuUnspec = ConvertOnGpu(warp, Frame420P8(p, MatrixCoefficients::Unspecified, ColorRange::Limited));
+    ExpectBgraNear(gpuUnspec, Cpu420(p, MatrixCoefficients::Unspecified, ColorRange::Limited), 2,
+                   "420p8 unspecified limited");
+
+    // Unspecified IS BT.709 by both implementations' documented fallback, and
+    // BT.2020 must be a genuinely different matrix from it.
+    const auto gpu709 = ConvertOnGpu(warp, Frame420P8(p, MatrixCoefficients::Bt709, ColorRange::Limited));
+    EXPECT_EQ(gpuUnspec, gpu709) << "Unspecified must fall back to BT.709";
+    EXPECT_NE(gpu2020, gpu709) << "BT.2020-NCL and BT.709 must not render identically";
+}
+
 // --- SDR: 4:4:4 8-bit -------------------------------------------------------
 
 std::vector<uint8_t> Cpu444(const Planes8& p, MatrixCoefficients matrix, ColorRange range) {

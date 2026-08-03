@@ -48,15 +48,15 @@ namespace recorder_core {
 // the fixed backpressure point that paces the playback AUDIO decode thread --
 // see docs/superpowers/specs/2026-07-14-edit-video-player-pacing-design.md.
 // Kept deliberately small: it bounds how far ahead of the audio clock that
-// thread can race before PushSamples() blocks it, and the same decode-ahead
-// window is what EditPlayerSession's video frame queue is sized to hold
-// (VideoQueueCapacityForFrameRate, playback_clock.h).
+// thread can race before PushSamples() blocks it.
 //
-// Since 2026-08-01 video decodes on its own thread and is paced by that frame
-// queue instead (docs/superpowers/specs/
+// Since 2026-08-01 video decodes on its own thread (docs/superpowers/specs/
 // 2026-08-01-edit-player-decoupled-decode-design.md), so blocking here no
 // longer holds video up -- and a video hitch no longer starves this ring,
-// which is the whole point of that split.
+// which is the whole point of that split. Video's own decode-ahead bound is
+// the demux thread's clock-based read-ahead gate (ShouldDemuxMorePackets,
+// edit_playback_pacing.h); the frame queue this comment used to point at was
+// removed with the 2026-08-03 GPU render path.
 inline constexpr uint32_t kDefaultRingCapacityFrames = 9600;
 
 class WasapiAudioRenderer {

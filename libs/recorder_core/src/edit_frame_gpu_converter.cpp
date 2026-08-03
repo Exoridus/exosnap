@@ -323,6 +323,15 @@ bool EditFrameGpuConverter::Init(ID3D11Device* device, ID3D11DeviceContext* cont
         return false;
     }
 
+    // Plane textures are owned by this object but created FROM the device, so
+    // a re-Init against a different device must drop them alongside the cached
+    // constants -- otherwise UploadPlane's size/format cache would happily
+    // reuse a texture belonging to the previous device. No caller re-Inits
+    // today; this keeps the method correct on re-entry rather than relying on
+    // that staying true.
+    for (auto& plane : planes_)
+        plane = PlaneTexture{};
+
     constants_valid_ = false;
     return true;
 }

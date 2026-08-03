@@ -20,6 +20,12 @@ EditPlayerSurface::EditPlayerSurface(QWidget* parent) : QWidget(parent) {
 }
 
 EditPlayerSurface::~EditPlayerSurface() {
+    // Unpublish before destroying, so a late presentFrame()/updateClockUs()
+    // sees nullptr rather than a dangling pointer. EditExportPage already
+    // guarantees the ordering that matters (the session and its decode/seek
+    // threads are torn down before this widget), so this is the belt to that
+    // pair of braces, not the primary guarantee.
+    renderer_published_.store(nullptr, std::memory_order_release);
     // renderer_'s destructor (EditPlayerRenderer::~EditPlayerRenderer) calls
     // Shutdown(), which stops+joins the render thread and destroys the child
     // HWND -- explicit reset here only for readability, unique_ptr would do
@@ -53,27 +59,30 @@ bool EditPlayerSurface::startGpuRendering() {
         return false; // stays on the legacy QPainter path (no hardware D3D11 adapter, etc.)
 
     renderer_ = std::move(candidate);
-    has_frame_ = false;
+    has_frame_.store(false, std::memory_order_relaxed);
     frame_ = QImage{};
     renderer_->ShowPlaceholder(placeholder_.toStdWString());
+    // Published only once Initialize() has succeeded and the object is fully
+    // constructed -- see the member's declaration comment.
+    renderer_published_.store(renderer_.get(), std::memory_order_release);
     update(); // one more repaint so paintEvent's early-return takes over cleanly
     return true;
 }
 
 void EditPlayerSurface::presentFrame(recorder_core::RawDecodedVideoFrame frame, float hdr_peak_scale) {
-    has_frame_ = true;
-    if (renderer_)
-        renderer_->PresentFrame(std::move(frame), hdr_peak_scale);
+    has_frame_.store(true, std::memory_order_relaxed);
+    if (EditPlayerRenderer* renderer = renderer_published_.load(std::memory_order_acquire))
+        renderer->PresentFrame(std::move(frame), hdr_peak_scale);
 }
 
 void EditPlayerSurface::updateClockUs(int64_t media_time_us) noexcept {
-    if (renderer_)
-        renderer_->SetClockUs(media_time_us);
+    if (EditPlayerRenderer* renderer = renderer_published_.load(std::memory_order_acquire))
+        renderer->SetClockUs(media_time_us);
 }
 
 void EditPlayerSurface::setFrame(QImage frame) {
     frame_ = std::move(frame);
-    has_frame_ = !frame_.isNull();
+    has_frame_.store(!frame_.isNull(), std::memory_order_relaxed);
     if (renderer_) {
         // GPU path active (harness-only in practice -- see the class
         // comment): there is no raw YUV frame to hand the renderer here, so
@@ -85,9 +94,8 @@ void EditPlayerSurface::setFrame(QImage frame) {
 }
 
 void EditPlayerSurface::clearFrame() {
-    if (!has_frame_)
+    if (!has_frame_.exchange(false, std::memory_order_relaxed))
         return;
-    has_frame_ = false;
     frame_ = QImage{};
     if (renderer_)
         renderer_->ShowPlaceholder(placeholder_.toStdWString());
@@ -99,7 +107,7 @@ void EditPlayerSurface::setPlaceholderText(const QString& text) {
     if (placeholder_ == text)
         return;
     placeholder_ = text;
-    if (has_frame_)
+    if (has_frame_.load(std::memory_order_relaxed))
         return; // never interrupts a frame already on screen
     if (renderer_)
         renderer_->ShowPlaceholder(placeholder_.toStdWString());

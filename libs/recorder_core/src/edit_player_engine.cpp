@@ -553,19 +553,17 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
     AVCodecContext* vctx = avcodec_alloc_context3(vcodec);
     bool vctx_ready = vctx != nullptr && avcodec_parameters_to_context(vctx, vst->codecpar) >= 0;
     if (vctx_ready) {
-        // avcodec defaults thread_count to 1, i.e. no decoder threading at all
-        // -- measured on a 2560x1440@60 recording, the whole playback path then
-        // peaks below realtime. Set explicitly to the host's core count
-        // (falling back to 1 on a report of 0, as the standard library allows)
-        // rather than leaving it to libavcodec's own 0-means-auto heuristic,
-        // matching the shipped decoders' actual thread-capability support
-        // (AV_CODEC_CAP_FRAME_THREADS/SLICE_THREADS) -- frame threading adds a
-        // few frames of decode latency, which is irrelevant for a player paced
-        // by an audio clock anyway.
-        vctx->thread_count = static_cast<int>(std::thread::hardware_concurrency());
-        if (vctx->thread_count <= 0) {
-            vctx->thread_count = 1;
-        }
+        // 0 = let libavcodec pick the count itself: it derives one from
+        // av_cpu_count() (which honours this process's affinity mask) and caps
+        // it at its own MAX_AUTO_THREADS, then writes the resolved value back
+        // into thread_count during avcodec_open2. Deliberately NOT the host's
+        // raw std::thread::hardware_concurrency(): that removes the cap, and
+        // on a high-core-count machine more frame-threading depth means more
+        // in-flight decode latency on the latency-sensitive scrub path plus
+        // proportionally more decoder frame-pool memory at 4K, for no measured
+        // throughput gain. Frame threading costs a few frames of latency
+        // either way, which is irrelevant for a player paced by an audio clock.
+        vctx->thread_count = 0;
         vctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
         vctx_ready = avcodec_open2(vctx, vcodec, nullptr) >= 0;
     }
