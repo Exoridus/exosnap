@@ -172,7 +172,14 @@ HDR10 clip that reaches the PQ tonemap path reads garbage codes. Unlike the 4:4:
 isn't something to verify empirically first; it's a known required conversion step and should be
 implemented as such from the start.
 
-## Blocker found during implementation: the shipped FFmpeg build has no hwaccel compiled in at all
+## Blocker found during implementation, then resolved: the shipped FFmpeg build had no hwaccel compiled in
+
+**Resolved same day.** A branch for exactly this (`feat/d3d11va-hwaccels`, already CI-built
+2026-08-01) existed unmerged in `exosnap-ffmpeg-build`; verified locally against this codebase's
+new code (real D3D11 frames now flow through `DeinterleaveHwReadbackFrame`, P010 rescale included,
+on both the plain and HDR10 fixtures), then tagged and released as **r7**. `cmake/VendorFFmpeg.cmake`
+is now pinned to r7; every FFmpeg-touching recorder_core test passes against it. The rest of this
+section is kept as the empirical record of how the gap was found.
 
 Confirmed empirically 2026-08-03 while implementing the pieces above (`TryAttachD3D11VA`,
 `SelectD3D11HwFormat`, the `Open()` wiring, `DeinterleaveHwReadbackFrame` with the P010 fix) and
@@ -188,8 +195,8 @@ design.
 `avcodec_get_hw_config()` returns null at index 0 for h264, hevc, AND av1 -- "no hw config
 compiled in" -- while `av_hwdevice_ctx_create` for both D3D11VA and DXVA2 succeeds on their own
 (the GPU/driver/OS side is fine). `avcodec_configuration()` confirms why: this project's own
-minimal FFmpeg build ([[project_ffmpeg_build_repo]], `Exoridus/exosnap-ffmpeg-build`, currently
-pinned to r5) is compiled with `--disable-everything` plus an explicit
+minimal FFmpeg build ([[project_ffmpeg_build_repo]], `Exoridus/exosnap-ffmpeg-build`, pinned to r5
+at the time) is compiled with `--disable-everything` plus an explicit
 `--enable-decoder=h264,hevc,av1,...` whitelist and **no** `--enable-d3d11va`, `--enable-dxva2`, or
 `--enable-hwaccel=...` flags anywhere. The decoders themselves were never built with hwaccel
 wiring, independent of what device or get_format logic this codebase supplies.
@@ -202,13 +209,12 @@ as designed: it degrades to today's software decode cleanly and safely, proven b
 But none of it can ever actually engage hardware decode on a machine running this FFmpeg build,
 because the decoders it links against were never compiled with a hwaccel to offer.
 
-**Fixing this is out of scope for this repository:** it requires a new release (`r7` or later) of
-the separate `Exoridus/exosnap-ffmpeg-build` repo/CI pipeline with `--enable-d3d11va
---enable-dxva2` and the corresponding `--enable-hwaccel=...` entries for h264/hevc/av1 added to the
-whitelist, a fresh cross-compiled artifact, and this repo's CMake pin bumped to it -- the same
-release-and-verify workflow already used for r4 (decoders) through r6 (x264/x265, since reverted).
-Until that lands, this design's C++ side is complete, tested, and safe to merge as dormant
-scaffolding, but delivers zero performance benefit on any machine running the current r5 build.
+**Fixing this required a new release of the separate `Exoridus/exosnap-ffmpeg-build` repo/CI
+pipeline** with `--enable-d3d11va --enable-dxva2` and the corresponding `--enable-hwaccel=...`
+entries for h264/hevc/av1 -- the same release-and-verify workflow already used for r4 (decoders)
+through r6 (x264/x265, since reverted). A branch doing exactly this already existed
+(`feat/d3d11va-hwaccels`), was verified locally against this codebase's new code, then tagged and
+released as **r7**; `cmake/VendorFFmpeg.cmake` now pins it. See the "Resolved" note above.
 
 ## Fallback behavior
 
