@@ -150,12 +150,27 @@ formats regardless of which path produced it.
 
 **Not yet verified, deliberately not asserted here:** the exact DXGI surface layout
 `av_hwframe_transfer_data` hands back for the HEVC RExt 4:4:4 case specifically. 4:2:0/4:2:2
-(NV12/P010) are well-known; 4:4:4's D3D11VA surface layout is far less commonly exercised in the
-wild and this design has not empirically confirmed it on real hardware, the same way this session
-confirmed the CUVID pass/fail behavior directly instead of trusting documentation. The
-implementation plan's first task should confirm this on real hardware before
+(NV12/P010) surface *layout* is well-known; 4:4:4's D3D11VA surface layout is far less commonly
+exercised in the wild and this design has not empirically confirmed it on real hardware, the same
+way this session confirmed the CUVID pass/fail behavior directly instead of trusting
+documentation. The implementation plan's first task should confirm this on real hardware before
 `ReadBackD3D11Frame`'s de-interleave logic is written for the 4:4:4 case, the same way the prior
 GPU-render-path plan pinned down exact struct layouts before parallel work started.
+
+**Certain, not just unverified — the P010 numeric range needs an explicit fix, separate from the
+4:4:4 layout question above.** `av_hwframe_transfer_data` hands 10-bit streams back as
+`AV_PIX_FMT_P010LE`: FFmpeg/DXGI's documented convention left-justifies each 10-bit sample into a
+16-bit word (`raw16 = sample << 6`). This codebase's `DecodedPixelFormat::Yuv420P10` is defined
+against the opposite convention — plain values in `[0, 1023]`, "no P010 <<6 left-justification"
+(`edit_frame_gpu_converter.cpp:33-34`) — and both consumers of it rely on that: the SDR path's
+`y_scale`/`c_scale` divide by 1023/876/896 (`edit_frame_gpu_converter.cpp:222-223`), and the HDR
+path's `DequantY10Limited`/`DequantC10Limited` (`hdr_pq.h:163-168`) expect codes in roughly
+64-960. `ReadBackD3D11Frame` must therefore right-shift every 10-bit sample by 6 as part of
+de-interleaving, not merely split the semi-planar plane into two — otherwise every
+hardware-decoded 10-bit clip renders with badly wrong color (values ~64x too large), and any
+HDR10 clip that reaches the PQ tonemap path reads garbage codes. Unlike the 4:4:4 layout, this
+isn't something to verify empirically first; it's a known required conversion step and should be
+implemented as such from the start.
 
 ## Fallback behavior
 
