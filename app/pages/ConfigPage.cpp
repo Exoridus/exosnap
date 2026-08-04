@@ -1650,13 +1650,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_layout_->addWidget(output_fields, 1);
     out_panel_layout->addWidget(output_split);
 
-    // "Open editor when finished" — a real row in the Output card, off by
+    // "Open editor when finished" — a real row in the Output card, on by
     // default. Was an ADR-0031 debug-only roadmap dummy with no engine setting
     // behind it; now backed by PersistedAppSettings::open_editor_when_finished.
     {
         open_editor_when_finished_check_ = new ui::widgets::ExoToggle(out_panel);
         open_editor_when_finished_check_->setObjectName(QStringLiteral("openEditorWhenFinishedCheck"));
-        open_editor_when_finished_check_->setOn(false);
+        open_editor_when_finished_check_->setOn(true);
         out_panel_layout->addWidget(makeSettingsRow(
             out_panel, QStringLiteral("Open editor when finished"),
             new ui::widgets::InfoHintIcon(

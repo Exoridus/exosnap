@@ -334,12 +334,12 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingShowNotifications_DefaultsToT
 
 // open_editor_when_finished round-trip tests. Was a debug-only ADR-0031
 // roadmap-dummy toggle (no engine setting backed it, no Release row existed);
-// now a real, persisted preference: default OFF (unchanged post-recording
-// behavior — a notification toast offers Edit/Show-in-folder), ON opens the
-// Edit overlay directly with no toast.
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultOpenEditorWhenFinishedIsFalse) {
+// now a real, persisted preference: default ON (recording completion opens
+// the Edit overlay directly), OFF falls back to a notification toast
+// offering Edit/Show-in-folder instead.
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultOpenEditorWhenFinishedIsTrue) {
     PersistedAppSettings settings;
-    EXPECT_FALSE(settings.open_editor_when_finished);
+    EXPECT_TRUE(settings.open_editor_when_finished);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_True) {
@@ -368,7 +368,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OpenEditorWhenFinished_F
     EXPECT_FALSE(loaded.open_editor_when_finished);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingOpenEditorWhenFinished_DefaultsToFalse) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingOpenEditorWhenFinished_DefaultsToTrue) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -384,7 +384,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingOpenEditorWhenFinished_Defaul
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_FALSE(loaded.open_editor_when_finished);
+    EXPECT_TRUE(loaded.open_editor_when_finished);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {
