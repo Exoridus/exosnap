@@ -771,6 +771,11 @@ right-aligned mono values) and **Export** (the output choices plus the progress 
 run, described below). One action — **Export** — sits **bottom-right**, matching the Record page's
 transport actions; it starts the export straight away and is unavailable while one is running.
 
+By default, a successful recording opens straight into this overlay, preloaded with the clip —
+the product's post-record path is editing, not a bare "recording saved" notice. The **Open editor
+when finished** toggle (Settings → Output) turns this off: with it off, a "Recording saved" toast
+with Edit / Show-in-folder actions appears instead and the user returns to Record.
+
 The surface scales with the window. The right rail narrows as the window gets tighter and scrolls
 when its two cards need more height than the window offers, but it is never hidden — it carries
 the export controls, and the surface stays fully usable down to the minimum window size. At the

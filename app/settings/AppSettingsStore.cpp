@@ -66,9 +66,9 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("editor"));
-    // "Open editor when finished" toggle (default OFF).
-    // Pre-1.0: no migration; missing key defaults to false.
-    persisted.open_editor_when_finished = settings.value(QStringLiteral("open_editor_when_finished"), false).toBool();
+    // "Open editor when finished" toggle (default ON).
+    // Pre-1.0: no migration; missing key defaults to true.
+    persisted.open_editor_when_finished = settings.value(QStringLiteral("open_editor_when_finished"), true).toBool();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("tray"));
