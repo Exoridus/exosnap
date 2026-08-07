@@ -1395,14 +1395,21 @@ TEST(DisplayNameTest, SupportLevelStrings) {
 // ─── Blocked Scenario Tests ───────────────────────────────────────────────────
 //
 // BLOCKED state sources:
-//   1. Startup: RecordingCoordinator::OnCapabilitiesReady() validates primaryRecorderConfig()
-//      (MKV + H264 + AAC + Cs420 + Bit8 + 60 fps) — fails when NVENC is unavailable.
+//   1. Startup: RecordingCoordinator::OnCapabilitiesReady() validates resolved_user_config_
+//      (the settings already applied via SetOutputSettings/SetVideoSettings during
+//      RecordPage::initCoordinator() — always before the async hardware probe resolves) —
+//      fails when the selected codec is unavailable on this hardware.
 //   2. Post-profile-change (REC-R10): RecordingCoordinator::RevalidateCapabilities() is called
 //      from RecordPage::setOutputSettings() whenever the active profile or output settings
-//      change. It validates the current resolved_user_config_ (fed by SetOutputSettings).
+//      change. It validates the current resolved_user_config_ too.
 //
-// Both paths use the same ValidateConfig() call. These tests prove the data path via
-// synthetic CapabilitySets that mirror NVENC absence or codec unavailability.
+// Both paths validate resolved_user_config_ via the same ValidateConfig() call — neither
+// is handed a separately-computed stand-in config (a prior version of OnCapabilitiesReady
+// was, and that mismatch silently discarded the real settings; see
+// CapabilitiesReadyTest.DoesNotOverwriteAlreadyAppliedOutputSettings in
+// test_output_settings.cpp). These tests below exercise the resolver directly with the
+// MKV + H264 + AAC + Cs420 + Bit8 + 60fps shape as a representative config, via synthetic
+// CapabilitySets that mirror NVENC absence or codec unavailability.
 
 TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_ValidateFails) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
@@ -1416,7 +1423,8 @@ TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_ValidateFails) {
 
     capability::SettingsResolver resolver(caps);
 
-    // Matches the hardcoded primaryRecorderConfig() used by RecordPage::initCoordinator().
+    // A representative MKV + H264 + AAC config — the shape OnCapabilitiesReady
+    // validates in production is whatever resolved_user_config_ already holds.
     capability::UserRecorderConfig primary;
     primary.container = capability::Container::Matroska;
     primary.video_codec = capability::VideoCodec::H264;

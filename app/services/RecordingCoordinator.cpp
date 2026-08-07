@@ -518,8 +518,7 @@ void RecordingCoordinator::OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshol
     }
 }
 
-void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
-                                               const exosnap::capability::ResolveResult& validation) {
+void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps) {
     if (!caps.probed) {
         // Defense-in-depth: a recording-start decision must never be authorized
         // from a cache-hydrated (warm-start) CapabilitySet — only a freshly
@@ -535,6 +534,17 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     }
     caps_ = caps;
     has_caps_ = true;
+    // Validate the config already threaded in via SetOutputSettings/SetVideoSettings —
+    // never a caller-supplied stand-in. A caller-supplied validation used to be accepted
+    // here and RecordPage fed it a hardcoded MKV+H264+AAC baseline (primaryRecorderConfig())
+    // meant only as a hardware sanity gate; this method unconditionally applied that
+    // baseline's resolved config to resolved_user_config_, silently discarding whatever
+    // AV1/Opus profile SetOutputSettings had just applied moments earlier — invisible
+    // until the user touched any Settings control (which re-syncs via
+    // RevalidateCapabilities). Found live 2026-08-07: fresh app start + immediate record
+    // always recorded H.264/AAC despite a persisted AV1/Opus profile.
+    capability::SettingsResolver resolver(caps_);
+    const capability::ResolveResult validation = resolver.ValidateConfig(resolved_user_config_);
     validation_result_ = validation;
     resolved_user_config_ = validation.resolved_config;
     if (validation.succeeded) {

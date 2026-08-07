@@ -133,8 +133,14 @@ class RecordingCoordinator {
     // Exposed for tests.
     static const wchar_t* kDiskSpaceStopReason;
 
-    void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
-                             const exosnap::capability::ResolveResult& validation);
+    // Validates the coordinator's own already-applied resolved_user_config_ (set by
+    // SetOutputSettings/SetVideoSettings) against the freshly probed caps — the same
+    // validation RevalidateCapabilities() runs on every later settings change. Callers
+    // must not pre-compute a validation against a different config and expect it to
+    // stick: OnCapabilitiesReady always re-derives it from resolved_user_config_, so
+    // whatever format the caller wants recorded must be applied via SetOutputSettings/
+    // SetVideoSettings BEFORE calling this.
+    void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps);
     void OnCapabilityFailure(std::wstring message);
     void RevalidateCapabilities();
 

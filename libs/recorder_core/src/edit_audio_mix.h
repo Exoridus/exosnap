@@ -63,6 +63,21 @@ class EditAudioMixer {
     // renderer.
     static constexpr uint32_t kMaxTrackLagFrames = kSampleRate / 4;
 
+    // Same idea, but for a track that has not produced its first block at all
+    // yet, as opposed to one that played and then fell behind or stopped. The
+    // two are indistinguishable from inside the mix within a short window, so
+    // a track that simply has not started (a decoder still priming, a physical
+    // capture device that took longer to open than another track's) needs more
+    // benefit of the doubt than one already proven live and now lagging --
+    // otherwise a leading track racing ahead alone releases the stretch the
+    // other track's still-pending first block belongs in, and that block
+    // arrives too late for it once it does land (found live 2026-08-07: a
+    // fresh two-track recording's slower-starting track lost its opening audio
+    // this way). Wider than kMaxTrackLagFrames, still comfortably under the
+    // demuxer's one-second read-ahead per the reasoning above, so holding back
+    // this long still cannot starve the renderer.
+    static constexpr uint32_t kStartupGraceFrames = kSampleRate * 3 / 4;
+
     struct MixedBlock {
         int64_t pts_us = 0;
         uint32_t frame_count = 0; // sample frames (kChannels floats each)
@@ -109,6 +124,10 @@ class EditAudioMixer {
     // each other by exactly the amount this class exists to prevent.
     int64_t origin_frame_ = 0;
     std::vector<int64_t> track_through_frame_;
+    // Whether each track has ever contributed a sample -- distinguishes "has
+    // not started yet" (kStartupGraceFrames) from "played, now lagging or
+    // stopped" (kMaxTrackLagFrames) in Take()'s barrier computation.
+    std::vector<bool> has_contributed_;
     std::vector<float> accum_; // interleaved, kChannels floats per frame
     BrickwallLimiter limiter_;
     uint64_t late_frames_dropped_ = 0;

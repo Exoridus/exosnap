@@ -25,6 +25,7 @@ void EditAudioMixer::Reset(size_t track_count, int64_t start_us) {
     track_count_ = track_count;
     origin_frame_ = FrameIndexForUs(start_us);
     track_through_frame_.assign(track_count, origin_frame_);
+    has_contributed_.assign(track_count, false);
     accum_.clear();
     late_frames_dropped_ = 0;
 
@@ -42,6 +43,8 @@ void EditAudioMixer::Reset(size_t track_count, int64_t start_us) {
 void EditAudioMixer::Submit(size_t track, int64_t pts_us, const float* interleaved_stereo, size_t frame_count) {
     if (track >= track_count_ || interleaved_stereo == nullptr || frame_count == 0)
         return;
+
+    has_contributed_[track] = true;
 
     const int64_t block_start = FrameIndexForUs(pts_us);
     const int64_t block_end = block_start + static_cast<int64_t>(frame_count);
@@ -95,14 +98,21 @@ std::optional<EditAudioMixer::MixedBlock> EditAudioMixer::Take() {
     // it is a stretch a track could still add to.
     int64_t newest = origin_frame_;
     int64_t barrier = accum_end;
-    for (const int64_t through : track_through_frame_) {
-        newest = std::max(newest, through);
-        barrier = std::min(barrier, through);
+    bool all_started = true;
+    for (size_t i = 0; i < track_count_; ++i) {
+        newest = std::max(newest, track_through_frame_[i]);
+        barrier = std::min(barrier, track_through_frame_[i]);
+        if (!has_contributed_[i])
+            all_started = false;
     }
     // ...except that a track this far behind is treated as having nothing more
     // to say, so one that ends early neither stops the mix nor silences the
-    // others (see kMaxTrackLagFrames).
-    barrier = std::max(barrier, newest - static_cast<int64_t>(kMaxTrackLagFrames));
+    // others (see kMaxTrackLagFrames). A track that has not contributed even
+    // once yet gets the wider kStartupGraceFrames instead: it is
+    // indistinguishable from one that already ended, but deserves more benefit
+    // of the doubt (see kStartupGraceFrames).
+    const int64_t lag_frames = static_cast<int64_t>(all_started ? kMaxTrackLagFrames : kStartupGraceFrames);
+    barrier = std::max(barrier, newest - lag_frames);
     barrier = std::min(barrier, accum_end);
 
     if (barrier <= origin_frame_)

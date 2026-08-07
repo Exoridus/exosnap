@@ -1165,7 +1165,7 @@ TEST(DisplayFactsRefreshTest, RefreshReplacesTheStartupSnapshot) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
     caps.runtime.displays = {MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/false)};
-    coordinator.OnCapabilitiesReady(caps, capability::ResolveResult{});
+    coordinator.OnCapabilitiesReady(caps);
     ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
     EXPECT_FALSE(coordinator.DisplayFacts()[0].hdr_active);
 
@@ -1186,13 +1186,43 @@ TEST(DisplayFactsRefreshTest, AnEmptyQueryKeepsThePreviousFacts) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
     caps.runtime.displays = {MakeDisplay("\\\\.\\DISPLAY1", /*hdr_active=*/true)};
-    coordinator.OnCapabilitiesReady(caps, capability::ResolveResult{});
+    coordinator.OnCapabilitiesReady(caps);
 
     coordinator.SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
     coordinator.RefreshDisplayFacts();
 
     ASSERT_EQ(coordinator.DisplayFacts().size(), 1u);
     EXPECT_TRUE(coordinator.DisplayFacts()[0].hdr_active);
+}
+
+// ---------------------------------------------------------------------------
+// OnCapabilitiesReady must validate (and never clobber) settings already
+// applied via SetOutputSettings/SetVideoSettings
+// ---------------------------------------------------------------------------
+// Regression for a live-verify finding (2026-08-07): RecordPage::initCoordinator()
+// always applies the persisted profile via SetOutputSettings/SetVideoSettings BEFORE
+// the async hardware capability probe resolves. OnCapabilitiesReady used to be handed
+// a validation computed by the caller against a *different* config (RecordPage fed it
+// a hardcoded MKV+H264+AAC baseline meant only as a "can anything record at all" gate)
+// and unconditionally applied that validation's resolved config to
+// resolved_user_config_ — silently discarding the AV1/Opus profile that had just been
+// applied. Invisible until the user touched any Settings control (which re-syncs via
+// RevalidateCapabilities), so it hit every "fresh app start, immediate record" session.
+
+TEST(CapabilitiesReadyTest, DoesNotOverwriteAlreadyAppliedOutputSettings) {
+    RecordingCoordinator coordinator;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.container = capability::Container::Matroska;
+    settings.video_codec = capability::VideoCodec::Av1;
+    settings.audio_codec = capability::AudioCodec::Opus;
+    coordinator.SetOutputSettings(settings);
+
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
+    coordinator.OnCapabilitiesReady(caps);
+
+    EXPECT_EQ(coordinator.ResolvedVideoCodecLabel(), L"AV1 NVENC encoder");
 }
 
 // ---------------------------------------------------------------------------
@@ -1210,18 +1240,6 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     RecordingCoordinator coordinator;
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.probed = true; // simulate a completed hardware probe — required by OnCapabilitiesReady
-    capability::ResolveResult validation;
-    validation.succeeded = true;
-    // MP4 + H.264 + AAC: validated as-is by the static baseline, and distinct
-    // from every UiRecordingResult default, so a leak of the defaults cannot
-    // pass by coincidence.
-    validation.resolved_config.container = capability::Container::Mp4;
-    validation.resolved_config.video_codec = capability::VideoCodec::H264;
-    validation.resolved_config.audio_codec = capability::AudioCodec::Aac;
-    coordinator.OnCapabilitiesReady(caps, validation);
-
-    std::optional<UiRecordingResult> failure;
-    coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
 
     // Point the output at a FILE so the folder guard rejects the start before
     // any engine work — the earliest of the failure paths that used to leave
@@ -1233,12 +1251,20 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     }
     OutputSettingsModel settings;
     settings.output_folder = file_as_folder;
-    // SetOutputSettings re-stamps the resolved config's format from this model,
-    // so the format under test must live here, not only in the ResolveResult.
+    // MP4 + H.264 + AAC: validated as-is by the static baseline, and distinct
+    // from every UiRecordingResult default, so a leak of the defaults cannot
+    // pass by coincidence.
     settings.container = capability::Container::Mp4;
     settings.video_codec = capability::VideoCodec::H264;
     settings.audio_codec = capability::AudioCodec::Aac;
+    // Settings must be applied BEFORE OnCapabilitiesReady: the coordinator validates
+    // whatever resolved_user_config_ already holds (see RecordingCoordinator::
+    // OnCapabilitiesReady) — it is never handed a caller-supplied stand-in.
     coordinator.SetOutputSettings(settings);
+    coordinator.OnCapabilitiesReady(caps);
+
+    std::optional<UiRecordingResult> failure;
+    coordinator.SetResultReadyCallback([&](const UiRecordingResult& r) { failure = r; });
 
     recorder_core::CaptureTarget target;
     target.kind = recorder_core::CaptureTarget::Kind::Monitor;
@@ -1257,7 +1283,11 @@ TEST(StartFailureFormatTest, FailureResultCarriesTheConfiguredFormat) {
     EXPECT_FALSE(failure->succeeded);
     // The contract: the dialog's format context equals what the recording
     // itself would have used — the same translation StartRecording runs.
-    const auto expected = capability::ToRecorderCoreConfig(validation.resolved_config, caps);
+    capability::UserRecorderConfig expected_config;
+    expected_config.container = capability::Container::Mp4;
+    expected_config.video_codec = capability::VideoCodec::H264;
+    expected_config.audio_codec = capability::AudioCodec::Aac;
+    const auto expected = capability::ToRecorderCoreConfig(expected_config, caps);
     EXPECT_EQ(failure->container, expected.container);
     EXPECT_EQ(failure->video_codec, expected.video_codec);
     EXPECT_EQ(failure->audio_codec, expected.audio_codec);
@@ -1278,14 +1308,6 @@ namespace {
 // the caller can clean it up.
 void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesystem::path& out_folder) {
     std::filesystem::create_directories(out_folder);
-    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.probed = true;
-    capability::ResolveResult validation;
-    validation.succeeded = true;
-    validation.resolved_config.container = capability::Container::Matroska;
-    validation.resolved_config.video_codec = capability::VideoCodec::Av1;
-    validation.resolved_config.audio_codec = capability::AudioCodec::Opus;
-    coordinator.OnCapabilitiesReady(caps, validation);
 
     OutputSettingsModel settings;
     settings.output_folder = out_folder;
@@ -1293,6 +1315,10 @@ void MakeReadyCoordinator(RecordingCoordinator& coordinator, const std::filesyst
     settings.video_codec = capability::VideoCodec::Av1;
     settings.audio_codec = capability::AudioCodec::Opus;
     coordinator.SetOutputSettings(settings);
+
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.probed = true;
+    coordinator.OnCapabilitiesReady(caps);
 }
 
 recorder_core::CaptureTarget MonitorTarget() {

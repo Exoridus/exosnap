@@ -22,7 +22,6 @@
 #include "../visual_tests/VisualScenario.h"
 #endif
 
-#include <capability/resolver.h>
 #include <capability/user_config.h>
 #include <recorder_core/audio_input_device.h>
 
@@ -293,6 +292,13 @@ QString logSafeTargetLabel(const recorder_core::CaptureTarget& target) {
     return QString::fromStdString(RecordViewModel::LogSafeTargetLabel(target));
 }
 
+// A fixed, universally-supported baseline shape — NOT the user's actual format choice.
+// Its only remaining use is the crop-box preview start below, which reads frame_rate_*
+// and nothing capability-sensitive. Do not feed this into any capability validation
+// (SettingsResolver::ValidateConfig) or hand its result to RecordingCoordinator: that
+// was the exact bug fixed 2026-08-07 (see RecordingCoordinator::OnCapabilitiesReady's
+// doc comment) — it silently overwrote the real, already-applied AV1/Opus settings with
+// this baseline's H.264/AAC the moment capabilities landed.
 capability::UserRecorderConfig primaryRecorderConfig() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
@@ -3232,9 +3238,11 @@ void RecordPage::deliverCapabilitiesToCoordinator() {
     if (!coordinator_)
         return;
     try {
-        capability::SettingsResolver resolver(shared_runtime_caps_);
-        const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-        coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
+        // The coordinator validates its own already-applied resolved_user_config_ (set
+        // by SetOutputSettings/SetVideoSettings during initCoordinator(), well before
+        // this ever runs) — see OnCapabilitiesReady's doc comment for why this must not
+        // be a separately-computed validation over some other config.
+        coordinator_->OnCapabilitiesReady(shared_runtime_caps_);
     } catch (const std::exception& ex) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
         diagnostics::AppLog::error(
