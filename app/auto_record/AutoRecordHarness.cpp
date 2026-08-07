@@ -13,8 +13,6 @@
 #include <capability/capability_builder.h>
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
-#include <capability/resolver.h>
-#include <capability/user_config.h>
 #include <recorder_core/audio_track_model.h>
 #include <recorder_core/codec_types.h>
 #include <recorder_core/recorder_session.h>
@@ -46,9 +44,9 @@ namespace {
 // ---------------------------------------------------------------------------
 // Option → engine-type mapping
 //
-// These mirror the field-for-field translation RecordPage::primaryRecorderConfig()
-// and the Output settings model do from live UI state; here the "UI state" is the
-// parsed AutoRecordOptions instead. The CLI parser (above) already restricts the
+// These mirror the field-for-field translation the Output settings model does from
+// live UI state; here the "UI state" is the parsed AutoRecordOptions instead. The
+// CLI parser (above) already restricts the
 // string/int inputs to the valid sets, so the defaults below are only reached for
 // values the parser passes through unchecked (--video-codec / --audio-codec).
 // ---------------------------------------------------------------------------
@@ -108,24 +106,6 @@ recorder_core::AudioSourceKind RowKindFromName(const QString& name) {
     // pid-free SystemOutput for a Display/Region target (NormalizeSourceRowsForTarget),
     // so this is correct for every target kind without special-casing here.
     return recorder_core::AudioSourceKind::Sys;
-}
-
-// Builds the capability::UserRecorderConfig that seeds the resolver validation and
-// the coordinator's Ready gate (OnCapabilitiesReady). This is the harness's stand-in
-// for RecordPage::primaryRecorderConfig(), which reads the same fields off live
-// Settings state. The actual format the recording uses is committed separately via
-// SetOutputSettings (see BuildOutputSettings), which re-reconciles container×codec.
-capability::UserRecorderConfig BuildUserRecorderConfig(const AutoRecordOptions& options) {
-    capability::UserRecorderConfig config;
-    config.container = MapContainer(options.container);
-    config.video_codec = MapVideoCodec(options.video_codec);
-    config.audio_codec = MapAudioCodec(options.audio_codec);
-    config.chroma = MapChroma(options.chroma);
-    config.bit_depth = MapBitDepth(options.bit_depth);
-    config.hdr_mode = MapHdrMode(options.hdr_mode);
-    config.frame_rate_num = options.frame_rate;
-    config.frame_rate_den = 1;
-    return config;
 }
 
 OutputSettingsModel BuildOutputSettings(const AutoRecordOptions& options) {
@@ -195,32 +175,28 @@ int RunAutoRecordOnCoordinator(QApplication& app, exosnap::RecordingCoordinator&
     // it skips the worker-thread hop MainWindow uses (app/MainWindow.cpp:1093-1109).
     const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
 
-    // Seed the coordinator's Ready gate. Mirrors RecordPage::deliverCapabilitiesToCoordinator():
-    // resolve the requested format against the probed caps, then hand both to the coordinator.
-    const capability::UserRecorderConfig user_config = BuildUserRecorderConfig(options);
-    const capability::SettingsResolver resolver(caps);
-    const capability::ResolveResult validation = resolver.ValidateConfig(user_config);
-    coordinator.OnCapabilitiesReady(caps, validation);
-
-    if (!validation.succeeded || coordinator.State() != UiRecordingState::Ready) {
-        const QString reason = validation.invalidity.empty()
-                                   ? QStringLiteral("recording unavailable for the requested format")
-                                   : QString::fromStdString(validation.invalidity.front().message);
-        return FailWith(QStringLiteral("recording unavailable: %1").arg(reason));
-    }
-
-    // Commit the actual output format (container/codec/depth/chroma/HDR) and frame rate.
-    // SetOutputSettings re-reconciles the format and stamps it into the resolved config
-    // the recording thread reads, so this — not the resolver seed above — decides the
-    // container/codec the file is written with.
+    // Commit the requested format BEFORE the caps gate, mirroring
+    // RecordPage::initCoordinator() (SetOutputSettings/SetVideoSettings always run before
+    // OnCapabilitiesReady there too). OnCapabilitiesReady validates whatever is already
+    // applied — it must never be handed a validation computed against a different config,
+    // or that config silently overwrites the one just committed here the moment caps land
+    // (the exact bug this harness used to reproduce without ever catching it: it built its
+    // own separate seed config instead of committing first).
     coordinator.SetOutputSettings(BuildOutputSettings(options));
-    // The frame rate has to travel through the video settings, not the resolver
-    // seed above: RecordingCoordinator stamps the recording config from
-    // video_settings, so a rate set anywhere else is silently replaced by 60.
+    // The frame rate has to travel through the video settings: RecordingCoordinator
+    // stamps the recording config from video_settings, so a rate set anywhere else is
+    // silently replaced by 60.
     VideoSettingsModel video_settings = VideoSettingsModel::Defaults();
     video_settings.frame_rate_num = static_cast<uint32_t>(options.frame_rate);
     video_settings.frame_rate_den = 1;
     coordinator.SetVideoSettings(video_settings);
+
+    coordinator.OnCapabilitiesReady(caps);
+
+    if (coordinator.State() != UiRecordingState::Ready) {
+        return FailWith(QStringLiteral("recording unavailable: %1")
+                            .arg(QString::fromStdWString(coordinator.CapabilityStatusText())));
+    }
 
     // Select a capture target.
     //   Monitor → the first display-kind target.
