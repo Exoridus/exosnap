@@ -231,6 +231,38 @@ TEST(EditAudioMixer, ATrackThatEndsEarlyDoesNotStopTheOthers) {
     EXPECT_EQ(mixer.LateFramesDropped(), 0u);
 }
 
+TEST(EditAudioMixer, ATrackNotYetStartedGetsMoreGraceThanOneThatEnded) {
+    // Regression for a live-verify finding (2026-08-07): a track whose decoder
+    // has not produced its first frame yet (a slower-to-prime codec, or a
+    // physical mic device that took longer to open than the loopback track it
+    // shares a recording with) must not be excluded by the same short lag
+    // window a track that already played and then stopped gets. The old code
+    // used one constant (kMaxTrackLagFrames, 250 ms) for both cases: track 0
+    // alone racing past it let the mix release a stretch track 1's still-
+    // pending FIRST block -- correctly timestamped at pts 0 -- belonged in. By
+    // the time track 1 finally submitted, its block was entirely behind the
+    // mix's already-released position and was dropped as "late".
+    constexpr size_t kBlock = 480; // 10 ms
+    EditAudioMixer mixer;
+    mixer.Reset(2, 0);
+
+    const auto a = ConstantBlock(kBlock, 0.4f);
+    // Track 0 alone for 400 ms, drained after every block -- the same eager
+    // per-packet Take() pattern the real playback thread uses.
+    for (int i = 0; i < 40; ++i) {
+        mixer.Submit(0, UsForFrames(static_cast<int64_t>(i) * kBlock), a.data(), kBlock);
+        (void)mixer.Take(); // discard; only the drop count and track 1's fate matter below
+    }
+
+    // Track 1's decoder only just produced its first frame -- correctly
+    // timestamped at the very start of the clip.
+    const auto b = ConstantBlock(kBlock, 0.1f);
+    mixer.Submit(1, 0, b.data(), kBlock);
+
+    EXPECT_EQ(mixer.LateFramesDropped(), 0u) << "track 1's first block, correctly timestamped at t=0, must not "
+                                                "be dropped just because track 0 decoded 400ms ahead of it";
+}
+
 TEST(EditAudioMixer, AHoleInEveryTrackIsPlayedAsSilenceRatherThanClosedUp) {
     // The renderer's clock counts samples, so swallowing a gap would walk the
     // audio clock ahead of media time and leave video behind by the length of
