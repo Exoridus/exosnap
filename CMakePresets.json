@@ -31,6 +31,15 @@
       }
     },
     {
+      "name": "windows-x64-asan",
+      "displayName": "Windows x64 ASan",
+      "description": "MSBuild + MSVC Debug with AddressSanitizer. Needs the 'C++ AddressSanitizer' VS component.",
+      "inherits": "windows-x64-debug",
+      "cacheVariables": {
+        "EXOSNAP_ASAN": "ON"
+      }
+    },
+    {
       "name": "windows-x64-ninja-debug",
       "displayName": "Windows x64 Ninja Debug",
       "description": "Ninja + MSVC Debug. Run from a VS Developer PowerShell/Command Prompt.",
@@ -59,6 +68,15 @@
       "cacheVariables": {
         "EXOSNAP_CLANG_TIDY": "ON",
         "EXOSNAP_CPPCHECK": "ON"
+      }
+    },
+    {
+      "name": "windows-x64-ninja-asan",
+      "displayName": "Windows x64 Ninja ASan",
+      "description": "Ninja + MSVC Debug with AddressSanitizer. Run from a VS Developer PowerShell/Command Prompt. Needs the 'C++ AddressSanitizer' VS component.",
+      "inherits": "windows-x64-ninja-debug",
+      "cacheVariables": {
+        "EXOSNAP_ASAN": "ON"
       }
     }
   ],
@@ -103,6 +121,11 @@
       "configurePreset": "windows-x64-lint"
     },
     {
+      "name": "windows-x64-asan",
+      "configurePreset": "windows-x64-asan",
+      "configuration": "Debug"
+    },
+    {
       "name": "windows-x64-ninja-debug",
       "configurePreset": "windows-x64-ninja-debug"
     },
@@ -137,6 +160,10 @@
     {
       "name": "windows-x64-ninja-lint",
       "configurePreset": "windows-x64-ninja-lint"
+    },
+    {
+      "name": "windows-x64-ninja-asan",
+      "configurePreset": "windows-x64-ninja-asan"
     }
   ],
   "testPresets": [
@@ -157,6 +184,14 @@
       }
     },
     {
+      "name": "windows-x64-asan",
+      "configurePreset": "windows-x64-asan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
       "name": "windows-x64-ninja-debug",
       "configurePreset": "windows-x64-ninja-debug",
       "output": {
@@ -166,6 +201,13 @@
     {
       "name": "windows-x64-ninja-release",
       "configurePreset": "windows-x64-ninja-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-ninja-asan",
+      "configurePreset": "windows-x64-ninja-asan",
       "output": {
         "outputOnFailure": true
       }

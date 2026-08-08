@@ -83,6 +83,10 @@ endif()
 
 enable_testing()
 
+# Must come before any add_subdirectory(): it edits the global compile/link flags
+# so every translation unit — third_party included — is instrumented.
+include(cmake/exosnap_asan.cmake)
+
 include(cmake/exosnap_warnings.cmake)
 include(cmake/exosnap_testing.cmake)
 
