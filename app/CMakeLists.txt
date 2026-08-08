@@ -407,6 +407,10 @@ target_sources(exosnap PRIVATE
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.cpp>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.h>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.cpp>"
+    # MainWindow's visual-test scenario members, split out of MainWindow.cpp.
+    # Non-Release only, matching the guards inside the file and the ones its
+    # declarations already carry in MainWindow.h.
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/MainWindow_VisualScenarios.cpp>"
 )
 
 if(WIN32)
