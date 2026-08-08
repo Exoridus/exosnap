@@ -36,6 +36,12 @@ class NotificationBell : public QToolButton {
         return !unread_status_.isEmpty();
     }
 
+    // Centre of the unread dot, in widget coordinates. Anchored to the bell
+    // glyph's top-right corner rather than to the widget edge: the icon is
+    // centred inside a larger button, so an edge-anchored dot floats away from
+    // the glyph instead of reading as attached to it.
+    QPoint dotCenter() const;
+
     // VG-2: open/closed hub state — drives the QSS [hubOpen="true"] rule.
     // Call this from wherever the hub panel is shown/hidden (e.g. MainWindow::toggleNotificationHub).
     void setHubOpen(bool open);

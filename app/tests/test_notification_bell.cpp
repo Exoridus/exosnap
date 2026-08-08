@@ -33,10 +33,7 @@ QColor DotPixel(ui::widgets::NotificationBell& bell) {
     QImage image(bell.size(), QImage::Format_ARGB32);
     image.fill(Qt::transparent);
     bell.render(&image);
-    constexpr int kRing = 2;
-    const int cx = bell.width() - ui::widgets::NotificationBell::kDotDiameter / 2 - kRing / 2;
-    const int cy = kRing / 2 + ui::widgets::NotificationBell::kDotDiameter / 2;
-    return image.pixelColor(cx, cy);
+    return image.pixelColor(bell.dotCenter());
 }
 
 TEST_F(NotificationBellTest, Constructs_WithNothingUnread) {
@@ -128,6 +125,24 @@ TEST_F(NotificationBellTest, Clicked_Signal_Emitted) {
     QObject::connect(&bell, &ui::widgets::NotificationBell::clicked, [&]() { ++click_count; });
     bell.click();
     EXPECT_EQ(click_count, 1);
+}
+
+TEST_F(NotificationBellTest, DotCenter_SitsOnTheIconCornerNotTheWidgetEdge) {
+    ui::widgets::NotificationBell bell;
+    const QPoint c = bell.dotCenter();
+    const int radius = ui::widgets::NotificationBell::kDotDiameter / 2;
+
+    // Fully inside the widget, ring included.
+    EXPECT_GE(c.x() - radius - 1, 0);
+    EXPECT_LE(c.x() + radius + 1, bell.width());
+    EXPECT_GE(c.y() - radius - 1, 0);
+    EXPECT_LE(c.y() + radius + 1, bell.height());
+
+    // Anchored to the glyph, not the widget corner: a dot pinned to the widget
+    // edge floats away from the bell, because the icon is centred in a larger
+    // button. Rendered proof of that is in the visual-test screenshots.
+    EXPECT_LT(c.x(), bell.width() - radius) << "dot is hugging the widget's right edge";
+    EXPECT_GT(c.y(), radius - 1) << "dot is hugging the widget's top edge";
 }
 
 TEST_F(NotificationBellTest, RepeatedSameStatus_IsIdempotent) {
