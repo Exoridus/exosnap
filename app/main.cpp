@@ -25,6 +25,9 @@
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
 #include "auto_record/AutoRecordHarness.h"
 #endif
+#if defined(EXOSNAP_ENABLE_HWND_AUDIT_HARNESS)
+#include "hwnd_audit/HwndAuditHarness.h"
+#endif
 
 #if defined(Q_OS_WIN)
 #include <crash_capture/crash_capture.h>
@@ -163,6 +166,17 @@ int main(int argc, char* argv[]) {
         qInfo().noquote() << "auto-record: isolated config dir" << isolated;
     }
 #endif
+#if defined(EXOSNAP_ENABLE_HWND_AUDIT_HARNESS)
+    // Same rationale as the two blocks above: an audit run brings up the real
+    // application, which persists its live configuration while it runs.
+    if (exosnap::hwnd_audit::HasHwndAuditRequest(QCoreApplication::arguments()) &&
+        !qEnvironmentVariableIsSet("EXOSNAP_CONFIG_DIR")) {
+        const QString isolated = QDir(QDir::tempPath()).filePath(QStringLiteral("exosnap-hwnd-audit"));
+        QDir().mkpath(isolated);
+        qputenv("EXOSNAP_CONFIG_DIR", isolated.toUtf8());
+        qInfo().noquote() << "hwnd-audit: isolated config dir" << isolated;
+    }
+#endif
     const qint64 qapplication_created_ms = exosnap::diagnostics::StartupClock().elapsed();
     app.setApplicationName("ExoSnap");
 
@@ -226,18 +240,30 @@ int main(int argc, char* argv[]) {
     constexpr bool auto_record_requested = false;
 #endif
 
+#if defined(EXOSNAP_ENABLE_HWND_AUDIT_HARNESS)
+    const bool hwnd_audit_requested = exosnap::hwnd_audit::HasHwndAuditRequest(QCoreApplication::arguments());
+#else
+    constexpr bool hwnd_audit_requested = false;
+#endif
+
 #if defined(Q_OS_WIN)
     HANDLE hMutex = nullptr;
-    // In a Release build both harness macros are undefined, so visual_test_requested and
-    // auto_record_requested are both `constexpr false` — the compound condition folds to a
-    // compile-time constant and MSVC's /W4 flags it (C4127), which /WX then hard-fails on.
-    // The check is a genuine runtime branch in non-Release builds, so suppress locally
-    // rather than restructure (matches this codebase's existing MSVC-suppression convention).
+    // In a Release build every harness macro is undefined, so visual_test_requested,
+    // auto_record_requested and hwnd_audit_requested are all `constexpr false` — the compound
+    // condition folds to a compile-time constant and MSVC's /W4 flags it (C4127), which /WX
+    // then hard-fails on. The check is a genuine runtime branch in non-Release builds, so
+    // suppress locally rather than restructure (matches this codebase's existing
+    // MSVC-suppression convention).
+    //
+    // Every harness must stay out of this branch. Beyond the second instance exiting
+    // immediately, the single-instance path calls SetForegroundWindow on the running window —
+    // a harness run would yank focus off whatever the developer is doing, which CLAUDE.md
+    // rules out.
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4127) // conditional expression is constant (Release-only fold)
 #endif
-    if (!visual_test_requested && !auto_record_requested) {
+    if (!visual_test_requested && !auto_record_requested && !hwnd_audit_requested) {
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
@@ -343,6 +369,18 @@ int main(int argc, char* argv[]) {
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
     if (auto_record_requested && auto_record_options.enable_preview) {
         const int rc = exosnap::auto_record::RunAutoRecord(app, win, auto_record_options);
+#if defined(Q_OS_WIN)
+        if (!crash_dir.empty())
+            exosnap::crash_capture::MarkCleanExit(crash_dir);
+        exosnap::crash_capture::Shutdown();
+#endif
+        return rc;
+    }
+#endif
+
+#if defined(EXOSNAP_ENABLE_HWND_AUDIT_HARNESS)
+    if (hwnd_audit_requested) {
+        const int rc = exosnap::hwnd_audit::RunHwndAudit(app, win);
 #if defined(Q_OS_WIN)
         if (!crash_dir.empty())
             exosnap::crash_capture::MarkCleanExit(crash_dir);

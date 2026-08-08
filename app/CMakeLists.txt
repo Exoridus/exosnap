@@ -403,6 +403,10 @@ target_sources(exosnap PRIVATE
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.h>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.cpp>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordOptions.cpp>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.h>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.cpp>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.h>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.cpp>"
 )
 
 if(WIN32)
@@ -430,6 +434,7 @@ target_compile_definitions(exosnap PRIVATE
     EXOSNAP_BUILD_CONFIG="$<CONFIG>"
     "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
     "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_AUTO_RECORD_HARNESS=1>"
+    "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_HWND_AUDIT_HARNESS=1>"
 )
 add_dependencies(exosnap exosnap_build_info)
 
@@ -532,6 +537,10 @@ if(WIN32)
             VERBATIM
         )
     endforeach()
+
+    # No-op unless EXOSNAP_ASAN=ON — same 0xC0000135 reasoning as the two blocks
+    # above, for the sanitizer runtime that ships next to cl.exe.
+    exosnap_stage_asan_runtime(exosnap)
 endif()
 
 function(exosnap_add_app_test_support NAME)
@@ -654,6 +663,19 @@ exosnap_add_app_test_support(exosnap_source_picker_test_support
 target_link_libraries(exosnap_source_picker_test_support PUBLIC
     Qt6::Core Qt6::Gui Qt6::Widgets recorder_core d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
+
+# Only the pure evaluation half of the --hwnd-audit harness. The Win32 half needs
+# a real MainWindow and therefore lives in the harness itself, not in a gtest —
+# see HwndAuditHarness.h for why that split exists.
+exosnap_add_gtest(
+    NAME hwnd_audit_report_tests
+    TEST_PREFIX hwnd_audit.
+    SOURCES
+        tests/test_hwnd_audit_report.cpp
+        hwnd_audit/HwndAuditReport.cpp
+    LIBRARIES Qt6::Core Qt6::Gui
+)
+target_include_directories(hwnd_audit_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME presentation_state_tests
