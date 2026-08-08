@@ -382,18 +382,18 @@ class MainWindow : public QMainWindow {
 #endif
 
     // QPointer, not a raw pointer: nativeEvent() reaches for the bar while handling
-    // native messages, and WM_NCHITTEST arrives on every mouse move — including
-    // during teardown, after the child widgets are gone but before the HWND is.
-    // A raw pointer stays non-null there and the null checks sail straight into
-    // freed memory; QPointer clears itself and they hold.
+    // native messages, and WM_SETCURSOR arrives on every mouse move over the window
+    // — including during teardown, after the child widgets are gone but before the
+    // HWND is. A raw pointer stays non-null there and the null checks sail straight
+    // into freed memory; QPointer clears itself and they hold. WM_SIZE reaches for
+    // it under the same guard and has the same exposure, just far more rarely.
     QPointer<ui::chrome::OperationalTitleBar> title_bar_;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
-    // QPointer for the same reason as title_bar_ below: reached from nativeEvent()
-    // and eventFilter(), and destroyed with centralWidget() while the HWND still
-    // receives messages.
+    // QPointer for the same reason as title_bar_ below: reached from eventFilter()
+    // and destroyed with centralWidget() while the HWND still receives messages.
     QPointer<ui::dialogs::EditExportOverlay> edit_export_overlay_;
     ui::dialogs::FinalizingOverlay* finalizing_overlay_ = nullptr;
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -525,6 +525,7 @@ class MainWindow : public QMainWindow {
     bool resizable_style_applied_ = false;
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
+    bool resize_cursor_shown_ = false;
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
     // PERF-MEASURE: one-shot guard so first-paint latency is logged exactly once.

@@ -60,8 +60,8 @@ QPushButton[titlebarNavTab="true"]:checked {
    Explorer, Chrome and Windows itself paint their caption buttons. An earlier
    revision inset the painted box to 32 x 32 with a 6px radius; the click area was
    always the full cell, but the small floating square read as a smaller target
-   than it was, and the corner still lost to the resize border above it (now fixed
-   in WM_NCHITTEST).
+   than it was. The corner still loses to the resize border above it — that is a
+   hit-test problem, not a painting one, and it is still open.
    The fill uses ${bg3}/${bg4} rather than a white alpha: this stylesheet is shared
    by all four themes, and a literal rgba(255,255,255,...) would be invisible on
    the light ones.

@@ -264,22 +264,11 @@ std::optional<diagnostics::LogSeverity> DeveloperLogLevelFromString(const QStrin
     return diagnostics::LogSeverity::Debug;
 }
 
-// Width of the grab band along each window edge, in logical pixels. Windows sizes
-// its own frames from these two metrics (they report physical pixels, hence the
-// ratio), so following them keeps our band the same thickness as every other
-// window on the system instead of a fixed 8 that only happened to match at 100%.
-int resizeBorderLogical(double device_pixel_ratio) {
-    const int physical = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
-    const double dpr = device_pixel_ratio > 0.0 ? device_pixel_ratio : 1.0;
-    // A floor of 4: some themes report a hairline frame, which would leave an
-    // edge too thin to hit with a moving pointer.
-    return qMax(4, qRound(physical / dpr));
-}
-
-ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized, int resize_border) {
+ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
         return ResizeZone::None;
 
+    constexpr int resize_border = 8;
     const bool left = local.x() >= -resize_border && local.x() < resize_border;
     const bool right = local.x() <= size.width() + resize_border && local.x() > size.width() - resize_border;
     const bool top = local.y() >= -resize_border && local.y() < resize_border;
@@ -328,9 +317,24 @@ LRESULT hitTestFromResizeZone(ResizeZone zone) {
     }
 }
 
-// The edge cursors used to be loaded and set by hand from WM_SETCURSOR, because
-// every zone answered HTCLIENT and Windows had no reason to show one. With the
-// zones declared in WM_NCHITTEST, DefWindowProc picks the cursor itself.
+HCURSOR cursorFromHitTestCode(LRESULT hit_test) {
+    switch (hit_test) {
+    case HTLEFT:
+    case HTRIGHT:
+        return LoadCursorW(nullptr, IDC_SIZEWE);
+    case HTTOP:
+    case HTBOTTOM:
+        return LoadCursorW(nullptr, IDC_SIZENS);
+    case HTTOPLEFT:
+    case HTBOTTOMRIGHT:
+        return LoadCursorW(nullptr, IDC_SIZENWSE);
+    case HTTOPRIGHT:
+    case HTBOTTOMLEFT:
+        return LoadCursorW(nullptr, IDC_SIZENESW);
+    default:
+        return nullptr;
+    }
+}
 
 void ensureWin32ResizableStyle(HWND hwnd) {
     if (hwnd == nullptr)
@@ -2164,93 +2168,55 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 return true;
             }
 
-            // The window is frameless, so nothing below is declared for us: this
-            // handler is what tells Windows which parts of the client area behave
-            // like a real window frame. Everything used to answer HTCLIENT, and
-            // move, resize, edge cursors and restore-on-drag were re-implemented on
-            // top of Qt events.
-            //
-            // Order matters. The button cells are tested before the resize edges so
-            // the top-right screen corner resolves to Close rather than HTTOPRIGHT —
-            // that inversion is exactly why throwing the mouse into the corner used
-            // to start a resize instead of closing the window.
-            if (msg->hwnd == main_hwnd && msg->message == WM_NCHITTEST) {
-                // lParam carries screen coordinates in physical pixels. ScreenToClient
-                // makes them client-relative, still physical; Qt geometry below is
-                // logical, so divide by this window's ratio.
-                POINT native_pt = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
-                ScreenToClient(msg->hwnd, &native_pt);
-                const double dpr = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
-                const QPoint local(qRound(native_pt.x / dpr), qRound(native_pt.y / dpr));
-
-                if (title_bar_ != nullptr && title_bar_->geometry().contains(local)) {
-                    const QPoint bar_local = local - title_bar_->geometry().topLeft();
-                    switch (title_bar_->hitTestWindowButton(bar_local)) {
-                    case ui::chrome::OperationalTitleBar::WindowButtonHit::MaximizeRestore:
-                        // The one cell Windows must own: HTMAXBUTTON is the only way to
-                        // get the Snap Layouts flyout. The cost is that Qt no longer
-                        // sees hover or clicks for it — both are driven from the
-                        // WM_NC* messages below.
-                        *result = HTMAXBUTTON;
-                        return true;
-                    case ui::chrome::OperationalTitleBar::WindowButtonHit::Minimize:
-                    case ui::chrome::OperationalTitleBar::WindowButtonHit::Close:
-                        *result = HTCLIENT;
-                        return true;
-                    case ui::chrome::OperationalTitleBar::WindowButtonHit::None:
-                        break;
+            // Resize cursor feedback: all zones are HTCLIENT, so WM_SETCURSOR's lParam
+            // always carries HTCLIENT.  Read the live cursor position via Qt (logical
+            // pixels) to derive the zone independently of NCHITTEST.
+            // When leaving the resize zone we explicitly reset to IDC_ARROW — without
+            // this the resize cursor sticks as Qt does not unconditionally call
+            // SetCursor on every WM_SETCURSOR for client-area messages.
+            if (msg->hwnd == main_hwnd && msg->message == WM_SETCURSOR) {
+                if (!effectiveMaximizedState()) {
+                    const QPoint local = mapFromGlobal(QCursor::pos());
+                    const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), false);
+                    if (zone != ResizeZone::None) {
+                        HCURSOR cursor = cursorFromHitTestCode(hitTestFromResizeZone(zone));
+                        if (cursor != nullptr) {
+                            SetCursor(cursor);
+                            resize_cursor_shown_ = true;
+                            *result = TRUE;
+                            return true;
+                        }
                     }
+                    if (resize_cursor_shown_) {
+                        // Just left the resize zone — force-reset so the resize cursor
+                        // does not linger over the titlebar or content area.
+                        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                        resize_cursor_shown_ = false;
+                        // Return false so Qt can still set the correct cursor for the
+                        // widget under the cursor (e.g. pointing-hand for nav items).
+                    }
+                } else {
+                    resize_cursor_shown_ = false;
                 }
 
-                const ResizeZone zone =
-                    resizeZoneFromLocalPoint(local, size(), effectiveMaximizedState(), resizeBorderLogical(dpr));
-                if (zone != ResizeZone::None) {
-                    *result = hitTestFromResizeZone(zone);
-                    return true;
-                }
-
-                if (title_bar_ != nullptr && title_bar_->geometry().contains(local) &&
-                    title_bar_->isInDragArea(local - title_bar_->geometry().topLeft())) {
-                    *result = HTCAPTION;
-                    return true;
-                }
-
-                *result = HTCLIENT;
-                return true;
+                // Safety net for the titlebar drag/move override cursor: WM_EXITSIZEMOVE
+                // below is the normal reset signal, but it depends on startSystemMove's
+                // modal loop actually starting and cleanly exiting. WM_SETCURSOR instead
+                // fires continuously for every mouse move anywhere over the window
+                // (titlebar and plain body alike), so if it ever observes the left button
+                // no longer held while the override is still active, the drag ended some
+                // other way and the override would otherwise stick indefinitely.
+                if (title_bar_ != nullptr && !(QGuiApplication::mouseButtons() & Qt::LeftButton))
+                    title_bar_->resetDragCursor();
             }
 
-            // Hover and click for the maximize button. It sits in the non-client area
-            // as far as Windows is concerned (HTMAXBUTTON above), so Qt delivers it no
-            // enter/leave events and its clicked() never fires — without this it would
-            // stay inert while its two neighbours light up under the cursor.
-            if (msg->hwnd == main_hwnd && title_bar_ != nullptr) {
-                switch (msg->message) {
-                case WM_NCMOUSEMOVE:
-                    title_bar_->setForcedWindowButtonHover(msg->wParam == HTMAXBUTTON ? QStringLiteral("maximize")
-                                                                                      : QString());
-                    break;
-                case WM_NCMOUSELEAVE:
-                    title_bar_->setForcedWindowButtonHover(QString());
-                    break;
-                case WM_NCLBUTTONDOWN:
-                    if (msg->wParam == HTMAXBUTTON) {
-                        // Consume, or DefWindowProc opens the system menu's maximize
-                        // path and the button never sees the matching button-up.
-                        *result = 0;
-                        return true;
-                    }
-                    break;
-                case WM_NCLBUTTONUP:
-                    if (msg->wParam == HTMAXBUTTON) {
-                        title_bar_->setForcedWindowButtonHover(QString());
-                        title_bar_->triggerMaximizeRestore();
-                        *result = 0;
-                        return true;
-                    }
-                    break;
-                default:
-                    break;
-                }
+            // Reset the drag/move override cursor when the window-move or resize
+            // operation ends.  WM_CAPTURECHANGED fires too early (ReleaseCapture is
+            // called inside startSystemMove before the loop starts), so WM_EXITSIZEMOVE
+            // is the reliable signal that the modal loop has actually finished.
+            if (msg->hwnd == main_hwnd && msg->message == WM_EXITSIZEMOVE) {
+                if (title_bar_ != nullptr)
+                    title_bar_->resetDragCursor();
             }
 
             // A live HDR/Advanced-Color toggle on any display re-probes DisplayHdrFacts so
@@ -2303,12 +2269,52 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         }
     }
 
-    // Resize used to be intercepted here: every zone reported HTCLIENT, so Qt
-    // delivered ordinary presses and this filter called startSystemResize(). The
-    // zones are now declared in WM_NCHITTEST, so Windows starts the modal loop
-    // straight out of DefWindowProc — without the detour through Qt's event loop
-    // that made the first press feel late, and with the edge cursors and
-    // double-click-to-maximize-vertically that a client-area edge never gets.
+    // Intercept mouse presses for the resize border zones.  All zones are
+    // HTCLIENT so Qt generates regular QMouseEvents — handle resize here.
+    if (event->type() == QEvent::MouseButtonPress && isVisible() && !isMaximized()) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton) {
+            const QPoint local = mapFromGlobal(me->globalPosition().toPoint());
+            const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), false);
+            if (zone != ResizeZone::None) {
+                Qt::Edges edges;
+                switch (zone) {
+                case ResizeZone::Left:
+                    edges = Qt::LeftEdge;
+                    break;
+                case ResizeZone::Right:
+                    edges = Qt::RightEdge;
+                    break;
+                case ResizeZone::Top:
+                    edges = Qt::TopEdge;
+                    break;
+                case ResizeZone::Bottom:
+                    edges = Qt::BottomEdge;
+                    break;
+                case ResizeZone::TopLeft:
+                    edges = Qt::LeftEdge | Qt::TopEdge;
+                    break;
+                case ResizeZone::TopRight:
+                    edges = Qt::RightEdge | Qt::TopEdge;
+                    break;
+                case ResizeZone::BottomLeft:
+                    edges = Qt::LeftEdge | Qt::BottomEdge;
+                    break;
+                case ResizeZone::BottomRight:
+                    edges = Qt::RightEdge | Qt::BottomEdge;
+                    break;
+                default:
+                    break;
+                }
+                if (edges) {
+                    if (QWindow* win = windowHandle()) {
+                        win->startSystemResize(edges);
+                        return true; // consume — do not forward to child widgets
+                    }
+                }
+            }
+        }
+    }
     return QMainWindow::eventFilter(watched, event);
 }
 
@@ -3154,7 +3160,7 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     if (title_bar_ && stack_)
         title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
     if (title_bar_)
-        title_bar_->setForcedWindowButtonHover(scenario.titlebar_hover_button);
+        title_bar_->applyVisualWindowButtonHover(scenario.titlebar_hover_button);
 
     // Deterministic keyboard focus (VR-004): give the named widget tab focus so
     // :focus styling is visible in screenshots.

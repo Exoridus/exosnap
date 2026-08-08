@@ -422,9 +422,9 @@ TEST_F(OperationalTitleBarTest, Bell_ClickEmitsBellClickedSignal) {
 }
 
 // ── Drag area ────────────────────────────────────────────────────────────────
-// MainWindow's WM_NCHITTEST answers HTCAPTION for everything isInDragArea()
-// accepts, and Windows delivers no mouse events at all for a caption. A control
-// wrongly reported as draggable is therefore not slightly off — it is dead.
+// isInDragArea() decides where a press starts a window move (mousePressEvent) and
+// where a double-click toggles maximize. A control wrongly reported as draggable
+// would have its press turned into a window drag instead of a click.
 // These tests walk every interactive child and assert it is excluded.
 
 namespace {
@@ -450,7 +450,7 @@ TEST_F(OperationalTitleBarTest, DragArea_ExcludesEveryNavTab) {
     ASSERT_EQ(tabs.size(), 6);
     for (const QPushButton* tab : tabs)
         EXPECT_FALSE(bar.isInDragArea(centreInBar(bar, tab)))
-            << "nav tab '" << tab->text().toStdString() << "' would be swallowed by HTCAPTION";
+            << "nav tab '" << tab->text().toStdString() << "' would start a window drag instead of activating";
 }
 
 TEST_F(OperationalTitleBarTest, DragArea_ExcludesTheBell) {
@@ -507,8 +507,8 @@ TEST_F(OperationalTitleBarTest, HitTestWindowButton_ResolvesTheTopRightCornerToC
     bar.setNavItems(DefaultNavItems());
     layOutBar(bar);
 
-    // The very pixel a thrown pointer lands on. WM_NCHITTEST consults this before
-    // the resize edges, which is what stops the corner starting a resize instead.
+    // The very pixel a thrown pointer lands on: the button must own the corner, or
+    // the throw-to-close gesture misses.
     const QPoint corner(bar.width() - 1, 0);
     EXPECT_EQ(bar.hitTestWindowButton(corner), ui::chrome::OperationalTitleBar::WindowButtonHit::Close);
 }
@@ -523,9 +523,8 @@ TEST_F(OperationalTitleBarTest, HitTestWindowButton_SeparatesTheThreeCells) {
     const int y = ui::chrome::OperationalTitleBar::kHeight / 2;
 
     // Cells run minimize | maximize | close from the left inwards, close flush to
-    // the right edge. Both sides of every boundary are pinned: WM_NCHITTEST hands
-    // only the maximize cell to Windows, so a cell drifting by one pixel would put
-    // a neighbour under HTMAXBUTTON and silently kill its click.
+    // the right edge. Both sides of every boundary are pinned so a cell cannot
+    // drift by a pixel and hand a click to its neighbour.
     EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - 1, y)), Hit::Close);
     EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - kCell, y)), Hit::Close);
 

@@ -1,6 +1,8 @@
-# Title bar: 40 px, native window chrome, severity-coloured bell
+# Title bar: 40 px, severity-coloured bell
 
-Status: design, approved 2026-08-08
+Status: Parts 1 and 3 shipped 2026-08-08. **Part 2 (native window chrome) was withdrawn the
+same day** — it cannot work in this application's window structure. See
+"Part 2 — Native window chrome (withdrawn)" for the measurement that settled it.
 Scope: `app/ui/chrome/OperationalTitleBar`, `app/MainWindow`, `app/ui/widgets/NotificationBell`,
 `app/ui/chrome/NotificationHubPanel`, `app/ui/theme`
 
@@ -20,8 +22,10 @@ Three separate complaints, one surface.
 
 Underneath all three sits a structural point: the window is frameless
 (`Qt::FramelessWindowHint`, `MainWindow.cpp:467`) but never answers `WM_NCHITTEST`. Every zone
-reports `HTCLIENT`, so move and resize are re-implemented on top of Qt events instead of being
-delegated to Windows.
+reports `HTCLIENT`, so move and resize are re-implemented on top of Qt events.
+
+That last observation is correct. The conclusion drawn from it — that answering `WM_NCHITTEST`
+would therefore hand these behaviours to Windows — is not. See Part 2.
 
 ## Decisions
 
@@ -29,7 +33,7 @@ delegated to Windows.
 | --- | --- |
 | Title bar height | 40 px |
 | Window-button hover | Fills the full 46×40 cell, no radius, no margin |
-| Native integration | Answer `WM_NCHITTEST` for resize borders, button cells, and the drag area |
+| Native integration | **Withdrawn** — not reachable in this window structure (Part 2) |
 | Badge form | 8 px dot, no digit |
 | Badge colour | Derived from the worst unread severity |
 
@@ -64,116 +68,79 @@ alpha. Despite the filename, this stylesheet is the only one — all four themes
 it through token substitution, so a literal `rgba(255, 255, 255, ...)` would be invisible on the
 light ones. On the bar's dark ground the tokens produce the same result the white overlay would.
 
-## Part 2 — Native window chrome
+Complaint 2 from the Problem section — the thrown-into-the-corner click landing on the resize
+border — is **not** fixed. It was to be fixed by Part 2's hit-test ordering. The corner behaves
+as it did before this work.
 
-`MainWindow::nativeEvent()` gains a `WM_NCHITTEST` handler. This is the load-bearing change:
-every zone below currently reports `HTCLIENT` and is emulated in Qt.
+## Part 2 — Native window chrome (withdrawn)
 
-| Zone | Returns | Effect |
-| --- | --- | --- |
-| Window edges and corners | `HTLEFT` … `HTBOTTOMRIGHT` | Windows drives resize directly |
-| Minimize / Close cells | `HTCLIENT` | Our buttons keep their own hover and click |
-| Maximize cell | `HTMAXBUTTON` | Snap Layouts flyout on hover |
-| Title bar drag area | `HTCAPTION` | Windows drives move, restore-on-drag, double-click, system menu |
-| Everything else | `HTCLIENT` | Unchanged |
+The plan was: answer `WM_NCHITTEST` on the top-level window, declaring the resize edges
+(`HTLEFT` … `HTBOTTOMRIGHT`), the maximize cell (`HTMAXBUTTON`, for the Snap Layouts flyout) and
+the drag area (`HTCAPTION`), then delete the Qt-side emulation of move, resize, edge cursors,
+restore-on-drag and double-click-to-maximize.
 
-Edge width follows `GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER)`
-instead of the hard-coded 8, so the grab band matches the rest of the system at any DPI.
-The button cells are tested before the edge zones, so the top-right corner resolves to Close
-rather than `HTTOPRIGHT`.
+It was implemented, all 270 tests passed, and every screenshot looked right. In live use
+nothing worked: the bar could not be dragged, double-click did nothing, a maximized window
+could not be restored, and the maximize button showed no hover.
 
-`hitTestFromResizeZone()` already returns exactly these `HT*` codes but is currently only used
-to look up a cursor. It becomes the actual hit-test mapper.
+### Why it cannot work here
 
-`resizeZoneFromLocalPoint()` takes the border width as a parameter instead of hard-coding 8, and
-the caller derives it from `SM_CXSIZEFRAME + SM_CXPADDEDBORDER` divided by the window's device
-pixel ratio (those metrics report physical pixels; the zone maths is logical). At 100% that
-resolves to 8, so nothing changes there — it stops drifting from the system at other scales.
+`WM_NCHITTEST` is only asked of the window that owns the pixel under the cursor. This
+application has native child windows — `PreviewSurface` and `EditPlayerSurface` set
+`Qt::WA_NativeWindow` and call `winId()` so DXGI has a real `HWND` to present into. Qt must give
+a native widget native *ancestors*, and it promotes native *siblings* too unless
+`Qt::AA_DontCreateNativeWidgetSiblings` is set, which it is not.
 
-`maximizeButtonRectInWindow()` (`OperationalTitleBar.cpp:358`) is deleted rather than finally
-used: the hit test needs to name *which* button a point is over, and `hitTestWindowButton()`
-answers that directly for all three cells. Keeping a second, rect-shaped path to the same fact
-would be one more thing to keep in step.
+The result, read off the running process:
 
-### `HTMAXBUTTON` costs its own hover handling
+```
+0x3810CE  MainWindow                1920x1032 @354
+ └ 0x8308AA                         1920x1032 @354   spans the whole client area
+    ├ 0x8E1008                      1920x 992 @394   content; the preview chain hangs below
+    └ 0x4009EC                      1920x  40 @354   the title bar, its own HWND
+```
 
-Declaring the maximize cell as `HTMAXBUTTON` moves it into the non-client area as far as Windows
-is concerned: Qt stops receiving `enterEvent` / `leaveEvent` / clicks for it, so the button would
-sit inert while its two neighbours light up under the cursor. It needs:
+`WindowFromPoint` — the same routing a real cursor takes — answers `0x4009EC` for every point
+in the bar. `MainWindow` is never asked. Sending `WM_NCHITTEST` to `MainWindow` directly still
+returned `HTCAPTION`, `HTMAXBUTTON` and `HTCLIENT` in exactly the right places, which is why the
+implementation looked correct from the inside: the answers were right, nobody was listening.
 
-- `WM_NCMOUSEMOVE` with `wParam == HTMAXBUTTON` → paint the hover state; any other `wParam`,
-  plus `WM_NCMOUSELEAVE`, clears it.
-- `WM_NCLBUTTONDOWN` with `wParam == HTMAXBUTTON` → paint the pressed state, consume the message.
-- `WM_NCLBUTTONUP` with `wParam == HTMAXBUTTON` → toggle maximize/restore, clear the state.
+Setting `AA_DontCreateNativeWidgetSiblings` would remove the ten promoted siblings but not fix
+this. `0x8308AA` is an *ancestor* of the preview and spans the title-bar band; ancestors of a
+native widget cannot be made non-native. The bar's pixels would move from `0x4009EC` to
+`0x8308AA` and still not reach `MainWindow`.
 
-`applyVisualWindowButtonHover()` already drives the painted hover state directly for the
-visual-test harness (`OperationalTitleBar.cpp:238-255`); the same mechanism serves here, so no
-new painting path is needed. It is renamed to `setForcedWindowButtonHover()` — with a second,
-production caller it is no longer visual-test-only, and a name saying otherwise would invite
-someone to strip it from a release build.
+### What would be needed
 
-This is the one place where the change adds code rather than removing it. It buys the Snap
-Layouts flyout, which cannot be obtained any other way.
+Top-level `WM_NCHITTEST` requires that no native window covers the title bar. Two routes exist:
 
-### What this deletes
+- Lift the title bar out of the preview's ancestor chain — e.g. `QMainWindow::setMenuWidget()`,
+  so the central widget starts below the bar — *and* set `AA_DontCreateNativeWidgetSiblings`.
+  Cheaper, but it rests on an invariant nothing enforces: the moment someone wraps the bar in a
+  container that also holds the preview, it silently breaks again. It would need a test that
+  walks the `HWND` tree, and its own live-verification round for preview stacking, which
+  `PreviewSurface::hideEvent()` already documents as fragile in this application.
+- Remove the native child windows entirely by compositing the DXGI frame through Qt's own render
+  pipeline. This is the same root constraint that forces the webcam PiP and the OSD stat rows to
+  be composited inside `DxgiPreviewRenderer` instead of being ordinary Qt widgets. Larger, and it
+  carries its own risks — preview latency, whole-window compositing cost, HDR output fidelity,
+  device-lost blast radius — so it needs a measuring spike before it is decided, not a decision
+  followed by measurement.
 
-Emulation that Windows performs natively once the zones are declared:
+Neither belongs in this piece of work. What shipped is Parts 1 and 3; `MainWindow` and
+`OperationalTitleBar` keep the Qt-side move/resize/double-click handling they had before.
 
-- The resize branch of the app-wide event filter (`MainWindow.cpp:1051`, `2280-2313`), including
-  its `startSystemResize()` call. Windows starts the modal loop from `DefWindowProc` instead —
-  this is the latency that reads as "not quite snappy".
-- The entire `WM_SETCURSOR` handler (`MainWindow.cpp:2175-2209`) and `resize_cursor_shown_`.
-  Windows sets the cursor itself for declared edge zones.
-- `tracking_drag_from_max_`, `drag_press_global_pos_`, the 5 px threshold and the `rel_x`
-  reposition maths (`OperationalTitleBar.cpp:285-309`). The comment there names it as a
-  reimplementation of native restore-on-drag. Windows also preserves the cursor's relative
-  vertical position, which the current code does not — it forces `y = current.y() - kHeight/2`.
-- `mouseDoubleClickEvent()` (`OperationalTitleBar.cpp:329-340`).
-- `QApplication::setOverrideCursor(Qt::SizeAllCursor)` (`OperationalTitleBar.cpp:262`) and its
-  whole dependency chain: `move_cursor_active_`, `resetDragCursor()`, `mouseReleaseEvent()`,
-  the `WM_EXITSIZEMOVE` handler (`MainWindow.cpp:2215-2218`), and the safety net inside
-  `WM_SETCURSOR` (`MainWindow.cpp:2200-2208`) whose comment describes the override sticking
-  "indefinitely".
+### What was kept from the attempt
 
-The four-way move cursor is a deliberate, accepted regression: Windows shows a plain arrow when
-dragging a caption. It was never native behaviour, and it is the root of the state that the two
-safety nets exist to repair.
-
-### What this gains
-
-Right-click on the title bar opens the system menu (Move, Size, Minimize, Maximize, Close).
-The application has no such menu today.
-
-### `title_bar_` has to be a QPointer
-
-Found during implementation, not anticipated here. `nativeEvent()` reaches for the bar while
-handling native messages, and `WM_NCHITTEST` arrives on every mouse move — including during
-teardown, after the child widgets are destroyed but before the HWND is. A raw pointer stays
-non-null there, so the `title_bar_ != nullptr` guards sail straight into freed memory.
-
-The latent bug predates this work: `WM_SIZE` already called `title_bar_->setMaximizedState()`
-under the same guard. It stayed invisible because `WM_SIZE` is rare during shutdown while
-`WM_NCHITTEST` is not — it reproduced as an access violation on every run of the harness's
-error path. `QPointer` clears itself when the widget dies and the existing guards then hold.
-
-### The risk that needs care
-
-Under `HTCAPTION`, Qt receives no mouse events for that area. Any interactive child not excluded
-from the caption region becomes dead.
-
-`isInDragArea()` (`OperationalTitleBar.cpp:342`) currently excludes only the three window
-buttons. It becomes the single authority the `WM_NCHITTEST` handler consults, and excludes every
-interactive child by walking up from `childAt()` and rejecting anything that is a
-`QAbstractButton` — the six nav tabs, the bell, the three window controls.
-
-A type test rather than a list of members, deliberately: a control added to the bar later is
-excluded without anyone having to remember this function exists. The failure mode it guards
-against is silent — a caption swallows mouse events entirely, so a forgotten control does not
-misbehave, it stops responding.
-
-The status pill stays draggable. It is a plain `QWidget` with no interaction, and native title
-bars let their own inert content be dragged; excluding it would only shrink the grab area. Same
-for the wordmark. Both are asserted as draggable so the intent is not mistaken for an oversight.
+- `isInDragArea()` now excludes any `QAbstractButton` by type rather than listing the three
+  window controls, and `mousePressEvent()` / `mouseDoubleClickEvent()` consult it instead of
+  `hitTestWindowButton()`. Before, the function had no caller at all.
+- `title_bar_` and `edit_export_overlay_` are `QPointer`s. `nativeEvent()` reaches for the bar
+  from `WM_SETCURSOR`, which arrives on every mouse move over the window — including during
+  teardown, after the child widgets are destroyed but before the `HWND` is. A raw pointer stays
+  non-null there, so the `!= nullptr` guards sail into freed memory. This bug predates the
+  attempt; `WM_SIZE` had the same exposure, just far more rarely.
+- `maximizeButtonRectInWindow()` stays deleted. It had no caller before this work either.
 
 ## Part 3 — Bell and severity
 
@@ -237,31 +204,23 @@ amber is caution, mint is a neutral hint.
 | `AdvisoryStatusForType` over all 13 `NotificationType` values | The mapping table above, including the six corrections |
 | `worstUnreadStatus()`: empty, all-read, single unread, mixed severities, ranking order | Aggregation |
 | `NotificationBell` renders the dot in the three colours and nothing when the status is empty | Rendering |
-| `isInDragArea()` rejects each of: six nav tabs, bell, three window buttons; accepts the drag slot, the brand slot, and rejects points outside the bar | The `HTCAPTION` dead-child risk |
+| `isInDragArea()` rejects each of: six nav tabs, bell, three window buttons; accepts the drag slot, the brand slot, and rejects points outside the bar | Which presses start a window drag |
 | `hitTestWindowButton()` resolves the top-right corner pixel to Close | Corner target |
-| `hitTestWindowButton()` at both sides of every cell boundary | Only the maximize cell goes to Windows; a cell drifting one pixel would put a neighbour under `HTMAXBUTTON` and kill its click |
+| `hitTestWindowButton()` at both sides of every cell boundary | A cell drifting one pixel would hand a click to its neighbour |
 
 The `--visual-test` harness renders screenshots for a human to judge; it holds no stored
 reference images, so there is nothing to re-bless. The 40 px bar is checked by eye there.
 
-`WM_NCHITTEST` itself is not unit-testable — it needs a real window and a real cursor. It is
-covered by the live checks below.
+Note what this suite could not catch. Every one of these tests exercises widgets, and every
+screenshot renders widgets. Which `HWND` owns a pixel is invisible to both, which is why Part 2
+passed 270 tests and a visual review while being inert in the user's hands. A test that walks
+the `HWND` tree would have caught it; none exists.
 
 ## Live verification
 
-Only what cannot be judged from tests or the render harness. Per CLAUDE.md, each of these needs
-coordination with the developer before driving the running application.
-
-1. Throw the mouse into the top-right screen corner, windowed and maximized — Close is hit both
-   times.
-2. Hover the maximize button for about a second — the Snap Layouts flyout appears.
-3. Drag each of the four edges and four corners — the cursor changes without lag and the resize
-   starts on the first press.
-4. Double-click the top edge — the window maximizes vertically.
-5. Drag the title bar of a maximized window downwards — it restores under the cursor, and the
-   cursor keeps its relative position in the bar.
-6. Right-click the title bar — the system menu opens.
-7. Click every nav tab, the bell, and the status pill — none is dead under `HTCAPTION`.
+Nothing here needs live verification beyond ordinary use: the move/resize/double-click paths are
+the ones that were already shipping before this work. The severity dot is judged in the
+`--visual-test` harness (`notifications-open`, `record-ready`).
 
 ## Out of scope
 
@@ -270,6 +229,7 @@ coordination with the developer before driving the running application.
 - Any change to toast appearance or to `NotificationToastWindow`.
 - Light-theme values. The QSS token structure carries them; no literal changes are needed
   beyond the shared hover alphas.
+- Native window chrome, in either of the two forms named in Part 2. Each needs its own spec.
 
 ## Spec updates
 
@@ -277,5 +237,6 @@ coordination with the developer before driving the running application.
 behaviour. The title-bar height and button styling are implementation metrics and stay out of
 the product spec.
 
-An ADR is not warranted: this decides no architecture, it removes emulation in favour of the
-platform.
+An ADR is not warranted: this decides no architecture. The Part 2 finding is a constraint
+discovered, not a decision taken — the decision it forces (native child windows vs. Qt-composited
+preview) is still open.

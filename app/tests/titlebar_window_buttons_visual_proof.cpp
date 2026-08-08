@@ -171,7 +171,7 @@ TEST_F(TitlebarWindowButtonsVisualProofTest, CloseButton_ForcedHover_PaintsRedFi
     }
     ASSERT_NE(close_button, nullptr);
 
-    bar.setForcedWindowButtonHover(QStringLiteral("close"));
+    bar.applyVisualWindowButtonHover(QStringLiteral("close"));
     settle();
 
     const QImage img = bar.grab().toImage().convertToFormat(QImage::Format_ARGB32);
@@ -210,7 +210,7 @@ TEST_F(TitlebarWindowButtonsVisualProofTest, MinimizeButton_ForcedHover_PaintsNe
     const QImage rest_img = bar.grab().toImage().convertToFormat(QImage::Format_ARGB32);
     const QColor rest_color = averagePaintedBoxColor(rest_img, bar, *minimize_button);
 
-    bar.setForcedWindowButtonHover(QStringLiteral("minimize"));
+    bar.applyVisualWindowButtonHover(QStringLiteral("minimize"));
     settle();
 
     const QImage hover_img = bar.grab().toImage().convertToFormat(QImage::Format_ARGB32);
