@@ -64,8 +64,9 @@ class OperationalTitleBar : public QWidget {
     // :hover QSS path.
     void applyVisualWindowButtonHover(const QString& which);
 
-    // PS-PHASE-B: notification bell API.
-    void setBellUnreadCount(int count);
+    // PS-PHASE-B: notification bell API. Takes the worst unread advisory status
+    // ("error" / "caution" / "info" / "success"); empty means nothing unread.
+    void setBellUnreadStatus(const QString& status);
     ui::widgets::NotificationBell* bellWidget() const {
         return bell_;
     }
@@ -74,10 +75,10 @@ class OperationalTitleBar : public QWidget {
     // so the "exo" colour is correct for the current (possibly persisted) theme.
     void refreshBrand();
 
+    // True where the bar may be dragged, i.e. everywhere no interactive child sits.
     bool isInDragArea(const QPoint& local_pos) const;
     WindowButtonHit hitTestWindowButton(const QPoint& local_pos) const;
     void resetDragCursor();
-    QRect maximizeButtonRectInWindow() const;
 
   signals:
     void navPageRequested(int page_index);

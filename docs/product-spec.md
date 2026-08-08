@@ -880,6 +880,13 @@ release (0.11 per ADR 0022).
   dismissed, and keeps its action (recover, undo, show in folder, …). The **system-tray icon
   additionally shows an unread badge** for the same items. The "Show notifications" setting gates only
   the toasts — the hub records regardless.
+- **The bell's unread dot** carries urgency, not a count. It appears whenever anything is unread and
+  takes its colour from the **worst** unread entry — **mint** when nothing unread is more than a
+  notice, **amber** when at least one is a warning (frames dropped, a source degraded, a dead hotkey,
+  a repaired settings file, an omitted overlay, a recoverable session), **coral** when at least one is
+  a failure (unexpected stop, low storage stopping a recording, a failed settings write, a rejected
+  capture action). The exact number is deliberately not shown in the title bar: it is never the thing
+  you act on, and the hub states it in full one click away.
 - **Toast notifications** — a transient glance at the hub, anchored bottom-right **of the screen
   hosting the ExoSnap window**. A notification is **timed** when it reports something that already
   finished (saved, update available, frames dropped, settings repaired, a hotkey unavailable at

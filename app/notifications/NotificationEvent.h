@@ -82,6 +82,51 @@ struct NotificationEvent {
 };
 
 // ---------------------------------------------------------------------------
+// AdvisoryStatusForType
+// ---------------------------------------------------------------------------
+// Pure resolver: notification type -> the hub's advisory status key
+// ("success" / "caution" / "error" / "info").
+//
+// The status drives two things: the icon on the hub entry, and — since the
+// bell went from a counted badge to a severity-coloured dot — the colour of the
+// title-bar dot itself. That second consumer is why every type is listed
+// explicitly instead of letting the harmless ones fall through a `default`:
+// a failed settings write reported as "info" would leave the dot mint, which
+// reads as "nothing is wrong". The switch has no default, so adding a
+// NotificationType is a compile error until its severity is decided.
+[[nodiscard]] inline QString AdvisoryStatusForType(NotificationType type) {
+    switch (type) {
+    case NotificationType::Saved:
+        return QStringLiteral("success");
+
+    // Something failed, was lost, or ended the recording.
+    case NotificationType::LowStorage: // crosses the hard-stop threshold and stops recording
+    case NotificationType::UnexpectedStop:
+    case NotificationType::SettingsSaveFailed:  // the change may be lost
+    case NotificationType::CaptureActionFailed: // the requested action did not happen
+        return QStringLiteral("error");
+
+    // Degraded, but the user keeps working — including RecoveryAvailable, which
+    // offers to rescue work rather than reporting a live failure. As "error" it
+    // would paint the bell coral within seconds of every launch that finds a
+    // recoverable session.
+    case NotificationType::FramesDropped:
+    case NotificationType::OverlayOmitted:
+    case NotificationType::AudioSourceDegraded:
+    case NotificationType::RecoveryAvailable:
+    case NotificationType::HotkeyConflict:   // a bound hotkey is dead
+    case NotificationType::SettingsRepaired: // the store needed repairing on load
+        return QStringLiteral("caution");
+
+    case NotificationType::UpdateAvailable:
+    case NotificationType::PresetSwitched:
+        return QStringLiteral("info");
+    }
+    // Only reachable through a cast from an out-of-range value.
+    return QStringLiteral("info");
+}
+
+// ---------------------------------------------------------------------------
 // MakeAudioSourceDegradedEvent
 // ---------------------------------------------------------------------------
 // Pure resolver: degraded-source count -> the standing AudioSourceDegraded toast

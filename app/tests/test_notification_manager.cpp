@@ -439,5 +439,70 @@ TEST_F(NotificationManagerTest, AudioSourceDegraded_StacksAboveATimedToast) {
     EXPECT_EQ(vis.first().type, NotificationType::AudioSourceDegraded);
 }
 
+// ── AdvisoryStatusForType ────────────────────────────────────────────────────
+// The status drives the title-bar bell's dot colour, so every type is pinned
+// here: a wrong rung is not a cosmetic icon slip, it is the bar reporting the
+// wrong urgency. Types that used to fall through the old `default` to "info"
+// are called out individually below.
+
+TEST(AdvisoryStatusForTypeTest, Saved_IsSuccess) {
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::Saved), QStringLiteral("success"));
+}
+
+TEST(AdvisoryStatusForTypeTest, FailuresAreErrors) {
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::UnexpectedStop), QStringLiteral("error"));
+    // Crosses the hard-stop threshold and ends the recording — not a hint.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::LowStorage), QStringLiteral("error"));
+    // Previously fell through to "info": the write failed and the change may be lost.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::SettingsSaveFailed), QStringLiteral("error"));
+    // Previously fell through to "info": the requested action did not happen.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::CaptureActionFailed), QStringLiteral("error"));
+}
+
+TEST(AdvisoryStatusForTypeTest, DegradedButWorkingIsCaution) {
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::FramesDropped), QStringLiteral("caution"));
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::OverlayOmitted), QStringLiteral("caution"));
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::AudioSourceDegraded), QStringLiteral("caution"));
+    // Previously fell through to "info": a bound hotkey is dead.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::HotkeyConflict), QStringLiteral("caution"));
+    // Previously fell through to "info": the preset store needed repairing.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::SettingsRepaired), QStringLiteral("caution"));
+}
+
+TEST(AdvisoryStatusForTypeTest, RecoveryAvailable_IsCautionNotError) {
+    // As "error" the bell would go coral within seconds of every launch that
+    // finds a recoverable session. Recovery offers to rescue work; it does not
+    // report a live failure.
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::RecoveryAvailable), QStringLiteral("caution"));
+}
+
+TEST(AdvisoryStatusForTypeTest, NeutralTypesAreInfo) {
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::UpdateAvailable), QStringLiteral("info"));
+    EXPECT_EQ(AdvisoryStatusForType(NotificationType::PresetSwitched), QStringLiteral("info"));
+}
+
+TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
+    // Guards the resolver against a new NotificationType arriving with no
+    // considered severity. The switch has no default, so a missing case is a
+    // compiler warning first — this is the runtime backstop.
+    constexpr NotificationType kAll[] = {
+        NotificationType::LowStorage,          NotificationType::Saved,
+        NotificationType::UnexpectedStop,      NotificationType::RecoveryAvailable,
+        NotificationType::UpdateAvailable,     NotificationType::FramesDropped,
+        NotificationType::SettingsRepaired,    NotificationType::PresetSwitched,
+        NotificationType::OverlayOmitted,      NotificationType::HotkeyConflict,
+        NotificationType::SettingsSaveFailed,  NotificationType::AudioSourceDegraded,
+        NotificationType::CaptureActionFailed,
+    };
+    ASSERT_EQ(std::size(kAll), 13u) << "a NotificationType was added without a severity decision";
+
+    for (const NotificationType type : kAll) {
+        const QString status = AdvisoryStatusForType(type);
+        EXPECT_TRUE(status == QStringLiteral("success") || status == QStringLiteral("info") ||
+                    status == QStringLiteral("caution") || status == QStringLiteral("error"))
+            << "unexpected status '" << status.toStdString() << "' for type " << static_cast<int>(type);
+    }
+}
+
 } // namespace
 } // namespace exosnap::notifications

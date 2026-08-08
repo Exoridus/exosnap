@@ -27,7 +27,7 @@ QWidget#titlebarDragSlot {
 
 QLabel[labelRole="titlebarWordmark"] {
     font-family: ${font-sans};
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     color: ${text0};
 }
@@ -39,9 +39,9 @@ QPushButton[titlebarNavTab="true"] {
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0;
-    padding: 0 15px;
+    padding: 0 13px;
     color: ${text2};
-    font-size: 13.5px;
+    font-size: 13px;
     font-weight: 500;
 }
 
@@ -56,29 +56,26 @@ QPushButton[titlebarNavTab="true"]:checked {
     font-weight: 600;
 }
 
-/* The button widget itself stays the full 46 x kHeight hit target (fixed in
-   OperationalTitleBar.cpp) so a click into the top-right screen corner still lands —
-   margin only insets the PAINTED box (background + border), leaving the click area
-   untouched. This is what makes the buttons read as small/quiet without shrinking
-   the Fitts's-law corner target.
-   padding/min-height/min-width reset the generic QPushButton rule below: that rule's
-   padding + min-height otherwise still apply here (an ID selector only overrides the
-   properties it actually sets, not the ones it omits) and, combined with margin, left
-   the computed content box degenerate — the buttons stopped painting anything at all
-   even though their real geometry (setFixedSize) was still correct. Verified by
-   bisecting the property list: margin alone reproduced it, resetting these three
-   fixed it. */
+/* The hover fills the whole 46 x kTitlebarHeight cell with no radius, the way
+   Explorer, Chrome and Windows itself paint their caption buttons. An earlier
+   revision inset the painted box to 32 x 32 with a 6px radius; the click area was
+   always the full cell, but the small floating square read as a smaller target
+   than it was. The corner still loses to the resize border above it — that is a
+   hit-test problem, not a painting one, and it is still open.
+   The fill uses ${bg3}/${bg4} rather than a white alpha: this stylesheet is shared
+   by all four themes, and a literal rgba(255,255,255,...) would be invisible on
+   the light ones.
+   padding/min-height/min-width reset the generic QPushButton rule below: that
+   rule's padding + min-height otherwise still apply here (an ID selector only
+   overrides the properties it actually sets, not the ones it omits). */
 QPushButton#titlebarWindowButton {
     border: none;
-    border-radius: 6px;
+    border-radius: 0;
     background: transparent;
     color: ${text2};
     font-family: ${font-mono};
     font-size: 11px;
-    /* 56 - 2*12 = 32 tall, 46 - 2*7 = 32 wide: a square field. Insetting the
-       46 x 56 cell evenly on all sides instead would leave a tall, narrow pill,
-       which reads as its own odd shape rather than as a quieter button. */
-    margin: 12px 7px;
+    margin: 0;
     padding: 0;
     min-height: 0;
     min-width: 0;

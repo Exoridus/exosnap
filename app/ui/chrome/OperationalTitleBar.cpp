@@ -79,11 +79,11 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     auto* brand_slot = new QWidget(this);
     brand_slot->setObjectName("titlebarBrandSlot");
     auto* brand_layout = new QHBoxLayout(brand_slot);
-    brand_layout->setContentsMargins(16, 0, 8, 0);
+    brand_layout->setContentsMargins(14, 0, 8, 0);
     brand_layout->setSpacing(8);
 
     brand_mark_ = new ui::brand::BrandMarkWidget(brand_slot);
-    brand_mark_->setFixedSize(20, 20);
+    brand_mark_->setFixedSize(18, 18);
 
     wordmark_ = new QLabel(brand_slot);
     wordmark_->setProperty("labelRole", "titlebarWordmark");
@@ -257,7 +257,11 @@ void OperationalTitleBar::applyVisualWindowButtonHover(const QString& which) {
 void OperationalTitleBar::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
-        if (hitTestWindowButton(local) == WindowButtonHit::None) {
+        // isInDragArea() rather than hitTestWindowButton(): it excludes every
+        // interactive child, not just the three window controls. In practice those
+        // children consume their own presses before this handler runs, so this is
+        // a belt-and-braces agreement between the two paths rather than a fix.
+        if (isInDragArea(local)) {
             // Show the move cursor immediately on press.
             QApplication::setOverrideCursor(Qt::SizeAllCursor);
             move_cursor_active_ = true;
@@ -329,7 +333,7 @@ void OperationalTitleBar::resetDragCursor() {
 void OperationalTitleBar::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
-        if (hitTestWindowButton(local) == WindowButtonHit::None) {
+        if (isInDragArea(local)) {
             QWidget* win = window();
             win->isMaximized() ? win->showNormal() : win->showMaximized();
             event->accept();
@@ -342,7 +346,19 @@ void OperationalTitleBar::mouseDoubleClickEvent(QMouseEvent* event) {
 bool OperationalTitleBar::isInDragArea(const QPoint& local_pos) const {
     if (!rect().contains(local_pos))
         return false;
-    return hitTestWindowButton(local_pos) == WindowButtonHit::None;
+
+    // Walk up from whatever sits under the point: anything that is a button —
+    // the six nav tabs, the bell, the three window controls — is interactive and
+    // must not start a window drag.
+    // Deliberately a type test rather than a list of members: a control added to
+    // the bar later is excluded without anyone having to remember this function.
+    // Plain labels and the status pill are not buttons and stay draggable, which
+    // is what every native title bar does with its own inert content.
+    for (const QWidget* child = childAt(local_pos); child != nullptr && child != this; child = child->parentWidget()) {
+        if (qobject_cast<const QAbstractButton*>(child) != nullptr)
+            return false;
+    }
+    return true;
 }
 
 OperationalTitleBar::WindowButtonHit OperationalTitleBar::hitTestWindowButton(const QPoint& local_pos) const {
@@ -353,12 +369,6 @@ OperationalTitleBar::WindowButtonHit OperationalTitleBar::hitTestWindowButton(co
     if (minimize_btn_->rect().contains(minimize_btn_->mapFrom(this, local_pos)))
         return WindowButtonHit::Minimize;
     return WindowButtonHit::None;
-}
-
-QRect OperationalTitleBar::maximizeButtonRectInWindow() const {
-    if (!window())
-        return {};
-    return QRect(maximize_btn_->mapTo(window(), QPoint(0, 0)), maximize_btn_->size());
 }
 
 void OperationalTitleBar::paintEvent(QPaintEvent* event) {
@@ -375,9 +385,9 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
-void OperationalTitleBar::setBellUnreadCount(int count) {
+void OperationalTitleBar::setBellUnreadStatus(const QString& status) {
     if (bell_)
-        bell_->setUnreadCount(count);
+        bell_->setUnreadStatus(status);
 }
 
 void OperationalTitleBar::refreshStatusChip() {

@@ -723,7 +723,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     notification_hub_->setDemoAdvisories(true);
-    title_bar_->setBellUnreadCount(2);
+    // The demo advisories seeded above include a caution entry, so the harness
+    // renders the dot in the colour a real mixed-severity inbox would produce.
+    title_bar_->setBellUnreadStatus(QStringLiteral("caution"));
 #endif
 
     // PS-PHASE-E: Deep-link target contract — route by target string.
@@ -4091,24 +4093,7 @@ void MainWindow::recordEventInHub(const notifications::NotificationEvent& event)
         break;
     }
 
-    QString status = QStringLiteral("info");
-    switch (event.type) {
-    case NotificationType::Saved:
-        status = QStringLiteral("success");
-        break;
-    case NotificationType::LowStorage:
-    case NotificationType::FramesDropped:
-    case NotificationType::OverlayOmitted:
-    case NotificationType::AudioSourceDegraded:
-        status = QStringLiteral("caution");
-        break;
-    case NotificationType::UnexpectedStop:
-    case NotificationType::RecoveryAvailable:
-        status = QStringLiteral("error");
-        break;
-    default:
-        break;
-    }
+    const QString status = notifications::AdvisoryStatusForType(event.type);
 
     // Map the toast's primary action onto the hub's action contract. Navigation
     // actions ride the deep-link route; file/undo actions carry an opaque target
@@ -4456,7 +4441,7 @@ void MainWindow::applyVerifyUpdateReinstallMode(bool enabled) {
 void MainWindow::refreshHubUnreadBell() {
     if (!notification_hub_ || !title_bar_)
         return;
-    title_bar_->setBellUnreadCount(notification_hub_->unreadCount());
+    title_bar_->setBellUnreadStatus(notification_hub_->worstUnreadStatus());
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 #pragma once
 #include <QKeySequence>
 #include <QMainWindow>
+#include <QPointer>
 #include <QRect>
 #include <QStackedWidget>
 #include <QString>
@@ -380,12 +381,20 @@ class MainWindow : public QMainWindow {
     void ensureEditPlayerSurfaceVisualTestHost();
 #endif
 
-    ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
+    // QPointer, not a raw pointer: nativeEvent() reaches for the bar while handling
+    // native messages, and WM_SETCURSOR arrives on every mouse move over the window
+    // — including during teardown, after the child widgets are gone but before the
+    // HWND is. A raw pointer stays non-null there and the null checks sail straight
+    // into freed memory; QPointer clears itself and they hold. WM_SIZE reaches for
+    // it under the same guard and has the same exposure, just far more rarely.
+    QPointer<ui::chrome::OperationalTitleBar> title_bar_;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
-    ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
+    // QPointer for the same reason as title_bar_ below: reached from eventFilter()
+    // and destroyed with centralWidget() while the HWND still receives messages.
+    QPointer<ui::dialogs::EditExportOverlay> edit_export_overlay_;
     ui::dialogs::FinalizingOverlay* finalizing_overlay_ = nullptr;
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // EDIT-VIDEO-PLAYER Task 9: harness-only host for EditPlayerSurface (see

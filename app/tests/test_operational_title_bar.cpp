@@ -343,17 +343,27 @@ TEST_F(OperationalTitleBarTest, Bell_PresentInTitleBar) {
     EXPECT_NE(bar.bellWidget(), nullptr);
 }
 
-TEST_F(OperationalTitleBarTest, Bell_DefaultZeroCount) {
+TEST_F(OperationalTitleBarTest, Bell_DefaultsToNothingUnread) {
     ui::chrome::OperationalTitleBar bar;
     ASSERT_NE(bar.bellWidget(), nullptr);
-    EXPECT_EQ(bar.bellWidget()->unreadCount(), 0);
+    EXPECT_TRUE(bar.bellWidget()->unreadStatus().isEmpty());
+    EXPECT_FALSE(bar.bellWidget()->hasUnread());
 }
 
-TEST_F(OperationalTitleBarTest, Bell_SetUnreadCountPropagates) {
+TEST_F(OperationalTitleBarTest, Bell_SetUnreadStatusPropagates) {
     ui::chrome::OperationalTitleBar bar;
-    bar.setBellUnreadCount(3);
+    bar.setBellUnreadStatus(QStringLiteral("error"));
     ASSERT_NE(bar.bellWidget(), nullptr);
-    EXPECT_EQ(bar.bellWidget()->unreadCount(), 3);
+    EXPECT_EQ(bar.bellWidget()->unreadStatus(), QStringLiteral("error"));
+    EXPECT_TRUE(bar.bellWidget()->hasUnread());
+}
+
+TEST_F(OperationalTitleBarTest, Bell_EmptyStatusClearsUnread) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setBellUnreadStatus(QStringLiteral("caution"));
+    bar.setBellUnreadStatus(QString());
+    ASSERT_NE(bar.bellWidget(), nullptr);
+    EXPECT_FALSE(bar.bellWidget()->hasUnread());
 }
 
 // ── Window-button click target (quiet-controls polish) ──────────────────────
@@ -409,6 +419,123 @@ TEST_F(OperationalTitleBarTest, Bell_ClickEmitsBellClickedSignal) {
     ASSERT_NE(bar.bellWidget(), nullptr);
     bar.bellWidget()->click();
     EXPECT_EQ(click_count, 1);
+}
+
+// ── Drag area ────────────────────────────────────────────────────────────────
+// isInDragArea() decides where a press starts a window move (mousePressEvent) and
+// where a double-click toggles maximize. A control wrongly reported as draggable
+// would have its press turned into a window drag instead of a click.
+// These tests walk every interactive child and assert it is excluded.
+
+namespace {
+// Centre of a child widget, in the bar's own coordinates.
+QPoint centreInBar(const ui::chrome::OperationalTitleBar& bar, const QWidget* child) {
+    return child->mapTo(&bar, QPoint(child->width() / 2, child->height() / 2));
+}
+
+// A laid-out, shown bar — child geometry is meaningless before the layout runs.
+void layOutBar(ui::chrome::OperationalTitleBar& bar) {
+    bar.resize(1600, ui::chrome::OperationalTitleBar::kHeight);
+    bar.show();
+    QCoreApplication::processEvents();
+}
+} // namespace
+
+TEST_F(OperationalTitleBarTest, DragArea_ExcludesEveryNavTab) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    const QList<QPushButton*> tabs = NavTabs(bar);
+    ASSERT_EQ(tabs.size(), 6);
+    for (const QPushButton* tab : tabs)
+        EXPECT_FALSE(bar.isInDragArea(centreInBar(bar, tab)))
+            << "nav tab '" << tab->text().toStdString() << "' would start a window drag instead of activating";
+}
+
+TEST_F(OperationalTitleBarTest, DragArea_ExcludesTheBell) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    ASSERT_NE(bar.bellWidget(), nullptr);
+    EXPECT_FALSE(bar.isInDragArea(centreInBar(bar, bar.bellWidget())));
+}
+
+TEST_F(OperationalTitleBarTest, DragArea_ExcludesEveryWindowButton) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    const QList<QPushButton*> window_buttons = bar.findChildren<QPushButton*>(QStringLiteral("titlebarWindowButton"));
+    ASSERT_EQ(window_buttons.size(), 3);
+    for (const QPushButton* button : window_buttons)
+        EXPECT_FALSE(bar.isInDragArea(centreInBar(bar, button)));
+}
+
+TEST_F(OperationalTitleBarTest, DragArea_AcceptsTheEmptySpaceAndTheWordmark) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    // The flexible slot between the nav and the status pill: the bar's main
+    // grab handle. Sampled at mid-height so it cannot be confused with an edge.
+    const QWidget* drag_slot = bar.findChild<QWidget*>(QStringLiteral("titlebarDragSlot"));
+    ASSERT_NE(drag_slot, nullptr);
+    EXPECT_TRUE(bar.isInDragArea(centreInBar(bar, drag_slot)));
+
+    // The wordmark is a plain label, not a control — native title bars let their
+    // own inert content be dragged, and so does this one.
+    const QWidget* brand_slot = bar.findChild<QWidget*>(QStringLiteral("titlebarBrandSlot"));
+    ASSERT_NE(brand_slot, nullptr);
+    EXPECT_TRUE(bar.isInDragArea(centreInBar(bar, brand_slot)));
+}
+
+TEST_F(OperationalTitleBarTest, DragArea_RejectsPointsOutsideTheBar) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    EXPECT_FALSE(bar.isInDragArea(QPoint(-1, 5)));
+    EXPECT_FALSE(bar.isInDragArea(QPoint(5, ui::chrome::OperationalTitleBar::kHeight + 1)));
+}
+
+// ── Window-button hit test ───────────────────────────────────────────────────
+
+TEST_F(OperationalTitleBarTest, HitTestWindowButton_ResolvesTheTopRightCornerToClose) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    // The very pixel a thrown pointer lands on: the button must own the corner, or
+    // the throw-to-close gesture misses.
+    const QPoint corner(bar.width() - 1, 0);
+    EXPECT_EQ(bar.hitTestWindowButton(corner), ui::chrome::OperationalTitleBar::WindowButtonHit::Close);
+}
+
+TEST_F(OperationalTitleBarTest, HitTestWindowButton_SeparatesTheThreeCells) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    layOutBar(bar);
+
+    using Hit = ui::chrome::OperationalTitleBar::WindowButtonHit;
+    constexpr int kCell = 46;
+    const int y = ui::chrome::OperationalTitleBar::kHeight / 2;
+
+    // Cells run minimize | maximize | close from the left inwards, close flush to
+    // the right edge. Both sides of every boundary are pinned so a cell cannot
+    // drift by a pixel and hand a click to its neighbour.
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - 1, y)), Hit::Close);
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - kCell, y)), Hit::Close);
+
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - kCell - 1, y)), Hit::MaximizeRestore);
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - 2 * kCell, y)), Hit::MaximizeRestore);
+
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - 2 * kCell - 1, y)), Hit::Minimize);
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - 3 * kCell, y)), Hit::Minimize);
+
+    // Left of all three: no button.
+    EXPECT_EQ(bar.hitTestWindowButton(QPoint(bar.width() - 3 * kCell - 1, y)), Hit::None);
 }
 
 } // namespace
