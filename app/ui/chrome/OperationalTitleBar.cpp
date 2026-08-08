@@ -7,13 +7,11 @@
 #include "../widgets/StatusPill.h"
 
 #include <QAbstractButton>
-#include <QApplication>
 #include <QButtonGroup>
 #include <QColor>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayoutItem>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
 #include <QPushButton>
@@ -21,7 +19,6 @@
 #include <QStyle>
 #include <QStyleOptionButton>
 #include <QStylePainter>
-#include <QWindow>
 
 namespace exosnap::ui::chrome {
 
@@ -32,14 +29,15 @@ namespace {
 // does not reliably flip QStyleSheetStyle's :hover pseudo-state for this widget
 // (verified empirically), so this sets QStyle::State_MouseOver directly on the
 // style option used for painting instead — the same flag the style itself
-// would set from a real hover, so it renders identically. Used only by
-// OperationalTitleBar::applyVisualWindowButtonHover() (visual-test only); a
-// real mouse hover is unaffected and keeps using the normal :hover path.
+// would set from a real hover, so it renders identically. Driven through
+// OperationalTitleBar::setForcedWindowButtonHover() by the visual-test harness
+// and by the maximize button's native WM_NCMOUSEMOVE hover; a real mouse hover
+// is unaffected and keeps using the normal :hover path.
 class WindowControlButton : public QPushButton {
   public:
     using QPushButton::QPushButton;
 
-    void setForcedHoverForVisualTest(bool hovered) {
+    void setForcedHover(bool hovered) {
         if (forced_hover_ == hovered)
             return;
         forced_hover_ = hovered;
@@ -79,11 +77,11 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     auto* brand_slot = new QWidget(this);
     brand_slot->setObjectName("titlebarBrandSlot");
     auto* brand_layout = new QHBoxLayout(brand_slot);
-    brand_layout->setContentsMargins(16, 0, 8, 0);
+    brand_layout->setContentsMargins(14, 0, 8, 0);
     brand_layout->setSpacing(8);
 
     brand_mark_ = new ui::brand::BrandMarkWidget(brand_slot);
-    brand_mark_->setFixedSize(20, 20);
+    brand_mark_->setFixedSize(18, 18);
 
     wordmark_ = new QLabel(brand_slot);
     wordmark_->setProperty("labelRole", "titlebarWordmark");
@@ -235,7 +233,7 @@ void OperationalTitleBar::setMaximizedState(bool maximized) {
     maximize_btn_->setText(maximized ? "⧉" : "□"); // ⧉ TWO JOINED SQUARES — same visual weight as □
 }
 
-void OperationalTitleBar::applyVisualWindowButtonHover(const QString& which) {
+void OperationalTitleBar::setForcedWindowButtonHover(const QString& which) {
     // Neither Qt::WA_UnderMouse nor a dynamic property + unpolish()/polish() reliably
     // forced the CSS :hover pseudo-state for this button under the real stylesheet
     // (verified empirically — both left the style reading the widget as not-hovered).
@@ -247,102 +245,34 @@ void OperationalTitleBar::applyVisualWindowButtonHover(const QString& which) {
     const auto apply_hover = [](QPushButton* button, bool hovered) {
         if (button == nullptr)
             return;
-        static_cast<WindowControlButton*>(button)->setForcedHoverForVisualTest(hovered);
+        static_cast<WindowControlButton*>(button)->setForcedHover(hovered);
     };
     apply_hover(minimize_btn_, which == QStringLiteral("minimize"));
     apply_hover(maximize_btn_, which == QStringLiteral("maximize"));
     apply_hover(close_btn_, which == QStringLiteral("close"));
 }
 
-void OperationalTitleBar::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
-        if (hitTestWindowButton(local) == WindowButtonHit::None) {
-            // Show the move cursor immediately on press.
-            QApplication::setOverrideCursor(Qt::SizeAllCursor);
-            move_cursor_active_ = true;
-
-            if (window()->isMaximized()) {
-                // Defer move until the user actually drags — a bare click on a
-                // maximized titlebar must not restore the window.
-                drag_press_global_pos_ = event->globalPosition().toPoint();
-                tracking_drag_from_max_ = true;
-                event->accept();
-                return;
-            }
-            if (QWindow* win = window()->windowHandle()) {
-                win->startSystemMove();
-                event->accept();
-                return;
-            }
-        }
-    }
-    tracking_drag_from_max_ = false;
-    QWidget::mousePressEvent(event);
-}
-
-void OperationalTitleBar::mouseMoveEvent(QMouseEvent* event) {
-    if (tracking_drag_from_max_ && window()->isMaximized() && (event->buttons() & Qt::LeftButton)) {
-        const QPoint current = event->globalPosition().toPoint();
-        if ((current - drag_press_global_pos_).manhattanLength() > 5) {
-            tracking_drag_from_max_ = false;
-
-            QWidget* win = window();
-            const QRect max_rect = win->geometry();
-            const QRect normal_rect = win->normalGeometry();
-
-            win->showNormal();
-
-            // Reposition so the cursor stays at roughly the same relative x in
-            // the titlebar, matching the native Windows restore-on-drag behavior.
-            if (normal_rect.isValid() && max_rect.width() > 0) {
-                const qreal rel_x = static_cast<qreal>(current.x() - max_rect.left()) / max_rect.width();
-                const int target_x = current.x() - qRound(win->width() * rel_x);
-                win->move(qMax(0, target_x), qMax(0, current.y() - kHeight / 2));
-            }
-
-            if (QWindow* handle = win->windowHandle()) {
-                handle->startSystemMove();
-                event->accept();
-                return;
-            }
-        }
-    }
-    QWidget::mouseMoveEvent(event);
-}
-
-void OperationalTitleBar::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        tracking_drag_from_max_ = false;
-        resetDragCursor(); // handles plain click (no drag) — WM_EXITSIZEMOVE handles drag end
-    }
-    QWidget::mouseReleaseEvent(event);
-}
-
-void OperationalTitleBar::resetDragCursor() {
-    if (move_cursor_active_) {
-        QApplication::restoreOverrideCursor();
-        move_cursor_active_ = false;
-    }
-}
-
-void OperationalTitleBar::mouseDoubleClickEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
-        if (hitTestWindowButton(local) == WindowButtonHit::None) {
-            QWidget* win = window();
-            win->isMaximized() ? win->showNormal() : win->showMaximized();
-            event->accept();
-            return;
-        }
-    }
-    QWidget::mouseDoubleClickEvent(event);
+void OperationalTitleBar::triggerMaximizeRestore() {
+    if (QWidget* win = window())
+        win->isMaximized() ? win->showNormal() : win->showMaximized();
 }
 
 bool OperationalTitleBar::isInDragArea(const QPoint& local_pos) const {
     if (!rect().contains(local_pos))
         return false;
-    return hitTestWindowButton(local_pos) == WindowButtonHit::None;
+
+    // Walk up from whatever sits under the point: anything that is a button —
+    // the six nav tabs, the bell, the three window controls — is interactive and
+    // must stay HTCLIENT, or HTCAPTION would swallow its clicks entirely.
+    // Deliberately a type test rather than a list of members: a control added to
+    // the bar later is excluded without anyone having to remember this function.
+    // Plain labels and the status pill are not buttons and stay draggable, which
+    // is what every native title bar does with its own inert content.
+    for (const QWidget* child = childAt(local_pos); child != nullptr && child != this; child = child->parentWidget()) {
+        if (qobject_cast<const QAbstractButton*>(child) != nullptr)
+            return false;
+    }
+    return true;
 }
 
 OperationalTitleBar::WindowButtonHit OperationalTitleBar::hitTestWindowButton(const QPoint& local_pos) const {
@@ -353,12 +283,6 @@ OperationalTitleBar::WindowButtonHit OperationalTitleBar::hitTestWindowButton(co
     if (minimize_btn_->rect().contains(minimize_btn_->mapFrom(this, local_pos)))
         return WindowButtonHit::Minimize;
     return WindowButtonHit::None;
-}
-
-QRect OperationalTitleBar::maximizeButtonRectInWindow() const {
-    if (!window())
-        return {};
-    return QRect(maximize_btn_->mapTo(window(), QPoint(0, 0)), maximize_btn_->size());
 }
 
 void OperationalTitleBar::paintEvent(QPaintEvent* event) {
@@ -375,9 +299,9 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
-void OperationalTitleBar::setBellUnreadCount(int count) {
+void OperationalTitleBar::setBellUnreadStatus(const QString& status) {
     if (bell_)
-        bell_->setUnreadCount(count);
+        bell_->setUnreadStatus(status);
 }
 
 void OperationalTitleBar::refreshStatusChip() {

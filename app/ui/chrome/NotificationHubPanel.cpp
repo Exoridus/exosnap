@@ -191,10 +191,11 @@ void NotificationHubPanel::addAdvisory(const QString& id, const QString& status,
                 [this](const QString& target) { emit deepLinkRequested(target); });
     }
 
-    addAdvisoryWidget(item, id, unread);
+    addAdvisoryWidget(item, id, status, unread);
 }
 
-void NotificationHubPanel::addAdvisoryWidget(ui::widgets::AdvisoryItem* item, const QString& id, bool unread) {
+void NotificationHubPanel::addAdvisoryWidget(ui::widgets::AdvisoryItem* item, const QString& id, const QString& status,
+                                             bool unread) {
     // Insert before the trailing stretch (last item in list_layout_).
     const int stretch_index = list_layout_->count() - 1;
     QFrame* divider = nullptr;
@@ -216,6 +217,7 @@ void NotificationHubPanel::addAdvisoryWidget(ui::widgets::AdvisoryItem* item, co
     entry.item = item;
     entry.divider_before = divider;
     entry.unread = unread;
+    entry.status = status;
     advisory_by_id_.insert(id, entry);
 
     refreshEmptyState();
@@ -290,6 +292,31 @@ void NotificationHubPanel::removeAdvisoryById(const QString& id) {
 
 int NotificationHubPanel::unreadCount() const noexcept {
     return unread_count_;
+}
+
+QString NotificationHubPanel::worstUnreadStatus() const {
+    // Ranked so the bell reports the worst unread severity, not the newest one.
+    // "info" and "success" share a rung: both are neutral for the dot's purpose.
+    const auto rank = [](const QString& status) -> int {
+        if (status == QStringLiteral("error"))
+            return 3;
+        if (status == QStringLiteral("caution"))
+            return 2;
+        return 1; // "info", "success", and anything unrecognised
+    };
+
+    QString worst;
+    int worst_rank = 0;
+    for (const AdvisoryEntry& entry : advisory_by_id_) {
+        if (!entry.unread)
+            continue;
+        const int r = rank(entry.status);
+        if (r > worst_rank) {
+            worst_rank = r;
+            worst = entry.status;
+        }
+    }
+    return worst;
 }
 
 void NotificationHubPanel::clearAdvisories() {

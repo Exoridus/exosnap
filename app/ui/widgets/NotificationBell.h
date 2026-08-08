@@ -4,18 +4,36 @@
 
 namespace exosnap::ui::widgets {
 
-// PS-FOUNDATIONS-R1: Notification bell with optional unread badge.
-// Lucide "bell" icon; badge uses kWarn color for count > 0.
+// PS-FOUNDATIONS-R1: Notification bell with an optional unread dot.
+// Lucide "bell" icon; the dot is coloured by the worst unread severity.
 // signal clicked() is inherited from QAbstractButton.
+//
+// The dot replaced a counted badge: a 9 px digit inside a 14x13 px field put the
+// glyph at roughly 5 px tall, below what IBM Plex Mono rasterises cleanly. The
+// exact count was never actionable from the title bar anyway — it lives in the
+// hub, one click away — so the dot carries only what the bar can say legibly:
+// that something is unread, and how urgent the worst of it is.
 class NotificationBell : public QToolButton {
     Q_OBJECT
   public:
     explicit NotificationBell(QWidget* parent = nullptr);
 
-    // 0 = resting (no badge), >0 = shows badge with count.
-    void setUnreadCount(int count);
-    int unreadCount() const {
-        return unread_count_;
+    // Sized for the 40 px title bar: the bell needs vertical clearance on both
+    // sides of the bar, so it cannot simply grow with the row.
+    static constexpr int kSize = 28;
+    static constexpr int kIconSize = 16;
+    static constexpr int kDotDiameter = 8;
+
+    // Advisory status key of the worst unread entry: "error", "caution",
+    // "info" or "success". Empty means nothing is unread and no dot is drawn.
+    // Values are produced by notifications::AdvisoryStatusForType(); an
+    // unrecognised non-empty string still draws a dot, in the neutral colour.
+    void setUnreadStatus(const QString& status);
+    QString unreadStatus() const {
+        return unread_status_;
+    }
+    bool hasUnread() const {
+        return !unread_status_.isEmpty();
     }
 
     // VG-2: open/closed hub state — drives the QSS [hubOpen="true"] rule.
@@ -33,8 +51,10 @@ class NotificationBell : public QToolButton {
 
   private:
     void updateIcon();
+    // Resolves unread_status_ to the dot fill from the active theme.
+    QColor dotColor() const;
 
-    int unread_count_ = 0;
+    QString unread_status_;
     bool hovered_ = false;
     bool hub_open_ = false;
 };

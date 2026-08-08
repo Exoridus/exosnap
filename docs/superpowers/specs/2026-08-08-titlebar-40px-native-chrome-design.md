@@ -56,9 +56,13 @@ The button cell keeps its 46 px width deliberately: that is the Windows 11 capti
 metric, so the right edge lines up with every other title bar on the system.
 
 In `exosnap_dark.qss`, `QPushButton#titlebarWindowButton` loses `margin` and `border-radius`.
-Hover becomes `rgba(255, 255, 255, 0.09)`, pressed `rgba(255, 255, 255, 0.05)`. Close keeps
-`#b8261d` / `#971e17`. The long comment above that rule explaining why `margin` does not shrink
-the Fitts's-law target goes away with the margin.
+Close keeps `#b8261d` / `#971e17`. The long comment above that rule explaining why `margin` does
+not shrink the Fitts's-law target goes away with the margin.
+
+Hover and pressed keep the existing `${bg3}` / `${bg4}` tokens rather than moving to a white
+alpha. Despite the filename, this stylesheet is the only one — all four themes are served from
+it through token substitution, so a literal `rgba(255, 255, 255, ...)` would be invisible on the
+light ones. On the bar's dark ground the tokens produce the same result the white overlay would.
 
 ## Part 2 — Native window chrome
 
@@ -81,8 +85,15 @@ rather than `HTTOPRIGHT`.
 `hitTestFromResizeZone()` already returns exactly these `HT*` codes but is currently only used
 to look up a cursor. It becomes the actual hit-test mapper.
 
-`maximizeButtonRectInWindow()` (`OperationalTitleBar.cpp:358`) supplies the cell geometry. It
-exists today and is called from nowhere.
+`resizeZoneFromLocalPoint()` takes the border width as a parameter instead of hard-coding 8, and
+the caller derives it from `SM_CXSIZEFRAME + SM_CXPADDEDBORDER` divided by the window's device
+pixel ratio (those metrics report physical pixels; the zone maths is logical). At 100% that
+resolves to 8, so nothing changes there — it stops drifting from the system at other scales.
+
+`maximizeButtonRectInWindow()` (`OperationalTitleBar.cpp:358`) is deleted rather than finally
+used: the hit test needs to name *which* button a point is over, and `hitTestWindowButton()`
+answers that directly for all three cells. Keeping a second, rect-shaped path to the same fact
+would be one more thing to keep in step.
 
 ### `HTMAXBUTTON` costs its own hover handling
 
@@ -97,7 +108,9 @@ sit inert while its two neighbours light up under the cursor. It needs:
 
 `applyVisualWindowButtonHover()` already drives the painted hover state directly for the
 visual-test harness (`OperationalTitleBar.cpp:238-255`); the same mechanism serves here, so no
-new painting path is needed.
+new painting path is needed. It is renamed to `setForcedWindowButtonHover()` — with a second,
+production caller it is no longer visual-test-only, and a name saying otherwise would invite
+someone to strip it from a release build.
 
 This is the one place where the change adds code rather than removing it. It buys the Snap
 Layouts flyout, which cannot be obtained any other way.
@@ -137,9 +150,18 @@ Under `HTCAPTION`, Qt receives no mouse events for that area. Any interactive ch
 from the caption region becomes dead.
 
 `isInDragArea()` (`OperationalTitleBar.cpp:342`) currently excludes only the three window
-buttons. It must exclude every interactive child: the six nav tabs, the notification bell, and
-the status pill. It becomes the single authority the `WM_NCHITTEST` handler consults, and it is
-tested child by child.
+buttons. It becomes the single authority the `WM_NCHITTEST` handler consults, and excludes every
+interactive child by walking up from `childAt()` and rejecting anything that is a
+`QAbstractButton` — the six nav tabs, the bell, the three window controls.
+
+A type test rather than a list of members, deliberately: a control added to the bar later is
+excluded without anyone having to remember this function exists. The failure mode it guards
+against is silent — a caption swallows mouse events entirely, so a forgotten control does not
+misbehave, it stops responding.
+
+The status pill stays draggable. It is a plain `QWidget` with no interaction, and native title
+bars let their own inert content be dragged; excluding it would only shrink the grab area. Same
+for the wordmark. Both are asserted as draggable so the intent is not mistaken for an oversight.
 
 ## Part 3 — Bell and severity
 
@@ -203,9 +225,12 @@ amber is caution, mint is a neutral hint.
 | `AdvisoryStatusForType` over all 13 `NotificationType` values | The mapping table above, including the six corrections |
 | `worstUnreadStatus()`: empty, all-read, single unread, mixed severities, ranking order | Aggregation |
 | `NotificationBell` renders the dot in the three colours and nothing when the status is empty | Rendering |
-| `isInDragArea()` rejects each of: six nav tabs, bell, status pill, three window buttons; accepts the flexible drag slot | The `HTCAPTION` dead-child risk |
-| `hitTestWindowButton()` at 40 px cell geometry, including cell borders and the top-right corner pixel | Corner target |
-| Visual-test baselines for the title bar at 40 px | Metrics |
+| `isInDragArea()` rejects each of: six nav tabs, bell, three window buttons; accepts the drag slot, the brand slot, and rejects points outside the bar | The `HTCAPTION` dead-child risk |
+| `hitTestWindowButton()` resolves the top-right corner pixel to Close | Corner target |
+| `hitTestWindowButton()` at both sides of every cell boundary | Only the maximize cell goes to Windows; a cell drifting one pixel would put a neighbour under `HTMAXBUTTON` and kill its click |
+
+The `--visual-test` harness renders screenshots for a human to judge; it holds no stored
+reference images, so there is nothing to re-bless. The 40 px bar is checked by eye there.
 
 `WM_NCHITTEST` itself is not unit-testable — it needs a real window and a real cursor. It is
 covered by the live checks below.

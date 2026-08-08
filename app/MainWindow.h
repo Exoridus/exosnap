@@ -516,7 +516,6 @@ class MainWindow : public QMainWindow {
     bool resizable_style_applied_ = false;
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
-    bool resize_cursor_shown_ = false;
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
     // PERF-MEASURE: one-shot guard so first-paint latency is logged exactly once.

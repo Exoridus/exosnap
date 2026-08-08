@@ -205,6 +205,71 @@ TEST_F(NotificationHubPanelTest, ClearAdvisories_ResetsUnreadCount) {
     EXPECT_EQ(panel.unreadCount(), 0);
 }
 
+// --- worstUnreadStatus -------------------------------------------------------
+// Feeds the title-bar bell's dot colour. It reports the worst unread severity
+// rather than the newest, so one failure among nine notices cannot be painted
+// over by whatever arrived last.
+
+namespace {
+void addEntry(ui::chrome::NotificationHubPanel& panel, const QString& id, const QString& status, bool unread) {
+    panel.addAdvisory(id, status, QStringLiteral("T"), QStringLiteral("B"), QString(), unread, QString(), QString(),
+                      false);
+}
+} // namespace
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_EmptyWhenNothingAdded) {
+    ui::chrome::NotificationHubPanel panel;
+    EXPECT_TRUE(panel.worstUnreadStatus().isEmpty());
+}
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_EmptyWhenAllRead) {
+    ui::chrome::NotificationHubPanel panel;
+    addEntry(panel, QStringLiteral("a1"), QStringLiteral("error"), /*unread=*/false);
+    EXPECT_TRUE(panel.worstUnreadStatus().isEmpty()) << "a read failure must not colour the bell";
+}
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_SingleEntry) {
+    ui::chrome::NotificationHubPanel panel;
+    addEntry(panel, QStringLiteral("a1"), QStringLiteral("caution"), true);
+    EXPECT_EQ(panel.worstUnreadStatus(), QStringLiteral("caution"));
+}
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_ErrorOutranksCautionAndInfo) {
+    ui::chrome::NotificationHubPanel panel;
+    addEntry(panel, QStringLiteral("a1"), QStringLiteral("info"), true);
+    addEntry(panel, QStringLiteral("a2"), QStringLiteral("error"), true);
+    addEntry(panel, QStringLiteral("a3"), QStringLiteral("caution"), true);
+    EXPECT_EQ(panel.worstUnreadStatus(), QStringLiteral("error"));
+}
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_CautionOutranksInfoAndSuccess) {
+    ui::chrome::NotificationHubPanel panel;
+    addEntry(panel, QStringLiteral("a1"), QStringLiteral("success"), true);
+    addEntry(panel, QStringLiteral("a2"), QStringLiteral("caution"), true);
+    addEntry(panel, QStringLiteral("a3"), QStringLiteral("info"), true);
+    EXPECT_EQ(panel.worstUnreadStatus(), QStringLiteral("caution"));
+}
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_IgnoresReadEntries) {
+    ui::chrome::NotificationHubPanel panel;
+    addEntry(panel, QStringLiteral("a1"), QStringLiteral("error"), /*unread=*/false);
+    addEntry(panel, QStringLiteral("a2"), QStringLiteral("info"), /*unread=*/true);
+    EXPECT_EQ(panel.worstUnreadStatus(), QStringLiteral("info"));
+}
+
+TEST_F(NotificationHubPanelTest, WorstUnreadStatus_ClearedWithTheEntries) {
+    ui::chrome::NotificationHubPanel panel;
+    addEntry(panel, QStringLiteral("a1"), QStringLiteral("error"), true);
+    ASSERT_EQ(panel.worstUnreadStatus(), QStringLiteral("error"));
+
+    panel.removeAdvisoryById(QStringLiteral("a1"));
+    EXPECT_TRUE(panel.worstUnreadStatus().isEmpty());
+
+    addEntry(panel, QStringLiteral("a2"), QStringLiteral("caution"), true);
+    panel.clearAdvisories();
+    EXPECT_TRUE(panel.worstUnreadStatus().isEmpty());
+}
+
 // --- AdvisoryItem entry padding / alignment ------------------------------------
 // The unread dot used to sit before the title and consume title-row space only on
 // unread rows, shoving the title right against its own body and against read rows.

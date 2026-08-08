@@ -57,15 +57,22 @@ class OperationalTitleBar : public QWidget {
 
     void setMaximizedState(bool maximized);
 
-    // Visual-test only: forces one window control button ("minimize" / "maximize" /
-    // "close") to paint its hover state, so a static screenshot can show it without a
-    // real OS mouse move. Any other value (including empty) clears hover from all
-    // three buttons. A real mouse hover is unaffected and keeps using the normal
-    // :hover QSS path.
-    void applyVisualWindowButtonHover(const QString& which);
+    // Forces one window control button ("minimize" / "maximize" / "close") to paint
+    // its hover state. Any other value (including empty) clears hover from all three.
+    // A real mouse hover is unaffected and keeps using the normal :hover QSS path.
+    //
+    // Two callers:
+    //   - the visual-test harness, so a static screenshot can show a hover state
+    //     without a real OS mouse move;
+    //   - MainWindow's WM_NCMOUSEMOVE handling. The maximize cell answers
+    //     WM_NCHITTEST with HTMAXBUTTON to get the Snap Layouts flyout, which puts
+    //     it in the non-client area — Qt stops delivering enter/leave events for it,
+    //     so its hover has to be driven from the native message stream instead.
+    void setForcedWindowButtonHover(const QString& which);
 
-    // PS-PHASE-B: notification bell API.
-    void setBellUnreadCount(int count);
+    // PS-PHASE-B: notification bell API. Takes the worst unread advisory status
+    // ("error" / "caution" / "info" / "success"); empty means nothing unread.
+    void setBellUnreadStatus(const QString& status);
     ui::widgets::NotificationBell* bellWidget() const {
         return bell_;
     }
@@ -74,10 +81,14 @@ class OperationalTitleBar : public QWidget {
     // so the "exo" colour is correct for the current (possibly persisted) theme.
     void refreshBrand();
 
+    // True where the bar may be dragged, i.e. everywhere no interactive child sits.
+    // MainWindow's WM_NCHITTEST returns HTCAPTION for exactly this area, so anything
+    // wrongly reported as draggable stops receiving mouse events altogether.
     bool isInDragArea(const QPoint& local_pos) const;
     WindowButtonHit hitTestWindowButton(const QPoint& local_pos) const;
-    void resetDragCursor();
-    QRect maximizeButtonRectInWindow() const;
+    // Toggles the window between maximized and normal. Driven from WM_NCLBUTTONUP:
+    // the maximize button is HTMAXBUTTON and so never sees a Qt click.
+    void triggerMaximizeRestore();
 
   signals:
     void navPageRequested(int page_index);
@@ -88,10 +99,8 @@ class OperationalTitleBar : public QWidget {
     void closeRequested();
 
   protected:
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void mouseReleaseEvent(QMouseEvent* event) override;
-    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    // No mouse handlers: dragging, restore-on-drag and double-click-to-maximize are
+    // Windows' own, reached through HTCAPTION in MainWindow's WM_NCHITTEST.
     void paintEvent(QPaintEvent* event) override;
 
   private:
@@ -104,9 +113,6 @@ class OperationalTitleBar : public QWidget {
     QPushButton* minimize_btn_ = nullptr;
     QPushButton* maximize_btn_ = nullptr;
     QPushButton* close_btn_ = nullptr;
-    QPoint drag_press_global_pos_;
-    bool tracking_drag_from_max_ = false;
-    bool move_cursor_active_ = false;
 
     bool recording_active_ = false;
     QString status_label_ = QStringLiteral("READY");

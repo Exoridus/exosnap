@@ -35,6 +35,13 @@ class NotificationHubPanel : public QFrame {
     // PS-PHASE-E: Returns the current number of unread advisories.
     int unreadCount() const noexcept;
 
+    // The highest-ranking status among unread advisories, ranked
+    // error > caution > info == success. Empty when nothing is unread.
+    // Drives the title-bar bell's dot colour, so it deliberately reports the
+    // worst rather than the newest: one failure among nine notices must not be
+    // painted over by whatever arrived last.
+    QString worstUnreadStatus() const;
+
     // Populate with two demo advisories for harness/visual testing.
     // Passing false clears all advisories.
     void setDemoAdvisories(bool enabled);
@@ -53,7 +60,7 @@ class NotificationHubPanel : public QFrame {
 
   private:
     void refreshEmptyState();
-    void addAdvisoryWidget(ui::widgets::AdvisoryItem* item, const QString& id, bool unread);
+    void addAdvisoryWidget(ui::widgets::AdvisoryItem* item, const QString& id, const QString& status, bool unread);
 
     QLabel* mark_all_read_label_ = nullptr;
     QWidget* list_container_ = nullptr;
@@ -69,6 +76,7 @@ class NotificationHubPanel : public QFrame {
         ui::widgets::AdvisoryItem* item = nullptr;
         QFrame* divider_before = nullptr; // 1px divider widget prepended before this item; null for first
         bool unread = false;
+        QString status; // as passed to addAdvisory(); mirrored here for worstUnreadStatus()
     };
     QMap<QString, AdvisoryEntry> advisory_by_id_;
 };
