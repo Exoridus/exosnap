@@ -144,6 +144,18 @@ safety nets exist to repair.
 Right-click on the title bar opens the system menu (Move, Size, Minimize, Maximize, Close).
 The application has no such menu today.
 
+### `title_bar_` has to be a QPointer
+
+Found during implementation, not anticipated here. `nativeEvent()` reaches for the bar while
+handling native messages, and `WM_NCHITTEST` arrives on every mouse move — including during
+teardown, after the child widgets are destroyed but before the HWND is. A raw pointer stays
+non-null there, so the `title_bar_ != nullptr` guards sail straight into freed memory.
+
+The latent bug predates this work: `WM_SIZE` already called `title_bar_->setMaximizedState()`
+under the same guard. It stayed invisible because `WM_SIZE` is rare during shutdown while
+`WM_NCHITTEST` is not — it reproduced as an access violation on every run of the harness's
+error path. `QPointer` clears itself when the widget dies and the existing guards then hold.
+
 ### The risk that needs care
 
 Under `HTCAPTION`, Qt receives no mouse events for that area. Any interactive child not excluded

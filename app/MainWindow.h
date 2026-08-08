@@ -1,6 +1,7 @@
 #pragma once
 #include <QKeySequence>
 #include <QMainWindow>
+#include <QPointer>
 #include <QRect>
 #include <QStackedWidget>
 #include <QString>
@@ -380,7 +381,12 @@ class MainWindow : public QMainWindow {
     void ensureEditPlayerSurfaceVisualTestHost();
 #endif
 
-    ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
+    // QPointer, not a raw pointer: nativeEvent() reaches for the bar while handling
+    // native messages, and WM_NCHITTEST arrives on every mouse move — including
+    // during teardown, after the child widgets are gone but before the HWND is.
+    // A raw pointer stays non-null there and the null checks sail straight into
+    // freed memory; QPointer clears itself and they hold.
+    QPointer<ui::chrome::OperationalTitleBar> title_bar_;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
