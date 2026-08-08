@@ -391,7 +391,10 @@ class MainWindow : public QMainWindow {
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::WhatsNewOverlay* whats_new_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
-    ui::dialogs::EditExportOverlay* edit_export_overlay_ = nullptr;
+    // QPointer for the same reason as title_bar_ below: reached from nativeEvent()
+    // and eventFilter(), and destroyed with centralWidget() while the HWND still
+    // receives messages.
+    QPointer<ui::dialogs::EditExportOverlay> edit_export_overlay_;
     ui::dialogs::FinalizingOverlay* finalizing_overlay_ = nullptr;
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // EDIT-VIDEO-PLAYER Task 9: harness-only host for EditPlayerSurface (see
