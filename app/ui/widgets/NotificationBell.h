@@ -29,7 +29,7 @@ class NotificationBell : public QToolButton {
     // Values are produced by notifications::AdvisoryStatusForType(); an
     // unrecognised non-empty string still draws a dot, in the neutral colour.
     void setUnreadStatus(const QString& status);
-    QString unreadStatus() const {
+    const QString& unreadStatus() const {
         return unread_status_;
     }
     bool hasUnread() const {
