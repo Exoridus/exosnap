@@ -1,0 +1,90 @@
+name: AddressSanitizer
+
+# ---------------------------------------------------------------------------
+# Full build + test suite under /fsanitize=address.
+#
+# WHY IT EXISTS
+#
+# A use-after-free in C++ does not fail where it is written. The freed block
+# stays readable until something else is allocated over it, so the crash lands
+# in unrelated code much later — on 2026-08-08 a raw `title_bar_` pointer
+# surfaced as an unexplained crash after main() and cost an evening. ASan
+# poisons freed memory and quarantines it, so the FIRST invalid access reports
+# with the access, allocation, and free stacks attached.
+#
+# WHY MANUAL-ONLY, FOR NOW
+#
+# This is deliberately `workflow_dispatch` only. The whole tree plus ~176 test
+# binaries is a heavy Windows-runner job, and it re-derives a finding list that
+# changes on the scale of weeks, not commits — the same economics that moved
+# advisory-checks.yml to a nightly. To make it recurring, add:
+#
+#   schedule:
+#     - cron: '0 4 * * 1'   # Mondays 04:00 UTC
+#
+# It is its own workflow file for the reasons documented at the top of
+# advisory-checks.yml: a `schedule:` event runs on the default branch, and any
+# scheduled run inside ci.yml would become the newest main run of ci.yml and
+# drive the README CI badge.
+#
+# NOTE ON A CLEAN RUN
+#
+# "0 findings" only means something if the detector is armed. Configure fails
+# with an explicit message when the 'C++ AddressSanitizer' VS component is
+# missing, so a silently un-instrumented green run is not possible here.
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  asan:
+    name: build-test (windows-x64-ninja-asan)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          archives: 'qtbase qtsvg'
+          cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Configure (windows-x64-ninja-asan)
+        run: cmake --preset windows-x64-ninja-asan -DEXOSNAP_USE_SCCACHE=ON
+
+      - name: Build (windows-x64-ninja-asan)
+        run: cmake --build --preset windows-x64-ninja-asan
+
+      # Same -ExcludeLabel live rationale as ci.yml: this runner has no GPU, and
+      # excluding the hardware-querying binaries beats trusting them to skip
+      # themselves. ASan reports go to stderr and fail the owning binary, so a
+      # finding surfaces as a normal ctest failure with the report in the log.
+      - name: Test (windows-x64-ninja-asan)
+        run: >-
+          pwsh -NonInteractive -File scripts/run-tests.ps1
+          -BuildDir build/windows-x64-ninja-asan -Config Debug
+          -ExcludeLabel live
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload test logs (windows-x64-ninja-asan)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ctest-logs-windows-x64-ninja-asan
+          path: build/windows-x64-ninja-asan/Testing/

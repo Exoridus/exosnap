@@ -61,6 +61,15 @@ function(exosnap_add_gtest)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${_ffmpeg_dll}" "$<TARGET_FILE_DIR:${ARG_NAME}>")
     endforeach()
+    # Empty unless EXOSNAP_ASAN=ON. The ASan runtime lives next to cl.exe and is
+    # never on PATH, so an instrumented test binary fails to start (0xC0000135)
+    # without it. It rides the shared per-directory stage target for the same
+    # reason the FFmpeg DLLs do — see the CONCURRENCY note above.
+    foreach(_asan_dll IN LISTS EXOSNAP_ASAN_RUNTIME_DLLS)
+      list(APPEND _exosnap_stage_commands
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_asan_dll}" "$<TARGET_FILE_DIR:${ARG_NAME}>")
+    endforeach()
     foreach(_qt_target IN ITEMS Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
       if(TARGET ${_qt_target})
         list(APPEND _exosnap_stage_commands

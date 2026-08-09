@@ -103,6 +103,34 @@ only a compact summary plus the exact failing gtest cases.
   probes).
 - Build first: add `-Build` to do a full build before testing.
 
+### AddressSanitizer
+
+`windows-x64-asan` (MSBuild) and `windows-x64-ninja-asan` (Ninja, needs a VS
+Developer shell) build the whole tree with `/fsanitize=address`. Use them when
+chasing a crash whose stack makes no sense — a use-after-free surfaces as an
+unrelated crash somewhere else entirely, and ASan turns that into a report at
+the first invalid access with the allocation and free stacks attached.
+
+- Build + test: `cmake --preset windows-x64-asan && cmake --build --preset windows-x64-asan`,
+  then `pwsh scripts/run-tests.ps1 -BuildDir build/windows-x64-asan -Config Debug`.
+- The sanitizer runtime (`clang_rt.asan*dynamic-*.dll`) ships next to `cl.exe`
+  and is never on PATH; the build stages it beside every binary. A missing
+  'C++ AddressSanitizer' VS component fails configure with an explicit message
+  rather than at first launch with 0xC0000135.
+- `/RTC1` is stripped from the Debug flags — MSVC rejects it alongside
+  `/fsanitize=address`. ASan subsumes what it checked.
+- Expect the suite to run noticeably slower than a plain Debug run. This is a
+  diagnostic preset, not a replacement for the normal test gate.
+
+### Window-ownership auditing
+
+`exosnap.exe --hwnd-audit` walks the real MainWindow's native (HWND) tree and
+reports whether a native child covers a region the top-level window must be able
+to hit-test. Widget tests and `--visual-test` are both blind to this: they see
+widgets and pixels, never which WINDOW owns a pixel. Run it before and after any
+work on window chrome, hit-testing, drag/resize, or overlays. Exit codes: 0 clean,
+1 covered, 2 could not audit. The window is shown off-screen and never activated.
+
 ### Final validation
 
 Run once after the integrated branch is complete:
