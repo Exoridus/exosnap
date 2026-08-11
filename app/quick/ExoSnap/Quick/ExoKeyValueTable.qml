@@ -67,7 +67,7 @@ Rectangle {
                         Layout.alignment: Qt.AlignTop
                         font {
                             family: ExoTheme.sansFamily
-                            pixelSize: 12
+                            pixelSize: ExoTheme.fontSecondary
                         }
                     }
 
@@ -81,7 +81,7 @@ Rectangle {
                         Layout.alignment: Qt.AlignTop
                         font {
                             family: ExoTheme.monoFamily
-                            pixelSize: 11
+                            pixelSize: ExoTheme.fontCaption
                         }
                     }
                 }

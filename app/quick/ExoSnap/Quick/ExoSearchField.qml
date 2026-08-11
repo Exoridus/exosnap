@@ -28,15 +28,12 @@ Rectangle {
             rightMargin: ExoTheme.spacingSm
         }
 
-        Label {
-            text: "⌕"
-            textFormat: Text.PlainText
+        ExoGlyph {
+            kind: ExoGlyph.Search
             color: ExoTheme.textMuted
             Layout.alignment: Qt.AlignVCenter
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: 15
-            }
+            Layout.preferredWidth: 15
+            Layout.preferredHeight: 15
         }
 
         TextField {
@@ -55,7 +52,7 @@ Rectangle {
             background: null
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
             onTextEdited: root.searchEdited(input.text)
         }
@@ -75,16 +72,11 @@ Rectangle {
                 root.searchEdited("");
             }
 
-            contentItem: Label {
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                text: "✕"
-                textFormat: Text.PlainText
+            contentItem: ExoGlyph {
+                kind: ExoGlyph.Close
                 color: clearButton.hovered ? ExoTheme.text : ExoTheme.textMuted
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: 11
-                }
+                width: 12
+                height: 12
             }
         }
     }

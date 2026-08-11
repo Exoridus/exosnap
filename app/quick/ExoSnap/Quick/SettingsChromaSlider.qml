@@ -35,7 +35,7 @@ ExoSettingRow {
             Layout.preferredWidth: 48
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
         }
     }

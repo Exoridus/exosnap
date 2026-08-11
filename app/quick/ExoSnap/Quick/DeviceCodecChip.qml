@@ -26,14 +26,12 @@ Rectangle {
         spacing: ExoTheme.spacingXs
         anchors.centerIn: parent
 
-        Label {
-            text: root.available ? "✓" : "✕"
-            textFormat: Text.PlainText
+        ExoGlyph {
+            kind: root.available ? ExoGlyph.Check : ExoGlyph.Close
             color: root.available ? ExoTheme.success : ExoTheme.textDim
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: 11
-            }
+            anchors.verticalCenter: parent.verticalCenter
+            width: 11
+            height: 11
         }
 
         Label {
@@ -42,7 +40,7 @@ Rectangle {
             color: root.available ? ExoTheme.text : ExoTheme.textDim
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
                 weight: root.available ? Font.DemiBold : Font.Normal
             }
         }

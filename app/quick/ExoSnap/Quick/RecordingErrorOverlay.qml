@@ -18,6 +18,9 @@ ExoOverlayCard {
 
     objectName: "quickRecordingErrorOverlay"
     subtitle: qsTr("Recording")
+    // A recording that could not start or could not finish is a failure, and the
+    // surface should say so before it is read.
+    severity: "error"
     title: root.error.title
     hint: root.error.summary
     onDismissed: root.error.dismiss()
@@ -52,7 +55,7 @@ ExoOverlayCard {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
     }

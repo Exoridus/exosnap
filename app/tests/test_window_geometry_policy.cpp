@@ -1,11 +1,93 @@
 #include "ui/WindowGeometryPolicy.h"
 
+#include "ui/theme/ExoSnapMetrics.h"
+
 #include <gtest/gtest.h>
+
+#include <cstdlib>
 
 namespace exosnap::ui {
 namespace {
 
 constexpr QSize kMinimum(1120, 700);
+
+// ── First-launch placement ──────────────────────────────────────────────────
+//
+// The shipped minimum, and the preferred size the window opens at when nothing
+// has been persisted. The two clamps below are the whole of what
+// QuickApplication's ResolveWindowGeometry does on that path, so exercising them
+// with the real constants is a genuine check of first-launch placement rather
+// than of a number copied into a test.
+constexpr QSize kShippedMinimum(theme::ExoSnapMetrics::kMinWindowWidth, theme::ExoSnapMetrics::kMinWindowHeight);
+constexpr QSize kPreferred(theme::ExoSnapMetrics::kPreferredWindowWidth, theme::ExoSnapMetrics::kPreferredWindowHeight);
+
+// Mirrors ResolveWindowGeometry's "no persisted rect" branch: centre the
+// preferred size on the target screen, then apply both clamps in order.
+QRect FirstLaunchRect(const QRect& available) {
+    const QRect centered(available.center() - QPoint(kPreferred.width() / 2, kPreferred.height() / 2), kPreferred);
+    return ClampWindowToWorkArea(ClampRestoredWindowGeometry(centered, available, kShippedMinimum, true), available);
+}
+
+TEST(FirstLaunchGeometry, PreferredSizeIsAboveTheShippedMinimum) {
+    EXPECT_GE(kPreferred.width(), kShippedMinimum.width());
+    EXPECT_GE(kPreferred.height(), kShippedMinimum.height());
+}
+
+// 2560x1440 at 100 %, taskbar reserved.
+TEST(FirstLaunchGeometry, FitsAndCentersOn2560x1440) {
+    const QRect avail(0, 0, 2560, 1392);
+    const QRect out = FirstLaunchRect(avail);
+    EXPECT_EQ(out.size(), kPreferred);
+    EXPECT_TRUE(avail.contains(out));
+    EXPECT_LE(std::abs(out.center().x() - avail.center().x()), 1);
+    EXPECT_LE(std::abs(out.center().y() - avail.center().y()), 1);
+}
+
+// 1920x1080 at 100 %, taskbar reserved.
+TEST(FirstLaunchGeometry, FitsAndCentersOn1920x1080) {
+    const QRect avail(0, 0, 1920, 1032);
+    const QRect out = FirstLaunchRect(avail);
+    EXPECT_EQ(out.size(), kPreferred);
+    EXPECT_TRUE(avail.contains(out));
+    EXPECT_LE(std::abs(out.center().x() - avail.center().x()), 1);
+}
+
+// 1366x768 class at 100 %: the work area is only 720 px tall, exactly the
+// preferred height, and 1366 px wide. Nothing may hang off any edge — this is
+// the size where a first launch used to start under the taskbar.
+TEST(FirstLaunchGeometry, FullyContainedOn1366x768ClassWorkArea) {
+    const QRect avail(0, 0, 1366, 720);
+    const QRect out = FirstLaunchRect(avail);
+    EXPECT_TRUE(avail.contains(out));
+    EXPECT_EQ(out.width(), kPreferred.width());
+    EXPECT_EQ(out.height(), 720);
+}
+
+// 2560x1440 at 150 % scaling -> a 1706x912 logical screen, taskbar reserved.
+TEST(FirstLaunchGeometry, FitsOn2560x1440At150Percent) {
+    const QRect avail(0, 0, 1706, 880);
+    const QRect out = FirstLaunchRect(avail);
+    EXPECT_EQ(out.size(), kPreferred);
+    EXPECT_TRUE(avail.contains(out));
+}
+
+// 1920x1080 at 150 % -> a 1280x688 logical work area: narrower than the
+// preferred width and SHORTER than the 700 px window minimum (VR-001). The work
+// area is the hard bound in both directions, and the window still has to land
+// fully inside it rather than being grown to a minimum that does not fit.
+TEST(FirstLaunchGeometry, WorkAreaWinsOn1920x1080At150Percent) {
+    const QRect avail(0, 0, 1280, 688);
+    const QRect out = FirstLaunchRect(avail);
+    EXPECT_EQ(out, avail);
+}
+
+// A persisted rect always outranks the preferred size, including one that is
+// smaller than it.
+TEST(FirstLaunchGeometry, PersistedRectOutranksThePreferredSize) {
+    const QRect avail(0, 0, 2560, 1392);
+    const QRect saved(300, 200, 980, 780);
+    EXPECT_EQ(ClampWindowToWorkArea(ClampRestoredWindowGeometry(saved, avail, kShippedMinimum, false), avail), saved);
+}
 
 TEST(WindowGeometryPolicy, KeepsSavedGeometryWhenItFits) {
     const QRect avail(0, 0, 2560, 1392);

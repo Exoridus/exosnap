@@ -23,17 +23,14 @@ CheckBox {
                                        : root.checked ? ExoTheme.accent : ExoTheme.lineStrong
         radius: ExoTheme.radiusSm - 4
 
-        Label {
-            text: "✓"
-            textFormat: Text.PlainText
+        ExoGlyph {
+            kind: ExoGlyph.Check
             visible: root.checked
             anchors.centerIn: parent
             color: root.enabled ? ExoTheme.accentInk : ExoTheme.textDim
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: 12
-                weight: Font.DemiBold
-            }
+            strokeWidth: 2
+            width: 12
+            height: 12
         }
     }
 

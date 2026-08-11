@@ -62,15 +62,13 @@ Rectangle {
             spacing: ExoTheme.spacingSm
             Layout.fillWidth: true
 
-            Label {
-                text: root.tone === "blocker" ? "✗" : root.tone === "notice" ? "⚠" : "✓"
-                textFormat: Text.PlainText
+            ExoGlyph {
+                kind: root.tone === "blocker" ? ExoGlyph.Close
+                      : root.tone === "notice" ? ExoGlyph.Warning : ExoGlyph.Check
                 color: root.toneColor
                 Layout.alignment: Qt.AlignTop
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: 13
-                }
+                Layout.preferredWidth: 14
+                Layout.preferredHeight: 14
             }
 
             Label {
@@ -79,10 +77,10 @@ Rectangle {
                 wrapMode: Text.WordWrap
                 color: ExoTheme.text
                 Layout.fillWidth: true
-                Layout.minimumHeight: 16
+                Layout.minimumHeight: 18
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 13
+                    pixelSize: ExoTheme.fontBody
                     weight: Font.DemiBold
                 }
             }
@@ -116,19 +114,21 @@ Rectangle {
             visible: root.summary !== ""
             color: ExoTheme.textSecondary
             Layout.fillWidth: true
-            Layout.minimumHeight: 15
+            Layout.minimumHeight: 17
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
         }
 
+        // Chromed: this is the remedy for a blocker that is stopping the user
+        // from recording. Quiet, it read as a third line of explanation in a
+        // card that already had two.
         ExoButton {
             text: root.fixSafety === 1 ? root.fixLabel + " →" : root.fixLabel
             visible: root.hasFix && root.fixSafety !== 2
-            quiet: true
             Layout.alignment: Qt.AlignLeft
-            Layout.topMargin: ExoTheme.spacingXs
+            Layout.topMargin: ExoTheme.spacingSm
             onClicked: {
                 if (root.fixSafety === 0) {
                     root.applyFixRequested(root.fixId);
@@ -149,7 +149,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
 
@@ -186,7 +186,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 font {
                                     family: ExoTheme.monoFamily
-                                    pixelSize: 9
+                                    pixelSize: ExoTheme.fontEyebrow
                                     letterSpacing: 1
                                     weight: Font.DemiBold
                                 }
@@ -200,7 +200,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 font {
                                     family: ExoTheme.monoFamily
-                                    pixelSize: 11
+                                    pixelSize: ExoTheme.fontCaption
                                 }
                             }
                         }

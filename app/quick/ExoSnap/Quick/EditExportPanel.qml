@@ -42,7 +42,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 13
+                pixelSize: ExoTheme.fontBody
                 weight: Font.DemiBold
             }
         }
@@ -60,7 +60,7 @@ Rectangle {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 12
+                    pixelSize: ExoTheme.fontSecondary
                     weight: Font.DemiBold
                 }
             }
@@ -101,7 +101,7 @@ Rectangle {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                         weight: Font.DemiBold
                     }
                 }
@@ -115,7 +115,7 @@ Rectangle {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 10
+                    pixelSize: ExoTheme.fontEyebrow
                 }
             }
 
@@ -173,7 +173,7 @@ Rectangle {
                 color: ExoTheme.textMuted
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
 
@@ -191,7 +191,7 @@ Rectangle {
                 color: ExoTheme.textMuted
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
 
@@ -212,7 +212,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
     }

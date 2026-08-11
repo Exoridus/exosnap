@@ -83,7 +83,7 @@ Item {
                         color: ExoTheme.text
                         font {
                             family: ExoTheme.sansFamily
-                            pixelSize: 16
+                            pixelSize: ExoTheme.fontSectionTitle
                             weight: Font.Bold
                         }
                     }
@@ -96,7 +96,7 @@ Item {
                         Layout.fillWidth: true
                         font {
                             family: ExoTheme.monoFamily
-                            pixelSize: 12
+                            pixelSize: ExoTheme.fontSecondary
                         }
                     }
 

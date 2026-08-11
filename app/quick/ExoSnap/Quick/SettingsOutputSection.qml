@@ -88,7 +88,7 @@ ExoCard {
                     color: ExoTheme.textSecondary
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 11
+                        pixelSize: ExoTheme.fontCaption
                     }
                 }
             }

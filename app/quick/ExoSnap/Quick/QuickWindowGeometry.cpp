@@ -5,8 +5,12 @@
 #include <QGuiApplication>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QTimer>
+
+#include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace exosnap::quick {
 namespace {
@@ -24,6 +28,52 @@ QScreen* screenForSavedPosition(const PersistedWindowGeometry& saved) {
             return screen;
     }
     return nullptr;
+}
+
+// ── Native geometry ─────────────────────────────────────────────────────────
+//
+// MEASURED, and the reason this exists: the shell's window is frameless and its
+// WM_NCCALCSIZE handler gives the client area the whole window, so what the user
+// sees IS the native window rect. Qt does not agree during window creation — it
+// treats the requested x/y/width/height as a client rect and expands it by a
+// frame that this window does not have. Measured over three consecutive starts
+// of the shipped build, restoring a persisted rect produced
+//
+//     696,68 1168x760  ->  688,37 1184x760  ->  680,6 1200x760
+//
+// i.e. 8 px further left and 16 px wider every launch, and each grown rect was
+// persisted in turn. Left alone the window creeps off the top-left of the screen
+// and takes its own title bar with it. (Qt reports frameMargins of 0,0,0,0 in
+// the steady state, which is why this cannot be corrected by subtracting them.)
+//
+// So the round trip is made native on both ends: what is persisted is the rect
+// the window actually occupies, and the restore is applied with SetWindowPos
+// rather than through Qt's frame arithmetic.
+
+QRect nativeLogicalGeometry(QQuickWindow* window) {
+    auto hwnd = reinterpret_cast<HWND>(window->winId());
+    RECT rect{};
+    if (hwnd == nullptr || GetWindowRect(hwnd, &rect) == FALSE)
+        return window->geometry();
+    double dpr = window->devicePixelRatio();
+    if (!(dpr > 0.0))
+        dpr = 1.0;
+    return QRect(static_cast<int>(std::lround(rect.left / dpr)), static_cast<int>(std::lround(rect.top / dpr)),
+                 static_cast<int>(std::lround((rect.right - rect.left) / dpr)),
+                 static_cast<int>(std::lround((rect.bottom - rect.top) / dpr)));
+}
+
+void applyNativeLogicalGeometry(QQuickWindow* window, const QRect& logical) {
+    auto hwnd = reinterpret_cast<HWND>(window->winId());
+    if (hwnd == nullptr || logical.width() <= 0 || logical.height() <= 0)
+        return;
+    double dpr = window->devicePixelRatio();
+    if (!(dpr > 0.0))
+        dpr = 1.0;
+    SetWindowPos(hwnd, nullptr, static_cast<int>(std::lround(logical.x() * dpr)),
+                 static_cast<int>(std::lround(logical.y() * dpr)), static_cast<int>(std::lround(logical.width() * dpr)),
+                 static_cast<int>(std::lround(logical.height() * dpr)),
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 
 } // namespace
@@ -90,6 +140,11 @@ QuickWindowGeometry::QuickWindowGeometry(QQuickWindow* window, PersistedWindowGe
             sink_(current_);
     });
 
+    // Sampling stays disarmed until the window is actually up and standing on
+    // the rect it was restored to. Everything before that is Qt bringing the
+    // window into existence, and one of those steps expands the rect by a frame
+    // this window does not have (see nativeLogicalGeometry). Persisting any of
+    // it is what made the geometry grow from launch to launch.
     connect(window_, &QQuickWindow::xChanged, this, [this]() { sampleAndSchedule(); });
     connect(window_, &QQuickWindow::yChanged, this, [this]() { sampleAndSchedule(); });
     connect(window_, &QQuickWindow::widthChanged, this, [this]() { sampleAndSchedule(); });
@@ -97,10 +152,49 @@ QuickWindowGeometry::QuickWindowGeometry(QQuickWindow* window, PersistedWindowGe
     connect(window_, &QQuickWindow::visibilityChanged, this, [this]() { sampleVisibility(); });
 
     sampleVisibility();
+
+    // Correct the placement once, after the window exists and Qt has finished
+    // creating it. Deferred rather than immediate: the expansion happens inside
+    // window creation, so a correction issued in the same turn is overwritten by
+    // the thing it is correcting. A maximized restore is left alone — the rect
+    // carried here is only its un-maximize target.
+    if (current_.width <= 0 || current_.height <= 0) {
+        armed_ = true;
+        return;
+    }
+
+    // The first swapped frame is the first moment the window is definitively up
+    // — Qt's creation-time geometry work, including the expanding setGeometry,
+    // is behind it. frameSwapped fires on the render thread, so the correction
+    // is queued back onto the GUI thread.
+    const QRect intended(current_.x, current_.y, current_.width, current_.height);
+    connect(
+        window_, &QQuickWindow::frameSwapped, this,
+        [this, intended]() {
+            if (armed_ || detached_ || window_ == nullptr)
+                return;
+            armed_ = true;
+            if (current_.maximized || window_->visibility() != QWindow::Windowed)
+                return;
+            const QRect actual = nativeLogicalGeometry(window_);
+            if (actual == intended)
+                return;
+            qInfo("window-geometry: restoring %d,%d %dx%d (came up as %d,%d %dx%d)", intended.x(), intended.y(),
+                  intended.width(), intended.height(), actual.x(), actual.y(), actual.width(), actual.height());
+            applyNativeLogicalGeometry(window_, intended);
+        },
+        Qt::QueuedConnection);
+}
+
+void QuickWindowGeometry::detach() {
+    detached_ = true;
+    armed_ = true;
+    dirty_ = false;
+    persist_timer_.stop();
 }
 
 void QuickWindowGeometry::sampleAndSchedule() {
-    if (window_ == nullptr)
+    if (window_ == nullptr || !armed_ || detached_)
         return;
     // Only a Windowed window has a meaningful restore rect. While maximized,
     // minimized or full-screen the reported geometry is the screen (or, when
@@ -108,7 +202,11 @@ void QuickWindowGeometry::sampleAndSchedule() {
     // would destroy the rect the window has to un-maximize back to.
     if (window_->visibility() != QWindow::Windowed)
         return;
-    const QRect frame = window_->geometry();
+    // The NATIVE rect, not window_->geometry(): for this frameless window they
+    // are the same thing once it is on screen, but only the native one is what
+    // the restore above can reproduce exactly. Persisting Qt's value is what let
+    // the launch-to-launch expansion accumulate.
+    const QRect frame = nativeLogicalGeometry(window_);
     if (frame.width() <= 0 || frame.height() <= 0)
         return;
     current_.x = frame.x();
@@ -120,7 +218,7 @@ void QuickWindowGeometry::sampleAndSchedule() {
 }
 
 void QuickWindowGeometry::sampleVisibility() {
-    if (window_ == nullptr)
+    if (window_ == nullptr || detached_)
         return;
     const QWindow::Visibility visibility = window_->visibility();
     // Minimized is not a persisted state: a window minimized at quit must come
@@ -138,7 +236,7 @@ void QuickWindowGeometry::sampleVisibility() {
 }
 
 void QuickWindowGeometry::flush() {
-    if (!dirty_)
+    if (!dirty_ || detached_)
         return;
     persist_timer_.stop();
     dirty_ = false;

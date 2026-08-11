@@ -15,9 +15,16 @@ Item {
 
     required property DeviceAdapter device
 
+    // The capped, centred reading column, shared by the page title and the
+    // content below it so both sit on one axis.
+    readonly property real contentBox: Math.max(0, root.width - 2 * ExoTheme.pagePadding - ExoTheme.spacingLg)
+    readonly property real contentWidth: Math.min(root.contentBox, ExoTheme.contentMaxWidth)
+    readonly property real sideInset: Math.max(0, (root.contentBox - root.contentWidth) / 2)
+
     // Two columns of adapter cards only while each stays wide enough for the
-    // title, kind badge and ACTIVE badge to sit on one line.
-    readonly property bool twoColumn: ExoTheme.isRegular(root.width)
+    // title, kind badge and ACTIVE badge to sit on one line. Measured on the
+    // capped column, which is the width the cards actually get.
+    readonly property bool twoColumn: ExoTheme.isRegular(root.contentWidth)
 
     signal settingsRequested()
 
@@ -45,6 +52,12 @@ Item {
         RowLayout {
             spacing: ExoTheme.spacingMd
             Layout.fillWidth: true
+            // Shares the capped column's axis with the content below. Left at
+            // full width the page title sat against the window edge while every
+            // card under it started 130 px further in, which reads as two pages
+            // stacked rather than one.
+            Layout.leftMargin: root.sideInset
+            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
 
             Label {
                 text: qsTr("Device")
@@ -82,8 +95,8 @@ Item {
                 // Capped and centred: the capability matrix is a label/value list,
                 // and a 1500 px line between the two is harder to read than a
                 // shorter one, not richer.
-                width: Math.min(scroll.availableWidth, ExoTheme.contentMaxWidth)
-                x: Math.max(0, (scroll.availableWidth - width) / 2)
+                width: root.contentWidth
+                x: root.sideInset
 
                 Label {
                     text: qsTr("ENCODER DEVICE")
@@ -92,7 +105,7 @@ Item {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 10
+                        pixelSize: ExoTheme.fontEyebrow
                         letterSpacing: 1
                         weight: Font.DemiBold
                     }
@@ -132,7 +145,7 @@ Item {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                     }
                 }
 
@@ -170,14 +183,13 @@ Item {
                             Layout.alignment: Qt.AlignVCenter
                             font {
                                 family: ExoTheme.sansFamily
-                                pixelSize: 12
+                                pixelSize: ExoTheme.fontSecondary
                             }
                         }
 
                         ExoButton {
                             text: qsTr("Open Settings")
-                            quiet: true
-                            Layout.alignment: Qt.AlignTop
+                            Layout.alignment: Qt.AlignVCenter
                             onClicked: root.settingsRequested()
                         }
                     }
@@ -190,7 +202,7 @@ Item {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 10
+                        pixelSize: ExoTheme.fontEyebrow
                         letterSpacing: 1
                         weight: Font.DemiBold
                     }
@@ -235,11 +247,12 @@ Item {
                                     Label {
                                         text: roadmapRow.modelData.name
                                         textFormat: Text.PlainText
-                                        color: ExoTheme.textSecondary
+                                        color: ExoTheme.text
                                         Layout.fillWidth: true
                                         font {
                                             family: ExoTheme.sansFamily
-                                            pixelSize: 12
+                                            pixelSize: ExoTheme.fontBody
+                                            weight: Font.Medium
                                         }
                                     }
 
@@ -251,20 +264,18 @@ Item {
                                         Layout.fillWidth: true
                                         font {
                                             family: ExoTheme.sansFamily
-                                            pixelSize: 11
+                                            pixelSize: ExoTheme.fontCaption
                                         }
                                     }
                                 }
 
-                                Label {
+                                // A badge, like every other status this page
+                                // states. As bare dim text it read as a fourth
+                                // caption in a row that already had two.
+                                ExoBadge {
                                     text: qsTr("Planned")
-                                    textFormat: Text.PlainText
-                                    color: ExoTheme.textDim
+                                    mono: true
                                     Layout.alignment: Qt.AlignVCenter
-                                    font {
-                                        family: ExoTheme.monoFamily
-                                        pixelSize: 10
-                                    }
                                 }
                             }
                         }

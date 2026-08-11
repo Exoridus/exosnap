@@ -54,7 +54,7 @@ Control {
                                               : root.binding === "" ? ExoTheme.textMuted : ExoTheme.text
         font {
             family: root.binding === "" || root.capturing ? ExoTheme.sansFamily : ExoTheme.monoFamily
-            pixelSize: 12
+            pixelSize: ExoTheme.fontSecondary
         }
     }
 

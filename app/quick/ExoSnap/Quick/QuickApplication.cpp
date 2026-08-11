@@ -139,9 +139,11 @@ QString captureSourceUnavailableNotice() {
 }
 
 // First-launch window size, centred on the primary screen by
-// ResolveWindowGeometry. Only used when nothing has been persisted yet.
-constexpr int kDefaultWindowWidth = 1040;
-constexpr int kDefaultWindowHeight = 760;
+// ResolveWindowGeometry. Only used when nothing has been persisted yet; the
+// number itself is a product decision and lives with the window minimum in
+// ExoSnapMetrics rather than as a second literal here.
+constexpr int kDefaultWindowWidth = ui::theme::ExoSnapMetrics::kPreferredWindowWidth;
+constexpr int kDefaultWindowHeight = ui::theme::ExoSnapMetrics::kPreferredWindowHeight;
 
 } // namespace
 
@@ -352,7 +354,12 @@ void QuickApplication::initializeRecordWorkflow() {
             av_drift_ever_available_ = false;
             last_completed_snapshot_ = {};
         }
-        if (state != UiRecordingState::Countdown) {
+        // Keyed off the state the UI is actually showing, not the one just
+        // reported. In production the two are the same value — SetState assigned
+        // it one line up. Under a latched visual scenario they are not, and
+        // reading the coordinator's here zeroed the remaining seconds out from
+        // under a Countdown the capture was told to render.
+        if (record_view_model_.state != UiRecordingState::Countdown) {
             countdown_timer_.stop();
             countdown_.reset();
             countdown_remaining_ = 0;
@@ -1228,6 +1235,14 @@ void QuickApplication::initializeDiagnosticsArea() {
 }
 
 void QuickApplication::refreshDiagnosticsData() {
+    // A seeded visual scenario owns the Diagnostics state for the life of the
+    // process. Without this the async capability probe's completion replaced it
+    // with the real environment a second or two after load, so the scenario was
+    // set, then quietly undone, and the capture showed a healthy machine. Only a
+    // --visual-test run can ever set this flag.
+    if (diagnostics_visual_scenario_active_)
+        return;
+
     diagnostics::DiagnosticsController::Config config;
     config.caps = capabilities_;
     config.audio = record_view_model_.audio_ui_state;
@@ -1627,6 +1642,7 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         config.hotkeys_ok = false;
         config.hotkeys_summary = "Ctrl+Shift+R";
         diagnostics_adapter_.setDiagnosticConfig(std::move(config));
+        diagnostics_visual_scenario_active_ = true;
     }
 }
 
@@ -2050,6 +2066,50 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         if (!report)
             return false;
         recording_error_adapter_.present(*report, /*can_send_report=*/true);
+        return true;
+    }
+
+    // The notification hub, seeded with one entry per severity and its hub
+    // opened. Toast cards are otherwise only reachable through a real save, a
+    // real disk-pressure event or a real failed hotkey registration, none of
+    // which a visual pass can produce on demand — which is why the toast
+    // treatment had never been photographed next to the reference at all.
+    //
+    // Real Enqueue calls on the real manager, so what gets rendered is what the
+    // notification policy actually produces for these events, not a hand-built
+    // set of cards.
+    if (scenario == QLatin1String("notifications")) {
+        struct Seed {
+            notifications::NotificationType type;
+            QString title;
+            QString body;
+            notifications::NotificationAction action;
+            notifications::NotificationAction secondary;
+        };
+        const Seed seeds[] = {
+            {notifications::NotificationType::Saved, QStringLiteral("Recording saved"),
+             QStringLiteral("2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB"),
+             notifications::NotificationAction::Edit, notifications::NotificationAction::OpenFolder},
+            {notifications::NotificationType::LowStorage, QStringLiteral("Low disk space"),
+             QStringLiteral("Recording stopped — C: has less than 2 GB free."),
+             notifications::NotificationAction::ChangeFolder, notifications::NotificationAction::None},
+            {notifications::NotificationType::UnexpectedStop, QStringLiteral("Recording stopped unexpectedly"),
+             QStringLiteral("The encoder reported an error. The partial file was kept."),
+             notifications::NotificationAction::ShowFile, notifications::NotificationAction::None},
+            {notifications::NotificationType::UpdateAvailable, QStringLiteral("Update available"),
+             QStringLiteral("ExoSnap 0.9.1 is ready to install."), notifications::NotificationAction::OpenUpdate,
+             notifications::NotificationAction::None},
+        };
+        for (const Seed& seed : seeds) {
+            notifications::NotificationEvent event;
+            event.type = seed.type;
+            event.title = seed.title;
+            event.body = seed.body;
+            event.action = seed.action;
+            event.secondary_action = seed.secondary;
+            notifications_adapter_.manager().Enqueue(std::move(event));
+        }
+        notifications_adapter_.openHub();
         return true;
     }
 
@@ -2785,6 +2845,15 @@ bool QuickApplication::selectCaptureTargetForAutomation(recorder_core::CaptureTa
     return false;
 }
 
+void QuickApplication::applyHarnessWindowSize(const QSize& size) {
+    if (!size.isValid() || size.isEmpty())
+        return;
+    if (window_geometry_)
+        window_geometry_->detach();
+    if (root_window_)
+        root_window_->resize(size);
+}
+
 bool QuickApplication::openEditorForAutomation() {
     if (!canOpenEditorForCurrentRecording())
         return false;
@@ -2813,6 +2882,17 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.dropped_frames = 0;
         record_view_model_.av_drift_available = true;
         record_view_model_.av_drift_ms = 1.0;
+    } else if (normalized == QStringLiteral("countdown")) {
+        // A held countdown: the state and the remaining seconds are set, but the
+        // tick timer is not started, so the frame is deterministic. This is the
+        // only Record state the deterministic suite could not photograph — the
+        // transport looks materially different in it (the split button's main
+        // face becomes Cancel, its chevron goes inactive, and the timer shows a
+        // bare digit rather than a clock), which is exactly the kind of state a
+        // visual pass has to be able to see.
+        countdown_remaining_ = 3;
+        live_config_.countdown_seconds = 3;
+        record_view_model_.SetState(UiRecordingState::Countdown);
     } else if (normalized == QStringLiteral("paused")) {
         record_view_model_.SetState(UiRecordingState::Paused);
         record_view_model_.live_stats_available = true;

@@ -52,29 +52,33 @@ AbstractButton {
             const cx = Math.round(width / 2) + 0.5;
             const cy = Math.round(height / 2) + 0.5;
 
+            // 7 px across, not 10. The window buttons sit in the same band as the
+            // wordmark and the six nav tabs, and at 10 px the maximize square and
+            // the close cross were the heaviest marks up there — they pulled the
+            // eye to the corner the user is not meant to be looking at.
             if (glyphCanvas.kind === "minimize") {
                 ctx.beginPath();
-                ctx.moveTo(cx - 5, cy);
-                ctx.lineTo(cx + 5, cy);
+                ctx.moveTo(cx - 3.5, cy);
+                ctx.lineTo(cx + 3.5, cy);
                 ctx.stroke();
             } else if (glyphCanvas.kind === "maximize") {
-                ctx.strokeRect(cx - 5, cy - 5, 10, 10);
+                ctx.strokeRect(cx - 3.5, cy - 3.5, 7, 7);
             } else if (glyphCanvas.kind === "restore") {
                 // Front pane plus the visible corner of the one behind it.
-                ctx.strokeRect(cx - 5, cy - 3, 8, 8);
+                ctx.strokeRect(cx - 3.5, cy - 2, 6, 6);
                 ctx.beginPath();
-                ctx.moveTo(cx - 2, cy - 3);
-                ctx.lineTo(cx - 2, cy - 5);
-                ctx.lineTo(cx + 5, cy - 5);
-                ctx.lineTo(cx + 5, cy + 2);
-                ctx.lineTo(cx + 3, cy + 2);
+                ctx.moveTo(cx - 1.5, cy - 2);
+                ctx.lineTo(cx - 1.5, cy - 3.5);
+                ctx.lineTo(cx + 3.5, cy - 3.5);
+                ctx.lineTo(cx + 3.5, cy + 1.5);
+                ctx.lineTo(cx + 2.5, cy + 1.5);
                 ctx.stroke();
             } else {
                 ctx.beginPath();
-                ctx.moveTo(cx - 5, cy - 5);
-                ctx.lineTo(cx + 5, cy + 5);
-                ctx.moveTo(cx + 5, cy - 5);
-                ctx.lineTo(cx - 5, cy + 5);
+                ctx.moveTo(cx - 3.5, cy - 3.5);
+                ctx.lineTo(cx + 3.5, cy + 3.5);
+                ctx.moveTo(cx + 3.5, cy - 3.5);
+                ctx.lineTo(cx - 3.5, cy + 3.5);
                 ctx.stroke();
             }
         }

@@ -46,7 +46,7 @@ Item {
                 implicitHeight: content.implicitHeight + 48
                 color: ExoTheme.surface
                 border.width: 1
-                border.color: ExoTheme.lineStrong
+                border.color: ExoTheme.line
                 radius: ExoTheme.radiusLg
                 anchors.centerIn: parent
 
@@ -61,12 +61,7 @@ Item {
                         spacing: ExoTheme.spacingLg
                         Layout.fillWidth: true
 
-                        Image {
-                            source: "qrc:/brand/exosnap-logo.svg"
-                            sourceSize.width: 48
-                            sourceSize.height: 48
-                            asynchronous: true
-                            visible: status === Image.Ready
+                        ExoBrandMark {
                             Layout.preferredWidth: 48
                             Layout.preferredHeight: 48
                             Accessible.ignored: true
@@ -85,7 +80,7 @@ Item {
                                     color: ExoTheme.text
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 28
+                                        pixelSize: ExoTheme.fontValueLarge
                                         weight: Font.DemiBold
                                     }
                                 }
@@ -96,7 +91,7 @@ Item {
                                     color: ExoTheme.accent
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 28
+                                        pixelSize: ExoTheme.fontValueLarge
                                         weight: Font.DemiBold
                                     }
                                 }
@@ -109,7 +104,7 @@ Item {
                                 Layout.fillWidth: true
                                 font {
                                     family: ExoTheme.monoFamily
-                                    pixelSize: 12
+                                    pixelSize: ExoTheme.fontSecondary
                                 }
                             }
                         }
@@ -123,7 +118,7 @@ Item {
                         Layout.fillWidth: true
                         font {
                             family: ExoTheme.sansFamily
-                            pixelSize: 13
+                            pixelSize: ExoTheme.fontBody
                         }
                     }
 
@@ -220,9 +215,12 @@ Item {
                         spacing: ExoTheme.spacingSm
                         Layout.fillWidth: true
 
+                        // One row of three peers, so all three are chromed. Two of
+                        // them were quiet and one was not, which made the middle
+                        // one look like the recommended action when the three are
+                        // equals.
                         ExoButton {
                             text: qsTr("GitHub")
-                            quiet: true
                             onClicked: root.aboutViewModel.openGitHub()
                         }
 
@@ -234,7 +232,6 @@ Item {
 
                         ExoButton {
                             text: qsTr("Release notes")
-                            quiet: true
                             onClicked: root.aboutViewModel.openReleaseNotes()
                         }
 
@@ -252,7 +249,7 @@ Item {
                         Layout.fillWidth: true
                         font {
                             family: ExoTheme.sansFamily
-                            pixelSize: 12
+                            pixelSize: ExoTheme.fontSecondary
                         }
                     }
                 }

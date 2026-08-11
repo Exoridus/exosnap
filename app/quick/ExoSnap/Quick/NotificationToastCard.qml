@@ -120,27 +120,21 @@ Rectangle {
                 }
             }
 
-            Label {
-                text: "›"
+            ExoChevron {
+                direction: 270
                 visible: root.cardIsAction
-                textFormat: Text.PlainText
-                color: ExoTheme.textMuted
+                tone: ExoTheme.textMuted
                 Layout.alignment: Qt.AlignTop
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: 14
-                }
+                Layout.preferredWidth: 12
+                Layout.preferredHeight: 12
             }
 
-            Label {
-                text: "✕"
-                textFormat: Text.PlainText
+            ExoGlyph {
+                kind: ExoGlyph.Close
                 color: dismissHover.hovered ? ExoTheme.text : ExoTheme.textMuted
                 Layout.alignment: Qt.AlignTop
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: 13
-                }
+                Layout.preferredWidth: 12
+                Layout.preferredHeight: 12
 
                 Accessible.role: Accessible.Button
                 Accessible.name: qsTr("Dismiss notification")
@@ -166,7 +160,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
         }
 

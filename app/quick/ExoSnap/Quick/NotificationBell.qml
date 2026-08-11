@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Shapes
 
 // Title-bar bell. Opens/closes the hub and paints the worst-unread-severity
 // dot (docs/product-spec.md §9: "The bell's unread dot carries urgency, not a
@@ -35,55 +36,85 @@ Item {
         color: hoverHandler.hovered || root.notifications.hubOpen ? ExoTheme.surfaceHover : "transparent"
     }
 
-    // Minimal bell glyph: a rounded dome outline, a base line, and a clapper
-    // dot — built from Rectangles rather than a Shape/SVG asset, matching the
-    // plain-glyph weight ("✗ ⚠ ✓") the rest of this frontend uses for icons
-    // that have no existing asset.
-    Item {
+    // The bell, drawn as one continuous outline.
+    //
+    // It used to be three stacked Rectangles — a rounded dome, a separate base
+    // bar and a detached dot. Enlarged next to the Widgets reference that reads
+    // as a lamp with a crumb underneath rather than as a bell: the dome's corner
+    // radii never met the bar, and the clapper floated clear of the body. A
+    // Shape draws the silhouette the glyph is supposed to have, and the clapper
+    // stays attached to it.
+    Shape {
         id: glyph
 
         anchors.centerIn: parent
-        width: 14
-        height: 14
+        width: 16
+        height: 16
+        preferredRendererType: Shape.CurveRenderer
 
-        Rectangle {
-            id: dome
+        readonly property color ink: ExoTheme.textSecondary
 
-            width: 12
-            height: 9
-            radius: 6
-            bottomLeftRadius: 1
-            bottomRightRadius: 1
-            color: "transparent"
-            border.width: 1.4
-            border.color: ExoTheme.textSecondary
-            anchors {
-                horizontalCenter: parent.horizontalCenter
-                top: parent.top
+        ShapePath {
+            strokeColor: glyph.ink
+            strokeWidth: 1.4
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            joinStyle: ShapePath.RoundJoin
+
+            // Body: shoulders rising from the rim, a crown across the top, and
+            // the flare back down to the rim on the other side.
+            startX: 2.2
+            startY: 11.4
+            PathLine { x: 3.6; y: 11.4 }
+            PathLine { x: 3.6; y: 7.4 }
+            PathCubic {
+                control1X: 3.6; control1Y: 4.5
+                control2X: 5.6; control2Y: 2.6
+                x: 8; y: 2.6
+            }
+            PathCubic {
+                control1X: 10.4; control1Y: 2.6
+                control2X: 12.4; control2Y: 4.5
+                x: 12.4; y: 7.4
+            }
+            PathLine { x: 12.4; y: 11.4 }
+            PathLine { x: 13.8; y: 11.4 }
+        }
+
+        // Rim: one straight rule the body's two shoulders both land on.
+        ShapePath {
+            strokeColor: glyph.ink
+            strokeWidth: 1.4
+            capStyle: ShapePath.RoundCap
+            startX: 2.2
+            startY: 11.4
+            PathLine { x: 13.8; y: 11.4 }
+        }
+
+        // Clapper: touching the rim, not floating below it.
+        ShapePath {
+            strokeColor: glyph.ink
+            strokeWidth: 1.4
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            startX: 6.6
+            startY: 11.9
+            PathCubic {
+                control1X: 6.9; control1Y: 13.4
+                control2X: 9.1; control2Y: 13.4
+                x: 9.4; y: 11.9
             }
         }
 
-        Rectangle {
-            width: glyph.width
-            height: 1.4
-            color: ExoTheme.textSecondary
-            anchors {
-                horizontalCenter: parent.horizontalCenter
-                top: dome.bottom
-                topMargin: 1
-            }
-        }
-
-        Rectangle {
-            width: 3.5
-            height: 3.5
-            radius: 1.75
-            color: ExoTheme.textSecondary
-            anchors {
-                horizontalCenter: parent.horizontalCenter
-                top: parent.top
-                topMargin: 11
-            }
+        // The little stem on the crown — the detail that stops the silhouette
+        // reading as a dome.
+        ShapePath {
+            strokeColor: glyph.ink
+            strokeWidth: 1.4
+            capStyle: ShapePath.RoundCap
+            startX: 8
+            startY: 2.6
+            PathLine { x: 8; y: 1.4 }
         }
     }
 
@@ -98,8 +129,8 @@ Item {
         anchors {
             top: parent.top
             right: parent.right
-            topMargin: 5
-            rightMargin: 5
+            topMargin: 7
+            rightMargin: 7
         }
     }
 

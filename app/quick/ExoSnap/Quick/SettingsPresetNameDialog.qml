@@ -55,7 +55,7 @@ Dialog {
             Layout.preferredWidth: 280
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
     }

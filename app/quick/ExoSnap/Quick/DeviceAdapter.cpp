@@ -58,7 +58,18 @@ QString FormatVram(uint64_t bytes) {
 }
 
 QString AdapterDisplayTitle(const capability::AdapterInfo& adapter) {
-    return QStringLiteral("%1 %2").arg(VendorDisplayName(adapter.vendor), QString::fromStdString(adapter.name));
+    const QString vendor = VendorDisplayName(adapter.vendor);
+    const QString name = QString::fromStdString(adapter.name).trimmed();
+    if (name.isEmpty())
+        return vendor;
+    // The DXGI description already carries the vendor on some drivers and not on
+    // others: an RTX 4070 reports "GeForce RTX 4070", an RTX 5070 Ti reports
+    // "NVIDIA GeForce RTX 5070 Ti". Prefixing unconditionally printed "NVIDIA
+    // NVIDIA GeForce RTX 5070 Ti" on the second machine — visible on the Device
+    // page and in the Diagnostics encoder tile.
+    if (name.startsWith(vendor, Qt::CaseInsensitive))
+        return name;
+    return QStringLiteral("%1 %2").arg(vendor, name);
 }
 
 QString CodecLabel(capability::VideoCodec codec) {

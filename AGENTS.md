@@ -127,15 +127,33 @@ the first invalid access with the allocation and free stacks attached.
 - Expect the suite to run noticeably slower than a plain Debug run. This is a
   diagnostic preset, not a replacement for the normal test gate.
 
-### Window-ownership auditing
+### Window-ownership and chrome auditing
 
-`exosnap.exe --hwnd-audit` counts the native child windows (HWNDs) under the real
-top-level window and exits 0 when there are none, 1 otherwise, printing
-`quick-hwnd-audit: child_hwnds=N`. Tests and `--visual-test` are both blind to
-this: they see objects and pixels, never which WINDOW owns a pixel — and a native
-child never lets the top-level window see a `WM_NCHITTEST`, so it silently breaks
-drag, resize and Snap over whatever it covers. Run it after any work on window
-chrome, hit-testing or overlays. The window is never activated.
+`exosnap.exe --hwnd-audit` reports three things about the real top-level window
+and exits 0 only when all three hold:
+
+```
+quick-hwnd-audit: child_hwnds=0
+quick-hwnd-audit: style=0x96040000 exstyle=0x00000100 caption=0 thickframe=1 border=0
+quick-hwnd-audit: nonclient_inset=0,0,0,0 native_titlebar=0
+```
+
+1. **`child_hwnds=0`** — no native child windows. Tests and `--visual-test` are
+   both blind to this: they see objects and pixels, never which WINDOW owns a
+   pixel — and a native child never lets the top-level window see a
+   `WM_NCHITTEST`, so it silently breaks drag, resize and Snap over whatever it
+   covers.
+2. **No non-client area** — the 40 px title band is the product's own, so Windows
+   must reserve nothing outside the client rect. A non-zero top inset is a native
+   caption drawn ABOVE ours, i.e. two title bars.
+3. **`WS_THICKFRAME` present** — a frameless window has no caption to offer the
+   system, so this bit is the only thing keeping the native resize drag, Aero
+   Snap and Win+Arrow alive. Qt drops it when it makes the window visible unless
+   `QuickWindowChrome` re-asserts it; nothing about the window LOOKS wrong when
+   it is missing.
+
+Run it after any work on window chrome, hit-testing or overlays. The window is
+never activated.
 
 Zero is the expected result and is the point of the Qt Quick migration: the
 preview and the editor player are scene-graph items, not child windows. The

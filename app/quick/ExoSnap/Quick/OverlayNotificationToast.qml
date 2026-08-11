@@ -331,17 +331,14 @@ Window {
 
                 // Single-action affordance: the whole card is the target, the
                 // chevron only marks it.
-                Text {
+                ExoChevron {
                     x: root.cardWidth - 15 - 18 - 6 - 18
                     y: (card.height - (card.standing ? 0 : 3) - height) / 2
+                    width: 14
+                    height: 14
                     visible: card.cardIsAction
-                    text: "›"
-                    textFormat: Text.PlainText
-                    color: ExoTheme.textMuted
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: 18
-                    }
+                    direction: 270
+                    tone: ExoTheme.textMuted
                 }
 
                 MouseArea {
@@ -358,15 +355,7 @@ Window {
                     y: 14
                     width: 18
                     height: 18
-                    text: "✕"
-                    textFormat: Text.PlainText
                     color: dismissArea.containsMouse ? ExoTheme.text : ExoTheme.textDim
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: 12
-                    }
 
                     Accessible.role: Accessible.Button
                     Accessible.name: qsTr("Dismiss notification")

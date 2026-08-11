@@ -35,6 +35,8 @@ qt_add_qml_module(exosnap
     DEPENDENCIES
         QtQuick
         QtQuick.Dialogs
+        # OverlayCountdown's circle carries a MultiEffect drop shadow.
+        QtQuick.Effects
         # EditPlayer draws its play glyph with a Shape rather than a Canvas.
         QtQuick.Shapes
         # DeviceAdapter exposes two QAbstractListModel subclasses as declared QML
@@ -59,15 +61,20 @@ qt_add_qml_module(exosnap
         EditPlayer.qml
         EditTimeline.qml
         ExoBadge.qml
+        ExoBrandMark.qml
         ExoButton.qml
         ExoCard.qml
         ExoCheckBox.qml
         ExoChevron.qml
         ExoConfirmDialog.qml
         ExoDisclosure.qml
+        ExoGlyph.qml
         ExoIssueCard.qml
         ExoKeyValueTable.qml
         ExoLogView.qml
+        ExoMenu.qml
+        ExoMenuItem.qml
+        ExoNavTab.qml
         ExoNotice.qml
         ExoNumberField.qml
         ExoOverlayCard.qml
@@ -105,6 +112,7 @@ qt_add_qml_module(exosnap
         RecordingErrorOverlay.qml
         RecordSourcePicker.qml
         RecordSourceToggle.qml
+        RecordSplitButton.qml
         RecordTransportDock.qml
         RecoveryOverlay.qml
         RegionSelectionOverlay.qml
@@ -565,6 +573,13 @@ qt_add_qml_module(record_controls_qml_tests
     # resolve their type and reports every token line.
     DEPENDENCIES
         QtQuick
+        # ExoGlyph draws with Shape/PathSvg. Listing DEPENDENCIES at all turns
+        # off auto-detection for this module, so an import missing from the list
+        # is an import qmllint cannot resolve — and a type it cannot fully
+        # resolve stops publishing its enum, which surfaced here as every
+        # `ExoGlyph.Mic` in the tested components being reported as an unknown
+        # member while the same lines linted clean in the shipping module.
+        QtQuick.Shapes
     # ExoTheme.qml resolves every colour through the QuickThemeTokens C++
     # singleton. Compiling that class into this module too registers it under
     # this URI, so the tested components see the same tokens the shipping module
@@ -578,6 +593,10 @@ qt_add_qml_module(record_controls_qml_tests
         ExoButton.qml
         ExoChevron.qml
         ExoDisclosure.qml
+        # The record transport's two controls draw their icons with ExoGlyph, so
+        # the test module has to carry it as well — without it qmllint resolves
+        # nothing inside either component and reports the whole icon block.
+        ExoGlyph.qml
         ExoSegmentedControl.qml
         ExoTheme.qml
         PreviewMetricsOverlay.qml

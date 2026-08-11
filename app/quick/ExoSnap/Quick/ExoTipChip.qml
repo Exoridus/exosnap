@@ -52,14 +52,11 @@ Rectangle {
             contentItem: RowLayout {
                 spacing: ExoTheme.spacingSm
 
-                Label {
-                    text: root.expanded ? "▾" : "▸"
-                    textFormat: Text.PlainText
-                    color: ExoTheme.textMuted
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: 11
-                    }
+                ExoChevron {
+                    direction: root.expanded ? 0 : 270
+                    tone: ExoTheme.textMuted
+                    Layout.preferredWidth: 12
+                    Layout.preferredHeight: 12
                 }
 
                 Label {
@@ -69,7 +66,7 @@ Rectangle {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                         weight: Font.DemiBold
                     }
                 }
@@ -81,7 +78,7 @@ Rectangle {
                     color: ExoTheme.textMuted
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 11
+                        pixelSize: ExoTheme.fontCaption
                     }
                 }
             }
@@ -104,10 +101,10 @@ Rectangle {
                     wrapMode: Text.WordWrap
                     color: ExoTheme.textSecondary
                     Layout.fillWidth: true
-                    Layout.minimumHeight: 15
+                    Layout.minimumHeight: 17
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                     }
                 }
 

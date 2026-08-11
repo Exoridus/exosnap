@@ -7,15 +7,32 @@ Item {
 
     required property SettingsAdapter settings
 
+    // How wide the configuration itself is allowed to get, independent of the
+    // window. Uncapped, a 1600 px window put a setting's label at the far left
+    // and the control that changes it at the far right with half a screen of
+    // nothing between them — technically responsive, unusable to scan.
+    //
+    // `contentBox` is what the scroll view actually offers (page padding on both
+    // sides, minus the reserved scrollbar gutter on the right), so the page title
+    // above the scroll view and the cards inside it centre on the SAME axis
+    // rather than on two that differ by the gutter.
+    readonly property real contentBox: Math.max(0, root.width - 2 * ExoTheme.pagePadding - ExoTheme.spacingLg)
+    readonly property real contentWidth: Math.min(root.contentBox, ExoTheme.contentMaxWidth)
+    readonly property real sideInset: Math.max(0, (root.contentBox - root.contentWidth) / 2)
+
     // Card columns come from the shared width classes; the row stacking decision
     // is made per COLUMN, because that is the width a label/control pair actually
     // gets. Below the stacking threshold the pair goes one over the other, which
     // is what keeps the 860x700 minimum window usable instead of clipped.
     //
+    // Measured against the CONTENT width, not the window: the column count has to
+    // answer "does a second column of settings fit", and after the cap above the
+    // window no longer answers that question.
+    //
     // Settings stops at two columns even on a wide screen: a third would break a
     // sequential configuration into pieces nobody reads in order.
-    readonly property int cardColumns: ExoTheme.columnsFor(root.width, 2)
-    readonly property bool stackedRows: ExoTheme.stackRows(root.width / root.cardColumns)
+    readonly property int cardColumns: ExoTheme.columnsFor(root.contentWidth, 2)
+    readonly property bool stackedRows: ExoTheme.stackRows(root.contentWidth / root.cardColumns)
 
     objectName: "quickSettingsPage"
 
@@ -146,6 +163,8 @@ Item {
             spacing: ExoTheme.spacingSm
             Layout.fillWidth: true
             Layout.bottomMargin: ExoTheme.spacingXs
+            Layout.leftMargin: root.sideInset
+            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
 
             Label {
                 text: qsTr("Settings")
@@ -181,6 +200,8 @@ Item {
             tone: "info"
             visible: root.settings.controlsLocked
             Layout.fillWidth: true
+            Layout.leftMargin: root.sideInset
+            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
         }
 
         ExoScrollView {
@@ -201,7 +222,10 @@ Item {
             Item {
                 id: compositionHost
 
-                width: scroll.availableWidth
+                // Capped and centred, not stretched. `sideInset` is shared with
+                // the page title above so the two line up exactly.
+                x: root.sideInset
+                width: root.contentWidth
                 implicitHeight: root.cardColumns === 1 ? oneColumn.implicitHeight
                                                        : twoColumn.implicitHeight
 

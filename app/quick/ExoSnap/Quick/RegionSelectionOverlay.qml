@@ -101,7 +101,7 @@ FocusScope {
             color: ExoTheme.text
             anchors.centerIn: parent
             font.family: ExoTheme.sansFamily
-            font.pixelSize: 12
+            font.pixelSize: ExoTheme.fontCaption
         }
     }
 

@@ -30,7 +30,7 @@ SpinBox {
         leftPadding: ExoTheme.spacingMd
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 13
+            pixelSize: ExoTheme.fontBody
         }
     }
 
@@ -52,12 +52,12 @@ SpinBox {
             anchors.fill: parent
         }
 
-        Label {
-            text: "+"
-            textFormat: Text.PlainText
+        ExoGlyph {
+            kind: ExoGlyph.Plus
             anchors.centerIn: parent
             color: root.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
-            font.pixelSize: 13
+            width: 12
+            height: 12
         }
     }
 
@@ -73,12 +73,12 @@ SpinBox {
             anchors.fill: parent
         }
 
-        Label {
-            text: "−"
-            textFormat: Text.PlainText
+        ExoGlyph {
+            kind: ExoGlyph.Minus
             anchors.centerIn: parent
             color: root.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
-            font.pixelSize: 13
+            width: 12
+            height: 12
         }
     }
 

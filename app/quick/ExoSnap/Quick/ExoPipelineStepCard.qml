@@ -65,7 +65,7 @@ Rectangle {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                     weight: Font.DemiBold
                 }
             }
@@ -79,7 +79,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 13
+                pixelSize: ExoTheme.fontBody
             }
         }
 
@@ -91,7 +91,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 9
+                pixelSize: ExoTheme.fontEyebrow
                 letterSpacing: 1
             }
         }

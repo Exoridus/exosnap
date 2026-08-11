@@ -48,7 +48,7 @@ Item {
             Layout.alignment: Qt.AlignVCenter
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
         }
 
@@ -66,7 +66,7 @@ Item {
             Layout.alignment: Qt.AlignVCenter
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
         }
 

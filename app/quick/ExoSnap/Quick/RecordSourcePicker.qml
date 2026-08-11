@@ -38,7 +38,7 @@ Popup {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 20
+                    pixelSize: ExoTheme.fontPageTitle
                     weight: Font.DemiBold
                 }
             }
@@ -55,7 +55,7 @@ Popup {
             textFormat: Text.PlainText
             color: ExoTheme.textMuted
             font.family: ExoTheme.monoFamily
-            font.pixelSize: 10
+            font.pixelSize: ExoTheme.fontEyebrow
         }
 
         Flow {
@@ -109,7 +109,7 @@ Popup {
             textFormat: Text.PlainText
             color: ExoTheme.textMuted
             font.family: ExoTheme.monoFamily
-            font.pixelSize: 10
+            font.pixelSize: ExoTheme.fontEyebrow
         }
 
         ListView {

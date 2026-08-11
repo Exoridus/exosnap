@@ -60,7 +60,7 @@ ExoOverlayCard {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 13
+                        pixelSize: ExoTheme.fontBody
                         weight: Font.DemiBold
                     }
                 }
@@ -71,7 +71,7 @@ ExoOverlayCard {
                     color: ExoTheme.textDim
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 11
+                        pixelSize: ExoTheme.fontCaption
                         letterSpacing: 0.3
                     }
                 }
@@ -110,7 +110,7 @@ ExoOverlayCard {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                     }
                 }
 

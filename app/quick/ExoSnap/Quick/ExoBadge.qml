@@ -20,7 +20,7 @@ Rectangle {
     color: ExoTheme.surfaceRaised
     border.width: 1
     border.color: root.toneColor
-    radius: 6
+    radius: ExoTheme.radiusXs
 
     Accessible.role: Accessible.StaticText
     Accessible.name: root.text
@@ -34,7 +34,7 @@ Rectangle {
         color: root.toneColor
         font {
             family: root.mono ? ExoTheme.monoFamily : ExoTheme.sansFamily
-            pixelSize: 10
+            pixelSize: ExoTheme.fontEyebrow
             weight: Font.DemiBold
         }
     }

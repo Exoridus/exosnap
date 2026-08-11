@@ -17,7 +17,7 @@ RowLayout {
         color: ExoTheme.textMuted
         font {
             family: ExoTheme.monoFamily
-            pixelSize: 10
+            pixelSize: ExoTheme.fontEyebrow
             letterSpacing: 1
             weight: Font.DemiBold
         }
@@ -37,7 +37,7 @@ RowLayout {
         color: ExoTheme.textDim
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 11
+            pixelSize: ExoTheme.fontCaption
         }
     }
 }

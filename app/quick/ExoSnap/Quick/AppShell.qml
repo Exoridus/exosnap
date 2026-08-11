@@ -122,15 +122,41 @@ Item {
                     leftMargin: ExoTheme.spacingLg
                 }
 
-                Label {
-                    text: qsTr("ExoSnap")
-                    textFormat: Text.PlainText
-                    color: ExoTheme.text
+                // Mark + wordmark, the same pair the About card and every overlay
+                // chrome bar already draw. The shell was the one surface still
+                // spelling the product "ExoSnap" in plain body text, which made
+                // the band read as a generic window rather than as this product.
+                ExoBrandMark {
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Row {
+                    Layout.leftMargin: ExoTheme.spacingSm - ExoTheme.spacingXs
                     Layout.rightMargin: ExoTheme.spacingXl
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: 15
-                        weight: Font.DemiBold
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Label {
+                        text: qsTr("exo")
+                        textFormat: Text.PlainText
+                        color: ExoTheme.text
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontBrand
+                            weight: Font.DemiBold
+                        }
+                    }
+
+                    Label {
+                        text: qsTr("snap")
+                        textFormat: Text.PlainText
+                        color: ExoTheme.accent
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontBrand
+                            weight: Font.DemiBold
+                        }
                     }
                 }
 
@@ -144,14 +170,18 @@ Item {
                     model: [qsTr("Record"), qsTr("Device"), qsTr("Settings"),
                             qsTr("Diagnostics"), qsTr("Logs"), qsTr("About")]
 
-                    delegate: ExoButton {
+                    delegate: ExoNavTab {
                         required property int index
                         required property string modelData
 
                         text: modelData
-                        quiet: true
-                        selectable: true
                         selected: root.currentPage === index
+                        Layout.alignment: Qt.AlignVCenter
+                        // Shrinkable to nothing on purpose. Everything to the
+                        // right of the drag handle is fixed-size, so when the
+                        // band runs out of room the tabs are the only things
+                        // that may give — never the close button.
+                        Layout.minimumWidth: 0
                         onClicked: root.currentPage = index
                         onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
                     }
@@ -162,6 +192,7 @@ Item {
                 // as interactive resolves to HTCAPTION.
                 Item {
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                 }
 
                 // What the engine is doing, permanently visible, exactly as the
@@ -173,12 +204,15 @@ Item {
                     tone: root.recordViewModel.stateTone
                     Layout.rightMargin: ExoTheme.spacingSm
                     Layout.alignment: Qt.AlignVCenter
+                    Layout.minimumWidth: implicitWidth
                 }
 
                 NotificationBell {
                     id: notificationBell
 
                     notifications: root.notifications
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.minimumWidth: implicitWidth
                     onWidthChanged: Qt.callLater(titleBar.refreshChromeGeometry)
 
                     NotificationHub {
@@ -187,12 +221,18 @@ Item {
                     }
                 }
 
+                // The three window buttons declare a minimum equal to their own
+                // size, so a band that overflows can never resolve it by clipping
+                // Close off the right edge. It did exactly that at the 860 px
+                // minimum window, which left the shipped shell with no visible
+                // way to close it.
                 WindowChromeButton {
                     id: minimizeButton
 
                     kind: "minimize"
                     Accessible.name: qsTr("Minimize")
                     Layout.leftMargin: ExoTheme.spacingSm
+                    Layout.minimumWidth: implicitWidth
                     onClicked: root.minimizeRequested()
                 }
 
@@ -201,6 +241,7 @@ Item {
 
                     kind: root.windowMaximized ? "restore" : "maximize"
                     Accessible.name: root.windowMaximized ? qsTr("Restore") : qsTr("Maximize")
+                    Layout.minimumWidth: implicitWidth
                     onClicked: root.maximizeRestoreRequested()
                 }
 
@@ -210,6 +251,7 @@ Item {
                     kind: "close"
                     danger: true
                     Accessible.name: qsTr("Close")
+                    Layout.minimumWidth: implicitWidth
                     onClicked: root.closeRequested()
                 }
             }

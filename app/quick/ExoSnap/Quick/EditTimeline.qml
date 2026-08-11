@@ -71,7 +71,7 @@ Item {
         color: ExoTheme.surfaceRaised
         border.width: 1
         border.color: ExoTheme.lineStrong
-        radius: 10
+        radius: ExoTheme.radiusMd
         // The rows, the dim bands and the markers all have to stop at the
         // rounded shape; the handles and the playhead deliberately do not.
         clip: true
@@ -154,7 +154,7 @@ Item {
                     color: ExoTheme.textMuted
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 10
+                        pixelSize: ExoTheme.fontEyebrow
                     }
                 }
             }
@@ -287,7 +287,7 @@ Item {
             color: ExoTheme.text
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 10
+                pixelSize: ExoTheme.fontEyebrow
             }
         }
     }
@@ -306,7 +306,7 @@ Item {
         color: ExoTheme.textDim
         font {
             family: ExoTheme.monoFamily
-            pixelSize: 10
+            pixelSize: ExoTheme.fontEyebrow
         }
     }
 
@@ -324,7 +324,7 @@ Item {
             color: ExoTheme.textDim
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 10
+                pixelSize: ExoTheme.fontEyebrow
             }
         }
 
@@ -336,7 +336,7 @@ Item {
             color: ExoTheme.textDim
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 10
+                pixelSize: ExoTheme.fontEyebrow
             }
         }
 
@@ -350,7 +350,7 @@ Item {
             color: ExoTheme.textDim
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 10
+                pixelSize: ExoTheme.fontEyebrow
             }
         }
     }

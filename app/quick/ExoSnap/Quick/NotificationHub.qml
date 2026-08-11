@@ -82,7 +82,7 @@ Popup {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 14
+                    pixelSize: ExoTheme.fontSectionTitle
                     weight: Font.DemiBold
                 }
             }
@@ -96,7 +96,7 @@ Popup {
                 color: markAllReadHover.hovered ? ExoTheme.text : ExoTheme.accent
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 12
+                    pixelSize: ExoTheme.fontSecondary
                     weight: Font.Medium
                 }
 
@@ -121,7 +121,7 @@ Popup {
                 color: clearAllHover.hovered ? ExoTheme.text : ExoTheme.textMuted
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 12
+                    pixelSize: ExoTheme.fontSecondary
                     weight: Font.Medium
                 }
 
@@ -162,7 +162,7 @@ Popup {
                 Layout.alignment: Qt.AlignHCenter
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 13
+                    pixelSize: ExoTheme.fontBody
                     weight: Font.DemiBold
                 }
             }
@@ -176,7 +176,7 @@ Popup {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
 
@@ -274,7 +274,7 @@ Popup {
                                     Layout.fillWidth: true
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 12
+                                        pixelSize: ExoTheme.fontSecondary
                                         weight: entryDelegate.unread ? Font.DemiBold : Font.Medium
                                     }
                                 }
@@ -285,18 +285,15 @@ Popup {
                                     color: ExoTheme.textDim
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 10
+                                        pixelSize: ExoTheme.fontCaption
                                     }
                                 }
 
-                                Label {
-                                    text: "✕"
-                                    textFormat: Text.PlainText
+                                ExoGlyph {
+                                    kind: ExoGlyph.Close
                                     color: dismissHover.hovered ? ExoTheme.text : ExoTheme.textMuted
-                                    font {
-                                        family: ExoTheme.sansFamily
-                                        pixelSize: 12
-                                    }
+                                    Layout.preferredWidth: 12
+                                    Layout.preferredHeight: 12
 
                                     Accessible.role: Accessible.Button
                                     Accessible.name: qsTr("Dismiss")
@@ -320,7 +317,7 @@ Popup {
                                 Layout.fillWidth: true
                                 font {
                                     family: ExoTheme.sansFamily
-                                    pixelSize: 11
+                                    pixelSize: ExoTheme.fontCaption
                                 }
                             }
 

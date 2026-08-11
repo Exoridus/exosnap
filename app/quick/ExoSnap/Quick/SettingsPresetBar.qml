@@ -62,7 +62,7 @@ Rectangle {
             }
 
             ExoButton {
-                text: "⋯"
+                glyph: ExoGlyph.Overflow
                 quiet: true
                 Accessible.name: qsTr("More preset actions")
                 onClicked: overflowMenu.popup()
@@ -83,22 +83,22 @@ Rectangle {
         }
     }
 
-    Menu {
+    ExoMenu {
         id: overflowMenu
 
-        MenuItem {
+        ExoMenuItem {
             text: qsTr("Rename…")
             enabled: !root.settings.presetBuiltIn && !root.settings.controlsLocked
             onTriggered: nameDialog.openFor(true)
         }
 
-        MenuItem {
+        ExoMenuItem {
             text: qsTr("Reset changes")
             enabled: root.settings.presetDirty && !root.settings.controlsLocked
             onTriggered: root.settings.resetChanges()
         }
 
-        MenuItem {
+        ExoMenuItem {
             text: qsTr("Delete")
             enabled: !root.settings.presetBuiltIn && !root.settings.controlsLocked
             onTriggered: root.settings.deletePreset()
@@ -106,12 +106,12 @@ Rectangle {
 
         MenuSeparator {}
 
-        MenuItem {
+        ExoMenuItem {
             text: qsTr("Export…")
             onTriggered: presetFileDialog.openFor(true)
         }
 
-        MenuItem {
+        ExoMenuItem {
             text: qsTr("Import…")
             enabled: !root.settings.controlsLocked
             onTriggered: presetFileDialog.openFor(false)

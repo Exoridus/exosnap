@@ -20,8 +20,8 @@ Rectangle {
                                      : root.tone === "notice" ? ExoTheme.warning
                                      : ExoTheme.line
 
-    implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingMd
-    implicitWidth: 180
+    implicitHeight: column.implicitHeight + 2 * ExoTheme.spacingLg
+    implicitWidth: 210
     color: root.tone === "blocker" ? ExoTheme.errorSurface
          : root.tone === "notice" ? ExoTheme.warningSurface
          : ExoTheme.surface
@@ -38,8 +38,8 @@ Rectangle {
         spacing: ExoTheme.spacingXs
         anchors {
             fill: parent
-            topMargin: ExoTheme.spacingMd
-            bottomMargin: ExoTheme.spacingMd
+            topMargin: ExoTheme.spacingLg
+            bottomMargin: ExoTheme.spacingLg
             leftMargin: ExoTheme.spacingLg
             rightMargin: ExoTheme.spacingLg
         }
@@ -56,33 +56,42 @@ Rectangle {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 9
+                    pixelSize: ExoTheme.fontEyebrow
                     letterSpacing: 1
                     weight: Font.DemiBold
                 }
             }
 
-            Label {
-                text: "✓"
-                textFormat: Text.PlainText
+            ExoGlyph {
+                kind: ExoGlyph.Check
                 visible: root.showOkGlyph
                 color: ExoTheme.success
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: 12
-                }
+                Layout.preferredWidth: 14
+                Layout.preferredHeight: 14
             }
         }
 
+        // The measurement the tile exists to report. On the shared value rung, so
+        // it is unmistakably more important than its own caption above it and its
+        // qualifier below — at 17 px against a 9 px caption and an 11 px sub it
+        // was just the largest of three small things.
         Label {
             text: root.value
             textFormat: Text.PlainText
             elide: Text.ElideRight
             color: ExoTheme.text
             Layout.fillWidth: true
+            Layout.topMargin: ExoTheme.spacingXs
+            // A long value shrinks rather than truncating. "NVIDIA GeForce RTX
+            // 5070 Ti" does not fit a tile at the value size, and the answer is
+            // not to show the user "NVIDIA GeForce RTX …" — the whole point of
+            // the encoder tile is which encoder. Short values keep the full rung;
+            // elide stays as the floor for a value no size can fit.
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: ExoTheme.fontSectionTitle
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 17
+                pixelSize: ExoTheme.fontValue
                 weight: Font.DemiBold
             }
         }
@@ -96,10 +105,10 @@ Rectangle {
             Layout.fillWidth: true
             // A one-line floor: a wrapping sub-line must never clip the tile's own
             // height the way an unconstrained wordWrap label does.
-            Layout.minimumHeight: 14
+            Layout.minimumHeight: 16
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
 

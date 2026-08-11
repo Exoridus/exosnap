@@ -41,13 +41,11 @@ Rectangle {
                 Layout.preferredHeight: 40
                 Layout.alignment: Qt.AlignTop
 
-                Rectangle {
-                    width: 18
-                    height: 18
-                    color: ExoTheme.surfaceRaised
-                    border.width: 2
-                    border.color: ExoTheme.accent
-                    radius: 4
+                ExoGlyph {
+                    kind: ExoGlyph.Chip
+                    color: ExoTheme.accent
+                    width: 20
+                    height: 20
                     anchors.centerIn: parent
                 }
             }
@@ -68,7 +66,7 @@ Rectangle {
                         Layout.fillWidth: true
                         font {
                             family: ExoTheme.sansFamily
-                            pixelSize: 15
+                            pixelSize: ExoTheme.fontSectionTitle
                             weight: Font.DemiBold
                         }
                     }
@@ -80,7 +78,7 @@ Rectangle {
                         color: ExoTheme.textMuted
                         font {
                             family: ExoTheme.monoFamily
-                            pixelSize: 10
+                            pixelSize: ExoTheme.fontEyebrow
                         }
                     }
 
@@ -101,7 +99,7 @@ Rectangle {
                             anchors.centerIn: parent
                             font {
                                 family: ExoTheme.monoFamily
-                                pixelSize: 9
+                                pixelSize: ExoTheme.fontEyebrow
                                 weight: Font.DemiBold
                             }
                         }
@@ -116,7 +114,7 @@ Rectangle {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                     }
                 }
             }
@@ -130,7 +128,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 10
+                pixelSize: ExoTheme.fontEyebrow
                 letterSpacing: 1
                 weight: Font.DemiBold
             }
@@ -178,15 +176,12 @@ Rectangle {
             Layout.topMargin: ExoTheme.spacingXs
             Layout.fillWidth: true
 
-            Label {
-                text: root.device.provenanceOk ? "✓" : "•"
-                textFormat: Text.PlainText
+            ExoGlyph {
+                kind: root.device.provenanceOk ? ExoGlyph.Check : ExoGlyph.Dot
                 color: root.device.provenanceOk ? ExoTheme.success : ExoTheme.textDim
                 Layout.alignment: Qt.AlignTop
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: 11
-                }
+                Layout.preferredWidth: 12
+                Layout.preferredHeight: 12
             }
 
             Label {
@@ -197,7 +192,7 @@ Rectangle {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
         }

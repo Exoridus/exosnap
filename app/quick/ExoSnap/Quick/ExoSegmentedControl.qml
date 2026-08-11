@@ -52,7 +52,7 @@ Rectangle {
                          : "transparent"
                     border.width: root.currentIndex === segment.index ? 1 : 0
                     border.color: ExoTheme.accent
-                    radius: 6
+                    radius: ExoTheme.radiusXs
                 }
 
                 contentItem: Label {
@@ -65,7 +65,7 @@ Rectangle {
                     color: root.currentIndex === segment.index ? ExoTheme.text : ExoTheme.textSecondary
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 12
+                        pixelSize: ExoTheme.fontSecondary
                         weight: root.currentIndex === segment.index ? Font.DemiBold : Font.Medium
                     }
                 }

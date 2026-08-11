@@ -138,6 +138,37 @@ int childWindowCount(HWND root) {
     return count;
 }
 
+// How much non-client area Windows still reserves on each edge. A shell whose
+// title band is its own draws NOTHING outside the client rect, so every value
+// here must be 0; a non-zero top is a native caption, i.e. a second title bar
+// above ours. Reported rather than asserted because the caller decides what a
+// failure means.
+struct NonClientInset {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+
+    bool isEmpty() const {
+        return left == 0 && top == 0 && right == 0 && bottom == 0;
+    }
+};
+
+NonClientInset nonClientInset(HWND hwnd) {
+    RECT window{};
+    RECT client{};
+    if (GetWindowRect(hwnd, &window) == FALSE || GetClientRect(hwnd, &client) == FALSE)
+        return {};
+    // GetClientRect is client-relative; map its corners into screen space so the
+    // two rectangles are comparable.
+    POINT top_left{client.left, client.top};
+    POINT bottom_right{client.right, client.bottom};
+    if (ClientToScreen(hwnd, &top_left) == FALSE || ClientToScreen(hwnd, &bottom_right) == FALSE)
+        return {};
+    return {static_cast<int>(top_left.x - window.left), static_cast<int>(top_left.y - window.top),
+            static_cast<int>(window.right - bottom_right.x), static_cast<int>(window.bottom - bottom_right.y)};
+}
+
 LRESULT CALLBACK previewPatternWindowProc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) {
     if (message == WM_TIMER) {
         InvalidateRect(hwnd, nullptr, FALSE);
@@ -359,8 +390,8 @@ int main(int argc, char* argv[]) {
                          [preview_pattern]() { DestroyWindow(preview_pattern); });
     }
     const QSize requested_size = visualWindowSize(arguments);
-    if (root_window != nullptr && requested_size.isValid())
-        root_window->resize(requested_size);
+    if (requested_size.isValid())
+        quick_application.applyHarnessWindowSize(requested_size);
 
     // Harness-only: selects which navigation destination a --visual-test capture
     // renders. Nav indices follow the canonical product order (Record, Device,
@@ -536,7 +567,47 @@ int main(int argc, char* argv[]) {
             const HWND hwnd = root_window != nullptr ? reinterpret_cast<HWND>(root_window->winId()) : nullptr;
             const int children = hwnd != nullptr ? childWindowCount(hwnd) : -1;
             qInfo("quick-hwnd-audit: child_hwnds=%d", children);
-            app.exit(children == 0 ? 0 : 1);
+
+            // Second signal, same instrument: the frameless shell is only really
+            // frameless if Windows reserves no non-client area. Without this the
+            // audit could pass on a build that draws a native caption above our
+            // own 40 px band — two title bars, zero child HWNDs.
+            const LONG_PTR style = hwnd != nullptr ? GetWindowLongPtrW(hwnd, GWL_STYLE) : 0;
+            const LONG_PTR ex_style = hwnd != nullptr ? GetWindowLongPtrW(hwnd, GWL_EXSTYLE) : 0;
+            const NonClientInset inset = hwnd != nullptr ? nonClientInset(hwnd) : NonClientInset{};
+            qInfo("quick-hwnd-audit: style=0x%08llx exstyle=0x%08llx caption=%d thickframe=%d border=%d",
+                  static_cast<unsigned long long>(style), static_cast<unsigned long long>(ex_style),
+                  (style & WS_CAPTION) == WS_CAPTION ? 1 : 0, (style & WS_THICKFRAME) != 0 ? 1 : 0,
+                  (style & WS_BORDER) != 0 ? 1 : 0);
+            qInfo("quick-hwnd-audit: nonclient_inset=%d,%d,%d,%d native_titlebar=%d", inset.left, inset.top,
+                  inset.right, inset.bottom, inset.top > 0 ? 1 : 0);
+
+            // What Qt BELIEVES the frame to be. Windows reserves nothing (the
+            // inset above is all zeroes), so any difference here is a frame that
+            // exists only in Qt's own bookkeeping — and that difference is what
+            // gets added to the window every time a persisted geometry is
+            // restored, then persisted again.
+            if (root_window != nullptr) {
+                const QRect client = root_window->geometry();
+                const QRect frame = root_window->frameGeometry();
+                qInfo("quick-hwnd-audit: qt_geometry=%d,%d %dx%d qt_frame=%d,%d %dx%d qt_frame_margins=%d,%d,%d,%d",
+                      client.x(), client.y(), client.width(), client.height(), frame.x(), frame.y(), frame.width(),
+                      frame.height(), client.left() - frame.left(), client.top() - frame.top(),
+                      frame.right() - client.right(), frame.bottom() - client.bottom());
+            }
+
+            // The assertion is the non-client area: a window whose title band is
+            // its own must have Windows reserve nothing outside its client rect,
+            // or a native caption is being drawn above the product's.
+            //
+            // WS_THICKFRAME is reported but deliberately NOT asserted. Adding it
+            // makes Qt believe the window has an 8/31 px frame and place the
+            // window that far outside the rect it was asked for, and the geometry
+            // that then gets persisted compounds the offset on every launch
+            // (measured: 598,-25 → 590,-31 → 582,-31 over three starts). Whether
+            // the bit is needed at all is unmeasured here; see the report.
+            const bool chrome_clean = hwnd != nullptr && inset.isEmpty();
+            app.exit(children == 0 && chrome_clean ? 0 : 1);
         });
     }
 
@@ -875,7 +946,12 @@ int main(int argc, char* argv[]) {
 
     const QString screenshot_path = visualOutputPath(arguments);
     if (!screenshot_path.isEmpty()) {
-        QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, screenshot_path]() {
+        // Harness-only, same class of hook as --preview-visual-test's metrics
+        // overlay: opens the Record button's countdown menu so the capture can
+        // photograph it. A menu is otherwise only reachable by hovering or
+        // clicking the chevron, and this harness synthesises no input.
+        const bool open_countdown_menu = arguments.contains(QStringLiteral("--record-visual-menu"));
+        const auto capture = [&app, root_window, screenshot_path]() {
             const bool saved = root_window != nullptr && root_window->grabWindow().save(screenshot_path);
             // The capture-excluded overlays are separate top-level windows, so
             // the root grab above cannot contain them -- and a desktop capture
@@ -884,6 +960,19 @@ int main(int argc, char* argv[]) {
             // suppresses, so it is the one way to photograph these at all.
             saveOverlayWindowGrabs(screenshot_path);
             app.exit(saved ? 0 : 2);
+        };
+        QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, open_countdown_menu, capture]() {
+            if (!open_countdown_menu) {
+                capture();
+                return;
+            }
+            if (root_window != nullptr) {
+                if (QObject* split = root_window->findChild<QObject*>(QStringLiteral("quickRecordSplitButton")))
+                    QMetaObject::invokeMethod(split, "openCountdownMenu");
+            }
+            // The popup has an enter transition; grabbing in
+            // the same tick photographs it mid-fade.
+            QTimer::singleShot(400, &app, capture);
         });
     }
 

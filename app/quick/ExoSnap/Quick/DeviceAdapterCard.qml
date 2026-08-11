@@ -35,15 +35,11 @@ Button {
             Layout.preferredHeight: 34
             Layout.alignment: Qt.AlignVCenter
 
-            // Two nested outlines read as a processor die without needing an
-            // icon set the Quick frontend does not have yet.
-            Rectangle {
-                width: 15
-                height: 15
-                color: ExoTheme.surfaceRaised
-                border.width: 2
-                border.color: root.inspected ? ExoTheme.accent : ExoTheme.textMuted
-                radius: 3
+            ExoGlyph {
+                kind: ExoGlyph.Chip
+                color: root.inspected ? ExoTheme.accent : ExoTheme.textMuted
+                width: 18
+                height: 18
                 anchors.centerIn: parent
             }
         }
@@ -64,7 +60,7 @@ Button {
                     Layout.fillWidth: true
                     font {
                         family: ExoTheme.sansFamily
-                        pixelSize: 13
+                        pixelSize: ExoTheme.fontBody
                         weight: Font.DemiBold
                     }
                 }
@@ -76,7 +72,7 @@ Button {
                     color: ExoTheme.textMuted
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 10
+                        pixelSize: ExoTheme.fontEyebrow
                     }
                 }
             }
@@ -90,7 +86,7 @@ Button {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
         }
@@ -114,7 +110,7 @@ Button {
                 anchors.centerIn: parent
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 9
+                    pixelSize: ExoTheme.fontEyebrow
                     weight: Font.DemiBold
                 }
             }

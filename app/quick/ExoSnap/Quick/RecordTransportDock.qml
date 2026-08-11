@@ -9,223 +9,255 @@ Rectangle {
 
     required property RecordViewModelAdapter recordViewModel
 
-    implicitHeight: 72
-    color: ExoTheme.surface
+    // Three groups, three weights. Left: which sources feed the recording, as
+    // round peers. Centre: the elapsed time, the largest thing on the page.
+    // Right: the secondary per-recording actions as round icons, then the one
+    // recommended action as a filled pill. The previous dock put all eight
+    // controls on the same rounded rectangle at the same size, which is why it
+    // read as a developer toolbar rather than as a recorder's transport.
+    //
+    // Anchored, not laid out. The timer used to sit in a RowLayout between two
+    // fill-spacers, which centres it between the two CLUSTERS rather than in the
+    // bar — so it slid sideways every time a state change made one cluster wider
+    // (Ready → Recording moved it by ~40 px). Anchoring it to the bar's own
+    // horizontal centre makes the position a property of the bar instead of a
+    // by-product of what is currently visible.
+    //
+    // The 860 px minimum window runs the transport one control rung down, and
+    // with it every gap below. The action cluster is inherently the wider of the
+    // two (four icons plus the Stop pill while recording), and the timer is
+    // pinned to the bar's geometric centre rather than laid out between the
+    // clusters — so what the compact rung protects is the lane the timer has
+    // left. Widening the gaps at 860 closes it: measured, the shutter button
+    // came to rest against the last digit.
+    readonly property bool compactControls: !ExoTheme.isRegular(root.width)
+
+    // Three gaps, three roles, and at the regular rung they are 16 / 12 / 16:
+    // from a cluster to the bar's edge, between round peers inside a cluster,
+    // and between the secondary cluster and the one recommended action. The edge
+    // used to be the widest of the three at 24, on the theory that a round end
+    // needs more air than a straight one — side by side that read as the
+    // clusters having been pushed inwards, with the peers sitting tighter than
+    // their own distance to nothing.
+    readonly property int contentInsetX: ExoTheme.spacingLg
+    readonly property int contentInsetY: ExoTheme.spacingMd
+    readonly property int clusterSpacing: root.compactControls ? ExoTheme.spacingSm : ExoTheme.spacingMd
+    // Between the secondary cluster and the recommended action, so that action
+    // reads as its own tier rather than as a fifth icon. Expressed as the
+    // difference, because the RowLayout has already applied `clusterSpacing` by
+    // the time this margin is added.
+    readonly property int actionGap: (root.compactControls ? ExoTheme.spacingMd : ExoTheme.spacingLg)
+                                     - root.clusterSpacing
+
+    // A raised dock with recessed controls, not a flat bar with outlined ones.
+    // The two clusters had drifted apart: the source toggles sat on `surface`
+    // with a hairline, the action buttons on `surfaceRaised` with a full-strength
+    // one, on a bar that was itself `surface` — so eight round peers on one bar
+    // carried three different treatments and only the outlines told them apart.
+    // Lifting the BAR one step and dropping every control onto `surface` gives
+    // the same relationship in all four themes and lets the hairline go quiet.
+    implicitHeight: (root.compactControls ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge)
+                    + 2 * root.contentInsetY
+    color: ExoTheme.surfaceRaised
     border.width: 1
-    border.color: ExoTheme.lineStrong
+    border.color: ExoTheme.line
     radius: height / 2
 
+    // ── Left: the sources ────────────────────────────────────────────────────
     RowLayout {
-        spacing: ExoTheme.spacingSm
+        id: sourceCluster
+
+        spacing: root.clusterSpacing
         anchors {
-            fill: parent
-            leftMargin: ExoTheme.spacingLg
-            rightMargin: ExoTheme.spacingLg
-            topMargin: ExoTheme.spacingMd
-            bottomMargin: ExoTheme.spacingMd
+            left: parent.left
+            leftMargin: root.contentInsetX
+            verticalCenter: parent.verticalCenter
         }
 
-        RowLayout {
-            spacing: ExoTheme.spacingXs
-
-            RecordSourceToggle {
-                shortLabel: qsTr("SYS")
-                accessibleLabel: qsTr("System audio")
-                checkedState: root.recordViewModel.systemAudioEnabled
-                meterLevel: root.recordViewModel.systemMeter
-                enabled: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                         && !root.recordViewModel.failed
-                onClicked: root.recordViewModel.requestToggleSource("system")
-            }
-
-            RecordSourceToggle {
-                shortLabel: qsTr("APP")
-                accessibleLabel: qsTr("Application audio")
-                checkedState: root.recordViewModel.appAudioEnabled
-                meterLevel: root.recordViewModel.appMeter
-                enabled: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                         && !root.recordViewModel.failed
-                visible: root.recordViewModel.appAudioVisible
-                onClicked: root.recordViewModel.requestToggleSource("app")
-            }
-
-            RecordSourceToggle {
-                shortLabel: qsTr("MIC")
-                accessibleLabel: root.recordViewModel.microphoneAvailable
-                                 ? qsTr("Microphone") : qsTr("No microphone connected")
-                checkedState: root.recordViewModel.microphoneEnabled
-                meterLevel: root.recordViewModel.microphoneMeter
-                enabled: root.recordViewModel.canSelectSource && root.recordViewModel.microphoneAvailable
-                         && !root.recordViewModel.blocked && !root.recordViewModel.failed
-                onClicked: root.recordViewModel.requestToggleSource("microphone")
-            }
-
-            RecordSourceToggle {
-                shortLabel: qsTr("CAM")
-                accessibleLabel: root.recordViewModel.webcamError
-                                 ? qsTr("Camera can't be opened — %1").arg(root.recordViewModel.webcamErrorText)
-                                 : root.recordViewModel.webcamAvailable ? qsTr("Webcam")
-                                                                        : qsTr("No camera connected")
-                checkedState: root.recordViewModel.webcamEnabled
-                errorState: root.recordViewModel.webcamError
-                enabled: root.recordViewModel.webcamAvailable && !root.recordViewModel.finalizing
-                         && !root.recordViewModel.blocked && !root.recordViewModel.failed
-                onClicked: root.recordViewModel.requestToggleSource("webcam")
-            }
+        RecordSourceToggle {
+            compact: root.compactControls
+            shortLabel: qsTr("SYS")
+            glyph: ExoGlyph.Speaker
+            accessibleLabel: qsTr("System audio")
+            checkedState: root.recordViewModel.systemAudioEnabled
+            meterLevel: root.recordViewModel.systemMeter
+            enabled: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
+                     && !root.recordViewModel.failed
+            onClicked: root.recordViewModel.requestToggleSource("system")
         }
 
-        Item { Layout.fillWidth: true }
-
-        Label {
-            text: root.recordViewModel.countdownActive
-                  ? root.recordViewModel.countdownRemaining.toString()
-                  : root.recordViewModel.elapsedText.length > 0 ? root.recordViewModel.elapsedText : qsTr("0:00")
-            textFormat: Text.PlainText
-            horizontalAlignment: Text.AlignHCenter
-            color: root.recordViewModel.recording ? ExoTheme.error
-                                                  : root.recordViewModel.paused ? ExoTheme.warning : ExoTheme.text
-            Layout.minimumWidth: 70
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: 18
-                weight: Font.DemiBold
-            }
+        RecordSourceToggle {
+            compact: root.compactControls
+            shortLabel: qsTr("APP")
+            glyph: ExoGlyph.AppWindow
+            accessibleLabel: qsTr("Application audio")
+            checkedState: root.recordViewModel.appAudioEnabled
+            meterLevel: root.recordViewModel.appMeter
+            enabled: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
+                     && !root.recordViewModel.failed
+            visible: root.recordViewModel.appAudioVisible
+            onClicked: root.recordViewModel.requestToggleSource("app")
         }
 
-        Item { Layout.fillWidth: true }
+        RecordSourceToggle {
+            compact: root.compactControls
+            shortLabel: qsTr("MIC")
+            glyph: ExoGlyph.Mic
+            accessibleLabel: root.recordViewModel.microphoneAvailable
+                             ? qsTr("Microphone") : qsTr("No microphone connected")
+            checkedState: root.recordViewModel.microphoneEnabled
+            meterLevel: root.recordViewModel.microphoneMeter
+            enabled: root.recordViewModel.canSelectSource && root.recordViewModel.microphoneAvailable
+                     && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            onClicked: root.recordViewModel.requestToggleSource("microphone")
+        }
 
-        RowLayout {
-            spacing: ExoTheme.spacingXs
+        RecordSourceToggle {
+            compact: root.compactControls
+            shortLabel: qsTr("CAM")
+            glyph: ExoGlyph.Camera
+            accessibleLabel: root.recordViewModel.webcamError
+                             ? qsTr("Camera can't be opened — %1").arg(root.recordViewModel.webcamErrorText)
+                             : root.recordViewModel.webcamAvailable ? qsTr("Webcam")
+                                                                    : qsTr("No camera connected")
+            checkedState: root.recordViewModel.webcamEnabled
+            errorState: root.recordViewModel.webcamError
+            enabled: root.recordViewModel.webcamAvailable && !root.recordViewModel.finalizing
+                     && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            onClicked: root.recordViewModel.requestToggleSource("webcam")
+        }
+    }
 
-            RecordActionButton {
-                accessibleLabel: qsTr("Capture frame")
-                text: qsTr("Frame")
-                round: false
-                enabled: root.recordViewModel.captureFrameEnabled
-                visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing
-                onClicked: root.recordViewModel.requestCaptureFrame()
-            }
+    // ── Centre: the elapsed time ─────────────────────────────────────────────
+    //
+    // On the value rung with tabular figures: this is what the user looks at
+    // while recording, and at 18 px it carried the same weight as the button
+    // labels either side of it.
+    Label {
+        text: root.recordViewModel.countdownActive
+              ? root.recordViewModel.countdownRemaining.toString()
+              : root.recordViewModel.elapsedText.length > 0 ? root.recordViewModel.elapsedText : qsTr("0:00")
+        textFormat: Text.PlainText
+        horizontalAlignment: Text.AlignHCenter
+        color: root.recordViewModel.recording ? ExoTheme.error
+                                              : root.recordViewModel.paused ? ExoTheme.warning : ExoTheme.text
+        anchors {
+            horizontalCenter: parent.horizontalCenter
+            verticalCenter: parent.verticalCenter
+        }
+        font {
+            family: ExoTheme.monoFamily
+            // A countdown is one digit where every other state is an eight
+            // character clock, and at the clock's size that digit read as a
+            // stray number rather than as the thing the whole window is waiting
+            // on. One rung up for the seconds that are counting down.
+            pixelSize: root.recordViewModel.countdownActive ? ExoTheme.fontValueLarge : ExoTheme.fontValue
+            weight: Font.DemiBold
+            features: { "tnum": 1 }
+        }
+    }
 
-            RecordActionButton {
-                accessibleLabel: qsTr("Add marker")
-                text: qsTr("Mark")
-                round: false
-                visible: root.recordViewModel.recording || root.recordViewModel.paused
-                onClicked: root.recordViewModel.requestAddMarker()
-            }
+    // ── Right: secondary actions, then the one recommended action ────────────
+    RowLayout {
+        id: actionCluster
 
-            RecordActionButton {
-                accessibleLabel: qsTr("Split recording")
-                text: qsTr("Split")
-                round: false
-                enabled: root.recordViewModel.splitEnabled
-                visible: root.recordViewModel.recording || root.recordViewModel.paused
-                onClicked: root.recordViewModel.requestSplit()
-            }
+        spacing: root.clusterSpacing
+        anchors {
+            right: parent.right
+            rightMargin: root.contentInsetX
+            verticalCenter: parent.verticalCenter
+        }
 
-            RecordActionButton {
-                id: pauseButton
+        RecordActionButton {
+            compact: root.compactControls
+            accessibleLabel: qsTr("Capture frame")
+            text: qsTr("Frame")
+            glyph: ExoGlyph.Shutter
+            enabled: root.recordViewModel.captureFrameEnabled
+            visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing
+            ToolTip.visible: hovered
+            ToolTip.text: accessibleLabel
+            onClicked: root.recordViewModel.requestCaptureFrame()
+        }
 
-                accessibleLabel: qsTr("Pause recording")
-                text: qsTr("Pause")
-                round: false
-                visible: root.recordViewModel.recording
-                onClicked: root.recordViewModel.requestPause()
-            }
+        RecordActionButton {
+            compact: root.compactControls
+            accessibleLabel: qsTr("Add marker")
+            text: qsTr("Mark")
+            glyph: ExoGlyph.Flag
+            visible: root.recordViewModel.recording || root.recordViewModel.paused
+            ToolTip.visible: hovered
+            ToolTip.text: accessibleLabel
+            onClicked: root.recordViewModel.requestAddMarker()
+        }
 
-            RecordActionButton {
-                id: resumeButton
+        RecordActionButton {
+            compact: root.compactControls
+            accessibleLabel: qsTr("Split recording")
+            text: qsTr("Split")
+            glyph: ExoGlyph.Scissors
+            enabled: root.recordViewModel.splitEnabled
+            visible: root.recordViewModel.recording || root.recordViewModel.paused
+            ToolTip.visible: hovered
+            ToolTip.text: accessibleLabel
+            onClicked: root.recordViewModel.requestSplit()
+        }
 
-                accessibleLabel: qsTr("Resume recording")
-                text: qsTr("Resume")
-                round: false
-                emphasisColor: ExoTheme.accent
-                emphasisTextColor: ExoTheme.accentInk
-                visible: root.recordViewModel.paused
-                onClicked: root.recordViewModel.requestResume()
-            }
+        // Pause is a secondary action DURING a recording — Stop is the one that
+        // ends it — so it stays a round peer of the three above.
+        RecordActionButton {
+            id: pauseButton
 
-            RecordActionButton {
-                id: stopButton
+            compact: root.compactControls
 
-                accessibleLabel: qsTr("Stop recording")
-                text: qsTr("Stop")
-                round: false
-                emphasisColor: ExoTheme.error
-                emphasisTextColor: ExoTheme.errorInk
-                visible: root.recordViewModel.recording || root.recordViewModel.paused
-                onClicked: root.recordViewModel.requestStop()
-            }
+            accessibleLabel: qsTr("Pause recording")
+            text: qsTr("Pause")
+            glyph: ExoGlyph.Pause
+            visible: root.recordViewModel.recording
+            ToolTip.visible: hovered
+            ToolTip.text: accessibleLabel
+            onClicked: root.recordViewModel.requestPause()
+        }
 
-            ComboBox {
-                id: countdownCombo
+        RecordActionButton {
+            id: resumeButton
 
-                readonly property var seconds: [0, 3, 5, 10]
+            compact: root.compactControls
 
-                model: [qsTr("Now"), qsTr("3 s"), qsTr("5 s"), qsTr("10 s")]
-                currentIndex: Math.max(0, countdownCombo.seconds.indexOf(root.recordViewModel.countdownSeconds))
-                enabled: root.recordViewModel.canStart && !root.recordViewModel.countdownActive
-                visible: !root.recordViewModel.recording && !root.recordViewModel.paused
-                         && !root.recordViewModel.preparing && !root.recordViewModel.finalizing
-                focusPolicy: Qt.StrongFocus
-                Accessible.name: qsTr("Recording countdown")
-                Layout.preferredWidth: 72
-                onActivated: index => root.recordViewModel.requestCountdownSeconds(countdownCombo.seconds[index])
-                palette {
-                    button: ExoTheme.surfaceRaised
-                    buttonText: ExoTheme.textSecondary
-                    base: ExoTheme.surfaceRaised
-                    window: ExoTheme.surfaceRaised
-                    text: ExoTheme.textSecondary
-                    highlight: ExoTheme.accent
-                    highlightedText: ExoTheme.accentInk
-                }
+            accessibleLabel: qsTr("Resume recording")
+            text: qsTr("Resume")
+            round: false
+            emphasised: true
+            emphasisColor: ExoTheme.accent
+            emphasisTextColor: ExoTheme.accentInk
+            visible: root.recordViewModel.paused
+            Layout.leftMargin: root.actionGap
+            onClicked: root.recordViewModel.requestResume()
+        }
 
-                contentItem: Label {
-                    text: countdownCombo.displayText
-                    textFormat: Text.PlainText
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    color: countdownCombo.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
-                    font.family: ExoTheme.sansFamily
-                    font.pixelSize: 12
-                }
+        RecordActionButton {
+            id: stopButton
 
-                background: Rectangle {
-                    color: countdownCombo.down ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
-                    border.width: countdownCombo.visualFocus ? 2 : 1
-                    border.color: countdownCombo.visualFocus ? ExoTheme.text : ExoTheme.lineStrong
-                    radius: ExoTheme.radiusSm
-                }
+            compact: root.compactControls
 
-                indicator: Label {
-                    x: countdownCombo.width - width - 7
-                    y: (countdownCombo.height - height) / 2
-                    text: qsTr("⌄")
-                    textFormat: Text.PlainText
-                    color: countdownCombo.enabled ? ExoTheme.textMuted : ExoTheme.textDim
-                    font.family: ExoTheme.sansFamily
-                    font.pixelSize: 12
-                }
-            }
+            accessibleLabel: qsTr("Stop recording")
+            text: qsTr("Stop")
+            round: false
+            emphasised: true
+            emphasisColor: ExoTheme.error
+            emphasisTextColor: ExoTheme.errorInk
+            visible: root.recordViewModel.recording || root.recordViewModel.paused
+            Layout.leftMargin: root.recordViewModel.paused ? 0 : root.actionGap
+            onClicked: root.recordViewModel.requestStop()
+        }
 
-            RecordActionButton {
-                id: primaryButton
+        RecordSplitButton {
+            id: primaryButton
 
-                accessibleLabel: root.recordViewModel.countdownActive ? qsTr("Cancel countdown")
-                                 : root.recordViewModel.preparing ? qsTr("Preparing recording")
-                                 : root.recordViewModel.finalizing ? qsTr("Finalizing recording")
-                                                                   : qsTr("Start recording")
-                text: root.recordViewModel.countdownActive ? qsTr("Cancel")
-                      : root.recordViewModel.preparing ? qsTr("Preparing…")
-                      : root.recordViewModel.finalizing ? qsTr("Finalizing…") : qsTr("Record")
-                round: false
-                emphasisColor: root.recordViewModel.countdownActive ? ExoTheme.error : ExoTheme.accent
-                emphasisTextColor: ExoTheme.accentInk
-                enabled: root.recordViewModel.countdownActive || root.recordViewModel.canStart
-                visible: !root.recordViewModel.recording && !root.recordViewModel.paused
-                onClicked: root.recordViewModel.requestStart()
-            }
+            recordViewModel: root.recordViewModel
+            compact: root.compactControls
+            visible: !root.recordViewModel.recording && !root.recordViewModel.paused
+            Layout.leftMargin: root.actionGap
         }
     }
 
@@ -242,7 +274,7 @@ Rectangle {
                     resumeButton.forceActiveFocus()
                 else if (stopButton.visible && stopButton.enabled)
                     stopButton.forceActiveFocus()
-                else if (primaryButton.visible && primaryButton.enabled)
+                else if (primaryButton.visible)
                     primaryButton.forceActiveFocus()
             })
         }

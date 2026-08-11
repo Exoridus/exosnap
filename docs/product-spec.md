@@ -86,6 +86,28 @@ The frameless main window carries a **subtle native 1px border** in the active t
 (it follows Windows 11's rounded window corners and updates on a theme switch). On Windows versions
 without per-window border colors the default system frame is kept — never an error.
 
+The window has exactly **one** title bar: ExoSnap's own 40 px band. Windows reserves no non-client
+area for it, so no native caption is drawn above the product's. The band carries, left to right: the
+brand mark and the **exosnap** wordmark (the second half in the accent colour), the six nav
+destinations, the drag handle, the permanent engine-state pill, the notification bell, and the three
+window buttons. The **selected destination is marked by an accent underline**, not by an enclosing
+box — six words in a 40 px band shared with the window buttons cannot each carry a frame without the
+band reading as a toolbar. The keyboard focus ring is drawn only while a keyboard user has focus.
+The window buttons are the last thing that may be given up when the band runs out of room: at the
+860 px minimum window the nav tabs compress before Close does.
+
+The window's **minimum size is 860 × 700**. A first launch — one with no persisted geometry — opens
+at a **preferred 1280 × 720**, centred on the primary screen's work area and clamped to it, so a
+small or heavily scaled display never opens the window under the taskbar or off-screen. This is a
+preferred size, not a forced one: any valid persisted rect wins over it outright, and the window is
+freely resizable, maximizable and snappable afterwards.
+
+Every nav destination that has a page title states it the same way: the destination's name on the
+page-title rung, on the same axis as its own content, with that page's controls (Expert toggle,
+Rescan, filters) on the right of the same row. **Record** is the one destination with no page title
+— its context band names the capture target instead, because the preview is that page's subject —
+and **About** is the one with no header at all, being a single centred identity card.
+
 ---
 
 ## 3. Recording defaults and profiles
@@ -653,6 +675,37 @@ exists** (for example: no supported NVENC encoder detected, hard-stop disk thres
 unresolved HDR10-vs-H.264 conflict). If no supported NVIDIA NVENC encoder is detected, recording is
 blocked with a diagnostic message rather than silently falling back.
 
+**Page composition.** The Record page is three bands on one rhythm: a **context band**, the
+**preview stage**, and the **transport dock**.
+
+The context band replaces a page title. It states, on one quiet surface, what is being captured
+(target kind and name), whether that choice is currently locked by a running recording (a **LOCKED**
+badge), and what the recording will be written as (the resolved format summary), with **Change
+source** at its right end. It is a context statement, not a second toolbar, and it never duplicates
+what the preview already says.
+
+The preview stage is the page's subject and takes all remaining height. The live frame keeps the
+source's aspect ratio and is ringed in the current state's colour — quiet while idle, amber while
+counting down or paused, coral while recording or after a failure. Over it sit the state pill (top
+left) and, while recording or paused, the live readout (bitrate, drops, drift, output size) on the
+same ground as that pill. Nothing that changes with engine state is placed *around* the preview, so
+the frame never resizes because of a message appearing beside it.
+
+**Transport dock.** The Record page's controls sit in one raised bar along the bottom, in three
+groups of deliberately different weight:
+
+- **Left — the sources.** One round icon button per audio/video source (`APP`, `SYS`, `MIC`, camera),
+  each carrying its live level as an arc on its own edge. These are icons, not labels: they are the
+  most-used controls on the page and the four abbreviations that preceded them said nothing about
+  what they toggled. Every one has a tooltip and an accessible name spelling the source out in full,
+  and a source that cannot be used (no microphone, camera that will not open) stays visible and
+  disabled rather than disappearing.
+- **Centre — the elapsed time**, the largest element on the page. It is neutral while idle, coral
+  while recording and amber while paused, using tabular figures so the digits do not shift.
+- **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add
+  marker, split, pause) as round icon buttons, then the one recommended action — **Record**,
+  **Resume** or **Stop** — as a wider filled pill. There is never more than one filled pill.
+
 **Preparing.** Between the trigger (or the end of the countdown) and the running recording, the app
 briefly shows a **Preparing** state while device setup — display facts, webcam open, and the capture
 lease hand-off — runs off the UI thread, so the window stays responsive rather than freezing at the
@@ -1038,6 +1091,11 @@ user shares *is* the support channel. Three connected pieces make that shareable
 
 A **Startup** table on the Logs page shows start-to-milestone latencies so startup regressions are
 visible; it also rides along in the bundle.
+
+The Logs page states how much of the stream is currently shown ("Showing 22 of 22 entries · All · no
+search") as the page header's own subtitle, beside the title, rather than as a separate band between
+the toolbar and the list. The log list itself is deliberately full-width — a log line is data, and
+truncating it to protect a reading measure would be the wrong trade on a tool surface.
 
 **Present / tearing / latency diagnostics.** An opt-in, elevation-gated provider (PresentMon, the
 engine behind FrameView) enriches window/game-capture diagnosis and feeds judder correlation. The

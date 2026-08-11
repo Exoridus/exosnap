@@ -6,9 +6,10 @@ Switch {
 
     signal toggledByUser(bool value)
 
-    // A switch is 20 px of glyph. Reserving a full control height around it is
-    // what made every toggle row on the Settings page twice as tall as it needs
-    // to be, so the compact rung is the right one here.
+    // A switch does not need a full control height of surrounding air, but it
+    // does need to be hittable and readable: shrunk to a 38x20 glyph on a 26 px
+    // row it read as a decoration rather than as the control that decides
+    // whether a recording captures your microphone.
     implicitHeight: ExoTheme.controlHeightCompact
     focusPolicy: Qt.StrongFocus
     hoverEnabled: true
@@ -17,8 +18,8 @@ Switch {
     onClicked: root.toggledByUser(root.checked)
 
     indicator: Rectangle {
-        implicitWidth: 38
-        implicitHeight: 20
+        implicitWidth: 44
+        implicitHeight: 24
         x: root.leftPadding
         y: root.topPadding + (root.availableHeight - height) / 2
         color: !root.enabled ? ExoTheme.surface
@@ -30,8 +31,8 @@ Switch {
 
         Rectangle {
             x: root.checked ? parent.width - width - 3 : 3
-            width: 14
-            height: 14
+            width: 18
+            height: 18
             color: root.checked && root.enabled ? ExoTheme.accentInk : ExoTheme.textSecondary
             radius: height / 2
             anchors.verticalCenter: parent.verticalCenter

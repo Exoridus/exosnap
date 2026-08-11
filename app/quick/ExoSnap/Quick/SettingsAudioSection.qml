@@ -119,7 +119,7 @@ ExoCard {
                 Layout.preferredWidth: 52
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 12
+                    pixelSize: ExoTheme.fontSecondary
                 }
             }
         }

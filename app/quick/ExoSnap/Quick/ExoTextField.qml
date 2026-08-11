@@ -16,7 +16,7 @@ TextField {
     rightPadding: ExoTheme.spacingMd
     font {
         family: ExoTheme.sansFamily
-        pixelSize: 13
+        pixelSize: ExoTheme.fontBody
     }
 
     background: Rectangle {

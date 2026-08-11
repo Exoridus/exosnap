@@ -49,9 +49,43 @@ Item {
             margins: ExoTheme.pagePadding
         }
 
-        DiagnosticsSectionHeader {
-            title: qsTr("APPLICATION LOG")
+        // The page title on the same rung as Settings, Device and Diagnostics.
+        // It was a 10 px mono kicker with a hairline — the SECTION header
+        // component, used as a page header — so the one nav destination whose
+        // content is deliberately full-bleed also had the smallest identity of
+        // the six. The startup trace further down keeps that component, which is
+        // what it is for.
+        RowLayout {
+            spacing: ExoTheme.spacingMd
             Layout.fillWidth: true
+            Layout.bottomMargin: ExoTheme.spacingXs
+
+            Label {
+                text: qsTr("Logs")
+                textFormat: Text.PlainText
+                color: ExoTheme.text
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontPageTitle
+                    weight: Font.DemiBold
+                }
+            }
+
+            // "Showing 23 of 23 entries · All · no search" — the page's own
+            // subtitle, and it used to sit in a band of its own between the
+            // toolbar and the list. One line of muted text does not need a band.
+            Label {
+                text: root.logs.statusText
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: ExoTheme.textMuted
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignBaseline
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontSecondary
+                }
+            }
         }
 
         // Toolbar. Left: severity segments, search, auto-scroll. Right: the three
@@ -97,39 +131,28 @@ Item {
                 spacing: ExoTheme.spacingSm
                 Layout.alignment: root.width >= 900 ? Qt.AlignRight : Qt.AlignLeft
 
+                // All three chromed. Quiet, they rendered as three text runs in a
+                // toolbar that already contains a segmented control, a search
+                // field and a checkbox — the only three items up there that did
+                // not look like controls were the three that write to the
+                // clipboard and to disk.
                 ExoButton {
                     text: qsTr("Copy")
                     enabled: root.logs.canCopy
-                    quiet: true
                     onClicked: root.logs.copyVisible()
                 }
 
                 ExoButton {
                     text: qsTr("Export…")
                     enabled: root.logs.canExport
-                    quiet: true
                     onClicked: exportDialog.open()
                 }
 
                 ExoButton {
                     text: qsTr("Create support bundle")
-                    quiet: true
                     Accessible.description: qsTr("Create a diagnostic package to share with support")
                     onClicked: bundleDialog.open()
                 }
-            }
-        }
-
-        Label {
-            text: root.logs.statusText
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            color: ExoTheme.textMuted
-            Layout.fillWidth: true
-            Layout.minimumHeight: 15
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: 11
             }
         }
 
@@ -155,7 +178,7 @@ Item {
                 color: ExoTheme.textDim
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
 
@@ -181,7 +204,7 @@ Item {
                     color: folderLink.hovered ? ExoTheme.text : ExoTheme.accent
                     font {
                         family: ExoTheme.monoFamily
-                        pixelSize: 11
+                        pixelSize: ExoTheme.fontCaption
                         underline: folderLink.hovered
                     }
                 }
@@ -205,7 +228,7 @@ Item {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
 

@@ -40,7 +40,7 @@ Dialog {
         topPadding: ExoTheme.spacingLg
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 14
+            pixelSize: ExoTheme.fontSectionTitle
             weight: Font.DemiBold
         }
     }
@@ -52,7 +52,7 @@ Dialog {
         color: ExoTheme.textSecondary
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 12
+            pixelSize: ExoTheme.fontSecondary
         }
     }
 

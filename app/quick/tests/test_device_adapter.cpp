@@ -188,6 +188,23 @@ TEST_F(DeviceAdapterTest, InjectedAdaptersPopulateTheSelectorModel) {
 
     // The probed NVIDIA adapter is active AND initially inspected.
     EXPECT_EQ(adapter.activeIndex(), 0);
+}
+
+// Newer NVIDIA drivers put the vendor into the DXGI description itself, older
+// ones do not. Prefixing unconditionally printed "NVIDIA NVIDIA GeForce RTX
+// 5070 Ti" on the Device page and in the Diagnostics encoder tile.
+TEST_F(DeviceAdapterTest, AdapterTitleDoesNotRepeatAVendorTheNameAlreadyCarries) {
+    adapter.setAdaptersForTest(
+        {MakeAdapter("NVIDIA GeForce RTX 5070 Ti", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete,
+                     1),
+         MakeAdapter("GeForce RTX 4070", capability::AdapterVendor::Nvidia, capability::AdapterKind::Discrete, 2)},
+        {MakeProbedNvencCap(true, true, true), MakeProbedNvencCap(true, true, true)});
+
+    const QAbstractListModel& model = *adapter.adapters();
+    ASSERT_EQ(model.rowCount(), 2);
+    EXPECT_EQ(RoleValue(model, 0, QByteArrayLiteral("title")).toString(), QStringLiteral("NVIDIA GeForce RTX 5070 Ti"));
+    // The name without the vendor still gets it prefixed.
+    EXPECT_EQ(RoleValue(model, 1, QByteArrayLiteral("title")).toString(), QStringLiteral("NVIDIA GeForce RTX 4070"));
     EXPECT_EQ(adapter.selectedIndex(), 0);
     EXPECT_TRUE(RoleValue(model, 0, QByteArrayLiteral("selected")).toBool());
     EXPECT_FALSE(RoleValue(model, 1, QByteArrayLiteral("selected")).toBool());

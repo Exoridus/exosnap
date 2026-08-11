@@ -18,6 +18,10 @@ ExoOverlayCard {
 
     objectName: "quickCrashReportOverlay"
     subtitle: qsTr("Problem Report")
+    // Warning, not error: the crash already happened and nothing is broken right
+    // now — the surface asks a consent question about a session that has ended.
+    // Escalating it to "error" would overstate what the user has to do about it.
+    severity: "warning"
     title: qsTr("The previous session did not shut down normally")
     hint: root.crash.availabilityText
     onDismissed: root.crash.dismiss()
@@ -38,7 +42,7 @@ ExoOverlayCard {
         Layout.fillWidth: true
         font {
             family: ExoTheme.monoFamily
-            pixelSize: 10
+            pixelSize: ExoTheme.fontEyebrow
             letterSpacing: 0.6
         }
     }
@@ -59,8 +63,10 @@ ExoOverlayCard {
 
             Repeater {
                 model: [
-                    { heading: qsTr("INCLUDED"), items: root.crash.includedItems, tone: ExoTheme.success, glyph: "✓" },
-                    { heading: qsTr("NOT INCLUDED"), items: root.crash.excludedItems, tone: ExoTheme.error, glyph: "×" }
+                    { heading: qsTr("INCLUDED"), items: root.crash.includedItems, tone: ExoTheme.success,
+                      glyph: ExoGlyph.Check },
+                    { heading: qsTr("NOT INCLUDED"), items: root.crash.excludedItems, tone: ExoTheme.error,
+                      glyph: ExoGlyph.Close }
                 ]
 
                 delegate: ColumnLayout {
@@ -71,14 +77,27 @@ ExoOverlayCard {
                     spacing: 2
                     Layout.fillWidth: true
 
-                    Label {
-                        text: group.modelData.glyph + "  " + group.modelData.heading
-                        textFormat: Text.PlainText
-                        color: group.modelData.tone
-                        font {
-                            family: ExoTheme.monoFamily
-                            pixelSize: 10
-                            letterSpacing: 0.6
+                    RowLayout {
+                        spacing: ExoTheme.spacingSm
+                        Layout.fillWidth: true
+
+                        ExoGlyph {
+                            kind: group.modelData.glyph
+                            color: group.modelData.tone
+                            Layout.preferredWidth: 12
+                            Layout.preferredHeight: 12
+                        }
+
+                        Label {
+                            text: group.modelData.heading
+                            textFormat: Text.PlainText
+                            color: group.modelData.tone
+                            Layout.fillWidth: true
+                            font {
+                                family: ExoTheme.monoFamily
+                                pixelSize: ExoTheme.fontEyebrow
+                                letterSpacing: 0.6
+                            }
                         }
                     }
 
@@ -95,7 +114,7 @@ ExoOverlayCard {
                             Layout.fillWidth: true
                             font {
                                 family: ExoTheme.sansFamily
-                                pixelSize: 11
+                                pixelSize: ExoTheme.fontCaption
                             }
                         }
                     }
@@ -110,7 +129,7 @@ ExoOverlayCard {
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
         }
@@ -136,7 +155,7 @@ ExoOverlayCard {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
     }

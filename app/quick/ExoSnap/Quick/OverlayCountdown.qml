@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Shapes
 
 // Pre-roll countdown, centred on the recorded monitor.
@@ -29,7 +30,6 @@ Window {
     readonly property color circleBackground: "#BD0C0C0E"  // rgba(12,12,14,0.74)
     readonly property color circleBorder: "#29FFFFFF"      // rgba(255,255,255,0.16)
     readonly property color ringTrack: "#1FFFFFFF"         // rgba(255,255,255,0.12)
-    readonly property color shadowTone: "#80000000"        // rgba(0,0,0,0.5)
 
     readonly property int circleSize: 124
     readonly property int shadowMargin: 18
@@ -56,20 +56,6 @@ Window {
         target: root
     }
 
-    // Flat dark ellipse instead of a real blur, the same approximation the
-    // Widgets class makes: the overlay must stay cheap to composite while the
-    // encoder has the GPU.
-    Rectangle {
-        width: root.circleSize + 20
-        height: root.circleSize + 20
-        radius: width / 2
-        color: root.shadowTone
-        anchors {
-            centerIn: parent
-            verticalCenterOffset: 6
-        }
-    }
-
     Rectangle {
         id: circle
 
@@ -80,6 +66,31 @@ Window {
         color: root.circleBackground
         border.width: 1
         border.color: root.circleBorder
+
+        // A real shadow, in one pass. It used to be a second Rectangle behind
+        // this one: a hard-edged 50 % black disc 20 px wider than the circle,
+        // ported from the Widgets class as a cheap stand-in for a blur. Over
+        // arbitrary desktop content that does not read as a shadow at all — it
+        // reads as an opaque grey plate the countdown is sitting on, which is
+        // exactly what a capture-excluded overlay must not look like.
+        //
+        // Rendered through the item's own layer, so the effect draws this
+        // circle rather than duplicating it, and `autoPaddingEnabled` grows the
+        // layer to fit the blur instead of clipping it at the circle's edge.
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            shadowEnabled: true
+            // Literal rather than a token on the window root: a `layer.effect`
+            // component is instantiated in its own scope, so an id from the
+            // enclosing file does not resolve inside it.
+            shadowColor: "#B3000000" // rgba(0, 0, 0, 0.7)
+            shadowVerticalOffset: 4
+            shadowBlur: 1.0
+            // Small on purpose: the window is only 20 px wider than the circle
+            // on each side, and the docs are explicit that a smaller blurMax is
+            // the cheapest way to keep a shadow affordable.
+            blurMax: 16
+        }
 
         Shape {
             anchors.fill: parent

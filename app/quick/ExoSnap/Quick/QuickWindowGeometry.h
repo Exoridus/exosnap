@@ -68,6 +68,19 @@ class QuickWindowGeometry : public QObject {
         return current_;
     }
 
+    // Hands the window over to a caller that owns its size for the rest of the
+    // process: the deferred one-shot restore is abandoned and nothing further is
+    // persisted.
+    //
+    // This exists for the render harness, which resizes the window to the size
+    // it was asked to photograph. That resize happens before the first frame,
+    // and the restore fires after it — so without this the harness silently
+    // photographed whatever rect happened to be persisted, and then persisted
+    // the harness's own size over the developer's real window in the bargain.
+    // Both halves are one decision: a run that dictates the size is also a run
+    // whose size means nothing to the next launch.
+    void detach();
+
   private:
     void sampleAndSchedule();
     void sampleVisibility();
@@ -77,6 +90,14 @@ class QuickWindowGeometry : public QObject {
     std::function<void(const PersistedWindowGeometry&)> sink_;
     QTimer persist_timer_;
     bool dirty_ = false;
+    // Set by detach(): the window's size belongs to someone else now, so neither
+    // the pending restore nor any sample may act.
+    bool detached_ = false;
+    // False until the window has produced a frame and been placed on its
+    // restored rect. Geometry changes before that are Qt creating the window,
+    // not the user moving it, and persisting them made the window grow on every
+    // launch.
+    bool armed_ = false;
 };
 
 } // namespace exosnap::quick

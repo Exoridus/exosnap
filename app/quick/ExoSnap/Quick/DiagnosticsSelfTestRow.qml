@@ -40,15 +40,28 @@ Rectangle {
             rightMargin: ExoTheme.spacingMd
         }
 
+        // "Not run" stays an em dash: that is the app's convention for a value
+        // that has no measurement, not an icon.
         Label {
-            text: root.notRun ? "—" : root.tone === "pass" ? "✓" : root.tone === "notice" ? "⚠" : "✗"
+            text: "—"
             textFormat: Text.PlainText
+            visible: root.notRun
             color: root.toneColor
             Layout.alignment: Qt.AlignTop
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
+        }
+
+        ExoGlyph {
+            kind: root.tone === "pass" ? ExoGlyph.Check
+                  : root.tone === "notice" ? ExoGlyph.Warning : ExoGlyph.Close
+            visible: !root.notRun
+            color: root.toneColor
+            Layout.alignment: Qt.AlignTop
+            Layout.preferredWidth: 13
+            Layout.preferredHeight: 13
         }
 
         Label {
@@ -60,7 +73,7 @@ Rectangle {
             Layout.alignment: Qt.AlignTop
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
             }
         }
 
@@ -72,7 +85,7 @@ Rectangle {
             Layout.alignment: Qt.AlignTop
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
 
@@ -82,11 +95,11 @@ Rectangle {
             wrapMode: Text.WordWrap
             color: ExoTheme.textMuted
             Layout.fillWidth: true
-            Layout.minimumHeight: 14
+            Layout.minimumHeight: 16
             Layout.alignment: Qt.AlignTop
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
             }
         }
     }

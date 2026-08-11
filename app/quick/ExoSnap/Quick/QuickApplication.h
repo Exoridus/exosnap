@@ -103,6 +103,17 @@ class QuickApplication {
     // an automated gate must not silently pass or fail on a persisted user
     // setting. Returns false when there is no completed recording to open.
     [[nodiscard]] bool openEditorForAutomation();
+    // Harness-only (--visual-test-size). Resizes the window to the size a
+    // capture was asked for and takes the size away from the persistence layer
+    // for the rest of the process.
+    //
+    // Both halves are needed. The window is placed on its persisted rect by a
+    // deferred correction that fires after the first rendered frame, which is
+    // AFTER a plain resize() — so a harness resize was being silently undone and
+    // every capture came out at whatever size the developer last left the real
+    // window at. And a size dictated on the command line is not a size the next
+    // launch should reopen at, so nothing is written back.
+    void applyHarnessWindowSize(const QSize& size);
     [[nodiscard]] bool applyRecordVisualScenario(const QString& scenario);
     // Harness-only (--overlay-visual-state). Seeds one of the runtime overlay
     // surfaces with deterministic content so a --visual-test capture can
@@ -309,6 +320,12 @@ class QuickApplication {
     // Harness only. Empty unless the corresponding CLI option was given.
     QString pending_record_visual_state_;
     QString pending_overlay_visual_state_;
+    // Harness-only. A --visual-test run that seeded a synthetic Diagnostics state
+    // must keep it: the capability probe lands asynchronously ~3 s later and its
+    // refresh would otherwise overwrite the scenario with this machine's real,
+    // healthy environment — which is exactly what every `diagnostics__issues`
+    // capture in the earlier baselines silently photographed.
+    bool diagnostics_visual_scenario_active_ = false;
     bool reapplying_visual_scenarios_ = false;
     // The relaunch handoff is applied before load(), when QML is not connected to
     // navigateToPageRequested yet, so the page is parked here and emitted once the

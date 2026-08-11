@@ -27,77 +27,113 @@ Item {
         value: root.active
     }
 
+    // One rhythm for the page: the shared page inset (24) to every window edge,
+    // one scale step less (16) between the three bands. It used to be 12 between
+    // the bands with a 12 px top inset against 24 everywhere else, so the strip
+    // sat closer to the title bar than the transport did to the bottom edge and
+    // the page did not share the inset every other page uses.
     ColumnLayout {
-        spacing: ExoTheme.spacingSm
+        spacing: ExoTheme.spacingLg
         anchors {
             fill: parent
-            topMargin: ExoTheme.spacingSm
-            rightMargin: ExoTheme.spacingXl
-            bottomMargin: ExoTheme.spacingLg
-            leftMargin: ExoTheme.spacingXl
+            topMargin: ExoTheme.pagePadding
+            rightMargin: ExoTheme.pagePadding
+            bottomMargin: ExoTheme.pagePadding
+            leftMargin: ExoTheme.pagePadding
         }
 
-        // Source/status strip. Deliberately a bare toolbar row rather than a
-        // bordered container: the preview is this page's subject, and a decorative
-        // box around four words of metadata was taking a preview band's worth of
-        // height to carry it.
-        RowLayout {
-            spacing: ExoTheme.spacingSm
+        // Context band. Record is the one page with no page title, so this bar IS
+        // the page's identity: what is being captured, whether that choice is
+        // locked, and what it will be written as.
+        //
+        // It used to be a bare row of text across the bare page. At 1600 px that
+        // left the source name and the format summary a thousand pixels apart
+        // with nothing saying they belonged to one statement, and its 9/10 px
+        // mono read as debug output beside 14 px body text everywhere else. A
+        // quiet surface — contrast only, no border, per the same rule ExoCard
+        // follows — ties the two ends into one band without making it a second
+        // toolbar.
+        Rectangle {
+            id: contextBar
+
+            implicitHeight: ExoTheme.controlHeight + 2 * ExoTheme.spacingSm
+            color: ExoTheme.surface
+            radius: ExoTheme.radiusMd
             Layout.fillWidth: true
-            Layout.preferredHeight: ExoTheme.controlHeight
 
-            Label {
-                text: root.recordViewModel.sourceKindText
-                textFormat: Text.PlainText
-                color: ExoTheme.textDim
-                Layout.alignment: Qt.AlignVCenter
-                font.family: ExoTheme.monoFamily
-                font.pixelSize: 9
-            }
-
-            Label {
-                text: root.recordViewModel.sourceName
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                color: ExoTheme.text
-                Layout.alignment: Qt.AlignVCenter
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontBody
-                    weight: Font.DemiBold
+            RowLayout {
+                spacing: ExoTheme.spacingSm
+                anchors {
+                    fill: parent
+                    topMargin: ExoTheme.spacingSm
+                    rightMargin: ExoTheme.spacingSm
+                    bottomMargin: ExoTheme.spacingSm
+                    leftMargin: ExoTheme.spacingLg
                 }
-            }
 
-            ExoBadge {
-                text: qsTr("LOCKED")
-                tone: "notice"
-                visible: !root.recordViewModel.canSelectSource
-                Layout.alignment: Qt.AlignVCenter
-            }
+                Label {
+                    text: root.recordViewModel.sourceKindText
+                    textFormat: Text.PlainText
+                    color: ExoTheme.textDim
+                    Layout.alignment: Qt.AlignVCenter
+                    font {
+                        family: ExoTheme.monoFamily
+                        pixelSize: ExoTheme.fontCaption
+                        letterSpacing: 1
+                        weight: Font.DemiBold
+                    }
+                }
 
-            Item {
-                Layout.fillWidth: true
-            }
+                // On the section-title rung, not the body rung: with no page
+                // title above it this is the largest piece of text on the page
+                // outside the timer, and it is what the user checks before
+                // pressing Record.
+                Label {
+                    text: root.recordViewModel.sourceName
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: ExoTheme.text
+                    Layout.alignment: Qt.AlignVCenter
+                    font {
+                        family: ExoTheme.sansFamily
+                        pixelSize: ExoTheme.fontSectionTitle
+                        weight: Font.DemiBold
+                    }
+                }
 
-            Label {
-                text: root.recordViewModel.formatText
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                horizontalAlignment: Text.AlignRight
-                color: ExoTheme.textMuted
-                Layout.maximumWidth: 310
-                Layout.alignment: Qt.AlignVCenter
-                font.family: ExoTheme.monoFamily
-                font.pixelSize: 10
-            }
+                ExoBadge {
+                    text: qsTr("LOCKED")
+                    tone: "notice"
+                    visible: !root.recordViewModel.canSelectSource
+                    Layout.alignment: Qt.AlignVCenter
+                }
 
-            ExoButton {
-                id: changeSourceButton
+                Item {
+                    Layout.fillWidth: true
+                }
 
-                text: qsTr("Change source")
-                enabled: root.recordViewModel.canSelectSource
-                Layout.leftMargin: ExoTheme.spacingSm
-                onClicked: sourcePicker.open()
+                Label {
+                    text: root.recordViewModel.formatText
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignRight
+                    color: ExoTheme.textMuted
+                    Layout.maximumWidth: 360
+                    Layout.alignment: Qt.AlignVCenter
+                    font {
+                        family: ExoTheme.monoFamily
+                        pixelSize: ExoTheme.fontCaption
+                    }
+                }
+
+                ExoButton {
+                    id: changeSourceButton
+
+                    text: qsTr("Change source")
+                    enabled: root.recordViewModel.canSelectSource
+                    Layout.leftMargin: ExoTheme.spacingMd - ExoTheme.spacingSm
+                    onClicked: sourcePicker.open()
+                }
             }
         }
 
@@ -125,18 +161,27 @@ Item {
                                          * root.recordViewModel.normalizedSourceRect.height
                     return sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
                 }
+                // Idle is the state the page spends most of its life in, and it
+                // is the one that does NOT need to shout: a hairline on the
+                // container rung (`line`, what every card uses) rather than the
+                // control rung. The four states that mean something keep their
+                // full-strength tone, so the ring reads as a signal instead of
+                // as permanent chrome.
                 readonly property color stateColor: root.recordViewModel.stateTone === "recording" ? ExoTheme.error
                                                     : root.recordViewModel.stateTone === "warning" ? ExoTheme.warning
                                                     : root.recordViewModel.stateTone === "error" ? ExoTheme.error
                                                     : root.recordViewModel.stateTone === "success" ? ExoTheme.success
-                                                    : ExoTheme.lineStrong
+                                                    : ExoTheme.line
 
                 width: Math.min(parent.width, parent.height * fittedPreview.sourceAspect)
                 height: width / fittedPreview.sourceAspect
                 color: "#08080A"
                 border.width: 1
                 border.color: fittedPreview.stateColor
-                radius: ExoTheme.radiusMd
+                // The largest surface in the product sits on the largest radius
+                // in the scale, the same rung cards use. At radiusMd it read as
+                // a scaled-up control rather than as the page's stage.
+                radius: ExoTheme.radiusLg
                 anchors.centerIn: parent
 
                 ExoPreviewItem {
@@ -145,7 +190,7 @@ Item {
                     objectName: "quickPreviewItem"
                     previewAdapter: root.previewAdapter
                     normalizedSourceRect: root.recordViewModel.normalizedSourceRect
-                    cornerRadius: ExoTheme.radiusMd
+                    cornerRadius: ExoTheme.radiusLg
                     anchors {
                         fill: parent
                         margins: 1
@@ -243,7 +288,7 @@ Item {
                         visible: webcamImage.status === Image.Error
                         anchors.fill: parent
                         font.family: ExoTheme.sansFamily
-                        font.pixelSize: 10
+                        font.pixelSize: ExoTheme.fontCaption
                     }
 
                     Rectangle {
@@ -352,12 +397,21 @@ Item {
                 // strip directly above states it already, and a second copy cost
                 // preview area to say the same thing twice.
 
-                Flow {
+                // The live readout, on the SAME ground the status pill in the
+                // opposite corner already uses. It used to be four bare outlined
+                // strings sitting straight on the video: legible, but it read as
+                // debug text burned into the frame rather than as a readout the
+                // product puts there, and it was the one thing on the preview
+                // that did not share the pill's language.
+                Rectangle {
                     id: liveMetrics
 
-                    width: Math.max(0, parent.width - 2 * ExoTheme.spacingLg)
-                    height: childrenRect.height
-                    spacing: ExoTheme.spacingMd
+                    readonly property real maxWidth: Math.max(0, parent.width - 2 * ExoTheme.spacingLg)
+
+                    width: Math.min(metricsFlow.childrenRect.width + 2 * ExoTheme.spacingMd, liveMetrics.maxWidth)
+                    height: metricsFlow.childrenRect.height + 2 * ExoTheme.spacingSm
+                    color: Qt.rgba(0, 0, 0, 0.72)
+                    radius: ExoTheme.radiusSm
                     visible: root.recordViewModel.recording || root.recordViewModel.paused
                     anchors {
                         left: parent.left
@@ -365,42 +419,50 @@ Item {
                         margins: ExoTheme.spacingLg
                     }
 
-                    Label {
-                        text: qsTr("BITRATE %1").arg(root.recordViewModel.bitrateText)
-                        textFormat: Text.PlainText
-                        color: ExoTheme.text
-                        style: Text.Outline
-                        styleColor: "#B0000000"
-                        font.family: ExoTheme.monoFamily
-                        font.pixelSize: 10
-                    }
-                    Label {
-                        text: qsTr("DROP %1").arg(root.recordViewModel.droppedFramesText)
-                        textFormat: Text.PlainText
-                        color: ExoTheme.text
-                        style: Text.Outline
-                        styleColor: "#B0000000"
-                        font.family: ExoTheme.monoFamily
-                        font.pixelSize: 10
-                    }
-                    Label {
-                        text: qsTr("DRIFT %1").arg(root.recordViewModel.driftText)
-                        textFormat: Text.PlainText
-                        color: ExoTheme.text
-                        style: Text.Outline
-                        styleColor: "#B0000000"
-                        font.family: ExoTheme.monoFamily
-                        font.pixelSize: 10
-                    }
+                    Flow {
+                        id: metricsFlow
 
-                    Label {
-                        text: qsTr("SIZE %1").arg(root.recordViewModel.outputSizeText)
-                        textFormat: Text.PlainText
-                        color: ExoTheme.text
-                        style: Text.Outline
-                        styleColor: "#B0000000"
-                        font.family: ExoTheme.monoFamily
-                        font.pixelSize: 10
+                        // Measured off the preview rather than off the ground
+                        // above, which is what keeps the two from feeding into
+                        // each other.
+                        width: Math.max(0, liveMetrics.maxWidth - 2 * ExoTheme.spacingMd)
+                        spacing: ExoTheme.spacingMd
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            topMargin: ExoTheme.spacingSm
+                            leftMargin: ExoTheme.spacingMd
+                        }
+
+                        Label {
+                            text: qsTr("BITRATE %1").arg(root.recordViewModel.bitrateText)
+                            textFormat: Text.PlainText
+                            color: ExoTheme.text
+                            font.family: ExoTheme.monoFamily
+                            font.pixelSize: ExoTheme.fontEyebrow
+                        }
+                        Label {
+                            text: qsTr("DROP %1").arg(root.recordViewModel.droppedFramesText)
+                            textFormat: Text.PlainText
+                            color: ExoTheme.text
+                            font.family: ExoTheme.monoFamily
+                            font.pixelSize: ExoTheme.fontEyebrow
+                        }
+                        Label {
+                            text: qsTr("DRIFT %1").arg(root.recordViewModel.driftText)
+                            textFormat: Text.PlainText
+                            color: ExoTheme.text
+                            font.family: ExoTheme.monoFamily
+                            font.pixelSize: ExoTheme.fontEyebrow
+                        }
+
+                        Label {
+                            text: qsTr("SIZE %1").arg(root.recordViewModel.outputSizeText)
+                            textFormat: Text.PlainText
+                            color: ExoTheme.text
+                            font.family: ExoTheme.monoFamily
+                            font.pixelSize: ExoTheme.fontEyebrow
+                        }
                     }
                 }
 
@@ -435,9 +497,14 @@ Item {
                 }
 
                 Label {
-                    text: root.previewAdapter.errorText.length > 0 ? root.previewAdapter.errorText
-                          : root.recordViewModel.blocked || root.recordViewModel.failed
-                            ? root.recordViewModel.capabilityText : ""
+                    // Only a real preview error. The blocked/failed fallback used
+                    // to put `capabilityText` here — the configuration summary,
+                    // which reads "Ready: MKV · AV1 NVENC · Opus · 60 fps". On a
+                    // failed run that is amber text across the middle of the
+                    // preview saying "Ready", and it repeats what the strip above
+                    // the preview already states. Why the run failed belongs to
+                    // the recording-error surface, which owns it.
+                    text: root.previewAdapter.errorText
                     textFormat: Text.PlainText
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
@@ -446,7 +513,7 @@ Item {
                     width: Math.max(0, Math.min(440, parent.width - 48))
                     anchors.centerIn: parent
                     font.family: ExoTheme.sansFamily
-                    font.pixelSize: 13
+                    font.pixelSize: ExoTheme.fontBody
                 }
 
                 Rectangle {
@@ -473,28 +540,30 @@ Item {
             }
         }
 
+        // Production entry into the Edit surface (ADR 0022). Hidden rather than
+        // disabled when the recording cannot be edited at all (split recording,
+        // missing file, failed run) — a permanently dead button next to a
+        // successful result reads as a defect.
+        //
+        // The row's OWN visibility is the Edit button's, so an invisible row
+        // contributes neither height nor column spacing. It used to also carry
+        // `recordViewModel.resultText`, which appeared and disappeared with the
+        // engine state and re-scaled the live preview underneath it every time —
+        // a failed run shrank the preview to make room for a sentence saying it
+        // had failed. What went wrong is stated inside the preview and, when it
+        // is serious, on the recording-error surface; neither needed this line.
         RowLayout {
             spacing: ExoTheme.spacingSm
+            visible: root.recordViewModel.canOpenEditor
             Layout.fillWidth: true
 
-            Label {
-                text: root.recordViewModel.resultText
-                textFormat: Text.PlainText
-                elide: Text.ElideMiddle
-                color: root.recordViewModel.failed ? ExoTheme.error : ExoTheme.textMuted
-                visible: text.length > 0
-                font.family: ExoTheme.monoFamily
-                font.pixelSize: 10
+            Item {
                 Layout.fillWidth: true
             }
 
-            // Production entry into the Edit surface (ADR 0022). Hidden rather
-            // than disabled when the recording cannot be edited at all (split
-            // recording, missing file, failed run) — a permanently dead button
-            // next to a successful result reads as a defect.
             ExoButton {
                 text: qsTr("Edit")
-                visible: root.recordViewModel.canOpenEditor
+                tone: "primary"
                 onClicked: root.recordViewModel.requestOpenEditor()
             }
         }

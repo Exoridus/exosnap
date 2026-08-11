@@ -141,7 +141,7 @@ Rectangle {
                 color: ExoTheme.textDim
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
 
@@ -185,7 +185,7 @@ Rectangle {
                 color: ExoTheme.textSecondary
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
 
@@ -206,7 +206,7 @@ Rectangle {
                 color: ExoTheme.text
                 font {
                     family: ExoTheme.monoFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontCaption
                 }
             }
         }
@@ -220,7 +220,7 @@ Rectangle {
         color: ExoTheme.textMuted
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 12
+            pixelSize: ExoTheme.fontSecondary
         }
     }
 }

@@ -40,33 +40,69 @@ QtObject {
     // fits on screen, so they are separate from the raw scale: tuning the product's
     // density must not silently retune every unrelated gap that happens to share a
     // number today.
-    readonly property int rowSpacing: 9        // between setting rows inside a card
-    readonly property int sectionGap: 16       // between cards on a page
-    readonly property int cardPadding: 15      // a card's own inset
-    readonly property int cardPaddingCompact: 11
-    readonly property int pagePadding: 20      // page edge inset
+    //
+    // These were once tuned DOWN, to fit more configuration on one screen. Judged
+    // against the Widgets reference side by side that read as a window rendered at
+    // reduced zoom rather than as a compact desktop application, so the scale is
+    // back at desktop density. "How much fits without scrolling" is explicitly not
+    // the metric being optimised here.
+    readonly property int rowSpacing: 12       // between setting rows inside a card
+    readonly property int sectionGap: 18       // between cards on a page
+    readonly property int cardPadding: 18      // a card's own inset
+    readonly property int cardPaddingCompact: 14
+    readonly property int pagePadding: 24      // page edge inset
 
     // ── Radii ────────────────────────────────────────────────────────────────
+    //
+    // Four rungs and nothing between them. `radiusXs` is for something that is
+    // barely taller than its own corner — a badge, the selected chip inside a
+    // segmented control — where radiusSm rounds so far it reads as a pill it is
+    // not. It is not a new value: it names the 6 both of those already drew.
+    // Anything smaller still in the tree (a 3 px dot, a 1 px caret) is an
+    // indicator, not a container, and deliberately stays local.
+    readonly property int radiusXs: 6
     readonly property int radiusSm: 8
     readonly property int radiusMd: 10
     readonly property int radiusLg: 14
     readonly property int radiusPill: 999
 
     // ── Control sizing ───────────────────────────────────────────────────────
-    readonly property int controlHeight: 32
-    readonly property int controlHeightCompact: 26
-    readonly property int controlHeightLarge: 40
+    //
+    // 36 is the Widgets shell's ui::theme::ExoSnapMetrics::kControlHeight and the
+    // floor for a comfortable desktop hit target; 44 is its kPrimaryCtaHeight, so
+    // the one recommended action on a surface is visibly larger than the row of
+    // secondary ones next to it.
+    readonly property int controlHeight: 36
+    readonly property int controlHeightCompact: 30
+    readonly property int controlHeightLarge: 44
 
     // ── Typography ───────────────────────────────────────────────────────────
     // Semantic rungs, not a numeric scale: the caller names the role and the theme
     // decides the size, which is what keeps one page from inventing a fourth
     // heading size.
-    readonly property int fontCaption: 11      // hints, units, secondary metadata
-    readonly property int fontSecondary: 12    // subtitles, muted supporting text
-    readonly property int fontBody: 13         // labels, controls, list rows
-    readonly property int fontSectionTitle: 14 // card / section headings
-    readonly property int fontBrand: 15        // the shell's wordmark
-    readonly property int fontPageTitle: 19    // one per page, at most
+    //
+    // Six rungs that must stay TELLABLE APART at 100% scaling. The previous set
+    // spanned 11..19 and collapsed body, section title and secondary into what
+    // read as one small size; the spread below restores the steps between them.
+    // The mono kicker: an uppercase label over a value, the text inside a badge,
+    // a section eyebrow, a track name on the timeline. Deliberately below
+    // fontCaption — it labels, it is never read as prose. It is a named rung
+    // because the same role was being drawn at 9 px in four files and 10 px in a
+    // dozen others, which is a size difference nobody chose.
+    readonly property int fontEyebrow: 10
+    readonly property int fontCaption: 12      // hints, units, secondary metadata
+    readonly property int fontSecondary: 13    // subtitles, muted supporting text
+    readonly property int fontBody: 14         // labels, controls, list rows
+    readonly property int fontSectionTitle: 16 // card / section headings
+    readonly property int fontBrand: 16        // the shell's wordmark
+    readonly property int fontPageTitle: 22    // one per page, at most
+
+    // The number the surface EXISTS to show: a diagnostics tile's measurement, the
+    // transport's elapsed time, a readiness count. Deliberately far above
+    // fontSectionTitle — a value that reads at the same weight as its own label is
+    // the specific failure this rung was added to fix.
+    readonly property int fontValue: 22
+    readonly property int fontValueLarge: 28
 
     // ── State treatment ──────────────────────────────────────────────────────
     readonly property real disabledOpacity: 0.45
@@ -100,12 +136,19 @@ QtObject {
     readonly property int widthWide: 1360
     readonly property int rowStackWidth: 460
 
-    // Widest a single reading column is allowed to get. A page whose content is
-    // genuinely short (a healthy Diagnostics run says almost nothing, and that is
-    // the point) should not stretch its few rows across a 4K desktop; capping the
-    // column turns the leftover space into a margin instead of a void. Pages that
-    // fill their width — Settings' two columns, the Logs list — do not use this.
-    readonly property int contentMaxWidth: 1280
+    // Widest the page content is allowed to get before the leftover space becomes
+    // a margin instead of more content. Responsive is not the same as
+    // edge-to-edge: a label pinned left and its control pinned right across 1560
+    // px puts half a screen of nothing between a setting and the thing that
+    // changes it, which is what the un-capped Settings page did at 1600.
+    //
+    // Derived by comparison, not by rule: the Widgets reference centred roughly a
+    // 1040 px column at 1600. This is a little wider because Quick keeps each
+    // row's hint text inline rather than behind an information tooltip.
+    //
+    // Logs is the deliberate exception — a log line is data, and truncating it to
+    // protect a reading measure would be the wrong trade for a tool surface.
+    readonly property int contentMaxWidth: 1160
 
     function isRegular(w: real): bool {
         return w >= root.widthRegular;

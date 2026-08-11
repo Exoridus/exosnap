@@ -54,7 +54,7 @@ Rectangle {
         color: ExoTheme.textMuted
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 13
+            pixelSize: ExoTheme.fontBody
         }
     }
 
@@ -148,7 +148,7 @@ Rectangle {
         color: ExoTheme.textDim
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 10
+            pixelSize: ExoTheme.fontCaption
         }
     }
 }

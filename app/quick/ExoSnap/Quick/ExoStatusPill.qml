@@ -56,7 +56,7 @@ Rectangle {
             color: root.onSurface ? root.toneColor : ExoTheme.textSecondary
             font {
                 family: root.onSurface ? ExoTheme.monoFamily : ExoTheme.sansFamily
-                pixelSize: root.onSurface ? 10 : ExoTheme.fontSecondary
+                pixelSize: root.onSurface ? ExoTheme.fontEyebrow : ExoTheme.fontSecondary
                 weight: Font.DemiBold
             }
         }

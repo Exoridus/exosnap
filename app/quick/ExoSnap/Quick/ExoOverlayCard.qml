@@ -23,6 +23,14 @@ Item {
     required property string title
     property string subtitle: ""
     property string hint: ""
+    // "none" | "info" | "warning" | "error" — how serious this surface is, drawn
+    // as the hero block left of the title. "none" keeps the plain heading, which
+    // is what a surface that merely asks a question wants.
+    property string severity: "none"
+
+    readonly property color _severityColor: root.severity === "error" ? ExoTheme.error
+                                          : root.severity === "warning" ? ExoTheme.warning
+                                          : ExoTheme.accent
     // Escape and a backdrop click both mean "leave this for now". Surfaces where
     // that is not a safe answer (an unrecoverable recording error the user has to
     // acknowledge) set this false and offer an explicit action instead.
@@ -101,29 +109,51 @@ Item {
                         rightMargin: ExoTheme.spacingMd
                     }
 
-                    Image {
-                        source: "qrc:/brand/exosnap-logo.svg"
-                        sourceSize.width: 15
-                        sourceSize.height: 15
-                        Layout.preferredWidth: 15
-                        Layout.preferredHeight: 15
+                    // The same mark-plus-wordmark pair the shell's title bar
+                    // draws, at the same rung. Every runtime surface the user
+                    // meets after something went wrong — the recording error,
+                    // the crash consent, the recovery prompt — sits on this card,
+                    // and all three were spelling the product "ExoSnap" in 12 px
+                    // body text next to a 15 px mark. That is the exact thing the
+                    // shell stopped doing; a surface that appears when the
+                    // application is in trouble is the last one that should look
+                    // like a different application.
+                    ExoBrandMark {
+                        Layout.preferredWidth: 16
+                        Layout.preferredHeight: 16
                     }
 
-                    Label {
-                        text: qsTr("ExoSnap")
-                        textFormat: Text.PlainText
-                        color: ExoTheme.text
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: 12
-                            weight: Font.DemiBold
+                    Row {
+                        Layout.alignment: Qt.AlignVCenter
+
+                        Label {
+                            text: qsTr("exo")
+                            textFormat: Text.PlainText
+                            color: ExoTheme.text
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontBrand
+                                weight: Font.DemiBold
+                            }
+                        }
+
+                        Label {
+                            text: qsTr("snap")
+                            textFormat: Text.PlainText
+                            color: ExoTheme.accent
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontBrand
+                                weight: Font.DemiBold
+                            }
                         }
                     }
 
                     Rectangle {
                         color: ExoTheme.line
                         Layout.preferredWidth: 1
-                        Layout.preferredHeight: 13
+                        Layout.preferredHeight: 14
+                        Layout.alignment: Qt.AlignVCenter
                         visible: root.subtitle !== ""
                     }
 
@@ -132,9 +162,10 @@ Item {
                         textFormat: Text.PlainText
                         visible: root.subtitle !== ""
                         color: ExoTheme.textMuted
+                        Layout.alignment: Qt.AlignVCenter
                         font {
                             family: ExoTheme.monoFamily
-                            pixelSize: 11
+                            pixelSize: ExoTheme.fontCaption
                             letterSpacing: 0.3
                         }
                     }
@@ -155,37 +186,71 @@ Item {
                 }
             }
 
-            // ---- Title + hint ----
-            ColumnLayout {
-                spacing: ExoTheme.spacingXs
+            // ---- Severity hero + title + hint ----
+            //
+            // The hero is what tells the user, before they read a word, whether
+            // this surface is a failure, a caution or a routine question. Without
+            // it every one of these surfaces was a card with a heading in it, and
+            // "Recording could not start" carried exactly as much visual weight as
+            // a settings section title.
+            RowLayout {
+                spacing: ExoTheme.spacingLg
                 Layout.fillWidth: true
                 Layout.leftMargin: ExoTheme.spacingXl
                 Layout.rightMargin: ExoTheme.spacingXl
                 Layout.topMargin: ExoTheme.spacingLg
 
-                Label {
-                    text: root.title
-                    textFormat: Text.PlainText
-                    wrapMode: Text.WordWrap
-                    color: ExoTheme.text
-                    Layout.fillWidth: true
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: 16
-                        weight: Font.DemiBold
+                Rectangle {
+                    color: root.severity === "error" ? ExoTheme.errorSurface
+                         : root.severity === "warning" ? ExoTheme.warningSurface : ExoTheme.surfaceRaised
+                    border.width: 1
+                    border.color: root._severityColor
+                    radius: ExoTheme.radiusMd
+                    visible: root.severity !== "none"
+                    Layout.preferredWidth: 44
+                    Layout.preferredHeight: 44
+                    Layout.alignment: Qt.AlignTop
+
+                    ExoGlyph {
+                        anchors.centerIn: parent
+                        kind: root.severity === "error" ? ExoGlyph.Close
+                              : root.severity === "warning" ? ExoGlyph.Warning : ExoGlyph.Info
+                        color: root._severityColor
+                        strokeWidth: 2
+                        width: 22
+                        height: 22
                     }
                 }
 
-                Label {
-                    text: root.hint
-                    textFormat: Text.PlainText
-                    wrapMode: Text.WordWrap
-                    visible: root.hint !== ""
-                    color: ExoTheme.textMuted
+                ColumnLayout {
+                    spacing: ExoTheme.spacingXs
                     Layout.fillWidth: true
-                    font {
-                        family: ExoTheme.sansFamily
-                        pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Label {
+                        text: root.title
+                        textFormat: Text.PlainText
+                        wrapMode: Text.WordWrap
+                        color: ExoTheme.text
+                        Layout.fillWidth: true
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontPageTitle
+                            weight: Font.DemiBold
+                        }
+                    }
+
+                    Label {
+                        text: root.hint
+                        textFormat: Text.PlainText
+                        wrapMode: Text.WordWrap
+                        visible: root.hint !== ""
+                        color: ExoTheme.textSecondary
+                        Layout.fillWidth: true
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontSecondary
+                        }
                     }
                 }
             }

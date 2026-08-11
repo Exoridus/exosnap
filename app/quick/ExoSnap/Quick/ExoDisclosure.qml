@@ -72,7 +72,7 @@ ColumnLayout {
         Layout.leftMargin: ExoTheme.spacingLg
         font {
             family: ExoTheme.sansFamily
-            pixelSize: 11
+            pixelSize: ExoTheme.fontCaption
         }
     }
 

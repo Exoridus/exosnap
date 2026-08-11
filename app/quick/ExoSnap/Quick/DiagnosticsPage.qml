@@ -21,9 +21,19 @@ Item {
     // The tile grid reflows on the tiles' own minimum width rather than on window
     // thresholds, so it stays right inside a narrow column too. Free in QML; there
     // is no C++ column policy to keep in sync any more.
-    readonly property int tileColumns: ExoTheme.gridColumns(
-                                           Math.min(root.width, ExoTheme.contentMaxWidth) - 2 * ExoTheme.pagePadding,
-                                           210, ExoTheme.spacingSm, 4)
+    readonly property int tileColumns: ExoTheme.gridColumns(root.contentWidth, 210, ExoTheme.spacingMd, 4)
+
+    // The capped, centred reading column. Shared by the header above the scroll
+    // view and the content inside it, so the page identity is not pinned to the
+    // window edge while every card under it starts further in.
+    //
+    // Same formula as Settings and Device — page padding on both sides minus the
+    // reserved scrollbar gutter. It used to subtract only the gutter, which put
+    // this page's capped column on an axis 12 px off from theirs at every window
+    // width.
+    readonly property real contentBox: Math.max(0, root.width - 2 * ExoTheme.pagePadding - ExoTheme.spacingLg)
+    readonly property real contentWidth: Math.min(root.contentBox, ExoTheme.contentMaxWidth)
+    readonly property real sideInset: Math.max(0, (root.contentBox - root.contentWidth) / 2)
 
     signal navigateToLogsRequested()
     signal navigateToDeviceRequested()
@@ -88,47 +98,56 @@ Item {
     }
 
     ColumnLayout {
-        anchors.fill: parent
-        spacing: 0
+        spacing: ExoTheme.spacingMd
+        anchors {
+            fill: parent
+            margins: ExoTheme.pagePadding
+        }
 
-        // ── Toolbar: page identity, the support-bundle export, the Expert toggle ──
+        // ── Page header: identity, the support-bundle export, the Expert toggle ──
+        //
+        // A page title on the same rung, the same axis and the same inset as
+        // Settings and Device. It was a 12 px mono kicker under a full-window
+        // hairline, on an axis 24 px further in than its own cards — three
+        // different page-header treatments across six pages, and one of them
+        // misaligned with its own content.
         RowLayout {
             spacing: ExoTheme.spacingMd
             Layout.fillWidth: true
-            Layout.leftMargin: ExoTheme.pagePadding
-            Layout.rightMargin: ExoTheme.pagePadding
-            Layout.topMargin: ExoTheme.spacingSm
-            Layout.bottomMargin: ExoTheme.spacingSm
+            Layout.bottomMargin: ExoTheme.spacingXs
+            Layout.leftMargin: root.sideInset
+            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
 
             Label {
-                text: qsTr("DIAGNOSTICS")
+                text: qsTr("Diagnostics")
                 textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
+                color: ExoTheme.text
                 font {
-                    family: ExoTheme.monoFamily
-                    pixelSize: 11
-                    letterSpacing: 1
+                    family: ExoTheme.sansFamily
+                    pixelSize: ExoTheme.fontPageTitle
                     weight: Font.DemiBold
                 }
             }
 
             Label {
-                text: root.diagnostics.expertMode ? qsTr("· Expert — full taxonomy") : qsTr("· Simple")
+                text: root.diagnostics.expertMode ? qsTr("Expert — full taxonomy") : qsTr("Simple")
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 color: ExoTheme.textMuted
                 Layout.fillWidth: true
+                Layout.alignment: Qt.AlignBaseline
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 11
+                    pixelSize: ExoTheme.fontSecondary
                 }
             }
 
+            // Chromed, not quiet: this one writes a file to disk and it must not
+            // read like the muted mode label two items to its right.
             ExoButton {
                 text: root.diagnostics.bundleBusy ? qsTr("Creating…") : qsTr("Create support bundle")
                 visible: root.diagnostics.expertMode
                 enabled: !root.diagnostics.bundleBusy
-                quiet: true
                 Accessible.description: qsTr("Create a diagnostic package to share with support")
                 onClicked: bundleDialog.open()
             }
@@ -136,11 +155,11 @@ Item {
             Label {
                 text: qsTr("Expert mode")
                 textFormat: Text.PlainText
-                color: root.diagnostics.expertMode ? ExoTheme.text : ExoTheme.textMuted
+                color: root.diagnostics.expertMode ? ExoTheme.accent : ExoTheme.textSecondary
                 Layout.alignment: Qt.AlignVCenter
                 font {
                     family: ExoTheme.sansFamily
-                    pixelSize: 12
+                    pixelSize: ExoTheme.fontBody
                 }
             }
 
@@ -151,12 +170,6 @@ Item {
                     root.diagnostics.expertMode = value;
                 }
             }
-        }
-
-        Rectangle {
-            color: ExoTheme.line
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
         }
 
         ExoScrollView {
@@ -174,8 +187,8 @@ Item {
                 spacing: ExoTheme.spacingLg
                 // Capped and centred: a healthy run is a short page, and stretching
                 // six tiles across a wide desktop reads as something missing.
-                width: Math.min(scroll.availableWidth, ExoTheme.contentMaxWidth)
-                x: Math.max(0, (scroll.availableWidth - width) / 2)
+                width: root.contentWidth
+                x: root.sideInset
 
                 // ── Verdict band ────────────────────────────────────────────────
                 Rectangle {
@@ -194,9 +207,6 @@ Item {
                     border.color: root.diagnostics.verdictState === "neutral" ? ExoTheme.line : verdictBand.verdictColor
                     radius: ExoTheme.radiusLg
                     Layout.fillWidth: true
-                    Layout.topMargin: ExoTheme.spacingXl
-                    Layout.leftMargin: ExoTheme.pagePadding
-                    Layout.rightMargin: ExoTheme.pagePadding
 
                     RowLayout {
                         id: verdictRow
@@ -216,18 +226,16 @@ Item {
                             Layout.preferredHeight: 42
                             Layout.alignment: Qt.AlignVCenter
 
-                            Label {
+                            ExoGlyph {
                                 anchors.centerIn: parent
-                                text: root.diagnostics.verdictState === "blocked" ? "✗"
-                                    : root.diagnostics.verdictState === "warn" ? "⚠"
-                                    : root.diagnostics.verdictState === "ready" ? "✓"
-                                    : "ⓘ"
-                                textFormat: Text.PlainText
+                                kind: root.diagnostics.verdictState === "blocked" ? ExoGlyph.Close
+                                      : root.diagnostics.verdictState === "warn" ? ExoGlyph.Warning
+                                      : root.diagnostics.verdictState === "ready" ? ExoGlyph.Check
+                                                                                  : ExoGlyph.Info
                                 color: verdictBand.verdictColor
-                                font {
-                                    family: ExoTheme.sansFamily
-                                    pixelSize: 20
-                                }
+                                strokeWidth: 1.8
+                                width: 20
+                                height: 20
                             }
                         }
 
@@ -241,10 +249,10 @@ Item {
                                 wrapMode: Text.WordWrap
                                 color: ExoTheme.text
                                 Layout.fillWidth: true
-                                Layout.minimumHeight: 20
+                                Layout.minimumHeight: 22
                                 font {
                                     family: ExoTheme.sansFamily
-                                    pixelSize: 16
+                                    pixelSize: ExoTheme.fontSectionTitle
                                     weight: Font.DemiBold
                                 }
                             }
@@ -255,10 +263,10 @@ Item {
                                 wrapMode: Text.WordWrap
                                 color: ExoTheme.textMuted
                                 Layout.fillWidth: true
-                                Layout.minimumHeight: 15
+                                Layout.minimumHeight: 17
                                 font {
                                     family: ExoTheme.sansFamily
-                                    pixelSize: 12
+                                    pixelSize: ExoTheme.fontSecondary
                                 }
                             }
                         }
@@ -275,12 +283,18 @@ Item {
                                 Layout.alignment: Qt.AlignRight
                                 font {
                                     family: ExoTheme.sansFamily
-                                    pixelSize: 11
+                                    pixelSize: ExoTheme.fontCaption
                                 }
                             }
 
+                            // The one action the verdict band offers, so it takes
+                            // the primary rung: accent-filled and on the taller
+                            // CTA height, matching the Widgets reference. Left
+                            // neutral it rendered as a text run beside the
+                            // timestamp above it.
                             ExoButton {
                                 text: root.diagnostics.checking ? qsTr("Checking…") : qsTr("Run Check")
+                                tone: "primary"
                                 enabled: !root.diagnostics.checking
                                 Layout.alignment: Qt.AlignRight
                                 onClicked: root.diagnostics.runCheck()
@@ -295,8 +309,6 @@ Item {
                     columnSpacing: ExoTheme.spacingMd
                     rowSpacing: ExoTheme.spacingMd
                     Layout.fillWidth: true
-                    Layout.leftMargin: ExoTheme.pagePadding
-                    Layout.rightMargin: ExoTheme.pagePadding
 
                     Repeater {
                         model: root.diagnostics.tiles
@@ -324,8 +336,6 @@ Item {
                     spacing: ExoTheme.spacingSm
                     visible: root.diagnostics.hasIssues
                     Layout.fillWidth: true
-                    Layout.leftMargin: ExoTheme.pagePadding
-                    Layout.rightMargin: ExoTheme.pagePadding
 
                     Repeater {
                         model: root.diagnostics.issues
@@ -366,8 +376,6 @@ Item {
                     tips: root.diagnostics.tips
                     defaultOpen: root.diagnostics.expertMode
                     Layout.fillWidth: true
-                    Layout.leftMargin: ExoTheme.pagePadding
-                    Layout.rightMargin: ExoTheme.pagePadding
                     onApplyFixRequested: function (id) {
                         root.diagnostics.applyFix(id);
                     }
@@ -381,8 +389,6 @@ Item {
                     spacing: ExoTheme.spacingLg
                     visible: root.diagnostics.expertMode
                     Layout.fillWidth: true
-                    Layout.leftMargin: ExoTheme.pagePadding
-                    Layout.rightMargin: ExoTheme.pagePadding
 
                     DiagnosticsSectionHeader {
                         title: qsTr("ENVIRONMENT")
@@ -404,10 +410,10 @@ Item {
                             wrapMode: Text.WordWrap
                             color: ExoTheme.textMuted
                             Layout.fillWidth: true
-                            Layout.minimumHeight: 15
+                            Layout.minimumHeight: 17
                             font {
                                 family: ExoTheme.sansFamily
-                                pixelSize: 12
+                                pixelSize: ExoTheme.fontSecondary
                             }
                         }
 
@@ -439,7 +445,7 @@ Item {
                                         Layout.fillWidth: true
                                         font {
                                             family: ExoTheme.sansFamily
-                                            pixelSize: 12
+                                            pixelSize: ExoTheme.fontSecondary
                                         }
                                     }
 
@@ -460,7 +466,7 @@ Item {
                                     Layout.fillWidth: true
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 11
+                                        pixelSize: ExoTheme.fontCaption
                                     }
                                 }
 
@@ -503,7 +509,7 @@ Item {
                                     Layout.fillWidth: true
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 11
+                                        pixelSize: ExoTheme.fontCaption
                                     }
                                 }
 
@@ -532,7 +538,7 @@ Item {
                                     Layout.fillWidth: true
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 11
+                                        pixelSize: ExoTheme.fontCaption
                                     }
                                 }
 
@@ -593,10 +599,10 @@ Item {
                                 wrapMode: Text.WordWrap
                                 color: ExoTheme.textMuted
                                 Layout.fillWidth: true
-                                Layout.minimumHeight: 15
+                                Layout.minimumHeight: 17
                                 font {
                                     family: ExoTheme.sansFamily
-                                    pixelSize: 12
+                                    pixelSize: ExoTheme.fontSecondary
                                 }
                             }
 
@@ -640,7 +646,7 @@ Item {
                                     Layout.fillWidth: true
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 13
+                                        pixelSize: ExoTheme.fontBody
                                         weight: Font.DemiBold
                                     }
                                 }
@@ -651,10 +657,10 @@ Item {
                                     wrapMode: Text.WordWrap
                                     color: ExoTheme.textMuted
                                     Layout.fillWidth: true
-                                    Layout.minimumHeight: 14
+                                    Layout.minimumHeight: 16
                                     font {
                                         family: ExoTheme.sansFamily
-                                        pixelSize: 11
+                                        pixelSize: ExoTheme.fontCaption
                                     }
                                 }
                             }

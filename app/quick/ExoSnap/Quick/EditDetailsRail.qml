@@ -36,7 +36,7 @@ Rectangle {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily
-                pixelSize: 13
+                pixelSize: ExoTheme.fontBody
                 weight: Font.DemiBold
             }
         }

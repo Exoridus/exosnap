@@ -26,7 +26,7 @@ Item {
             Layout.preferredWidth: 96
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 11
+                pixelSize: ExoTheme.fontCaption
                 capitalization: Font.AllUppercase
             }
         }
@@ -51,7 +51,7 @@ Item {
             Layout.fillWidth: true
             font {
                 family: ExoTheme.monoFamily
-                pixelSize: 12
+                pixelSize: ExoTheme.fontSecondary
                 weight: Font.Medium
             }
         }
