@@ -21,7 +21,8 @@ Read:
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
 - Top-level navigation: **Record, Device, Settings, Diagnostics, Logs, About** (6 items; Hotkeys moved into Settings as an embedded card — PS-PHASE-C; Device tab added in the final-redesign port)
-  - **Settings** hosts recording configuration across embedded sections (Container & codecs, Quality & timing, Audio, Output, Webcam, Notifications & overlays, Hotkeys, Updates, Appearance, Developer); no section is Expert-only — a shared Expert toggle reveals additional rows in place per section instead
+  - **Settings** hosts recording configuration across embedded sections (Container & codecs, Quality & timing, Audio, Output, Webcam, Overlays, Notifications & presence, Hotkeys, Updates, Appearance, Developer); no section is Expert-only — a shared Expert toggle reveals additional rows in place per section instead
+  - **Overlays** configures the capture-excluded on-screen surfaces by behaviour and content (preset + per-element), never by visual token; the former single "Notifications & overlays" card was split once the overlays gained content configuration
   - **Device** hosts adapter selection + the per-GPU capability matrix (moved out of Diagnostics)
   - **Edit/Output/Save** is an overlay over the Record page (ADR 0022), not a nav item
 

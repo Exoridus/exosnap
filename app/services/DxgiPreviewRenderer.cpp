@@ -17,8 +17,10 @@
 #include <d3dcompiler.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <numeric>
 #include <vector>
 
 // High-resolution waitable timer flag (Windows 10 1803+). Define defensively in
@@ -29,6 +31,20 @@
 
 namespace exosnap {
 namespace {
+
+using PerformanceClock = std::chrono::steady_clock;
+
+int64_t performanceNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(PerformanceClock::now().time_since_epoch()).count();
+}
+
+double performancePercentile(std::vector<double> values, double fraction) {
+    if (values.empty())
+        return 0.0;
+    std::sort(values.begin(), values.end());
+    const size_t index = static_cast<size_t>(std::ceil(fraction * static_cast<double>(values.size()))) - 1;
+    return values[std::min(index, values.size() - 1)];
+}
 
 constexpr const wchar_t* kChildWindowClass = L"ExoSnapDxgiPreviewChild";
 
@@ -351,6 +367,9 @@ void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uin
                                             recorder_core::PreviewTapDesc tap, bool raw_source_frames) {
     if (nt_handle == nullptr || width == 0 || height == 0)
         return;
+    if (!raw_source_frames)
+        ResetPerformanceMetrics();
+    metricEnginePushedActive_.store(!raw_source_frames, std::memory_order_release);
     // Store dimensions + transform first, then the handle with release ordering:
     // the render thread reads the handle with acquire ordering and then these.
     pushedPendingWidth_.store(width, std::memory_order_relaxed);
@@ -368,6 +387,7 @@ void DxgiPreviewRenderer::BeginPushedSource(void* nt_handle, uint32_t width, uin
 }
 
 void DxgiPreviewRenderer::EndPushedSource() {
+    metricEnginePushedActive_.store(false, std::memory_order_release);
     pushedRequested_.store(false, std::memory_order_release);
     // Drain a pending handle that the render thread never adopted (e.g. recording
     // ended before the first engine frame).
@@ -600,6 +620,8 @@ void DxgiPreviewRenderer::ConsumePushedFrame() {
     // 0 ms acquire: if the producer currently holds the mutex we keep the last
     // local copy for this present tick rather than stall the render thread.
     if (pushedMutex_->AcquireSync(kPushedConsumerKey, 0) == S_OK) {
+        const bool measure_engine = metricEnginePushedActive_.load(std::memory_order_acquire);
+        const int64_t submit_start = performanceNowNs();
         d3dContext_->CopyResource(pushedLocalTex_.Get(), pushedSharedTex_.Get());
         pushedMutex_->ReleaseSync(kPushedProducerKey);
         // FP16 scRGB tap: tone-map the fresh copy down to the SDR surface the
@@ -611,6 +633,19 @@ void DxgiPreviewRenderer::ConsumePushedFrame() {
                     QStringLiteral("dxgi-preview"),
                     QStringLiteral("pushed tone-map failed: %1").arg(QString::fromStdString(tmErr)));
             }
+        }
+        if (measure_engine) {
+            const int64_t consumed_at = performanceNowNs();
+            const uint64_t submit_index = metricSubmitWrite_.fetch_add(1, std::memory_order_relaxed);
+            metricSubmitNs_[submit_index % kPerformanceWindow].store(consumed_at - submit_start,
+                                                                     std::memory_order_relaxed);
+            const int64_t previous_source = metricLastSourceNs_.exchange(consumed_at, std::memory_order_relaxed);
+            if (previous_source > 0) {
+                const uint64_t source_index = metricSourceWrite_.fetch_add(1, std::memory_order_relaxed);
+                metricSourceIntervalsNs_[source_index % kPerformanceWindow].store(consumed_at - previous_source,
+                                                                                  std::memory_order_relaxed);
+            }
+            metricPushedFrames_.fetch_add(1, std::memory_order_relaxed);
         }
         // BUG FIX: GetSourceSize() (frameMutex_-guarded, safe to call from the UI
         // thread) is what PreviewSurface::displayedFrameRect() uses to compute the
@@ -633,6 +668,9 @@ void DxgiPreviewRenderer::ConsumePushedFrame() {
             srcHeight_ = pushedHeight_;
         }
         pushed_.OnFrameConsumed();
+    } else {
+        if (metricEnginePushedActive_.load(std::memory_order_acquire))
+            metricMutexMisses_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -1579,6 +1617,16 @@ void DxgiPreviewRenderer::RenderFrame() {
     }
 
     swapChain_->Present(1, 0);
+    if (metricEnginePushedActive_.load(std::memory_order_acquire)) {
+        const int64_t presented_at = performanceNowNs();
+        const int64_t previous_present = metricLastPresentNs_.exchange(presented_at, std::memory_order_relaxed);
+        if (previous_present > 0) {
+            const uint64_t index = metricPresentWrite_.fetch_add(1, std::memory_order_relaxed);
+            metricPresentIntervalsNs_[index % kPerformanceWindow].store(presented_at - previous_present,
+                                                                        std::memory_order_relaxed);
+        }
+        metricPresentedFrames_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void DxgiPreviewRenderer::RequestSnapshot(SnapshotCallback callback) {
@@ -1595,6 +1643,65 @@ void DxgiPreviewRenderer::SetFirstFramePresentedCallback(std::function<void()> c
 
 bool DxgiPreviewRenderer::HasPresentedFrame() const noexcept {
     return framePresented_.load(std::memory_order_acquire);
+}
+
+void DxgiPreviewRenderer::ResetPerformanceMetrics() noexcept {
+    metricPresentedFrames_.store(0, std::memory_order_relaxed);
+    metricPushedFrames_.store(0, std::memory_order_relaxed);
+    metricMutexMisses_.store(0, std::memory_order_relaxed);
+    metricPresentWrite_.store(0, std::memory_order_relaxed);
+    metricSourceWrite_.store(0, std::memory_order_relaxed);
+    metricSubmitWrite_.store(0, std::memory_order_relaxed);
+    metricLastPresentNs_.store(0, std::memory_order_relaxed);
+    metricLastSourceNs_.store(0, std::memory_order_relaxed);
+    for (auto& value : metricPresentIntervalsNs_)
+        value.store(0, std::memory_order_relaxed);
+    for (auto& value : metricSourceIntervalsNs_)
+        value.store(0, std::memory_order_relaxed);
+    for (auto& value : metricSubmitNs_)
+        value.store(0, std::memory_order_relaxed);
+}
+
+DxgiPreviewPerformanceSnapshot DxgiPreviewRenderer::PerformanceMetrics() const {
+    DxgiPreviewPerformanceSnapshot result;
+    result.presented_frames = metricPresentedFrames_.load(std::memory_order_relaxed);
+    result.pushed_frames_consumed = metricPushedFrames_.load(std::memory_order_relaxed);
+    result.keyed_mutex_misses = metricMutexMisses_.load(std::memory_order_relaxed);
+
+    const auto samples = [](const auto& storage, uint64_t count, double divisor) {
+        std::vector<double> values;
+        const uint64_t available = std::min<uint64_t>(count, storage.size());
+        values.reserve(static_cast<size_t>(available));
+        for (uint64_t i = 0; i < available; ++i) {
+            const int64_t value = storage[i].load(std::memory_order_relaxed);
+            if (value > 0)
+                values.push_back(static_cast<double>(value) / divisor);
+        }
+        return values;
+    };
+    const std::vector<double> present =
+        samples(metricPresentIntervalsNs_, metricPresentWrite_.load(std::memory_order_relaxed), 1'000'000.0);
+    result.present_ms_p50 = performancePercentile(present, 0.50);
+    result.present_ms_p95 = performancePercentile(present, 0.95);
+    result.present_ms_p99 = performancePercentile(present, 0.99);
+    result.present_ms_max = present.empty() ? 0.0 : *std::max_element(present.begin(), present.end());
+    if (!present.empty()) {
+        const double total = std::accumulate(present.begin(), present.end(), 0.0);
+        result.present_fps = total > 0.0 ? 1000.0 * static_cast<double>(present.size()) / total : 0.0;
+    }
+    const std::vector<double> source =
+        samples(metricSourceIntervalsNs_, metricSourceWrite_.load(std::memory_order_relaxed), 1'000'000.0);
+    result.source_interval_ms_p95 = performancePercentile(source, 0.95);
+    result.source_interval_ms_p99 = performancePercentile(source, 0.99);
+    if (!source.empty()) {
+        const double total = std::accumulate(source.begin(), source.end(), 0.0);
+        result.source_delivery_fps = total > 0.0 ? 1000.0 * static_cast<double>(source.size()) / total : 0.0;
+    }
+    const std::vector<double> submit =
+        samples(metricSubmitNs_, metricSubmitWrite_.load(std::memory_order_relaxed), 1'000.0);
+    result.submit_us_p95 = performancePercentile(submit, 0.95);
+    result.submit_us_p99 = performancePercentile(submit, 0.99);
+    return result;
 }
 
 void DxgiPreviewRenderer::PerformSnapshotIfRequested(ID3D11ShaderResourceView* srv, uint32_t srcW, uint32_t srcH) {

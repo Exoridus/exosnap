@@ -50,6 +50,7 @@ class QToolButton;
 class QVBoxLayout;
 
 namespace exosnap {
+struct DxgiPreviewPerformanceSnapshot;
 
 enum class InteractionMode {
     None,
@@ -214,6 +215,9 @@ class RecordPage : public QWidget {
     // Window mode selects the first window whose description contains window_title_substr
     // (case-insensitive). Returns false when no matching target is enumerated.
     bool selectCaptureTargetForAutomation(recorder_core::CaptureTarget::Kind kind, const QString& window_title_substr);
+    [[nodiscard]] DxgiPreviewPerformanceSnapshot previewPerformanceMetrics() const;
+    [[nodiscard]] uint64_t previewRecordingDroppedFrames() const noexcept;
+    void resetPreviewPerformanceMetrics() noexcept;
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif

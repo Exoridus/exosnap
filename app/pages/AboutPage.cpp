@@ -1,33 +1,22 @@
 #include "AboutPage.h"
 
 #include "../services/UpdateService.h"
-#include "../ui/theme/LucideIcon.h"
-#include "ExoSnapBuildInfo.h"
-
 #include "../ui/brand/BrandMarkWidget.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/theme/LucideIcon.h"
 
 #include <update/install_mode_detector.h>
 
-#ifndef EXOSNAP_BUILD_CONFIG
-#define EXOSNAP_BUILD_CONFIG "Unknown"
-#endif
-
 #include <QClipboard>
 #include <QCoreApplication>
-#include <QCryptographicHash>
-#include <QDateTime>
 #include <QDesktopServices>
-#include <QDir>
-#include <QFile>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QStringList>
 #include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -37,15 +26,7 @@
 namespace exosnap::pages {
 namespace {
 
-constexpr const char* kAppAuthor = "Exoridus";
-constexpr const char* kGitHubUrl = "https://github.com/Exoridus/exosnap";
-constexpr const char* kAuthorProfileUrl = "https://github.com/Exoridus";
-constexpr const char* kReleasesUrl = "https://github.com/Exoridus/exosnap/releases";
-constexpr const char* kAppDescription =
-    "A calm, preview-first screen recorder with a high-performance GPU pipeline, multi-track audio "
-    "routing, and diagnostics when you need them.";
 constexpr const char* kDefaultChannel = "Stable";
-constexpr const char* kUnavailableCommit = "Unavailable";
 
 // NOTE: QStringLiteral() requires an actual string-literal token (it sizes the
 // literal at compile time), so these are read back with QString::fromUtf8(),
@@ -127,76 +108,14 @@ QLabel* makeNotice(const QString& text, const QString& object_name, QWidget* par
     return label;
 }
 
-// Computes the SHA-256 of a file, streaming it in chunks. Returns an empty
-// string if the file cannot be opened or read (caller retries on next click).
-QString ComputeFileSha256(const QString& path) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    if (!hash.addData(&file))
-        return {};
-
-    return QString::fromLatin1(hash.result().toHex());
-}
-
 } // namespace
-
-QString FormatBuildTimestampForDisplay(const QString& iso8601_utc) {
-    QDateTime parsed = QDateTime::fromString(iso8601_utc, Qt::ISODate);
-    if (!parsed.isValid())
-        return iso8601_utc;
-
-    // Parsing an ISO 8601 string with a trailing 'Z' already yields a UTC-spec
-    // QDateTime; toUTC() is a no-op in that case and a safe normalisation
-    // otherwise (avoids the deprecated QDateTime::setTimeSpec()).
-    return parsed.toUTC().toString(QStringLiteral("yyyy-MM-dd HH:mm")) + QStringLiteral(" UTC");
-}
-
-QString ResolveInstallModeLabel(exosnap::update::InstallMode install_mode, bool is_scoop) {
-    if (install_mode == exosnap::update::InstallMode::Installed)
-        return QStringLiteral("MSI");
-    if (is_scoop)
-        return QStringLiteral("Scoop");
-    return QStringLiteral("Portable");
-}
-
-QString BuildAboutCopyText(const AboutCopyFields& fields) {
-    QStringList lines;
-    lines << QStringLiteral("ExoSnap");
-    lines << QStringLiteral("Version: %1").arg(fields.version);
-    lines << (fields.official_build ? QStringLiteral("Tag: v%1").arg(fields.version)
-                                    : QStringLiteral("Tag: (unofficial build)"));
-    lines << QStringLiteral("Commit: %1").arg(fields.git_commit_full);
-    lines << QStringLiteral("Build time: %1").arg(fields.build_timestamp_utc);
-    lines << QStringLiteral("Build ID: %1").arg(fields.build_id.isEmpty() ? QStringLiteral("(none)") : fields.build_id);
-    lines << QStringLiteral("Architecture: x64");
-    lines << QStringLiteral("Configuration: %1").arg(fields.configuration);
-    lines << QStringLiteral("Official build: %1")
-                 .arg(fields.official_build ? QStringLiteral("yes") : QStringLiteral("no"));
-    if (fields.dirty_source_tree)
-        lines << QStringLiteral("Dirty source tree: yes");
-    lines << QStringLiteral("Install mode: %1").arg(fields.install_mode_label);
-    lines << QStringLiteral("Update channel: %1").arg(fields.channel);
-    lines << QStringLiteral("Executable: %1").arg(fields.executable_path);
-    lines << QStringLiteral("Executable SHA-256: %1").arg(fields.executable_sha256);
-    return lines.join(QLatin1Char('\n'));
-}
 
 AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     setObjectName("aboutPage");
 
-    const QString version = QString::fromLatin1(build::kVersion);
-    const QString commit_short = QString::fromLatin1(build::kGitCommit);
-    const QString commit_full = QString::fromLatin1(build::kGitCommitFull);
-    const QString author = QString::fromLatin1(kAppAuthor);
-    const QString channel = QString::fromLatin1(kDefaultChannel);
-    const QString built = FormatBuildTimestampForDisplay(QString::fromLatin1(build::kBuildTimestampUtc));
-
     const bool is_scoop = UpdateService::IsScoopManagedInstall(QCoreApplication::applicationDirPath());
     const exosnap::update::InstallMode install_mode = exosnap::update::DetectInstallMode();
-    install_mode_label_ = ResolveInstallModeLabel(install_mode, is_scoop);
+    about_info_ = models::BuildAboutInfo(QString::fromLatin1(kDefaultChannel), install_mode, is_scoop);
 
     // ── About info card ──────────────────────────────────────────────────────────────
     auto* card = new QFrame(this);
@@ -227,7 +146,7 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     // switch (runs once now, again on each ReapplyTheme).
     ui::theme::OnThemeChanged(this, [this]() { refreshBrand(); });
 
-    auto* version_line = new QLabel(QStringLiteral("Version %1 \xc2\xb7 for Windows").arg(version), card);
+    auto* version_line = new QLabel(QStringLiteral("Version %1 \xc2\xb7 for Windows").arg(about_info_.version), card);
     version_line->setProperty("labelRole", "aboutVersionLine");
 
     title_col->addWidget(wordmark_);
@@ -238,7 +157,7 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     card_layout->addSpacing(18);
 
     // ── Description ────────────────────────────────────────────────────────────────
-    auto* desc_label = new QLabel(QString::fromLatin1(kAppDescription), card);
+    auto* desc_label = new QLabel(about_info_.description, card);
     desc_label->setProperty("labelRole", "aboutDescription");
     desc_label->setWordWrap(true);
     card_layout->addWidget(desc_label);
@@ -252,33 +171,30 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     meta_layout->setSpacing(0);
 
     // No link when the commit is unresolvable (e.g. building outside a git work tree).
-    const QString commit_url = commit_full == QString::fromLatin1(kUnavailableCommit)
-                                   ? QString()
-                                   : QStringLiteral("%1/commit/%2").arg(QString::fromLatin1(kGitHubUrl), commit_full);
-
     meta_layout->addWidget(
-        makeMetaRow(QStringLiteral("VERSION"), version, QStringLiteral("aboutValueVersion"), meta_panel));
+        makeMetaRow(QStringLiteral("VERSION"), about_info_.version, QStringLiteral("aboutValueVersion"), meta_panel));
     meta_layout->addWidget(makeHairline(meta_panel));
-    meta_layout->addWidget(makeMetaRow(QStringLiteral("COMMIT"), commit_short, QStringLiteral("aboutValueCommit"),
-                                       meta_panel, commit_url));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("COMMIT"), about_info_.commit_short,
+                                       QStringLiteral("aboutValueCommit"), meta_panel, about_info_.commit_url));
     meta_layout->addWidget(makeHairline(meta_panel));
-    meta_layout->addWidget(makeMetaRow(QStringLiteral("BUILT"), built, QStringLiteral("aboutValueBuilt"), meta_panel));
+    meta_layout->addWidget(
+        makeMetaRow(QStringLiteral("BUILT"), about_info_.built_display, QStringLiteral("aboutValueBuilt"), meta_panel));
     meta_layout->addWidget(makeHairline(meta_panel));
-    meta_layout->addWidget(makeMetaRow(QStringLiteral("INSTALL"), install_mode_label_,
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("INSTALL"), about_info_.install_mode_label,
                                        QStringLiteral("aboutValueInstallation"), meta_panel));
     meta_layout->addWidget(makeHairline(meta_panel));
-    channel_value_ = makeMetaRowDynamic(QStringLiteral("CHANNEL"), channel, QStringLiteral("aboutValueChannel"),
-                                        meta_panel, meta_layout);
+    channel_value_ = makeMetaRowDynamic(QStringLiteral("CHANNEL"), about_info_.channel,
+                                        QStringLiteral("aboutValueChannel"), meta_panel, meta_layout);
     meta_layout->addWidget(makeHairline(meta_panel));
-    meta_layout->addWidget(makeMetaRow(QStringLiteral("AUTHOR"), author, QStringLiteral("aboutValueAuthor"), meta_panel,
-                                       QString::fromLatin1(kAuthorProfileUrl)));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("AUTHOR"), about_info_.author, QStringLiteral("aboutValueAuthor"),
+                                       meta_panel, about_info_.author_url));
 
     card_layout->addWidget(meta_panel);
 
     // ── Conditional notices: only rendered when they represent a real deviation ──
-    const bool show_unofficial = !build::kOfficialBuild;
-    const bool show_debug = QString::fromLatin1(EXOSNAP_BUILD_CONFIG).compare(QStringLiteral("Debug")) == 0;
-    const bool show_dirty = build::kDirtySourceTree;
+    const bool show_unofficial = !about_info_.official_build;
+    const bool show_debug = about_info_.debug_build;
+    const bool show_dirty = about_info_.dirty_source_tree;
 
     // show_unofficial and show_dirty come straight from `constexpr bool` build-info
     // fields; in some build configurations (e.g. an unofficial dev build) the OR
@@ -317,12 +233,12 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
     auto* github_btn = new QPushButton(QStringLiteral("GitHub"), card);
     github_btn->setObjectName(QStringLiteral("aboutGitHubButton"));
     github_btn->setProperty("role", "ghost");
-    github_btn->setProperty("url", QString::fromLatin1(kGitHubUrl));
+    github_btn->setProperty("url", about_info_.github_url);
     github_btn->setIcon(ui::theme::lucideIcon(QStringLiteral("github"), QString::fromUtf8(ui::theme::ActiveTheme().mut),
                                               14, github_btn->devicePixelRatioF()));
     github_btn->setCursor(Qt::PointingHandCursor);
     connect(github_btn, &QPushButton::clicked, this,
-            []() { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kGitHubUrl))); });
+            [this]() { QDesktopServices::openUrl(QUrl(about_info_.github_url)); });
 
     copy_button_ = new QPushButton(QString::fromUtf8(kCopyButtonIdleText), card);
     copy_button_->setObjectName(QStringLiteral("aboutCopyButton"));
@@ -340,7 +256,7 @@ AboutPage::AboutPage(QWidget* parent) : QWidget(parent) {
                                                      release_notes_btn->devicePixelRatioF()));
     release_notes_btn->setCursor(Qt::PointingHandCursor);
     connect(release_notes_btn, &QPushButton::clicked, this,
-            []() { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kReleasesUrl))); });
+            [this]() { QDesktopServices::openUrl(QUrl(about_info_.release_notes_url)); });
 
     auto* btn_row = new QHBoxLayout();
     btn_row->setContentsMargins(0, 0, 0, 0);
@@ -374,6 +290,7 @@ AboutPage::~AboutPage() {
 void AboutPage::setChannelHint(const QString& channel) {
     if (channel_value_ == nullptr || channel.isEmpty())
         return;
+    about_info_.channel = channel;
     channel_value_->setText(channel);
 }
 
@@ -403,7 +320,7 @@ void AboutPage::startCopyDetails() {
     const QString exe_path = QCoreApplication::applicationFilePath();
     auto result = std::make_shared<QString>();
 
-    QThread* thread = QThread::create([exe_path, result]() { *result = ComputeFileSha256(exe_path); });
+    QThread* thread = QThread::create([exe_path, result]() { *result = models::ComputeFileSha256(exe_path); });
     hash_thread_ = thread;
 
     connect(thread, &QThread::finished, this, [this, thread, result]() {
@@ -428,20 +345,9 @@ void AboutPage::finishCopyDetails(const QString& exe_sha256) {
         copy_button_->setText(QString::fromUtf8(kCopyButtonIdleText));
     }
 
-    AboutCopyFields fields;
-    fields.version = QString::fromLatin1(build::kVersion);
-    fields.official_build = build::kOfficialBuild;
-    fields.git_commit_full = QString::fromLatin1(build::kGitCommitFull);
-    fields.build_timestamp_utc = QString::fromLatin1(build::kBuildTimestampUtc);
-    fields.build_id = QString::fromLatin1(build::kBuildId);
-    fields.configuration = QString::fromLatin1(EXOSNAP_BUILD_CONFIG);
-    fields.dirty_source_tree = build::kDirtySourceTree;
-    fields.install_mode_label = install_mode_label_;
-    fields.channel = channel_value_ ? channel_value_->text() : QString::fromLatin1(kDefaultChannel);
-    fields.executable_path = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
-    fields.executable_sha256 = cached_exe_sha256_;
-
-    const QString details = BuildAboutCopyText(fields);
+    const models::AboutCopyFields fields =
+        models::MakeAboutCopyFields(about_info_, QCoreApplication::applicationFilePath(), cached_exe_sha256_);
+    const QString details = models::BuildAboutCopyText(fields);
     QGuiApplication::clipboard()->setText(details);
     emit copyDetailsFinished(details);
 }

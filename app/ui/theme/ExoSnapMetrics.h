@@ -21,6 +21,13 @@ struct ExoSnapMetrics final {
     static constexpr int kTitlebarHeight = 40;
     static constexpr int kControlHeight = 36;
     static constexpr int kPrimaryCtaHeight = 44;
+
+    // Hard minimum for the main window. Every layout breakpoint in the product
+    // is designed against it, and the geometry restore clamps to it — so the
+    // window class and the clamp have to read the same number rather than each
+    // carrying its own literal.
+    static constexpr int kMinWindowWidth = 860;
+    static constexpr int kMinWindowHeight = 700;
 };
 
 } // namespace exosnap::ui::theme

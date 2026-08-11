@@ -2253,13 +2253,14 @@ void VideoThread::Run() {
         hdrMonitorConverter->Convert(yuvSrc, out_bgra, out_stride_bytes);
     };
 
-    // Perform a one-shot encode-surface→BGRA readback (NV12/P010/AYUV) for the
-    // current slot if a snapshot is pending.
-    // Called only on real frames (not duplicates) to ensure non-stale data.
+    // Perform a one-shot encode-surface→BGRA readback (NV12/P010/AYUV) if a
+    // snapshot is pending. Normal recording calls this on a real frame. Pause
+    // calls it with the last completed real-frame slot, which remains owned by
+    // this VideoThread and is not overwritten while the encode loop is paused.
     // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
     //       it stalls the thread until the GPU completes the CopyResource, typically <1 ms.
-    auto performSnapshotIfRequested = [&](int32_t slot_idx) {
-        if (!m_state.snapshot_requested.load())
+    auto performSnapshotIfRequested = [&](ID3D11Texture2D* source) {
+        if (!m_state.snapshot_requested.load() || source == nullptr)
             return;
 
         // Lazily allocate the staging texture on first use. Matches encodeFormat
@@ -2295,7 +2296,7 @@ void VideoThread::Run() {
         }
 
         // Copy the final encode-ready frame (NV12/P010/AYUV) to the staging texture.
-        d3dContext->CopyResource(snapshotStagingTex.get(), nv12Textures[slot_idx].get());
+        d3dContext->CopyResource(snapshotStagingTex.get(), source);
 
         // Map for CPU read (synchronization point — stalls until GPU copy completes).
         D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -2378,6 +2379,7 @@ void VideoThread::Run() {
         if (pending_cb)
             pending_cb(true, encodeWidth, encodeHeight, std::move(bgra), {});
     };
+    int32_t lastRealFrameSlot = -1;
 
     // --- Live WYSIWYG preview tap: shared GPU texture ---
     // The preview shows exactly what the encoder receives by sharing the
@@ -2431,10 +2433,16 @@ void VideoThread::Run() {
         // Time the CPU submission cost of the copy; the display present itself runs
         // on the consumer's (UI) render thread, outside this engine path.
         const auto prev_t0 = std::chrono::steady_clock::now();
-        previewSharedTex.TryPublish(d3dContext.get(), vpInput);
+        const bool published = previewSharedTex.TryPublish(d3dContext.get(), vpInput);
         const auto prev_t1 = std::chrono::steady_clock::now();
         m_state.diagnostics.OnPreviewCopy(prev_t1,
                                           std::chrono::duration<double, std::milli>(prev_t1 - prev_t0).count());
+        // Only a frame that reached the shared texture is worth waking the
+        // consumer for. A contention drop means the consumer has not taken the
+        // PREVIOUS frame yet, so its redraw is already pending — signalling it
+        // again would add a render without adding a picture.
+        if (published && m_state.preview_frame_published_cb)
+            m_state.preview_frame_published_cb();
     };
 
     // Cache the VideoProcessor input view across ticks. The encode input handed to
@@ -2836,6 +2844,8 @@ void VideoThread::Run() {
                     ringHead = 0;
                     phaseRingHasFrame = false;
                 }
+                if (lastRealFrameSlot >= 0)
+                    performSnapshotIfRequested(nv12Textures[static_cast<size_t>(lastRealFrameSlot)].get());
                 Sleep(1);
                 continue;
             }
@@ -3058,7 +3068,8 @@ void VideoThread::Run() {
                         slotContainedKey[slot] = currentVisualKey;
                         slotContainedValid[slot] = true;
                     }
-                    performSnapshotIfRequested(slot);
+                    lastRealFrameSlot = slot;
+                    performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
                     frameWritten = true;
                     lastCompositedKey = currentVisualKey;
                     haveLastCompositedKey = true;
@@ -3134,7 +3145,8 @@ void VideoThread::Run() {
                                 slotContainedValid[slot] = true;
                             }
                             // Capture frame snapshot on real (non-duplicate) frames.
-                            performSnapshotIfRequested(slot);
+                            lastRealFrameSlot = slot;
+                            performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
                             frameWritten = true;
                             lastCompositedKey = currentVisualKey;
                             haveLastCompositedKey = true;
@@ -3465,6 +3477,8 @@ void VideoThread::Run() {
                     vfr_pause_start_100ns = Qpc100ns(qpcFreq);
                 }
                 odCapturedTexValid = false;
+                if (lastRealFrameSlot >= 0)
+                    performSnapshotIfRequested(nv12Textures[static_cast<size_t>(lastRealFrameSlot)].get());
                 Sleep(1);
                 continue;
             }
@@ -3558,7 +3572,8 @@ void VideoThread::Run() {
                         conv_t1, std::chrono::duration<double, std::milli>(conv_t1 - conv_t0).count());
                     latestTex = nullptr;
 
-                    performSnapshotIfRequested(slot);
+                    lastRealFrameSlot = slot;
+                    performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
                     maybeArmSplit(framePts_ns);
 
                     std::vector<EncodedVideoPacket> pkts;
@@ -3639,7 +3654,8 @@ void VideoThread::Run() {
                         }
                         if (SUCCEEDED(hr)) {
                             // Capture frame snapshot on real frames (VFR path).
-                            performSnapshotIfRequested(slot);
+                            lastRealFrameSlot = slot;
+                            performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
 
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);

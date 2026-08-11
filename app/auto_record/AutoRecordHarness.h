@@ -1,9 +1,14 @@
 #pragma once
 
+#include "../benchmark/BenchmarkReport.h"
+
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 class QApplication;
+class QCoreApplication;
 
 namespace exosnap {
 class MainWindow;
@@ -40,6 +45,37 @@ struct AutoRecordOptions {
     QString screenshot_path; // preview mode only
     int repeat_cycles = 1;   // run N start/stop cycles on the same coordinator
                              // (warm capture-hub state) instead of exiting after one
+
+    // ---- Frontend A/B benchmark mode -------------------------------------
+    // Non-empty benchmark_scenario turns the ordinary drive loop into a measured
+    // run: the recording is extended by benchmark_warmup_seconds, the preview and
+    // process counters are reset when the warm-up ends, and one report per cycle is
+    // written under benchmark_output_dir.
+    //
+    // There is deliberately no --benchmark-frontend flag. The frontend is a property
+    // of the executable being driven, and each entry point states its own; a flag
+    // could disagree with the binary that wrote the file.
+    QString benchmark_scenario;
+    QString benchmark_output_dir;
+    int benchmark_warmup_seconds = 0;
+    // Operator-supplied facts no in-process probe can know: the external source
+    // being captured, its graphics preset, and whether frame generation was on.
+    QString benchmark_source_notes;
+};
+
+// Frontend-specific probes the shared drive loop calls at the two moments that
+// matter. Everything else about a benchmark run — configuration, timing, the
+// engine metrics, the report — is common code, which is what makes the two
+// frontends' numbers comparable at all.
+struct BenchmarkHooks {
+    // Warm-up has ended and the measured window opens. Called on the Qt main
+    // thread while the recording is already active; the frontend resets its
+    // preview counters so no start-up transient lands in the measurement.
+    std::function<void()> onMeasurementStart;
+
+    // The recording result has landed. Called on the Qt main thread; the frontend
+    // reads its own preview instrumentation into the neutral contract.
+    std::function<benchmark::PreviewMetrics()> samplePreviewMetrics;
 };
 
 bool HasAutoRecordRequest(const QStringList& args);
@@ -52,17 +88,27 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
 // mode is Task 3). Returns the process exit code: 0 when every cycle succeeded,
 // non-zero on any failure (target not found, StartRecording refused, capability
 // block, timeout) — cycling stops at the first failed cycle.
-int RunAutoRecord(QApplication& app, const AutoRecordOptions& options);
+int RunAutoRecord(QCoreApplication& app, const AutoRecordOptions& options);
 
 // Shared drive loop: seeds the coordinator's capability gate, commits the CLI output
 // format, selects the capture target, then runs options.repeat_cycles start/stop
 // cycles on it (same coordinator instance across cycles, so a later cycle sees
 // whatever "warm" capture-hub state the previous cycle left behind), printing one
-// JSON result line per cycle. Both the bare-mode entry point (above) and the
-// preview-mode entry point (below) call this on their coordinator —
-// bare mode on a coordinator it constructs itself, preview mode on the one the Record
-// page owns. Returns the process exit code.
-int RunAutoRecordOnCoordinator(QApplication& app, RecordingCoordinator& coordinator, const AutoRecordOptions& options);
+// JSON result line per cycle. Bare mode calls this on a coordinator it constructs
+// itself; the Widgets and Qt Quick preview entry points call it on the one their
+// shell owns. Returns the process exit code.
+//
+// This is the single orchestration path for the frontend A/B benchmark. Both
+// frontends therefore commit the identical output/video settings, select the target
+// by the identical rule, and run the identical warm-up/measure/stop sequence — the
+// only per-frontend code is the two BenchmarkHooks probes.
+//
+// Takes QCoreApplication& rather than QApplication& because it only ever quits and
+// re-enters the event loop: the Widgets shell supplies a QApplication and the Quick
+// shell a QGuiApplication, and neither distinction is meaningful here.
+int RunAutoRecordOnCoordinator(QCoreApplication& app, RecordingCoordinator& coordinator,
+                               const AutoRecordOptions& options, benchmark::Frontend frontend,
+                               const BenchmarkHooks& hooks = {});
 
 // Preview-mode drive loop: shows an OFF-SCREEN MainWindow (never activated, placed on a
 // non-primary screen when one exists), waits for the real async capability probe to

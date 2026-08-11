@@ -1,0 +1,679 @@
+pragma ComponentBehavior: Bound
+
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Dialogs
+import QtQuick.Layouts
+
+// Diagnostics nav area. A calm Simple default — verdict band, responsive readiness
+// tiles, worst-first cards, one bundled tip chip — with an Expert toggle that
+// reveals the flat taxonomy beneath the SAME band and tiles.
+//
+// The page renders; it decides nothing. Verdict wording, tier→card/tip split, tile
+// text and pipeline health all arrive already resolved from DiagnosticsAdapter.
+// The first probe (volume query, output-path write test, self-test) starts here,
+// the first time the page becomes visible, and runs on a worker thread.
+Item {
+    id: root
+
+    required property DiagnosticsAdapter diagnostics
+
+    // The tile grid reflows on the tiles' own minimum width rather than on window
+    // thresholds, so it stays right inside a narrow column too. Free in QML; there
+    // is no C++ column policy to keep in sync any more.
+    readonly property int tileColumns: ExoTheme.gridColumns(
+                                           Math.min(root.width, ExoTheme.contentMaxWidth) - 2 * ExoTheme.pagePadding,
+                                           210, ExoTheme.spacingSm, 4)
+
+    signal navigateToLogsRequested()
+    signal navigateToDeviceRequested()
+    signal navigateToSettingsRequested()
+
+    objectName: "quickDiagnosticsPage"
+
+    onVisibleChanged: {
+        if (root.visible) {
+            root.diagnostics.ensureChecked();
+        }
+    }
+
+    Component.onCompleted: {
+        if (root.visible) {
+            root.diagnostics.ensureChecked();
+        }
+    }
+
+    Connections {
+        target: root.diagnostics
+
+        function onFixConfirmRequested(fixId: string, label: string, changesSummary: string): void {
+            confirmDialog.pendingFixId = fixId;
+            confirmDialog.title = label === "" ? qsTr("Apply fix") : label;
+            confirmDialog.bodyText = changesSummary === ""
+                ? qsTr("Apply this fix to your recording settings?")
+                : changesSummary;
+            confirmDialog.open();
+        }
+
+        function onNavigateToLogsRequested(): void {
+            root.navigateToLogsRequested();
+        }
+
+        function onNavigateToDeviceRequested(): void {
+            root.navigateToDeviceRequested();
+        }
+
+        function onNavigateToSettingsRequested(): void {
+            root.navigateToSettingsRequested();
+        }
+    }
+
+    ExoConfirmDialog {
+        id: confirmDialog
+
+        property string pendingFixId: ""
+
+        title: qsTr("Apply fix")
+        onAccepted: root.diagnostics.acceptFix(confirmDialog.pendingFixId)
+    }
+
+    FileDialog {
+        id: bundleDialog
+
+        title: qsTr("Save support bundle")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Zip archives (*.zip)")]
+        defaultSuffix: "zip"
+        onAccepted: root.diagnostics.createSupportBundle(bundleDialog.selectedFile)
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 0
+
+        // ── Toolbar: page identity, the support-bundle export, the Expert toggle ──
+        RowLayout {
+            spacing: ExoTheme.spacingMd
+            Layout.fillWidth: true
+            Layout.leftMargin: ExoTheme.pagePadding
+            Layout.rightMargin: ExoTheme.pagePadding
+            Layout.topMargin: ExoTheme.spacingSm
+            Layout.bottomMargin: ExoTheme.spacingSm
+
+            Label {
+                text: qsTr("DIAGNOSTICS")
+                textFormat: Text.PlainText
+                color: ExoTheme.textSecondary
+                font {
+                    family: ExoTheme.monoFamily
+                    pixelSize: 11
+                    letterSpacing: 1
+                    weight: Font.DemiBold
+                }
+            }
+
+            Label {
+                text: root.diagnostics.expertMode ? qsTr("· Expert — full taxonomy") : qsTr("· Simple")
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: ExoTheme.textMuted
+                Layout.fillWidth: true
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: 11
+                }
+            }
+
+            ExoButton {
+                text: root.diagnostics.bundleBusy ? qsTr("Creating…") : qsTr("Create support bundle")
+                visible: root.diagnostics.expertMode
+                enabled: !root.diagnostics.bundleBusy
+                quiet: true
+                Accessible.description: qsTr("Create a diagnostic package to share with support")
+                onClicked: bundleDialog.open()
+            }
+
+            Label {
+                text: qsTr("Expert mode")
+                textFormat: Text.PlainText
+                color: root.diagnostics.expertMode ? ExoTheme.text : ExoTheme.textMuted
+                Layout.alignment: Qt.AlignVCenter
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: 12
+                }
+            }
+
+            ExoSwitch {
+                checked: root.diagnostics.expertMode
+                Accessible.name: qsTr("Expert mode")
+                onToggledByUser: function (value) {
+                    root.diagnostics.expertMode = value;
+                }
+            }
+        }
+
+        Rectangle {
+            color: ExoTheme.line
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+        }
+
+        ExoScrollView {
+            id: scroll
+
+            contentWidth: availableWidth
+            clip: true
+            // The vertical scroll bar overlays content, so its gutter is reserved
+            // unconditionally — this page always scrolls in Expert.
+            rightPadding: ExoTheme.spacingLg
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            ColumnLayout {
+                spacing: ExoTheme.spacingLg
+                // Capped and centred: a healthy run is a short page, and stretching
+                // six tiles across a wide desktop reads as something missing.
+                width: Math.min(scroll.availableWidth, ExoTheme.contentMaxWidth)
+                x: Math.max(0, (scroll.availableWidth - width) / 2)
+
+                // ── Verdict band ────────────────────────────────────────────────
+                Rectangle {
+                    id: verdictBand
+
+                    readonly property color verdictColor: root.diagnostics.verdictState === "blocked" ? ExoTheme.error
+                                                        : root.diagnostics.verdictState === "warn" ? ExoTheme.warning
+                                                        : root.diagnostics.verdictState === "ready" ? ExoTheme.success
+                                                        : ExoTheme.textMuted
+
+                    implicitHeight: verdictRow.implicitHeight + 2 * ExoTheme.spacingLg
+                    color: root.diagnostics.verdictState === "blocked" ? ExoTheme.errorSurface
+                         : root.diagnostics.verdictState === "warn" ? ExoTheme.warningSurface
+                         : ExoTheme.surface
+                    border.width: 1
+                    border.color: root.diagnostics.verdictState === "neutral" ? ExoTheme.line : verdictBand.verdictColor
+                    radius: ExoTheme.radiusLg
+                    Layout.fillWidth: true
+                    Layout.topMargin: ExoTheme.spacingXl
+                    Layout.leftMargin: ExoTheme.pagePadding
+                    Layout.rightMargin: ExoTheme.pagePadding
+
+                    RowLayout {
+                        id: verdictRow
+
+                        spacing: ExoTheme.spacingMd
+                        anchors {
+                            fill: parent
+                            margins: ExoTheme.spacingLg
+                        }
+
+                        Rectangle {
+                            color: ExoTheme.surfaceRaised
+                            border.width: 1
+                            border.color: verdictBand.verdictColor
+                            radius: ExoTheme.radiusMd
+                            Layout.preferredWidth: 42
+                            Layout.preferredHeight: 42
+                            Layout.alignment: Qt.AlignVCenter
+
+                            Label {
+                                anchors.centerIn: parent
+                                text: root.diagnostics.verdictState === "blocked" ? "✗"
+                                    : root.diagnostics.verdictState === "warn" ? "⚠"
+                                    : root.diagnostics.verdictState === "ready" ? "✓"
+                                    : "ⓘ"
+                                textFormat: Text.PlainText
+                                color: verdictBand.verdictColor
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: 20
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            spacing: ExoTheme.spacingXs
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: root.diagnostics.verdictHeadline
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                color: ExoTheme.text
+                                Layout.fillWidth: true
+                                Layout.minimumHeight: 20
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: 16
+                                    weight: Font.DemiBold
+                                }
+                            }
+
+                            Label {
+                                text: root.diagnostics.verdictSubline
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                color: ExoTheme.textMuted
+                                Layout.fillWidth: true
+                                Layout.minimumHeight: 15
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: 12
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            spacing: ExoTheme.spacingSm
+                            Layout.alignment: Qt.AlignVCenter
+
+                            Label {
+                                text: root.diagnostics.lastCheckText
+                                textFormat: Text.PlainText
+                                horizontalAlignment: Text.AlignRight
+                                color: ExoTheme.textDim
+                                Layout.alignment: Qt.AlignRight
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: 11
+                                }
+                            }
+
+                            ExoButton {
+                                text: root.diagnostics.checking ? qsTr("Checking…") : qsTr("Run Check")
+                                enabled: !root.diagnostics.checking
+                                Layout.alignment: Qt.AlignRight
+                                onClicked: root.diagnostics.runCheck()
+                            }
+                        }
+                    }
+                }
+
+                // ── Readiness tiles ─────────────────────────────────────────────
+                GridLayout {
+                    columns: root.tileColumns
+                    columnSpacing: ExoTheme.spacingMd
+                    rowSpacing: ExoTheme.spacingMd
+                    Layout.fillWidth: true
+                    Layout.leftMargin: ExoTheme.pagePadding
+                    Layout.rightMargin: ExoTheme.pagePadding
+
+                    Repeater {
+                        model: root.diagnostics.tiles
+
+                        ExoStatusTile {
+                            id: tile
+
+                            required property var modelData
+
+                            title: tile.modelData.title
+                            value: tile.modelData.value
+                            sub: tile.modelData.sub
+                            tone: tile.modelData.tone
+                            showOkGlyph: tile.modelData.showOkGlyph
+                            hasUsageBar: tile.modelData.hasUsageBar
+                            usagePercent: tile.modelData.usagePercent
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                        }
+                    }
+                }
+
+                // ── Worst-first cards (shared: Simple + Expert) ─────────────────
+                ColumnLayout {
+                    spacing: ExoTheme.spacingSm
+                    visible: root.diagnostics.hasIssues
+                    Layout.fillWidth: true
+                    Layout.leftMargin: ExoTheme.pagePadding
+                    Layout.rightMargin: ExoTheme.pagePadding
+
+                    Repeater {
+                        model: root.diagnostics.issues
+
+                        ExoIssueCard {
+                            id: card
+
+                            // Roles arrive through the injected `model` object rather
+                            // than as required properties: several role names collide
+                            // with this component's own property names.
+                            required property var model
+
+                            issueId: card.model.issueId
+                            tone: card.model.tone
+                            title: card.model.title
+                            summary: card.model.summary
+                            why: card.model.why
+                            measured: card.model.measured
+                            logExcerpt: card.model.logExcerpt
+                            needsElevation: card.model.needsElevation
+                            hasEvidence: card.model.hasEvidence
+                            hasFix: card.model.hasFix
+                            fixId: card.model.fixId
+                            fixLabel: card.model.fixLabel
+                            fixSafety: card.model.fixSafety
+                            Layout.fillWidth: true
+                            onApplyFixRequested: function (id) {
+                                root.diagnostics.applyFix(id);
+                            }
+                            onAssistedFixRequested: function (id) {
+                                root.diagnostics.openAssistedFix(id);
+                            }
+                        }
+                    }
+                }
+
+                ExoTipChip {
+                    tips: root.diagnostics.tips
+                    defaultOpen: root.diagnostics.expertMode
+                    Layout.fillWidth: true
+                    Layout.leftMargin: ExoTheme.pagePadding
+                    Layout.rightMargin: ExoTheme.pagePadding
+                    onApplyFixRequested: function (id) {
+                        root.diagnostics.applyFix(id);
+                    }
+                    onAssistedFixRequested: function (id) {
+                        root.diagnostics.openAssistedFix(id);
+                    }
+                }
+
+                // ── Expert-only taxonomy ────────────────────────────────────────
+                ColumnLayout {
+                    spacing: ExoTheme.spacingLg
+                    visible: root.diagnostics.expertMode
+                    Layout.fillWidth: true
+                    Layout.leftMargin: ExoTheme.pagePadding
+                    Layout.rightMargin: ExoTheme.pagePadding
+
+                    DiagnosticsSectionHeader {
+                        title: qsTr("ENVIRONMENT")
+                        Layout.fillWidth: true
+                    }
+
+                    ExoKeyValueTable {
+                        rows: root.diagnostics.environmentRows
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        spacing: ExoTheme.spacingMd
+                        Layout.fillWidth: true
+
+                        Label {
+                            text: qsTr("Hardware capabilities (GPU, codecs, displays, audio devices)")
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: ExoTheme.textMuted
+                            Layout.fillWidth: true
+                            Layout.minimumHeight: 15
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: 12
+                            }
+                        }
+
+                        ExoButton {
+                            text: qsTr("Device →")
+                            quiet: true
+                            onClicked: root.diagnostics.openDevice()
+                        }
+                    }
+
+                    ExoDisclosure {
+                        title: qsTr("2 · Pre-flight & Readiness")
+                        subtitle: qsTr("Tier-1 gates the start · Tier-3 informs. Self-test validates core pipeline components.")
+                        expanded: true
+                        Layout.fillWidth: true
+
+                        body: Component {
+                            ColumnLayout {
+                                spacing: ExoTheme.spacingSm
+
+                                RowLayout {
+                                    spacing: ExoTheme.spacingMd
+                                    Layout.fillWidth: true
+
+                                    Label {
+                                        text: root.diagnostics.selfTestStatus
+                                        textFormat: Text.PlainText
+                                        color: ExoTheme.textSecondary
+                                        Layout.fillWidth: true
+                                        font {
+                                            family: ExoTheme.sansFamily
+                                            pixelSize: 12
+                                        }
+                                    }
+
+                                    ExoButton {
+                                        text: qsTr("Run Self-Test")
+                                        enabled: !root.diagnostics.checking
+                                        quiet: true
+                                        onClicked: root.diagnostics.runCheck()
+                                    }
+                                }
+
+                                Label {
+                                    text: qsTr("Run a system check or click Run Self-Test.")
+                                    textFormat: Text.PlainText
+                                    wrapMode: Text.WordWrap
+                                    visible: root.diagnostics.selfTestRows.length === 0
+                                    color: ExoTheme.textMuted
+                                    Layout.fillWidth: true
+                                    font {
+                                        family: ExoTheme.sansFamily
+                                        pixelSize: 11
+                                    }
+                                }
+
+                                Repeater {
+                                    model: root.diagnostics.selfTestRows
+
+                                    DiagnosticsSelfTestRow {
+                                        id: selfTestRow
+
+                                        required property var modelData
+
+                                        title: selfTestRow.modelData.title
+                                        statusText: selfTestRow.modelData.statusText
+                                        detail: selfTestRow.modelData.detail
+                                        tone: selfTestRow.modelData.tone
+                                        notRun: selfTestRow.modelData.notRun
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ExoDisclosure {
+                        title: qsTr("3 · Live pipeline")
+                        subtitle: qsTr("Low-overhead runtime metrics for the active recording (~5×/s). Unmeasured values are shown as Unavailable, never zero.")
+                        expanded: true
+                        Layout.fillWidth: true
+
+                        body: Component {
+                            ColumnLayout {
+                                spacing: ExoTheme.spacingSm
+
+                                Label {
+                                    text: root.diagnostics.pipelineLive
+                                        ? qsTr("Live — measured from the running recording.")
+                                        : qsTr("Idle — stage timings appear once a recording starts.")
+                                    textFormat: Text.PlainText
+                                    color: ExoTheme.textMuted
+                                    Layout.fillWidth: true
+                                    font {
+                                        family: ExoTheme.sansFamily
+                                        pixelSize: 11
+                                    }
+                                }
+
+                                ExoPipelineFlow {
+                                    stages: root.diagnostics.pipelineStages
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                    }
+
+                    ExoDisclosure {
+                        title: qsTr("4 · Post-flight & Review")
+                        subtitle: qsTr("After Stop: drop-%, max drift, achieved vs target and file validity, then a bridge to the Edit overlay.")
+                        Layout.fillWidth: true
+
+                        body: Component {
+                            ColumnLayout {
+                                spacing: ExoTheme.spacingSm
+
+                                Label {
+                                    text: qsTr("The report card appears in the Edit view's Review step after a recording finishes.")
+                                    textFormat: Text.PlainText
+                                    wrapMode: Text.WordWrap
+                                    color: ExoTheme.textMuted
+                                    Layout.fillWidth: true
+                                    font {
+                                        family: ExoTheme.sansFamily
+                                        pixelSize: 11
+                                    }
+                                }
+
+                                ExoButton {
+                                    text: qsTr("Open last report")
+                                    enabled: root.diagnostics.hasLastRecording
+                                    quiet: true
+                                    Layout.alignment: Qt.AlignLeft
+                                    onClicked: root.diagnostics.openLastReport()
+                                }
+                            }
+                        }
+                    }
+
+                    ExoDisclosure {
+                        title: qsTr("Active configuration")
+                        subtitle: qsTr("Recording settings as currently configured in the app.")
+                        Layout.fillWidth: true
+
+                        body: Component {
+                            ExoKeyValueTable {
+                                rows: root.diagnostics.configRows
+                            }
+                        }
+                    }
+
+                    DiagnosticsSectionHeader {
+                        title: qsTr("ELEVATED DIAGNOSTICS")
+                        meta: qsTr("Opt-in · relaunch as admin")
+                        Layout.fillWidth: true
+                    }
+
+                    Rectangle {
+                        implicitHeight: elevationRow.implicitHeight + 2 * ExoTheme.spacingMd
+                        color: ExoTheme.surface
+                        border.width: 1
+                        border.color: ExoTheme.line
+                        radius: ExoTheme.radiusMd
+                        Layout.fillWidth: true
+
+                        RowLayout {
+                            id: elevationRow
+
+                            spacing: ExoTheme.spacingMd
+                            anchors {
+                                fill: parent
+                                topMargin: ExoTheme.spacingMd
+                                bottomMargin: ExoTheme.spacingMd
+                                leftMargin: ExoTheme.spacingLg
+                                rightMargin: ExoTheme.spacingLg
+                            }
+
+                            Label {
+                                text: root.diagnostics.elevated
+                                    ? qsTr("Running elevated — PresentMon ETW present diagnostics are available.")
+                                    : qsTr("Running standard — present-path and DPC/ISR measurements need an elevated relaunch.")
+                                textFormat: Text.PlainText
+                                wrapMode: Text.WordWrap
+                                color: ExoTheme.textMuted
+                                Layout.fillWidth: true
+                                Layout.minimumHeight: 15
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: 12
+                                }
+                            }
+
+                            ExoBadge {
+                                text: root.diagnostics.elevated ? qsTr("Elevated") : qsTr("Standard")
+                                tone: root.diagnostics.elevated ? "pass" : "neutral"
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                        }
+                    }
+
+                    // ── Logs redirect (Expert; the Simple view stays calm) ──────
+                    Rectangle {
+                        implicitHeight: logsRow.implicitHeight + 2 * ExoTheme.spacingMd
+                        color: ExoTheme.surface
+                        border.width: 1
+                        border.color: ExoTheme.line
+                        radius: ExoTheme.radiusMd
+                        Layout.fillWidth: true
+
+                        RowLayout {
+                            id: logsRow
+
+                            spacing: ExoTheme.spacingMd
+                            anchors {
+                                fill: parent
+                                topMargin: ExoTheme.spacingMd
+                                bottomMargin: ExoTheme.spacingMd
+                                leftMargin: ExoTheme.spacingLg
+                                rightMargin: ExoTheme.spacingLg
+                            }
+
+                            ColumnLayout {
+                                spacing: 2
+                                Layout.fillWidth: true
+
+                                Label {
+                                    text: qsTr("Application Logs")
+                                    textFormat: Text.PlainText
+                                    color: ExoTheme.text
+                                    Layout.fillWidth: true
+                                    font {
+                                        family: ExoTheme.sansFamily
+                                        pixelSize: 13
+                                        weight: Font.DemiBold
+                                    }
+                                }
+
+                                Label {
+                                    text: qsTr("Need the raw event stream behind these checks? Open the Logs page.")
+                                    textFormat: Text.PlainText
+                                    wrapMode: Text.WordWrap
+                                    color: ExoTheme.textMuted
+                                    Layout.fillWidth: true
+                                    Layout.minimumHeight: 14
+                                    font {
+                                        family: ExoTheme.sansFamily
+                                        pixelSize: 11
+                                    }
+                                }
+                            }
+
+                            ExoButton {
+                                text: qsTr("Open Logs Page")
+                                quiet: true
+                                Layout.alignment: Qt.AlignVCenter
+                                onClicked: root.diagnostics.openLogs()
+                            }
+                        }
+                    }
+                }
+
+                Item {
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: ExoTheme.spacingXl
+                }
+            }
+        }
+    }
+}

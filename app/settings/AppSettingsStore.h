@@ -35,6 +35,20 @@ struct PersistedAppSettings {
     // SetWindowDisplayAffinity; hidden on failure.
     bool show_diagnostics_overlay = false;
 
+    // What the two overlays above put on screen. Presets persist as their token
+    // ("minimal" / "health" / "technical" / "custom"); the custom sets persist as
+    // a comma-separated element-token list. The vocabulary and the resolution
+    // both live in models/OverlayContentPolicy — this struct only carries them.
+    //
+    // A token list rather than one bool per element: the settings file stays
+    // readable, and adding an element does not add a key. The custom lists are
+    // kept even while a named preset is selected, so switching away and back
+    // returns the user's own set.
+    QString recording_overlay_preset = QStringLiteral("minimal");
+    QString recording_overlay_custom_elements = QStringLiteral("elapsed");
+    QString diagnostics_overlay_preset = QStringLiteral("health");
+    QString diagnostics_overlay_custom_elements = QStringLiteral("drop,drift,muted");
+
     // NOTIFY-TOASTS-R1: whether transient notification toasts are shown.
     // Default ON. Excluded from capture via SetWindowDisplayAffinity.
     // Covers: LowStorage, Saved, UnexpectedStop, RecoveryAvailable.

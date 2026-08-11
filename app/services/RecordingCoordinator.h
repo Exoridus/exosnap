@@ -15,6 +15,7 @@
 #include <windows.h>
 
 #include <QImage>
+#include <QThreadPool>
 
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
@@ -151,6 +152,7 @@ class RecordingCoordinator {
     // Webcam overlay
     void SetWebcamSettings(const WebcamSettings& settings);
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
+    void SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb);
     // Receiver-scoped open-reader status transitions (see WebcamService::
     // SetStatusCallback): forwarded verbatim so the Record dock can flag a webcam
     // that cannot be opened. Dropped if the receiver dies.
@@ -226,6 +228,27 @@ class RecordingCoordinator {
     void SetStateChangedCallback(StateChangedCallback cb);
     void SetStatsUpdatedCallback(StatsUpdatedCallback cb);
     void SetDiagnosticsCallback(DiagnosticsUpdatedCallback cb);
+    // Read-back of the most recent accepted diagnostics snapshot for the current or
+    // just-finished session. Returns false when none has been accepted yet.
+    //
+    // Exists because SetDiagnosticsCallback is single-occupancy: a second registration
+    // silently displaces the first, which is how dropped_frames and av_drift once went
+    // to zero for a whole session. A reader that only needs the terminal numbers — the
+    // benchmark harness, chiefly — must not have to take the one callback slot away
+    // from the frontend that owns it.
+    [[nodiscard]] bool LastDiagnosticsSnapshot(recorder_core::RecordingDiagnosticsSnapshot* out);
+
+    // Read-back of the RecorderConfig the most recent StartRecording actually
+    // handed the engine, captured after session_.Validate() accepted it. Returns
+    // false when no session has been prepared in this process yet.
+    //
+    // Exists for the frontend A/B benchmark: comparing the CLI strings two runs
+    // were launched with proves nothing, because a frontend can commit settings of
+    // its own on the way to StartRecording (the Qt Quick path did exactly that,
+    // seeding OutputSettingsModel::Defaults() while the Widgets path used the
+    // CLI-committed values, so the two sides silently recorded different formats).
+    // This is the committed truth, not the requested one.
+    [[nodiscard]] bool LastCommittedRecorderConfig(recorder_core::RecorderConfig* out) const;
     void SetResultReadyCallback(ResultReadyCallback cb);
     void SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb);
     void SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb);
@@ -247,6 +270,14 @@ class RecordingCoordinator {
     using PreviewSharedHandleReadyCallback =
         std::function<void(void* nt_handle, uint32_t width, uint32_t height, recorder_core::PreviewTapDesc tap)>;
     void SetPreviewSharedHandleReadyCallback(PreviewSharedHandleReadyCallback cb);
+
+    // Register the per-frame publish edge for the same WYSIWYG tap
+    // (recorder_core::PreviewFramePublishedCallback). Fires from the engine's
+    // video thread after each frame that actually reached the shared texture,
+    // so a preview consumer can schedule one redraw per new frame instead of
+    // polling. No payload; same fast-return / no-D3D contract as above.
+    using PreviewFramePublishedCallback = std::function<void()>;
+    void SetPreviewFramePublishedCallback(PreviewFramePublishedCallback cb);
 
     // Invoked on the recording preparation worker thread (NOT the UI thread),
     // immediately before the engine opens its capture — after every validation,
@@ -291,12 +322,16 @@ class RecordingCoordinator {
     // safe to invoke from a background-thread-fired snapshot callback — matches
     // this class's existing convention of never capturing `this` into a callback
     // that fires off a worker thread it does not own the lifetime of.
+    // `pool` is the only exception to that rule and is passed explicitly rather
+    // than reached through `this`: the PNG encode must not run on the caller's
+    // thread (VideoThread / the DXGI preview render thread would drop frames),
+    // and it must have an owner that waits for it — see snapshot_pool_.
     // log_context_suffix distinguishes the two call sites in the app log only
     // (e.g. " (Ready)").
-    static void WriteSnapshotAndNotify(FrameCapturedCallback cb, const std::wstring& folder, bool has_target_context,
-                                       const FilenameTargetContext& target_context, const QString& log_context_suffix,
-                                       bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra,
-                                       const QString& error);
+    static void WriteSnapshotAndNotify(QThreadPool& pool, FrameCapturedCallback cb, const std::wstring& folder,
+                                       bool has_target_context, const FilenameTargetContext& target_context,
+                                       const QString& log_context_suffix, bool ok, uint32_t width, uint32_t height,
+                                       std::vector<uint8_t> bgra, const QString& error);
 
     // Immutable snapshot of every input and config model StartRecording's device
     // work reads, copied by value on the UI thread before the preparation worker
@@ -563,6 +598,12 @@ class RecordingCoordinator {
     // diagnostics_guard_mutex_.
     recorder_core::RecordingDiagnosticsSnapshot last_snapshot_;
     bool has_last_snapshot_ = false;
+    // The RecorderConfig the engine was actually handed, published by the prepare
+    // worker once session_.Validate() has accepted it. Written on the recording
+    // thread, read on the UI thread, hence its own mutex.
+    mutable std::mutex committed_config_mutex_;
+    recorder_core::RecorderConfig last_committed_config_;
+    bool has_last_committed_config_ = false;
     ResultReadyCallback on_result_ready_;
     MicMeterUpdatedCallback on_mic_meter_updated_;
     SysMeterUpdatedCallback on_sys_meter_updated_;
@@ -570,12 +611,36 @@ class RecordingCoordinator {
     RecordingMeterCallback on_recording_meter_updated_;
     FrameCapturedCallback on_frame_captured_;
     PreviewSharedHandleReadyCallback on_preview_shared_handle_ready_;
+    PreviewFramePublishedCallback on_preview_frame_published_;
     PreviewCaptureReleaseHook preview_capture_release_hook_;
     ReadyFrameRequester ready_frame_requester_;
 
     std::optional<std::string> mic_meter_device_id_;
     recorder_core::MicChannelMode mic_meter_channel_mode_ = recorder_core::MicChannelMode::Auto;
     bool mic_meter_config_valid_ = false;
+
+    // Runs the screenshot PNG encode + write off the thread that delivered the
+    // readback (VideoThread, or the DXGI preview render thread).
+    //
+    // Declared LAST so it is destroyed FIRST: members are destroyed in reverse
+    // declaration order, and the pool's destructor waits for the worker. This
+    // used to be a detached std::thread — nobody owned it, nobody waited, and
+    // its body touches QDateTime/QDir/QImage/QFile, a function-static
+    // QRegularExpression and QCoreApplication::instance(). At process teardown
+    // those Qt statics go away underneath it, which is a 0xC0000005 after the
+    // last test has already passed. The QCoreApplication::closingDown() check
+    // in the worker is a sampled race, not a barrier: it can be false at the
+    // check and true one instruction later.
+    //
+    // Single thread: only one snapshot is ever in flight per source (the engine
+    // ignores a second request while one is pending), and serialising the
+    // writes also removes the race between two workers running the same
+    // collision scan over the same output directory.
+    //
+    // ~RecordingCoordinator additionally calls waitForDone() explicitly, after
+    // the engine threads are joined — see the destructor for why the order
+    // matters.
+    QThreadPool snapshot_pool_;
 };
 
 } // namespace exosnap

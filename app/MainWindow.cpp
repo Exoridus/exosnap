@@ -5,9 +5,11 @@
 
 #include "diagnostics/AppLog.h"
 #include "diagnostics/ConfigSummary.h"
+#include "diagnostics/CrashSessionContext.h"
 #include "diagnostics/StartupClock.h"
 #include "diagnostics/StartupTrace.h"
 #include "diagnostics/SupportBundle.h"
+#include "models/HotkeyStartupConflicts.h"
 #include "models/RecordingPreset.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
@@ -21,6 +23,7 @@
 #include "services/ElevatedRelaunch.h"
 #include "services/GlobalHotkeyService.h"
 #include "services/UpdateService.h"
+#include "services/Win32HotkeyRegistrar.h"
 #include "ui/WindowGeometryPolicy.h"
 #include "ui/chrome/NotificationHubPanel.h"
 #include "ui/chrome/OperationalTitleBar.h"
@@ -137,24 +140,6 @@ namespace {
 
 constexpr bool kTraceFrameActivation = false;
 
-#if defined(Q_OS_WIN)
-// Win32 registrar — wraps a live HWND; created in showEvent once the handle is valid.
-class Win32HotkeyRegistrar : public IHotkeyRegistrar {
-  public:
-    explicit Win32HotkeyRegistrar(HWND hwnd) : hwnd_(hwnd) {
-    }
-    bool Register(int id, unsigned int modifiers, unsigned int vk) override {
-        return ::RegisterHotKey(hwnd_, id, static_cast<UINT>(modifiers), static_cast<UINT>(vk)) != FALSE;
-    }
-    void Unregister(int id) override {
-        ::UnregisterHotKey(hwnd_, id);
-    }
-
-  private:
-    HWND hwnd_ = nullptr;
-};
-#endif
-
 void appendFrameTrace(const QString& line) {
     if (!kTraceFrameActivation)
         return;
@@ -191,33 +176,9 @@ int pageIndexForNavLabel(const QString& label) {
     return -1;
 }
 
-// UPDATE-WIRE-R1: map between the persisted/UI channel string ("Stable"|"Preview")
-// and the engine enum. Unknown values fall back to Stable.
-update::UpdateChannel UpdateChannelFromString(const QString& channel) {
-    return channel.compare(QStringLiteral("Preview"), Qt::CaseInsensitive) == 0 ? update::UpdateChannel::Preview
-                                                                                : update::UpdateChannel::Stable;
-}
-
-QString UpdateChannelToString(update::UpdateChannel channel) {
-    return channel == update::UpdateChannel::Preview ? QStringLiteral("Preview") : QStringLiteral("Stable");
-}
-
-// SETTINGS-HONESTY-R1: map the persisted/UI developer log-level string ("Off" |
-// "Error" | "Warning" | "Info" | "Debug") to AppLog's filter (nullopt = "Off",
-// i.e. record nothing). Unknown/legacy values fall back to Debug (record
-// everything, review F1) so a corrupt or stale key can never silently narrow
-// support diagnostics below what main always recorded.
-std::optional<diagnostics::LogSeverity> DeveloperLogLevelFromString(const QString& level) {
-    if (level.compare(QStringLiteral("Off"), Qt::CaseInsensitive) == 0)
-        return std::nullopt;
-    if (level.compare(QStringLiteral("Error"), Qt::CaseInsensitive) == 0)
-        return diagnostics::LogSeverity::Error;
-    if (level.compare(QStringLiteral("Warning"), Qt::CaseInsensitive) == 0)
-        return diagnostics::LogSeverity::Warning;
-    if (level.compare(QStringLiteral("Info"), Qt::CaseInsensitive) == 0)
-        return diagnostics::LogSeverity::Info;
-    return diagnostics::LogSeverity::Debug;
-}
+// UpdateChannelFromString / UpdateChannelToString now live next to their engine
+// in services/UpdateService.h -- the Quick frontend needs the identical mapping,
+// and a second private copy is how the two spellings would drift.
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
@@ -451,7 +412,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // D6 wave-2 responsive: lowered from 1120 so a single Settings card column
     // is fully visible at the minimum width.  RecordPage preview scales down
     // gracefully to ~200 px; rail column is fixed at 320 px.
-    setMinimumSize(860, 700);
+    setMinimumSize(ui::theme::ExoSnapMetrics::kMinWindowWidth, ui::theme::ExoSnapMetrics::kMinWindowHeight);
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
@@ -465,7 +426,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // SETTINGS-HONESTY-R1: narrow AppLog's recording filter to the persisted developer
     // log-level now that it is known. AppLog::init() (above) already ran with the
     // "record everything" default, so early-startup entries are unaffected.
-    diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(persisted_settings_.developer_log_level));
+    diagnostics::AppLog::setMinSeverity(
+        diagnostics::DeveloperLogLevelFromString(persisted_settings_.developer_log_level));
     // Reconcile the SDK-wide persisted consent with the explicit app policy
     // before any report UI is considered in this process.
     switch (persisted_settings_.crash_report_policy) {
@@ -1289,62 +1251,9 @@ void MainWindow::showWhatsNewAfterStartupOverlays(const QVector<WhatsNewNote>& n
     openWhatsNewOverlay(notes, /*post_update_mode=*/true);
 }
 
-namespace {
-
-// Compact container/codec tokens for the session sidecar + crash report.
-// The capability ToString() helpers are verbose ("Matroska", "AV1 NVENC",
-// "AAC"); the crash facts want short, allowlisted tokens.
-// (Prefixed Crash* to avoid colliding with the std::wstring ContainerToken in
-// RecordingPreset.h used for filename building.)
-std::string CrashContainerToken(capability::Container c) {
-    switch (c) {
-    case capability::Container::Matroska:
-        return "MKV";
-    case capability::Container::Mp4:
-        return "MP4";
-    case capability::Container::WebM:
-        return "WebM";
-    }
-    return "MKV";
-}
-
-std::string CrashVideoCodecToken(capability::VideoCodec v) {
-    switch (v) {
-    case capability::VideoCodec::Av1:
-        return "AV1";
-    case capability::VideoCodec::Hevc:
-        return "HEVC";
-    case capability::VideoCodec::H264:
-        return "H.264";
-    }
-    return "AV1";
-}
-
-std::string CrashAudioCodecToken(capability::AudioCodec a) {
-    switch (a) {
-    case capability::AudioCodec::Opus:
-        return "Opus";
-    case capability::AudioCodec::Aac:
-        return "AAC";
-    case capability::AudioCodec::Pcm:
-        return "PCM";
-    case capability::AudioCodec::Flac:
-        return "FLAC";
-    }
-    return "Opus";
-}
-
-} // namespace
-
 crash_capture::SessionContext MainWindow::currentSessionContext() const {
-    crash_capture::SessionContext ctx;
-    ctx.app_version = exosnap::build::kVersion;
-    // All NVENC video codecs ship today; the encoder backend baseline is nvenc.
-    ctx.encoder_backend = "nvenc";
-    ctx.container = CrashContainerToken(output_settings_.container);
-    ctx.video_codec = CrashVideoCodecToken(output_settings_.video_codec);
-    ctx.audio_codec = CrashAudioCodecToken(output_settings_.audio_codec);
-    return ctx;
+    return diagnostics::MakeCrashSessionContext(output_settings_.container, output_settings_.video_codec,
+                                                output_settings_.audio_codec);
 }
 
 void MainWindow::refreshCrashSessionContext() {
@@ -1664,22 +1573,14 @@ void MainWindow::showEvent(QShowEvent* event) {
             const std::vector<HotkeyAction> failed_hotkeys =
                 hotkey_service_->SetRegistrar(win32_hotkey_registrar_.get());
             if (!failed_hotkeys.empty()) {
-                // Split by provenance BEFORE unsetting (unsetting clears the binding,
-                // which would make everything read as "at default" afterwards).
-                // Default-vs-default collisions are common environmental noise (another
-                // app's own default hotkey, e.g. NVIDIA's Alt+F9 Instant Replay, claimed
-                // the combo first) and happen on every launch that app is running —
-                // worth logging, not worth interrupting the user about every time. A
-                // combo the user deliberately chose is different: it worked when they
-                // set it, so losing it now is worth telling them.
-                std::vector<HotkeyAction> default_failed;
-                std::vector<HotkeyAction> custom_failed;
-                for (const HotkeyAction action : failed_hotkeys) {
-                    if (hotkey_service_->IsAtDefault(action))
-                        default_failed.push_back(action);
-                    else
-                        custom_failed.push_back(action);
-                }
+                // Provenance split (and the reasoning behind it) lives in
+                // models/HotkeyStartupConflicts, shared with the Quick frontend —
+                // it has to happen BEFORE anything is unset, because unsetting
+                // makes every action read as "at default".
+                const models::HotkeyStartupConflicts conflicts =
+                    models::ClassifyHotkeyStartupConflicts(failed_hotkeys, *hotkey_service_);
+                const std::vector<HotkeyAction>& default_failed = conflicts.default_failed;
+                const std::vector<HotkeyAction>& custom_failed = conflicts.custom_failed;
 
                 QStringList names;
                 for (const HotkeyAction action : failed_hotkeys)
@@ -1708,17 +1609,10 @@ void MainWindow::showEvent(QShowEvent* event) {
                     QStringList custom_names;
                     for (const HotkeyAction action : custom_failed)
                         custom_names << GlobalHotkeyService::ActionDisplayName(action);
-                    const QString joined = custom_names.join(QStringLiteral(", "));
-                    const bool plural = custom_failed.size() > 1;
                     notifications::NotificationEvent hotkey_conflict_event;
                     hotkey_conflict_event.type = notifications::NotificationType::HotkeyConflict;
                     hotkey_conflict_event.title = QStringLiteral("Hotkey unavailable");
-                    hotkey_conflict_event.body =
-                        (plural ? QStringLiteral("%1 were already in use by Windows or another app, so ExoSnap "
-                                                 "removed them. Pick new shortcuts to re-enable them.")
-                                : QStringLiteral("%1 was already in use by Windows or another app, so ExoSnap "
-                                                 "removed it. Pick a new shortcut to re-enable it."))
-                            .arg(joined);
+                    hotkey_conflict_event.body = models::HotkeyConflictNotificationBody(custom_names);
                     hotkey_conflict_event.action = notifications::NotificationAction::OpenHotkeys;
                     notification_manager_->Enqueue(std::move(hotkey_conflict_event));
                 }
@@ -3838,7 +3732,7 @@ void MainWindow::buildConfigPage() {
                                   QStringLiteral("Developer log level changed to %1").arg(level));
         persisted_settings_.developer_log_level = level;
         settings_store_.Save(persisted_settings_);
-        diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(level));
+        diagnostics::AppLog::setMinSeverity(diagnostics::DeveloperLogLevelFromString(level));
     });
 
     // ---- Format / preset / video / audio / webcam signal connects ----
@@ -4129,6 +4023,9 @@ void MainWindow::createSupportBundle() {
     inputs.app_version = QString::fromLatin1(build::kVersion);
     inputs.commit_sha = QString::fromLatin1(build::kGitCommit);
     inputs.verify_update_reinstall = verify_update_reinstall_;
+    // ADR 0044: startup-trace.txt. Read from the process-global trace here, so
+    // the collector stays a pure function of its inputs.
+    inputs.startup_trace = diagnostics::StartupTrace::instance().entries();
 
     const auto& rt = runtime_caps_.runtime;
     inputs.capability.gpu_adapter_name = QString::fromStdString(runtime_caps_.gpu_adapter_name);

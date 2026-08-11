@@ -26,7 +26,8 @@ class QVariantAnimation;
 
 namespace exosnap {
 class DxgiPreviewRenderer;
-}
+struct DxgiPreviewPerformanceSnapshot;
+} // namespace exosnap
 
 namespace exosnap::ui::widgets {
 
@@ -75,6 +76,8 @@ class PreviewSurface : public QWidget {
     // True while the live DXGI preview has presented at least one real frame —
     // the exact condition under which requestDxgiSnapshot can succeed.
     [[nodiscard]] bool isDxgiSnapshotReady() const noexcept;
+    void resetDxgiPerformanceMetrics() noexcept;
+    [[nodiscard]] exosnap::DxgiPreviewPerformanceSnapshot dxgiPerformanceMetrics() const;
     void repositionDxgiPreview();
 
     // Switch the active DXGI preview to a shared source texture: the engine's

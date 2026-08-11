@@ -63,6 +63,18 @@ PersistedAppSettings AppSettingsStore::Load() const {
     // NOTIFY-TOASTS-R1: notification toasts toggle (default ON).
     // Pre-1.0: no migration; missing key defaults to true.
     persisted.show_notifications = settings.value(QStringLiteral("show_notifications"), true).toBool();
+    // Overlay content. Read as raw strings: validation belongs to
+    // models/OverlayContentPolicy, which resolves an unknown token to the
+    // shipped default rather than rejecting the file.
+    persisted.recording_overlay_preset =
+        settings.value(QStringLiteral("recording_overlay_preset"), QStringLiteral("minimal")).toString();
+    persisted.recording_overlay_custom_elements =
+        settings.value(QStringLiteral("recording_overlay_custom_elements"), QStringLiteral("elapsed")).toString();
+    persisted.diagnostics_overlay_preset =
+        settings.value(QStringLiteral("diagnostics_overlay_preset"), QStringLiteral("health")).toString();
+    persisted.diagnostics_overlay_custom_elements =
+        settings.value(QStringLiteral("diagnostics_overlay_custom_elements"), QStringLiteral("drop,drift,muted"))
+            .toString();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("editor"));
@@ -190,6 +202,12 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);
     // NOTIFY-TOASTS-R1: notification toasts toggle.
     settings.setValue(QStringLiteral("show_notifications"), settings_snapshot.show_notifications);
+    settings.setValue(QStringLiteral("recording_overlay_preset"), settings_snapshot.recording_overlay_preset);
+    settings.setValue(QStringLiteral("recording_overlay_custom_elements"),
+                      settings_snapshot.recording_overlay_custom_elements);
+    settings.setValue(QStringLiteral("diagnostics_overlay_preset"), settings_snapshot.diagnostics_overlay_preset);
+    settings.setValue(QStringLiteral("diagnostics_overlay_custom_elements"),
+                      settings_snapshot.diagnostics_overlay_custom_elements);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("editor"));

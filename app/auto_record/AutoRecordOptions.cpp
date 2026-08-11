@@ -183,12 +183,46 @@ bool ParseAutoRecordOptions(const QStringList& args, AutoRecordOptions* out, QSt
                 return false;
         } else if (arg == QStringLiteral("--capture-frame-in-ready")) {
             parsed.capture_frame_in_ready = true;
+        } else if (arg == QStringLiteral("--benchmark-scenario")) {
+            if (!require_value(&parsed.benchmark_scenario))
+                return false;
+        } else if (arg == QStringLiteral("--benchmark-output")) {
+            if (!require_value(&parsed.benchmark_output_dir))
+                return false;
+        } else if (arg == QStringLiteral("--benchmark-notes")) {
+            if (!require_value(&parsed.benchmark_source_notes))
+                return false;
+        } else if (arg == QStringLiteral("--benchmark-warmup")) {
+            QString value;
+            if (!require_value(&value))
+                return false;
+            bool ok = false;
+            parsed.benchmark_warmup_seconds = value.toInt(&ok);
+            if (!ok || parsed.benchmark_warmup_seconds < 0) {
+                if (error)
+                    *error = QStringLiteral("--benchmark-warmup requires a non-negative integer");
+                return false;
+            }
         }
     }
 
     if (parsed.target == TargetKind::Window && parsed.target_window_title.trimmed().isEmpty()) {
         if (error)
             *error = QStringLiteral("--target=window requires --target-window-title");
+        return false;
+    }
+
+    // A benchmark run whose reports have nowhere to go is a run whose numbers are
+    // lost the moment the process exits — refuse it rather than record for a minute
+    // and then discard the measurement.
+    if (!parsed.benchmark_scenario.trimmed().isEmpty() && parsed.benchmark_output_dir.trimmed().isEmpty()) {
+        if (error)
+            *error = QStringLiteral("--benchmark-scenario requires --benchmark-output");
+        return false;
+    }
+    if (parsed.benchmark_scenario.trimmed().isEmpty() && parsed.benchmark_warmup_seconds > 0) {
+        if (error)
+            *error = QStringLiteral("--benchmark-warmup requires --benchmark-scenario");
         return false;
     }
 

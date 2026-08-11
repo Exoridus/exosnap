@@ -83,7 +83,8 @@
   "buildPresets": [
     {
       "name": "windows-x64-debug",
-      "configurePreset": "windows-x64-debug"
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug"
     },
     {
       "name": "windows-x64-debug-exosnap",
@@ -105,7 +106,8 @@
     },
     {
       "name": "windows-x64-release",
-      "configurePreset": "windows-x64-release"
+      "configurePreset": "windows-x64-release",
+      "configuration": "Release"
     },
     {
       "name": "windows-x64-release-exosnap",
@@ -118,7 +120,8 @@
     },
     {
       "name": "windows-x64-lint",
-      "configurePreset": "windows-x64-lint"
+      "configurePreset": "windows-x64-lint",
+      "configuration": "Debug"
     },
     {
       "name": "windows-x64-asan",

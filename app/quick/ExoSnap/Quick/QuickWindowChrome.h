@@ -1,0 +1,185 @@
+#pragma once
+
+#include <QAbstractNativeEventFilter>
+#include <QColor>
+#include <QList>
+#include <QObject>
+#include <QPointer>
+#include <QRectF>
+// Full include rather than a forward declaration: QQuickWindow* appears as a
+// Q_PROPERTY type and a Q_INVOKABLE parameter, and the meta-type system rejects
+// pointers to incomplete types.
+#include <QQuickWindow>
+#include <QtQmlIntegration/qqmlintegration.h>
+
+namespace exosnap::quick {
+
+// Win32 non-client chrome for the borderless Quick shell.
+//
+// WHY THIS TYPE EXISTS AT ALL
+// ---------------------------
+// The borderless 40 px title bar had to be reverted in the Widgets shell because
+// `WM_NCHITTEST` is only ever sent to the window that OWNS the pixel under the
+// cursor. `PreviewSurface` set `Qt::WA_NativeWindow`, so a child HWND owned the
+// band the title bar drew into and the top-level was never asked — no drag, no
+// resize, no Snap Layouts. A `QQuickWindow` is a single top-level HWND with no
+// native children, so the whole client area (including the title band) belongs to
+// the one window that answers the hit test. That removes the blocker; this class
+// supplies the answer.
+//
+// WHY QObject AND QAbstractNativeEventFilter IN ONE CLASS
+// ------------------------------------------------------
+// `QuickHotkeyEventFilter` (QuickApplication.cpp) is a separate class because it
+// only forwards `WM_HOTKEY` into a `std::function` and owns no state of its own.
+// Here every branch of the filter reads this object's QML-driven properties
+// (`titleBarHeight`, `interactiveRects`, `maximizeButtonRect`, ...) and writes
+// back into notifying properties. A split class would need a back-pointer plus a
+// lifetime rule to keep it valid, so the two responsibilities are fused: QObject
+// first (moc requires it), the interface second. The destructor removes the
+// filter, which makes the lifetime rule trivially correct.
+//
+// COORDINATE SPACES
+// -----------------
+// Everything Windows hands us (`MSG::lParam`, `GetClientRect`, `MINMAXINFO`) is in
+// PHYSICAL device pixels. Everything QML pushes in (`titleBarHeight`,
+// `interactiveRects`, `maximizeButtonRect`) is in LOGICAL Qt pixels. The single
+// conversion point is `QWindow::devicePixelRatio()`, applied inside the hit test:
+// physical client coordinates are divided down into logical ones and compared
+// against the QML rects there. Nothing else in this class mixes the two.
+class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
+    Q_OBJECT
+    QML_ELEMENT
+
+    Q_PROPERTY(QQuickWindow* target READ target WRITE setTarget NOTIFY targetChanged FINAL)
+    Q_PROPERTY(int titleBarHeight READ titleBarHeight WRITE setTitleBarHeight NOTIFY titleBarHeightChanged FINAL)
+    Q_PROPERTY(int resizeBorderThickness READ resizeBorderThickness WRITE setResizeBorderThickness NOTIFY
+                   resizeBorderThicknessChanged FINAL)
+    Q_PROPERTY(QList<QRectF> interactiveRects READ interactiveRects WRITE setInteractiveRects NOTIFY
+                   interactiveRectsChanged FINAL)
+    Q_PROPERTY(QRectF maximizeButtonRect READ maximizeButtonRect WRITE setMaximizeButtonRect NOTIFY
+                   maximizeButtonRectChanged FINAL)
+    Q_PROPERTY(bool maximizeButtonHovered READ maximizeButtonHovered NOTIFY maximizeButtonHoveredChanged FINAL)
+    Q_PROPERTY(bool maximizeButtonPressed READ maximizeButtonPressed NOTIFY maximizeButtonPressedChanged FINAL)
+    Q_PROPERTY(QColor borderColor READ borderColor WRITE setBorderColor NOTIFY borderColorChanged FINAL)
+    // Both of the following gate behaviour that is NOT verified on this codebase
+    // (see the notes on the corresponding handlers). They are runtime-togglable
+    // on purpose so a measurement session can A/B them without a rebuild.
+    Q_PROPERTY(bool snapLayoutsEnabled READ snapLayoutsEnabled WRITE setSnapLayoutsEnabled NOTIFY
+                   snapLayoutsEnabledChanged FINAL)
+    Q_PROPERTY(bool nonClientActivationWorkaround READ nonClientActivationWorkaround WRITE
+                   setNonClientActivationWorkaround NOTIFY nonClientActivationWorkaroundChanged FINAL)
+
+  public:
+    // Window/taskbar icon variants. The three .ico files and the three Win32
+    // resource ids are the same assets the Widgets shell switched between in
+    // MainWindow::switchRecordingIcon; Paused takes precedence over Recording
+    // there and the caller is expected to keep that precedence.
+    enum IconState { Idle, Recording, Paused };
+    Q_ENUM(IconState)
+
+    // The default title band height matches ui::theme::ExoSnapMetrics::kTitlebarHeight (40).
+    static constexpr int kDefaultTitleBarHeight = 40;
+    // The Widgets shell used an 8 px grab band (resizeZoneFromLocalPoint).
+    static constexpr int kDefaultResizeBorderThickness = 8;
+
+    explicit QuickWindowChrome(QObject* parent = nullptr);
+    ~QuickWindowChrome() override;
+
+    QuickWindowChrome(const QuickWindowChrome&) = delete;
+    QuickWindowChrome& operator=(const QuickWindowChrome&) = delete;
+
+    // Binds to `window`, installs the native event filter, re-adds WS_THICKFRAME
+    // and paints the DWM border. Passing nullptr is equivalent to detach().
+    Q_INVOKABLE void attach(QQuickWindow* window);
+    Q_INVOKABLE void detach();
+    // Qt can recreate the platform window (flag changes, some DPI transitions),
+    // which invalidates the cached HWND. QML calls this when it changes anything
+    // that could have caused a recreate.
+    Q_INVOKABLE void refreshHandle();
+
+    // Incremental builders so QML can assemble the exclusion list from repeaters
+    // without materialising a JS array first.
+    Q_INVOKABLE void clearInteractiveRects();
+    Q_INVOKABLE void addInteractiveRect(const QRectF& rect);
+
+    // Sets QWindow::icon and posts WM_SETICON for ICON_SMALL/ICON_BIG. Qt's own
+    // icon path updates the frame; the taskbar BUTTON only follows WM_SETICON.
+    Q_INVOKABLE void applyWindowIcon(IconState state);
+
+    [[nodiscard]] QQuickWindow* target() const noexcept;
+    void setTarget(QQuickWindow* window);
+
+    [[nodiscard]] int titleBarHeight() const noexcept;
+    void setTitleBarHeight(int height);
+
+    [[nodiscard]] int resizeBorderThickness() const noexcept;
+    void setResizeBorderThickness(int thickness);
+
+    [[nodiscard]] const QList<QRectF>& interactiveRects() const noexcept;
+    void setInteractiveRects(const QList<QRectF>& rects);
+
+    [[nodiscard]] QRectF maximizeButtonRect() const noexcept;
+    void setMaximizeButtonRect(const QRectF& rect);
+
+    [[nodiscard]] bool maximizeButtonHovered() const noexcept;
+    [[nodiscard]] bool maximizeButtonPressed() const noexcept;
+
+    [[nodiscard]] QColor borderColor() const noexcept;
+    void setBorderColor(const QColor& color);
+
+    [[nodiscard]] bool snapLayoutsEnabled() const noexcept;
+    void setSnapLayoutsEnabled(bool enabled);
+
+    [[nodiscard]] bool nonClientActivationWorkaround() const noexcept;
+    void setNonClientActivationWorkaround(bool enabled);
+
+    bool nativeEventFilter(const QByteArray& event_type, void* message, qintptr* result) override;
+
+  signals:
+    void targetChanged();
+    void titleBarHeightChanged();
+    void resizeBorderThicknessChanged();
+    void interactiveRectsChanged();
+    void maximizeButtonRectChanged();
+    void maximizeButtonHoveredChanged();
+    void maximizeButtonPressedChanged();
+    void borderColorChanged();
+    void snapLayoutsEnabledChanged();
+    void nonClientActivationWorkaroundChanged();
+
+    // Emitted on a completed NC click on maximizeButtonRect. QML owns the
+    // resulting visibility change (Window.Maximized <-> Window.Windowed) because
+    // the maximized state is read back from Window.visibility, not from Win32.
+    void maximizeButtonClicked();
+
+  private:
+    // `hwnd_` is the raw HWND but is typed as void* so this header stays free of
+    // <windows.h> — it is included by moc-generated TUs and by any QML consumer.
+    void* hwnd_ = nullptr;
+    QPointer<QQuickWindow> target_;
+
+    int title_bar_height_ = kDefaultTitleBarHeight;
+    int resize_border_thickness_ = kDefaultResizeBorderThickness;
+    QList<QRectF> interactive_rects_;
+    QRectF maximize_button_rect_;
+    bool maximize_button_hovered_ = false;
+    bool maximize_button_pressed_ = false;
+    QColor border_color_;
+    bool snap_layouts_enabled_ = true;
+    bool non_client_activation_workaround_ = true;
+    // TrackMouseEvent is one-shot; this stops us re-arming it on every single
+    // WM_NCMOUSEMOVE.
+    bool non_client_leave_tracked_ = false;
+
+    void setMaximizeButtonHovered(bool hovered);
+    void setMaximizeButtonPressed(bool pressed);
+
+    // Reads the live client rect and devicePixelRatio, then resolves the HT* code.
+    // Returns HTNOWHERE-equivalent 0 only if the window is gone.
+    [[nodiscard]] qintptr resolveHitTest(qintptr lparam) const;
+
+    void applyBorderColor(const char* reason) const;
+    void ensureResizableStyle() const;
+};
+
+} // namespace exosnap::quick

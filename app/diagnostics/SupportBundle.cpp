@@ -112,6 +112,15 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
         }
     }
 
+    // startup-trace.txt (ADR 0044). Milestone labels and millisecond readings
+    // only — no paths, no identifiers — so it needs no scrubbing. Omitted rather
+    // than written empty when the process recorded nothing, because an empty
+    // table reads as "startup produced no milestones" instead of "this build
+    // never wired the trace up".
+    if (!inputs.startup_trace.empty()) {
+        entries.push_back({QStringLiteral("startup-trace.txt"), FormatStartupTrace(inputs.startup_trace).toUtf8()});
+    }
+
     // capability.json
     entries.push_back({QStringLiteral("capability.json"), ToJsonBytes(BuildCapabilityJson(inputs.capability))});
 

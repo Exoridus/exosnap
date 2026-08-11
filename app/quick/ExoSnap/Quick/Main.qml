@@ -1,0 +1,251 @@
+import QtQuick
+import QtQuick.Controls
+
+ApplicationWindow {
+    id: root
+
+    required property AboutViewModelAdapter aboutViewModel
+    required property RecordViewModelAdapter recordViewModel
+    required property RecordPreviewAdapter previewAdapter
+    required property SettingsAdapter settingsAdapter
+    required property DeviceAdapter deviceAdapter
+    required property DiagnosticsAdapter diagnosticsAdapter
+    required property LogsAdapter logsAdapter
+    required property EditSessionAdapter editSession
+    required property EditTimelineAdapter editTimeline
+    required property EditPlayerAdapter editPlayer
+    required property EditExportAdapter editExport
+    required property ShellAdapter shell
+    required property NotificationsAdapter notifications
+    required property RecoveryAdapter recovery
+    required property RecordingErrorAdapter recordingError
+    required property CrashReportAdapter crashReport
+    required property OverlayAdapter overlays
+    // Set once every close guard has cleared, so the re-issued close() is not
+    // caught by the same guards again.
+    property bool closeApproved: false
+    property bool benchmarkInteractionActive: false
+    property bool noActivate: false
+
+    // Resolved in C++ (QuickWindowGeometry) from the persisted geometry, clamped
+    // onto a connected screen's work area. Supplied as an initial property so the
+    // window is created at its final placement -- setting it after the engine has
+    // loaded would show the default size for one frame first. The maximized state
+    // is applied separately, after load, because a maximized window still needs
+    // this rect as its restore rect.
+    required property rect initialGeometry
+    // Single source of truth with the clamp: ui::theme::ExoSnapMetrics.
+    required property size minimumWindowSize
+
+    x: root.initialGeometry.x
+    y: root.initialGeometry.y
+    width: root.initialGeometry.width
+    height: root.initialGeometry.height
+    minimumWidth: root.minimumWindowSize.width
+    minimumHeight: root.minimumWindowSize.height
+    visible: true
+    // Frameless: the 40 px title band is ours and QuickWindowChrome answers
+    // WM_NCHITTEST for it, which is what keeps the native move loop, Snap,
+    // double-click-to-maximize, Aero Shake and the system menu working rather
+    // than having to be re-implemented in Qt.
+    //
+    // This is the change the Widgets shell could not make. There, PreviewSurface
+    // set Qt::WA_NativeWindow, so a CHILD HWND owned the pixels the title bar
+    // drew into and the top-level window was never asked to hit-test them. A
+    // QQuickWindow is a single top-level HWND with no native children, so the
+    // whole client area belongs to the one window that answers.
+    flags: Qt.Window | Qt.FramelessWindowHint | (root.noActivate ? Qt.WindowDoesNotAcceptFocus : 0)
+    color: ExoTheme.background
+    // Deliberately not qsTr(): the native window title is an identifier here,
+    // not copy. The single-instance activation (FindWindowW(nullptr, "ExoSnap"))
+    // and the updater's handoff both look the window up by this exact string, so
+    // a localized title would silently break both.
+    title: "ExoSnap"
+
+    // Close guards live in C++ (models/CloseGuardPolicy via ShellAdapter);
+    // this only routes the answer. requestClose() returns false both when a
+    // prompt went up and when the close was refused outright.
+    onClosing: function(close) {
+        if (root.closeApproved)
+            return;
+        close.accepted = root.shell.requestClose();
+    }
+
+    Connections {
+        target: root.shell
+
+        function onCloseApproved(): void {
+            root.closeApproved = true;
+            root.close();
+        }
+
+        function onNavigateToPageRequested(pageIndex: int): void {
+            appShell.currentPage = pageIndex;
+        }
+
+        // Opened imperatively rather than by binding `visible`: Dialog::accept()
+        // closes the popup itself, which would destroy a binding on `visible`
+        // and leave the second guard in a chain unable to appear.
+        function onCloseGuardChanged(): void {
+            if (root.shell.closeGuardActive)
+                closeGuardDialog.open();
+            else
+                closeGuardDialog.close();
+        }
+    }
+
+    // Win32 non-client behaviour for the frameless shell. The interactive
+    // geometry it needs is pushed down from the title bar in AppShell — this
+    // object cannot walk a widget tree to find the buttons, so the bar tells it.
+    QuickWindowChrome {
+        id: windowChrome
+
+        target: root
+        titleBarHeight: appShell.titleBarHeight
+        // The DWM frame line, kept on the theme rather than left at the system
+        // accent so a light theme does not get a dark border and vice versa.
+        borderColor: ExoTheme.line
+
+        // Qt owns the maximized state (Window.visibility), Win32 only reports
+        // the click. Reading it back from IsZoomed here would introduce a second
+        // notion of "maximized" that can disagree with the binding below.
+        onMaximizeButtonClicked: root.toggleMaximized()
+    }
+
+    function toggleMaximized(): void {
+        root.visibility = root.visibility === Window.Maximized ? Window.Windowed : Window.Maximized;
+    }
+
+    ExoConfirmDialog {
+        id: closeGuardDialog
+
+        title: root.shell.closeGuardTitle
+        bodyText: root.shell.closeGuardBody
+        proceedText: root.shell.closeGuardProceedLabel
+        cancelText: root.shell.closeGuardCancelLabel
+        defaultIsCancel: root.shell.closeGuardDefaultIsCancel
+        // Escape resolves to reject(), so dismissing the dialog always means
+        // "keep the window open" — never an accidental proceed.
+        onAccepted: root.shell.confirmCloseGuard()
+        onRejected: root.shell.cancelCloseGuard()
+    }
+
+    // The out-of-window toast stack: its own top-level, capture-excluded window,
+    // not a child of the shell. A toast about a finished recording is most
+    // useful exactly when ExoSnap is not the window in front — behind a
+    // fullscreen game, or with the app hidden in the tray.
+    OverlayNotificationToast {
+        toasts: root.notifications.toastModel
+        anchorGeometry: root.notifications.toastAnchorGeometry
+        onActionTriggered: function (sequence, action) {
+            root.notifications.triggerToastAction(sequence, action);
+        }
+        onDismissRequested: function (sequence) {
+            root.notifications.dismissToast(sequence);
+        }
+    }
+
+    // ── Capture-excluded overlays ────────────────────────────────────────────
+    //
+    // Four separate top-level windows on the monitor being recorded, not
+    // children of the shell: they have to survive the app window being
+    // minimised, hidden to the tray or covered by a fullscreen game, which is
+    // the situation they exist for. Each one applies WDA_EXCLUDEFROMCAPTURE to
+    // itself and stays hidden if that call fails — see CaptureExclusion.
+    //
+    // WHETHER each is on screen is decided in C++ (OverlayAdapter, over
+    // models::OverlayContentPolicy); WHAT it says is bound from the adapters
+    // that already own those values. Nothing here decides either.
+
+    OverlayRecording {
+        objectName: "quickOverlayRecording"
+        monitorGeometry: root.overlays.recordedMonitorGeometry
+        overlayState: root.overlays.recordingState
+        overlayActive: root.overlays.recordingOverlayActive
+        elapsedText: root.recordViewModel.elapsedText
+        outputSizeText: root.recordViewModel.outputSizeText
+        sourceNameText: root.recordViewModel.sourceName
+        showElapsed: root.settingsAdapter.recordingOverlayElapsed
+        showOutputSize: root.settingsAdapter.recordingOverlayOutputSize
+        showSourceName: root.settingsAdapter.recordingOverlaySourceName
+    }
+
+    OverlayDiagnostics {
+        objectName: "quickOverlayDiagnostics"
+        monitorGeometry: root.overlays.recordedMonitorGeometry
+        overlayActive: root.overlays.diagnosticsOverlayActive
+        fpsText: root.recordViewModel.capturedFpsText
+        dropText: root.recordViewModel.droppedFramesText
+        driftText: root.recordViewModel.driftText
+        sizeText: root.recordViewModel.outputSizeText
+        // "Muted" means the source is NOT part of this recording, which is what
+        // the Widgets overlay reported too (its meter callback passed the
+        // `*_show` flags, derived from audio_active_*, not the RMS level).
+        // Deliberately not derived from the meter: a level of zero is a silent
+        // moment, and a glyph that appears every time the user stops talking
+        // would report a problem that is not there.
+        micMuted: !root.recordViewModel.microphoneEnabled
+        sysMuted: !root.recordViewModel.systemAudioEnabled
+        showFps: root.settingsAdapter.diagnosticsOverlayFps
+        showDrop: root.settingsAdapter.diagnosticsOverlayDrop
+        showDrift: root.settingsAdapter.diagnosticsOverlayDrift
+        showSize: root.settingsAdapter.diagnosticsOverlaySize
+        showMutedSources: root.settingsAdapter.diagnosticsOverlayMutedSources
+    }
+
+    OverlayCountdown {
+        objectName: "quickOverlayCountdown"
+        monitorGeometry: root.overlays.recordedMonitorGeometry
+        countdownActive: root.overlays.countdownOverlayActive
+        remainingSeconds: root.recordViewModel.countdownRemaining
+        durationSeconds: root.recordViewModel.countdownSeconds
+    }
+
+    // The one capture-excluded overlay that is deliberately NOT click-through:
+    // it is an interactive control surface (ADR 0016), so it takes mouse input
+    // while still being kept out of the recording.
+    OverlayQuickControlPill {
+        objectName: "quickOverlayQuickControls"
+        monitorGeometry: root.overlays.recordedMonitorGeometry
+        overlayActive: root.overlays.quickControlsActive
+        paused: root.recordViewModel.paused
+        onPauseResumeRequested: {
+            if (root.recordViewModel.paused)
+                root.recordViewModel.requestResume();
+            else
+                root.recordViewModel.requestPause();
+        }
+        onStopRequested: root.recordViewModel.requestStop()
+        onCaptureFrameRequested: root.recordViewModel.requestCaptureFrame()
+    }
+
+    AppShell {
+        id: appShell
+
+        anchors.fill: parent
+        // AppShell is anchored at the window origin, so its item coordinates and
+        // the window coordinates the hit test compares against are the same
+        // space — no mapping is needed on the way down.
+        chrome: windowChrome
+        windowMaximized: root.visibility === Window.Maximized
+        onMinimizeRequested: root.showMinimized()
+        onMaximizeRestoreRequested: root.toggleMaximized()
+        onCloseRequested: root.close()
+        notifications: root.notifications
+        recovery: root.recovery
+        recordingError: root.recordingError
+        crashReport: root.crashReport
+        aboutViewModel: root.aboutViewModel
+        recordViewModel: root.recordViewModel
+        previewAdapter: root.previewAdapter
+        settingsAdapter: root.settingsAdapter
+        deviceAdapter: root.deviceAdapter
+        diagnosticsAdapter: root.diagnosticsAdapter
+        logsAdapter: root.logsAdapter
+        editSession: root.editSession
+        editTimeline: root.editTimeline
+        editPlayer: root.editPlayer
+        editExport: root.editExport
+        benchmarkInteractionActive: root.benchmarkInteractionActive
+    }
+}

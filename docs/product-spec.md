@@ -52,7 +52,7 @@ Top-level navigation is **six items**, in order:
   control reads these facts yet). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
   x264/SVT-AV1) appear as honest grayed-out "planned" rows — never fabricated probes.
 - **Settings** — unified recording configuration, hosting embedded sections: **Container & codecs ·
-  Quality & timing · Audio · Output · Webcam · Notifications & overlays · Hotkeys · Updates ·
+  Quality & timing · Audio · Output · Webcam · Overlays · Notifications & presence · Hotkeys · Updates ·
   Appearance · Developer**. There is no separate Advanced section — a global **Expert** toggle
   (shared with Diagnostics) reveals additional rows in place within a section rather than hiding or
   revealing a whole card; every section, including Developer, is visible in both modes (§12).
@@ -899,10 +899,28 @@ release (0.11 per ADR 0022).
   hub always keeps the full untruncated text); with a single action the card itself is clickable
   (marked `›`); two actions get named buttons. A preset switch raises no toast — only the hub entry
   with **Undo** (the combo box that switched is the way back).
-- **On-screen overlays** (all capture-excluded and click-through): a recording-status pill + elapsed
-  timer (anchored top-right of the recorded monitor), a diagnostics readout overlay (bottom-right,
-  **off by default**), a countdown overlay anchored to the recorded monitor's bottom-center, and an
-  **opt-in** interactive quick-control pill (off by default; enabled in Advanced).
+- **On-screen overlays**: a recording-status pill (anchored top-right of the recorded monitor), a
+  diagnostics readout pill directly beneath it (**off by default**), a countdown overlay centred on
+  the recorded monitor, and an **opt-in** interactive quick-control pill (off by default). All four
+  are capture-excluded. The first three are click-through; the quick-control pill is interactive by
+  design (ADR 0016) and is the sole exception.
+  - The **recording pill** carries a state glyph plus the configured text. There is no REC or PAUSED
+    word — the pill only appears while a capture is live, so the glyph carries the state: a coral dot
+    while recording, an amber pause symbol while held, an amber warning symbol once **measured**
+    frame drops occur. A failed recording does **not** raise the pill: the in-window error surface
+    owns that, and a click-through pill could not be dismissed.
+  - **Overlay content is configurable** in Settings → Overlays, by preset with per-element
+    overrides. Recording: **Minimal** (elapsed time) or **Custom** (elapsed time · file size ·
+    source name). Diagnostics: **Health** (only the tokens that can report a problem — drop, drift,
+    muted sources), **Technical** (all of fps · drop · drift · size · muted sources), or **Custom**.
+    Toggling any single element turns the preset into Custom, starting from the set currently shown.
+  - Every offered element has a measured runtime producer; an element with no producer is not
+    offered. A configured-but-unmeasured value renders as an em dash, never as zero. An overlay whose
+    elements have all been unticked does not appear rather than appearing empty.
+  - Overlay **appearance is not configurable**. Opacity, radius, shadow, colour and placement are
+    design-system values, not preferences; the Settings section configures behaviour and content
+    only. Click-through is likewise not a setting — it is a correctness property of a window that
+    sits over whatever the user is recording.
 - **Close-to-tray** is opt-in.
 
 ---

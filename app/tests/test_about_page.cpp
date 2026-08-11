@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "ExoSnapBuildInfo.h"
+#include "models/AboutInfo.h"
 #include "pages/AboutPage.h"
 
 #ifndef EXOSNAP_BUILD_CONFIG
@@ -59,34 +60,34 @@ class AboutPageTest : public ::testing::Test {
 // ── Pure helper tests (no widget, no QApplication dependency) ────────────────
 
 TEST(AboutPageHelpersTest, FormatBuildTimestampForDisplay_ValidIso8601) {
-    EXPECT_EQ(pages::FormatBuildTimestampForDisplay(QStringLiteral("2026-07-28T12:34:56Z")),
+    EXPECT_EQ(models::FormatBuildTimestampForDisplay(QStringLiteral("2026-07-28T12:34:56Z")),
               QStringLiteral("2026-07-28 12:34 UTC"));
 }
 
 TEST(AboutPageHelpersTest, FormatBuildTimestampForDisplay_InvalidInputPassesThrough) {
     const QString raw = QStringLiteral("not-a-timestamp");
-    EXPECT_EQ(pages::FormatBuildTimestampForDisplay(raw), raw);
+    EXPECT_EQ(models::FormatBuildTimestampForDisplay(raw), raw);
 }
 
 TEST(AboutPageHelpersTest, ResolveInstallModeLabel_InstalledWinsOverScoop) {
-    EXPECT_EQ(pages::ResolveInstallModeLabel(exosnap::update::InstallMode::Installed, /*is_scoop=*/true),
+    EXPECT_EQ(models::ResolveInstallModeLabel(exosnap::update::InstallMode::Installed, /*is_scoop=*/true),
               QStringLiteral("MSI"));
-    EXPECT_EQ(pages::ResolveInstallModeLabel(exosnap::update::InstallMode::Installed, /*is_scoop=*/false),
+    EXPECT_EQ(models::ResolveInstallModeLabel(exosnap::update::InstallMode::Installed, /*is_scoop=*/false),
               QStringLiteral("MSI"));
 }
 
 TEST(AboutPageHelpersTest, ResolveInstallModeLabel_ScoopBeatsPlainPortable) {
-    EXPECT_EQ(pages::ResolveInstallModeLabel(exosnap::update::InstallMode::Portable, /*is_scoop=*/true),
+    EXPECT_EQ(models::ResolveInstallModeLabel(exosnap::update::InstallMode::Portable, /*is_scoop=*/true),
               QStringLiteral("Scoop"));
 }
 
 TEST(AboutPageHelpersTest, ResolveInstallModeLabel_PlainPortable) {
-    EXPECT_EQ(pages::ResolveInstallModeLabel(exosnap::update::InstallMode::Portable, /*is_scoop=*/false),
+    EXPECT_EQ(models::ResolveInstallModeLabel(exosnap::update::InstallMode::Portable, /*is_scoop=*/false),
               QStringLiteral("Portable"));
 }
 
 TEST(AboutPageHelpersTest, BuildAboutCopyText_OfficialCleanBuild) {
-    pages::AboutCopyFields f;
+    models::AboutCopyFields f;
     f.version = QStringLiteral("0.9.0-rc4");
     f.official_build = true;
     f.git_commit_full = QStringLiteral("23aa1d210f0b5f23fca4c53d1f83021dd4cf6428");
@@ -114,11 +115,11 @@ TEST(AboutPageHelpersTest, BuildAboutCopyText_OfficialCleanBuild) {
                                             "Executable SHA-256: %1")
                                  .arg(QString(64, QLatin1Char('a')));
 
-    EXPECT_EQ(pages::BuildAboutCopyText(f), expected);
+    EXPECT_EQ(models::BuildAboutCopyText(f), expected);
 }
 
 TEST(AboutPageHelpersTest, BuildAboutCopyText_UnofficialDirtyBuildOmitsTagAndAddsDirtyLine) {
-    pages::AboutCopyFields f;
+    models::AboutCopyFields f;
     f.version = QStringLiteral("0.9.0-dev");
     f.official_build = false;
     f.git_commit_full = QStringLiteral("Unavailable");
@@ -131,7 +132,7 @@ TEST(AboutPageHelpersTest, BuildAboutCopyText_UnofficialDirtyBuildOmitsTagAndAdd
     f.executable_path = QStringLiteral("C:\\dev\\exosnap.exe");
     f.executable_sha256 = QString(64, QLatin1Char('b'));
 
-    const QString text = pages::BuildAboutCopyText(f);
+    const QString text = models::BuildAboutCopyText(f);
 
     EXPECT_TRUE(text.contains(QStringLiteral("Tag: (unofficial build)")));
     EXPECT_FALSE(text.contains(QStringLiteral("Tag: v0.9.0-dev")));
@@ -141,7 +142,7 @@ TEST(AboutPageHelpersTest, BuildAboutCopyText_UnofficialDirtyBuildOmitsTagAndAdd
 }
 
 TEST(AboutPageHelpersTest, BuildAboutCopyText_CleanBuildOmitsDirtyLine) {
-    pages::AboutCopyFields f;
+    models::AboutCopyFields f;
     f.version = QStringLiteral("0.9.0-rc4");
     f.git_commit_full = QStringLiteral("deadbeef");
     f.build_timestamp_utc = QStringLiteral("2026-07-28T00:00:00Z");
@@ -152,7 +153,7 @@ TEST(AboutPageHelpersTest, BuildAboutCopyText_CleanBuildOmitsDirtyLine) {
     f.executable_path = QStringLiteral("exosnap.exe");
     f.executable_sha256 = QString(64, QLatin1Char('c'));
 
-    EXPECT_FALSE(pages::BuildAboutCopyText(f).contains(QStringLiteral("Dirty source tree")));
+    EXPECT_FALSE(models::BuildAboutCopyText(f).contains(QStringLiteral("Dirty source tree")));
 }
 
 // ── AboutPage widget tests ────────────────────────────────────────────────────
@@ -185,7 +186,7 @@ TEST_F(AboutPageTest, PermanentFieldsShowRealBuildMetadata) {
     EXPECT_EQ(version->text(), QString::fromLatin1(build::kVersion));
     // Commit uses a rich-text hyperlink; verify the raw short SHA is embedded.
     EXPECT_TRUE(commit->text().contains(QString::fromLatin1(build::kGitCommit)));
-    EXPECT_EQ(built->text(), pages::FormatBuildTimestampForDisplay(QString::fromLatin1(build::kBuildTimestampUtc)));
+    EXPECT_EQ(built->text(), models::FormatBuildTimestampForDisplay(QString::fromLatin1(build::kBuildTimestampUtc)));
 
     EXPECT_FALSE(installation->text().isEmpty());
     EXPECT_TRUE(installation->text() == QStringLiteral("Portable") || installation->text() == QStringLiteral("MSI") ||

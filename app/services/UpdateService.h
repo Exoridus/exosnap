@@ -7,8 +7,9 @@
 // Design rules (CLAUDE.md):
 //   - The engine (libs/update) has NO Qt dependency.
 //   - This class is the ONLY Qt-side owner; it calls engine functions on a
-//     QThread worker and marshals results back to the main thread via
-//     QMetaObject::invokeMethod.
+//     worker from a QThreadPool it owns, and marshals results back to the main
+//     thread via QMetaObject::invokeMethod. Owning the pool is what makes the
+//     worker joinable at destruction — see the pool's declaration in Impl.
 //   - Recording guard is wired to RecordingCoordinator::State().
 
 #include <QObject>
@@ -24,6 +25,20 @@ class RecordingCoordinator;
 }
 
 namespace exosnap {
+
+// The persisted channel is a string in AppSettingsStore and an enum in the
+// engine. One conversion pair, next to the Qt-side owner of the engine, so a
+// second frontend cannot land its own spelling of "Preview".
+[[nodiscard]] inline exosnap::update::UpdateChannel UpdateChannelFromString(const QString& channel) {
+    return channel.compare(QStringLiteral("Preview"), Qt::CaseInsensitive) == 0
+               ? exosnap::update::UpdateChannel::Preview
+               : exosnap::update::UpdateChannel::Stable;
+}
+
+[[nodiscard]] inline QString UpdateChannelToString(exosnap::update::UpdateChannel channel) {
+    using exosnap::update::UpdateChannel;
+    return channel == UpdateChannel::Preview ? QStringLiteral("Preview") : QStringLiteral("Stable");
+}
 
 enum class UpdateHandoffPhase : uint8_t {
     Idle,

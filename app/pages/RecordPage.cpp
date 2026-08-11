@@ -1,10 +1,15 @@
 #include "RecordPage.h"
 
+#include "services/DxgiPreviewRenderer.h"
+
 #include "../diagnostics/AppLog.h"
 #include "../diagnostics/StartupClock.h"
+#include "../models/EditContextFactory.h"
+#include "../models/RecordingFailurePolicy.h"
 #include "../models/RecordingPreset.h"
 #include "../services/DisplayNumbering.h"
 #include "../services/DxgiCaptureHubService.h"
+#include "../services/ScreenPresentation.h"
 #include "../ui/CodecLabels.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
@@ -183,31 +188,6 @@ using exosnap::ui::frameRateLabel;
 using exosnap::ui::resolutionLabel;
 using exosnap::ui::videoCodecLabel;
 
-// EDIT-OVERLAY-R1 (review): single source for the EditContext fields both Edit
-// entry points share (post-stop result button + Recent-menu Edit action). The
-// live-session-only extras (mkv_master_path override, peak drift, diagnostics
-// snapshot) are layered on by the result-button path.
-EditContext MakeEditContext(const CompletedRecording& rec) {
-    EditContext ctx;
-    ctx.output_path = rec.file_path;
-    ctx.mkv_master_path = rec.file_path; // best-effort fallback (may not be correct for MP4)
-    ctx.duration = QString::fromStdWString(RecordViewModel::FormatElapsed(rec.totalDurationSeconds()));
-    ctx.duration_seconds = rec.totalDurationSeconds();
-    ctx.size = rec.totalSizeBytes() > 0
-                   ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.totalSizeBytes())))
-                   : QString{};
-    if (rec.output_width > 0 && rec.output_height > 0)
-        ctx.resolution = QStringLiteral("%1x%2").arg(rec.output_width).arg(rec.output_height);
-    ctx.fps = frameRateLabel(rec.frame_rate_num, rec.frame_rate_den) + QStringLiteral(" ") +
-              (rec.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-    ctx.video_codec = videoCodecLabel(rec.video_codec);
-    ctx.audio_codec = audioCodecLabel(rec.audio_codec);
-    ctx.container = containerLabel(rec.container);
-    ctx.markers = rec.markers;
-    ctx.marker_sidecar_path = rec.marker_sidecar_path;
-    return ctx;
-}
-
 // Shared explainer for why a split recording's Edit affordance is disabled
 // (result panel button + Recent-menu Edit action use the same wording).
 QString splitEditDisabledTooltip() {
@@ -316,15 +296,6 @@ struct MinimumCaptureSize {
     int height = 0;
 };
 
-struct ScreenPresentation {
-    bool available = false;
-    bool primary = false;
-    int width = 0;
-    int height = 0;
-    int origin_x = 0; // rcMonitor.left (virtual-screen coords)
-    int origin_y = 0; // rcMonitor.top
-};
-
 struct WindowPresentation {
     bool valid = false;
     bool is_visible = false;
@@ -364,28 +335,6 @@ QString FormatSizeText(int width, int height) {
 
 QString MinimumSizeText(const MinimumCaptureSize& min_size) {
     return QStringLiteral("Minimum %1×%2").arg(min_size.width).arg(min_size.height);
-}
-
-ScreenPresentation QueryScreenPresentation(uintptr_t native_id) {
-    ScreenPresentation meta;
-    const auto monitor = reinterpret_cast<HMONITOR>(native_id);
-    if (monitor == nullptr) {
-        return meta;
-    }
-
-    MONITORINFOEXW info{};
-    info.cbSize = sizeof(info);
-    if (!GetMonitorInfoW(monitor, &info)) {
-        return meta;
-    }
-
-    meta.available = true;
-    meta.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
-    meta.width = info.rcMonitor.right - info.rcMonitor.left;
-    meta.height = info.rcMonitor.bottom - info.rcMonitor.top;
-    meta.origin_x = info.rcMonitor.left;
-    meta.origin_y = info.rcMonitor.top;
-    return meta;
 }
 
 QString QueryWindowProcessLabel(HWND hwnd) {
@@ -1880,13 +1829,11 @@ bool RecordPage::hasCompletedRecording() const noexcept {
 
 EditContext RecordPage::currentEditContext() const {
     const auto& vm = view_model_;
-    EditContext ctx = MakeEditContext(vm.current_completed_recording);
-    // Live-session extras the history rows don't carry:
-    ctx.mkv_master_path = QString::fromStdWString(vm.result_mkv_master_path);
-    ctx.peak_av_drift_ms = peak_av_drift_ms_;
-    ctx.av_drift_available = av_drift_ever_available_;
-    ctx.completed_snapshot = last_completed_snapshot_;
-    return ctx;
+    // Live-session extras the history rows don't carry are layered on by the
+    // shared factory, so both frontends produce the identical context.
+    return MakeEditContextForCurrentSession(vm.current_completed_recording,
+                                            QString::fromStdWString(vm.result_mkv_master_path), peak_av_drift_ms_,
+                                            av_drift_ever_available_, last_completed_snapshot_);
 }
 
 EditContext RecordPage::editContextForOutputPath(const QString& output_path) const {
@@ -2836,7 +2783,10 @@ bool RecordPage::subscribeHubFeed(uintptr_t monitor_native_id) {
                     }
                 },
                 Qt::QueuedConnection);
-        });
+        },
+        // The Widgets preview presents from its own DXGI render thread on a
+        // fixed interval and does not need to be told when a frame lands.
+        nullptr);
 }
 
 void RecordPage::stopHubFeed() {
@@ -2956,6 +2906,10 @@ void RecordPage::initCoordinator() {
                         return;
                     if (surface && surface->isDxgiPreviewActive()) {
                         handle_owner->handle = nullptr; // claim: renderer now owns + closes it
+                        // Development performance counters start at the real engine-texture
+                        // handoff, excluding idle/capability-probe presents from native-vs-Quick
+                        // preview comparisons. This does not change renderer behavior.
+                        surface->resetDxgiPerformanceMetrics();
                         surface->beginPushedSource(raw, w, h, tap);
                     }
                     // Otherwise the owner's destructor closes the handle when this lambda
@@ -3008,6 +2962,8 @@ void RecordPage::initCoordinator() {
             updateWebcamOverlay();
         }
         if (state == UiRecordingState::Recording && prev != UiRecordingState::Recording) {
+            if (preview_surface_)
+                preview_surface_->resetDxgiPerformanceMetrics();
             if (prev == UiRecordingState::Paused) {
                 // Resume: keep accumulated time, restart the running clock.
                 recording_wall_clock_.restart();
@@ -3148,23 +3104,21 @@ void RecordPage::initCoordinator() {
         // RECORDING-ERROR-MODAL-R1: for any failure except the disk-space auto-stop
         // (which has its own actionable "Storage running low" notification), surface
         // a prominent modal with the failure detail and an opt-in error report.
-        if (!result.succeeded && result.error_phase != L"DiskSpace") {
+        // Which results deserve the modal, and what it says, is one policy shared
+        // with the Quick frontend (models/RecordingFailurePolicy) — nullopt for a
+        // success and for the disk-space auto-stop, which has its own actionable
+        // notification. can_send_report is decided by MainWindow from
+        // crash_capture availability.
+        if (const auto failure = models::BuildRecordingFailureReport(result)) {
             ui::dialogs::RecordingErrorModel model;
-            const bool has_partial = result.output_file_bytes > 0;
-            model.title = has_partial ? QStringLiteral("Recording stopped unexpectedly")
-                                      : QStringLiteral("Recording could not start");
-            model.summary =
-                has_partial
-                    ? QStringLiteral("The recording was interrupted before it finished. A partial file may have "
-                                     "been saved to your output folder.")
-                    : QStringLiteral("ExoSnap couldn't start this recording. The details below may help identify why.");
-            model.phase = QString::fromStdWString(result.error_phase);
-            model.code = QString::fromStdWString(result.hresult_text);
-            model.detail = QString::fromStdWString(result.error_detail);
-            model.container = containerLabel(result.container);
-            model.video_codec = videoCodecLabel(result.video_codec);
-            model.audio_codec = audioCodecLabel(result.audio_codec);
-            // can_send_report is decided by MainWindow based on crash_capture availability.
+            model.title = failure->title;
+            model.summary = failure->summary;
+            model.phase = failure->phase;
+            model.code = failure->code;
+            model.detail = failure->detail;
+            model.container = failure->container;
+            model.video_codec = failure->video_codec;
+            model.audio_codec = failure->audio_codec;
             emit recordingFailed(model);
         }
 
@@ -3432,6 +3386,19 @@ bool RecordPage::selectCaptureTargetForAutomation(recorder_core::CaptureTarget::
         (kind == recorder_core::CaptureTarget::Kind::Window) ? CaptureMode::Window : CaptureMode::Monitor;
     syncTargetSelectionToCombo(resolved_index);
     return true;
+}
+
+DxgiPreviewPerformanceSnapshot RecordPage::previewPerformanceMetrics() const {
+    return preview_surface_ ? preview_surface_->dxgiPerformanceMetrics() : DxgiPreviewPerformanceSnapshot{};
+}
+
+uint64_t RecordPage::previewRecordingDroppedFrames() const noexcept {
+    return view_model_.dropped_frames;
+}
+
+void RecordPage::resetPreviewPerformanceMetrics() noexcept {
+    if (preview_surface_)
+        preview_surface_->resetDxgiPerformanceMetrics();
 }
 
 bool RecordPage::isCountdownActive() const noexcept {

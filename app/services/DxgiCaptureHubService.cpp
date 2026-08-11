@@ -59,7 +59,7 @@ DxgiCaptureHubService::~DxgiCaptureHubService() {
         worker_.join();
 }
 
-bool DxgiCaptureHubService::Subscribe(HMONITOR monitor, HandleSink sink) {
+bool DxgiCaptureHubService::Subscribe(HMONITOR monitor, HandleSink sink, FramePublishedSink frame_sink) {
     if (monitor == nullptr || !sink)
         return false;
 
@@ -84,6 +84,7 @@ bool DxgiCaptureHubService::Subscribe(HMONITOR monitor, HandleSink sink) {
     cmd.op = Command::Op::Subscribe;
     cmd.device_name = info.szDevice;
     cmd.sink = std::move(sink);
+    cmd.frame_sink = std::move(frame_sink);
     PostCommand(std::move(cmd));
     return true;
 }
@@ -119,6 +120,20 @@ void DxgiCaptureHubService::ReturnEngineLease() {
     PostCommand(std::move(cmd));
 }
 
+DxgiCaptureHubService::PreviewPublishStats DxgiCaptureHubService::GetPreviewPublishStats() const noexcept {
+    return {
+        publish_attempts_.load(std::memory_order_relaxed),
+        published_frames_.load(std::memory_order_relaxed),
+        publish_drops_.load(std::memory_order_relaxed),
+    };
+}
+
+void DxgiCaptureHubService::ResetPreviewPublishStats() noexcept {
+    publish_attempts_.store(0, std::memory_order_relaxed);
+    published_frames_.store(0, std::memory_order_relaxed);
+    publish_drops_.store(0, std::memory_order_relaxed);
+}
+
 uint64_t DxgiCaptureHubService::PostCommand(Command cmd) {
     uint64_t serial = 0;
     {
@@ -144,6 +159,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
 
     CaptureSubscription subscription;
     HandleSink sink;
+    FramePublishedSink frameSink;
     CaptureSourceKey currentKey;
 
     // Publisher state: the shared texture lives on the producer's device and is
@@ -201,7 +217,17 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
             // Ownership of the NT handle transfers to the sink.
             sink(handle, sharedW, sharedH, tap);
         }
-        shared.TryPublish(producer->Context(), frame.texture.get());
+        publish_attempts_.fetch_add(1, std::memory_order_relaxed);
+        if (shared.TryPublish(producer->Context(), frame.texture.get())) {
+            published_frames_.fetch_add(1, std::memory_order_relaxed);
+            // A contention drop deliberately does NOT signal: it means the
+            // consumer still has the previous frame to take, so a redraw is
+            // already on its way to it.
+            if (frameSink)
+                frameSink();
+        } else {
+            publish_drops_.fetch_add(1, std::memory_order_relaxed);
+        }
     };
 
     while (!stop_token.stop_requested()) {
@@ -222,9 +248,11 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
                 subscription.Reset();
                 producer = nullptr;
                 sink = nullptr;
+                frameSink = nullptr;
                 resetPublisher();
 
                 sink = std::move(command->sink);
+                frameSink = std::move(command->frame_sink);
                 currentKey = {};
                 currentKey.kind = CaptureSourceKey::Kind::DxgiMonitor;
                 currentKey.device_name = std::move(command->device_name);
@@ -237,6 +265,7 @@ void DxgiCaptureHubService::WorkerProc(std::stop_token stop_token) {
                 subscription.Reset();
                 producer = nullptr;
                 sink = nullptr;
+                frameSink = nullptr;
                 currentKey = {};
                 resetPublisher();
                 break;

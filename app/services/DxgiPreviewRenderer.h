@@ -3,6 +3,7 @@
 #include "PreviewHelpers.h"
 #include "PushedSourceState.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -30,6 +31,22 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 
 namespace exosnap {
+
+struct DxgiPreviewPerformanceSnapshot {
+    uint64_t presented_frames = 0;
+    uint64_t pushed_frames_consumed = 0;
+    uint64_t keyed_mutex_misses = 0;
+    double present_fps = 0.0;
+    double present_ms_p50 = 0.0;
+    double present_ms_p95 = 0.0;
+    double present_ms_p99 = 0.0;
+    double present_ms_max = 0.0;
+    double source_delivery_fps = 0.0;
+    double source_interval_ms_p95 = 0.0;
+    double source_interval_ms_p99 = 0.0;
+    double submit_us_p95 = 0.0;
+    double submit_us_p99 = 0.0;
+};
 
 class DxgiPreviewRenderer {
   public:
@@ -172,6 +189,8 @@ class DxgiPreviewRenderer {
     void SetFirstFramePresentedCallback(std::function<void()> cb);
     // True once a real source frame has been presented in this renderer run.
     [[nodiscard]] bool HasPresentedFrame() const noexcept;
+    void ResetPerformanceMetrics() noexcept;
+    [[nodiscard]] DxgiPreviewPerformanceSnapshot PerformanceMetrics() const;
 
   private:
     static LRESULT CALLBACK ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -386,6 +405,23 @@ class DxgiPreviewRenderer {
     // StartCapture/StartPushedOnly before the render thread is created. No
     // mutex needed: writes and reads never race across those two windows.
     std::atomic<bool> framePresented_{false};
+
+    static constexpr size_t kPerformanceWindow = 1024;
+    std::atomic<uint64_t> metricPresentedFrames_{0};
+    std::atomic<uint64_t> metricPushedFrames_{0};
+    std::atomic<uint64_t> metricMutexMisses_{0};
+    std::atomic<uint64_t> metricPresentWrite_{0};
+    std::atomic<uint64_t> metricSourceWrite_{0};
+    std::atomic<uint64_t> metricSubmitWrite_{0};
+    std::array<std::atomic<int64_t>, kPerformanceWindow> metricPresentIntervalsNs_{};
+    std::array<std::atomic<int64_t>, kPerformanceWindow> metricSourceIntervalsNs_{};
+    std::array<std::atomic<int64_t>, kPerformanceWindow> metricSubmitNs_{};
+    std::atomic<int64_t> metricLastPresentNs_{0};
+    std::atomic<int64_t> metricLastSourceNs_{0};
+    // Benchmark samples intentionally cover only the recording engine's pushed
+    // source. Idle raw-hub frames use the same renderer but are not part of the
+    // native-vs-Quick recording comparison.
+    std::atomic<bool> metricEnginePushedActive_{false};
     // Set before StartCapture/StartPushedOnly (no lock); read only on the
     // render thread thereafter.
     std::function<void()> firstFrameCallback_;

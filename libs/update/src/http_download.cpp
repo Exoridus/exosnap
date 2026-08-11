@@ -95,6 +95,12 @@ std::optional<std::string> DownloadToFile(const std::string& url, const std::wst
     if (!session)
         return FailWithCleanup(dest_path, "WinHttpOpen failed");
 
+    // WinHTTP's default resolve timeout is INFINITE. This download does check a
+    // cancel flag between reads, so a stalled transfer is at least interruptible
+    // here -- but a hung name resolution never reaches the first read. Receive is
+    // generous because this is a multi-MB installer, not a JSON response.
+    WinHttpSetTimeouts(session.get(), /*resolve*/ 10'000, /*connect*/ 15'000, /*send*/ 15'000, /*receive*/ 60'000);
+
     HInternetGuard conn(WinHttpConnect(session.get(), components.lpszHostName, components.nPort, 0));
     if (!conn)
         return FailWithCleanup(dest_path, "WinHttpConnect failed");

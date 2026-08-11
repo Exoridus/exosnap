@@ -409,6 +409,15 @@ bool PreviewSurface::isDxgiSnapshotReady() const noexcept {
     return isDxgiPreviewActive() && dxgi_renderer_->HasPresentedFrame();
 }
 
+void PreviewSurface::resetDxgiPerformanceMetrics() noexcept {
+    if (dxgi_renderer_)
+        dxgi_renderer_->ResetPerformanceMetrics();
+}
+
+exosnap::DxgiPreviewPerformanceSnapshot PreviewSurface::dxgiPerformanceMetrics() const {
+    return dxgi_renderer_ ? dxgi_renderer_->PerformanceMetrics() : exosnap::DxgiPreviewPerformanceSnapshot{};
+}
+
 void PreviewSurface::beginPushedSource(void* nt_handle, uint32_t width, uint32_t height,
                                        recorder_core::PreviewTapDesc tap, bool raw_source_frames) {
     if (dxgi_renderer_)

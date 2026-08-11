@@ -182,6 +182,69 @@ TEST_F(UpdaterVisualProofTest, FailureMatrixAtRepresentativeDpiScales) {
     }
 }
 
+// The five scenarios above are the RC5 evidence set and their filenames are
+// referenced from that live-verify folder, so they are left alone. This covers
+// the REST of the matrix: every remaining FailureCase and the two UpSteps the
+// set above skips, so the standalone updater's visual identity is preserved in
+// full before the Qt Quick cutover retires the Widgets frontend around it.
+//
+// FailureState() already knows how to reach all twelve cases; only the scenario
+// table was partial. Rendering is deterministic and offscreen — no live updater
+// window, no network, no install, nothing to coordinate with the developer.
+TEST_F(UpdaterVisualProofTest, RemainingFailureMatrixForVisualBaseline) {
+    struct Scenario {
+        const char* filename;
+        FailureCase failure;
+        qreal dpr;
+        bool verify;
+    };
+    // Both reference DPIs from the cutover plan (100% / 150%). A case is rendered
+    // at one of them, not both: the two scales exercise the same layout code and
+    // a second copy would add files without adding information.
+    constexpr std::array<Scenario, 7> scenarios = {{
+        // A2 — security stop after a failed download verification.
+        {"10-verify-download-failed-dpr100.png", FailureCase::VerifyDownloadFailed, 1.0, false},
+        // A3 — verification reinstall refused because the version did not match.
+        {"11-verify-reinstall-mismatch-dpr150.png", FailureCase::VerifyReinstallMismatch, 1.5, true},
+        // B1 — the running app would not close.
+        {"12-app-wont-close-dpr100.png", FailureCase::AppWontClose, 1.0, false},
+        // B3-R — restore incomplete, backup preserved.
+        {"13-restore-failed-dpr150.png", FailureCase::RestoreFailed, 1.5, false},
+        // B3-MSI — msiexec rolled back to the previous version.
+        {"14-verify-install-failed-msi-dpr100.png", FailureCase::VerifyInstallFailedMsi, 1.0, false},
+        // C2 — msiexec itself failed; the detail string carries the exit code.
+        {"15-msi-failed-dpr150.png", FailureCase::MsiFailed, 1.5, false},
+        // C3 — terminal SUCCESS with a pending restart, not a failure despite
+        // travelling through onFailure(). The only TerminalVariant the evidence
+        // set had no picture of at all.
+        {"16-msi-reboot-required-dpr100.png", FailureCase::MsiRebootRequired, 1.0, false},
+    }};
+
+    for (const Scenario& scenario : scenarios) {
+        UpdaterWindow window;
+        window.render(FailureState(scenario.failure, scenario.verify));
+        ExpectNoClippedCopy(window);
+        EXPECT_TRUE(RenderEvidence(window, QString::fromLatin1(scenario.filename), scenario.dpr)) << scenario.filename;
+    }
+
+    // The two steps the working set above skips, so every UpStep has a picture.
+    struct WorkingScenario {
+        const char* filename;
+        UpStep step;
+        qreal dpr;
+    };
+    constexpr std::array<WorkingScenario, 2> working = {{
+        {"17-closing-app-dpr100.png", UpStep::CloseApp, 1.0},
+        {"18-launching-dpr150.png", UpStep::Launch, 1.5},
+    }};
+    for (const WorkingScenario& scenario : working) {
+        UpdaterWindow window;
+        window.render(WorkingState(scenario.step));
+        ExpectNoClippedCopy(window);
+        EXPECT_TRUE(RenderEvidence(window, QString::fromLatin1(scenario.filename), scenario.dpr)) << scenario.filename;
+    }
+}
+
 TEST_F(UpdaterVisualProofTest, SafeCancelConfirmationAtRepresentativeDpi) {
     UpdaterWindow window;
     window.render(WorkingState(UpStep::Download));

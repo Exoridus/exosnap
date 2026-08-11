@@ -1,0 +1,169 @@
+pragma ComponentBehavior: Bound
+
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+// The previous session did not shut down normally (ADR 0017). Shown once at the
+// next launch, and only when the persisted policy is "ask every time".
+//
+// This is a consent surface: the two committing actions are equally weighted and
+// neither is pre-focused, the remember tick changes nothing until one of them is
+// pressed, and dismissing commits nothing at all. All of that is enforced in
+// CrashReportAdapter — the QML only reports which button was pressed.
+ExoOverlayCard {
+    id: root
+
+    required property CrashReportAdapter crash
+
+    objectName: "quickCrashReportOverlay"
+    subtitle: qsTr("Problem Report")
+    title: qsTr("The previous session did not shut down normally")
+    hint: root.crash.availabilityText
+    onDismissed: root.crash.dismiss()
+
+    // A crash mid-recording left a recovery candidate behind. Said here because
+    // "did not shut down normally" otherwise reads as "your recording is gone".
+    ExoNotice {
+        text: qsTr("Your interrupted recording data is available for recovery.")
+        tone: "success"
+        visible: root.crash.recordingWasActive
+        Layout.fillWidth: true
+    }
+
+    Label {
+        text: qsTr("WHAT HAPPENED")
+        textFormat: Text.PlainText
+        color: ExoTheme.textDim
+        Layout.fillWidth: true
+        font {
+            family: ExoTheme.monoFamily
+            pixelSize: 10
+            letterSpacing: 0.6
+        }
+    }
+
+    ExoKeyValueTable {
+        rows: root.crash.summaryRows
+        labelColumnWidth: 110
+        Layout.fillWidth: true
+    }
+
+    ExoDisclosure {
+        title: qsTr("What is included in this report?")
+        subtitle: qsTr("Includes a native crash dump when available and limited app diagnostics. Recordings are never included.")
+        Layout.fillWidth: true
+
+        body: ColumnLayout {
+            spacing: ExoTheme.spacingSm
+
+            Repeater {
+                model: [
+                    { heading: qsTr("INCLUDED"), items: root.crash.includedItems, tone: ExoTheme.success, glyph: "✓" },
+                    { heading: qsTr("NOT INCLUDED"), items: root.crash.excludedItems, tone: ExoTheme.error, glyph: "×" }
+                ]
+
+                delegate: ColumnLayout {
+                    id: group
+
+                    required property var modelData
+
+                    spacing: 2
+                    Layout.fillWidth: true
+
+                    Label {
+                        text: group.modelData.glyph + "  " + group.modelData.heading
+                        textFormat: Text.PlainText
+                        color: group.modelData.tone
+                        font {
+                            family: ExoTheme.monoFamily
+                            pixelSize: 10
+                            letterSpacing: 0.6
+                        }
+                    }
+
+                    Repeater {
+                        model: group.modelData.items
+
+                        delegate: Label {
+                            required property string modelData
+
+                            text: "· " + modelData
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: ExoTheme.textMuted
+                            Layout.fillWidth: true
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: 11
+                            }
+                        }
+                    }
+                }
+            }
+
+            Label {
+                text: root.crash.channelNote
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: ExoTheme.textDim
+                Layout.fillWidth: true
+                font {
+                    family: ExoTheme.sansFamily
+                    pixelSize: 11
+                }
+            }
+        }
+    }
+
+    ColumnLayout {
+        spacing: 2
+        Layout.fillWidth: true
+
+        ExoCheckBox {
+            objectName: "crashRememberChoice"
+            text: qsTr("Remember this choice for future crashes")
+            checked: root.crash.rememberChoice
+            onToggled: root.crash.rememberChoice = checked
+        }
+
+        Label {
+            text: qsTr("Send report will enable automatic reports. Don't send will stop future report prompts.")
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            visible: root.crash.rememberChoice
+            color: ExoTheme.textDim
+            Layout.fillWidth: true
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: 11
+            }
+        }
+    }
+
+    actions: [
+        ExoButton {
+            objectName: "crashOpenFolderButton"
+            text: qsTr("Open crash folder")
+            quiet: true
+            enabled: root.crash.crashFolderAvailable
+            onClicked: root.crash.openCrashFolder()
+        },
+        Item {
+            Layout.fillWidth: true
+        },
+        // Neither action is pre-focused: a stray Return must not answer a
+        // consent question on the user's behalf, in either direction.
+        ExoButton {
+            objectName: "crashDontSendButton"
+            text: qsTr("Don't send")
+            onClicked: root.crash.dontSend()
+        },
+        ExoButton {
+            objectName: "crashSendButton"
+            text: qsTr("Send report")
+            tone: "primary"
+            onClicked: root.crash.sendReport()
+        }
+    ]
+}

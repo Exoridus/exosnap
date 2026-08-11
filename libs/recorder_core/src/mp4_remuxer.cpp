@@ -364,7 +364,32 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     // onto that keyframe yet.
     bool trim_start_locked = !tr.HasStart(); // true = past the start boundary
 
+    // Last progress value handed to the callback. Re-sent by the unconditional
+    // cancellation probe below so a cancel poll never reports a bogus position.
+    float last_progress = 0.0f;
+
     while (true) {
+        // Cancellation is tested here, once per packet, unconditionally.
+        //
+        // It used to live inside the progress block further down, behind three
+        // extra conditions: a positive container duration, stream index == 0,
+        // and a valid PTS. Any one of them false disabled cancellation for the
+        // whole run -- and the duration one is routinely false, because
+        // matroska_stream_writer writes KaxDuration as 0.0 and only back-patches
+        // it at finalize. So exactly the inputs a cancel matters for (an
+        // unfinalized master from a crash, a recovery artefact, an abrupt stop)
+        // were the ones that could not be cancelled. The caller joins this work
+        // synchronously on the GUI thread during window close, so the failure
+        // mode was a frozen UI for the length of a whole stream copy.
+        //
+        // Breaking here is exactly as safe as breaking at the old site: the
+        // cancelled branch below closes the AVIO handle, frees the context and
+        // deletes the partial output before returning ECANCELED.
+        if (progress_cb && !progress_cb(last_progress)) {
+            cancelled = true;
+            break;
+        }
+
         int ret = av_read_frame(in_ctx, pkt);
         if (ret == AVERROR_EOF)
             break;
@@ -446,17 +471,17 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             return RemuxResult::Fail(ret, std::move(msg));
         }
 
-        // Progress callback: use video stream PTS (stream 0 is typically video).
-        if (progress_cb && input_duration_sec > 0.0 && si == 0 && pkt_pts != AV_NOPTS_VALUE) {
+        // Progress reporting. Keyed on the video stream rather than on index 0:
+        // "stream 0 is typically video" was a guess, and it reports nothing at
+        // all for a file whose video is not the first track. Still requires a
+        // known duration -- without one there is no denominator, so the run is
+        // simply progress-less. Cancellation no longer depends on any of this;
+        // it is handled at the top of the loop.
+        if (progress_cb && input_duration_sec > 0.0 && si == video_stream_idx && pkt_pts != AV_NOPTS_VALUE) {
             const double pts_sec = static_cast<double>(pkt_pts) * av_q2d(out_tb);
-            float progress = static_cast<float>(pts_sec / input_duration_sec);
-            if (progress > 1.0f)
-                progress = 1.0f;
-            if (progress < 0.0f)
-                progress = 0.0f;
+            last_progress = std::clamp(static_cast<float>(pts_sec / input_duration_sec), 0.0f, 1.0f);
 
-            const bool keep_going = progress_cb(progress);
-            if (!keep_going) {
+            if (!progress_cb(last_progress)) {
                 cancelled = true;
                 break;
             }

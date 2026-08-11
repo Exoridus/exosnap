@@ -127,6 +127,7 @@ struct RecorderSession::Impl {
     MeterCallback meter_callback;
     DiagnosticsCallback diagnostics_callback;
     PreviewSharedHandleCallback preview_shared_handle_callback;
+    PreviewFramePublishedCallback preview_frame_published_callback;
     SegmentCallback segment_callback;
     uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
@@ -175,6 +176,10 @@ void RecorderSession::SetDiagnosticsCallback(DiagnosticsCallback cb) {
 
 void RecorderSession::SetPreviewSharedHandleCallback(PreviewSharedHandleCallback cb) {
     m_impl->preview_shared_handle_callback = std::move(cb);
+}
+
+void RecorderSession::SetPreviewFramePublishedCallback(PreviewFramePublishedCallback cb) {
+    m_impl->preview_frame_published_callback = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +608,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         } else {
             st.preview_shared_handle_cb = nullptr;
         }
+        st.preview_frame_published_cb = m_impl->preview_frame_published_callback;
         st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(engine_config));
     }
 

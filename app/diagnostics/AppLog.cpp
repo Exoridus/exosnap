@@ -501,4 +501,16 @@ void AppLog::deliverPending() {
     emit entriesAppended(entries, evicted_count);
 }
 
+std::optional<LogSeverity> DeveloperLogLevelFromString(const QString& level) {
+    if (level.compare(QStringLiteral("Off"), Qt::CaseInsensitive) == 0)
+        return std::nullopt;
+    if (level.compare(QStringLiteral("Error"), Qt::CaseInsensitive) == 0)
+        return LogSeverity::Error;
+    if (level.compare(QStringLiteral("Warning"), Qt::CaseInsensitive) == 0)
+        return LogSeverity::Warning;
+    if (level.compare(QStringLiteral("Info"), Qt::CaseInsensitive) == 0)
+        return LogSeverity::Info;
+    return LogSeverity::Debug;
+}
+
 } // namespace exosnap::diagnostics

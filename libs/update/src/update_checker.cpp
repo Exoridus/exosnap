@@ -9,11 +9,24 @@
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
 
+#include <chrono>
 #include <optional>
 #include <string>
 
 namespace exosnap::update {
 namespace {
+
+// Per-operation WinHTTP deadlines. These bound each individual step; the
+// wall-clock guard on the read loop below is what bounds the total, because a
+// server that trickles one byte inside every receive window would otherwise
+// keep the per-read timeout from ever firing.
+constexpr int kResolveTimeoutMs = 10'000;
+constexpr int kConnectTimeoutMs = 15'000;
+constexpr int kSendTimeoutMs = 15'000;
+constexpr int kReceiveTimeoutMs = 30'000;
+// Total budget for reading the response body. An update check is a few hundred
+// KB of JSON; anything past this is a stalled connection, not a slow one.
+constexpr auto kBodyReadBudget = std::chrono::seconds(60);
 
 // Perform a simple HTTPS GET and return the response body, or nullopt on failure.
 std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view path, INTERNET_PORT port,
@@ -24,6 +37,13 @@ std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view pa
         out_error = "WinHttpOpen failed";
         return std::nullopt;
     }
+
+    // Without this WinHTTP applies its own defaults, and the resolve timeout
+    // among them is INFINITE -- a black-holed DNS server blocks the caller
+    // forever. The caller is UpdateService, whose thread pool is joined on the
+    // GUI thread at shutdown, so an unbounded GET here is an application that
+    // will not close, with no progress indication and no cancel affordance.
+    WinHttpSetTimeouts(session, kResolveTimeoutMs, kConnectTimeoutMs, kSendTimeoutMs, kReceiveTimeoutMs);
 
     HINTERNET conn = WinHttpConnect(session, std::wstring(host).c_str(), port, 0);
     if (!conn) {
@@ -69,7 +89,18 @@ std::optional<std::string> HttpsGet(std::wstring_view host, std::wstring_view pa
 
     std::string body;
     DWORD avail = 0;
+    // The per-read timeout above is per operation, so a server dripping a byte
+    // per window would keep this loop alive indefinitely. The total budget is
+    // what actually terminates that case.
+    const auto read_deadline = std::chrono::steady_clock::now() + kBodyReadBudget;
     while (WinHttpQueryDataAvailable(req, &avail) && avail > 0) {
+        if (std::chrono::steady_clock::now() > read_deadline) {
+            WinHttpCloseHandle(req);
+            WinHttpCloseHandle(conn);
+            WinHttpCloseHandle(session);
+            out_error = "Update server response timed out";
+            return std::nullopt;
+        }
         std::string chunk(avail, '\0');
         DWORD read = 0;
         WinHttpReadData(req, chunk.data(), avail, &read);

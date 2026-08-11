@@ -279,22 +279,42 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # qtdeclarative + qtshadertools: the Qt Quick frontend (app/quick/ExoSnap/Quick,
+      # gated behind EXOSNAP_BUILD_QUICK_SPIKE) links Qt6::Qml/Quick/QuickControls2/
+      # QuickDialogs2/QuickTest, all shipped in the single qtdeclarative archive;
+      # qtshadertools is a separate archive Qt6QuickConfig.cmake hard-requires to be
+      # installed (qmlcachegen/shader compilation) even before this project's own
+      # find_package(... COMPONENTS Quick) runs. The flag stays OFF and unset here
+      # (see app/CMakeLists.txt) so this does not yet build Quick, but this is the
+      # PR-CI gate that will build it once the flag flips.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
+      # EXOSNAP_BUILD_QUICK_SPIKE=ON: the Qt Quick frontend and its adapter/QML
+      # test targets are otherwise compiled by nothing on any runner. Installing
+      # qtdeclarative without enabling the option only bought the ability to
+      # build it — the target itself stayed outside CI, so every Quick-side
+      # regression reached main unbuilt and untested.
       - name: Configure (windows-x64-ninja-debug)
-        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
+        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON -DEXOSNAP_BUILD_QUICK_SPIKE=ON
 
       - name: Build (windows-x64-ninja-debug)
         run: cmake --build --preset windows-x64-ninja-debug
+
+      # qmllint over the production QML module. Deterministic and fast, and it
+      # catches a class of defect no C++ test can: an Accessible attachment on a
+      # non-Item, an unresolvable import, a property that does not exist on the
+      # declared type. The repository had no QML gate of any kind before this.
+      - name: qmllint (production QML module)
+        run: cmake --build build/windows-x64-ninja-debug --target exosnap_quick_spike_qmllint
 
       # Runs through scripts/run-tests.ps1 (the documented, canonical test entry
       # point — see AGENTS.md) rather than a bare `ctest`, so CI shares the same
@@ -379,19 +399,24 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # qtdeclarative + qtshadertools: see build-test-debug's Install Qt 6 step above
+      # for why the Quick frontend needs both archives.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
+      # Quick enabled here too: a Release build is the only configuration that
+      # compiles out the harness code paths, so a Debug-only Quick job would miss
+      # exactly the guards that differ between the two.
       - name: Configure (windows-x64-ninja-release)
-        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+        run: cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON -DEXOSNAP_BUILD_QUICK_SPIKE=ON
 
       - name: Build (windows-x64-ninja-release)
         run: cmake --build --preset windows-x64-ninja-release
@@ -477,12 +502,18 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
+      # qtdeclarative + qtshadertools: kept in lockstep with build-test-release's
+      # archives, which this job shares a preset/build-tree lineage with (see the
+      # comment block above). Note: install(TARGETS exosnap ...) in app/CMakeLists.txt
+      # only ever packages the Widgets `exosnap` target today, not exosnap_quick_spike
+      # — packaging the Quick frontend needs its own install()/windeployqt wiring
+      # once EXOSNAP_BUILD_QUICK_SPIKE (or its renamed successor) actually ships.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          archives: 'qtbase qtsvg'
+          archives: 'qtbase qtsvg qtdeclarative qtshadertools'
           cache: true
 
       - name: Set up sccache

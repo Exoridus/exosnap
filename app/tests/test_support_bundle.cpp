@@ -130,6 +130,33 @@ TEST(SupportBundle, NoPersonalDataOrWindowTitleSurvives) {
     EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("backend=wgc")));
 }
 
+// ADR 0044 and the product spec both promise startup-trace.txt in the bundle.
+// It was promised, formatted and never collected: CollectBundleEntries did not
+// add it and FormatStartupTrace had no production caller at all.
+TEST(SupportBundle, CarriesTheStartupTraceTable) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    BundleInputs in = MakeInputs(tmp.path());
+    in.startup_trace = {{QStringLiteral("main-start"), 1}, {QStringLiteral("first-paint"), 420}};
+
+    const auto entries = CollectBundleEntries(in);
+    const auto it = std::find_if(entries.begin(), entries.end(),
+                                 [](const BundleEntry& e) { return e.name == QStringLiteral("startup-trace.txt"); });
+    ASSERT_NE(it, entries.end());
+    EXPECT_EQ(QString::fromUtf8(it->bytes), QStringLiteral("main-start\t1 ms\nfirst-paint\t420 ms\n"));
+}
+
+// Omitted rather than shipped blank: an empty table reads as "startup produced
+// no milestones", which is a different claim from "this build never recorded
+// any".
+TEST(SupportBundle, OmitsTheStartupTraceWhenNoMilestonesWereRecorded) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const auto entries = CollectBundleEntries(MakeInputs(tmp.path()));
+    EXPECT_TRUE(std::none_of(entries.begin(), entries.end(),
+                             [](const BundleEntry& e) { return e.name == QStringLiteral("startup-trace.txt"); }));
+}
+
 TEST(SupportBundle, WritesAValidZip) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());

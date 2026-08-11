@@ -10,13 +10,37 @@ endif()
 # CI, contributors without Qt installed). Kept as an explicit option rather than
 # leaving "should we build the app" implied by Qt's presence alone.
 option(EXOSNAP_BUILD_APP "Build the ExoSnap Qt application" ON)
+option(EXOSNAP_BUILD_QUICK_SPIKE "Build the isolated Qt Quick frontend spike" OFF)
+
+# The --auto-record / --visual-test automation harnesses are Debug-only by
+# default: they have no shipping caller, so a normal Release must not carry
+# them. That rule breaks down for exactly one job — comparing the production
+# cost of the two frontends. A Debug measurement compares two unoptimised
+# builds and says nothing about what users run.
+#
+# Turning this ON adds the harness code to a genuine Release build and changes
+# NOTHING else: no optimisation flag, no runtime policy, no shipping default.
+# The delta between `Release` and `Release + this option` is the deliberately
+# included automation code and nothing besides. Never enable it for a shipped
+# artifact.
+option(EXOSNAP_BUILD_BENCHMARK_HARNESS
+       "Include the --auto-record benchmark/automation harness in Release builds" OFF)
+
+# Gate used by every harness source and compile definition below. Written as a
+# generator expression because the source lists are per-config: `Debug` keeps
+# the harness implicitly, `Release` only gets it when the option is on.
+if(EXOSNAP_BUILD_BENCHMARK_HARNESS)
+    set(EXOSNAP_HARNESS_GATE "1")
+else()
+    set(EXOSNAP_HARNESS_GATE "$<NOT:$<CONFIG:Release>>")
+endif()
 
 # Always probe for Qt6, even when EXOSNAP_BUILD_APP is OFF: this also caches
 # Qt6_DIR, which apps/updater/CMakeLists.txt relies on to find Qt6 in its own
 # (sibling, not nested) directory scope without repeating the CMAKE_PREFIX_PATH
 # hint above. Skipping this call when the app build is disabled would silently
 # break Qt detection for the updater even on a machine where Qt is installed.
-find_package(Qt6 QUIET COMPONENTS Core Gui Widgets Svg)
+find_package(Qt6 6.9 QUIET COMPONENTS Core Gui Widgets Svg)
 
 # A stand-in `exosnap` custom target is created in every branch below other than
 # the real build, so add_subdirectory(app) always leaves a target named `exosnap`
@@ -34,6 +58,16 @@ if(NOT EXOSNAP_BUILD_APP OR NOT Qt6_FOUND)
         message(STATUS "EXOSNAP_BUILD_APP is OFF — exosnap app will not be built.")
     endif()
     return()
+endif()
+
+qt_standard_project_setup(REQUIRES 6.9)
+
+if(EXOSNAP_BUILD_QUICK_SPIKE)
+    # Test is not used directly, but Qt6QuickTest links it, and the test-DLL
+    # staging in cmake/exosnap_testing.cmake can only copy a module whose
+    # imported target actually exists. Without it a QuickTest binary builds and
+    # then fails to START with 0xC0000135.
+    find_package(Qt6 6.9 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 endif()
 
 # Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
@@ -259,6 +293,8 @@ qt_add_executable(exosnap WIN32
     services/WebcamDeviceNotifier.cpp
     services/DisplayDeviceNotifier.h
     services/DisplayDeviceNotifier.cpp
+    services/CaptureTargetNotifier.h
+    services/CaptureTargetNotifier.cpp
     services/GlobalHotkeyService.h
     services/GlobalHotkeyService.cpp
     services/PreviewService.h
@@ -290,6 +326,8 @@ qt_add_executable(exosnap WIN32
     services/RecordingCoordinator.cpp
     services/DisplayNumbering.h
     services/DisplayNumbering.cpp
+    services/ScreenPresentation.h
+    services/ScreenPresentation.cpp
     services/TargetDisplayFacts.h
     services/DisplayIdentityResolver.h
     services/DisplayIdentityResolver.cpp
@@ -315,6 +353,8 @@ qt_add_executable(exosnap WIN32
     services/ElevatedRelaunch.h
     services/ElevatedRelaunch.cpp
     models/WebcamSettings.h
+    models/AboutInfo.h
+    models/AboutInfo.cpp
     models/SettingsCompareData.h
     models/SettingsCompareData.cpp
     models/OutputSettingsModel.h
@@ -331,6 +371,15 @@ qt_add_executable(exosnap WIN32
     models/OutputPathValidator.cpp
     models/OutputPathPolicy.h
     models/OutputPathPolicy.cpp
+    models/EditContextFactory.h
+    models/EditContextFactory.cpp
+    models/CloseGuardPolicy.h
+    models/CloseGuardPolicy.cpp
+    models/RecordingFailurePolicy.h
+    models/RecordingFailurePolicy.cpp
+    models/OverlayContentPolicy.h
+    models/OverlayContentPolicy.cpp
+    models/HotkeyStartupConflicts.h
     settings/AppSettingsStore.h
     settings/AppSettingsStore.cpp
     settings/RecordingPresetStore.h
@@ -361,6 +410,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/CapabilitySummary.cpp
     diagnostics/ConfigSummary.h
     diagnostics/ConfigSummary.cpp
+    diagnostics/CrashSessionContext.h
+    diagnostics/CrashSessionContext.cpp
     diagnostics/DiskSpaceProvider.h
     diagnostics/DiskSpaceProvider.cpp
     diagnostics/ElevationProvider.h
@@ -396,21 +447,37 @@ qt_add_executable(exosnap WIN32
 )
 
 target_sources(exosnap PRIVATE
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.h>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.cpp>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.h>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.cpp>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.h>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.cpp>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordOptions.cpp>"
+    # EXOSNAP_HARNESS_GATE, not a bare non-Release check: the frontend A/B
+    # benchmark drives --auto-record --enable-preview, which lives in
+    # AutoRecordHarness.cpp behind EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and reaches
+    # MainWindow's scenario members. The whole automation cluster therefore has
+    # to appear together, or a Release-with-harness build links against a
+    # declared-but-undefined preview entry point.
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.cpp>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.cpp>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.cpp>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordOptions.cpp>"
+    # Frontend-neutral benchmark report contract, shared with the Qt Quick target.
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkMetrics.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkReport.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkReport.cpp>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEngineMetrics.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEngineMetrics.cpp>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEffectiveConfig.h>"
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEffectiveConfig.cpp>"
+    # MainWindow's visual-test scenario members, split out of MainWindow.cpp.
+    # Same gate, matching the guards inside the file and the ones its
+    # declarations already carry in MainWindow.h.
+    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/MainWindow_VisualScenarios.cpp>"
+    # The HWND audit is a standalone harness with no --auto-record caller, so it
+    # stays Debug-only and keeps the Release-with-harness delta smaller.
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.h>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.cpp>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.h>"
     "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.cpp>"
-    # MainWindow's visual-test scenario members, split out of MainWindow.cpp.
-    # Non-Release only, matching the guards inside the file and the ones its
-    # declarations already carry in MainWindow.h.
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/MainWindow_VisualScenarios.cpp>"
 )
 
 if(WIN32)
@@ -436,8 +503,8 @@ set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exos
 target_compile_definitions(exosnap PRIVATE
     NOMINMAX
     EXOSNAP_BUILD_CONFIG="$<CONFIG>"
-    "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
-    "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_AUTO_RECORD_HARNESS=1>"
+    "$<${EXOSNAP_HARNESS_GATE}:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
+    "$<${EXOSNAP_HARNESS_GATE}:EXOSNAP_ENABLE_AUTO_RECORD_HARNESS=1>"
     "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_HWND_AUDIT_HARNESS=1>"
 )
 add_dependencies(exosnap exosnap_build_info)
@@ -603,6 +670,7 @@ exosnap_add_app_test_support(exosnap_device_service_test_support
     services/AudioDeviceNotifier.cpp
     services/WebcamDeviceNotifier.cpp
     services/DisplayDeviceNotifier.cpp
+    services/CaptureTargetNotifier.cpp
     services/WebcamService.cpp
     # WebcamService calls exosnap::diagnostics::logEvent (NV12 open diagnostics);
     # every target that pulls in this lib needs the symbol, and this is the one
@@ -1408,6 +1476,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_about_page.cpp
         pages/AboutPage.cpp
+        models/AboutInfo.cpp
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
@@ -2068,6 +2137,16 @@ target_include_directories(display_device_notifier_tests PRIVATE ${CMAKE_CURRENT
 target_link_libraries(display_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(display_device_notifier_tests PROPERTIES AUTOMOC ON)
 
+exosnap_add_gtest(
+    NAME capture_target_notifier_tests
+    TEST_PREFIX capture.targets.
+    SOURCES
+        tests/test_capture_target_notifier.cpp
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(capture_target_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(capture_target_notifier_tests PRIVATE ole32.lib user32.lib)
+set_target_properties(capture_target_notifier_tests PROPERTIES AUTOMOC ON)
+
 # Selection-preservation policy tests (Worker C).
 # Drives page methods with synthetic snapshots at the integration level.
 exosnap_add_gtest(
@@ -2498,4 +2577,16 @@ if(WIN32 AND Qt6_FOUND)
     # script below, so the override is in effect when the script runs.
     install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
     install(SCRIPT ${_exosnap_deploy_script})
+endif()
+
+# ---------------------------------------------------------------------------
+# Qt Quick frontend
+# ---------------------------------------------------------------------------
+# Added last, not next to the find_package() above: the Quick target compiles the
+# shared VERSIONINFO resource generated by configure_file() further up this file
+# and depends on targets (exosnap_build_info, the crash/update libraries) that
+# only exist by this point. Processing the subdirectory earlier left both as
+# forward references that happened to resolve at generate time.
+if(EXOSNAP_BUILD_QUICK_SPIKE)
+    add_subdirectory(quick/ExoSnap/Quick)
 endif()
