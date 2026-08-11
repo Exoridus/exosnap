@@ -65,3 +65,5 @@ manifest.json
 .workspace/
 .claude/
 .superpowers/
+.agents/
+skills-lock.json
