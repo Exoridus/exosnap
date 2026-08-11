@@ -216,15 +216,14 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$epoch (commit $GITHUB_SHA)"
 
-      # qtdeclarative + qtshadertools: the Qt Quick frontend (app/quick/ExoSnap/Quick,
-      # gated behind EXOSNAP_BUILD_QUICK_SPIKE) links Qt6::Qml/Quick/QuickControls2/
-      # QuickDialogs2/QuickTest, all shipped in the single qtdeclarative archive;
-      # qtshadertools is a separate archive Qt6QuickConfig.cmake hard-requires to be
-      # installed (qmlcachegen/shader compilation) even before this project's own
-      # find_package(... COMPONENTS Quick) runs. The flag stays OFF and unset in this
-      # pipeline (see app/CMakeLists.txt), so this does not yet build or ship Quick,
-      # but this is the pipeline that produces the artifact users install, so it is
-      # provisioned ahead of the cutover.
+      # qtdeclarative + qtshadertools are MANDATORY for the shipped artifact: the
+      # ExoSnap application (app/quick/ExoSnap/Quick, target `exosnap`) is a Qt
+      # Quick program and links Qt6::Qml/Quick/QuickControls2/QuickDialogs2/
+      # QuickTest, all shipped in the single qtdeclarative archive; qtshadertools
+      # is a separate archive Qt6QuickConfig.cmake hard-requires to be installed
+      # (qmlcachegen/shader compilation) even before this project's own
+      # find_package(... COMPONENTS Quick) runs. Dropping either archive does not
+      # produce a Widgets fallback — it produces no application at all.
       - name: Install Qt 6
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:

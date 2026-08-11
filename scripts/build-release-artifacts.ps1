@@ -572,9 +572,10 @@ Invoke-Heartbeat -Name 'cmake install' -FilePath 'cmake' `
 # and VendorSentry.cmake — these projects expose no such switch (or install via a
 # git submodule we do not control), so `cmake --install` unavoidably stages their
 # dev trees. The portable package ships runtime only: exosnap.exe, the Qt/FFmpeg
-# DLLs, crashpad_handler.exe, plugins/, and licenses/ — all flat or under
-# plugins/ per Qt convention. Nothing the app loads at runtime lives in lib/ or
-# include/, so remove these dev trees before the absence audit asserts on them.
+# DLLs, crashpad_handler.exe, plugins/, qml/ (the Qt Quick import tree) and
+# licenses/ — all flat or under plugins/ and qml/ per Qt convention. Nothing the
+# app loads at runtime lives in lib/ or include/, so remove these dev trees
+# before the absence audit asserts on them.
 foreach ($devDir in @('lib', 'include')) {
     $devPath = Join-Path $PackageRoot $devDir
     if (Test-Path -LiteralPath $devPath -PathType Container) {
@@ -592,16 +593,33 @@ $allFiles = Get-ChildItem -LiteralPath $PackageRoot -Recurse -File
 $relPaths = $allFiles | ForEach-Object { $_.FullName.Substring($PackageRoot.Length + 1) }
 
 # Presence — required runtime files and docs.
+#
+# ExoSnap is a Qt Quick application (ADR 0064). Qt6Qml/Quick/QuickControls2/
+# QuickTemplates2 and the qml/ import tree are load-bearing, not optional extras:
+# without them the process starts and then dies at QQmlApplicationEngine::load,
+# which no compile or link step can catch. Qt6Widgets stays required for exactly
+# one reason — QSystemTrayIcon, via app/ui/tray/TrayPresence.
 $requiredFiles = @(
     'exosnap.exe', 'exosnap-updater.exe', 'qt.conf',
     'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6Svg.dll',
+    'Qt6Qml.dll', 'Qt6QmlModels.dll', 'Qt6Network.dll',
+    'Qt6Quick.dll', 'Qt6QuickControls2.dll', 'Qt6QuickTemplates2.dll',
+    'Qt6QuickLayouts.dll', 'Qt6QuickShapes.dll', 'Qt6QuickDialogs2.dll',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'KNOWN_LIMITATIONS.md', 'README-PORTABLE.md'
 )
 foreach ($f in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $f) -PathType Leaf)) { Add-Error "Missing required file: $f" }
 }
-foreach ($d in @('plugins/platforms', 'licenses')) {
+foreach ($d in @('plugins/platforms', 'licenses',
+                 'qml/QtQuick', 'qml/QtQuick/Controls', 'qml/QtQuick/Dialogs',
+                 'qml/QtQuick/Shapes', 'qml/QtQml')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $d) -PathType Container)) { Add-Error "Missing required directory: $d" }
+}
+# A QML module directory without its qmldir is a directory the engine cannot
+# resolve — present-but-useless is the failure mode a plain existence check on
+# qml/ would wave through.
+foreach ($qmldir in @('qml/QtQuick/qmldir', 'qml/QtQuick/Controls/qmldir', 'qml/QtQml/qmldir')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $qmldir) -PathType Leaf)) { Add-Error "Missing QML module descriptor: $qmldir" }
 }
 # Every dependency staged unconditionally by third_party/CMakeLists.txt and
 # cmake/VendorFFmpeg.cmake for the default build configuration (the one this
@@ -644,6 +662,32 @@ foreach ($file in $allFiles) {
     if ($forbiddenNames -contains $file.Name.ToLowerInvariant()) {
         Add-Error "User-data file leaked: $($file.Name)"
     }
+}
+
+# Absence — superseded and non-product executables. ExoSnap ships exactly two
+# executables plus the optional Crashpad handler. `exosnap_quick_spike.exe` was
+# the Qt Quick frontend's pre-cutover name and `exosnap_widgets_legacy.exe` is
+# the retired Widgets frontend; either one appearing here means a stale build
+# tree was packaged, or that a target regrew an install rule it must not have.
+$forbiddenExecutables = @('exosnap_quick_spike.exe', 'exosnap_widgets_legacy.exe')
+foreach ($file in $allFiles) {
+    if ($forbiddenExecutables -contains $file.Name.ToLowerInvariant()) {
+        Add-Error "Superseded executable leaked into the package: $($file.Name)"
+    }
+}
+
+# Absence — the Qt test framework. qmlimportscanner walks the whole QML module
+# source directory, so a single `import QtTest` in a file that happens to live
+# under it is enough to pull Qt6QuickTest.dll, Qt6Test.dll and a qml/QtTest
+# module into the shipped product. Tests are kept outside app/quick/ExoSnap/Quick
+# precisely to prevent that; this asserts the outcome rather than the intent.
+foreach ($testArtifact in @('Qt6QuickTest.dll', 'Qt6Test.dll')) {
+    if (Test-Path -LiteralPath (Join-Path $PackageRoot $testArtifact) -PathType Leaf) {
+        Add-Error "Qt test framework leaked into the package: $testArtifact"
+    }
+}
+if (Test-Path -LiteralPath (Join-Path $PackageRoot 'qml/QtTest') -PathType Container) {
+    Add-Error "Qt test framework leaked into the package: qml/QtTest/"
 }
 foreach ($dir in @('.git', '.github', '.workspace', '.claude', 'include', 'lib', 'src', 'tests', 'CMakeFiles', 'Testing')) {
     if (Test-Path -LiteralPath (Join-Path $PackageRoot $dir) -PathType Container) { Add-Error "Forbidden directory leaked: $dir/" }
@@ -959,6 +1003,20 @@ if (-not $SkipMsi) {
                                         $msiPsi.EnvironmentVariables['EXOSNAP_CONFIG_DIR'] = $msiIsoConfig
                                         $msiPsi.EnvironmentVariables['TEMP'] = $msiIsoTemp
                                         $msiPsi.EnvironmentVariables['TMP']  = $msiIsoTemp
+                                        # Same sanitized environment as the ZIP smoke below — see the
+                                        # long comment there for why a Qt Quick package cannot be
+                                        # smoke-tested with the developer's Qt visible.
+                                        $msiPsi.EnvironmentVariables['PATH'] = (@(
+                                            (Join-Path $env:SystemRoot 'system32'),
+                                            $env:SystemRoot,
+                                            (Join-Path $env:SystemRoot 'System32\Wbem'),
+                                            (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0')
+                                        ) -join ';')
+                                        foreach ($qtVar in @('QML_IMPORT_PATH', 'QML2_IMPORT_PATH', 'QT_PLUGIN_PATH',
+                                                             'QT_QPA_PLATFORM_PLUGIN_PATH', 'QT_QUICK_CONTROLS_STYLE',
+                                                             'QT_DIR', 'Qt6_DIR')) {
+                                            $msiPsi.EnvironmentVariables.Remove($qtVar) | Out-Null
+                                        }
 
                                         # Layer 1: suppress Windows hard-error dialogs (missing DLL →
                                         # immediate non-zero exit instead of a modal dialog).
@@ -1147,6 +1205,29 @@ if (-not $SkipSmoke) {
         $psi.EnvironmentVariables['EXOSNAP_CONFIG_DIR'] = $isoConfig
         $psi.EnvironmentVariables['TEMP'] = $isoTemp
         $psi.EnvironmentVariables['TMP'] = $isoTemp
+
+        # Sanitized environment — the point of this smoke, not decoration.
+        #
+        # ExoSnap is a Qt Quick application, and a QML import is resolved by the
+        # engine's own search path, NOT by the DLL loader. So the loader
+        # hardening in ProductionBootstrap (SetDefaultDllDirectories drops PATH)
+        # does not cover it: on a developer machine a stray QML_IMPORT_PATH or a
+        # Qt bin directory on PATH can make a package with a missing qml/ tree
+        # launch perfectly, and the same package then dies at
+        # QQmlApplicationEngine::load on a user's machine. PATH is cut back to
+        # the OS directories and every Qt discovery variable is cleared, so the
+        # only thing that can satisfy the imports is the package itself.
+        $psi.EnvironmentVariables['PATH'] = (@(
+            (Join-Path $env:SystemRoot 'system32'),
+            $env:SystemRoot,
+            (Join-Path $env:SystemRoot 'System32\Wbem'),
+            (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0')
+        ) -join ';')
+        foreach ($qtVar in @('QML_IMPORT_PATH', 'QML2_IMPORT_PATH', 'QT_PLUGIN_PATH',
+                             'QT_QPA_PLATFORM_PLUGIN_PATH', 'QT_QUICK_CONTROLS_STYLE',
+                             'QT_DIR', 'Qt6_DIR')) {
+            $psi.EnvironmentVariables.Remove($qtVar) | Out-Null
+        }
 
         # Layer 1: suppress Windows hard-error dialogs in the child.
         # SetErrorMode is inherited by child processes; the loader turns a

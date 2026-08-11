@@ -56,11 +56,18 @@ if (-not (Test-Path $scenarioPath)) {
 }
 $definition = Get-Content -Raw -Path $scenarioPath | ConvertFrom-Json
 
-if (-not $WidgetsExe) {
-    $WidgetsExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\Release\exosnap.exe'
-}
+# Both executables now live in the same directory: `exosnap` is the shipping Qt
+# Quick application (ADR 0064) and owns app/<config>/exosnap.exe, while the
+# retired Widgets frontend builds beside it as exosnap_widgets_legacy.exe. The
+# Widgets side is EXCLUDE_FROM_ALL and needs
+# -DEXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND=ON plus an explicit --target; the
+# archived results under .workspace/benchmark-results*/ are the record of the
+# original comparison, and re-running it is not a normal workflow.
 if (-not $QuickExe) {
-    $QuickExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\quick\ExoSnap\Quick\Release\exosnap_quick_spike.exe'
+    $QuickExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\Release\exosnap.exe'
+}
+if (-not $WidgetsExe) {
+    $WidgetsExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\Release\exosnap_widgets_legacy.exe'
 }
 $exe = if ($Frontend -eq 'widgets') { $WidgetsExe } else { $QuickExe }
 if (-not (Test-Path $exe)) {

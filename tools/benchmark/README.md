@@ -20,16 +20,25 @@ keeps them in separate sections for that reason.
 
 ## Prerequisites
 
-Both frontends must be built from a **Release** configuration with the harness
-explicitly enabled:
+The frontend A/B campaign this tooling was built for is **complete and frozen**
+(`.workspace/benchmark-results*/`). Qt Quick is the shipping frontend (ADR 0064)
+and the Qt Widgets frontend is retired; re-running the comparison is not a normal
+workflow and needs a concrete regression to justify it.
+
+A Release configuration with the harness explicitly enabled:
 
 ```powershell
 cmake -S . -B build/windows-x64-release-bench `
   -DCMAKE_BUILD_TYPE=Release `
-  -DEXOSNAP_BUILD_QUICK_SPIKE=ON `
   -DEXOSNAP_BUILD_BENCHMARK_HARNESS=ON
-cmake --build build/windows-x64-release-bench --config Release --target exosnap exosnap_quick_spike
+cmake --build build/windows-x64-release-bench --config Release --target exosnap
 ```
+
+Both binaries land in `app/Release/`. `-Frontend quick` drives `exosnap.exe`, the
+shipping application. `-Frontend widgets` drives `exosnap_widgets_legacy.exe`,
+which is `EXCLUDE_FROM_ALL` and additionally needs
+`-DEXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND=ON` at configure time and
+`--target exosnap_widgets_legacy` at build time.
 
 `EXOSNAP_BUILD_BENCHMARK_HARNESS` adds the automation code and changes nothing
 else — no optimisation flag, no runtime policy. A Debug binary is rejected by
