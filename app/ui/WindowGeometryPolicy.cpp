@@ -32,4 +32,27 @@ QRect ClampWindowToWorkArea(const QRect& window, const QRect& available) {
     return {x, y, w, h};
 }
 
+StartupWindowPlacement ResolveStartupWindowPlacement(const QRect& saved, bool saved_maximized, const QRect& available,
+                                                     const QSize& minimum, const QSize& preferred,
+                                                     bool center_on_primary) {
+    const bool has_saved_rect = saved.width() > 0 && saved.height() > 0;
+
+    StartupWindowPlacement placement;
+    placement.maximized = has_saved_rect && saved_maximized;
+
+    const QSize size = has_saved_rect ? saved.size() : preferred;
+    const QRect requested =
+        has_saved_rect ? saved : QRect(available.center() - QPoint(size.width() / 2, size.height() / 2), size);
+
+    // Two stages, exactly as the Widgets restore did. The first preserves a
+    // deliberately-placed window while guaranteeing a reachable title strip; the
+    // second is the full containment clamp, which is what stops a bottom edge
+    // ending up under the taskbar.
+    QRect rect = ClampRestoredWindowGeometry(requested, available, minimum, center_on_primary);
+    if (!placement.maximized)
+        rect = ClampWindowToWorkArea(rect, available);
+    placement.rect = rect;
+    return placement;
+}
+
 } // namespace exosnap::ui

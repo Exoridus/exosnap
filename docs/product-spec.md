@@ -102,6 +102,10 @@ small or heavily scaled display never opens the window under the taskbar or off-
 preferred size, not a forced one: any valid persisted rect wins over it outright, and the window is
 freely resizable, maximizable and snappable afterwards.
 
+The window is **already at its final position, size and maximized state on the first frame it
+shows**. It does not appear at one rect and move to another, and a window that was maximized when it
+was last closed comes back maximized without showing its normal size first.
+
 Every nav destination that has a page title states it the same way: the destination's name on the
 page-title rung, on the same axis as its own content, with that page's controls (Expert toggle,
 Rescan, filters) on the right of the same row. **Record** is the one destination with no page title

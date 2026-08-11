@@ -1,4 +1,5 @@
 #include "QuickApplication.h"
+#include "QuickWindowGeometry.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
 #include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
@@ -338,6 +339,18 @@ int main(int argc, char* argv[]) {
 
     const QIcon app_icon = exosnap::bootstrap::InstallApplicationIcon();
 
+    // Startup-geometry measurement seam. Must be armed before load(), which is
+    // where the persisted rect is resolved and the window is created. Also
+    // available as EXOSNAP_WINDOW_TRACE=1 so a launch that cannot take extra argv
+    // (a shortcut, the updater's relaunch) can still be traced.
+    if (arguments.contains(QStringLiteral("--window-trace"))) {
+        exosnap::quick::SetWindowGeometryTraceEnabled(true);
+        // Before the window exists: the messages that decide its first rect are
+        // sent during creation, so a filter installed afterwards would miss the
+        // only part of the sequence worth measuring.
+        exosnap::quick::InstallStartupMessageTrace();
+    }
+
     exosnap::quick::QuickApplication quick_application;
     // ADR 0033: the handoff a prior elevated self-relaunch put in our own argv.
     // Applied before load() so the shell's landing page is decided once, rather
@@ -596,17 +609,25 @@ int main(int argc, char* argv[]) {
                       frame.right() - client.right(), frame.bottom() - client.bottom());
             }
 
-            // The assertion is the non-client area: a window whose title band is
+            // Two assertions, both of them invisible in a screenshot:
+            //
+            // The non-client area must be empty — a window whose title band is
             // its own must have Windows reserve nothing outside its client rect,
             // or a native caption is being drawn above the product's.
             //
-            // WS_THICKFRAME is reported but deliberately NOT asserted. Adding it
-            // makes Qt believe the window has an 8/31 px frame and place the
-            // window that far outside the rect it was asked for, and the geometry
-            // that then gets persisted compounds the offset on every launch
-            // (measured: 598,-25 → 590,-31 → 582,-31 over three starts). Whether
-            // the bit is needed at all is unmeasured here; see the report.
-            const bool chrome_clean = hwnd != nullptr && inset.isEmpty();
+            // WS_THICKFRAME must be present. It is now asserted rather than only
+            // reported: it is the single bit keeping the native resize drag, Aero
+            // Snap and Win+Arrow alive on a frameless window, and it went missing
+            // silently once before — Qt rewrites the whole style when it applies
+            // Qt::FramelessWindowHint, and the bit was being set before that
+            // rather than after. The old objection to asserting it (that Qt then
+            // believes the window has an 8/31 px frame and misplaces it) does not
+            // survive measurement: with the frameless hint applied Qt reports
+            // frame margins of 0,0,0,0 with the bit set, which is what
+            // qt_frame_margins above exists to keep honest.
+            exosnap::quick::TraceWindowGeometry("settled", root_window);
+
+            const bool chrome_clean = hwnd != nullptr && inset.isEmpty() && (style & WS_THICKFRAME) != 0;
             app.exit(children == 0 && chrome_clean ? 0 : 1);
         });
     }

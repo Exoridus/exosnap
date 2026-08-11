@@ -29,10 +29,9 @@ ApplicationWindow {
 
     // Resolved in C++ (QuickWindowGeometry) from the persisted geometry, clamped
     // onto a connected screen's work area. Supplied as an initial property so the
-    // window is created at its final placement -- setting it after the engine has
-    // loaded would show the default size for one frame first. The maximized state
-    // is applied separately, after load, because a maximized window still needs
-    // this rect as its restore rect.
+    // window carries its final placement from the start. The maximized state is
+    // applied separately, after load, because a maximized window still needs this
+    // rect as its restore rect.
     required property rect initialGeometry
     // Single source of truth with the clamp: ui::theme::ExoSnapMetrics.
     required property size minimumWindowSize
@@ -43,7 +42,22 @@ ApplicationWindow {
     height: root.initialGeometry.height
     minimumWidth: root.minimumWindowSize.width
     minimumHeight: root.minimumWindowSize.height
-    visible: true
+    // C++ OWNS THE FIRST SHOW (QuickApplication::load). Deliberately false, and
+    // it must stay false.
+    //
+    // `visible: true` here shows the window part-way through engine load, at a
+    // point where Qt has already created the HWND but has NOT yet applied the
+    // FramelessWindowHint below. While the window still carries a native frame
+    // Qt offsets every x/y/width it is given by that frame, so the rect the user
+    // saw first was the intended one inflated by a frame the window does not
+    // keep -- measured: 400,120 1280x820 came up as 392,89 1296x820, corrected a
+    // frame later. Nothing declarative here can fix that ordering, because the
+    // ordering is Qt's.
+    //
+    // So the window is built hidden and C++ shows it once the flags, the native
+    // style and the geometry are all final. Harnesses go through the same path;
+    // none of them shows the window itself.
+    visible: false
     // Frameless: the 40 px title band is ours and QuickWindowChrome answers
     // WM_NCHITTEST for it, which is what keeps the native move loop, Snap,
     // double-click-to-maximize, Aero Shake and the system menu working rather

@@ -1,5 +1,7 @@
 #include "QuickWindowChrome.h"
 
+#include "QuickWindowGeometry.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 #include <QIcon>
@@ -86,11 +88,13 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
     }
 
     target_ = window;
+    TraceWindowGeometry("chrome-attach", window);
     // QML attaches from Component.onCompleted, which can run before the window is
     // exposed. create() forces the platform window into existence so winId() can
     // never hand back a null handle that would silently disable every handler.
     window->create();
     hwnd_ = reinterpret_cast<void*>(window->winId());
+    TraceWindowGeometry("chrome-hwnd-created", window);
 
     // Qt recreates the platform window for some flag and DPI transitions, which
     // invalidates the cached HWND; a screen change is the cheapest observable
@@ -103,6 +107,7 @@ void QuickWindowChrome::setTarget(QQuickWindow* window) {
 
     ensureResizableStyle();
     applyBorderColor("attach");
+    TraceWindowGeometry("chrome-style-applied", window);
     emit targetChanged();
 }
 
@@ -135,6 +140,17 @@ void QuickWindowChrome::refreshHandle() {
     non_client_leave_tracked_ = false;
     ensureResizableStyle();
     applyBorderColor("handle-recreated");
+}
+
+void QuickWindowChrome::applyNativeWindowStyle() {
+    if (target_.isNull())
+        return;
+    // The handle first: applying the window flags is exactly the kind of change
+    // that can make Qt recreate the platform window, and a stale HWND here would
+    // style a window that no longer exists.
+    refreshHandle();
+    ensureResizableStyle();
+    TraceWindowGeometry("chrome-native-style", target_.data());
 }
 
 // ---------------------------------------------------------------------------

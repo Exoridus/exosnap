@@ -1,5 +1,7 @@
 #include "QuickApplication.h"
 
+#include "QuickWindowChrome.h"
+
 #include "services/DisplayIdentityEnumerator.h"
 #include "services/DisplayIdentityResolver.h"
 #include "services/RecordingCoordinator.h"
@@ -192,6 +194,11 @@ QuickApplication::QuickApplication()
 }
 
 QuickApplication::~QuickApplication() {
+    // Same hazard, same shape as the hotkey filter below: QCoreApplication holds
+    // a raw pointer to it. A run that never produced a frame (a load failure, a
+    // --smoke-test that quits first) never reached the probe that normally stops
+    // it, so it is unhooked here rather than left for static destruction.
+    StopStartupMessageTrace();
 #if defined(Q_OS_WIN)
     // FIRST, before anything else can be freed. QCoreApplication holds a raw
     // pointer to this filter, and the destruction order here is the wrong way
@@ -2613,6 +2620,13 @@ bool QuickApplication::load(bool no_activate) {
     const QSize minimum_size(ui::theme::ExoSnapMetrics::kMinWindowWidth, ui::theme::ExoSnapMetrics::kMinWindowHeight);
     const ResolvedWindowGeometry restored = ResolveWindowGeometry(settings_.window_geometry, minimum_size,
                                                                   QSize(kDefaultWindowWidth, kDefaultWindowHeight));
+    if (WindowGeometryTraceEnabled()) {
+        const PersistedWindowGeometry& saved = settings_.window_geometry;
+        qInfo("window-trace: persisted %d,%d %dx%d maximized=%d", saved.x, saved.y, saved.width, saved.height,
+              saved.maximized ? 1 : 0);
+        qInfo("window-trace: resolved %d,%d %dx%d maximized=%d", restored.rect.x(), restored.rect.y(),
+              restored.rect.width(), restored.rect.height(), restored.maximized ? 1 : 0);
+    }
     engine_.setInitialProperties({
         {QStringLiteral("initialGeometry"), QVariant::fromValue(QRectF(restored.rect))},
         {QStringLiteral("minimumWindowSize"), QVariant::fromValue(QSizeF(minimum_size))},
@@ -2653,13 +2667,56 @@ bool QuickApplication::load(bool no_activate) {
 
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine_.rootObjects().constFirst())) {
         root_window_ = root_window;
-        // Maximizing after load rather than via an initial `visibility` keeps the
-        // rect above as the restore rect: a window created maximized has no other
-        // record of where it should un-maximize to.
+        InstallWindowGeometryTrace(root_window);
+        TraceWindowGeometry("after-qml-load", root_window);
+
+        // ── First show ──────────────────────────────────────────────────────
+        //
+        // Main.qml sets `visible: false` and this is the only place that undoes
+        // it. The single owner is the fix, not a tidying-up: shown from QML, the
+        // window appears part-way through engine load, before Qt has applied
+        // Qt::FramelessWindowHint -- and while the HWND still carries the framed
+        // style Qt creates it with, Qt offsets every geometry it is handed by
+        // that frame. Measured, the persisted 400,120 1280x820 became a visible
+        // 392,89 1296x820 and was put right one frame later, which is the jump.
+        //
+        // The window is therefore still hidden here, and the three steps below
+        // run in the order that leaves nothing to correct afterwards:
+        //
+        //   1. the final native style, once Qt has stopped rewriting it,
+        //   2. the final geometry, now that Qt's frame margins are zero,
+        //   3. visible.
+        //
+        // Activation is not requested anywhere in this sequence. A window that
+        // is shown takes focus because Windows gives it focus, and a --no-activate
+        // start withholds it through Qt::WindowDoesNotAcceptFocus in the flags,
+        // which is already set by the time we get here.
+        if (auto* chrome = root_window->findChild<QuickWindowChrome*>())
+            chrome->applyNativeWindowStyle();
+        ApplyStartupWindowGeometry(root_window, restored.rect);
+        TraceWindowGeometry("pre-show", root_window);
+        // showMaximized() rather than an initial `visibility`, and after the rect
+        // above: a maximized window still needs a restore rect, and the rect it
+        // un-maximizes to is whatever it stood on when it was maximized.
         if (restored.maximized)
             root_window->showMaximized();
-        window_geometry_ = std::make_unique<QuickWindowGeometry>(
-            root_window, settings_.window_geometry, [this](const PersistedWindowGeometry& geometry) {
+        else
+            root_window->show();
+        TraceWindowGeometry("post-show", root_window);
+
+        // Seeded with the rect the window is ACTUALLY on -- the resolved one --
+        // rather than the raw persisted value. The two differ whenever the clamp
+        // moved the window (a disconnected monitor, a shrunken work area), and
+        // seeding the unclamped value made everything downstream reason about a
+        // rect that was never on screen.
+        PersistedWindowGeometry placed = settings_.window_geometry;
+        placed.x = restored.rect.x();
+        placed.y = restored.rect.y();
+        placed.width = restored.rect.width();
+        placed.height = restored.rect.height();
+        placed.maximized = restored.maximized;
+        window_geometry_ =
+            std::make_unique<QuickWindowGeometry>(root_window, placed, [this](const PersistedWindowGeometry& geometry) {
                 if (settings_.window_geometry.x == geometry.x && settings_.window_geometry.y == geometry.y &&
                     settings_.window_geometry.width == geometry.width &&
                     settings_.window_geometry.height == geometry.height &&

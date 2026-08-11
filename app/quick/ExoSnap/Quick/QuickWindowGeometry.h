@@ -47,6 +47,57 @@ struct ResolvedWindowGeometry {
 [[nodiscard]] ResolvedWindowGeometry ResolveWindowGeometry(const PersistedWindowGeometry& saved, const QSize& minimum,
                                                            const QSize& fallback_size);
 
+// Places `window` on `logical` BEFORE it is shown for the first time.
+//
+// Once Qt::FramelessWindowHint has been applied Qt reports zero frame margins,
+// so QWindow::setGeometry reaches SetWindowPos unchanged and is exact. That is a
+// Qt implementation detail, though, and this is the one placement the user must
+// never see go wrong -- so the result is measured against Windows and corrected
+// if the two disagree. The correction is invisible by construction: it happens
+// while nothing is on screen. Correcting AFTER the first frame, which is what
+// this replaces, is a frame the user has already seen in the wrong place.
+void ApplyStartupWindowGeometry(QQuickWindow* window, const QRect& logical);
+
+// ── Startup geometry trace ──────────────────────────────────────────────────
+//
+// The measurement seam for this window's startup. "The window ends up in the
+// right place" is not the property that matters -- the window used to end up in
+// the right place while visibly jumping there -- so what has to be observable is
+// the ORDER: which rect the window holds at each lifecycle step, and at which
+// step it first becomes visible to the user.
+//
+// Every line reports both spaces at once, because the whole class of defect here
+// is Qt and Windows disagreeing about what the rect means: Qt's logical
+// geometry, Qt's believed frame margins, and the native window/client rects.
+//
+// Off unless explicitly enabled, so a normal run's log is unchanged.
+[[nodiscard]] bool WindowGeometryTraceEnabled();
+void SetWindowGeometryTraceEnabled(bool enabled);
+
+// One `window-trace: <stage> ...` line. `window` may be null -- the earliest
+// stages happen before any window exists -- and the line then carries the stage
+// alone.
+void TraceWindowGeometry(const char* stage, const QQuickWindow* window);
+
+// Attaches the trace points that cannot be reached from a call site: the first
+// expose, the first show and the first swapped frame. No-op while tracing is
+// off; the probe is parented to the window and dies with it.
+void InstallWindowGeometryTrace(QQuickWindow* window);
+
+// Logs the Win32 messages that decide a window's rect (WM_NCCALCSIZE,
+// WM_WINDOWPOSCHANGING/CHANGED, WM_GETMINMAXINFO, WM_SHOWWINDOW, style changes)
+// while the window is coming up.
+//
+// This is the only way to see the ORDER of the negotiation: those messages are
+// SENT, not posted, so they never appear in a log written from Qt's own signals
+// -- by the time xChanged arrives the decision has already been made and its
+// cause is gone. Installed before the window exists, and it stops itself after
+// the first frame so a live resize drag cannot flood the log.
+//
+// No-op while tracing is off.
+void InstallStartupMessageTrace();
+void StopStartupMessageTrace();
+
 // Tracks a live window and reports the geometry worth persisting. Owns nothing
 // but its timer; the sink decides where the value goes.
 class QuickWindowGeometry : public QObject {

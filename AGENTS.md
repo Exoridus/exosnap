@@ -161,6 +161,38 @@ richer "does a child cover a region the top-level must hit-test" report belonged
 to the Widgets shell and went with it; a non-zero count is now the whole signal,
 because in a Quick build any native child at all is the regression.
 
+### Startup window geometry
+
+`exosnap.exe --window-trace` (or `EXOSNAP_WINDOW_TRACE=1`, for a launch that
+cannot take extra argv) writes one line per startup geometry milestone to the
+application log:
+
+```
+window-trace: persisted 400,120 1280x820 maximized=0
+window-trace: resolved  400,120 1280x820 maximized=0
+window-trace: pre-show  qt=400,120 1280x820 ... native_window=400,120 1280x820 native_visible=0 ...
+window-trace: post-show qt=400,120 1280x820 ... native_window=400,120 1280x820 native_visible=1 ...
+window-trace: first-frame ...
+```
+
+Each line carries both spaces at once — Qt's logical geometry and believed frame
+margins next to the native window and client rects — because the whole class of
+defect here is the two disagreeing about what a rect means.
+
+The property to check is **not** "it ends up in the right place". It is that
+`pre-show` already holds the final rect while `native_visible=0`, and that
+`post-show`, `first-expose` and `first-frame` never change it. A window that
+reaches the right rect a frame late reached it visibly.
+
+`--window-trace` also logs the Win32 messages that decide the rect
+(`window-msg: WINDOWPOSCHANGING/NCCALCSIZE/GETMINMAXINFO/STYLECHANGED`) until the
+first frame. Those are *sent*, not posted, so they are invisible to any log
+written from Qt signals: by the time `xChanged` arrives the decision is made and
+its cause is gone.
+
+Combine with `--hwnd-audit` for a run that measures all of this and exits without
+ever activating the window.
+
 ### Final validation
 
 Run once after the integrated branch is complete:

@@ -21,11 +21,11 @@ constexpr QSize kMinimum(1120, 700);
 constexpr QSize kShippedMinimum(theme::ExoSnapMetrics::kMinWindowWidth, theme::ExoSnapMetrics::kMinWindowHeight);
 constexpr QSize kPreferred(theme::ExoSnapMetrics::kPreferredWindowWidth, theme::ExoSnapMetrics::kPreferredWindowHeight);
 
-// Mirrors ResolveWindowGeometry's "no persisted rect" branch: centre the
-// preferred size on the target screen, then apply both clamps in order.
+// The real "no persisted rect" branch, not a re-implementation of it. This used
+// to centre and clamp by hand here, which meant the tests could stay green while
+// the shipped resolver drifted away from them.
 QRect FirstLaunchRect(const QRect& available) {
-    const QRect centered(available.center() - QPoint(kPreferred.width() / 2, kPreferred.height() / 2), kPreferred);
-    return ClampWindowToWorkArea(ClampRestoredWindowGeometry(centered, available, kShippedMinimum, true), available);
+    return ResolveStartupWindowPlacement(QRect(), false, available, kShippedMinimum, kPreferred, true).rect;
 }
 
 TEST(FirstLaunchGeometry, PreferredSizeIsAboveTheShippedMinimum) {
@@ -87,6 +87,66 @@ TEST(FirstLaunchGeometry, PersistedRectOutranksThePreferredSize) {
     const QRect avail(0, 0, 2560, 1392);
     const QRect saved(300, 200, 980, 780);
     EXPECT_EQ(ClampWindowToWorkArea(ClampRestoredWindowGeometry(saved, avail, kShippedMinimum, false), avail), saved);
+}
+
+// ── Startup placement ───────────────────────────────────────────────────────
+//
+// The rect the window is created at and shown on. Everything here is what the
+// user sees on the FIRST frame, so a wrong answer is not corrected later — the
+// startup lifecycle deliberately has nothing left to correct with.
+
+TEST(StartupWindowPlacement, RestoresASavedRectUnchangedWhenItFits) {
+    const QRect avail(0, 0, 2560, 1392);
+    const QRect saved(400, 120, 1280, 820);
+    const StartupWindowPlacement out =
+        ResolveStartupWindowPlacement(saved, false, avail, kShippedMinimum, kPreferred, false);
+    EXPECT_EQ(out.rect, saved);
+    EXPECT_FALSE(out.maximized);
+}
+
+// The saved rect is the RESTORE rect of a maximized window, so it survives
+// intact: it is not the rect the window opens on, and clamping it to the work
+// area would silently rewrite where un-maximizing lands.
+TEST(StartupWindowPlacement, MaximizedRestoreKeepsItsRestoreRect) {
+    const QRect avail(0, 0, 1920, 1032);
+    const QRect saved(200, 100, 1280, 820);
+    const StartupWindowPlacement out =
+        ResolveStartupWindowPlacement(saved, true, avail, kShippedMinimum, kPreferred, false);
+    EXPECT_TRUE(out.maximized);
+    EXPECT_EQ(out.rect, saved);
+}
+
+// A first launch has no saved rect and therefore cannot be maximized, whatever
+// a stale persisted flag claims.
+TEST(StartupWindowPlacement, FirstLaunchIsNeverMaximized) {
+    const QRect avail(0, 0, 2560, 1392);
+    const StartupWindowPlacement out =
+        ResolveStartupWindowPlacement(QRect(), true, avail, kShippedMinimum, kPreferred, true);
+    EXPECT_FALSE(out.maximized);
+    EXPECT_EQ(out.rect.size(), kPreferred);
+}
+
+// A monitor that has been unplugged since the last run: the position is
+// abandoned and the window is re-centred rather than restored to coordinates
+// nothing can display.
+TEST(StartupWindowPlacement, RecentersWhenTheSavedPositionIsUnreachable) {
+    const QRect avail(0, 0, 1920, 1032);
+    const QRect saved(4200, 300, 1280, 820);
+    const StartupWindowPlacement out =
+        ResolveStartupWindowPlacement(saved, false, avail, kShippedMinimum, kPreferred, true);
+    EXPECT_TRUE(avail.contains(out.rect));
+    EXPECT_LE(std::abs(out.rect.center().x() - avail.center().x()), 1);
+}
+
+// Restoring the same rect must be a fixed point. This is the property the
+// launch-to-launch drift violated: each start returned a slightly different rect
+// from the one it was given, and that rect was persisted and fed back in.
+TEST(StartupWindowPlacement, RestoreIsAFixedPoint) {
+    const QRect avail(0, 0, 2560, 1392);
+    QRect rect(400, 120, 1280, 820);
+    for (int start = 0; start < 4; ++start)
+        rect = ResolveStartupWindowPlacement(rect, false, avail, kShippedMinimum, kPreferred, false).rect;
+    EXPECT_EQ(rect, QRect(400, 120, 1280, 820));
 }
 
 TEST(WindowGeometryPolicy, KeepsSavedGeometryWhenItFits) {

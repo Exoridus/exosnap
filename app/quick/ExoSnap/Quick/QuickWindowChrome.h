@@ -97,6 +97,17 @@ class QuickWindowChrome : public QObject, public QAbstractNativeEventFilter {
     // that could have caused a recreate.
     Q_INVOKABLE void refreshHandle();
 
+    // Re-asserts WS_THICKFRAME once Qt has written the window style for the last
+    // time, and must be called then rather than at attach.
+    //
+    // MEASURED: attach happens while the HWND still carries the framed style Qt
+    // creates it with (WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|...), so the check in
+    // ensureResizableStyle finds the bit already set and returns. Qt then applies
+    // Qt::FramelessWindowHint, which rewrites the whole style to WS_POPUP and
+    // takes WS_THICKFRAME with it -- and with it the native resize drag, Aero
+    // Snap and Win+Arrow, none of which look wrong in a screenshot.
+    Q_INVOKABLE void applyNativeWindowStyle();
+
     // Incremental builders so QML can assemble the exclusion list from repeaters
     // without materialising a JS array first.
     Q_INVOKABLE void clearInteractiveRects();
