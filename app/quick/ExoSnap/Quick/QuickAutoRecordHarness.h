@@ -29,7 +29,10 @@ class QuickApplication;
 //
 // Returns the process exit code. `window` may be null (the shared loop still
 // runs; the child-HWND metric is then reported as unavailable).
+// `out_last_outcome` is forwarded to the shared drive loop; see its declaration
+// for why the recording's result has to be handed back explicitly.
 [[nodiscard]] int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQuickWindow* window,
-                                     const auto_record::AutoRecordOptions& options);
+                                     const auto_record::AutoRecordOptions& options,
+                                     benchmark::RunOutcome* out_last_outcome = nullptr);
 
 } // namespace exosnap::quick

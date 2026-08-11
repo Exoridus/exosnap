@@ -217,7 +217,7 @@ benchmark::RunConfig BuildBenchmarkRunConfig(const AutoRecordOptions& options, b
 
 int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordinator& coordinator,
                                const AutoRecordOptions& options, benchmark::Frontend frontend,
-                               const BenchmarkHooks& hooks) {
+                               const BenchmarkHooks& hooks, benchmark::RunOutcome* out_last_outcome) {
     if (options.target == TargetKind::Region) {
         // Region capture (Monitor + crop_region) is out of the v1 checklist scope for
         // the harness; reject it honestly rather than silently recording the full monitor.
@@ -482,6 +482,8 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         }
 
         PrintResultLine(ResultToJson(ok, final_output_path, report_path, final_error));
+        if (out_last_outcome != nullptr)
+            *out_last_outcome = outcome;
         all_ok = all_ok && ok;
         if (!ok)
             break; // don't keep cycling once one cycle has already failed/hung

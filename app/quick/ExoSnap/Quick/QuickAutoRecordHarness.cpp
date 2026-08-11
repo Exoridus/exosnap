@@ -120,7 +120,7 @@ benchmark::PreviewMetrics SampleQuickPreviewMetrics(const RecordPreviewAdapter& 
 } // namespace
 
 int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQuickWindow* window,
-                       const auto_record::AutoRecordOptions& options) {
+                       const auto_record::AutoRecordOptions& options, benchmark::RunOutcome* out_last_outcome) {
     // Same rule as the Widgets side, resolved by the same function: visible, on
     // the secondary screen when there is one, at one shared logical size.
     if (window != nullptr) {
@@ -174,7 +174,8 @@ int RunQuickAutoRecord(QCoreApplication& app, QuickApplication& application, QQu
     // Nothing here switches the QML overlay animation on. The Widgets frontend has
     // no equivalent, and an extra animated surface on one side only would be a
     // difference the report could not attribute to the frontends themselves.
-    return auto_record::RunAutoRecordOnCoordinator(app, *coordinator, options, benchmark::Frontend::Quick, hooks);
+    return auto_record::RunAutoRecordOnCoordinator(app, *coordinator, options, benchmark::Frontend::Quick, hooks,
+                                                   out_last_outcome);
 }
 
 } // namespace exosnap::quick

@@ -619,16 +619,24 @@ int main(int argc, char* argv[]) {
     if (auto_record_requested) {
         // `bootstrap` is a stack object: its destructor performs the same clean-exit
         // marking and crash-capture shutdown every other early return here relies on.
-        const int record_exit =
-            exosnap::quick::RunQuickAutoRecord(app, quick_application, root_window, auto_record_options);
+        exosnap::benchmark::RunOutcome record_outcome;
+        const int record_exit = exosnap::quick::RunQuickAutoRecord(app, quick_application, root_window,
+                                                                   auto_record_options, &record_outcome);
         if (!auto_edit_requested || record_exit != 0)
             return record_exit;
-        // Chained Record -> Edit -> Export. The editor is NOT opened here: the
-        // recording's own completion path already did it (openEditorForCurrentRecording,
-        // gated on the open-editor-when-finished setting), which is what makes the
-        // edit context the real CompletedRecording rather than a bare path. Running
-        // the two phases in one process is the point — a second process would edit a
-        // file the product had already forgotten about.
+        // Chained Record -> Edit -> Export, in one process: a second process would
+        // edit a file this one had already forgotten about.
+        //
+        // The clip is handed over explicitly rather than through the application's
+        // own Record -> Editor handoff. The drive loop takes the coordinator's
+        // single result-callback slot for itself, so the view model never learns a
+        // recording completed and openEditorForCurrentRecording() has nothing to
+        // open. What the outcome carries -- the real output path and the measured
+        // media duration -- is the same information that handoff would have used.
+        if (auto_edit_options.media_path.isEmpty()) {
+            auto_edit_options.media_path = record_outcome.output_path;
+            auto_edit_options.media_duration_seconds = record_outcome.media_duration_seconds;
+        }
         return exosnap::quick::RunQuickAutoEdit(app, quick_application, root_window, auto_edit_options);
     }
 

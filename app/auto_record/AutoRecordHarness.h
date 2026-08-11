@@ -115,9 +115,17 @@ int RunAutoRecord(QCoreApplication& app, const AutoRecordOptions& options);
 // Takes QCoreApplication& rather than QApplication& because it only ever quits and
 // re-enters the event loop: the Widgets shell supplies a QApplication and the Quick
 // shell a QGuiApplication, and neither distinction is meaningful here.
+//
+// `out_last_outcome`, when given, receives the last cycle's result: output path,
+// media duration, dimensions. It exists because this loop takes the
+// coordinator's single SetResultReadyCallback slot for itself, which displaces
+// the frontend's own handler — so after a harness run the application's view
+// model does not know a recording completed, and anything downstream (the
+// Record -> Editor handoff) has nothing to act on. Rather than have the caller
+// reconstruct that from the printed JSON line, hand it back directly.
 int RunAutoRecordOnCoordinator(QCoreApplication& app, RecordingCoordinator& coordinator,
                                const AutoRecordOptions& options, benchmark::Frontend frontend,
-                               const BenchmarkHooks& hooks = {});
+                               const BenchmarkHooks& hooks = {}, benchmark::RunOutcome* out_last_outcome = nullptr);
 
 // Preview-mode drive loop: shows an OFF-SCREEN MainWindow (never activated, placed on a
 // non-primary screen when one exists), waits for the real async capability probe to
