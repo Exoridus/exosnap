@@ -71,19 +71,33 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
     connect(session_, &EditSessionAdapter::trimSnapReadyChanged, this, [this]() {
         if (session_ == nullptr || !session_->trimSnapReady() || clip_path_.isEmpty())
             return;
-        if (!source_.has_value())
-            source_.emplace();
-        connect(
-            &source_.value(), &TimelineThumbnailSource::clipOpened, this,
+        ensureThumbnailSource();
+        source_->openClip(clip_path_, session_->keyframeTimestamps());
+    });
+}
+
+// The thumbnail source is created and wired exactly once, on the first clip that
+// reaches a completed keyframe scan. It used to be (re)connected on every
+// trimSnapReadyChanged with Qt::UniqueConnection — which is not a thing Qt
+// supports for a lambda: uniqueness requires a pointer-to-member-function
+// receiver. A debug build asserts and abort()s on the first real clip; a release
+// build, where the assert is compiled out, instead accumulates a duplicate pair
+// of connections per opened clip, so the second clip counts every decoded tile
+// twice. Neither showed up in the adapter tests or the visual harness because
+// both drive setFixture(), which never reaches this path — only genuinely
+// decoded media does.
+void EditTimelineAdapter::ensureThumbnailSource() {
+    if (source_.has_value())
+        return;
+    source_.emplace();
+    connect(&source_.value(), &TimelineThumbnailSource::clipOpened, this,
             [this](int width, int height, const QStringList& audio_track_names) {
                 clip_video_width_ = width;
                 clip_video_height_ = height;
                 setAudioTrackLabels(audio_track_names);
                 scheduleTileRun();
-            },
-            Qt::UniqueConnection);
-        connect(
-            &source_.value(), &TimelineThumbnailSource::tileReady, this,
+            });
+    connect(&source_.value(), &TimelineThumbnailSource::tileReady, this,
             [this](qint64 time_ms, const QImage& image, quint64 run_id) {
                 if (run_id != active_run_)
                     return;
@@ -92,10 +106,7 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
                 ++tiles_ready_;
                 tile_model_.appendTile(time_ms);
                 emit tileProgressChanged();
-            },
-            Qt::UniqueConnection);
-        source_->openClip(clip_path_, session_->keyframeTimestamps());
-    });
+            });
 }
 
 QAbstractItemModel* EditTimelineAdapter::tileModel() noexcept {

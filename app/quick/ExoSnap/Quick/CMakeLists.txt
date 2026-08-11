@@ -1,14 +1,36 @@
+# app/quick/ExoSnap/Quick/CMakeLists.txt -- the shipping ExoSnap main frontend.
+#
+# This target IS `exosnap`/`exosnap.exe`: the one production executable, built on
+# Qt Quick/QML on top of ProductionBootstrap -> QuickApplication. It was
+# developed under the name `exosnap_quick_spike` behind EXOSNAP_BUILD_QUICK_SPIKE
+# while the Qt Widgets frontend still shipped; both are gone. There is no runtime
+# frontend selector and no second production application.
+#
+# The directory path mirrors the QML module URI (ExoSnap.Quick -> ExoSnap/Quick
+# under the import root app/quick), which is a Qt requirement, not a leftover of
+# the migration layout.
+# Tests live OUTSIDE this directory, and that is a packaging requirement rather
+# than a matter of taste. qt_generate_deploy_qml_app_script() resolves the
+# application's QML imports by running qmlimportscanner with `-rootPath` set to
+# this directory — it walks the whole tree, not just the files listed in
+# QML_FILES. With the QML test cases sitting in a tests/ subdirectory here, their
+# `import QtTest` was recorded as an application import and the shipped package
+# grew Qt6QuickTest.dll, Qt6Test.dll and a qml/QtTest module: the Qt test
+# framework, inside the product. Keep this directory free of any QML that is not
+# part of the application.
+set(EXOSNAP_QUICK_TESTS_DIR "${PROJECT_SOURCE_DIR}/app/quick/tests")
+
 set_source_files_properties(ExoTheme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
 )
 
-qt_add_executable(exosnap_quick_spike WIN32
+qt_add_executable(exosnap WIN32
     main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap_brand.qrc
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 
-qt_add_qml_module(exosnap_quick_spike
+qt_add_qml_module(exosnap
     URI ExoSnap.Quick
     DEPENDENCIES
         QtQuick
@@ -176,7 +198,7 @@ qt_add_qml_module(exosnap_quick_spike
         QuickWindowGeometry.h
 )
 
-target_sources(exosnap_quick_spike
+target_sources(exosnap
     PRIVATE
         QuickApplication.cpp
         QuickApplication.h
@@ -310,10 +332,14 @@ target_sources(exosnap_quick_spike
 # Widgets-bound preview entry point is excluded while the shared drive loop is
 # not. EXOSNAP_HARNESS_GATE comes from app/CMakeLists.txt: non-Release builds get
 # the harness implicitly, Release only with EXOSNAP_BUILD_BENCHMARK_HARNESS=ON.
-target_sources(exosnap_quick_spike
+target_sources(exosnap
     PRIVATE
         "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/QuickAutoRecordHarness.cpp>"
         "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/QuickAutoRecordHarness.h>"
+        # The Edit -> Export drive loop. Same gate: it is automation, never a
+        # shipping code path, and it reaches the edit adapters the QML binds to.
+        "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/QuickAutoEditHarness.cpp>"
+        "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/QuickAutoEditHarness.h>"
         "$<${EXOSNAP_HARNESS_GATE}:${PROJECT_SOURCE_DIR}/app/auto_record/AutoRecordHarness.cpp>"
         "$<${EXOSNAP_HARNESS_GATE}:${PROJECT_SOURCE_DIR}/app/auto_record/AutoRecordHarness.h>"
         "$<${EXOSNAP_HARNESS_GATE}:${PROJECT_SOURCE_DIR}/app/auto_record/AutoRecordOptions.cpp>"
@@ -327,31 +353,39 @@ target_sources(exosnap_quick_spike
 )
 
 if(WIN32)
-    # Same two resource scripts the shipping Widgets executable compiles:
+    # The two Windows resource scripts that make this a shippable executable:
     # exosnap.rc carries the three application icons (bootstrap's WM_SETICON path
     # loads IDI_EXOSNAP_APP_ICON out of the EXE's own resources, so a target
     # without them shows a blank taskbar entry), and the generated
-    # exosnap_version.rc carries VERSIONINFO. Both are prerequisites for this
-    # target being a shippable executable rather than a development spike.
-    target_sources(exosnap_quick_spike
+    # exosnap_version.rc carries VERSIONINFO, which
+    # scripts/build-release-artifacts.ps1 asserts against the release identity.
+    target_sources(exosnap
         PRIVATE
             ${PROJECT_SOURCE_DIR}/app/exosnap.rc
             "${PROJECT_BINARY_DIR}/app/exosnap_version.rc"
     )
 endif()
 
-set_target_properties(exosnap_quick_spike PROPERTIES
+# Output into ${PROJECT_BINARY_DIR}/app rather than this subdirectory's own
+# binary dir. Two things depend on that location: scripts/build-release-artifacts.ps1
+# resolves the built exe as app/<config>/exosnap.exe (multi-config) or
+# app/exosnap.exe (Ninja), and every gtest binary is emitted into the same
+# directory -- so the Qt/FFmpeg runtime this target stages POST_BUILD is also
+# what makes the test executables launchable. While the Widgets frontend still
+# existed it played both roles; the Quick target inherits them whole.
+set_target_properties(exosnap PROPERTIES
     AUTORCC ON
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    OUTPUT_NAME "exosnap"
+    RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/app"
 )
 
-target_include_directories(exosnap_quick_spike
+target_include_directories(exosnap
     PRIVATE
         ${PROJECT_SOURCE_DIR}/app
         ${PROJECT_BINARY_DIR}/app
 )
 
-target_compile_definitions(exosnap_quick_spike
+target_compile_definitions(exosnap
     PRIVATE
         NOMINMAX
         EXOSNAP_BUILD_CONFIG="$<CONFIG>"
@@ -363,12 +397,12 @@ target_compile_definitions(exosnap_quick_spike
 # qmlcachegen-generated translation units instantiate Qt's QJSEngine templates
 # in a way MSVC diagnoses as unreachable code under /W4. Keep /WX for project
 # code while suppressing that third-party/generated-header diagnostic.
-target_compile_options(exosnap_quick_spike
+target_compile_options(exosnap
     PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/wd4702>
 )
 
-target_link_libraries(exosnap_quick_spike
+target_link_libraries(exosnap
     PRIVATE
         Qt6::Core
         Qt6::Gui
@@ -408,38 +442,38 @@ target_link_libraries(exosnap_quick_spike
         Version
 )
 
-# Same Windows-N support the shipping Widgets executable has: /DELAYLOAD turns
+# Windows-N support: /DELAYLOAD turns
 # the static Media Foundation imports into demand-load bindings so the process
 # starts on an N SKU without the Media Feature Pack. WebcamService::IsMfPresent()
 # probes availability with LoadLibraryW before any MF entry point is called, so
 # the delay-load failure hook is never reached. Without this the Quick binary
 # would regress a documented platform-support property the moment it ships.
 if(MSVC)
-    target_link_options(exosnap_quick_spike PRIVATE
+    target_link_options(exosnap PRIVATE
         /DELAYLOAD:mfplat.dll
         /DELAYLOAD:mf.dll
         /DELAYLOAD:mfreadwrite.dll
     )
-    target_link_libraries(exosnap_quick_spike PRIVATE delayimp.lib)
+    target_link_libraries(exosnap PRIVATE delayimp.lib)
 endif()
 
-add_dependencies(exosnap_quick_spike exosnap_build_info)
+add_dependencies(exosnap exosnap_build_info)
 
 # recorder_core links the FFmpeg-backed recording path even though this slice
 # only consumes its preview transport. Keep the development executable
 # launchable from the build tree, matching the shipping target's staging rule.
 foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-    add_custom_command(TARGET exosnap_quick_spike POST_BUILD
+    add_custom_command(TARGET exosnap POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_exosnap_ffmpeg_dll}" "$<TARGET_FILE_DIR:exosnap_quick_spike>"
-        COMMENT "Staging FFmpeg runtime next to exosnap_quick_spike.exe"
+            "${_exosnap_ffmpeg_dll}" "$<TARGET_FILE_DIR:exosnap>"
+        COMMENT "Staging FFmpeg runtime next to exosnap.exe"
         VERBATIM
     )
 endforeach()
-exosnap_stage_asan_runtime(exosnap_quick_spike)
+exosnap_stage_asan_runtime(exosnap)
 
 # ---- Qt runtime staging (build tree) ----
-# Not merely a convenience here, the way it is for the Widgets target. The
+# A correctness requirement, not a convenience. The
 # production bootstrap calls SetDefaultDllDirectories(SYSTEM32 |
 # APPLICATION_DIR), which deliberately drops PATH from the loader's search
 # order — the whole point of the hardening. A build-tree executable that relied
@@ -453,11 +487,11 @@ exosnap_stage_asan_runtime(exosnap_quick_spike)
 # generated resources, so windeployqt cannot discover the QtQuick/Controls/
 # Dialogs/Shapes imports by scanning the binary alone.
 if(WIN32 AND EXOSNAP_WINDEPLOYQT)
-    add_custom_command(TARGET exosnap_quick_spike POST_BUILD
+    add_custom_command(TARGET exosnap POST_BUILD
         COMMAND "${EXOSNAP_WINDEPLOYQT}" --no-translations --no-system-d3d-compiler --no-opengl-sw
             --qmldir "${CMAKE_CURRENT_SOURCE_DIR}"
-            "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap_quick_spike>"
-        COMMENT "Staging Qt runtime + QML imports next to exosnap_quick_spike.exe"
+            "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap>"
+        COMMENT "Staging Qt runtime + QML imports next to exosnap.exe"
         VERBATIM
     )
 elseif(WIN32)
@@ -465,24 +499,62 @@ elseif(WIN32)
 endif()
 
 # Stage crashpad_handler.exe next to the executable so the runtime lookup
-# (crash_capture::ResolveHandlerExePath) resolves it from the build tree, same
-# rule the Widgets target follows. Inert in the default stub build.
+# (crash_capture::ResolveHandlerExePath) resolves it from the build tree. Inert
+# in the default stub build; the install rule below ships it separately.
 if(EXOSNAP_ENABLE_CRASH_CAPTURE AND TARGET crashpad_handler)
-    add_dependencies(exosnap_quick_spike crashpad_handler)
-    add_custom_command(TARGET exosnap_quick_spike POST_BUILD
+    add_dependencies(exosnap crashpad_handler)
+    add_custom_command(TARGET exosnap POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:crashpad_handler>"
-            "$<TARGET_FILE_DIR:exosnap_quick_spike>/crashpad_handler.exe"
-        COMMENT "Staging crashpad_handler.exe next to exosnap_quick_spike.exe"
+            "$<TARGET_FILE_DIR:exosnap>/crashpad_handler.exe"
+        COMMENT "Staging crashpad_handler.exe next to exosnap.exe"
         VERBATIM
     )
 endif()
 
-add_test(NAME quick.qml.about_smoke COMMAND exosnap_quick_spike --smoke-test)
+# ---------------------------------------------------------------------------
+# Install / deploy — the shipping artifact
+# ---------------------------------------------------------------------------
+# qt_generate_deploy_qml_app_script(), NOT qt_generate_deploy_app_script(): the
+# latter deploys Qt DLLs and non-QML plugins by scanning the binary's imports,
+# which for a Qt Quick application misses everything the QML engine loads at
+# runtime — QtQuick, QtQuick.Controls (and its style plugin), QtQuick.Dialogs,
+# QtQuick.Shapes, QtQml.Models. Those are resolved by qmlimportscanner over the
+# module's recorded imports, which only the QML variant runs. The application's
+# OWN QML is compiled into the executable's resources by qt_add_qml_module and
+# is not part of the deployed tree.
+#
+# No NO_TRANSLATIONS and no DEPLOY_TOOL_OPTIONS: package content stays exactly
+# what the previous shipping target produced, plus the QML runtime.
+if(WIN32)
+    qt_generate_deploy_qml_app_script(
+        TARGET exosnap
+        OUTPUT_SCRIPT _exosnap_deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+
+    install(TARGETS exosnap RUNTIME DESTINATION .)
+
+    # Deploy the Qt runtime (DLLs + qt.conf) flat next to exosnap.exe rather than
+    # into a bin/ subdirectory. exosnap.exe installs to the prefix root, and a
+    # root executable on Windows cannot load Qt DLLs from bin/ — a flat layout is
+    # required for the portable package to launch. Qt's deploy support honors a
+    # pre-set QT_DEPLOY_BIN_DIR (it only defaults the value when undefined), and
+    # this install(CODE) runs in the same cmake_install.cmake pass as the deploy
+    # script below, so the override is in effect when the script runs.
+    #
+    # QT_DEPLOY_QML_DIR is left at its default "qml". The generated qt.conf names
+    # it, so the deployed application resolves its QML imports relative to its own
+    # directory and never from the build tree or a developer Qt installation.
+    install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
+    install(SCRIPT ${_exosnap_deploy_script})
+endif()
+
+add_test(NAME quick.qml.about_smoke COMMAND exosnap --smoke-test)
 set_tests_properties(quick.qml.about_smoke PROPERTIES LABELS "quick")
 
 qt_add_executable(record_controls_qml_tests
-    tests/qml_test_main.cpp
+    ${EXOSNAP_QUICK_TESTS_DIR}/qml_test_main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 
@@ -508,13 +580,14 @@ qt_add_qml_module(record_controls_qml_tests
         ExoDisclosure.qml
         ExoSegmentedControl.qml
         ExoTheme.qml
+        PreviewMetricsOverlay.qml
         RecordActionButton.qml
         RecordSourceToggle.qml
 )
 
 target_compile_definitions(record_controls_qml_tests
     PRIVATE
-        QUICK_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        QUICK_TEST_SOURCE_DIR="${EXOSNAP_QUICK_TESTS_DIR}"
 )
 
 # QuickThemeTokens.cpp reads the shared theme table, which lives with the Widgets
@@ -552,7 +625,7 @@ set_tests_properties(quick.qml.record_controls PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 
-add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap_quick_spike --preview-smoke-test)
+add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap --preview-smoke-test)
 set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     LABELS "quick;live"
     ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
@@ -560,7 +633,7 @@ set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     SKIP_RETURN_CODE 3
 )
 
-add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap_quick_spike --preview-lifecycle-test)
+add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap --preview-lifecycle-test)
 set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
     LABELS "quick;live"
     ENVIRONMENT_MODIFICATION "QT_QPA_PLATFORM=set:windows"
@@ -572,7 +645,7 @@ exosnap_add_gtest(
     NAME record_viewmodel_qml_adapter_tests
     TEST_PREFIX quick_adapter.
     SOURCES
-        tests/test_record_viewmodel_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_record_viewmodel_adapter.cpp
         RecordViewModelAdapter.cpp
         RecordViewModelAdapter.h
         RecordWebcamFrameProvider.cpp
@@ -600,7 +673,7 @@ exosnap_add_gtest(
     NAME about_viewmodel_qml_adapter_tests
     TEST_PREFIX quick_about_adapter.
     SOURCES
-        tests/test_about_viewmodel_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_about_viewmodel_adapter.cpp
         AboutViewModelAdapter.cpp
         AboutViewModelAdapter.h
         ${PROJECT_SOURCE_DIR}/app/models/AboutInfo.cpp
@@ -630,7 +703,7 @@ exosnap_add_gtest(
     NAME settings_qml_adapter_tests
     TEST_PREFIX quick_settings_adapter.
     SOURCES
-        tests/test_settings_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
         SettingsAdapter.cpp
         SettingsAdapter.h
         QuickThemeTokens.cpp
@@ -658,7 +731,7 @@ exosnap_add_gtest(
     NAME device_qml_adapter_tests
     TEST_PREFIX quick_device_adapter.
     SOURCES
-        tests/test_device_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_device_adapter.cpp
         DeviceAdapter.cpp
         DeviceAdapter.h
     # exosnap_app_log_test_support: DeviceAdapter logs the device-rescan-start/end
@@ -684,7 +757,7 @@ exosnap_add_gtest(
     NAME ready_frame_capture_tests
     TEST_PREFIX quick_ready_frame.
     SOURCES
-        tests/test_ready_frame_capture_service.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_ready_frame_capture_service.cpp
         ReadyFrameCaptureService.cpp
         ReadyFrameCaptureService.h
     LIBRARIES
@@ -711,7 +784,7 @@ exosnap_add_gtest(
     NAME diagnostics_policy_tests
     TEST_PREFIX quick_diagnostics_policy.
     SOURCES
-        tests/test_diagnostics_policy.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_policy.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsController.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DiagnosticsProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/FixActionDispatcher.cpp
@@ -737,7 +810,7 @@ exosnap_add_gtest(
     NAME preview_update_scheduler_tests
     TEST_PREFIX quick_preview_scheduler.
     SOURCES
-        tests/test_preview_update_scheduler.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_preview_update_scheduler.cpp
     LIBRARIES
         Qt6::Core
 )
@@ -754,7 +827,7 @@ exosnap_add_gtest(
     NAME log_view_policy_tests
     TEST_PREFIX quick_log_policy.
     SOURCES
-        tests/test_log_view_policy.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_log_view_policy.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/LogViewPolicy.cpp
     LIBRARIES
         Qt6::Core
@@ -773,7 +846,7 @@ exosnap_add_gtest(
     NAME log_entry_model_tests
     TEST_PREFIX quick_log_model.
     SOURCES
-        tests/test_log_entry_model.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_log_entry_model.cpp
         LogEntryModel.cpp
         LogEntryModel.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/LogViewPolicy.cpp
@@ -795,7 +868,7 @@ exosnap_add_gtest(
     NAME diagnostics_qml_adapter_tests
     TEST_PREFIX quick_diagnostics_adapter.
     SOURCES
-        tests/test_diagnostics_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_diagnostics_adapter.cpp
         DiagnosticIssueModel.cpp
         DiagnosticIssueModel.h
         DiagnosticsAdapter.cpp
@@ -852,7 +925,7 @@ exosnap_add_gtest(
     NAME shell_adapter_tests
     TEST_PREFIX quick_shell_adapter.
     SOURCES
-        tests/test_shell_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_shell_adapter.cpp
         ShellAdapter.cpp
         ShellAdapter.h
         ${PROJECT_SOURCE_DIR}/app/models/CloseGuardPolicy.cpp
@@ -873,7 +946,7 @@ exosnap_add_gtest(
     NAME edit_qml_adapter_tests
     TEST_PREFIX quick_edit_adapter.
     SOURCES
-        tests/test_edit_adapters.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
         EditExportAdapter.cpp
         EditExportAdapter.h
         EditSessionAdapter.cpp
@@ -908,7 +981,7 @@ exosnap_add_gtest(
     NAME recovery_qml_adapter_tests
     TEST_PREFIX quick_recovery_adapter.
     SOURCES
-        tests/test_recovery_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_recovery_adapter.cpp
         RecoveryAdapter.cpp
         RecoveryAdapter.h
         ${PROJECT_SOURCE_DIR}/app/services/RecoveryService.cpp
@@ -940,7 +1013,7 @@ exosnap_add_gtest(
     NAME overlay_qml_adapter_tests
     TEST_PREFIX quick_overlay_adapter.
     SOURCES
-        tests/test_overlay_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_overlay_adapter.cpp
         OverlayAdapter.cpp
         OverlayAdapter.h
         ${PROJECT_SOURCE_DIR}/app/models/OverlayContentPolicy.cpp
@@ -973,7 +1046,7 @@ exosnap_add_gtest(
     NAME recording_error_qml_adapter_tests
     TEST_PREFIX quick_recording_error_adapter.
     SOURCES
-        tests/test_recording_error_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_recording_error_adapter.cpp
         RecordingErrorAdapter.cpp
         RecordingErrorAdapter.h
         ${PROJECT_SOURCE_DIR}/app/models/RecordingFailurePolicy.cpp
@@ -1003,7 +1076,7 @@ exosnap_add_gtest(
     NAME notification_toast_qml_tests
     TEST_PREFIX quick_notification_toast.
     SOURCES
-        tests/test_notification_toasts.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_notification_toasts.cpp
         NotificationToastModel.cpp
         NotificationToastModel.h
         NotificationsAdapter.cpp
@@ -1037,7 +1110,7 @@ exosnap_add_gtest(
     NAME crash_report_qml_adapter_tests
     TEST_PREFIX quick_crash_report_adapter.
     SOURCES
-        tests/test_crash_report_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_crash_report_adapter.cpp
         CrashReportAdapter.cpp
         CrashReportAdapter.h
     LIBRARIES

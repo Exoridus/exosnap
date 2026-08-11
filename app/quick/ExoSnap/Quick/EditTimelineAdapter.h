@@ -105,6 +105,9 @@ class EditTimelineAdapter : public QObject {
     void refreshMarkers();
     void scheduleTileRun();
     void startTileRun();
+    // Creates and wires the decoding thumbnail source on first use. Idempotent,
+    // and deliberately not re-connected per clip — see the definition.
+    void ensureThumbnailSource();
     void setAudioTrackLabels(const QStringList& labels);
 
     EditSessionAdapter* session_ = nullptr;

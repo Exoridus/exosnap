@@ -354,6 +354,23 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         stopTimer.setSingleShot(true);
         QObject::connect(&stopTimer, &QTimer::timeout, &app, [&coordinator]() { coordinator.StopRecording(); });
 
+        // Optional pause/resume inside the run. A paused recording must keep
+        // producing the requested amount of MEDIA, so the paused interval is
+        // added to the stop deadline rather than eaten out of it — otherwise a
+        // pause that silently kept recording and one that silently dropped
+        // frames would both produce a plausible-looking file.
+        const int pause_budget_seconds = options.pause_at_seconds >= 0 ? std::max(0, options.pause_for_seconds) : 0;
+        QTimer pauseTimer;
+        QTimer resumeTimer;
+        pauseTimer.setSingleShot(true);
+        resumeTimer.setSingleShot(true);
+        if (options.pause_at_seconds >= 0) {
+            QObject::connect(&pauseTimer, &QTimer::timeout, &app, [&coordinator]() { coordinator.PauseRecording(); });
+            QObject::connect(&resumeTimer, &QTimer::timeout, &app, [&coordinator]() { coordinator.ResumeRecording(); });
+            pauseTimer.start(options.pause_at_seconds * 1000);
+            resumeTimer.start((options.pause_at_seconds + pause_budget_seconds) * 1000);
+        }
+
         // Benchmark mode inserts a warm-up *inside* the recording: the measured
         // window opens only once the coordinator has actually reached Recording and
         // the warm-up has elapsed on top of that. Without this the first seconds of
@@ -373,7 +390,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
                 baseline_snapshot = recorder_core::RecordingDiagnosticsSnapshot{};
             process_sampler.Start();
             measurement_started = true;
-            stopTimer.start(options.duration_seconds * 1000);
+            stopTimer.start((options.duration_seconds + pause_budget_seconds) * 1000);
         });
 
         QTimer recordingPoll;
@@ -387,14 +404,15 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
             });
             recordingPoll.start();
         } else {
-            stopTimer.start(options.duration_seconds * 1000);
+            stopTimer.start((options.duration_seconds + pause_budget_seconds) * 1000);
         }
 
         // Safety net: if the result never arrives (hang, crash-in-teardown), quit anyway so
         // the process exits with a failure rather than blocking forever. Generous enough to
         // cover finalize + an MP4 remux of a short clip.
         constexpr int kGraceMs = 30000;
-        const int wall_clock_ms = (options.duration_seconds + options.benchmark_warmup_seconds) * 1000;
+        const int wall_clock_ms =
+            (options.duration_seconds + options.benchmark_warmup_seconds + pause_budget_seconds) * 1000;
         QTimer graceTimer;
         graceTimer.setSingleShot(true);
         QObject::connect(&graceTimer, &QTimer::timeout, &app, [&app]() { app.quit(); });
@@ -405,6 +423,8 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         // None of these may survive into the next cycle's app.exec().
         captureFrameTimer.stop();
         stopTimer.stop();
+        pauseTimer.stop();
+        resumeTimer.stop();
         warmupTimer.stop();
         recordingPoll.stop();
         graceTimer.stop();

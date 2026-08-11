@@ -2785,6 +2785,13 @@ bool QuickApplication::selectCaptureTargetForAutomation(recorder_core::CaptureTa
     return false;
 }
 
+bool QuickApplication::openEditorForAutomation() {
+    if (!canOpenEditorForCurrentRecording())
+        return false;
+    openEditorForCurrentRecording();
+    return edit_session_adapter_.open();
+}
+
 bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     const QString normalized = scenario.trimmed().toLower();
     pending_record_visual_state_ = normalized;

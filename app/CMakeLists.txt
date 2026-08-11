@@ -10,7 +10,16 @@ endif()
 # CI, contributors without Qt installed). Kept as an explicit option rather than
 # leaving "should we build the app" implied by Qt's presence alone.
 option(EXOSNAP_BUILD_APP "Build the ExoSnap Qt application" ON)
-option(EXOSNAP_BUILD_QUICK_SPIKE "Build the isolated Qt Quick frontend spike" OFF)
+
+# The retired Qt Widgets main frontend. `exosnap` is the Qt Quick application
+# (app/quick/ExoSnap/Quick) and is always built with EXOSNAP_BUILD_APP; this
+# option only resurrects the superseded Widgets executable under the separate
+# name exosnap_widgets_legacy. It is never installed, never packaged, and no CI
+# job enables it. Its one remaining purpose is re-running the frozen frontend A/B
+# benchmark should a concrete regression ever require it — the archived results
+# under .workspace/benchmark-results*/ are otherwise the record.
+option(EXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND
+       "Build the superseded Qt Widgets main frontend (benchmark reproduction only; never shipped)" OFF)
 
 # The --auto-record / --visual-test automation harnesses are Debug-only by
 # default: they have no shipping caller, so a normal Release must not carry
@@ -40,15 +49,24 @@ endif()
 # (sibling, not nested) directory scope without repeating the CMAKE_PREFIX_PATH
 # hint above. Skipping this call when the app build is disabled would silently
 # break Qt detection for the updater even on a machine where Qt is installed.
-find_package(Qt6 6.9 QUIET COMPONENTS Core Gui Widgets Svg)
+#
+# The component list is what the SHIPPING application needs: Qml/Quick/
+# QuickControls2/QuickDialogs2 for the Qt Quick frontend, QuickTest/Test for its
+# QML test runner, and Widgets for QSystemTrayIcon (see "Intentional remaining
+# Widgets dependency" in the Quick target's CMakeLists.txt). A machine without
+# qtdeclarative therefore fails this probe and takes the "app skipped" branch
+# below with a clear message, rather than erroring out deep inside a Quick macro.
+find_package(Qt6 6.9 QUIET COMPONENTS
+    Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
 # A stand-in `exosnap` custom target is created in every branch below other than
 # the real build, so add_subdirectory(app) always leaves a target named `exosnap`
 # behind for anything downstream that references it defensively (see
 # apps/updater/CMakeLists.txt and tests/CMakeLists.txt). Nothing must call
-# target_link_libraries()/target_compile_definitions() on this stand-in — those
-# only ever run below, after the real qt_add_executable(exosnap ...) target
-# exists.
+# target_link_libraries()/target_compile_definitions() on this stand-in — the
+# real `exosnap` executable is the Qt Quick application defined in the
+# quick/ExoSnap/Quick subdirectory added at the bottom of this file, and only
+# exists on the path that does not return early here.
 if(NOT EXOSNAP_BUILD_APP OR NOT Qt6_FOUND)
     if(EXOSNAP_BUILD_APP)
         add_custom_target(exosnap COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: Qt6 not found")
@@ -62,13 +80,13 @@ endif()
 
 qt_standard_project_setup(REQUIRES 6.9)
 
-if(EXOSNAP_BUILD_QUICK_SPIKE)
-    # Test is not used directly, but Qt6QuickTest links it, and the test-DLL
-    # staging in cmake/exosnap_testing.cmake can only copy a module whose
-    # imported target actually exists. Without it a QuickTest binary builds and
-    # then fails to START with 0xC0000135.
-    find_package(Qt6 6.9 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
-endif()
+# Re-stated as REQUIRED so a partially-satisfied probe above turns into a hard
+# configure error here rather than a link failure later. Test is not used
+# directly, but Qt6QuickTest links it, and the test-DLL staging in
+# cmake/exosnap_testing.cmake can only copy a module whose imported target
+# actually exists. Without it a QuickTest binary builds and then fails to START
+# with 0xC0000135.
+find_package(Qt6 6.9 REQUIRED COMPONENTS Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
 # Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
 # and during CTest execution. Add Qt's bin directory to the environment so both work.
@@ -81,6 +99,17 @@ if(_qt6_core_loc)
     if(WIN32 AND _qt6_bin_dir)
         string(REGEX REPLACE "/$" "" _qt6_bin_dir "${_qt6_bin_dir}")
         set(ENV{PATH} "${_qt6_bin_dir}\;$ENV{PATH}")
+    endif()
+endif()
+
+# Located here, not inside a target block: both the shipping Quick target
+# (app/quick/ExoSnap/Quick) and the separately-built updater stage the Qt runtime
+# next to their build-tree executables with it, and the Quick subdirectory is
+# processed from the bottom of this file, so the cache entry must already exist.
+if(WIN32)
+    find_program(EXOSNAP_WINDEPLOYQT windeployqt HINTS "${_qt6_bin_dir}")
+    if(NOT EXOSNAP_WINDEPLOYQT)
+        message(STATUS "windeployqt not found — build-tree executables will rely on Qt being on PATH.")
     endif()
 endif()
 
@@ -130,7 +159,33 @@ add_custom_target(exosnap_build_info
     VERBATIM
 )
 
-qt_add_executable(exosnap WIN32
+# Windows VERSIONINFO resource — generated from the canonical project version so
+# the shipped exosnap.exe carries coherent File/Product version metadata, which
+# scripts/build-release-artifacts.ps1 asserts against the release identity.
+# Generated here rather than inside a target block: the shipping Quick target
+# compiles it from ${PROJECT_BINARY_DIR}/app/exosnap_version.rc, and this file is
+# the directory that owns that path.
+if(WIN32)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/exosnap_version.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
+        @ONLY
+    )
+endif()
+
+# ---------------------------------------------------------------------------
+# Superseded Qt Widgets main frontend — NOT the product
+# ---------------------------------------------------------------------------
+# This was `exosnap`/`exosnap.exe` until the Qt Quick cutover. The shipping
+# application is now the Qt Quick target in app/quick/ExoSnap/Quick, which owns
+# the `exosnap` name, the install rules and the packaging identity.
+#
+# What remains here is a benchmark-reproduction escape hatch, excluded from the
+# default build (see the EXCLUDE_FROM_ALL below) and carrying no install rule.
+# It is not a supported second frontend and there is no runtime selector between
+# the two: nothing in main.cpp, no environment variable, no CMake option chooses
+# a frontend at startup. See docs/decisions/0064-qt-quick-production-cutover.md.
+qt_add_executable(exosnap_widgets_legacy WIN32
     main.cpp
     startup_log.h
     startup_log.cpp
@@ -446,7 +501,7 @@ qt_add_executable(exosnap WIN32
     viewmodels/PresentationStateBuilder.cpp
 )
 
-target_sources(exosnap PRIVATE
+target_sources(exosnap_widgets_legacy PRIVATE
     # EXOSNAP_HARNESS_GATE, not a bare non-Release check: the frontend A/B
     # benchmark drives --auto-record --enable-preview, which lives in
     # AutoRecordHarness.cpp behind EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and reaches
@@ -481,35 +536,28 @@ target_sources(exosnap PRIVATE
 )
 
 if(WIN32)
-    # Windows VERSIONINFO resource — generated from the canonical project version
-    # so the installed exosnap.exe carries coherent File/Product version metadata.
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/exosnap_version.rc.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
-        @ONLY
-    )
-    target_sources(exosnap PRIVATE
+    target_sources(exosnap_widgets_legacy PRIVATE
         exosnap.rc
         "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
     )
 endif()
 
-set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
+set_target_properties(exosnap_widgets_legacy PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap_widgets_legacy")
 # EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and EXOSNAP_ENABLE_AUTO_RECORD_HARNESS are relied upon to
 # always be defined together: AutoRecordHarness.h unconditionally declares the preview-mode
 # RunAutoRecord(MainWindow&) overload, but its definition is gated on
 # EXOSNAP_ENABLE_VISUAL_TEST_HARNESS while main.cpp calls it under EXOSNAP_ENABLE_AUTO_RECORD_HARNESS
 # — decoupling the two in the future would produce a non-obvious link error.
-target_compile_definitions(exosnap PRIVATE
+target_compile_definitions(exosnap_widgets_legacy PRIVATE
     NOMINMAX
     EXOSNAP_BUILD_CONFIG="$<CONFIG>"
     "$<${EXOSNAP_HARNESS_GATE}:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
     "$<${EXOSNAP_HARNESS_GATE}:EXOSNAP_ENABLE_AUTO_RECORD_HARNESS=1>"
     "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_HWND_AUDIT_HARNESS=1>"
 )
-add_dependencies(exosnap exosnap_build_info)
+add_dependencies(exosnap_widgets_legacy exosnap_build_info)
 
-target_link_libraries(exosnap PRIVATE
+target_link_libraries(exosnap_widgets_legacy PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
     exosnap::update exosnap_miniz
@@ -529,8 +577,8 @@ target_link_libraries(exosnap PRIVATE
 # so it never runs against the custom-target stand-in used when Qt6 is not found
 # or EXOSNAP_BUILD_APP is OFF.
 if(EXOSNAP_WITH_PRESENTMON)
-    target_link_libraries(exosnap PRIVATE PresentMon::consumer)
-    target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON=1)
+    target_link_libraries(exosnap_widgets_legacy PRIVATE PresentMon::consumer)
+    target_compile_definitions(exosnap_widgets_legacy PRIVATE EXOSNAP_HAS_PRESENTMON=1)
 endif()
 
 # S4: Delay-load Media Foundation DLLs so the app runs on Windows-N without the
@@ -541,17 +589,17 @@ endif()
 # failure hook (__delayLoadHelper2 raising VcppException) is never reached.
 # delayimp.lib provides __delayLoadHelper2 (required by the MSVC delay-load stub).
 if(MSVC)
-    target_link_options(exosnap PRIVATE
+    target_link_options(exosnap_widgets_legacy PRIVATE
         /DELAYLOAD:mfplat.dll
         /DELAYLOAD:mf.dll
         /DELAYLOAD:mfreadwrite.dll
     )
-    target_link_libraries(exosnap PRIVATE delayimp.lib)
+    target_link_libraries(exosnap_widgets_legacy PRIVATE delayimp.lib)
 endif()
 
-target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(exosnap_widgets_legacy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
-# Stage crashpad_handler.exe next to exosnap.exe so the runtime lookup
+# Stage crashpad_handler.exe next to exosnap_widgets_legacy.exe so the runtime lookup
 # (crash_capture::ResolveHandlerExePath) resolves it when running from the build
 # tree. Only relevant when crash capture is enabled (sentry-native + Crashpad
 # fetched); inert in the default build. Resolve the handler via the
@@ -560,58 +608,64 @@ target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_C
 # (Debug/, Release/) that the cached EXOSNAP_CRASHPAD_HANDLER_EXE string misses.
 # The cached path stays the source of truth for the install() rule in VendorSentry.
 if(EXOSNAP_ENABLE_CRASH_CAPTURE AND TARGET crashpad_handler)
-    add_dependencies(exosnap crashpad_handler)
-    add_custom_command(TARGET exosnap POST_BUILD
+    add_dependencies(exosnap_widgets_legacy crashpad_handler)
+    add_custom_command(TARGET exosnap_widgets_legacy POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:crashpad_handler>"
-            "$<TARGET_FILE_DIR:exosnap>/crashpad_handler.exe"
-        COMMENT "Staging crashpad_handler.exe next to exosnap.exe"
+            "$<TARGET_FILE_DIR:exosnap_widgets_legacy>/crashpad_handler.exe"
+        COMMENT "Staging crashpad_handler.exe next to exosnap_widgets_legacy.exe"
         VERBATIM
     )
 endif()
 
 # ---- Dev convenience: stage the Qt runtime next to the build-tree exe ----
-# The build-tree exosnap.exe (and every test .exe — they share app/<config>/)
+# The build-tree exosnap_widgets_legacy.exe (and every test .exe — they share app/<config>/)
 # links against Qt DLLs that live in Qt's bin dir, not next to the exe. Without
 # them on PATH, launching raises one Windows error dialog per missing DLL and
 # tests abort with 0xC0000135 (STATUS_DLL_NOT_FOUND). windeployqt copies the Qt
 # runtime + required plugins (platforms/styles/imageformats) next to the exe so
 # launching and ctest always work with no PATH juggling. Release packaging
 # deploys separately; this is build-tree only, and POST_BUILD only fires when
-# exosnap is actually (re)linked.
+# exosnap_widgets_legacy is actually (re)linked.
 if(WIN32)
-    find_program(EXOSNAP_WINDEPLOYQT windeployqt HINTS "${_qt6_bin_dir}")
     if(EXOSNAP_WINDEPLOYQT)
-        add_custom_command(TARGET exosnap POST_BUILD
+        add_custom_command(TARGET exosnap_widgets_legacy POST_BUILD
             COMMAND "${EXOSNAP_WINDEPLOYQT}" --no-translations --no-system-d3d-compiler --no-opengl-sw
-                "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap>"
-            COMMENT "Staging Qt runtime next to exosnap.exe (build tree)"
+                "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap_widgets_legacy>"
+            COMMENT "Staging Qt runtime next to exosnap_widgets_legacy.exe (build tree)"
             VERBATIM
         )
-    else()
-        message(STATUS "windeployqt not found — build-tree exe will rely on Qt being on PATH.")
     endif()
 
-    # Deploy the FFmpeg runtime DLLs next to the exe so the build-tree exosnap.exe
+    # Deploy the FFmpeg runtime DLLs next to the exe so the build-tree exosnap_widgets_legacy.exe
     # launches in BOTH Debug and Release. Previously these only landed in the Debug
     # tree incidentally (the gtest targets copy them next to their binaries, which
-    # share app/Debug/); a Release build of just the exosnap target left them out,
-    # so launching app/Release/exosnap.exe aborted with 0xC0000135
+    # share app/Debug/); a Release build of just the exosnap_widgets_legacy target left them out,
+    # so launching app/Release/exosnap_widgets_legacy.exe aborted with 0xC0000135
     # (STATUS_DLL_NOT_FOUND) — the app links FFmpeg::mux for MP4 remux and the audio
     # resampler. Release packaging installs these separately (install(FILES …) in
     # VendorFFmpeg.cmake); this is the build-tree equivalent of the Qt deploy above.
     foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-        add_custom_command(TARGET exosnap POST_BUILD
+        add_custom_command(TARGET exosnap_widgets_legacy POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_exosnap_ffmpeg_dll}" "$<TARGET_FILE_DIR:exosnap>"
-            COMMENT "Staging FFmpeg runtime next to exosnap.exe (build tree)"
+                "${_exosnap_ffmpeg_dll}" "$<TARGET_FILE_DIR:exosnap_widgets_legacy>"
+            COMMENT "Staging FFmpeg runtime next to exosnap_widgets_legacy.exe (build tree)"
             VERBATIM
         )
     endforeach()
 
     # No-op unless EXOSNAP_ASAN=ON — same 0xC0000135 reasoning as the two blocks
     # above, for the sanitizer runtime that ships next to cl.exe.
-    exosnap_stage_asan_runtime(exosnap)
+    exosnap_stage_asan_runtime(exosnap_widgets_legacy)
+endif()
+
+# Kept out of the default build. The Qt Quick `exosnap` target is what every
+# build, test run, package and CI job produces; this one is reachable only via
+# `cmake --build <dir> --target exosnap_widgets_legacy` after configuring with
+# -DEXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND=ON, and exists solely so the frozen
+# frontend A/B benchmark could be re-run against a concrete regression.
+if(NOT EXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND)
+    set_target_properties(exosnap_widgets_legacy PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endif()
 
 function(exosnap_add_app_test_support NAME)
@@ -2533,15 +2587,14 @@ target_compile_definitions(titlebar_window_buttons_visual_proof_tests PRIVATE NO
 set_target_properties(titlebar_window_buttons_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # ---------------------------------------------------------------------------
-# Install / windeployqt
+# Install — target-independent payload
 # ---------------------------------------------------------------------------
+# The executable's own install(TARGETS)/deploy rules live with the target, in
+# app/quick/ExoSnap/Quick/CMakeLists.txt: a Qt Quick application needs
+# qt_generate_deploy_qml_app_script(), which requires the finalized target and
+# its recorded QML imports. What stays here is the payload that has no target:
+# licenses and the portable documentation.
 if(WIN32 AND Qt6_FOUND)
-    qt_generate_deploy_app_script(
-        TARGET exosnap
-        OUTPUT_SCRIPT _exosnap_deploy_script
-        NO_UNSUPPORTED_PLATFORM_ERROR
-    )
-
     # Root project license, third-party notices, and release-facing portable
     # documentation (before TARGETS so they install even if the exe target is
     # missing during dev iteration). These are the only docs shipped in the
@@ -2566,27 +2619,17 @@ if(WIN32 AND Qt6_FOUND)
         COPYONLY
     )
 
-    install(TARGETS exosnap RUNTIME DESTINATION .)
-
-    # Deploy the Qt runtime (DLLs + qt.conf) flat next to exosnap.exe rather than
-    # into a bin/ subdirectory. exosnap.exe installs to the prefix root, and a
-    # root executable on Windows cannot load Qt DLLs from bin/ — a flat layout is
-    # required for the portable package to launch. Qt's deploy support honors a
-    # pre-set QT_DEPLOY_BIN_DIR (it only defaults the value when undefined), and
-    # this install(CODE) runs in the same cmake_install.cmake pass as the deploy
-    # script below, so the override is in effect when the script runs.
-    install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
-    install(SCRIPT ${_exosnap_deploy_script})
 endif()
 
 # ---------------------------------------------------------------------------
-# Qt Quick frontend
+# Production frontend — Qt Quick
 # ---------------------------------------------------------------------------
-# Added last, not next to the find_package() above: the Quick target compiles the
-# shared VERSIONINFO resource generated by configure_file() further up this file
-# and depends on targets (exosnap_build_info, the crash/update libraries) that
-# only exist by this point. Processing the subdirectory earlier left both as
-# forward references that happened to resolve at generate time.
-if(EXOSNAP_BUILD_QUICK_SPIKE)
-    add_subdirectory(quick/ExoSnap/Quick)
-endif()
+# Added last, not next to the find_package() above: it compiles the shared
+# VERSIONINFO resource generated by configure_file() further up this file and
+# depends on targets (exosnap_build_info, the crash/update libraries, the shared
+# application static libraries) that only exist by this point. Processing the
+# subdirectory earlier left those as forward references that happened to resolve
+# at generate time.
+#
+# Unconditional: this subdirectory defines `exosnap`, the shipped application.
+add_subdirectory(quick/ExoSnap/Quick)

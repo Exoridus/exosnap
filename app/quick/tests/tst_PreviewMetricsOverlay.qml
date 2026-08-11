@@ -1,7 +1,12 @@
 import QtQuick
 import QtTest
 
-import ".."
+// The test module, like every other case here — not a relative "import ..".
+// A relative directory import reached straight into the shipping module's source
+// directory, which had two consequences: the test could only ever live inside
+// that directory, and qmlimportscanner recorded the directory as an application
+// import when resolving what to deploy.
+import ExoSnap.Quick.TestControls
 
 Item {
     id: root

@@ -1,5 +1,6 @@
 #include "QuickApplication.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+#include "QuickAutoEditHarness.h"
 #include "QuickAutoRecordHarness.h"
 #include "auto_record/AutoRecordHarness.h"
 #endif
@@ -90,6 +91,8 @@ QString harnessConfigId(const QStringList& arguments) {
         return QStringLiteral("quick-hwnd-audit");
     if (arguments.contains(QStringLiteral("--auto-record")))
         return QStringLiteral("quick-auto-record");
+    if (arguments.contains(QStringLiteral("--auto-edit")))
+        return QStringLiteral("quick-auto-edit");
     return QStringLiteral("quick-harness");
 }
 
@@ -258,10 +261,23 @@ int main(int argc, char* argv[]) {
             return 2;
         }
     }
+    // The Edit -> Export half of the product flow. Parsed alongside the recording
+    // options so a malformed value is rejected before anything records for a
+    // minute and only then discovers it has nowhere to export to.
+    const bool auto_edit_requested = exosnap::quick::AutoEditRequested(arguments);
+    exosnap::quick::AutoEditOptions auto_edit_options;
+    if (auto_edit_requested) {
+        QString parse_error;
+        if (!exosnap::quick::ParseAutoEditOptions(arguments, &auto_edit_options, &parse_error)) {
+            qCritical().noquote() << parse_error;
+            return 2;
+        }
+    }
 #else
     constexpr bool auto_record_requested = false;
+    constexpr bool auto_edit_requested = false;
 #endif
-    const bool diagnostic_mode = preview_mode || auto_record_requested ||
+    const bool diagnostic_mode = preview_mode || auto_record_requested || auto_edit_requested ||
                                  arguments.contains(QStringLiteral("--smoke-test")) ||
                                  arguments.contains(QStringLiteral("--visual-test"));
 
@@ -304,7 +320,7 @@ int main(int argc, char* argv[]) {
     // ExoSnap icon into the developer's tray. --smoke-test is deliberately NOT in
     // this list: it is what proves the tray still constructs and tears down
     // inside the real application.
-    quick_application.applyTraySuppression(preview_mode || auto_record_requested ||
+    quick_application.applyTraySuppression(preview_mode || auto_record_requested || auto_edit_requested ||
                                            arguments.contains(QStringLiteral("--visual-test")));
 
     if (!quick_application.load(diagnostic_mode))
@@ -603,8 +619,21 @@ int main(int argc, char* argv[]) {
     if (auto_record_requested) {
         // `bootstrap` is a stack object: its destructor performs the same clean-exit
         // marking and crash-capture shutdown every other early return here relies on.
-        return exosnap::quick::RunQuickAutoRecord(app, quick_application, root_window, auto_record_options);
+        const int record_exit =
+            exosnap::quick::RunQuickAutoRecord(app, quick_application, root_window, auto_record_options);
+        if (!auto_edit_requested || record_exit != 0)
+            return record_exit;
+        // Chained Record -> Edit -> Export. The editor is NOT opened here: the
+        // recording's own completion path already did it (openEditorForCurrentRecording,
+        // gated on the open-editor-when-finished setting), which is what makes the
+        // edit context the real CompletedRecording rather than a bare path. Running
+        // the two phases in one process is the point — a second process would edit a
+        // file the product had already forgotten about.
+        return exosnap::quick::RunQuickAutoEdit(app, quick_application, root_window, auto_edit_options);
     }
+
+    if (auto_edit_requested)
+        return exosnap::quick::RunQuickAutoEdit(app, quick_application, root_window, auto_edit_options);
 #endif
 
     const QString still_validation_path = optionValue(arguments, QStringLiteral("--still-frame-validation"));

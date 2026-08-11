@@ -96,6 +96,13 @@ class QuickApplication {
     // what lets the frontend A/B benchmark put both frontends in the same state.
     [[nodiscard]] bool selectCaptureTargetForAutomation(recorder_core::CaptureTarget::Kind kind,
                                                         const QString& title_filter);
+    // Automation only (--auto-edit chained onto --auto-record). Opens the Editor
+    // on the recording this process just finished, through the same
+    // openEditorForCurrentRecording() the production completion path calls.
+    // Explicit rather than relying on the open-editor-when-finished preference:
+    // an automated gate must not silently pass or fail on a persisted user
+    // setting. Returns false when there is no completed recording to open.
+    [[nodiscard]] bool openEditorForAutomation();
     [[nodiscard]] bool applyRecordVisualScenario(const QString& scenario);
     // Harness-only (--overlay-visual-state). Seeds one of the runtime overlay
     // surfaces with deterministic content so a --visual-test capture can

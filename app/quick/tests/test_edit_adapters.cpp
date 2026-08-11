@@ -377,5 +377,44 @@ TEST(TimelineRowBudget, ThreeUnmergedAudioRowsStillFitTheSharedStackBudget) {
     EXPECT_GE(TimelineAudioRowHeight(3), kTimelineAudioRowMinHeight);
 }
 
+// ── The decoding path the fixtures never reach ──────────────────────────────
+
+// Every other case above uses MakeContext(), which deliberately has no master
+// path — so the timeline never creates its thumbnail source and never wires it
+// up. That blind spot hid a real defect: the source's signals were connected on
+// every trimSnapReadyChanged with Qt::UniqueConnection and a lambda receiver, a
+// combination Qt does not support. A debug build asserted and abort()ed the
+// process on the first genuine clip; a release build silently accumulated a
+// duplicate connection pair per clip, double-counting decoded tiles.
+//
+// This case sets a master path so the wiring actually runs. The file need not
+// exist: the connection is made before the decoder is asked to open anything,
+// and a failed open is reported through the same signals rather than by
+// crashing. What is being pinned is that opening a second clip does not
+// re-connect anything.
+TEST(EditTimelineAdapterSource, WiringTheDecoderSourceSurvivesASecondClip) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    EditTimelineAdapter timeline;
+    timeline.setSession(&session);
+
+    EditContext context = MakeContext();
+    context.mkv_master_path = QStringLiteral("D:/Recordings/does-not-exist.mkv");
+    session.setEditContext(context);
+    session.setKeyframeTimestampsForTest({0, 2'000'000, 4'000'000});
+
+    // Second clip, same adapter — the path that used to add a duplicate pair of
+    // connections and count each tile of this clip twice.
+    EditContext second = MakeContext(50.0);
+    second.mkv_master_path = QStringLiteral("D:/Recordings/also-missing.mkv");
+    session.setEditContext(second);
+    session.setKeyframeTimestampsForTest({0, 1'000'000});
+
+    EXPECT_TRUE(session.trimSnapReady());
+    // Nothing decoded — neither file exists — so the strip stays empty rather
+    // than reporting phantom progress.
+    EXPECT_EQ(timeline.tilesReady(), 0);
+}
+
 } // namespace
 } // namespace exosnap::quick

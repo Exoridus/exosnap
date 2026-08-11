@@ -46,6 +46,15 @@ struct AutoRecordOptions {
     int repeat_cycles = 1;   // run N start/stop cycles on the same coordinator
                              // (warm capture-hub state) instead of exiting after one
 
+    // Pause/resume inside the recording. -1 disables. The pause happens
+    // pause_at_seconds into the run and lasts pause_for_seconds, which is added
+    // to the wall-clock budget rather than taken out of duration_seconds: the
+    // recorded MEDIA length stays what was asked for, which is what makes a
+    // paused run comparable with an unpaused one and what lets the exported
+    // duration be checked against an expectation.
+    int pause_at_seconds = -1;
+    int pause_for_seconds = 2;
+
     // ---- Frontend A/B benchmark mode -------------------------------------
     // Non-empty benchmark_scenario turns the ordinary drive loop into a measured
     // run: the recording is extended by benchmark_warmup_seconds, the preview and
