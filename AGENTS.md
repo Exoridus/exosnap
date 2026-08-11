@@ -129,12 +129,19 @@ the first invalid access with the allocation and free stacks attached.
 
 ### Window-ownership auditing
 
-`exosnap.exe --hwnd-audit` walks the real MainWindow's native (HWND) tree and
-reports whether a native child covers a region the top-level window must be able
-to hit-test. Widget tests and `--visual-test` are both blind to this: they see
-widgets and pixels, never which WINDOW owns a pixel. Run it before and after any
-work on window chrome, hit-testing, drag/resize, or overlays. Exit codes: 0 clean,
-1 covered, 2 could not audit. The window is shown off-screen and never activated.
+`exosnap.exe --hwnd-audit` counts the native child windows (HWNDs) under the real
+top-level window and exits 0 when there are none, 1 otherwise, printing
+`quick-hwnd-audit: child_hwnds=N`. Tests and `--visual-test` are both blind to
+this: they see objects and pixels, never which WINDOW owns a pixel — and a native
+child never lets the top-level window see a `WM_NCHITTEST`, so it silently breaks
+drag, resize and Snap over whatever it covers. Run it after any work on window
+chrome, hit-testing or overlays. The window is never activated.
+
+Zero is the expected result and is the point of the Qt Quick migration: the
+preview and the editor player are scene-graph items, not child windows. The
+richer "does a child cover a region the top-level must hit-test" report belonged
+to the Widgets shell and went with it; a non-zero count is now the whole signal,
+because in a Quick build any native child at all is the regression.
 
 ### Final validation
 
