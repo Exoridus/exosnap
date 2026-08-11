@@ -2,7 +2,12 @@
 
 ## Project intent
 
-Build a Windows-native, diagnostics-first recording application MVP with a high-performance C++ engine and a Qt 6 + Qt Widgets user interface.
+Build a Windows-native, diagnostics-first recording application MVP with a high-performance C++ engine and a Qt 6 + Qt Quick/QML user interface.
+
+The main frontend is Qt Quick (ADR 0064). `Qt6::Widgets` remains linked for
+`QSystemTrayIcon` alone, and the separate updater executable keeps its own
+Widgets UI; neither is a second frontend. Business and product policy stays in
+C++ — QML owns presentation, layout and interaction only.
 
 ## Canonical product decisions
 

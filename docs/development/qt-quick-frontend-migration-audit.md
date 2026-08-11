@@ -1,5 +1,11 @@
 # Qt Quick frontend migration — remaining-surface audit
 
+> **Historical.** This audit was written while the Qt Widgets frontend still shipped, and it is
+> kept for the reasoning behind each surface's classification. The migration is done: Qt Quick is
+> the production frontend and `exosnap.exe` is built from it (ADR 0064). Present-tense statements
+> below about `exosnap_quick_spike`, `EXOSNAP_BUILD_QUICK_SPIKE` or "the shipping Widgets
+> frontend" describe the migration-era tree, not the current one.
+
 Snapshot of every user-facing surface in the shipping Widgets frontend, classified for the
 Qt Widgets → Qt Quick/QML migration, plus the non-surface work the cutover depends on.
 

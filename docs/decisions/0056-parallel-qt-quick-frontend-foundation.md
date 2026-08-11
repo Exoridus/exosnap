@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted, and **superseded by ADR 0064**. The parallel `exosnap_quick_spike` target this ADR
+introduced no longer exists: the Qt Quick frontend is the shipped application. Everything below
+describes the arrangement while the migration ran and is kept as history.
 
 ## Context
 

@@ -52,9 +52,13 @@ categorical ban on ever interacting with a running instance — it is a coordina
   coordinate-based mouse synthesis where available — it does not move the real OS cursor and so
   cannot collide with the developer's own pointer.
 - Starting the app **once** to confirm it does not crash at startup is always allowed (e.g.
-  after a QSS theme edit); confirm the process survives, then close it.
-- Judge pixels with the `--visual-test` render harness and behavior with the widget tests first
-  — reach for live driving only when nothing else can verify the change, and say so.
+  after a theme-token edit); confirm the process survives, then close it. `--smoke-test` is
+  the cheaper form of the same check: it loads the QML engine, constructs the tray and exits.
+- Judge pixels with the `--visual-test` render harness and behavior with the adapter/QML tests
+  first — reach for live driving only when nothing else can verify the change, and say so.
+  Be aware of what a fixture cannot reach: the Edit surface's decode path is only exercised by
+  real media (`--auto-edit`), and a fixture-only suite once hid a defect that aborted the
+  process on the first genuine clip.
 - `--auto-record` is the same class of exception as `--visual-test`: CLI/env-configured, never
   mouse/keyboard synthesis or window automation. Bare mode never creates a window; preview mode
   creates one off-screen only to reuse the existing preview/hub and screenshot machinery, never to

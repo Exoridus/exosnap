@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Accepted, and **superseded by ADR 0064** where it describes the target layout. The vertical this
+ADR established is now part of the shipped Qt Quick application; statements below about
+`exosnap_quick_spike` and `EXOSNAP_BUILD_QUICK_SPIKE` describe the migration-era build and are
+kept as history.
 
 ## Context
 
