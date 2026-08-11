@@ -1,6 +1,6 @@
 #include "RecordingErrorAdapter.h"
 
-#include "ui/dialogs/RecordingErrorDetailText.h"
+#include "models/RecordingErrorDetailText.h"
 
 #include <QStringList>
 #include <QVariantMap>

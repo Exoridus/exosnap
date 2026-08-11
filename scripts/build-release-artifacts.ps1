@@ -665,10 +665,11 @@ foreach ($file in $allFiles) {
 }
 
 # Absence — superseded and non-product executables. ExoSnap ships exactly two
-# executables plus the optional Crashpad handler. `exosnap_quick_spike.exe` was
-# the Qt Quick frontend's pre-cutover name and `exosnap_widgets_legacy.exe` is
-# the retired Widgets frontend; either one appearing here means a stale build
-# tree was packaged, or that a target regrew an install rule it must not have.
+# executables plus the optional Crashpad handler. Neither name below can be
+# produced by the current tree: `exosnap_quick_spike.exe` was the Qt Quick
+# frontend's pre-cutover name and `exosnap_widgets_legacy.exe` the retired
+# Widgets frontend. That is the point — either one appearing here means a stale
+# build tree was packaged, which no build error would catch.
 $forbiddenExecutables = @('exosnap_quick_spike.exe', 'exosnap_widgets_legacy.exe')
 foreach ($file in $allFiles) {
     if ($forbiddenExecutables -contains $file.Name.ToLowerInvariant()) {

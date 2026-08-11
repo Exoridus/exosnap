@@ -5,7 +5,7 @@
 
 #include <QString>
 
-#include "ui/dialogs/RecordingErrorDetailText.h"
+#include "models/RecordingErrorDetailText.h"
 
 namespace exosnap::ui::dialogs {
 namespace {

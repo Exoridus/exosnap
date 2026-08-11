@@ -11,21 +11,12 @@ endif()
 # leaving "should we build the app" implied by Qt's presence alone.
 option(EXOSNAP_BUILD_APP "Build the ExoSnap Qt application" ON)
 
-# The retired Qt Widgets main frontend. `exosnap` is the Qt Quick application
-# (app/quick/ExoSnap/Quick) and is always built with EXOSNAP_BUILD_APP; this
-# option only resurrects the superseded Widgets executable under the separate
-# name exosnap_widgets_legacy. It is never installed, never packaged, and no CI
-# job enables it. Its one remaining purpose is re-running the frozen frontend A/B
-# benchmark should a concrete regression ever require it — the archived results
-# under .workspace/benchmark-results*/ are otherwise the record.
-option(EXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND
-       "Build the superseded Qt Widgets main frontend (benchmark reproduction only; never shipped)" OFF)
-
-# The --auto-record / --visual-test automation harnesses are Debug-only by
-# default: they have no shipping caller, so a normal Release must not carry
-# them. That rule breaks down for exactly one job — comparing the production
-# cost of the two frontends. A Debug measurement compares two unoptimised
-# builds and says nothing about what users run.
+# The --auto-record / --auto-edit / --visual-test automation harnesses are
+# Debug-only by default: they have no shipping caller, so a normal Release must
+# not carry them. That rule breaks down for the jobs that have to measure or
+# drive what users actually run — the frozen frontend A/B benchmark, and the
+# deployed Record -> Edit -> Export gate. A Debug measurement compares
+# unoptimised builds and says nothing about what users run.
 #
 # Turning this ON adds the harness code to a genuine Release build and changes
 # NOTHING else: no optimisation flag, no runtime policy, no shipping default.
@@ -56,6 +47,12 @@ endif()
 # Widgets dependency" in the Quick target's CMakeLists.txt). A machine without
 # qtdeclarative therefore fails this probe and takes the "app skipped" branch
 # below with a clear message, rather than erroring out deep inside a Quick macro.
+#
+# Svg is required but linked by nothing: the brand mark is an SVG inside the
+# application's own resources, and QML renders it through Qt's qsvg IMAGE-FORMAT
+# PLUGIN, which needs Qt6Svg.dll at runtime without the executable importing a
+# single symbol from it. Dropping the component would still build and still run
+# here, and would ship a package whose logo silently fails to load.
 find_package(Qt6 6.9 QUIET COMPONENTS
     Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test)
 
@@ -173,501 +170,6 @@ if(WIN32)
     )
 endif()
 
-# ---------------------------------------------------------------------------
-# Superseded Qt Widgets main frontend — NOT the product
-# ---------------------------------------------------------------------------
-# This was `exosnap`/`exosnap.exe` until the Qt Quick cutover. The shipping
-# application is now the Qt Quick target in app/quick/ExoSnap/Quick, which owns
-# the `exosnap` name, the install rules and the packaging identity.
-#
-# What remains here is a benchmark-reproduction escape hatch, excluded from the
-# default build (see the EXCLUDE_FROM_ALL below) and carrying no install rule.
-# It is not a supported second frontend and there is no runtime selector between
-# the two: nothing in main.cpp, no environment variable, no CMake option chooses
-# a frontend at startup. See docs/decisions/0064-qt-quick-production-cutover.md.
-qt_add_executable(exosnap_widgets_legacy WIN32
-    main.cpp
-    startup_log.h
-    startup_log.cpp
-    assets/brand/exosnap_brand.qrc
-    assets/fonts/exosnap_fonts.qrc
-    ui/theme/ExoSnapPalette.h
-    ui/theme/ExoSnapMetrics.h
-    ui/theme/ExoSnapTheme.h
-    ui/theme/ExoSnapTheme.cpp
-    ui/theme/ExoSnapThemes.h
-    ui/theme/exosnap_theme.qrc
-    ui/theme/LucideIcon.h
-    ui/theme/LucideIcon.cpp
-    ui/brand/BrandMarkWidget.h
-    ui/brand/BrandMarkWidget.cpp
-    ui/WindowGeometryPolicy.h
-    ui/WindowGeometryPolicy.cpp
-    ui/chrome/NotificationHubPanel.h
-    ui/chrome/NotificationHubPanel.cpp
-    ui/chrome/OperationalTitleBar.h
-    ui/chrome/OperationalTitleBar.cpp
-    ui/chrome/GlobalRecordingBar.h
-    ui/chrome/GlobalRecordingBar.cpp
-    ui/dialogs/RecoveryOverlay.h
-    ui/dialogs/RecoveryOverlay.cpp
-    ui/dialogs/WhatsNewOverlay.h
-    ui/dialogs/WhatsNewOverlay.cpp
-    ui/dialogs/SourcePickerPanel.h
-    ui/dialogs/SourcePickerPanel.cpp
-    ui/dialogs/SourcePickerDialog.h
-    ui/dialogs/SourcePickerDialog.cpp
-    ui/dialogs/SourcePickerOverlay.h
-    ui/dialogs/SourcePickerOverlay.cpp
-    ui/dialogs/SourcePickerWindowRules.h
-    ui/dialogs/EditExportOverlay.h
-    ui/dialogs/EditExportOverlay.cpp
-    ui/dialogs/FinalizingOverlay.h
-    ui/dialogs/FinalizingOverlay.cpp
-    ui/dialogs/CrashReportPanel.h
-    ui/dialogs/CrashReportPanel.cpp
-    ui/dialogs/CrashReportOverlay.h
-    ui/dialogs/CrashReportOverlay.cpp
-    ui/dialogs/RecordingErrorPanel.h
-    ui/dialogs/RecordingErrorPanel.cpp
-    ui/dialogs/RecordingErrorOverlay.h
-    ui/dialogs/RecordingErrorOverlay.cpp
-    ui/tray/TrayPresence.h
-    ui/tray/TrayPresence.cpp
-    ui/widgets/SectionRuleHeader.h
-    ui/widgets/SectionRuleHeader.cpp
-    ui/widgets/KeycapChip.h
-    ui/widgets/KeycapChip.cpp
-    ui/widgets/HotkeysSettingsPanel.h
-    ui/widgets/HotkeysSettingsPanel.cpp
-    ui/widgets/StatusPill.h
-    ui/widgets/StatusPill.cpp
-    ui/widgets/PreviewSurface.h
-    ui/widgets/PreviewSurface.cpp
-    ui/widgets/CameraPreview.h
-    ui/widgets/CameraPreview.cpp
-    ui/widgets/EditPlayerSurface.h
-    ui/widgets/EditPlayerSurface.cpp
-    ui/widgets/EditDetailsRail.h
-    ui/widgets/EditDetailsRail.cpp
-    ui/widgets/ExportPanel.h
-    ui/widgets/ExportPanel.cpp
-    ui/widgets/WebcamSetupPanel.h
-    ui/widgets/WebcamSetupPanel.cpp
-    ui/widgets/CaptureTargetCard.h
-    ui/widgets/CaptureTargetCard.cpp
-    ui/widgets/RegionPresetCard.h
-    ui/widgets/RegionPresetCard.cpp
-    ui/widgets/DeviceAdapterCard.h
-    ui/widgets/DeviceAdapterCard.cpp
-    ui/widgets/PipelineStepCard.h
-    ui/widgets/PipelineStepCard.cpp
-    ui/widgets/PipelineFlow.h
-    ui/widgets/PipelineFlow.cpp
-    ui/widgets/LivePipelinePanel.h
-    ui/widgets/LivePipelinePanel.cpp
-    ui/widgets/TipChip.h
-    ui/widgets/TipChip.cpp
-    ui/widgets/ElevationLock.h
-    ui/widgets/ElevationLock.cpp
-    ui/widgets/CodecCard.h
-    ui/widgets/CodecCard.cpp
-    ui/widgets/VUMeterWidget.h
-    ui/widgets/VUMeterWidget.cpp
-    ui/widgets/ExoToggle.h
-    ui/widgets/ExoToggle.cpp
-    ui/widgets/ExoCheckBox.h
-    ui/widgets/ExoCheckBox.cpp
-    ui/widgets/InfoHintIcon.h
-    ui/widgets/InfoHintIcon.cpp
-    ui/widgets/CompareHint.h
-    ui/widgets/CompareHint.cpp
-    ui/widgets/SettingsCardExpander.h
-    ui/widgets/SettingsCardExpander.cpp
-    ui/widgets/ComboBoxWheelFilter.h
-    ui/widgets/ComboBoxWheelFilter.cpp
-    ui/widgets/RegionSelectionOverlay.h
-    ui/widgets/RegionSelectionOverlay.cpp
-    ui/widgets/RegionGeometry.h
-    ui/widgets/RegionGeometry.cpp
-    ui/widgets/AudioSourceRow.h
-    ui/widgets/AudioSourceRow.cpp
-    ui/widgets/AudioSourceToggle.h
-    ui/widgets/AudioSourceToggle.cpp
-    ui/widgets/ExoSpinBox.h
-    ui/widgets/ExoSpinBox.cpp
-    ui/widgets/ExoSlider.h
-    ui/widgets/ExoSlider.cpp
-    ui/widgets/NotificationBell.h
-    ui/widgets/NotificationBell.cpp
-    ui/widgets/AdvisoryItem.h
-    ui/widgets/AdvisoryItem.cpp
-    ui/CodecLabels.h
-    ui/widgets/CornerCaptureButton.h
-    ui/widgets/CornerCaptureButton.cpp
-    ui/widgets/PlaceholderRow.h
-    ui/widgets/PlaceholderRow.cpp
-    ui/widgets/TransportDock.h
-    ui/widgets/TransportDock.cpp
-    ui/widgets/EditTimeline.h
-    ui/widgets/EditTimeline.cpp
-    ui/overlay/CountdownOverlayWindow.h
-    ui/overlay/CountdownOverlayWindow.cpp
-    ui/overlay/DiagnosticsOverlayWindow.h
-    ui/overlay/DiagnosticsOverlayWindow.cpp
-    ui/overlay/QuickControlPillWindow.h
-    ui/overlay/QuickControlPillWindow.cpp
-    ui/overlay/RecordingOverlayWindow.h
-    ui/overlay/RecordingOverlayWindow.cpp
-    ui/overlay/NotificationToastWindow.h
-    ui/overlay/NotificationToastWindow.cpp
-    notifications/NotificationEvent.h
-    notifications/NotificationManager.h
-    notifications/NotificationManager.cpp
-    MainWindow.h
-    MainWindow.cpp
-    pages/AboutPage.h
-    pages/AboutPage.cpp
-    pages/DevicePage.h
-    pages/DevicePage.cpp
-    pages/RecordPage.h
-    pages/RecordPage.cpp
-    pages/ConfigPage.h
-    pages/ConfigPage.cpp
-    pages/FrameRateLimits.h
-    pages/DiagnosticsPage.h
-    pages/DiagnosticsPage.cpp
-    pages/LogsPage.h
-    pages/LogsPage.cpp
-    pages/EditExportPage.h
-    pages/EditExportPage.cpp
-    services/DeviceDiscoveryCommon.h
-    services/AudioDeviceNotifier.h
-    services/AudioDeviceNotifier.cpp
-    services/WebcamDeviceNotifier.h
-    services/WebcamDeviceNotifier.cpp
-    services/DisplayDeviceNotifier.h
-    services/DisplayDeviceNotifier.cpp
-    services/CaptureTargetNotifier.h
-    services/CaptureTargetNotifier.cpp
-    services/GlobalHotkeyService.h
-    services/GlobalHotkeyService.cpp
-    services/PreviewService.h
-    services/PreviewService.cpp
-    services/PreviewHelpers.h
-    services/CaptureSourceHub.h
-    services/CaptureSourceHub.cpp
-    services/CaptureSourceKey.h
-    services/ThumbnailMip.h
-    services/CaptureHubRegistry.h
-    services/CaptureHubRegistry.cpp
-    services/WgcSourceProducer.h
-    services/WgcSourceProducer.cpp
-    services/DxgiSourceProducer.h
-    services/DxgiSourceProducer.cpp
-    services/DxgiCaptureHubService.h
-    services/DxgiCaptureHubService.cpp
-    services/ThumbnailCapture.h
-    services/ThumbnailCapture.cpp
-    services/WindowEvidenceProbe.h
-    services/WindowEvidenceProbe.cpp
-    services/DxgiPreviewRenderer.h
-    services/DxgiPreviewRenderer.cpp
-    services/EditPlayerRenderer.h
-    services/EditPlayerRenderer.cpp
-    services/WebcamService.h
-    services/WebcamService.cpp
-    services/RecordingCoordinator.h
-    services/RecordingCoordinator.cpp
-    services/DisplayNumbering.h
-    services/DisplayNumbering.cpp
-    services/ScreenPresentation.h
-    services/ScreenPresentation.cpp
-    services/TargetDisplayFacts.h
-    services/DisplayIdentityResolver.h
-    services/DisplayIdentityResolver.cpp
-    services/DisplayIdentityEnumerator.h
-    services/DisplayIdentityEnumerator.cpp
-    services/RecordingCountdownController.h
-    services/RecordingCountdownController.cpp
-    services/PageHydrationController.h
-    services/PageHydrationController.cpp
-    services/TimelineThumbnailSource.h
-    services/TimelineThumbnailSource.cpp
-    services/RecoveryService.h
-    services/RecoveryService.cpp
-    services/AtomicFileOps.h
-    services/AtomicFileOps.cpp
-    services/UpdateService.h
-    services/UpdateService.cpp
-    services/UpdateLaunchPlan.cpp
-    services/VerifyReinstallMode.h
-    services/VerifyReinstallMode.cpp
-    services/WhatsNewPayload.h
-    services/WhatsNewPayload.cpp
-    services/ElevatedRelaunch.h
-    services/ElevatedRelaunch.cpp
-    models/WebcamSettings.h
-    models/AboutInfo.h
-    models/AboutInfo.cpp
-    models/SettingsCompareData.h
-    models/SettingsCompareData.cpp
-    models/OutputSettingsModel.h
-    models/OutputSettingsModel.cpp
-    models/StableDisplayId.h
-    models/RecordingPreset.h
-    models/RecordingPreset.cpp
-    models/RecordingPresetRegistry.h
-    models/RecordingPresetRegistry.cpp
-    models/VideoSettingsModel.h
-    models/FilenameBuilder.h
-    models/FilenameBuilder.cpp
-    models/OutputPathValidator.h
-    models/OutputPathValidator.cpp
-    models/OutputPathPolicy.h
-    models/OutputPathPolicy.cpp
-    models/EditContextFactory.h
-    models/EditContextFactory.cpp
-    models/CloseGuardPolicy.h
-    models/CloseGuardPolicy.cpp
-    models/RecordingFailurePolicy.h
-    models/RecordingFailurePolicy.cpp
-    models/OverlayContentPolicy.h
-    models/OverlayContentPolicy.cpp
-    models/HotkeyStartupConflicts.h
-    settings/AppSettingsStore.h
-    settings/AppSettingsStore.cpp
-    settings/RecordingPresetStore.h
-    settings/RecordingPresetStore.cpp
-    settings/RecordingHistoryStore.h
-    settings/RecordingHistoryStore.cpp
-    settings/RecoveryManifestStore.h
-    settings/RecoveryManifestStore.cpp
-    settings/CapabilityCacheStore.h
-    settings/CapabilityCacheStore.cpp
-    diagnostics/error_message.h
-    diagnostics/error_message.cpp
-    diagnostics/AppLog.h
-    diagnostics/AppLog.cpp
-    diagnostics/EngineLogBridge.h
-    diagnostics/EngineLogBridge.cpp
-    diagnostics/StructuredLog.h
-    diagnostics/StructuredLog.cpp
-    diagnostics/SessionReport.h
-    diagnostics/SessionReport.cpp
-    diagnostics/ZipWriter.h
-    diagnostics/ZipWriter.cpp
-    diagnostics/SupportBundle.h
-    diagnostics/SupportBundle.cpp
-    diagnostics/DiagnosticResult.h
-    diagnostics/DiagnosticResult.cpp
-    diagnostics/CapabilitySummary.h
-    diagnostics/CapabilitySummary.cpp
-    diagnostics/ConfigSummary.h
-    diagnostics/ConfigSummary.cpp
-    diagnostics/CrashSessionContext.h
-    diagnostics/CrashSessionContext.cpp
-    diagnostics/DiskSpaceProvider.h
-    diagnostics/DiskSpaceProvider.cpp
-    diagnostics/ElevationProvider.h
-    diagnostics/ElevationProvider.cpp
-    diagnostics/PresentProvider.h
-    diagnostics/PresentAccumulator.h
-    diagnostics/PresentModeMapping.h
-    diagnostics/PresentModeMapping.cpp
-    diagnostics/PresentMonEtwSession.h
-    diagnostics/PresentMonEtwSession.cpp
-    diagnostics/PresentMonProvider.h
-    diagnostics/PresentMonProvider.cpp
-    diagnostics/DpcLatencyProvider.h
-    diagnostics/DpcLatencyProvider.cpp
-    diagnostics/DiskSpaceThresholds.h
-    diagnostics/FilesystemProvider.h
-    diagnostics/FilesystemProvider.cpp
-    diagnostics/RecommendationEngine.h
-    diagnostics/RecommendationEngine.cpp
-    diagnostics/WindowTargetFacts.h
-    diagnostics/WindowTargetFacts.cpp
-    diagnostics/WindowEvidenceAccumulator.h
-    diagnostics/WindowEvidenceAccumulator.cpp
-    diagnostics/WindowCaptureStall.h
-    diagnostics/WindowCaptureStall.cpp
-    diagnostics/SelfTestRunner.h
-    diagnostics/SelfTestRunner.cpp
-    viewmodels/RecordViewModel.h
-    viewmodels/RecordViewModel.cpp
-    viewmodels/PresentationState.h
-    viewmodels/PresentationStateBuilder.h
-    viewmodels/PresentationStateBuilder.cpp
-)
-
-target_sources(exosnap_widgets_legacy PRIVATE
-    # EXOSNAP_HARNESS_GATE, not a bare non-Release check: the frontend A/B
-    # benchmark drives --auto-record --enable-preview, which lives in
-    # AutoRecordHarness.cpp behind EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and reaches
-    # MainWindow's scenario members. The whole automation cluster therefore has
-    # to appear together, or a Release-with-harness build links against a
-    # declared-but-undefined preview entry point.
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.cpp>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.cpp>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordHarness.cpp>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/auto_record/AutoRecordOptions.cpp>"
-    # Frontend-neutral benchmark report contract, shared with the Qt Quick target.
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkMetrics.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkReport.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkReport.cpp>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEngineMetrics.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEngineMetrics.cpp>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEffectiveConfig.h>"
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/benchmark/BenchmarkEffectiveConfig.cpp>"
-    # MainWindow's visual-test scenario members, split out of MainWindow.cpp.
-    # Same gate, matching the guards inside the file and the ones its
-    # declarations already carry in MainWindow.h.
-    "$<${EXOSNAP_HARNESS_GATE}:${CMAKE_CURRENT_SOURCE_DIR}/MainWindow_VisualScenarios.cpp>"
-    # The HWND audit is a standalone harness with no --auto-record caller, so it
-    # stays Debug-only and keeps the Release-with-harness delta smaller.
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.h>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditReport.cpp>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.h>"
-    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/hwnd_audit/HwndAuditHarness.cpp>"
-)
-
-if(WIN32)
-    target_sources(exosnap_widgets_legacy PRIVATE
-        exosnap.rc
-        "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
-    )
-endif()
-
-set_target_properties(exosnap_widgets_legacy PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap_widgets_legacy")
-# EXOSNAP_ENABLE_VISUAL_TEST_HARNESS and EXOSNAP_ENABLE_AUTO_RECORD_HARNESS are relied upon to
-# always be defined together: AutoRecordHarness.h unconditionally declares the preview-mode
-# RunAutoRecord(MainWindow&) overload, but its definition is gated on
-# EXOSNAP_ENABLE_VISUAL_TEST_HARNESS while main.cpp calls it under EXOSNAP_ENABLE_AUTO_RECORD_HARNESS
-# — decoupling the two in the future would produce a non-obvious link error.
-target_compile_definitions(exosnap_widgets_legacy PRIVATE
-    NOMINMAX
-    EXOSNAP_BUILD_CONFIG="$<CONFIG>"
-    "$<${EXOSNAP_HARNESS_GATE}:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
-    "$<${EXOSNAP_HARNESS_GATE}:EXOSNAP_ENABLE_AUTO_RECORD_HARNESS=1>"
-    "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_HWND_AUDIT_HARNESS=1>"
-)
-add_dependencies(exosnap_widgets_legacy exosnap_build_info)
-
-target_link_libraries(exosnap_widgets_legacy PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-    recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
-    exosnap::update exosnap_miniz
-    tomlplusplus::tomlplusplus
-    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib Version.lib
-    mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
-    # ELEVATION-FOUNDATION-R1 (ADR 0033): ShellExecuteExW (Shell32) + token APIs
-    # OpenProcessToken/GetTokenInformation (Advapi32).
-    Shell32.lib Advapi32.lib
-)
-
-# ADR 0033: present & tearing diagnostics (PresentMon ETW). EXOSNAP_WITH_PRESENTMON
-# and the PresentMon::consumer target are declared at the root level (the option
-# before add_subdirectory(third_party), the target inside it), so both are already
-# visible by the time this subdirectory runs. Linked here — after the real Qt
-# executable target exists — rather than at the root after add_subdirectory(app),
-# so it never runs against the custom-target stand-in used when Qt6 is not found
-# or EXOSNAP_BUILD_APP is OFF.
-if(EXOSNAP_WITH_PRESENTMON)
-    target_link_libraries(exosnap_widgets_legacy PRIVATE PresentMon::consumer)
-    target_compile_definitions(exosnap_widgets_legacy PRIVATE EXOSNAP_HAS_PRESENTMON=1)
-endif()
-
-# S4: Delay-load Media Foundation DLLs so the app runs on Windows-N without the
-# Media Feature Pack. /DELAYLOAD converts the static import-table entry to a
-# demand-load binding: mfplat.dll / mf.dll / mfreadwrite.dll are NOT loaded at
-# process startup. WebcamService::IsMfPresent() probes availability via a safe
-# LoadLibraryW call before any MF entry point is invoked, so the delay-load
-# failure hook (__delayLoadHelper2 raising VcppException) is never reached.
-# delayimp.lib provides __delayLoadHelper2 (required by the MSVC delay-load stub).
-if(MSVC)
-    target_link_options(exosnap_widgets_legacy PRIVATE
-        /DELAYLOAD:mfplat.dll
-        /DELAYLOAD:mf.dll
-        /DELAYLOAD:mfreadwrite.dll
-    )
-    target_link_libraries(exosnap_widgets_legacy PRIVATE delayimp.lib)
-endif()
-
-target_include_directories(exosnap_widgets_legacy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-
-# Stage crashpad_handler.exe next to exosnap_widgets_legacy.exe so the runtime lookup
-# (crash_capture::ResolveHandlerExePath) resolves it when running from the build
-# tree. Only relevant when crash capture is enabled (sentry-native + Crashpad
-# fetched); inert in the default build. Resolve the handler via the
-# crashpad_handler TARGET (generator expression) rather than a fixed path: the
-# Visual Studio multi-config generator emits the exe under a per-config subdir
-# (Debug/, Release/) that the cached EXOSNAP_CRASHPAD_HANDLER_EXE string misses.
-# The cached path stays the source of truth for the install() rule in VendorSentry.
-if(EXOSNAP_ENABLE_CRASH_CAPTURE AND TARGET crashpad_handler)
-    add_dependencies(exosnap_widgets_legacy crashpad_handler)
-    add_custom_command(TARGET exosnap_widgets_legacy POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:crashpad_handler>"
-            "$<TARGET_FILE_DIR:exosnap_widgets_legacy>/crashpad_handler.exe"
-        COMMENT "Staging crashpad_handler.exe next to exosnap_widgets_legacy.exe"
-        VERBATIM
-    )
-endif()
-
-# ---- Dev convenience: stage the Qt runtime next to the build-tree exe ----
-# The build-tree exosnap_widgets_legacy.exe (and every test .exe — they share app/<config>/)
-# links against Qt DLLs that live in Qt's bin dir, not next to the exe. Without
-# them on PATH, launching raises one Windows error dialog per missing DLL and
-# tests abort with 0xC0000135 (STATUS_DLL_NOT_FOUND). windeployqt copies the Qt
-# runtime + required plugins (platforms/styles/imageformats) next to the exe so
-# launching and ctest always work with no PATH juggling. Release packaging
-# deploys separately; this is build-tree only, and POST_BUILD only fires when
-# exosnap_widgets_legacy is actually (re)linked.
-if(WIN32)
-    if(EXOSNAP_WINDEPLOYQT)
-        add_custom_command(TARGET exosnap_widgets_legacy POST_BUILD
-            COMMAND "${EXOSNAP_WINDEPLOYQT}" --no-translations --no-system-d3d-compiler --no-opengl-sw
-                "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap_widgets_legacy>"
-            COMMENT "Staging Qt runtime next to exosnap_widgets_legacy.exe (build tree)"
-            VERBATIM
-        )
-    endif()
-
-    # Deploy the FFmpeg runtime DLLs next to the exe so the build-tree exosnap_widgets_legacy.exe
-    # launches in BOTH Debug and Release. Previously these only landed in the Debug
-    # tree incidentally (the gtest targets copy them next to their binaries, which
-    # share app/Debug/); a Release build of just the exosnap_widgets_legacy target left them out,
-    # so launching app/Release/exosnap_widgets_legacy.exe aborted with 0xC0000135
-    # (STATUS_DLL_NOT_FOUND) — the app links FFmpeg::mux for MP4 remux and the audio
-    # resampler. Release packaging installs these separately (install(FILES …) in
-    # VendorFFmpeg.cmake); this is the build-tree equivalent of the Qt deploy above.
-    foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-        add_custom_command(TARGET exosnap_widgets_legacy POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_exosnap_ffmpeg_dll}" "$<TARGET_FILE_DIR:exosnap_widgets_legacy>"
-            COMMENT "Staging FFmpeg runtime next to exosnap_widgets_legacy.exe (build tree)"
-            VERBATIM
-        )
-    endforeach()
-
-    # No-op unless EXOSNAP_ASAN=ON — same 0xC0000135 reasoning as the two blocks
-    # above, for the sanitizer runtime that ships next to cl.exe.
-    exosnap_stage_asan_runtime(exosnap_widgets_legacy)
-endif()
-
-# Kept out of the default build. The Qt Quick `exosnap` target is what every
-# build, test run, package and CI job produces; this one is reachable only via
-# `cmake --build <dir> --target exosnap_widgets_legacy` after configuring with
-# -DEXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND=ON, and exists solely so the frozen
-# frontend A/B benchmark could be re-run against a concrete regression.
-if(NOT EXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND)
-    set_target_properties(exosnap_widgets_legacy PROPERTIES EXCLUDE_FROM_ALL TRUE)
-endif()
-
 function(exosnap_add_app_test_support NAME)
     add_library(${NAME} STATIC ${ARGN})
     target_include_directories(${NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -698,7 +200,7 @@ exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
     settings/RecordingHistoryStore.cpp
 )
 target_link_libraries(exosnap_record_viewmodel_test_support PUBLIC
-    exosnap_app_log_test_support exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets
+    exosnap_app_log_test_support exosnap_output_model_test_support Qt6::Core Qt6::Gui
 )
 
 exosnap_add_app_test_support(exosnap_diagnostics_test_support
@@ -738,87 +240,12 @@ target_link_libraries(exosnap_device_service_test_support PUBLIC
     ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
 
-exosnap_add_app_test_support(exosnap_pages_test_support
-    pages/ConfigPage.cpp
-    viewmodels/PresentationStateBuilder.cpp
-    ui/widgets/ComboBoxWheelFilter.cpp
-    ui/widgets/CameraPreview.cpp
-    ui/widgets/ExoCheckBox.cpp
-    ui/widgets/ExoToggle.cpp
-    ui/widgets/InfoHintIcon.cpp
-    # D6: CompareHint + compare data needed by ConfigPage.
-    ui/widgets/CompareHint.cpp
-    models/SettingsCompareData.cpp
-    ui/widgets/SettingsCardExpander.cpp
-    ui/widgets/VUMeterWidget.cpp
-    ui/widgets/WebcamSetupPanel.cpp
-    # v10: ConfigPage renders Lucide glyphs (card titles, row icons).
-    ui/theme/LucideIcon.cpp
-    # PS-PHASE-C: HotkeysSettingsPanel embedded in ConfigPage.
-    ui/widgets/HotkeysSettingsPanel.cpp
-    ui/widgets/KeycapChip.cpp
-    services/GlobalHotkeyService.cpp
-    ui/widgets/SectionRuleHeader.cpp
-    ui/widgets/PlaceholderRow.cpp
-    # THEME-SLICE-1: ExoCheckBox now calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
-    ui/theme/ExoSnapTheme.cpp
-    # S3: ExoSlider used by ConfigPage (mic gain slider with gradient groove + ticks).
-    ui/widgets/ExoSlider.cpp
-)
-target_link_libraries(exosnap_pages_test_support PUBLIC
-    exosnap_device_service_test_support exosnap_output_model_test_support
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-
-exosnap_add_app_test_support(exosnap_source_picker_test_support
-    ui/dialogs/SourcePickerPanel.cpp
-    ui/dialogs/SourcePickerDialog.cpp
-    ui/dialogs/SourcePickerOverlay.cpp
-    ui/widgets/RegionGeometry.cpp
-    ui/widgets/CaptureTargetCard.cpp
-    ui/widgets/RegionPresetCard.cpp
-    # DESIGN-SYNC-R1: SourcePickerPanel's "Select region…" checkbox is now ExoCheckBox.
-    ui/widgets/ExoCheckBox.cpp
-    services/ThumbnailCapture.cpp
-    services/CaptureSourceHub.cpp
-    services/CaptureHubRegistry.cpp
-    services/WgcSourceProducer.cpp
-    # THEME-SLICE-2C: SourcePickerOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
-    ui/theme/ExoSnapTheme.cpp
-)
-target_link_libraries(exosnap_source_picker_test_support PUBLIC
-    Qt6::Core Qt6::Gui Qt6::Widgets recorder_core d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
-)
-
-# Only the pure evaluation half of the --hwnd-audit harness. The Win32 half needs
-# a real MainWindow and therefore lives in the harness itself, not in a gtest —
-# see HwndAuditHarness.h for why that split exists.
-exosnap_add_gtest(
-    NAME hwnd_audit_report_tests
-    TEST_PREFIX hwnd_audit.
-    SOURCES
-        tests/test_hwnd_audit_report.cpp
-        hwnd_audit/HwndAuditReport.cpp
-    LIBRARIES Qt6::Core Qt6::Gui
-)
-target_include_directories(hwnd_audit_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
-    NAME presentation_state_tests
-    TEST_PREFIX state.
-    SOURCES
-        tests/test_presentation_state.cpp
-        viewmodels/PresentationStateBuilder.cpp
-    LIBRARIES exosnap_capability recorder_core
-)
-target_include_directories(presentation_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
 exosnap_add_gtest(
     NAME completed_result_tests
     TEST_PREFIX result.
     SOURCES
         tests/test_completed_result.cpp
-    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core Qt6::Gui Qt6::Widgets
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core Qt6::Gui
 )
 target_include_directories(completed_result_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(completed_result_tests PRIVATE ole32.lib shell32.lib)
@@ -960,28 +387,6 @@ exosnap_add_gtest(
         services/RecordingCountdownController.cpp
 )
 target_include_directories(recording_countdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
-    NAME page_hydration_controller_tests
-    TEST_PREFIX hydration.
-    SOURCES
-        tests/test_page_hydration_controller.cpp
-        services/PageHydrationController.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core
-)
-set_target_properties(page_hydration_controller_tests PROPERTIES AUTOMOC ON)
-target_include_directories(page_hydration_controller_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
-    NAME region_geometry_tests
-    TEST_PREFIX region.
-    SOURCES
-        tests/test_region_geometry.cpp
-        ui/widgets/RegionGeometry.cpp
-    LIBRARIES Qt6::Core
-)
-target_include_directories(region_geometry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME window_geometry_policy_tests
@@ -1154,17 +559,6 @@ exosnap_add_gtest(
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Theme table invariant tests. Headless — no QApplication required; only
-# inspects ExoTheme + ExoSnapPalette.
-exosnap_add_gtest(
-    NAME accent_theme_tests
-    TEST_PREFIX accent.
-    SOURCES
-        tests/test_accent_theme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui
-)
-target_include_directories(accent_theme_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
 exosnap_add_gtest(
     NAME diagnostics_tests
     TEST_PREFIX diagnostics.
@@ -1198,141 +592,6 @@ target_include_directories(filesystem_checks_tests PRIVATE ${CMAKE_CURRENT_SOURC
 # Coverage of WebcamSettings serialization is maintained by recording_preset_store_tests.
 
 exosnap_add_gtest(
-    NAME global_recording_bar_tests
-    TEST_PREFIX chrome.
-    SOURCES
-        tests/test_global_recording_bar.cpp
-        ui/chrome/GlobalRecordingBar.cpp
-        ui/widgets/StatusPill.cpp
-        # THEME-SLICE-2C: StatusPill now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(global_recording_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(global_recording_bar_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME operational_title_bar_tests
-    TEST_PREFIX chrome.
-    SOURCES
-        tests/test_operational_title_bar.cpp
-        ui/chrome/OperationalTitleBar.cpp
-        ui/brand/BrandMarkWidget.cpp
-        ui/widgets/NotificationBell.cpp
-        ui/widgets/StatusPill.cpp
-        ui/theme/LucideIcon.cpp
-        # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(operational_title_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(operational_title_bar_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME config_page_tests
-    TEST_PREFIX config.
-    SOURCES
-        tests/test_config_page.cpp
-    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
-
-# SETTINGS-TIERS-R2 Phase 2: InfoHintIcon widget unit tests.
-exosnap_add_gtest(
-    NAME info_hint_icon_tests
-    TEST_PREFIX hint.
-    SOURCES
-        tests/test_info_hint_icon.cpp
-        ui/widgets/InfoHintIcon.cpp
-        ui/theme/LucideIcon.cpp
-        # THEME-SLICE-2C: InfoHintIcon now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(info_hint_icon_tests PROPERTIES AUTOMOC ON)
-
-# PS-FOUNDATIONS-R1: Suite foundation widget tests.
-exosnap_add_gtest(
-    NAME exo_spin_box_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_exo_spin_box.cpp
-        ui/widgets/ExoSpinBox.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
-)
-target_include_directories(exo_spin_box_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(exo_spin_box_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME exo_slider_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_exo_slider.cpp
-        ui/widgets/ExoSlider.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
-)
-target_include_directories(exo_slider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(exo_slider_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME notification_bell_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_notification_bell.cpp
-        ui/widgets/NotificationBell.cpp
-        ui/theme/LucideIcon.cpp
-        # THEME-SLICE-2C: NotificationBell now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(notification_bell_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(notification_bell_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME advisory_item_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_advisory_item.cpp
-        ui/widgets/AdvisoryItem.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(advisory_item_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(advisory_item_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME notification_hub_panel_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_notification_hub_panel.cpp
-        ui/chrome/NotificationHubPanel.cpp
-        ui/widgets/AdvisoryItem.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(notification_hub_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(notification_hub_panel_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME corner_capture_button_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_corner_capture_button.cpp
-        ui/widgets/CornerCaptureButton.cpp
-        ui/theme/LucideIcon.cpp
-        # THEME-SLICE-2C: CornerCaptureButton now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(corner_capture_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(corner_capture_button_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
     NAME codec_labels_tests
     TEST_PREFIX suite.
     SOURCES
@@ -1340,58 +599,6 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
-    NAME placeholder_row_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_placeholder_row.cpp
-        ui/widgets/PlaceholderRow.cpp
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
-)
-target_include_directories(placeholder_row_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(placeholder_row_tests PROPERTIES AUTOMOC ON)
-
-# Settings-Redesign D6: CompareHint widget + compare data unit tests.
-exosnap_add_gtest(
-    NAME compare_hint_tests
-    TEST_PREFIX compare.
-    SOURCES
-        tests/test_compare_hint.cpp
-        ui/widgets/CompareHint.cpp
-        models/SettingsCompareData.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(compare_hint_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(compare_hint_tests PROPERTIES AUTOMOC ON)
-
-# SETTINGS-TIERS-R2 Phase 2: ConfigPage InfoHint integration tests.
-exosnap_add_gtest(
-    NAME info_hints_config_tests
-    TEST_PREFIX hint.
-    SOURCES
-        tests/test_info_hints_config.cpp
-    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(info_hints_config_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(info_hints_config_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(info_hints_config_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
-
-# SETTINGS-TIERS-R1: Expert mode toggle, per-card expander, and persistence tests.
-exosnap_add_gtest(
-    NAME settings_tiers_tests
-    TEST_PREFIX tiers.
-    SOURCES
-        tests/test_settings_tiers.cpp
-        settings/AppSettingsStore.cpp
-    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(settings_tiers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(settings_tiers_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(settings_tiers_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 # ELEVATION-FOUNDATION-R1 (ADR 0033): elevation provider stub + relaunch handoff
 # arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
@@ -1436,64 +643,6 @@ exosnap_add_gtest(
 target_include_directories(present_mapping_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
-    NAME source_picker_dialog_tests
-    TEST_PREFIX source.
-    SOURCES
-        tests/test_source_picker_dialog.cpp
-    LIBRARIES exosnap_source_picker_test_support Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
-)
-target_include_directories(source_picker_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(source_picker_dialog_tests PRIVATE NOMINMAX)
-set_target_properties(source_picker_dialog_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME source_picker_overlay_tests
-    TEST_PREFIX source.
-    SOURCES
-        tests/test_source_picker_overlay.cpp
-    LIBRARIES exosnap_source_picker_test_support Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
-)
-target_include_directories(source_picker_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(source_picker_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(source_picker_overlay_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME source_picker_refresh_tests
-    TEST_PREFIX source.
-    SOURCES
-        tests/test_source_picker_refresh.cpp
-    LIBRARIES exosnap_source_picker_test_support Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
-)
-target_include_directories(source_picker_refresh_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(source_picker_refresh_tests PRIVATE NOMINMAX)
-set_target_properties(source_picker_refresh_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME webcam_setup_panel_tests
-    TEST_PREFIX webcam.
-    SOURCES
-        tests/test_webcam_setup_panel.cpp
-    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(webcam_setup_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(webcam_setup_panel_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(webcam_setup_panel_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
-
-exosnap_add_gtest(
-    NAME hotkeys_settings_panel_tests
-    TEST_PREFIX hotkey.
-    SOURCES
-        tests/test_hotkeys_settings_panel.cpp
-        ui/widgets/HotkeysSettingsPanel.cpp
-        services/GlobalHotkeyService.cpp
-        ui/widgets/KeycapChip.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(hotkeys_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(hotkeys_settings_panel_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
-set_target_properties(hotkeys_settings_panel_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
     NAME hotkey_service_tests
     TEST_PREFIX hotkey_service.
     SOURCES
@@ -1503,168 +652,6 @@ exosnap_add_gtest(
 )
 target_include_directories(hotkey_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(hotkey_service_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME logs_page_tests
-    TEST_PREFIX log.
-    SOURCES
-        tests/test_logs_page.cpp
-        pages/LogsPage.cpp
-        diagnostics/AppLog.cpp
-        ui/widgets/SectionRuleHeader.cpp
-        # DESIGN-SYNC-R1: LogsPage's "Auto-scroll" checkbox is now ExoCheckBox, which
-        # calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
-        ui/widgets/ExoCheckBox.cpp
-        ui/theme/ExoSnapTheme.cpp
-        # v10: LogsPage's search field uses lucideIcon() (Lucide glyph renderer).
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
-set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME about_page_tests
-    TEST_PREFIX about.
-    SOURCES
-        tests/test_about_page.cpp
-        pages/AboutPage.cpp
-        models/AboutInfo.cpp
-        ui/brand/BrandMarkWidget.cpp
-        ui/theme/LucideIcon.cpp
-        # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-        # AboutPage resolves install mode (MSI/Portable/Scoop) via these pure helpers.
-        services/UpdateLaunchPlan.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap::update
-)
-target_include_directories(about_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(about_page_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
-add_dependencies(about_page_tests exosnap_build_info)
-set_target_properties(about_page_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME edit_export_page_tests
-    TEST_PREFIX edit_export.
-    SOURCES
-        tests/test_edit_export_page.cpp
-        pages/EditExportPage.cpp
-        ui/widgets/EditTimeline.cpp
-        services/TimelineThumbnailSource.h
-        services/TimelineThumbnailSource.cpp
-        ui/widgets/EditPlayerSurface.h
-        ui/widgets/EditPlayerSurface.cpp
-        # Native child-HWND GPU render host EditPlayerSurface now owns (2026-08-03
-        # editor-playback-gpu-render design) -- see edit_player_surface_tests below
-        # for its own dedicated lifecycle/resize coverage.
-        services/EditPlayerRenderer.h
-        services/EditPlayerRenderer.cpp
-        diagnostics/AppLog.h
-        diagnostics/AppLog.cpp
-        ui/widgets/EditDetailsRail.h
-        ui/widgets/EditDetailsRail.cpp
-        ui/widgets/ExportPanel.h
-        ui/widgets/ExportPanel.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
-        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
-)
-target_include_directories(edit_export_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(edit_export_page_tests PRIVATE NOMINMAX)
-set_target_properties(edit_export_page_tests PROPERTIES AUTOMOC ON)
-
-# EDIT-OVERLAY-R1: EditExportOverlay hosts EditExportPage as an overlay over Record
-# (ADR 0022 update) instead of a stack page — same technical recipe as
-# SourcePickerOverlay (see source_picker_overlay_tests below).
-exosnap_add_gtest(
-    NAME edit_export_overlay_tests
-    TEST_PREFIX edit_export_overlay.
-    SOURCES
-        tests/test_edit_export_overlay.cpp
-        ui/dialogs/EditExportOverlay.cpp
-        pages/EditExportPage.cpp
-        ui/widgets/EditTimeline.cpp
-        services/TimelineThumbnailSource.h
-        services/TimelineThumbnailSource.cpp
-        ui/widgets/EditPlayerSurface.h
-        ui/widgets/EditPlayerSurface.cpp
-        services/EditPlayerRenderer.h
-        services/EditPlayerRenderer.cpp
-        diagnostics/AppLog.h
-        diagnostics/AppLog.cpp
-        ui/widgets/EditDetailsRail.h
-        ui/widgets/EditDetailsRail.cpp
-        ui/widgets/ExportPanel.h
-        ui/widgets/ExportPanel.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
-        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
-)
-target_include_directories(edit_export_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(edit_export_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(edit_export_overlay_tests PROPERTIES AUTOMOC ON)
-
-# Native child-HWND GPU render host for the editor player (2026-08-03
-# editor-playback-gpu-render design, Task 4): EditPlayerSurface's own
-# lifecycle/resize coverage, dedicated (rather than folded into
-# edit_export_page_tests above) so it can run against a real hardware D3D11
-# device -- same live-hardware precedent as dxgi_preview_pushed_source_tests
-# (EditPlayerRenderer::InitD3D11() hardcodes D3D_DRIVER_TYPE_HARDWARE);
-# GTEST_SKIP covers headless/GPU-less runners.
-exosnap_add_gtest(
-    NAME edit_player_surface_tests
-    TEST_PREFIX edit_player.
-    SOURCES
-        tests/test_edit_player_surface.cpp
-        ui/widgets/EditPlayerSurface.h
-        ui/widgets/EditPlayerSurface.cpp
-        services/EditPlayerRenderer.h
-        services/EditPlayerRenderer.cpp
-        diagnostics/AppLog.h
-        diagnostics/AppLog.cpp
-    LIBRARIES
-        Qt6::Core Qt6::Gui Qt6::Widgets recorder_core
-        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
-    LABELS live
-)
-target_include_directories(edit_player_surface_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(edit_player_surface_tests PRIVATE NOMINMAX)
-set_target_properties(edit_player_surface_tests PROPERTIES AUTOMOC ON)
-
-# Export panel embedded in the edit surface's right rail; presentation only, the
-# export itself stays in EditExportPage (2026-08-03 edit-export-panel design).
-exosnap_add_gtest(
-    NAME export_panel_tests
-    TEST_PREFIX export_panel.
-    SOURCES
-        tests/test_export_panel.cpp
-        ui/widgets/ExportPanel.h
-        ui/widgets/ExportPanel.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(export_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(export_panel_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME edit_details_rail_tests
-    TEST_PREFIX edit_details_rail.
-    SOURCES
-        tests/test_edit_details_rail.cpp
-        ui/widgets/EditDetailsRail.h
-        ui/widgets/EditDetailsRail.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(edit_details_rail_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(edit_details_rail_tests PROPERTIES AUTOMOC ON)
 
 # Strip layout + tile loop behind the Edit timeline's thumbnails. The decoder is
 # injected, so these cases run without a clip, a worker thread, or FFmpeg.
@@ -1698,49 +685,6 @@ exosnap_add_gtest(
 )
 target_include_directories(edit_timeline_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-exosnap_add_gtest(
-    NAME crash_report_overlay_tests
-    TEST_PREFIX crash.
-    SOURCES
-        tests/test_crash_report_overlay.cpp
-        ui/dialogs/CrashReportPanel.cpp
-        ui/dialogs/CrashReportOverlay.cpp
-        ui/brand/BrandMarkWidget.cpp
-        ui/theme/LucideIcon.cpp
-        # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-        # DESIGN-SYNC-R1: CrashReportPanel's remember-choice draft is an ExoCheckBox.
-        ui/widgets/ExoCheckBox.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(crash_report_overlay_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME recording_error_overlay_tests
-    TEST_PREFIX record.
-    SOURCES
-        tests/test_recording_error_overlay.cpp
-        ui/dialogs/RecordingErrorPanel.cpp
-        ui/dialogs/RecordingErrorOverlay.cpp
-        ui/theme/LucideIcon.cpp
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(recording_error_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(recording_error_overlay_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME lucide_icon_tests
-    TEST_PREFIX lucide.
-    SOURCES
-        tests/test_lucide_icon.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(lucide_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-set_target_properties(lucide_icon_tests PROPERTIES AUTOMOC ON)
-
 # Pure helpers behind UpdateService::LaunchUpdater: staging file list, updater
 # argv (round-tripped through the updater's own parser), Scoop-path detection.
 exosnap_add_gtest(
@@ -1767,15 +711,6 @@ target_compile_definitions(version_tests PRIVATE
     EXOSNAP_EXPECTED_BASE_VERSION="${PROJECT_VERSION}")
 add_dependencies(version_tests exosnap_build_info)
 
-exosnap_add_gtest(
-    NAME preview_helpers_tests
-    TEST_PREFIX preview.
-    SOURCES
-        tests/test_preview_helpers.cpp
-    LIBRARIES recorder_core
-)
-target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
 # Pure switch-over state machine for the WYSIWYG preview during recording
 # (pushed engine source vs the preview's own WGC capture). Header-only logic.
 exosnap_add_gtest(
@@ -1787,15 +722,6 @@ exosnap_add_gtest(
 target_include_directories(pushed_source_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
-    NAME region_preview_crop_tests
-    TEST_PREFIX preview.
-    SOURCES
-        tests/test_region_preview_crop.cpp
-    LIBRARIES recorder_core
-)
-target_include_directories(region_preview_crop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
     NAME webcam_placement_tests
     TEST_PREFIX webcam.
     SOURCES
@@ -1803,123 +729,6 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(webcam_placement_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-exosnap_add_gtest(
-    NAME preview_surface_webcam_tests
-    TEST_PREFIX preview.
-    SOURCES
-        tests/test_preview_surface_webcam.cpp
-        ui/widgets/PreviewSurface.cpp
-        ui/widgets/StatusPill.cpp
-        services/DxgiPreviewRenderer.cpp
-        diagnostics/AppLog.cpp
-        # THEME-SLICE-2C: StatusPill now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-        # Webcam magnifier: PreviewSurface::paintMagnifierIcon() renders the
-        # search/x glyph via lucidePixmap().
-        ui/theme/LucideIcon.cpp
-    LIBRARIES
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
-)
-target_include_directories(preview_surface_webcam_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(preview_surface_webcam_tests PRIVATE NOMINMAX)
-set_target_properties(preview_surface_webcam_tests PROPERTIES AUTOMOC ON)
-
-# Regression coverage for the webcam-PiP handle/box desync bug: DxgiPreviewRenderer::
-# GetSourceSize() must track whatever the render thread is CURRENTLY drawing as the
-# pushed-source background, not a stale value from before the current source was
-# adopted. Exercises the real BeginPushedSource/keyed-mutex handoff against a live
-# hardware D3D11 device (InitD3D11() hardcodes D3D_DRIVER_TYPE_HARDWARE), so it is
-# GPU-live like capability_adapter_enum_tests; GTEST_SKIP covers headless runners.
-exosnap_add_gtest(
-    NAME dxgi_preview_pushed_source_tests
-    TEST_PREFIX preview.
-    SOURCES
-        tests/test_dxgi_preview_pushed_source.cpp
-        services/DxgiPreviewRenderer.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES
-        Qt6::Core recorder_core
-        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
-    LABELS live
-)
-target_include_directories(dxgi_preview_pushed_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(dxgi_preview_pushed_source_tests PRIVATE NOMINMAX)
-set_target_properties(dxgi_preview_pushed_source_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME transport_dock_tests
-    TEST_PREFIX record.
-    SOURCES
-        tests/test_transport_dock.cpp
-        ui/widgets/TransportDock.cpp
-        ui/widgets/AudioSourceToggle.cpp
-        # THEME-SLICE-2C: AudioSourceToggle now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(transport_dock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(transport_dock_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME pipeline_flow_tests
-    TEST_PREFIX diagnostic.
-    SOURCES
-        tests/test_pipeline_flow.cpp
-        ui/widgets/PipelineFlow.cpp
-        ui/widgets/PipelineStepCard.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
-)
-target_include_directories(pipeline_flow_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(pipeline_flow_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME diagnostics_page_tests
-    TEST_PREFIX diagnostic.
-    SOURCES
-        tests/test_diagnostics_page.cpp
-        pages/DiagnosticsPage.cpp
-        ui/widgets/SectionRuleHeader.cpp
-        ui/widgets/PipelineFlow.cpp
-        ui/widgets/PipelineStepCard.cpp
-        ui/widgets/LivePipelinePanel.cpp
-        ui/widgets/TipChip.cpp
-        ui/widgets/ElevationLock.cpp
-        # Diagnostics redesign: Expert toggle mirrors Settings (ExoToggle → ActiveTheme()).
-        ui/widgets/ExoToggle.cpp
-        ui/theme/ExoSnapTheme.cpp
-        # v10: DiagnosticsPage's readiness chip uses lucidePixmap() (Lucide glyph renderer).
-        ui/theme/LucideIcon.cpp
-        # ADR 0033: present-mode provider bridge. No EXOSNAP_HAS_PRESENTMON define →
-        # PresentMonEtwSession compiles the graceful no-op stub branch (no ETW dep).
-        diagnostics/PresentMonProvider.cpp
-        diagnostics/PresentMonEtwSession.cpp
-        diagnostics/PresentModeMapping.cpp
-        # ADR 0033: DPC/ISR latency provider. Same no-op stub branch (no ETW dep) since
-        # EXOSNAP_HAS_PRESENTMON is not defined here; DiagnosticsPage samples Read().
-        diagnostics/DpcLatencyProvider.cpp
-    LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME device_page_tests
-    TEST_PREFIX device.
-    SOURCES
-        tests/test_device_page.cpp
-        pages/DevicePage.cpp
-        ui/widgets/DeviceAdapterCard.cpp
-        ui/widgets/SectionRuleHeader.cpp
-        # DevicePage's adapter avatar + codec-chip icons use lucidePixmap() (Lucide glyph renderer).
-        ui/theme/LucideIcon.cpp
-    # exosnap_app_log_test_support: DevicePage logs the device-rescan-start/end perf
-    # milestones via AppLog (perf/startup-milestones slice).
-    LIBRARIES exosnap_app_log_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(device_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(device_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME recording_preset_registry_tests
@@ -2029,25 +838,6 @@ exosnap_add_gtest(
 target_include_directories(recovery_drill_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recovery_drill_tests PROPERTIES AUTOMOC ON)
 
-exosnap_add_gtest(
-    NAME recovery_overlay_tests
-    TEST_PREFIX recovery.
-    SOURCES
-        tests/test_recovery_overlay.cpp
-        ui/dialogs/RecoveryOverlay.cpp
-        settings/RecoveryManifestStore.cpp
-        services/RecoveryService.cpp
-        services/AtomicFileOps.cpp
-        diagnostics/AppLog.cpp
-        ui/brand/BrandMarkWidget.cpp
-        # THEME-SLICE-2C: RecoveryOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core FFmpeg::mux
-)
-target_include_directories(recovery_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(recovery_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(recovery_overlay_tests PROPERTIES AUTOMOC ON)
-
 # WHATS-NEW: pending-payload persistence round-trip + show decision (headless).
 exosnap_add_gtest(
     NAME whats_new_payload_tests
@@ -2058,23 +848,6 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core
 )
 target_include_directories(whats_new_payload_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-# WHATS-NEW: overlay smoke (sections render, checkbox only post-update, Esc/close).
-exosnap_add_gtest(
-    NAME whats_new_overlay_tests
-    TEST_PREFIX whats_new.
-    SOURCES
-        tests/test_whats_new_overlay.cpp
-        ui/dialogs/WhatsNewOverlay.cpp
-        services/WhatsNewPayload.cpp
-        ui/widgets/ExoCheckBox.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(whats_new_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(whats_new_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(whats_new_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME audio_device_notifier_tests
@@ -2133,25 +906,6 @@ exosnap_add_gtest(
     LIBRARIES recorder_core)
 target_include_directories(capture_source_hub_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# Delivery-lifetime contract for PreviewService / WebcamService PostFrame: queued
-# frames are dropped once the bound receiver QObject is destroyed, so the callback
-# is never invoked against a freed page (the latent use-after-free fix). Drives the
-# protected PostFrame directly -- no camera, no WGC. WebcamService is provided by
-# the device-service support lib; PreviewService is compiled in for its D3D/WGC bits.
-exosnap_add_gtest(
-    NAME service_frame_delivery_tests
-    TEST_PREFIX service.
-    SOURCES
-        tests/test_service_frame_delivery.cpp
-        services/PreviewService.cpp
-    LIBRARIES
-        exosnap_device_service_test_support
-        Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-        d3d11.lib dxgi.lib runtimeobject.lib ole32.lib)
-target_include_directories(service_frame_delivery_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(service_frame_delivery_tests PRIVATE NOMINMAX)
-set_target_properties(service_frame_delivery_tests PROPERTIES AUTOMOC ON)
-
 # Sharing and disposal: one hub per source key, born with the first consumer and
 # discarded with the last. Same fake-producer seam, no GPU.
 exosnap_add_gtest(
@@ -2201,20 +955,6 @@ target_include_directories(capture_target_notifier_tests PRIVATE ${CMAKE_CURRENT
 target_link_libraries(capture_target_notifier_tests PRIVATE ole32.lib user32.lib)
 set_target_properties(capture_target_notifier_tests PROPERTIES AUTOMOC ON)
 
-# Selection-preservation policy tests (Worker C).
-# Drives page methods with synthetic snapshots at the integration level.
-exosnap_add_gtest(
-    NAME device_selection_policy_tests
-    TEST_PREFIX discovery.
-    SOURCES
-        tests/test_device_selection_policy.cpp
-    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(device_selection_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(device_selection_policy_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(device_selection_policy_tests PRIVATE
-    mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
-
 # CAPTURE-FRAME-R1 tests
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     exosnap_add_gtest(
@@ -2232,7 +972,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             exosnap_output_model_test_support
             exosnap_device_service_test_support
             exosnap_diagnostics_test_support
-            Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+            Qt6::Core Qt6::Gui exosnap_capability recorder_core
     )
     target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(capture_frame_tests PRIVATE
@@ -2242,60 +982,6 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
-
-# RECORDING-OVERLAY-R1 tests
-exosnap_add_gtest(
-    NAME recording_overlay_tests
-    TEST_PREFIX overlay.
-    SOURCES
-        tests/test_recording_overlay.cpp
-        ui/overlay/RecordingOverlayWindow.cpp
-        settings/AppSettingsStore.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(recording_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(recording_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(recording_overlay_tests PROPERTIES AUTOMOC ON)
-
-# COUNTDOWN-OVERLAY-R1 tests
-exosnap_add_gtest(
-    NAME countdown_overlay_tests
-    TEST_PREFIX overlay.
-    SOURCES
-        tests/test_countdown_overlay.cpp
-        ui/overlay/CountdownOverlayWindow.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(countdown_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(countdown_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(countdown_overlay_tests PROPERTIES AUTOMOC ON)
-
-# DIAGNOSTICS-OVERLAY-R1 tests
-exosnap_add_gtest(
-    NAME diagnostics_overlay_tests
-    TEST_PREFIX overlay.
-    SOURCES
-        tests/test_diagnostics_overlay.cpp
-        ui/overlay/DiagnosticsOverlayWindow.cpp
-        settings/AppSettingsStore.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(diagnostics_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(diagnostics_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(diagnostics_overlay_tests PROPERTIES AUTOMOC ON)
-
-# QUICK-PILL-R1 tests
-exosnap_add_gtest(
-    NAME quick_control_pill_tests
-    TEST_PREFIX overlay.
-    SOURCES
-        tests/test_quick_control_pill.cpp
-        ui/overlay/QuickControlPillWindow.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(quick_control_pill_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(quick_control_pill_tests PRIVATE NOMINMAX)
-set_target_properties(quick_control_pill_tests PROPERTIES AUTOMOC ON)
 
 # NOTIFY-TOASTS-R1 tests
 exosnap_add_gtest(
@@ -2308,145 +994,6 @@ exosnap_add_gtest(
 )
 target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
-
-# CAPTURE-FRAME-DOCK-BUTTON-R1 tests
-# TransportDock and AudioSourceToggle included so tests 11-13 (dock button
-# seams/visibility/click) can exercise the live widget without requiring the
-# full RecordPage.  CountdownSelect removed: replaced by split-button + QMenu.
-exosnap_add_gtest(
-    NAME capture_frame_button_tests
-    TEST_PREFIX capture.frame.button.
-    SOURCES
-        tests/test_capture_frame_button.cpp
-        services/RecordingCoordinator.cpp
-        services/AtomicFileOps.cpp
-        services/DisplayNumbering.cpp
-        settings/RecoveryManifestStore.cpp
-        notifications/NotificationManager.cpp
-        ui/widgets/TransportDock.cpp
-        ui/widgets/AudioSourceToggle.cpp
-        # THEME-SLICE-2C: AudioSourceToggle now calls ActiveTheme() from ExoSnapTheme.cpp.
-        ui/theme/ExoSnapTheme.cpp
-    LIBRARIES
-        exosnap_output_model_test_support
-        exosnap_device_service_test_support
-        exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(capture_frame_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(capture_frame_button_tests PRIVATE NOMINMAX)
-target_link_libraries(capture_frame_button_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
-set_target_properties(capture_frame_button_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME notification_toast_tests
-    TEST_PREFIX notify.
-    SOURCES
-        tests/test_notification_toast.cpp
-        notifications/NotificationManager.cpp
-        ui/overlay/NotificationToastWindow.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(notification_toast_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(notification_toast_tests PRIVATE NOMINMAX)
-set_target_properties(notification_toast_tests PROPERTIES AUTOMOC ON)
-
-# OVERLAY-SKIN-AND-PROOF-R1: offscreen visual-proof renders for capture-excluded overlay windows.
-# Uses QWidget::grab() which bypasses WDA_EXCLUDEFROMCAPTURE; produces PNGs under
-# .workspace/screenshots/overlay-proof/ for human visual verification.
-# REGION-SELECTION-SKIN-R1: adds region-selection.png proof.
-exosnap_add_gtest(
-    NAME overlay_visual_proof_tests
-    TEST_PREFIX overlay.proof.
-    SOURCES
-        tests/overlay_visual_proof.cpp
-        notifications/NotificationManager.cpp
-        ui/overlay/CountdownOverlayWindow.cpp
-        ui/overlay/NotificationToastWindow.cpp
-        ui/overlay/QuickControlPillWindow.cpp
-        ui/overlay/RecordingOverlayWindow.cpp
-        ui/overlay/DiagnosticsOverlayWindow.cpp
-        ui/widgets/RegionSelectionOverlay.cpp
-        ui/widgets/RegionGeometry.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(overlay_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(overlay_visual_proof_tests PROPERTIES AUTOMOC ON)
-
-# CRASH-UPDATE-VISUAL-PROOF-R1: offscreen renders of the 0.4.0 crash + update UI
-# surfaces. Applies the real ExoSnap theme (QSS + bundled fonts), so the theme
-# and fonts qrc resources are compiled in via AUTORCC. Produces 7 PNGs under
-# .workspace/screenshots/0.4.0/ for human visual verification.
-exosnap_add_gtest(
-    NAME crash_update_visual_proof_tests
-    TEST_PREFIX crash.update.proof.
-    SOURCES
-        tests/crash_update_visual_proof.cpp
-        ui/dialogs/CrashReportOverlay.cpp
-        ui/dialogs/CrashReportPanel.cpp
-        ui/brand/BrandMarkWidget.cpp
-        ui/theme/LucideIcon.cpp
-        ui/theme/ExoSnapTheme.cpp
-        # DESIGN-SYNC-R1: CrashReportPanel's remember-choice draft is an ExoCheckBox.
-        ui/widgets/ExoCheckBox.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(crash_update_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(crash_update_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(crash_update_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
-
-exosnap_add_gtest(
-    NAME whats_new_visual_proof_tests
-    TEST_PREFIX whats.new.proof.
-    SOURCES
-        tests/whats_new_visual_proof.cpp
-        ui/dialogs/WhatsNewOverlay.cpp
-        ui/widgets/ExoCheckBox.cpp
-        ui/theme/LucideIcon.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(whats_new_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(whats_new_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(whats_new_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
-
-# RECORDING-ERROR-MODAL-R1: offscreen renders of the non-fatal recording-error
-# dialog. Applies the real ExoSnap theme; produces PNGs under
-# .workspace/screenshots/0.7.0/ for human visual verification.
-exosnap_add_gtest(
-    NAME recording_error_visual_proof_tests
-    TEST_PREFIX record.error.proof.
-    SOURCES
-        tests/recording_error_visual_proof.cpp
-        ui/dialogs/RecordingErrorPanel.cpp
-        ui/theme/LucideIcon.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(recording_error_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(recording_error_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(recording_error_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
-
-# REGION-SELECTION-SKIN-R1 unit tests.
-exosnap_add_gtest(
-    NAME region_selection_overlay_tests
-    TEST_PREFIX region.overlay.
-    SOURCES
-        tests/test_region_selection_overlay.cpp
-        ui/widgets/RegionSelectionOverlay.cpp
-        ui/widgets/RegionGeometry.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(region_selection_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(region_selection_overlay_tests PRIVATE NOMINMAX)
-set_target_properties(region_selection_overlay_tests PROPERTIES AUTOMOC ON)
 
 # RECORDING-MARKERS-R1 tests
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -2465,7 +1012,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
             exosnap_output_model_test_support
             exosnap_device_service_test_support
             exosnap_diagnostics_test_support
-            Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+            Qt6::Core Qt6::Gui exosnap_capability recorder_core
     )
     target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(recording_marker_tests PRIVATE
@@ -2481,6 +1028,10 @@ exosnap_add_gtest(
     SOURCES
         tests/test_tray_presence.cpp
         ui/tray/TrayPresence.cpp
+    # The one test target that still links Qt6::Widgets, for the same reason the
+    # shipping application does: QSystemTrayIcon is a QtWidgets type and needs a
+    # QApplication. If this line ever spreads to another target, a Widgets type
+    # crept back into something that is not the tray.
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(tray_presence_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -2497,94 +1048,6 @@ exosnap_add_gtest(
 )
 target_include_directories(recording_error_detail_text_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
-
-# Offscreen render of the startup Recovery card. Applies the real ExoSnap theme;
-# produces .workspace/screenshots/recovery-overlay.png for visual verification.
-exosnap_add_gtest(
-    NAME recovery_overlay_visual_proof_tests
-    TEST_PREFIX recovery.proof.
-    SOURCES
-        tests/recovery_overlay_visual_proof.cpp
-        ui/dialogs/RecoveryOverlay.cpp
-        settings/RecoveryManifestStore.cpp
-        services/RecoveryService.cpp
-        services/AtomicFileOps.cpp
-        diagnostics/AppLog.cpp
-        ui/brand/BrandMarkWidget.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core FFmpeg::mux
-)
-target_include_directories(recovery_overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(recovery_overlay_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(recovery_overlay_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
-
-# Guard: every curated theme (ExoSnapThemes.h) must resolve every `${token}` in
-# the real compiled QSS resource. An invalid/orphaned token crashes at startup
-# in Debug (Q_ASSERT_X in ExoSnapTheme.cpp) and ships a literal "${token}"
-# string in Release; this drives the real ApplyExoSnapTheme()/ReapplyTheme()
-# path for every shipped theme so a QSS edit can't silently leave one broken.
-exosnap_add_gtest(
-    NAME theme_token_resolution_tests
-    TEST_PREFIX theme.
-    SOURCES
-        tests/test_theme_token_resolution.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(theme_token_resolution_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(theme_token_resolution_tests PRIVATE NOMINMAX)
-set_target_properties(theme_token_resolution_tests PROPERTIES AUTOMOC ON AUTORCC ON)
-
-# Pixel proof that ReapplyTheme() restyles widgets whose inline stylesheets /
-# tinted pixmaps derive from ActiveTheme() (the CompareHint popover was the
-# confirmed stuck-dark case), and that a dark → light → dark round trip renders
-# byte-identically. Writes PNGs to .workspace/screenshots/theme-switch/.
-exosnap_add_gtest(
-    NAME theme_switch_visual_proof_tests
-    TEST_PREFIX theme.
-    SOURCES
-        tests/theme_switch_visual_proof.cpp
-        ui/widgets/CompareHint.cpp
-        models/SettingsCompareData.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/LucideIcon.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-)
-target_include_directories(theme_switch_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(theme_switch_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(theme_switch_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
-
-# Titlebar window-button hover/click-target proof with the *real* shipping theme
-# applied (QSS + bundled fonts) — the plain operational_title_bar_tests target has
-# no stylesheet loaded at all, so it cannot see stylesheet-only regressions (a
-# generic QPushButton rule's min-height/padding, combined with the buttons' own
-# margin, silently grew the real widget past its click target and separately
-# produced a degenerate paint rect). Writes PNGs under
-# .workspace/screenshots/titlebar-window-buttons/.
-exosnap_add_gtest(
-    NAME titlebar_window_buttons_visual_proof_tests
-    TEST_PREFIX chrome.proof.
-    SOURCES
-        tests/titlebar_window_buttons_visual_proof.cpp
-        ui/chrome/OperationalTitleBar.cpp
-        ui/brand/BrandMarkWidget.cpp
-        ui/widgets/NotificationBell.cpp
-        ui/widgets/StatusPill.cpp
-        ui/theme/LucideIcon.cpp
-        ui/theme/ExoSnapTheme.cpp
-        ui/theme/exosnap_theme.qrc
-        assets/fonts/exosnap_fonts.qrc
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
-)
-target_include_directories(titlebar_window_buttons_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(titlebar_window_buttons_visual_proof_tests PRIVATE NOMINMAX)
-set_target_properties(titlebar_window_buttons_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # ---------------------------------------------------------------------------
 # Install — target-independent payload

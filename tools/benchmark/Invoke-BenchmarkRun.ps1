@@ -56,18 +56,20 @@ if (-not (Test-Path $scenarioPath)) {
 }
 $definition = Get-Content -Raw -Path $scenarioPath | ConvertFrom-Json
 
-# Both executables now live in the same directory: `exosnap` is the shipping Qt
-# Quick application (ADR 0064) and owns app/<config>/exosnap.exe, while the
-# retired Widgets frontend builds beside it as exosnap_widgets_legacy.exe. The
-# Widgets side is EXCLUDE_FROM_ALL and needs
-# -DEXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND=ON plus an explicit --target; the
-# archived results under .workspace/benchmark-results*/ are the record of the
-# original comparison, and re-running it is not a normal workflow.
+# `exosnap` is the shipping Qt Quick application (ADR 0064) and owns
+# app/<config>/exosnap.exe. There is no Widgets executable any more: the frontend
+# A/B campaign it existed for is complete, its results are archived under
+# .workspace/benchmark-results*/, and the frontend itself was removed with the
+# cutover. -Frontend widgets therefore fails with an explanation rather than
+# silently measuring the Quick binary and labelling the report "widgets".
 if (-not $QuickExe) {
     $QuickExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\Release\exosnap.exe'
 }
-if (-not $WidgetsExe) {
-    $WidgetsExe = Join-Path $repoRoot 'build\windows-x64-release-bench\app\Release\exosnap_widgets_legacy.exe'
+if ($Frontend -eq 'widgets' -and -not $WidgetsExe) {
+    throw ("The Qt Widgets frontend was removed with the Qt Quick cutover (ADR 0064), so there is no " +
+           "executable to measure. The archived A/B results under .workspace/benchmark-results*/ are the " +
+           "record of that comparison. To re-run it, check out the pre-cutover checkpoint and build there, " +
+           "or pass -WidgetsExe with a binary you built yourself.")
 }
 $exe = if ($Frontend -eq 'widgets') { $WidgetsExe } else { $QuickExe }
 if (-not (Test-Path $exe)) {

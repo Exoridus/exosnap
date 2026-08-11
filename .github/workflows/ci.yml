@@ -298,11 +298,8 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
-      # No frontend flag: the Qt Quick application and its adapter/QML test
-      # targets are part of the default build. The retired Widgets frontend
-      # (EXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND, EXCLUDE_FROM_ALL) is deliberately
-      # NOT enabled anywhere in CI — it is not shipped and not a supported
-      # frontend.
+      # No frontend flag: there is one frontend. The Qt Quick application and its
+      # adapter/QML test targets are the default build (ADR 0064).
       - name: Configure (windows-x64-ninja-debug)
         run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
 

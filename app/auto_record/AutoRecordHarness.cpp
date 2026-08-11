@@ -24,26 +24,13 @@
 #include "../models/VideoSettingsModel.h"
 #include "../services/RecordingCoordinator.h"
 
-// Everything above this line is Qt Widgets-free on purpose: RunAutoRecordOnCoordinator
-// is the single orchestration path for BOTH frontends, so the Qt Quick target compiles
-// this translation unit too (with EXOSNAP_ENABLE_VISUAL_TEST_HARNESS off, which excludes
-// the Widgets-bound preview entry point below). A stray <QApplication> or MainWindow
-// include out here would drag Qt6::Widgets back into the Quick binary and undo the very
-// property the cutover is about.
-#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-#include <QApplication>
-#include <QElapsedTimer>
-#include <QEventLoop>
-#include <QGuiApplication>
-#include <QScreen>
-
-#include "../MainWindow.h"
-#include "../diagnostics/AppLog.h"
-#include "../pages/RecordPage.h"
-#include "../services/DxgiPreviewRenderer.h"
-#include "../viewmodels/RecordViewModel.h"
-#include "../visual_tests/VisualTestHarness.h"
-#endif
+// This translation unit is Qt Widgets-free on purpose. It is compiled into the
+// shipping Qt Quick application, and a stray <QApplication> or window-class
+// include here would drag Qt6::Widgets in beyond the one place that legitimately
+// needs it (QSystemTrayIcon) and undo the property the cutover is about.
+//
+// It used to carry a second, Widgets-bound preview entry point behind
+// EXOSNAP_ENABLE_VISUAL_TEST_HARNESS. That went with the Widgets frontend.
 
 // HasAutoRecordRequest / ParseAutoRecordOptions live in AutoRecordOptions.cpp — pure
 // parsing with no Widgets/RecordingCoordinator dependency, so the parser's gtest
@@ -166,8 +153,6 @@ int FailWith(const QString& error_detail) {
     return 1;
 }
 
-// Shared between RunAutoRecordOnCoordinator and the preview-mode RunAutoRecord entry
-// point below — both reject a Region target with the identical message.
 QString RegionNotSupportedError() {
     return QStringLiteral("region target is not supported by --auto-record yet");
 }
@@ -224,12 +209,12 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         return FailWith(RegionNotSupportedError());
     }
 
-    // Synchronous capability probe. Bare mode has no UI responsiveness constraint, so
-    // it skips the worker-thread hop MainWindow uses (app/MainWindow.cpp:1093-1109).
+    // Synchronous capability probe. A harness run has no UI responsiveness
+    // constraint, so it skips the worker-thread hop the application performs.
     const capability::CapabilitySet caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
 
-    // Commit the requested format BEFORE the caps gate, mirroring
-    // RecordPage::initCoordinator() (SetOutputSettings/SetVideoSettings always run before
+    // Commit the requested format BEFORE the caps gate, the same order the
+    // application uses (SetOutputSettings/SetVideoSettings always run before
     // OnCapabilitiesReady there too). OnCapabilitiesReady validates whatever is already
     // applied — it must never be handed a validation computed against a different config,
     // or that config silently overwrites the one just committed here the moment caps land
@@ -498,252 +483,5 @@ int RunAutoRecord(QCoreApplication& app, const AutoRecordOptions& options) {
     exosnap::RecordingCoordinator coordinator;
     return RunAutoRecordOnCoordinator(app, coordinator, options, benchmark::Frontend::Headless);
 }
-
-#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-
-namespace {
-
-// Waits (bounded) for the Record page's coordinator to be built AND brought to Ready by
-// the REAL async capability probe. Ready means the probe has already delivered
-// (OnCapabilitiesReady ran on the UI thread), so a later queued delivery cannot clobber
-// the Recording state mid-run once RunAutoRecordOnCoordinator enters its event loop.
-//
-// The wait is a bounded poll (25ms interval, up to timeout_ms) of real, in-memory
-// getters — page.recordingCoordinator() for non-null, then coordinator->State() — not
-// a connection to coordinatorInitialized() or any other signal, and not a log scrape.
-// RecordPage owns the single state-changed callback and exposes no "became Ready"
-// signal a non-owner can connect to, so polling the getters is the only observation
-// point available. Returns the coordinator on Ready, or nullptr on a capability block
-// or timeout (with a reason written to *error).
-exosnap::RecordingCoordinator* WaitForCoordinatorReady(exosnap::RecordPage& page, int timeout_ms, QString* error) {
-    QElapsedTimer clock;
-    clock.start();
-    QEventLoop loop;
-    QTimer poll;
-    exosnap::RecordingCoordinator* ready = nullptr;
-    QObject::connect(&poll, &QTimer::timeout, &loop, [&]() {
-        exosnap::RecordingCoordinator* coordinator = page.recordingCoordinator();
-        if (coordinator != nullptr) {
-            const UiRecordingState state = coordinator->State();
-            if (state == UiRecordingState::Ready) {
-                ready = coordinator;
-                loop.quit();
-                return;
-            }
-            if (state == UiRecordingState::Blocked) {
-                if (error != nullptr)
-                    *error = QString::fromStdWString(coordinator->CapabilityStatusText());
-                loop.quit();
-                return;
-            }
-        }
-        if (clock.elapsed() >= timeout_ms) {
-            if (error != nullptr)
-                *error = QStringLiteral("coordinator did not reach Ready within %1 ms").arg(timeout_ms);
-            loop.quit();
-        }
-    });
-    poll.start(25);
-    loop.exec();
-    return ready;
-}
-
-} // namespace
-
-int RunAutoRecord(QApplication& app, exosnap::MainWindow& window, const AutoRecordOptions& options) {
-    if (!options.enable_preview) {
-        // --enable-preview absent: fall back to headless bare mode, no window shown.
-        return RunAutoRecord(app, options);
-    }
-    if (options.target == TargetKind::Region) {
-        return FailWith(RegionNotSupportedError());
-    }
-
-    // Never activate (WA_ShowWithoutActivating) and prefer a non-primary screen, so
-    // the developer's primary desktop is never covered — and, in the frontend A/B,
-    // so the application is not inside the 1440p image it is capturing.
-    //
-    // The rule itself lives in benchmark::ResolveHarnessWindowPlacement: the Qt
-    // Quick entry point places its window through the same call, which is what
-    // makes "same logical size, equivalent placement" a fact rather than an
-    // intention.
-    window.setAttribute(Qt::WA_ShowWithoutActivating, true);
-    const benchmark::HarnessWindowPlacement placement = benchmark::ResolveHarnessWindowPlacement();
-    window.resize(placement.width, placement.height);
-    window.showNormal();
-    // showEvent restores persisted user geometry on first show; re-apply afterwards
-    // so the window lands where the placement rule says, not where the last
-    // interactive session left it.
-    if (!placement.screen_name.isEmpty()) {
-        window.move(placement.x, placement.y);
-        window.resize(placement.width, placement.height);
-    }
-
-    exosnap::RecordPage* record_page = window.recordPage();
-    if (record_page == nullptr)
-        return FailWith(QStringLiteral("preview mode: MainWindow has no Record page"));
-
-    // Let the real, worker-thread capability probe + deferred coordinator init run and
-    // bring the coordinator to Ready through the live idle-preview path.
-    QString wait_error;
-    exosnap::RecordingCoordinator* coordinator = WaitForCoordinatorReady(*record_page, 20000, &wait_error);
-    if (coordinator == nullptr)
-        return FailWith(QStringLiteral("preview mode: %1").arg(wait_error));
-
-    // Select the requested target through the same private path a source-picker click
-    // uses, so the live preview shows exactly what will be recorded.
-    VideoSettingsModel preview_video_settings = VideoSettingsModel::Defaults();
-    preview_video_settings.frame_rate_num = static_cast<uint32_t>(options.frame_rate);
-    preview_video_settings.frame_rate_den = 1;
-    record_page->setVideoSettings(preview_video_settings);
-    const auto want_kind = (options.target == TargetKind::Window) ? recorder_core::CaptureTarget::Kind::Window
-                                                                  : recorder_core::CaptureTarget::Kind::Monitor;
-    if (!record_page->selectCaptureTargetForAutomation(want_kind, options.target_window_title)) {
-        const QString what = options.target == TargetKind::Monitor
-                                 ? QStringLiteral("monitor")
-                                 : QStringLiteral("window matching \"%1\"").arg(options.target_window_title);
-        return FailWith(QStringLiteral("no matching capture target (%1)").arg(what));
-    }
-
-    if (options.capture_frame_in_ready) {
-        // Exercises the DXGI-preview-renderer readback path specifically (Ready
-        // state, idle preview, no recording) — the engine's own snapshot path
-        // is already covered by --capture-frame-at during an active recording.
-        // No recording is started; this is a standalone check.
-        //
-        // The DXGI preview renderer starts asynchronously on its own thread
-        // (device/swap-chain/shader init, then the first present) after
-        // selectCaptureTargetForAutomation returns, so the very first attempt
-        // can race a preview that hasn't rendered its first frame yet — retry
-        // on a short poll rather than treating that as a hard failure (a real
-        // user clicking the button has been looking at an already-live preview
-        // for seconds, so this race is a test-harness-only concern).
-        bool have_result = false;
-        bool succeeded = false;
-        QString result_path;
-        QString result_error;
-        coordinator->SetFrameCapturedCallback([&](bool success, const QString& path, const QString& error) {
-            have_result = true;
-            succeeded = success;
-            result_path = path;
-            result_error = error;
-        });
-
-        QElapsedTimer clock;
-        clock.start();
-        QEventLoop loop;
-        QTimer retryTimer;
-        retryTimer.setInterval(200);
-        QObject::connect(&retryTimer, &QTimer::timeout, &loop, [&]() {
-            have_result = false;
-            coordinator->CaptureFrame();
-        });
-        QTimer pollTimer;
-        pollTimer.setInterval(25);
-        QObject::connect(&pollTimer, &QTimer::timeout, &loop, [&]() {
-            if ((have_result && succeeded) || clock.elapsed() >= 10000)
-                loop.quit();
-        });
-        coordinator->CaptureFrame();
-        retryTimer.start();
-        pollTimer.start();
-        loop.exec();
-        retryTimer.stop();
-        pollTimer.stop();
-
-        if (!have_result) {
-            return FailWith(QStringLiteral("capture-frame-in-ready: timed out waiting for the result"));
-        }
-        PrintResultLine(ResultToJson(succeeded, result_path, QString(), result_error));
-        return succeeded ? 0 : 1;
-    }
-
-    // Drive the recording on the coordinator the Record page owns. RunAutoRecordOnCoordinator
-    // re-delivers caps (a redundant Ready->Ready now that the async probe has already landed)
-    // and, via RecordPage's still-wired state-changed callback, the idle preview is live
-    // before the recording start.
-    //
-    // The two hooks below are the ONLY Widgets-specific code in a benchmark run.
-    // Warm-up handling, timing, the engine metrics, the process sampling and the
-    // report format all come from the shared drive loop, so the Qt Quick entry
-    // point produces a document that differs only where the frontends genuinely do.
-    BenchmarkHooks hooks;
-    hooks.onMeasurementStart = [record_page]() { record_page->resetPreviewPerformanceMetrics(); };
-    hooks.samplePreviewMetrics = [record_page, &window]() {
-        const DxgiPreviewPerformanceSnapshot metrics = record_page->previewPerformanceMetrics();
-        constexpr auto kSame = benchmark::Comparability::Identical;
-        constexpr auto kApprox = benchmark::Comparability::Approximate;
-
-        benchmark::PreviewMetrics preview;
-        preview.frames_presented =
-            benchmark::MakeMetric(static_cast<double>(metrics.presented_frames), kApprox,
-                                  "DxgiPreviewRenderer: swap-chain Presents of the preview quad on its own "
-                                  "DXGI render thread");
-        preview.source_frames_consumed =
-            benchmark::MakeMetric(static_cast<double>(metrics.pushed_frames_consumed), kSame,
-                                  "DxgiPreviewRenderer: frames taken off the shared preview texture");
-        preview.mutex_misses = benchmark::MakeMetric(
-            static_cast<double>(metrics.keyed_mutex_misses), kApprox,
-            "DxgiPreviewRenderer: keyed-mutex AcquireSync(0) failures, one per attempt — scales with the "
-            "preview thread's own present cadence, not with the transport");
-        preview.frame_cadence_fps =
-            benchmark::MakeMetric(metrics.present_fps, kApprox, "DxgiPreviewRenderer: preview-quad present rate");
-        preview.frame_ms_p50 =
-            benchmark::MakeMetric(metrics.present_ms_p50, kApprox, "DxgiPreviewRenderer: inter-present interval");
-        preview.frame_ms_p95 =
-            benchmark::MakeMetric(metrics.present_ms_p95, kApprox, "DxgiPreviewRenderer: inter-present interval");
-        preview.frame_ms_p99 =
-            benchmark::MakeMetric(metrics.present_ms_p99, kApprox, "DxgiPreviewRenderer: inter-present interval");
-        preview.frame_ms_max =
-            benchmark::MakeMetric(metrics.present_ms_max, kApprox, "DxgiPreviewRenderer: inter-present interval");
-        preview.source_delivery_fps =
-            benchmark::MakeMetric(metrics.source_delivery_fps, kApprox,
-                                  "DxgiPreviewRenderer: rate at which frames arrived AT THIS CONSUMER; bounded by "
-                                  "the preview thread's own poll rate, not by what the engine produced");
-        preview.source_interval_ms_p95 = benchmark::MakeMetric(
-            metrics.source_interval_ms_p95, kApprox, "DxgiPreviewRenderer: consumer-observed arrival interval");
-        preview.source_interval_ms_p99 = benchmark::MakeMetric(
-            metrics.source_interval_ms_p99, kApprox, "DxgiPreviewRenderer: consumer-observed arrival interval");
-        // The Widgets renderer keeps no p50 of the submit duration; reporting it as
-        // unavailable is the honest answer, not interpolating from p95.
-        preview.submit_us_p50 = benchmark::UnavailableMetric(kSame, "not sampled by DxgiPreviewRenderer");
-        preview.submit_us_p95 =
-            benchmark::MakeMetric(metrics.submit_us_p95, kSame, "DxgiPreviewRenderer: GPU submit for the preview copy");
-        preview.submit_us_p99 =
-            benchmark::MakeMetric(metrics.submit_us_p99, kSame, "DxgiPreviewRenderer: GPU submit for the preview copy");
-        preview.child_hwnd_count = benchmark::MakeMetric(
-            static_cast<double>(benchmark::CountChildWindows(reinterpret_cast<void*>(window.winId()))),
-            benchmark::Comparability::FrontendOnly,
-            "EnumChildWindows over the top-level HWND; the Widgets preview IS a native child window");
-        if (metrics.pushed_frames_consumed > 0) {
-            preview.render_amplification = benchmark::MakeMetric(
-                static_cast<double>(metrics.presented_frames) / static_cast<double>(metrics.pushed_frames_consumed),
-                kApprox, "DxgiPreviewRenderer: preview-quad Presents per frame taken off the shared texture");
-        } else {
-            preview.render_amplification = benchmark::UnavailableMetric(
-                kApprox, "DxgiPreviewRenderer: no source frame was consumed in the window");
-        }
-        // The Widgets preview presents from a dedicated thread on a fixed
-        // interval; there is no scheduling gate here to count.
-        preview.preview_publish_signals = benchmark::UnavailableMetric(
-            benchmark::Comparability::FrontendOnly, "no publish-edge scheduling in the Widgets preview");
-        preview.preview_scene_update_requests = benchmark::UnavailableMetric(
-            benchmark::Comparability::FrontendOnly, "no publish-edge scheduling in the Widgets preview");
-        return preview;
-    };
-
-    const int rc = RunAutoRecordOnCoordinator(app, *coordinator, options, benchmark::Frontend::Widgets, hooks);
-
-    if (!options.screenshot_path.isEmpty()) {
-        if (!exosnap::visual::WriteVisualScreenshot(window, options.screenshot_path)) {
-            diagnostics::AppLog::warning(
-                QStringLiteral("auto-record"),
-                QStringLiteral("preview screenshot write failed: %1").arg(options.screenshot_path));
-        }
-    }
-    return rc;
-}
-
-#endif // EXOSNAP_ENABLE_VISUAL_TEST_HARNESS
 
 } // namespace exosnap::auto_record

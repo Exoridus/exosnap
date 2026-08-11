@@ -34,11 +34,12 @@ cmake -S . -B build/windows-x64-release-bench `
 cmake --build build/windows-x64-release-bench --config Release --target exosnap
 ```
 
-Both binaries land in `app/Release/`. `-Frontend quick` drives `exosnap.exe`, the
-shipping application. `-Frontend widgets` drives `exosnap_widgets_legacy.exe`,
-which is `EXCLUDE_FROM_ALL` and additionally needs
-`-DEXOSNAP_BUILD_LEGACY_WIDGETS_FRONTEND=ON` at configure time and
-`--target exosnap_widgets_legacy` at build time.
+`-Frontend quick` drives `app/Release/exosnap.exe`, the shipping application.
+
+`-Frontend widgets` no longer has anything to drive: the Qt Widgets frontend was
+removed with the cutover. The runner refuses that argument with an explanation
+rather than measuring the Quick binary and labelling the report `widgets`. To
+reproduce the original comparison, build from the pre-cutover checkpoint.
 
 `EXOSNAP_BUILD_BENCHMARK_HARNESS` adds the automation code and changes nothing
 else — no optimisation flag, no runtime policy. A Debug binary is rejected by

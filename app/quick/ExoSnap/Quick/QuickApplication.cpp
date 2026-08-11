@@ -13,10 +13,10 @@
 #include "diagnostics/StartupClock.h"
 #include "models/CompletedRecording.h"
 #include "models/EditContextFactory.h"
+#include "models/FrameRateLimits.h"
 #include "models/HotkeyStartupConflicts.h"
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
-#include "pages/FrameRateLimits.h"
 #include "ui/CodecLabels.h"
 #include "ui/theme/ExoSnapMetrics.h"
 

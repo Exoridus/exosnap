@@ -48,11 +48,23 @@ idea that Quick is an experiment are all gone.
 variable, not a build option — chooses a toolkit at startup. A product with a
 switchable frontend has two products to test; this one has one.
 
-**The Qt Widgets main frontend is retired**, not preserved in parallel. Its
-sources and the `exosnap_widgets_legacy` target are removed once the Quick
-artifact is proven end to end (see Consequences). The archived benchmark results
-are the record of the comparison; re-running it is not a supported workflow and
-does not justify keeping a second frontend compiling.
+**The Qt Widgets main frontend is removed**, not preserved in parallel: the main
+window, the seven pages, the custom widgets, the dialogs, the out-of-window
+overlays, the QSS stylesheet and icon resource, the Widgets-only services, and
+the 61 test binaries that covered them. The archived benchmark results are the
+record of the frontend comparison; re-running it is not a supported workflow and
+does not justify keeping a second frontend compiling. `tools/benchmark`'s
+`-Frontend widgets` now refuses with an explanation rather than measuring the
+Quick binary under the wrong label.
+
+Three files that lived under Widgets directories are **kept**, because they are
+toolkit-free and the Quick application uses them:
+`ui/theme/ExoSnapThemes.h` (the semantic colour table `QuickThemeTokens` reads),
+`ui/theme/ExoSnapMetrics.h` (the spacing/size constants the Quick shell keys its
+minimum window size and title band off) and `ui/WindowGeometryPolicy` (pure
+`QRect`/`QSize` clamping). `models/FrameRateLimits.h` and
+`models/RecordingErrorDetailText.h` moved out of `pages/` and `ui/dialogs/` for
+the same reason: neither was ever a Widgets file, they merely sat next to one.
 
 **`Qt6::Widgets` stays linked, for exactly one reason.** Qt provides no Quick or
 QML system-tray type, and `QSystemTrayIcon` is a `QtWidgets` class that requires
