@@ -95,6 +95,26 @@ void ApplyApplicationMetadata();
 // already in force and nothing was changed.
 bool IsolateHarnessConfigDir(const QString& harness_id);
 
+// Moves the QML bytecode cache under EXOSNAP_CONFIG_DIR whenever that variable
+// is in force, so an "isolated" run really is isolated.
+//
+// EXOSNAP_CONFIG_DIR redirects everything ExoSnap itself persists, but the QML
+// engine's disk cache is not ExoSnap's to place: Qt resolves it from
+// QStandardPaths::CacheLocation, which reads the real per-user folder through
+// SHGetKnownFolderPath and therefore ignores both EXOSNAP_CONFIG_DIR and a
+// redirected %LOCALAPPDATA%. So a run launched with an isolated config dir still
+// wrote %LOCALAPPDATA%\ExoSnap\cache\qmlcache\*.qmlc into the real user's tree.
+//
+// This did not exist while the frontend was Qt Widgets, and it is what the
+// release packaging smoke means by "isolation breach": it snapshots
+// %LOCALAPPDATA%\ExoSnap around the launch of the packaged executable and
+// asserts nothing under it changed.
+//
+// Qt reads QML_DISK_CACHE_PATH before the first QQmlEngine is constructed, so
+// this must be called before one exists. An explicit QML_DISK_CACHE_PATH from
+// the caller is left alone. Returns true when the variable was set here.
+bool AlignQmlDiskCacheWithConfigDir();
+
 // Loads the branded application icon from the Qt resource system, logs why it
 // failed if it did, and installs it as the process-wide window icon. Returns
 // the icon so a frontend can reapply it to its own window; the returned icon is

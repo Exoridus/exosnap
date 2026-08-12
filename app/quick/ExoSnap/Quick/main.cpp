@@ -319,6 +319,14 @@ int main(int argc, char* argv[]) {
     if (diagnostic_mode)
         (void)exosnap::bootstrap::IsolateHarnessConfigDir(harnessConfigId(arguments));
 
+    // Unconditional, and deliberately not gated on `diagnostic_mode`: the case
+    // that matters most is a caller — the release packaging smoke, CI — that set
+    // EXOSNAP_CONFIG_DIR itself and expects the launch to leave the real user's
+    // tree alone. The QML engine's cache is the one thing EXOSNAP_CONFIG_DIR
+    // does not reach on its own. Must precede QuickApplication, which owns the
+    // engine.
+    (void)exosnap::bootstrap::AlignQmlDiskCacheWithConfigDir();
+
     exosnap::bootstrap::BootstrapOptions bootstrap_options;
     // Every harness stays out of the single-instance guard: beyond a second
     // instance exiting immediately, the guard calls SetForegroundWindow on the

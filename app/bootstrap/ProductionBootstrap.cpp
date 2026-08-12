@@ -101,6 +101,23 @@ bool IsolateHarnessConfigDir(const QString& harness_id) {
     return true;
 }
 
+bool AlignQmlDiskCacheWithConfigDir() {
+    if (!qEnvironmentVariableIsSet("EXOSNAP_CONFIG_DIR"))
+        return false;
+    // An explicit choice by the caller outranks this one.
+    if (qEnvironmentVariableIsSet("QML_DISK_CACHE_PATH"))
+        return false;
+
+    const QString config_dir = qEnvironmentVariable("EXOSNAP_CONFIG_DIR");
+    if (config_dir.isEmpty())
+        return false;
+
+    const QString cache_dir = QDir(config_dir).filePath(QStringLiteral("qmlcache"));
+    QDir().mkpath(cache_dir);
+    qputenv("QML_DISK_CACHE_PATH", QDir::toNativeSeparators(cache_dir).toUtf8());
+    return true;
+}
+
 QIcon InstallApplicationIcon() {
     const QString icon_path = QString::fromLatin1(kAppIconResourcePath);
     if (!QFile::exists(icon_path))

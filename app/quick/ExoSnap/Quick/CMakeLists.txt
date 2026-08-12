@@ -573,6 +573,17 @@ endif()
 add_test(NAME quick.qml.about_smoke COMMAND exosnap --smoke-test)
 set_tests_properties(quick.qml.about_smoke PROPERTIES LABELS "quick")
 
+# An isolated run has to isolate Qt's QML bytecode cache as well — see the
+# script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
+add_test(
+    NAME quick.qml.disk_cache_isolation
+    COMMAND ${CMAKE_COMMAND}
+        -DEXOSNAP_EXE=$<TARGET_FILE:exosnap>
+        -DSCRATCH_DIR=${CMAKE_CURRENT_BINARY_DIR}/qml-cache-isolation
+        -P ${PROJECT_SOURCE_DIR}/cmake/tests/assert_qml_cache_isolated.cmake
+)
+set_tests_properties(quick.qml.disk_cache_isolation PROPERTIES LABELS "quick")
+
 qt_add_executable(record_controls_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/qml_test_main.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
