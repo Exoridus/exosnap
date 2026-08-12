@@ -17,7 +17,7 @@ ExoOverlayCard {
     required property CrashReportAdapter crash
 
     objectName: "quickCrashReportOverlay"
-    subtitle: qsTr("Problem Report")
+    subtitle: qsTr("PROBLEM REPORT")
     // Warning, not error: the crash already happened and nothing is broken right
     // now — the surface asks a consent question about a session that has ended.
     // Escalating it to "error" would overstate what the user has to do about it.
@@ -54,6 +54,10 @@ ExoOverlayCard {
     }
 
     ExoDisclosure {
+        // Named so a --visual-test capture can photograph the expanded body; the
+        // disclosure is otherwise only reachable by clicking, and the harness
+        // synthesises no input.
+        objectName: "crashIncludedDisclosure"
         title: qsTr("What is included in this report?")
         subtitle: qsTr("Includes a native crash dump when available and limited app diagnostics. Recordings are never included.")
         Layout.fillWidth: true
@@ -135,17 +139,18 @@ ExoOverlayCard {
         }
     }
 
-    ColumnLayout {
-        spacing: 2
-        Layout.fillWidth: true
-
+    // In the card's persistent strip, not in the scrolling body: this is the
+    // standing part of the decision, and at the 860x700 minimum window an
+    // expanded "What is included in this report?" used to scroll it out of sight
+    // while both committing buttons stayed visible. What the report contains may
+    // scroll; whether the answer is remembered may not.
+    persistent: [
         ExoCheckBox {
             objectName: "crashRememberChoice"
             text: qsTr("Remember this choice for future crashes")
             checked: root.crash.rememberChoice
             onToggled: root.crash.rememberChoice = checked
-        }
-
+        },
         Label {
             text: qsTr("Send report will enable automatic reports. Don't send will stop future report prompts.")
             textFormat: Text.PlainText
@@ -158,7 +163,7 @@ ExoOverlayCard {
                 pixelSize: ExoTheme.fontCaption
             }
         }
-    }
+    ]
 
     actions: [
         ExoButton {

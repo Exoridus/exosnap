@@ -46,6 +46,13 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(bool running READ running NOTIFY stateChanged FINAL)
     Q_PROPERTY(int progressPercent READ progressPercent NOTIFY progressChanged FINAL)
     Q_PROPERTY(QString outputPath READ outputPath NOTIFY resultChanged FINAL)
+    // The same result split where the filesystem already splits it, so the panel
+    // never has to guess a separator. The done state used to render the whole
+    // path as one wrap-anywhere run in a 240 px rail, which broke lines inside
+    // the file extension ("…2026-08-10 2 / 1-14-08_edit.mkv") — the one part of
+    // a path a reader actually scans for.
+    Q_PROPERTY(QString outputFileName READ outputFileName NOTIFY resultChanged FINAL)
+    Q_PROPERTY(QString outputFolder READ outputFolder NOTIFY resultChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY resultChanged FINAL)
 
     Q_PROPERTY(QString containerKey READ containerKey WRITE setContainerKey NOTIFY optionsChanged FINAL)
@@ -79,6 +86,8 @@ class EditExportAdapter : public QObject {
     [[nodiscard]] bool running() const noexcept;
     [[nodiscard]] int progressPercent() const noexcept;
     [[nodiscard]] QString outputPath() const;
+    [[nodiscard]] QString outputFileName() const;
+    [[nodiscard]] QString outputFolder() const;
     [[nodiscard]] const QString& errorText() const noexcept;
 
     [[nodiscard]] const QString& containerKey() const noexcept;
@@ -98,7 +107,6 @@ class EditExportAdapter : public QObject {
     Q_INVOKABLE void retry();
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void reset();
-    Q_INVOKABLE void openFolder();
     Q_INVOKABLE void revealFile();
 
     // Harness/test-only: paints a panel state without starting a run. Never

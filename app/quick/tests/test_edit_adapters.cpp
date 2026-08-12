@@ -163,7 +163,9 @@ TEST(EditSessionAdapterReport, MapsPipelineHealthOntoTheHeaderSeverity) {
     good.completed_snapshot.health = recorder_core::PipelineHealth::Good;
     session.setEditContext(good);
     EXPECT_EQ(session.reportSeverityValue(), static_cast<int>(EditSessionAdapter::Neutral));
-    EXPECT_TRUE(session.reportLabel().isEmpty());
+    // The header states a verdict in every case, so a healthy recording names
+    // itself rather than falling back to the word "Report".
+    EXPECT_EQ(session.reportLabel(), QStringLiteral("Good"));
 
     EditContext warning = MakeContext();
     warning.completed_snapshot.valid = true;
@@ -177,6 +179,7 @@ TEST(EditSessionAdapterReport, MapsPipelineHealthOntoTheHeaderSeverity) {
     critical.completed_snapshot.health = recorder_core::PipelineHealth::Critical;
     session.setEditContext(critical);
     EXPECT_EQ(session.reportSeverityValue(), static_cast<int>(EditSessionAdapter::Critical));
+    EXPECT_EQ(session.reportLabel(), QStringLiteral("Critical"));
 }
 
 TEST(EditSessionAdapterReport, CountsOnlyProblemDropsNotBenignCfrPacing) {

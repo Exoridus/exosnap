@@ -412,16 +412,22 @@ void QuickApplication::initializeRecordWorkflow() {
     });
     recording_coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         record_view_model_.SetResult(result);
-        // The file NAME, not the path. A full path is unbounded, so the banner
-        // it lands in becomes as wide as the deepest directory the user records
-        // into and reads as a broken control rather than as a sentence. The
-        // folder is one click away on the notification the same result raises
-        // ("Show in folder"), and the Edit surface names it in full.
-        const QString saved_name = QFileInfo(QString::fromStdWString(result.output_path)).fileName();
+        // Only a failure earns a page banner. A SUCCESSFUL stop used to add a
+        // full-width "Recording saved · name.mkv" notice above the Preview
+        // Surface, and because the preview is the page's fill-height element
+        // that banner came straight out of its height — and, through the
+        // aspect-ratio fit, out of its width as well. The user had been watching
+        // that frame for the whole recording and the reward for finishing was
+        // the entire composition jumping to announce something four other
+        // things already say: the shell's status pill reads Completed, the
+        // transport's recommended action becomes Edit, a "Recording saved" toast
+        // carries the path and the Show-in-folder action, and the file is on
+        // disk. A failure is different — it is unresolved, it is not stated
+        // anywhere else on the page, and it is exactly what a persistent notice
+        // is for.
         record_view_model_adapter_.setNoticeText(
-            result.succeeded ? QStringLiteral("Recording saved · %1").arg(saved_name)
-                             : QString::fromStdWString(record_view_model_.result_user_message),
-            result.succeeded ? QStringLiteral("success") : QStringLiteral("error"));
+            result.succeeded ? QString{} : QString::fromStdWString(record_view_model_.result_user_message),
+            result.succeeded ? QStringLiteral("info") : QStringLiteral("error"));
         synchronizeRecordState();
         publishRecordingResultNotification(result);
         // One authoritative failure state: the result itself. The policy decides
@@ -1619,8 +1625,11 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         } else if (log_scenario == "long-message") {
             entries.push_back(entry(0, diagnostics::LogSeverity::Warning, "Output",
                                     "Output folder validation returned a long recoverable warning with enough detail "
+                                    // A placeholder root rather than a real one: the fixture exists to make the
+                                    // surface wrap a long unbroken run, and it must not bake anybody's disk
+                                    // layout into the source to do it.
                                     "to wrap across the log surface while remaining selectable and copyable: "
-                                    "C:/Users/User/Videos/ExoSnap/Very/Long/Path/That/Still/Needs/To/Be/Readable"));
+                                    "<output folder>/Very/Long/Path/That/Still/Needs/To/Be/Readable"));
         } else {
             entries.push_back(entry(0, diagnostics::LogSeverity::Debug, "Preview", "DXGI preview crop resolved"));
             entries.push_back(entry(1, diagnostics::LogSeverity::Info, "Record", "Recording profile loaded"));
@@ -1677,8 +1686,14 @@ void QuickApplication::applyEditVisualScenario() {
         return;
     const QString scenario = QString::fromUtf8(raw).trimmed().toLower();
 
+    // The fixture's directory is resolved at runtime, never written into the
+    // source. A hard-coded absolute path bakes one machine's disk layout into
+    // the repository and then shows it to every reviewer in a screenshot.
+    const QString fixture_directory =
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/exosnap-visual-fixtures");
+
     EditContext context;
-    context.output_path = QStringLiteral("D:/Recordings/ExoSnap/2026-08-10 21-14-08.mkv");
+    context.output_path = fixture_directory + QStringLiteral("/2026-08-10 21-14-08.mkv");
     context.duration = QStringLiteral("2:34");
     context.size = QStringLiteral("412 MB");
     context.resolution = QStringLiteral("2560x1440");
@@ -1704,6 +1719,15 @@ void QuickApplication::applyEditVisualScenario() {
         context.completed_snapshot.health = recorder_core::PipelineHealth::Warning;
         context.completed_snapshot.capture.frames_dropped_backpressure = 122;
         context.peak_av_drift_ms = 41.0;
+    } else if (scenario == QStringLiteral("edit-long-filename")) {
+        // The header's width budget, exercised. Back on one end and the report
+        // status on the other are fixed; the clip name is the only element that
+        // may give, and at the 860 px minimum window there is very little to
+        // give. A name this long is not hypothetical — a window-capture
+        // recording is named after the window title.
+        context.output_path = fixture_directory + QStringLiteral("/2026-08-10 21-14-08 - Sprint demo, full "
+                                                                 "walkthrough with the diagnostics overlay "
+                                                                 "enabled (take 3).mkv");
     }
 
     edit_session_adapter_.setEditContext(context);
@@ -1728,7 +1752,7 @@ void QuickApplication::applyEditVisualScenario() {
         edit_export_adapter_.applyVisualState(EditExportAdapter::Running, 42, QString(), QString());
     } else if (scenario == QStringLiteral("edit-export-done")) {
         edit_export_adapter_.applyVisualState(EditExportAdapter::Done, 100,
-                                              QStringLiteral("D:/Recordings/ExoSnap/2026-08-10 21-14-08_edit.mkv"),
+                                              fixture_directory + QStringLiteral("/2026-08-10 21-14-08_edit.mkv"),
                                               QString());
     } else if (scenario == QStringLiteral("edit-export-failed")) {
         edit_export_adapter_.applyVisualState(EditExportAdapter::Failed, 63, QString(),
@@ -2182,13 +2206,47 @@ bool QuickApplication::applyOverlayVisualScenario(const QString& scenario) {
         return true;
     }
 
-    if (scenario == QLatin1String("crash-report") || scenario == QLatin1String("crash-report-recording")) {
+    // The crash consent surface. Every variant below is a real combination of the
+    // three inputs present() takes -- whether a dump landed, whether a recording
+    // was running, whether the crash folder can be opened -- plus the two pieces
+    // of surface state the user can change (the remember tick, the disclosure).
+    // Nothing here forces a rendering the adapter could not produce.
+    if (scenario.startsWith(QLatin1String("crash-report"))) {
+        const QStringView variant = QStringView(scenario).mid(12);
+        const bool known = variant.isEmpty() || variant == QLatin1String("-recording") ||
+                           variant == QLatin1String("-no-dump") || variant == QLatin1String("-no-folder") ||
+                           variant == QLatin1String("-remember") || variant == QLatin1String("-expanded") ||
+                           variant == QLatin1String("-long");
+        if (!known)
+            return false;
+
         CrashReportContext context;
-        context.dump_available = true;
-        context.recording_was_active = scenario == QLatin1String("crash-report-recording");
-        context.version = QStringLiteral("0.9.0 \xc2\xb7 build a5d55f1");
-        context.encoder = QStringLiteral("NVENC AV1 \xe2\x86\x92 MKV");
-        crash_report_adapter_.present(context, /*crash_folder_available=*/true);
+        context.dump_available = variant != QLatin1String("-no-dump");
+        context.recording_was_active = variant == QLatin1String("-recording");
+        if (variant == QLatin1String("-long")) {
+            // The longest values the sidecar can actually carry: the version is
+            // whatever ExoSnapBuildInfo reports for a tagged pre-release build,
+            // and the encoder line names every leg of the pipeline.
+            context.version =
+                QStringLiteral("0.9.0-rc5+build.20260812.eba270a \xc2\xb7 build eba270a301201882e9ca4d80");
+            context.encoder =
+                QStringLiteral("NVENC AV1 (10-bit, HDR10 passthrough) \xe2\x86\x92 Matroska + Opus 320 kbps");
+        } else {
+            context.version = QStringLiteral("0.9.0 \xc2\xb7 build a5d55f1");
+            context.encoder = QStringLiteral("NVENC AV1 \xe2\x86\x92 MKV");
+        }
+        crash_report_adapter_.present(context, /*crash_folder_available=*/variant != QLatin1String("-no-folder"));
+
+        // Draft tick: the same value the checkbox writes, set before the capture
+        // rather than by a synthesised click.
+        if (variant == QLatin1String("-remember"))
+            crash_report_adapter_.setRememberChoice(true);
+        // The Loader above the overlay is synchronous, so the item exists as soon
+        // as present() has flipped `active`.
+        if (variant == QLatin1String("-expanded") && root_window_) {
+            if (QObject* disclosure = root_window_->findChild<QObject*>(QStringLiteral("crashIncludedDisclosure")))
+                disclosure->setProperty("expanded", true);
+        }
         return true;
     }
 
@@ -2948,6 +3006,13 @@ bool QuickApplication::openEditorForAutomation() {
     return edit_session_adapter_.open();
 }
 
+// One name per product state, and no aliases at all. There used to be four —
+// `warning` for Blocked, `error` for Failed, `idle` for Ready, `saved` for
+// Completed — and the visual sweep captured every one of them, so the evidence
+// directory carried record__warning.png and record__blocked.png as two files
+// claiming to test a difference that does not exist: the same SetState call
+// produced both. A scenario name that contradicts, or merely duplicates, the
+// state it selects is worse than no scenario.
 bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     const QString normalized = scenario.trimmed().toLower();
     pending_record_visual_state_ = normalized;
@@ -2955,8 +3020,11 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     webcam_available_ = true;
     webcam_error_.clear();
     record_view_model_.ResetStats();
+    // Re-seeding is idempotent: a scenario that raises no notice must not
+    // inherit one from the scenario applied before it.
+    record_view_model_adapter_.setNoticeText({});
 
-    if (normalized == QStringLiteral("ready") || normalized == QStringLiteral("idle")) {
+    if (normalized == QStringLiteral("ready")) {
         record_view_model_.SetState(UiRecordingState::Ready);
     } else if (normalized == QStringLiteral("recording")) {
         record_view_model_.SetState(UiRecordingState::Recording);
@@ -2986,7 +3054,7 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.elapsed_text = L"12:34";
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
-    } else if (normalized == QStringLiteral("completed") || normalized == QStringLiteral("saved")) {
+    } else if (normalized == QStringLiteral("completed")) {
         // The post-recording state, which had no deterministic scenario at all —
         // so the one arrangement in which the transport's recommended action is
         // Edit rather than Record, and the one in which the page carries a
@@ -3012,16 +3080,25 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
         record_view_model_.SetState(UiRecordingState::Completed);
-        record_view_model_adapter_.setNoticeText(
-            QStringLiteral("Recording saved · 2026-08-12_06-21-07_Desktop_Display 1.mkv"), QStringLiteral("success"));
-    } else if (normalized == QStringLiteral("warning") || normalized == QStringLiteral("blocked")) {
+        // Deliberately no page notice: a successful stop no longer raises one,
+        // and the scenario exists to photograph what the product actually does.
+    } else if (normalized == QStringLiteral("blocked")) {
+        // A blocker is a condition Diagnostics reports about the machine, not a
+        // result of anything the user just did: no page notice, and Record is
+        // simply unavailable. That is what makes it visually distinct from
+        // Failed below, which is a run that started and ended badly.
         record_view_model_.SetState(UiRecordingState::Blocked);
         record_view_model_.capability_status_text =
             L"The selected format is unavailable on this GPU. Choose a supported profile in Settings.";
-    } else if (normalized == QStringLiteral("error") || normalized == QStringLiteral("failed")) {
+    } else if (normalized == QStringLiteral("failed")) {
         record_view_model_.SetState(UiRecordingState::Failed);
         record_view_model_.capability_status_text = L"Recording stopped because the capture source became unavailable.";
         record_view_model_.result_user_message = L"The capture source is no longer available.";
+        // The same notice the real result callback raises. Without it the
+        // scenario photographed a failure the page never states in words, which
+        // is precisely the evidence a failure state needs to be judged on.
+        record_view_model_adapter_.setNoticeText(QStringLiteral("The capture source is no longer available."),
+                                                 QStringLiteral("error"));
     } else if (normalized == QStringLiteral("unavailable")) {
         record_view_model_.SetState(UiRecordingState::Ready);
         record_view_model_.selected_target_index = -1;

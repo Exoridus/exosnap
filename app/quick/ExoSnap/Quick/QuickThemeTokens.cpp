@@ -40,6 +40,11 @@ QColor parseToken(const char* token) {
     return color;
 }
 
+QColor withAlpha(QColor color, double alpha) {
+    color.setAlphaF(static_cast<float>(std::clamp(alpha, 0.0, 1.0)));
+    return color;
+}
+
 QColor blend(const QColor& from, const QColor& to, double t) {
     const double s = std::clamp(t, 0.0, 1.0);
     return QColor(qRound(from.red() * (1.0 - s) + to.red() * s), qRound(from.green() * (1.0 - s) + to.green() * s),
@@ -107,6 +112,20 @@ void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString
     // hardcoding one palette's values.
     warning_surface_ = blend(background_, warning_, dark_ ? 0.13 : 0.16);
     error_surface_ = blend(background_, error_, dark_ ? 0.13 : 0.16);
+
+    // The modal scrim. A semantic role, not a translucent copy of the current
+    // page background: it means "the application behind this is not the thing
+    // to act on right now". Deriving it from `background` (which is what the
+    // overlay card used to do) works in Dark by coincidence — the background IS
+    // dark — and fails in Light, where washing the shell toward white leaves a
+    // white card floating on a white page with only its border separating them.
+    //
+    // So both appearances darken, and only the strength differs: Dark keeps the
+    // accepted 0.78 over its own near-black ground, Light uses a restrained
+    // neutral ink at 0.38 — enough for the shell to recede and the card to sit
+    // clearly in front, far short of the black curtain a heavier value makes of
+    // a light page.
+    overlay_scrim_ = dark_ ? withAlpha(background_, 0.78) : withAlpha(QColor(0x0F, 0x0F, 0x11), 0.38);
 
     emit changed();
 }
@@ -209,6 +228,9 @@ QColor QuickThemeTokens::errorSurface() const noexcept {
 }
 QColor QuickThemeTokens::success() const noexcept {
     return success_;
+}
+QColor QuickThemeTokens::overlayScrim() const noexcept {
+    return overlay_scrim_;
 }
 
 } // namespace exosnap::quick

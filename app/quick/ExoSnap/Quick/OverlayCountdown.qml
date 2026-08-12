@@ -117,8 +117,13 @@ Window {
             // Progress: starts at 12 o'clock and depletes clockwise. PathAngleArc
             // measures 0 degrees at 3 o'clock with positive angles clockwise —
             // the opposite sign convention to the QPainter original.
+            // Accent, not caution amber. A countdown is a normal workflow
+            // transition the user asked for — nothing about it needs attention,
+            // and amber spent on it is amber a real warning cannot claim back.
+            // Safe on this ground in both appearances: the contrast gate asserts
+            // the accent as an indicator on the overlays' near-black pill.
             ShapePath {
-                strokeColor: ExoTheme.warning
+                strokeColor: ExoTheme.accent
                 strokeWidth: 3
                 fillColor: "transparent"
                 capStyle: ShapePath.RoundCap
@@ -139,7 +144,7 @@ Window {
             anchors.centerIn: parent
             text: String(Math.max(1, root.remainingSeconds))
             textFormat: Text.PlainText
-            color: ExoTheme.warning
+            color: ExoTheme.accent
             font {
                 family: ExoTheme.monoFamily
                 pixelSize: 52

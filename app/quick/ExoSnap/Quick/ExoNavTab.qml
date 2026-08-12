@@ -46,7 +46,8 @@ Button {
         verticalAlignment: Text.AlignVCenter
         text: root.text
         textFormat: Text.PlainText
-        color: root.selected ? ExoTheme.text : root.hovered ? ExoTheme.text : ExoTheme.textSecondary
+        color: !root.enabled ? ExoTheme.textDim
+               : root.selected || root.hovered ? ExoTheme.text : ExoTheme.textSecondary
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontBody

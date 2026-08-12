@@ -55,9 +55,14 @@ Window {
     readonly property int statePaused: 2
     readonly property int stateWarning: 3
 
+    // Paused and Warning used to share caution amber, which made a deliberate
+    // pause look like a fault to a user glancing at the corner of a full-screen
+    // game. Paused now takes the accent — the same colour the Resume action in
+    // the transport carries — and amber is left to mean what it says.
     readonly property color stateTone: {
         switch (root.overlayState) {
         case root.statePaused:
+            return ExoTheme.accent;
         case root.stateWarning:
             return ExoTheme.warning;
         default:

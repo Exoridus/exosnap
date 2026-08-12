@@ -5,12 +5,10 @@
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
 
-#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QProcess>
-#include <QUrl>
 #include <QVariantMap>
 
 #include <recorder_core/mp4_remuxer.h>
@@ -93,6 +91,14 @@ int EditExportAdapter::progressPercent() const noexcept {
 
 QString EditExportAdapter::outputPath() const {
     return QString::fromStdWString(output_path_.wstring());
+}
+
+QString EditExportAdapter::outputFileName() const {
+    return QString::fromStdWString(output_path_.filename().wstring());
+}
+
+QString EditExportAdapter::outputFolder() const {
+    return QString::fromStdWString(output_path_.parent_path().wstring());
 }
 
 const QString& EditExportAdapter::errorText() const noexcept {
@@ -338,12 +344,9 @@ void EditExportAdapter::applyVisualState(State state, int percent, const QString
     setState(state);
 }
 
-void EditExportAdapter::openFolder() {
-    const QString folder = QString::fromStdWString(output_path_.parent_path().wstring());
-    if (!folder.isEmpty())
-        QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
-}
-
+// The panel offers one folder action, and this is it: "explorer /select,<path>"
+// opens the containing folder AND highlights the file, so it strictly contains
+// what the separate "Open folder" action did.
 void EditExportAdapter::revealFile() {
     const QString path = outputPath();
     if (path.isEmpty())

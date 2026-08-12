@@ -17,7 +17,7 @@ ExoOverlayCard {
     required property RecordingErrorAdapter error
 
     objectName: "quickRecordingErrorOverlay"
-    subtitle: qsTr("Recording")
+    subtitle: qsTr("RECORDING")
     // A recording that could not start or could not finish is a failure, and the
     // surface should say so before it is read.
     severity: "error"

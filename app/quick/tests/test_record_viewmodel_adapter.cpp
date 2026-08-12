@@ -96,12 +96,36 @@ TEST(RecordViewModelAdapterTest, MapsRecordingStateActionsAndTone) {
     adapter.synchronize();
     EXPECT_TRUE(adapter.paused());
     EXPECT_TRUE(adapter.canResume());
-    EXPECT_EQ(adapter.stateTone(), QStringLiteral("warning"));
+    // Paused is a normal state, so it never reports the caution tone: amber is
+    // reserved for a real warning.
+    EXPECT_EQ(adapter.stateTone(), QStringLiteral("paused"));
+
+    source.SetState(UiRecordingState::Countdown);
+    adapter.synchronize();
+    EXPECT_EQ(adapter.stateTone(), QStringLiteral("busy"));
 
     source.SetState(UiRecordingState::Saving);
     adapter.synchronize();
     EXPECT_TRUE(adapter.finalizing());
     EXPECT_FALSE(adapter.canStop());
+    EXPECT_EQ(adapter.stateTone(), QStringLiteral("busy"));
+}
+
+// The whole point of the tone vocabulary: no normal state may resolve to the
+// caution tone. A future state added to the switch inherits this.
+TEST(RecordViewModelAdapterTest, NormalStatesNeverReportTheWarningTone) {
+    RecordViewModel source;
+    source.targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, "Display 1: 1920x1080 at (0, 0)"});
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+
+    for (const auto state : {UiRecordingState::Ready, UiRecordingState::Countdown, UiRecordingState::Preparing,
+                             UiRecordingState::Recording, UiRecordingState::Paused, UiRecordingState::Stopping,
+                             UiRecordingState::Saving, UiRecordingState::RegionSelecting}) {
+        source.SetState(state);
+        adapter.synchronize();
+        EXPECT_NE(adapter.stateTone(), QStringLiteral("warning")) << "state " << static_cast<int>(state);
+    }
 }
 
 TEST(RecordViewModelAdapterTest, MapsBlockedAndFailedStatesTextually) {

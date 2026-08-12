@@ -244,6 +244,35 @@ TEST(ThemeContrastTest, AnUnavailableControlStaysVisible) {
     }
 }
 
+// The floor above has NO headroom: `dim` was nudged twice, once per appearance,
+// specifically to land just over 3:1 on the surfaces it is drawn on. So the one
+// way to break it without touching a colour is to fade the control that carries
+// it — and a shared `opacity: disabledOpacity` on ExoButton did exactly that,
+// while the assertions above kept passing because they read the token rather
+// than what reaches the screen.
+//
+// This test asserts the trap rather than the result: if the disabled rung is
+// ever applied to a control's INK again, the arithmetic here is what says how
+// far under the floor that lands. `disabledOpacity` belongs on chrome — a fill
+// and a border that recede — where it costs the ink nothing.
+TEST(ThemeContrastTest, TheDisabledRungMayNotBeAppliedToInk) {
+    // ExoTheme.disabledOpacity.
+    constexpr double kDisabledOpacity = 0.45;
+
+    for (const Combination& combination : shippedCombinations()) {
+        QuickThemeTokens tokens;
+        tokens.setAppearance(combination.appearance, combination.accent);
+        SCOPED_TRACE(combination.name());
+
+        const QColor faded = composite(tokens.textDim(), kDisabledOpacity, tokens.surfaceRaised());
+        const double ratio = contrastRatio(faded, tokens.surfaceRaised());
+        EXPECT_LT(ratio, kGraphical) << "textDim at " << kDisabledOpacity << " now measures " << ratio
+                                     << ":1 on surfaceRaised. If the palette moved far enough that fading "
+                                        "the ink is survivable, this test is the thing to revisit — not "
+                                        "ExoButton, which deliberately fades only its background.";
+    }
+}
+
 TEST(ThemeContrastTest, AnUnavailableButActiveControlStillReadsAsOn) {
     // The transport locks its source toggles for the whole recording, so this is
     // the state a user spends a recording looking at. dockInk/dockBorder keep a
@@ -281,6 +310,55 @@ TEST(ThemeContrastTest, StateColoursAreVisibleAsIndicatorsOnEverySurface) {
             EXPECT_TRUE(meets(kGraphical, color, tokens.surface(), state));
             EXPECT_TRUE(meets(kGraphical, color, tokens.surfaceRaised(), state));
         }
+    }
+}
+
+// The status pill that sits ON the live preview (ExoStatusPill.onSurface) is the
+// one surface in the product whose ground is near-black in BOTH appearances: it
+// has to be, because what is behind it is arbitrary captured content. That makes
+// every appearance colour on it suspect, and it is why the label there takes a
+// literal light ink while the dot and the ring carry the tone.
+TEST(ThemeContrastTest, TheStatusPillOverThePreviewStaysReadableInBothAppearances) {
+    // ExoStatusPill: Qt.rgba(0, 0, 0, 0.72) over the Preview Surface's own
+    // #08080A stage.
+    const QColor stage(QStringLiteral("#08080A"));
+    const QColor ground = composite(QColor(0, 0, 0), 0.72, stage);
+    const QColor on_surface_ink(QStringLiteral("#F1F1EF")); // ExoStatusPill.onSurfaceInk
+
+    for (const Combination& combination : shippedCombinations()) {
+        QuickThemeTokens tokens;
+        tokens.setAppearance(combination.appearance, combination.accent);
+        SCOPED_TRACE(combination.name());
+
+        EXPECT_TRUE(meets(kText, on_surface_ink, ground, "pill label on the preview ground"));
+
+        // Every tone the pill can resolve to over this ground, as an indicator
+        // (dot + ring). `busy` resolves to the light ink here rather than to
+        // textMuted precisely because Light's textMuted measures 2.998:1 on it.
+        for (const auto& [state, color] :
+             {std::pair{"recording/error", tokens.error()}, std::pair{"warning", tokens.warning()},
+              std::pair{"success/neutral", tokens.success()}, std::pair{"paused", tokens.accent()},
+              std::pair{"busy", on_surface_ink}}) {
+            EXPECT_TRUE(meets(kGraphical, color, ground, state));
+        }
+
+        // …and in the title band the same tone sits on an appearance surface,
+        // where textMuted is the right neutral and clears the bar.
+        EXPECT_TRUE(meets(kGraphical, tokens.textMuted(), tokens.background(), "busy dot in the title band"));
+    }
+}
+
+// Stop gives up its fill while a recording is paused (Resume is the state's one
+// recommended action there) and states itself in the error colour instead, as
+// text on the dock's raised control fill.
+TEST(ThemeContrastTest, AnOutlinedDestructiveActionStatesItselfInReadableInk) {
+    for (const Combination& combination : shippedCombinations()) {
+        QuickThemeTokens tokens;
+        tokens.setAppearance(combination.appearance, combination.accent);
+        SCOPED_TRACE(combination.name());
+
+        EXPECT_TRUE(meets(kText, tokens.error(), tokens.surfaceRaised(), "outlined Stop label"));
+        EXPECT_TRUE(meets(kGraphical, tokens.error(), tokens.surfaceRaised(), "outlined Stop border"));
     }
 }
 

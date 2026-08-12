@@ -72,7 +72,7 @@ Rectangle {
 
             ExoButton {
                 text: qsTr("Cancel")
-                quiet: true
+                compact: true
                 enabled: root.exporter.state === EditExportAdapter.Running
                 Layout.alignment: Qt.AlignRight
                 onClicked: root.exporter.cancel()
@@ -107,19 +107,51 @@ Rectangle {
                 }
             }
 
+            // What was written, on two lines that each elide rather than one run
+            // that wrapped anywhere. The file name is the part a reader scans
+            // for, so it gets its own line and never breaks; the folder is
+            // supporting detail below it. Middle elision keeps both ends — the
+            // drive and the extension — which is what makes an elided path
+            // readable at all. The full path is one hover away, and the same
+            // string is on the clipboard-free route the reveal action takes.
             Label {
-                text: root.succeeded ? root.exporter.outputPath : root.exporter.errorText
+                id: resultFileName
+
+                text: root.succeeded ? root.exporter.outputFileName : root.exporter.errorText
                 textFormat: Text.PlainText
-                wrapMode: Text.WrapAnywhere
+                elide: Text.ElideMiddle
+                wrapMode: root.succeeded ? Text.NoWrap : Text.WordWrap
+                color: root.succeeded ? ExoTheme.text : ExoTheme.textMuted
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                font {
+                    family: ExoTheme.monoFamily
+                    pixelSize: ExoTheme.fontCaption
+                }
+
+                HoverHandler {
+                    id: resultHover
+                }
+
+                ToolTip.visible: root.succeeded && resultHover.hovered
+                ToolTip.text: root.exporter.outputPath
+            }
+
+            Label {
+                text: root.exporter.outputFolder
+                textFormat: Text.PlainText
+                elide: Text.ElideMiddle
+                visible: root.succeeded && text.length > 0
                 color: ExoTheme.textMuted
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: ExoTheme.fontEyebrow
                 }
             }
 
-            // A RowLayout here would report the two buttons' natural widths as its
+            // A RowLayout here would report the buttons' natural widths as its
             // own minimum, and a layout honours minimums over the box it was
             // given -- at the 240 px rail that forced every sibling row 32 px
             // past the card's right margin, under the scroll bar. A Flow has no
@@ -128,22 +160,21 @@ Rectangle {
                 spacing: ExoTheme.spacingSm
                 Layout.fillWidth: true
 
+                // One action, not two. "Open folder" and "Show in Explorer" were
+                // two borderless text runs for one user task: the second opens
+                // the same folder AND selects the file in it, so it does
+                // everything the first did. Two labels for one outcome is a
+                // choice the user has to make and cannot win.
                 ExoButton {
-                    text: qsTr("Open folder")
-                    quiet: true
-                    visible: root.succeeded
-                    onClicked: root.exporter.openFolder()
-                }
-
-                ExoButton {
-                    text: qsTr("Show in Explorer")
-                    quiet: true
+                    text: qsTr("Show in folder")
+                    compact: true
                     visible: root.succeeded
                     onClicked: root.exporter.revealFile()
                 }
 
                 ExoButton {
                     text: qsTr("Retry")
+                    compact: true
                     visible: !root.succeeded
                     enabled: root.exporter.canExport
                     onClicked: root.exporter.retry()

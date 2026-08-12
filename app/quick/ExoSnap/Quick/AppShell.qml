@@ -189,6 +189,16 @@ Item {
                         text: modelData
                         selected: root.currentPage === index
                         compact: root.compactNav
+                        // The Edit workspace occupies the content area below
+                        // this band, with Record as its parent context. Leaving
+                        // the tabs live would let a click swap the page UNDER a
+                        // workspace that still covers it — and routing the click
+                        // through the editor's unsaved-edits guard would make
+                        // navigation conditional, which it is not anywhere else
+                        // in the product. The same lock the transport's source
+                        // controls take during a recording, for the same reason:
+                        // Back is the way out.
+                        enabled: !root.editOverlayOpen
                         Layout.alignment: Qt.AlignVCenter
                         // Shrinkable to nothing on purpose. Everything to the
                         // right of the drag handle is fixed-size, so when the
@@ -343,10 +353,24 @@ Item {
         }
     }
 
+    // The Edit surface is still a LAYER rather than a stack destination (ADR
+    // 0022 is untouched: nothing about who owns the clip, the decoder or the
+    // export changed) — but it now occupies the same content region every page
+    // does, below the shell's own 40 px band, instead of the whole window.
+    //
+    // Covering the window was the source of the "giant modal" reading, and of
+    // one outright defect: the shell's minimize, maximize and close buttons sat
+    // UNDER the editor, so a window with the editor open could not be closed or
+    // dragged by its own chrome. Anchoring below the title bar puts the brand,
+    // the navigation, the status pill, the notification bell and the three
+    // window buttons back where they always are.
     Loader {
         id: editOverlayLoader
 
-        anchors.fill: parent
+        anchors {
+            fill: parent
+            topMargin: root.titleBarHeight
+        }
         // Unloaded when dismissed: the overlay owns a scene-graph video item and
         // a decoder session, neither of which should sit behind a hidden page.
         active: root.editOverlayOpen
@@ -372,6 +396,11 @@ Item {
 
         sourceComponent: RecoveryOverlay {
             recovery: root.recovery
+            // The scrim covers the shell including its title band — the window
+            // behind a modal must not read as still usable — but the card stays
+            // below it, or at the 860x700 minimum window its top edge lands on
+            // the brand, the navigation and the window buttons.
+            contentTopInset: root.titleBarHeight
             focus: true
         }
     }
@@ -387,6 +416,7 @@ Item {
 
         sourceComponent: RecordingErrorOverlay {
             error: root.recordingError
+            contentTopInset: root.titleBarHeight
             focus: true
         }
     }
@@ -403,6 +433,7 @@ Item {
 
         sourceComponent: CrashReportOverlay {
             crash: root.crashReport
+            contentTopInset: root.titleBarHeight
             focus: true
         }
     }

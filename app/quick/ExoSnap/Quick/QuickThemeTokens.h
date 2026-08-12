@@ -45,6 +45,7 @@ class QuickThemeTokens : public QObject {
     Q_PROPERTY(QColor errorInk READ errorInk NOTIFY changed FINAL)
     Q_PROPERTY(QColor errorSurface READ errorSurface NOTIFY changed FINAL)
     Q_PROPERTY(QColor success READ success NOTIFY changed FINAL)
+    Q_PROPERTY(QColor overlayScrim READ overlayScrim NOTIFY changed FINAL)
 
   public:
     explicit QuickThemeTokens(QObject* parent = nullptr);
@@ -89,6 +90,7 @@ class QuickThemeTokens : public QObject {
     [[nodiscard]] QColor errorInk() const noexcept;
     [[nodiscard]] QColor errorSurface() const noexcept;
     [[nodiscard]] QColor success() const noexcept;
+    [[nodiscard]] QColor overlayScrim() const noexcept;
 
   signals:
     void changed();
@@ -115,6 +117,7 @@ class QuickThemeTokens : public QObject {
     QColor error_ink_;
     QColor error_surface_;
     QColor success_;
+    QColor overlay_scrim_;
 };
 
 } // namespace exosnap::quick

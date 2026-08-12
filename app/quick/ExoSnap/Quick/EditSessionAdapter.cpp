@@ -297,8 +297,14 @@ void EditSessionAdapter::applyReport(const EditContext& context) {
         report_drift_text_ = QStringLiteral("Peak A/V drift: %1").arg(kEmptyValue);
     }
 
+    // The label is the verdict itself in every case, not only in the two that go
+    // wrong. It used to be empty unless the pipeline reported Warning or
+    // Critical, so the header element showed the word "Report" the rest of the
+    // time — one element switching between reading as an ACTION ("open the
+    // report") and as a STATUS ("this recording has a warning"), which is
+    // exactly the ambiguity a header must not carry. Now it always states a
+    // verdict and the severity decides only how loudly.
     report_severity_ = ReportSeverity::Neutral;
-    report_label_.clear();
     if (has_snapshot) {
         QString health = QStringLiteral("Unknown");
         switch (snapshot.health) {
@@ -308,12 +314,10 @@ void EditSessionAdapter::applyReport(const EditContext& context) {
         case recorder_core::PipelineHealth::Warning:
             health = QStringLiteral("Warning");
             report_severity_ = ReportSeverity::Warning;
-            report_label_ = QStringLiteral("Warning");
             break;
         case recorder_core::PipelineHealth::Critical:
             health = QStringLiteral("Critical");
             report_severity_ = ReportSeverity::Critical;
-            report_label_ = QStringLiteral("Critical");
             break;
         case recorder_core::PipelineHealth::Unavailable:
             health = QStringLiteral("Unavailable");
@@ -321,8 +325,10 @@ void EditSessionAdapter::applyReport(const EditContext& context) {
         default:
             break;
         }
+        report_label_ = health;
         report_health_text_ = QStringLiteral("Pipeline health: %1").arg(health);
     } else {
+        report_label_ = kEmptyValue;
         report_health_text_ = QStringLiteral("Pipeline health: %1").arg(kEmptyValue);
     }
     emit reportChanged();

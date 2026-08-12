@@ -219,6 +219,17 @@ Rescan, filters) on the right of the same row. **Record** is the one destination
 — its Preview Toolbar names the capture target instead, because the preview is that page's subject —
 and **About** is the one with no header at all, being a single centred identity card.
 
+**In-window modal surfaces** — the crash-report consent surface, the recovery prompt and the
+recording-error surface — share one shape. Their **scrim covers the whole shell including the title
+band**, because a window that still looks operable behind a modal is lying about what a click will
+do; the **card itself stays inside the usable content region**, below that band, so a modal never
+sits on the brand, the navigation or the window buttons. The card is **not drawn as a window**: it
+has no title bar, no second wordmark and no imitation chrome of its own — the surface names itself
+with a single eyebrow above its heading, because the real title bar is 40 px above it. Inside the
+card, chrome, heading and actions are fixed and only the material being read scrolls; anything the
+user is being asked to **decide** (a consent tick, a "remember this choice") stays visible with the
+actions rather than scrolling away with the material.
+
 ---
 
 ## 3. Recording defaults and profiles
@@ -817,11 +828,29 @@ states it in words. At the 860 px minimum window the toolbar stays **one line** 
 format summary gives up room first, the source identity and the way back to the picker never do.
 
 The frame below the toolbar is the page's subject and takes all remaining height. It keeps the
-source's aspect ratio, and the whole Preview Surface is ringed in the current state's colour — quiet
-while idle, amber while counting down or paused, coral while recording or after a failure. Over the
-frame sit the state pill (top left) and, while recording or paused, the live readout (bitrate,
-drops, drift, output size) on the same ground as that pill. Nothing that changes with engine state
-is placed *around* the frame, so it never resizes because a message appeared beside it.
+source's aspect ratio. The Preview Surface's border is **structural and neutral in every state** —
+it says "this is one bounded surface", never what the engine is doing. It used to take the state's
+colour, which turned the largest object on the page into a roughly 1 000 px status light repeating
+what the state pill in its own corner, the shell's status pill and the transport's one recommended
+action all already said, and left "success" and "failure" differing only by the hue of a ring
+half a screen wide. Over the frame sit the state pill (top left) and, while recording or paused, the
+live readout (bitrate, drops, drift, output size) on the same ground as that pill. Nothing that
+changes with engine state is placed *around* the frame, so it never resizes because a message
+appeared beside it.
+
+**State is said locally, and once.** Each state names itself through the status pill over the frame
+and in the title band, through the transport's one recommended action, and — only where something is
+unresolved — through the page notice. The **LOCKED** badge is a neutral statement of fact, not a
+caution: the capture setup is locked for the duration of a recording by design, so there is nothing
+for the user to attend to.
+
+**State colour vocabulary.** Coral means recording, destructive or error; amber means an actual
+caution; green means ready or success; the accent means selection, focus or the primary interactive
+emphasis; everything else is neutral. **Countdown, Paused and Locked are normal states and never use
+amber.** Paused takes the accent — the same colour its Resume action carries — and the momentary
+transitions (countdown, preparing, stopping, saving) take a quiet neutral. Cancelling a countdown is
+not destructive and is not drawn as such: it is the accent-filled primary action of that state, told
+apart from Record by its glyph rather than by its colour.
 
 **Transport dock.** The Record page's controls sit in one bar along the bottom, in three
 groups of deliberately different weight. The **dock is the recessed base and its controls sit on
@@ -835,11 +864,13 @@ thing meant to be pressed the darkest thing on the page.
   and a source that cannot be used (no microphone, camera that will not open) stays visible and
   disabled rather than disappearing.
 - **Centre — the elapsed time**, the largest element on the page. It is neutral while idle, coral
-  while recording and amber while paused, using tabular figures so the digits do not shift.
+  while recording and accent while paused, using tabular figures so the digits do not shift.
 - **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add
   marker, split, pause) as round icon buttons, then the one recommended action — **Record**,
   **Resume**, **Stop** or, once a recording has finished, **Edit** — as a wider filled pill. There is
-  never more than one filled pill.
+  never more than one filled pill. While a recording is **paused**, Resume holds that pill and Stop
+  keeps its size and its coral but gives up its fill, so the bar still answers "what now?" with one
+  control.
 
   After a successful recording the recommended action is **Edit**, because opening what was just
   recorded is what the product is for and starting the next one is not. Record is not removed — it
@@ -850,11 +881,22 @@ thing meant to be pressed the darkest thing on the page.
   between the Preview Surface and the dock — the page is one Preview Surface, 16 px, one dock.
 
 **Page notice.** A single inline banner sits above the Preview Surface for conditions the page itself
-cannot fix. Its colour states what the message **means** — a saved recording is a success, a refused
-export is an error, an unavailable display is a caution — and never the same tone for all of them. It
-names a produced file by **file name**, never by full path: a path is unbounded, so a banner carrying
-one grows as wide as the deepest folder the user records into and stops reading as a sentence. The
-folder stays one click away on the notification the same result raises.
+cannot fix. Its colour states what the message **means** — a refused export is an error, an
+unavailable display is a caution — and never the same tone for all of them. It names a produced file
+by **file name**, never by full path: a path is unbounded, so a banner carrying one grows as wide as
+the deepest folder the user records into and stops reading as a sentence.
+
+The banner is for **unresolved conditions**, not for confirmations. **A successful recording raises
+no page notice.** It used to: a full-width "Recording saved · name.mkv" banner appeared above the
+Preview Surface, and because the preview is the page's fill-height element that banner came straight
+out of its height — and, through the aspect-ratio fit, out of its width as well. Measured at
+1 600 × 1 000, stopping a recording moved the Preview Surface down 60 px and narrowed it by 106 px:
+the user had watched that frame for the whole recording, and the reward for finishing was the entire
+composition jumping to announce something four other things already said — the shell's status pill
+reads *Completed*, the transport's recommended action becomes *Edit*, a "Recording saved" toast
+carries the path and the show-in-folder action, and the file is on disk. **Stopping a recording
+successfully must not change the Preview Surface's bounds.** A failure is different: it is
+unresolved, it is stated nowhere else on the page, and it keeps its banner.
 
 **Round-control states.** Every round dock control reads the same way in every state, and the four
 states are told apart by more than one cue:
@@ -988,12 +1030,41 @@ Continued sessions produce independent recording slices (no single-file concat).
 recordings, segments finalized before an interruption remain usable; an interrupted active segment
 may not be recoverable.
 
-**Edit / Output / Save (post-stop surface).** A single overlay view lets the user trim and export
-without leaving the app: the player and its trim timeline on the left, and a right rail with two
-cards — **Details** (duration / size / resolution / frame rate / video / audio / container as
-right-aligned mono values) and **Export** (the output choices plus the progress and result of a
-run, described below). One action — **Export** — sits **bottom-right**, matching the Record page's
-transport actions; it starts the export straight away and is unavailable while one is running.
+**Edit / Output / Save (post-stop surface).** A single view lets the user trim and export without
+leaving the app: the player and its trim timeline on the left, and a right rail with two cards —
+**Details** (duration / size / resolution / frame rate / video / audio / container as right-aligned
+mono values) and **Export** (the output choices plus the progress and result of a run, described
+below). One action — **Export** — sits **bottom-right**, matching the Record page's transport
+actions; it starts the export straight away and is unavailable while one is running. When an export
+is possible, Export is the **accent-filled primary action**: it is the one thing this surface exists
+to do, and an outlined control there was indistinguishable from a dismiss button.
+
+**It is a workspace, not a dialog.** Ownership is unchanged — it is still a layer over the Record
+page rather than a navigation destination (ADR 0022), and Record remains its parent context — but it
+**occupies the normal page content region**, below the shell's own title band. It carries no scrim,
+no floating gap, no outer rounded frame and no outer border; its shape comes from the header divider,
+the panel boundaries inside it and the footer divider. The previous presentation dimmed the whole
+application behind a rounded rectangle nearly the size of the window, which read as a modal question
+the application was waiting on an answer to — and covered the shell's own minimize, maximize and
+close buttons, so a window with the editor open could not be closed or dragged by its own chrome.
+
+While the workspace is open the navigation tabs are **disabled** and Record stays marked as the
+current destination: the workspace owns the content area, and Back is the way out of it. Back is a
+navigation action and is drawn as one, with the shared chevron.
+
+**Header.** One line: `‹ Back`, the title, the clip's file name, and the post-flight **report
+status** at the right end. The file name is the only element allowed to give up room and elides in
+the middle, so neither Back nor the report status can be pushed off the band at the minimum window.
+The report is a **status, never an action**: it names the pipeline's verdict (`Good`, `Warning`,
+`Critical`, `Unavailable`) in a severity-toned badge behind a fixed `Report` label. It used to be a
+single badge that read `Report` when nothing was wrong and `Warning` when something was — one element
+switching between an action and a verdict, with a tooltip as its only behaviour either way.
+
+**Structure.** Three bounded areas inside the workspace — player, timeline, inspector rail — each
+with exactly one boundary. The timeline sits in its own panel: its track already had a hairline, but
+the label zone, the loading hint and the clock row sat outside it on the bare page background, so
+next to two bordered panels the timeline read as loose furniture. Nested elements do not repeat their
+container's border.
 
 By default, a successful recording opens straight into this overlay, preloaded with the clip —
 the product's post-record path is editing, not a bare "recording saved" notice. The **Open editor
@@ -1068,8 +1139,16 @@ replace; the destructive choice is not the default button.
 
 The same card reports the run, and it reports it **directly under the card's heading, above the
 output choices** — so a result is visible without scrolling and without anything above it shifting.
-There is a progress bar with **Cancel** while it is going, the output filename with **Open folder**
-/ **Show in Explorer** when it succeeds, and the real error text with **Retry** when it does not.
+There is a progress bar with **Cancel** while it is going, the result with **Show in folder** when it
+succeeds, and the real error text with **Retry** when it does not.
+
+A successful run names the file on **its own line and the folder on a second one**, each elided in
+the middle, with the full path on hover. The two were one wrap-anywhere run, which in the narrow rail
+broke lines inside the extension (`…2026-08-10 2` / `1-14-08_edit.mkv`) — the one part of a path a
+reader scans for. There is **one** folder action, not two: `Show in folder` opens the containing
+folder *and* selects the file, so it does everything a separate `Open folder` did, and two labels for
+one outcome is a choice the user cannot win.
+
 The follow-up actions stay stacked (the rail is too narrow for them side by side) but are kept
 compact, so the finished state is not conspicuously taller than the other three. In the resting
 state the card reserves no space for the status it is not showing. The output choices stay visible
@@ -1375,8 +1454,9 @@ unimplemented behavior.
   `Verification reinstall available — <ver>` with `Reinstall <ver>` and the notice
   *Reinstalls the currently running signed version.* The mode can never offer a downgrade, never
   relaxes signature/hash checks, is logged in the app log and support bundle while active, and
-  remains explicit in the updater content through the reinstall-specific working copy (for example,
-  `Downloading version <ver> again…` and `Reinstalling version <ver>…`) rather than through a
+  remains explicit in the updater content — the eyebrow above the version pills reads
+  `REINSTALLING EXOSNAP`, and the working copy says so too (for example,
+  `Downloading version <ver> again…` and `Reinstalling version <ver>…`) — rather than through a
   title-bar badge. It is gone after the next restart. Without the flag, the same version is never
   offered.
 - **Shipped flow:** the update check (automatic or manual) finds a new version → an "update
@@ -1407,6 +1487,25 @@ unimplemented behavior.
   show **Retry/Re-download + Close**, a completed update that needs a manual launch shows
   **Open ExoSnap + Close**, and non-retryable results show **Close** only. The ambiguous
   **Open current version** label is not used.
+
+  The window shows **one** progress language at a time. Until the run has measured something — the
+  pre-flight frame it opens on — the ring carries **no percentage and no arc**, and the status line
+  under it says what is happening; a percentage appears only once there is real progress behind it,
+  and the ring never changes size between the two. The **eyebrow** above the version pills names
+  what kind of run this is (`UPDATING EXOSNAP`, `REINSTALLING EXOSNAP`, or after a terminal failure
+  `EXOSNAP WAS NOT UPDATED`), because the title bar's role label is the same word in every state.
+
+  **Version emphasis follows what is actually installed.** While a run is in flight — and after one
+  that applied — the target version carries the accent. After a terminal failure it does not: the
+  emphasis moves to the version that is on the machine, so a failed update can never read as
+  "the new version is installed".
+
+  **No text is ever cut off at a widget edge.** Version identifiers come from the release manifest
+  and installer detail text comes from Windows Installer, so neither has a length the window can
+  assume. Anything too long is shortened with an ellipsis and keeps its full value on the tooltip
+  and for screen readers: version pills shorten in the **middle** (the build suffix identifies which
+  build it is), prose shortens at the **end**. The 520 × 680 window never grows to fit long content,
+  and long content never pushes the action row out of view.
 
   During **Downloading** and **Closing previous version**, the normal title-bar close action safely
   opens the same confirmation as the visible **Cancel update** action. The confirmation says that
@@ -1479,6 +1578,9 @@ unimplemented behavior.
   key maps to `Ask every time`, never to `Never send`. `Never send` suppresses only the report
   consent prompt; the independent local recording-recovery surface remains available.
 - The dialog checkbox is **Remember this choice for future crashes**, unchecked by default. It is
+  **always visible** — at the 860 × 700 minimum window, with the report-contents disclosure
+  expanded, the contents scroll and the checkbox does not, because a consent decision whose control
+  has scrolled off screen is one the user can commit without seeing. It is
   draft state only: Send + remember commits `Send automatically`; Don't send + remember commits
   `Never send`; either action without remember leaves `Ask every time`; close, Escape and backdrop
   dismissals never change policy. Settings → Developer → **Crash reports** exposes all three

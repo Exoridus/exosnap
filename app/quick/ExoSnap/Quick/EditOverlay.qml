@@ -2,11 +2,23 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Edit/Output/Save surface (ADR 0022): an overlay over the Record page, not a
-// navigation destination.
+// Edit/Output/Save surface (ADR 0022): still a LAYER over the Record page
+// rather than a navigation destination — ownership of the clip, the decoder
+// session and the export is unchanged — but presented as a WORKSPACE that
+// occupies the normal content region rather than as a dialog floating above a
+// dimmed application.
+//
+// What it used to be: a global scrim over the whole window, a 20 px band of
+// dimmed application showing on every side, and inside that a rounded, bordered
+// rectangle nearly the size of the window. Three cues that all say "modal
+// dialog" about a surface that is not one: nothing about editing a finished
+// recording is a question the application is waiting on an answer to, and the
+// presentation covered the shell's own window buttons in the bargain. The shell
+// (title band, navigation, status, bell, window buttons) stays visible above
+// this item; see AppShell's editor Loader.
 //
 // One view — player, trim timeline, and a right rail carrying the details card
-// plus the export panel. The post-flight report rides as a header badge. The
+// plus the export panel. The post-flight report rides as a header status. The
 // rail is never hidden: it carries the export controls, so at the 860×700
 // minimum window it narrows to 240 px and gives the width back to the player
 // instead of disappearing.
@@ -18,16 +30,17 @@ Item {
     required property EditPlayerAdapter player
     required property EditExportAdapter exporter
 
-    // Measured against the page, which is the client area minus the overlay's
-    // 20 px band on each side — so an 860 px window reaches the page as 820 px
-    // and lands on the narrow rail.
+    // Measured against the workspace, which is now the full content width — an
+    // 860 px window reaches it as 860 px and still lands on the narrow rail.
     readonly property int railWidth: ExoTheme.isWide(page.width) ? 320
                                    : ExoTheme.isRegular(page.width) ? 280 : 240
 
     objectName: "quickEditOverlay"
 
-    // Blocks the surfaces underneath: a click that reaches the Record page while
-    // the editor is up would act on a recording the user is no longer looking at.
+    // Blocks the surface underneath: a click that reached the Record page while
+    // the editor is up would act on a recording the user is no longer looking
+    // at. The page below is fully covered either way — this is about hover and
+    // wheel events, which an opaque rectangle does not stop.
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
@@ -35,28 +48,20 @@ Item {
     }
 
     Rectangle {
-        anchors.fill: parent
-        color: Qt.alpha(ExoTheme.background, 0.72)
-    }
-
-    Rectangle {
         id: page
 
-        anchors {
-            fill: parent
-            margins: 20
-        }
+        anchors.fill: parent
+        // Meets the content bounds on the page background, with no frame of its
+        // own: the structure below (header divider, panel borders, footer
+        // divider) is what gives the workspace its shape.
         color: ExoTheme.background
-        border.width: 1
-        border.color: ExoTheme.line
-        radius: ExoTheme.radiusLg
         clip: true
 
         ColumnLayout {
             anchors.fill: parent
             spacing: 0
 
-            // ---- Mode bar ----
+            // ---- Workspace header ----
             Rectangle {
                 color: ExoTheme.surface
                 Layout.fillWidth: true
@@ -70,17 +75,41 @@ Item {
                         rightMargin: ExoTheme.spacingMd
                     }
 
+                    // A navigation action, drawn as one. It was a bare "Back"
+                    // text run, indistinguishable from the title beside it; the
+                    // chevron is the shared one every disclosure and popover in
+                    // the product already points with, rotated left. Drawn, not
+                    // typeset — the wordmark font has no "‹".
                     ExoButton {
                         objectName: "editOverlayBackButton"
                         text: qsTr("Back")
                         quiet: true
+                        compact: true
+                        leftPadding: backChevron.width + 2 * ExoTheme.spacingSm
+                        rightPadding: ExoTheme.spacingMd
+                        Layout.alignment: Qt.AlignVCenter
                         onClicked: root.requestClose()
+
+                        ExoChevron {
+                            id: backChevron
+
+                            direction: 90
+                            tone: ExoTheme.textSecondary
+                            width: 12
+                            height: 12
+                            anchors {
+                                left: parent.left
+                                leftMargin: ExoTheme.spacingSm
+                                verticalCenter: parent.verticalCenter
+                            }
+                        }
                     }
 
                     Label {
                         text: qsTr("Edit & export")
                         textFormat: Text.PlainText
                         color: ExoTheme.text
+                        Layout.alignment: Qt.AlignVCenter
                         font {
                             family: ExoTheme.sansFamily
                             pixelSize: ExoTheme.fontSectionTitle
@@ -88,23 +117,62 @@ Item {
                         }
                     }
 
+                    // The one element on the row allowed to give up room, and it
+                    // may shrink below its own implicit width — otherwise a deep
+                    // recording folder would push Back off one end of the band
+                    // and the report status off the other.
                     Label {
+                        id: clipTitleLabel
+
                         text: root.session.clipTitle
                         textFormat: Text.PlainText
                         elide: Text.ElideMiddle
                         color: ExoTheme.accent
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        Layout.alignment: Qt.AlignVCenter
                         font {
                             family: ExoTheme.monoFamily
                             pixelSize: ExoTheme.fontSecondary
+                        }
+
+                        HoverHandler {
+                            id: clipTitleHover
+                        }
+
+                        ToolTip.visible: clipTitleHover.hovered && clipTitleLabel.truncated
+                        ToolTip.text: root.session.clipTitle
+                    }
+
+                    // A STATUS, and only a status. This used to be one badge
+                    // whose text became "Report" when nothing was wrong and
+                    // "Warning"/"Critical" when something was — an element that
+                    // reads as an action in one state and as a verdict in the
+                    // other, with a tooltip as its only behaviour either way.
+                    // The label names what is being reported; the badge carries
+                    // the verdict and its severity. Neither is clickable,
+                    // because there is nothing to click.
+                    Label {
+                        text: qsTr("Report")
+                        textFormat: Text.PlainText
+                        color: ExoTheme.textMuted
+                        Layout.alignment: Qt.AlignVCenter
+                        font {
+                            family: ExoTheme.sansFamily
+                            pixelSize: ExoTheme.fontCaption
                         }
                     }
 
                     ExoBadge {
                         id: reportBadge
 
-                        text: root.session.reportLabel !== "" ? root.session.reportLabel : qsTr("Report")
-                        tone: root.session.reportSeverity === EditSessionAdapter.Critical ? "blocker" : root.session.reportSeverity === EditSessionAdapter.Warning ? "notice" : "neutral"
+                        text: root.session.reportLabel
+                        tone: root.session.reportSeverity === EditSessionAdapter.Critical ? "blocker"
+                              : root.session.reportSeverity === EditSessionAdapter.Warning ? "notice" : "neutral"
+                        Layout.alignment: Qt.AlignVCenter
+
+                        Accessible.name: qsTr("Recording report: %1").arg(root.session.reportLabel)
+                        Accessible.description: root.session.reportTooltip
 
                         HoverHandler {
                             id: reportHover
@@ -153,20 +221,44 @@ Item {
                         Layout.minimumHeight: 180
                     }
 
-                    EditTimeline {
-                        id: timelineView
+                    // One workspace-level boundary around the timeline, matching
+                    // the player above it and the rail beside it. The strip's
+                    // own track has a hairline, but the label zone, the loading
+                    // hint and the clock row sat outside it on the bare page
+                    // background — so next to two bordered panels the timeline
+                    // read as loose furniture rather than as the third area of
+                    // the workspace. Deliberately ONE boundary: the individual
+                    // tracks inside it stay unboxed.
+                    Rectangle {
+                        id: timelinePanel
 
-                        session: root.session
-                        timeline: root.timeline
-                        player: root.player
+                        color: ExoTheme.surface
+                        border.width: 1
+                        border.color: ExoTheme.line
+                        radius: ExoTheme.radiusLg
                         Layout.fillWidth: true
-                        Layout.preferredHeight: timelineView.implicitHeight
+                        Layout.preferredHeight: timelineView.implicitHeight + 2 * ExoTheme.spacingSm
+
+                        EditTimeline {
+                            id: timelineView
+
+                            session: root.session
+                            timeline: root.timeline
+                            player: root.player
+                            anchors {
+                                fill: parent
+                                topMargin: ExoTheme.spacingSm
+                                rightMargin: ExoTheme.spacingSm
+                                bottomMargin: ExoTheme.spacingSm
+                                leftMargin: ExoTheme.spacingSm
+                            }
+                        }
                     }
                 }
 
                 // The rail scrolls because both cards together outgrow the column
                 // at the 700 px minimum height once a result shows — a clipped
-                // "Show in Explorer" would be unreachable, a scrolled one is not.
+                // "Show in folder" would be unreachable, a scrolled one is not.
                 ExoScrollView {
                     id: rail
 
@@ -239,11 +331,20 @@ Item {
                         Layout.fillWidth: true
                     }
 
+                    // Exporting is what this workspace is FOR, so when it is
+                    // available it takes the accent fill — it was an outlined
+                    // secondary control indistinguishable from a dismiss button,
+                    // in a footer where it is the only action. `tone` falls back
+                    // to neutral while export is unavailable, which is also what
+                    // ExoButton does with a disabled primary, so the two never
+                    // disagree.
                     ExoButton {
                         objectName: "editOverlayExportButton"
                         text: qsTr("Export")
+                        tone: root.exporter.canExport ? "primary" : "neutral"
                         enabled: root.exporter.canExport
                         Layout.minimumWidth: 150
+                        Layout.alignment: Qt.AlignVCenter
                         onClicked: root.startExport()
                     }
                 }

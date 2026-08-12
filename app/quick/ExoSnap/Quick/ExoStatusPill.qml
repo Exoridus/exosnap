@@ -17,12 +17,37 @@ Rectangle {
     // inside the band.
     property bool onSurface: false
 
+    // Three semantic tones (recording / error / warning), one success tone, and
+    // two that are deliberately NOT semantic: a paused session takes the accent
+    // its Resume action carries, and a momentary transition takes a quiet
+    // neutral. Caution amber stays with `warning`, which is the only tone a real
+    // warning uses.
     readonly property color toneColor: root.tone === "recording" ? ExoTheme.error
                                      : root.tone === "error" ? ExoTheme.error
                                      : root.tone === "warning" ? ExoTheme.warning
                                      : root.tone === "success" ? ExoTheme.success
-                                     : root.tone === "paused" ? ExoTheme.warning
+                                     : root.tone === "paused" ? ExoTheme.accent
+                                     // The one tone that has to resolve per
+                                     // ground. `busy` is deliberately a quiet
+                                     // neutral, and Light has no LIGHT neutral —
+                                     // `textMuted` there measures 2.998:1 as a
+                                     // dot on the pill's near-black ground,
+                                     // which the contrast gate rejects (and
+                                     // rejected, before this line existed). The
+                                     // semantic tones need no such split because
+                                     // they are designed to read on both.
+                                     : root.tone === "busy" ? (root.onSurface ? root.onSurfaceInk : ExoTheme.textMuted)
                                      : ExoTheme.success
+
+    // Over the preview the pill has its own near-black ground in BOTH
+    // appearances — it has to, because what is behind it is arbitrary captured
+    // content — so its label cannot take an appearance colour. Light's
+    // `textMuted` on that ground measures 3.06:1 and Light's `error` 4.42:1,
+    // both under the 4.5:1 the contrast gate holds text to; the tone is carried
+    // by the dot and the ring, which are graphical and clear 3:1. A literal
+    // rather than a token for the same reason OverlayRecording uses literals:
+    // there is no appearance in which this ground is light.
+    readonly property color onSurfaceInk: "#F1F1EF"
 
     implicitWidth: content.implicitWidth + 2 * (root.onSurface ? ExoTheme.spacingMd : ExoTheme.spacingXs)
     implicitHeight: root.onSurface ? 26 : 20
@@ -53,7 +78,7 @@ Rectangle {
             textFormat: Text.PlainText
             elide: Text.ElideRight
             anchors.verticalCenter: parent.verticalCenter
-            color: root.onSurface ? root.toneColor : ExoTheme.textSecondary
+            color: root.onSurface ? root.onSurfaceInk : ExoTheme.textSecondary
             font {
                 family: root.onSurface ? ExoTheme.monoFamily : ExoTheme.sansFamily
                 pixelSize: root.onSurface ? ExoTheme.fontEyebrow : ExoTheme.fontSecondary

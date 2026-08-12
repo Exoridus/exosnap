@@ -26,6 +26,11 @@ QtObject {
     readonly property color errorInk: QuickThemeTokens.errorInk
     readonly property color errorSurface: QuickThemeTokens.errorSurface
     readonly property color success: QuickThemeTokens.success
+    // The ground a modal/interruption surface lays over the application. Its
+    // meaning is "de-emphasise what is behind this", which is why it is a token
+    // and not `Qt.alpha(background, x)` at each call site: a translucent copy of
+    // the page background de-emphasises nothing in Light.
+    readonly property color overlayScrim: QuickThemeTokens.overlayScrim
     readonly property bool dark: QuickThemeTokens.dark
 
     // ── Spacing scale ────────────────────────────────────────────────────────

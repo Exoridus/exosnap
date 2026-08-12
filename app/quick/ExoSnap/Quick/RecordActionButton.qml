@@ -30,6 +30,12 @@ FocusScope {
     // buttons, which take the shared dock treatment instead.
     property color emphasisColor: ExoTheme.accent
     property color emphasisTextColor: ExoTheme.accentInk
+    // An emphasised action that keeps its size and its colour but gives up the
+    // fill, so it cannot win a glance against a filled action beside it. This is
+    // what Stop becomes while a recording is paused: Resume is the state's one
+    // recommended action, and two filled pills side by side is two primaries.
+    // The same rule ExoButton's "destructive" tone already follows.
+    property bool emphasisOutlined: false
     // One rung down at the 860 px minimum window. The timer is pinned to the
     // bar's geometric centre, which leaves it a lane of `width − 2 × the wider
     // cluster`; with 44 px controls the paused state (three round actions plus
@@ -83,9 +89,10 @@ FocusScope {
         // An emphasised action carries its own colour outright; a round secondary
         // one takes the shared dock treatment, so every peer on the bar reads the
         // same way in every state.
-        readonly property color ink: root.emphasised
-                                     ? (root.available ? root.emphasisTextColor : ExoTheme.textDim)
-                                     : ExoTheme.dockInk(root.available, false, false, root.hovered)
+        readonly property color ink: !root.emphasised
+                                     ? ExoTheme.dockInk(root.available, false, false, root.hovered)
+                                     : !root.available ? ExoTheme.textDim
+                                     : root.emphasisOutlined ? root.emphasisColor : root.emphasisTextColor
 
         contentItem: Item {
             implicitWidth: label.visible ? label.implicitWidth : glyphIcon.width
@@ -121,16 +128,21 @@ FocusScope {
         }
 
         background: Rectangle {
-            color: root.emphasised
-                   ? (!root.available ? ExoTheme.surface
-                      : button.down ? ExoTheme.pressTint(root.emphasisColor)
-                      : root.hovered ? ExoTheme.hoverTint(root.emphasisColor) : root.emphasisColor)
-                   : ExoTheme.dockFill(root.available, false, root.hovered && root.available, button.down)
+            color: !root.emphasised
+                   ? ExoTheme.dockFill(root.available, false, root.hovered && root.available, button.down)
+                   : !root.available ? ExoTheme.surface
+                   : root.emphasisOutlined
+                     ? (button.down ? ExoTheme.surfaceHover
+                        : root.hovered ? ExoTheme.hoverTint(ExoTheme.surfaceRaised) : ExoTheme.surfaceRaised)
+                   : button.down ? ExoTheme.pressTint(root.emphasisColor)
+                   : root.hovered ? ExoTheme.hoverTint(root.emphasisColor) : root.emphasisColor
             border.width: button.visualFocus ? 2 : 1
-            border.color: root.emphasised
-                          ? (button.visualFocus ? ExoTheme.text : root.available ? "transparent" : ExoTheme.line)
-                          : ExoTheme.dockBorder(root.available, false, root.hovered && root.available, false,
+            border.color: !root.emphasised
+                          ? ExoTheme.dockBorder(root.available, false, root.hovered && root.available, false,
                                                 button.visualFocus)
+                          : button.visualFocus ? ExoTheme.text
+                          : !root.available ? ExoTheme.line
+                          : root.emphasisOutlined ? root.emphasisColor : "transparent"
             radius: root.round ? height / 2 : ExoTheme.radiusPill
         }
     }

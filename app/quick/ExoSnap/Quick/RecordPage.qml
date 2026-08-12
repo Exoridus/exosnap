@@ -98,18 +98,6 @@ Item {
                                          * root.recordViewModel.normalizedSourceRect.height
                     return sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
                 }
-                // Idle is the state the page spends most of its life in, and it
-                // is the one that does NOT need to shout: a hairline on the
-                // container rung (`line`, what every card uses) rather than the
-                // control rung. The four states that mean something keep their
-                // full-strength tone, so the ring reads as a signal instead of
-                // as permanent chrome.
-                readonly property color stateColor: root.recordViewModel.stateTone === "recording" ? ExoTheme.error
-                                                    : root.recordViewModel.stateTone === "warning" ? ExoTheme.warning
-                                                    : root.recordViewModel.stateTone === "error" ? ExoTheme.error
-                                                    : root.recordViewModel.stateTone === "success" ? ExoTheme.success
-                                                    : ExoTheme.line
-
                 // The video is still fitted to the source's aspect ratio and the
                 // toolbar rides on top of it, so the edge of the frame is still
                 // the edge of the recording — there is no letterboxing inside
@@ -126,7 +114,15 @@ Item {
                 // are the frame's own, so nothing has to be clipped to them.
                 color: "#08080A"
                 border.width: 1
-                border.color: previewSurface.stateColor
+                // Structural, never semantic. This border used to take the
+                // state's colour — red while recording, amber while paused or
+                // counting down, green once a recording had saved — which made
+                // the largest object on the page into a ~1000 px status light
+                // repeating what the status pill in its own corner, the shell's
+                // pill and the transport's one recommended action all already
+                // said. A surface border says "this is one bounded surface"; it
+                // is not a place to encode state.
+                border.color: ExoTheme.line
                 // The largest surface in the product sits on the largest radius
                 // in the scale, the same rung cards use. At radiusMd it read as
                 // a scaled-up control rather than as the page's stage.
@@ -202,9 +198,16 @@ Item {
                             }
                         }
 
+                        // Neutral, not `notice`. The capture setup is locked for
+                        // the duration of a recording BY DESIGN — changing the
+                        // source mid-file is not a thing the product allows, so
+                        // there is nothing here for the user to attend to and
+                        // caution amber promised otherwise. It stays as a quiet
+                        // statement of fact beside the disabled action it
+                        // explains.
                         ExoBadge {
                             text: qsTr("LOCKED")
-                            tone: "notice"
+                            tone: "neutral"
                             visible: !root.recordViewModel.canSelectSource
                             Layout.alignment: Qt.AlignVCenter
                         }
@@ -237,10 +240,16 @@ Item {
                             id: changeSourceButton
 
                             text: qsTr("Change source")
-                            // Quiet and compact: the way back to the picker must
-                            // stay obvious without competing with the Record
-                            // pill at the other end of the page.
-                            quiet: true
+                            // Compact, but NOT quiet. A quiet button carries no
+                            // chrome at rest, and at the end of a row that is
+                            // otherwise "Display 1 · 60 CFR · AV1 · Opus · MKV"
+                            // it read as one more piece of metadata: the only
+                            // thing on the toolbar the user can press looked
+                            // exactly like the four things they cannot. One
+                            // control boundary on the raised control fill is
+                            // enough to say "press me" — the compact rung keeps
+                            // it well below the Record pill at the other end of
+                            // the page.
                             compact: true
                             enabled: root.recordViewModel.canSelectSource
                             Layout.alignment: Qt.AlignVCenter

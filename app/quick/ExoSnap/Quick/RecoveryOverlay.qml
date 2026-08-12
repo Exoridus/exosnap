@@ -16,7 +16,7 @@ ExoOverlayCard {
     required property RecoveryAdapter recovery
 
     objectName: "quickRecoveryOverlay"
-    subtitle: qsTr("Recovery")
+    subtitle: qsTr("RECOVERY")
     title: qsTr("Recover interrupted recordings")
     hint: qsTr("These recordings were interrupted before they could be saved. Finish saves the recording as originally configured. Continue resumes recording from where you left off. Or decide later — entries stay for the next launch.")
     // A running repair must stay visible, so the escape hatch closes with it.

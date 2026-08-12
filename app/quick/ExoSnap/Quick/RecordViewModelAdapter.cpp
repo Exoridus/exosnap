@@ -60,19 +60,31 @@ const QString& RecordViewModelAdapter::stateText() const noexcept {
     return state_text_;
 }
 
+// The tone names what the state MEANS, not what colour to draw — ExoStatusPill
+// resolves it. Only three of them are semantic: `recording`, `error` and
+// `success`. Everything else is a normal state and must not borrow caution
+// amber: pausing a recording, counting down to one and writing one out are all
+// things the product does on request, and a user who has been taught that amber
+// means "something needs attention" learns nothing from seeing it four times a
+// session. `warning` is left for a real warning to claim.
 QString RecordViewModelAdapter::stateTone() const {
     if (source_ == nullptr)
         return QStringLiteral("neutral");
     switch (source_->state) {
     case UiRecordingState::Recording:
         return QStringLiteral("recording");
+    // A paused session is still a session — visible at a glance, on the same
+    // accent the Resume action beside it carries.
     case UiRecordingState::Paused:
+        return QStringLiteral("paused");
+    // Momentary transitions. They say what is happening and then stop; a quiet
+    // neutral is the whole requirement.
     case UiRecordingState::Countdown:
     case UiRecordingState::Preparing:
     case UiRecordingState::RegionSelecting:
     case UiRecordingState::Stopping:
     case UiRecordingState::Saving:
-        return QStringLiteral("warning");
+        return QStringLiteral("busy");
     case UiRecordingState::Blocked:
     case UiRecordingState::Failed:
         return QStringLiteral("error");

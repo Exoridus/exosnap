@@ -70,7 +70,10 @@ Item {
         height: root.stackHeight
         color: ExoTheme.surfaceRaised
         border.width: 1
-        border.color: ExoTheme.lineStrong
+        // The panel around this component now carries the workspace boundary, so
+        // the track keeps only the hairline that separates it from the panel's
+        // own fill — `lineStrong` here made two competing edges 8 px apart.
+        border.color: ExoTheme.line
         radius: ExoTheme.radiusMd
         // The rows, the dim bands and the markers all have to stop at the
         // rounded shape; the handles and the playhead deliberately do not.

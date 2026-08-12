@@ -43,7 +43,11 @@ Button {
     rightPadding: root._iconOnly ? 0 : root.compact ? ExoTheme.spacingMd : ExoTheme.spacingLg
     topPadding: 0
     bottomPadding: 0
-    hoverEnabled: true
+    // Explicitly off while disabled: a quiet action carries no chrome at rest,
+    // so its hover fill is most of what says "this is a control" — and a
+    // disabled control that still lights up under the pointer is telling the
+    // user to press it.
+    hoverEnabled: root.enabled
     checkable: root.selectable
     autoExclusive: root.selectable
     focusPolicy: Qt.StrongFocus
@@ -88,6 +92,16 @@ Button {
     }
 
     background: Rectangle {
+        // The disabled rung applies to the CHROME, never to the label. A
+        // disabled control keeps `textDim`, and `textDim` sits at the 3:1
+        // product floor for an unavailable control (product-spec §8) with no
+        // headroom at all — the palette was nudged twice to reach it. Fading the
+        // whole control by `disabledOpacity` therefore does not dim the ink a
+        // little, it takes it to ~1.6:1 in Dark and ~1.7:1 in Light and undoes
+        // both of those nudges. Receding the fill and the border says
+        // "unavailable" and costs the ink nothing; see the gate in
+        // test_theme_contrast.cpp, which pins exactly this.
+        opacity: root.enabled ? 1.0 : ExoTheme.disabledOpacity
         color: root._primary
                ? (root.down ? ExoTheme.pressTint(ExoTheme.accent) : root.hovered ? ExoTheme.hoverTint(ExoTheme.accent) : ExoTheme.accent)
                : root.down ? ExoTheme.surfaceHover

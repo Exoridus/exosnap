@@ -23,7 +23,23 @@ ColumnLayout {
         Layout.fillWidth: true
         Accessible.role: Accessible.Button
         Accessible.name: root.title
-        onClicked: root.expanded = !root.expanded
+        // Whether the section is open is the whole state of this control, and
+        // the chevron that shows it is a drawn shape. Qt Quick's Accessible
+        // attached type has no expanded/collapsed property, so the supported
+        // representation of a two-state button in this stack is checkable +
+        // checked — which is what a screen reader reads back as pressed/not
+        // pressed rather than leaving the state unsaid.
+        Accessible.checkable: true
+        Accessible.checked: root.expanded
+        Accessible.focusable: true
+        Accessible.focused: header.activeFocus
+        Accessible.onPressAction: header.toggle()
+        Accessible.onToggleAction: header.toggle()
+        onClicked: header.toggle()
+
+        function toggle(): void {
+            root.expanded = !root.expanded;
+        }
 
         background: Rectangle {
             color: header.hovered ? ExoTheme.surfaceHover : "transparent"

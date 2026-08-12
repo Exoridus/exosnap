@@ -51,6 +51,29 @@ user in every state. Alongside it the details card gained a **compact density** 
 breakpoint only, freeing roughly 50 px for the export card at the minimum window. See "Export
 panel" and "Surface structure" below.
 
+**Amended (2026-08-12, final visual polish): workspace presentation, unchanged ownership.** The
+Qt Quick frontend's `EditOverlay` is still a layer over the Record page and still owns the clip,
+the decoder session and the export exactly as decided here — **no page migration happened, and
+none is claimed.** What changed is presentation. The Quick port had regressed the shape this ADR
+already settled: it covered the *whole* window with a scrim, a 20 px floating gap and a rounded,
+bordered frame nearly the size of the window, which read as a modal dialog and put the shell's own
+minimize/maximize/close buttons underneath it. It now occupies the normal page content region below
+the 40 px title band — the same "title bar stays visible" property the Widgets implementation had —
+with no scrim, no gap, no outer frame and no outer border.
+
+Two behavioural notes, so this file does not stay wrong about the shipped build:
+
+- **Nav tabs are disabled while the workspace is open**, with Record still marked as the current
+  destination. The Widgets shape closed the overlay through the discard guard when the user
+  navigated away; the Quick shape locks the tabs instead — the same lock the transport's source
+  controls take during a recording — because routing a navigation click through a guard that may
+  raise a dialog makes navigation conditional, which it is nowhere else in the product. Back is the
+  way out.
+- **The Done state offers one folder action.** `Open folder` and `Show in Explorer` were two labels
+  for one user task (the second opens the same folder *and* selects the file); the panel now offers
+  `Show in folder` alone. The "Export panel" section below still describes the pair and is kept for
+  history.
+
 ## Context
 
 After a recording stops, users need to decide what to do with the captured file: keep the MKV

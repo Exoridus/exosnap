@@ -605,6 +605,14 @@ qt_add_qml_module(record_controls_qml_tests
         ExoButton.qml
         ExoChevron.qml
         ExoDisclosure.qml
+        # The shared overlay card and the two components it draws itself from.
+        # Its layout invariants — the card staying out of the shell's title
+        # band, and the persistent decision strip surviving a scrolling body —
+        # are geometry, so they are asserted here rather than judged on a
+        # screenshot.
+        ExoOverlayCard.qml
+        ExoScrollBar.qml
+        ExoScrollView.qml
         # The record transport's two controls draw their icons with ExoGlyph, so
         # the test module has to carry it as well — without it qmllint resolves
         # nothing inside either component and reports the whole icon block.

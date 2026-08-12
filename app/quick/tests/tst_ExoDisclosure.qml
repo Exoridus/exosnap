@@ -66,6 +66,48 @@ TestCase {
         });
     }
 
+    // Qt Quick's Accessible attached type has no expanded/collapsed property, so
+    // a two-state button reports its state as checkable + checked. Without it a
+    // screen reader announced "What is included in this report?, button" and
+    // never said whether the section was open — the chevron that says so on
+    // screen is a drawn shape.
+    function test_header_reports_its_open_state_to_assistive_tools() {
+        let disclosure = createTemporaryObject(disclosureComponent, testCase);
+        verify(disclosure);
+        let header = findHeader(disclosure);
+        verify(header);
+
+        compare(header.Accessible.role, Accessible.Button);
+        compare(header.Accessible.name, "Evidence");
+        compare(header.Accessible.checkable, true);
+        compare(header.Accessible.checked, false);
+
+        disclosure.expanded = true;
+        compare(header.Accessible.checked, true);
+    }
+
+    function test_assistive_press_toggles_the_section() {
+        let disclosure = createTemporaryObject(disclosureComponent, testCase);
+        verify(disclosure);
+        let header = findHeader(disclosure);
+        verify(header);
+
+        // The press action a screen reader invokes has to do what a click does.
+        header.Accessible.pressAction();
+        compare(disclosure.expanded, true);
+        header.Accessible.pressAction();
+        compare(disclosure.expanded, false);
+    }
+
+    function findHeader(disclosure) {
+        for (let i = 0; i < disclosure.children.length; ++i) {
+            let child = disclosure.children[i];
+            if (child.Accessible.role === Accessible.Button)
+                return child;
+        }
+        return null;
+    }
+
     function findBody(disclosure) {
         for (let i = 0; i < disclosure.children.length; ++i) {
             let child = disclosure.children[i];

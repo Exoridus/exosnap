@@ -37,11 +37,17 @@ Item {
     readonly property bool chevronEnabled: !root.counting && !root.busy && root.recordViewModel.canStart
 
     // A countdown outranks `subdued`: cancelling it is unambiguously the action
-    // in flight, whatever else is on the bar.
-    readonly property color fill: root.counting ? ExoTheme.error
-                                : root.subdued ? ExoTheme.surfaceRaised : ExoTheme.accent
-    readonly property color ink: root.counting ? ExoTheme.errorInk
-                               : root.subdued ? ExoTheme.text : ExoTheme.accentInk
+    // in flight, whatever else is on the bar — so it keeps the accent fill
+    // rather than giving it up.
+    //
+    // It used to take the ERROR fill, which said "destructive" about a button
+    // that stops something from starting. Nothing has been recorded yet, no file
+    // exists and nothing is lost; the countdown's one available action is simply
+    // its primary action, and it is drawn like one. The face's own glyph carries
+    // the difference — a cross rather than the record dot — so Cancel and Record
+    // are never confused at a glance despite sharing a colour.
+    readonly property color fill: root.subdued && !root.counting ? ExoTheme.surfaceRaised : ExoTheme.accent
+    readonly property color ink: root.subdued && !root.counting ? ExoTheme.text : ExoTheme.accentInk
     readonly property bool outlined: root.subdued && !root.counting
 
     readonly property string mainText: root.counting ? qsTr("Cancel")
@@ -116,7 +122,7 @@ Item {
                 anchors.centerIn: parent
 
                 ExoGlyph {
-                    kind: ExoGlyph.Record
+                    kind: root.counting ? ExoGlyph.Close : ExoGlyph.Record
                     color: root.mainEnabled || root.busy ? root.ink : ExoTheme.textDim
                     width: 16
                     height: 16

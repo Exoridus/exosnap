@@ -171,8 +171,12 @@ Rectangle {
               : root.recordViewModel.elapsedText.length > 0 ? root.recordViewModel.elapsedText : qsTr("0:00")
         textFormat: Text.PlainText
         horizontalAlignment: Text.AlignHCenter
+        // Red while a recording is running, because that is the one state the
+        // clock is counting something irreversible in. Paused used to be amber
+        // here, which put caution on a number that is simply not advancing —
+        // it takes the accent the Resume action beside it carries instead.
         color: root.recordViewModel.recording ? ExoTheme.error
-                                              : root.recordViewModel.paused ? ExoTheme.warning : ExoTheme.text
+                                              : root.recordViewModel.paused ? ExoTheme.accent : ExoTheme.text
         anchors {
             horizontalCenter: parent.horizontalCenter
             verticalCenter: parent.verticalCenter
@@ -276,6 +280,11 @@ Rectangle {
             text: qsTr("Stop")
             round: false
             emphasised: true
+            // Filled while recording — ending the recording IS the state's one
+            // recommended action. Outlined while paused, where Resume holds that
+            // role: a filled red pill next to a filled accent pill gives the bar
+            // two primaries and no answer to "what now?".
+            emphasisOutlined: root.recordViewModel.paused
             emphasisColor: ExoTheme.error
             emphasisTextColor: ExoTheme.errorInk
             visible: root.recordViewModel.recording || root.recordViewModel.paused

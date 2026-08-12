@@ -74,7 +74,14 @@ Rectangle {
                     Label {
                         text: entry.modelData[root.valueKey] ?? ""
                         textFormat: Text.PlainText
-                        wrapMode: Text.WrapAnywhere
+                        // Wrap, not WrapAnywhere: a value is diagnostic content
+                        // and none of it may be dropped, but a multi-word one
+                        // ("MKV + AV1 + Opus + CFR 60 fps", an adapter name and
+                        // its driver revision) was being split mid-word when a
+                        // space was available two characters earlier. Wrap is
+                        // WordWrap with WrapAnywhere as the fallback, so an
+                        // unbroken build hash still breaks exactly where it did.
+                        wrapMode: Text.Wrap
                         horizontalAlignment: root.valueRightAligned ? Text.AlignRight : Text.AlignLeft
                         color: ExoTheme.text
                         Layout.fillWidth: !root.valueRightAligned
