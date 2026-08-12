@@ -59,10 +59,14 @@ target_link_libraries(exosnap_updater_logic
 # same binaries, never copied). Kept separate from exosnap_updater_logic so the
 # headless controller/arg tests stay Qt-Core-only.
 add_library(exosnap_updater_ui STATIC
+    ElidingLabel.cpp
+    ElidingLabel.h
     ProgressRing.cpp
     ProgressRing.h
     StepListWidget.cpp
     StepListWidget.h
+    UpdaterAccessibility.cpp
+    UpdaterAccessibility.h
     UpdaterWindow.cpp
     UpdaterWindow.h
     UpdaterTheme.h

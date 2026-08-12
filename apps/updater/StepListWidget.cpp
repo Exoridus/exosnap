@@ -129,6 +129,11 @@ class StepRow : public QWidget {
         default: text = QStringLiteral("queued"); tagColor = dim(); break;
         }
         tag_->setText(text);
+        // "Installing new files, working" -- the row's whole meaning in one
+        // string, because the glyph that carries it on screen is painted and
+        // therefore invisible to a screen reader. StepListWidget's accessible
+        // interface (role List) walks these rows in order.
+        setAccessibleName(QStringLiteral("%1, %2").arg(label_->text(), text));
         tag_->setStyleSheet(
             QStringLiteral("color:rgba(%1,%2,%3,%4);background:transparent;")
                 .arg(tagColor.red())

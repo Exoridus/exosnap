@@ -47,6 +47,18 @@ exosnap_add_gtest(
     LIBRARIES exosnap_updater_ui
 )
 
+# Layout, state-presentation and accessibility contracts measured on the real
+# widget tree rather than on pixels: long-version elision, the long msiexec
+# detail, the indeterminate pre-flight ring, the eyebrow that names the run, the
+# version emphasis after a terminal failure, and the accessible progress/step
+# semantics. Writes no evidence files.
+exosnap_add_gtest(
+    NAME    test_updater_text_layout
+    TEST_PREFIX updater.
+    SOURCES test_updater_text_layout.cpp
+    LIBRARIES exosnap_updater_ui
+)
+
 # Deterministic QWidget renders of the terminal failure matrix at representative
 # Windows DPR values. Evidence is written under .workspace/live-verify/.
 exosnap_add_gtest(

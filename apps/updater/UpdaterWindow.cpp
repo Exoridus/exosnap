@@ -18,8 +18,10 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include "ElidingLabel.h"
 #include "ProgressRing.h"
 #include "StepListWidget.h"
+#include "UpdaterAccessibility.h"
 #include "UpdaterTheme.h"
 
 namespace {
@@ -42,6 +44,27 @@ constexpr int kTitleBarHeight = 56;
 constexpr int kWindowButtonWidth = 46;
 constexpr int kActionHeight = 36;
 constexpr int kStatePanelHeight = 110;
+
+// Content column: the window minus the 24 px inset on each side. Every width
+// cap below is derived from it rather than guessed, because the window is a
+// fixed 520x680 and long content has to fit THAT, not a larger hypothetical one.
+constexpr int kContentInset = 24;
+constexpr int kContentWidth = kWindowWidth - 2 * kContentInset; // 472
+
+// Version pill box model. Named because the elision has to know how much of the
+// pill's width the chrome takes, and a second copy of "12" would drift.
+constexpr int kPillPaddingH = 12;
+constexpr int kPillPaddingV = 6;
+constexpr int kPillBorder = 1;
+constexpr int kPillGap = 12;
+constexpr int kChevronSize = 16;
+// Two pills, one chevron and two gaps share the content column.
+constexpr int kPillMaxWidth = (kContentWidth - kChevronSize - 2 * kPillGap) / 2; // 216
+
+// The status line sits right of a 16 px glyph with a 9 px gap.
+constexpr int kStatusGlyphSize = 16;
+constexpr int kStatusGap = 9;
+constexpr int kStatusTextMaxWidth = kContentWidth - kStatusGlyphSize - kStatusGap;
 
 // ── Small painted icon (status line + footer marks) ──────────────────────────
 enum class Ico { None, Check, Cross, Warning, ShieldCheck, Dot, Spinner, Chevron, Download, Layers };
@@ -170,7 +193,7 @@ class MarkWidget : public QWidget {
 
 QString pillStyle(const QColor& fg, const QColor& bgc, const QColor& border) {
     return QStringLiteral("QLabel{color:%1;background:rgba(%2,%3,%4,%5);"
-                          "border:1px solid rgba(%6,%7,%8,%9);border-radius:8px;padding:6px 12px;}")
+                          "border:%10px solid rgba(%6,%7,%8,%9);border-radius:8px;padding:%11px %12px;}")
         .arg(fg.name())
         .arg(bgc.red())
         .arg(bgc.green())
@@ -179,7 +202,10 @@ QString pillStyle(const QColor& fg, const QColor& bgc, const QColor& border) {
         .arg(border.red())
         .arg(border.green())
         .arg(border.blue())
-        .arg(border.alphaF());
+        .arg(border.alphaF())
+        .arg(kPillBorder)
+        .arg(kPillPaddingV)
+        .arg(kPillPaddingH);
 }
 
 QString rgba(const QColor& c) {
@@ -242,6 +268,7 @@ QPushButton* makeButton(const QString& text, ButtonVariant variant, QWidget* par
 // ── UpdaterWindow ────────────────────────────────────────────────────────────
 UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     EnsureUpdaterResources();
+    EnsureUpdaterAccessibility();
     ensureFontsLoaded();
     setWindowTitle(QStringLiteral("ExoSnap Updater"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -348,27 +375,43 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     vb->setContentsMargins(0, 0, 0, 0);
     vb->setSpacing(9);
 
-    auto* caption = new QLabel(QStringLiteral("UPDATING EXOSNAP"), versionBlock);
-    caption->setFont(mono(10, QFont::Medium));
-    caption->setStyleSheet(QStringLiteral("QLabel{color:%1;letter-spacing:1px;}").arg(dim().name()));
-    caption->setAlignment(Qt::AlignHCenter);
-    vb->addWidget(caption, 0, Qt::AlignHCenter);
+    // The eyebrow is where the run says what KIND of run it is. ADR 0055's
+    // verification reinstall and a terminal failure are both content-level
+    // markings here, because the title bar's role label stays "Updater" in
+    // every state -- a title that changes under the user is the thing this
+    // window deliberately does not do.
+    caption_ = new QLabel(QStringLiteral("UPDATING EXOSNAP"), versionBlock);
+    caption_->setObjectName(QStringLiteral("updaterEyebrow"));
+    caption_->setFont(mono(10, QFont::Medium));
+    caption_->setStyleSheet(QStringLiteral("QLabel{color:%1;letter-spacing:1px;}").arg(dim().name()));
+    caption_->setAlignment(Qt::AlignHCenter);
+    vb->addWidget(caption_, 0, Qt::AlignHCenter);
 
     auto* pillRow = new QWidget(versionBlock);
     auto* pr = new QHBoxLayout(pillRow);
     pr->setContentsMargins(0, 0, 0, 0);
-    pr->setSpacing(12);
+    pr->setSpacing(kPillGap);
 
-    from_pill_ = new QLabel(pillRow);
+    // Middle elision, not right: a build-metadata semver identifies itself by
+    // its TAIL (`…eba270a.windows-x64`), so dropping the right-hand side would
+    // remove exactly the part that says which build this pill stands for.
+    from_pill_ = new ElidingLabel(pillRow);
+    from_pill_->setObjectName(QStringLiteral("updaterFromVersionPill"));
+    from_pill_->setElideMode(Qt::ElideMiddle);
+    from_pill_->setMaximumWidth(kPillMaxWidth);
     from_pill_->setFont(mono(14, QFont::Medium));
     from_pill_->setStyleSheet(pillStyle(mut(), surf2(), line()));
     pr->addWidget(from_pill_);
 
-    auto* chevron = new GlyphWidget(16, pillRow);
-    chevron->set(Ico::Chevron, mint());
-    pr->addWidget(chevron);
+    auto* chevronGlyph = new GlyphWidget(kChevronSize, pillRow);
+    chevronGlyph->set(Ico::Chevron, mint());
+    chevron_ = chevronGlyph;
+    pr->addWidget(chevronGlyph);
 
-    to_pill_ = new QLabel(pillRow);
+    to_pill_ = new ElidingLabel(pillRow);
+    to_pill_->setObjectName(QStringLiteral("updaterToVersionPill"));
+    to_pill_->setElideMode(Qt::ElideMiddle);
+    to_pill_->setMaximumWidth(kPillMaxWidth);
     to_pill_->setFont(mono(14, QFont::DemiBold));
     to_pill_->setStyleSheet(pillStyle(mint(), accentDim(), accentBorder()));
     pr->addWidget(to_pill_);
@@ -387,11 +430,13 @@ UpdaterWindow::UpdaterWindow(QWidget* parent) : QWidget(parent) {
     status_row_->setFixedHeight(20);
     auto* sr = new QHBoxLayout(status_row_);
     sr->setContentsMargins(0, 0, 0, 0);
-    sr->setSpacing(9);
-    auto* statusIcon = new GlyphWidget(16, status_row_);
+    sr->setSpacing(kStatusGap);
+    auto* statusIcon = new GlyphWidget(kStatusGlyphSize, status_row_);
     status_icon_ = statusIcon;
     sr->addWidget(statusIcon, 0, Qt::AlignVCenter);
-    status_text_ = new QLabel(status_row_);
+    status_text_ = new ElidingLabel(status_row_);
+    status_text_->setObjectName(QStringLiteral("updaterStatusText"));
+    status_text_->setMaximumWidth(kStatusTextMaxWidth);
     sr->addWidget(status_text_, 0, Qt::AlignVCenter);
     col->addWidget(status_row_, 0, Qt::AlignHCenter);
     col->addSpacing(14);
@@ -487,13 +532,49 @@ QStringList UpdaterWindow::footerButtonLabels() const {
 }
 
 void UpdaterWindow::render(const UpdaterUiState& state) {
-    // Ring
+    // Ring. Indeterminate until the run has measured something: before that the
+    // ring drew a large "0 percent" while a second small spinner turned beside
+    // it, which read as two competing progress indicators, one of them showing
+    // a value nothing had produced.
     ring_->setValue(state.ring);
     ring_->setVariant(state.variant);
+    ring_->setIndeterminate(state.variant == TerminalVariant::None && !state.determinate);
 
-    // Version pills
-    from_pill_->setText(state.from_version);
-    to_pill_->setText(state.to_version);
+    // Eyebrow. Three truths, one line, no new geometry.
+    const bool failed_terminal =
+        state.variant == TerminalVariant::Amber || state.variant == TerminalVariant::Red;
+    if (failed_terminal) {
+        caption_->setText(state.verification_reinstall ? QStringLiteral("EXOSNAP WAS NOT REINSTALLED")
+                                                       : QStringLiteral("EXOSNAP WAS NOT UPDATED"));
+    } else {
+        caption_->setText(state.verification_reinstall ? QStringLiteral("REINSTALLING EXOSNAP")
+                                                       : QStringLiteral("UPDATING EXOSNAP"));
+    }
+
+    // Version pills. The accent belongs to whichever version is actually on the
+    // machine at the end of this run. After an Amber/Red terminal that is the
+    // FROM version -- leaving the target accent-filled there let a failed update
+    // read as "0.9.0-rc5 is installed", which is the opposite of what happened.
+    // Green, Success and RebootRequired did apply the update, so they keep the
+    // normal emphasis.
+    auto* chevron = static_cast<GlyphWidget*>(chevron_);
+    if (failed_terminal) {
+        from_pill_->setFont(mono(14, QFont::DemiBold));
+        from_pill_->setStyleSheet(pillStyle(ink(), surf2(), line2()));
+        to_pill_->setFont(mono(14, QFont::Medium));
+        to_pill_->setStyleSheet(pillStyle(dim(), withAlpha(surf2(), 0.0), line()));
+        chevron->set(Ico::Chevron, dim());
+    } else {
+        from_pill_->setFont(mono(14, QFont::Medium));
+        from_pill_->setStyleSheet(pillStyle(mut(), surf2(), line()));
+        to_pill_->setFont(mono(14, QFont::DemiBold));
+        to_pill_->setStyleSheet(pillStyle(mint(), accentDim(), accentBorder()));
+        chevron->set(Ico::Chevron, mint());
+    }
+    // After the font/style above, so the elision measures the metrics it will
+    // actually be painted with.
+    from_pill_->setFullText(state.from_version);
+    to_pill_->setFullText(state.to_version);
 
     // Fail-row tint follows the terminal variant.
     QColor failColor = caution();
@@ -518,7 +599,7 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
         icon->set(Ico::Spinner, mint());
         status_text_->setFont(mono(13, QFont::Medium));
         status_text_->setStyleSheet(QStringLiteral("color:%1;").arg(ink().name()));
-        status_text_->setText(state.status_line);
+        status_text_->setFullText(state.status_line);
     } else {
         Ico ico = Ico::Check;
         QColor toneCol = success();
@@ -555,7 +636,7 @@ void UpdaterWindow::render(const UpdaterUiState& state) {
         icon->set(ico, toneCol);
         status_text_->setFont(ui(14, QFont::DemiBold));
         status_text_->setStyleSheet(QStringLiteral("color:%1;").arg(ink().name()));
-        status_text_->setText(headline);
+        status_text_->setFullText(headline);
     }
 
     // Footer
@@ -624,19 +705,23 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
                         tone);
         resultIcon->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
         hr->addWidget(resultIcon, 0, Qt::AlignVCenter);
-        auto* headline = new QLabel(state.headline, header);
+        auto* headline = new ElidingLabel(header);
         headline->setObjectName(QStringLiteral("updaterResultHeadline"));
-        headline->setWordWrap(false);
         headline->setFont(ui(13, QFont::DemiBold));
         headline->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+        headline->setFullText(state.headline);
         hr->addWidget(headline, 1);
         box->addWidget(header);
 
-        auto* detail = new QLabel(state.detail_text, card);
+        // The state panel is a fixed 110 px block, so this line cannot grow to
+        // fit msiexec's own failure text. It elides and keeps the whole string
+        // on the tooltip and the accessible name, which is what turns
+        // "...ERROR_I" into a truncation the user can recognise and read.
+        auto* detail = new ElidingLabel(card);
         detail->setObjectName(QStringLiteral("updaterResultDetail"));
-        detail->setWordWrap(false);
         detail->setFont(ui(12, QFont::Normal));
         detail->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(mut().name()));
+        detail->setFullText(state.detail_text);
         box->addWidget(detail);
 
         auto* safety = new QWidget(card);
@@ -648,11 +733,11 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
         shield->set(Ico::ShieldCheck, success());
         shield->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
         safeRow->addWidget(shield, 0, Qt::AlignVCenter);
-        auto* safeText = new QLabel(state.safety_text, safety);
+        auto* safeText = new ElidingLabel(safety);
         safeText->setObjectName(QStringLiteral("updaterSafetyText"));
-        safeText->setWordWrap(false);
         safeText->setFont(ui(12, QFont::Medium));
         safeText->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+        safeText->setFullText(state.safety_text);
         safeRow->addWidget(safeText, 1);
         box->addWidget(safety);
     } else {
@@ -739,17 +824,19 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
         panelIcon->set(titleIcon, titleTone);
         panelIcon->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
         hr->addWidget(panelIcon, 0, Qt::AlignVCenter);
-        auto* titleLabel = new QLabel(title, header);
+        auto* titleLabel = new ElidingLabel(header);
         titleLabel->setObjectName(QStringLiteral("updaterWorkingTitle"));
         titleLabel->setFont(ui(13, QFont::DemiBold));
         titleLabel->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+        titleLabel->setFullText(title);
         hr->addWidget(titleLabel, 1);
         box->addWidget(header);
 
-        auto* detailLabel = new QLabel(detail, card);
+        auto* detailLabel = new ElidingLabel(card);
         detailLabel->setObjectName(QStringLiteral("updaterWorkingDetail"));
         detailLabel->setFont(ui(12, QFont::Normal));
         detailLabel->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(mut().name()));
+        detailLabel->setFullText(detail);
         box->addWidget(detailLabel);
 
         auto* safetyRow = new QWidget(card);
@@ -761,10 +848,11 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
         shield->set(Ico::ShieldCheck, success());
         shield->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
         sr->addWidget(shield, 0, Qt::AlignVCenter);
-        auto* safetyLabel = new QLabel(safety, safetyRow);
+        auto* safetyLabel = new ElidingLabel(safetyRow);
         safetyLabel->setObjectName(QStringLiteral("updaterWorkingSafety"));
         safetyLabel->setFont(ui(12, QFont::Medium));
         safetyLabel->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;").arg(ink().name()));
+        safetyLabel->setFullText(safety);
         sr->addWidget(safetyLabel, 1);
         box->addWidget(safetyRow);
     }
@@ -799,7 +887,13 @@ void UpdaterWindow::buildFooter(const UpdaterUiState& state) {
             ar->addWidget(button);
         }
     } else if (successDone) {
-        hint->setText(QStringLiteral("ExoSnap is starting automatically."));
+        // Deliberately no hint. The action hint's job in every other state is to
+        // say what the button next to it does — "Cancelling discards this update
+        // run", "This phase cannot be interrupted" — and the terminal-result
+        // states leave it empty. Success used to repeat the panel's own safety
+        // line verbatim instead, so "ExoSnap is starting automatically" appeared
+        // twice on one screen: once as the explanation of the state and once as
+        // the caption of a Close button it does not describe.
         auto* button = makeButton(QStringLiteral("Close"), ButtonVariant::Secondary, actions);
         connect(button, &QPushButton::clicked, this, &UpdaterWindow::requestClose);
         footer_buttons_ << button;

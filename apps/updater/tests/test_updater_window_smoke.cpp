@@ -21,6 +21,7 @@
 #include <array>
 #include <memory>
 
+#include "ElidingLabel.h"
 #include "StepListWidget.h"
 #include "UpdaterController.h"
 #include "UpdaterWindow.h"
@@ -81,9 +82,32 @@ void Settle(UpdaterWindow& window) {
     }
 }
 
+// The string a label STANDS FOR, which is not always the string it paints: the
+// window's text rows elide, and `text()` on an ElidingLabel is whatever fits the
+// width the layout last gave it. These assertions are about the copy, so they
+// have to ask for the copy.
+QStringList LabelStrings(const UpdaterWindow& window) {
+    QStringList out;
+    for (const auto* label : window.findChildren<QLabel*>()) {
+        if (const auto* eliding = qobject_cast<const ElidingLabel*>(label))
+            out << eliding->fullText();
+        else
+            out << label->text();
+    }
+    return out;
+}
+
 void ExpectLabelFitsOneLine(const UpdaterWindow& window, const char* object_name) {
     const auto* label = window.findChild<QLabel*>(QString::fromLatin1(object_name));
     ASSERT_NE(label, nullptr) << object_name;
+    // For an eliding row the contract is not "the full string fits" — it cannot
+    // be, for content this window receives from outside — but "what is painted
+    // fits its box, on one line".
+    if (const auto* eliding = qobject_cast<const ElidingLabel*>(label)) {
+        EXPECT_LE(eliding->fontMetrics().horizontalAdvance(eliding->text()), eliding->textAreaWidth())
+            << object_name << " overflows its own box: " << eliding->text().toStdString();
+        return;
+    }
     EXPECT_GE(label->width(), label->fontMetrics().horizontalAdvance(label->text()))
         << object_name << " wrapped or clipped: " << label->text().toStdString();
 }
@@ -108,9 +132,7 @@ TEST_F(UpdaterWindowTest, RenderShowsEveryStepLabelInTheWidgetTree) {
     UpdaterWindow window;
     window.render(InstallInFlight());
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     for (const QString& expected : UpdaterWindow::stepLabels())
         EXPECT_TRUE(seen.contains(expected)) << expected.toStdString();
 }
@@ -385,9 +407,7 @@ TEST_F(UpdaterWindowTest, MsiRebootRequiredHeadlineMentionsRestart) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::MsiRebootRequired));
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     bool mentions_restart = false;
     for (const QString& text : seen)
         mentions_restart = mentions_restart || text.contains(QStringLiteral("restart Windows"));
@@ -398,9 +418,7 @@ TEST_F(UpdaterWindowTest, MsiVerifyFailureDoesNotClaimAConfirmedRollback) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::VerifyInstallFailedMsi));
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     bool could_not_confirm = false;
     bool restored = false;
     for (const QString& text : seen) {
@@ -435,9 +453,7 @@ TEST_F(UpdaterWindowTest, GreenVariantRendersLaunchRowTagAsManual) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::LaunchFailed));
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     EXPECT_TRUE(seen.contains(QStringLiteral("manual")));
     EXPECT_FALSE(seen.contains(QStringLiteral("failed")));
 }
@@ -446,9 +462,7 @@ TEST_F(UpdaterWindowTest, RedVariantRendersFailedRowTagAsFailed) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::VerifyInstallFailed));
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     EXPECT_TRUE(seen.contains(QStringLiteral("failed")));
     EXPECT_FALSE(seen.contains(QStringLiteral("manual")));
 }
@@ -457,9 +471,7 @@ TEST_F(UpdaterWindowTest, AmberVariantRendersFailedRowTagAsFailed) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::InstallFailed));
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     EXPECT_TRUE(seen.contains(QStringLiteral("failed")));
     EXPECT_FALSE(seen.contains(QStringLiteral("manual")));
 }
@@ -471,9 +483,7 @@ TEST_F(UpdaterWindowTest, TerminalAmberHasNoKeepOnNote) {
     UpdaterWindow window;
     window.render(Terminal(FailureCase::InstallFailed));
 
-    QStringList seen;
-    for (auto* label : window.findChildren<QLabel*>())
-        seen << label->text();
+    const QStringList seen = LabelStrings(window);
     for (const QString& text : seen)
         EXPECT_FALSE(text.contains(QStringLiteral("Keep your computer on"))) << text.toStdString();
 }

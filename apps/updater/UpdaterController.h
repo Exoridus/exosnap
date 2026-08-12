@@ -38,7 +38,12 @@ enum class FailureCase : uint8_t { // failure matrix cases
 
 struct UpdaterUiState {
     std::array<StepStatus, size_t(UpStep::Count)> steps{};
-    double ring = 0.0;   // 0..1
+    double ring = 0.0; // 0..1
+    // False until the run has produced a real measurement (download bytes, or a
+    // completed step). The window paints an indeterminate ring while it is
+    // false rather than a large "0 percent", which is a number nothing has
+    // measured yet.
+    bool determinate = false;
     QString status_line; // mono line under the ring
     TerminalVariant variant = TerminalVariant::None;
     // Terminal content is structured so the warning card owns its headline,
@@ -49,9 +54,11 @@ struct UpdaterUiState {
     QString primary_action;   // "" = hidden
     QString secondary_action; // "" = hidden
     QString from_version, to_version;
-    // ADR 0055: this run reinstalls the IDENTICAL version on purpose. The window
-    // marks it (title tag) and the working status lines say "reinstall", so the
-    // user is never told a version changed when none did.
+    // ADR 0055: this run reinstalls the IDENTICAL version on purpose. The title
+    // bar deliberately does NOT change -- it stays the stable "Updater" role
+    // label -- so the marking is content-level: the window's eyebrow reads
+    // "REINSTALLING EXOSNAP" and the working status lines say "reinstall", so
+    // the user is never told a version changed when none did.
     bool verification_reinstall = false;
 };
 
