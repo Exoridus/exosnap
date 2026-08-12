@@ -49,19 +49,33 @@ Rectangle {
     readonly property int actionGap: (root.compactControls ? ExoTheme.spacingMd : ExoTheme.spacingLg)
                                      - root.clusterSpacing
 
-    // A raised dock with recessed controls, not a flat bar with outlined ones.
-    // The two clusters had drifted apart: the source toggles sat on `surface`
-    // with a hairline, the action buttons on `surfaceRaised` with a full-strength
-    // one, on a bar that was itself `surface` — so eight round peers on one bar
-    // carried three different treatments and only the outlines told them apart.
-    // Lifting the BAR one step and dropping every control onto `surface` gives
-    // the same relationship in all four themes and lets the hairline go quiet.
+    // The dock is the base and its controls sit ON it. The previous pass had it
+    // the other way round — a `surfaceRaised` bar with `surface` controls — and
+    // side by side that reads as eight dark holes punched into the transport
+    // rather than as eight buttons: the thing meant to be pressed was the darkest
+    // thing on the page. Dropping the bar to `surface` and lifting every control
+    // to `surfaceRaised` inverts exactly that one relationship; the geometry,
+    // the grouping and the gaps are untouched.
+    //
+    // Where the three states resolve is ExoTheme.dockFill / dockBorder / dockInk,
+    // not here, because the source toggles and the action buttons are peers on
+    // this bar and had drifted into three different treatments between them.
     implicitHeight: (root.compactControls ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge)
                     + 2 * root.contentInsetY
-    color: ExoTheme.surfaceRaised
+    color: ExoTheme.surface
     border.width: 1
     border.color: ExoTheme.line
     radius: height / 2
+
+    // Why a source cannot be toggled right now, in the order the conditions are
+    // actually evaluated below. Composed from the same state the `available`
+    // bindings read, so the sentence can never disagree with the button.
+    readonly property string sourceLockReason: !root.recordViewModel.canSelectSource
+                                               ? qsTr("Unavailable — the capture setup is locked while a recording runs.")
+                                               : root.recordViewModel.blocked
+                                                 ? qsTr("Unavailable — Diagnostics is reporting a blocker.")
+                                                 : root.recordViewModel.failed
+                                                   ? qsTr("Unavailable — the last recording failed.") : ""
 
     // ── Left: the sources ────────────────────────────────────────────────────
     RowLayout {
@@ -81,8 +95,9 @@ Rectangle {
             accessibleLabel: qsTr("System audio")
             checkedState: root.recordViewModel.systemAudioEnabled
             meterLevel: root.recordViewModel.systemMeter
-            enabled: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                     && !root.recordViewModel.failed
+            available: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
+                       && !root.recordViewModel.failed
+            unavailableReason: root.sourceLockReason
             onClicked: root.recordViewModel.requestToggleSource("system")
         }
 
@@ -93,8 +108,9 @@ Rectangle {
             accessibleLabel: qsTr("Application audio")
             checkedState: root.recordViewModel.appAudioEnabled
             meterLevel: root.recordViewModel.appMeter
-            enabled: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
-                     && !root.recordViewModel.failed
+            available: root.recordViewModel.canSelectSource && !root.recordViewModel.blocked
+                       && !root.recordViewModel.failed
+            unavailableReason: root.sourceLockReason
             visible: root.recordViewModel.appAudioVisible
             onClicked: root.recordViewModel.requestToggleSource("app")
         }
@@ -103,12 +119,16 @@ Rectangle {
             compact: root.compactControls
             shortLabel: qsTr("MIC")
             glyph: ExoGlyph.Mic
-            accessibleLabel: root.recordViewModel.microphoneAvailable
-                             ? qsTr("Microphone") : qsTr("No microphone connected")
+            accessibleLabel: qsTr("Microphone")
             checkedState: root.recordViewModel.microphoneEnabled
             meterLevel: root.recordViewModel.microphoneMeter
-            enabled: root.recordViewModel.canSelectSource && root.recordViewModel.microphoneAvailable
-                     && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            available: root.recordViewModel.canSelectSource && root.recordViewModel.microphoneAvailable
+                       && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            // The device fact outranks the session lock: with no microphone
+            // attached, "locked while a recording runs" would be true and
+            // useless — plugging one in is what changes the answer.
+            unavailableReason: !root.recordViewModel.microphoneAvailable
+                               ? qsTr("Unavailable — no microphone was detected.") : root.sourceLockReason
             onClicked: root.recordViewModel.requestToggleSource("microphone")
         }
 
@@ -116,14 +136,26 @@ Rectangle {
             compact: root.compactControls
             shortLabel: qsTr("CAM")
             glyph: ExoGlyph.Camera
-            accessibleLabel: root.recordViewModel.webcamError
-                             ? qsTr("Camera can't be opened — %1").arg(root.recordViewModel.webcamErrorText)
-                             : root.recordViewModel.webcamAvailable ? qsTr("Webcam")
-                                                                    : qsTr("No camera connected")
+            accessibleLabel: qsTr("Webcam")
             checkedState: root.recordViewModel.webcamEnabled
             errorState: root.recordViewModel.webcamError
-            enabled: root.recordViewModel.webcamAvailable && !root.recordViewModel.finalizing
-                     && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            meterLevel: 0
+            available: root.recordViewModel.webcamAvailable && !root.recordViewModel.finalizing
+                       && !root.recordViewModel.blocked && !root.recordViewModel.failed
+            // The engine's own words when it has them. `webcamErrorText` is the
+            // reason the camera would not open, which no generic sentence here
+            // could improve on.
+            unavailableReason: root.recordViewModel.webcamError
+                               ? qsTr("Can't be opened — %1").arg(root.recordViewModel.webcamErrorText)
+                               : !root.recordViewModel.webcamAvailable
+                                 ? qsTr("Unavailable — no camera was detected.")
+                                 : root.recordViewModel.finalizing
+                                   ? qsTr("Unavailable — the recording is still being written.")
+                                   // The camera is not part of the capture setup
+                                   // the recording lock covers, so it never
+                                   // borrows the lock's sentence.
+                                   : root.recordViewModel.blocked || root.recordViewModel.failed
+                                     ? root.sourceLockReason : ""
             onClicked: root.recordViewModel.requestToggleSource("webcam")
         }
     }
@@ -173,10 +205,12 @@ Rectangle {
             accessibleLabel: qsTr("Capture frame")
             text: qsTr("Frame")
             glyph: ExoGlyph.Shutter
-            enabled: root.recordViewModel.captureFrameEnabled
+            available: root.recordViewModel.captureFrameEnabled
+            // The screenshot is read back out of the live preview, so before the
+            // preview has produced a frame there is nothing to capture. Saying so
+            // is the difference between "broken" and "not yet".
+            unavailableReason: qsTr("Unavailable — the preview has not produced a frame yet.")
             visible: !root.recordViewModel.preparing && !root.recordViewModel.finalizing
-            ToolTip.visible: hovered
-            ToolTip.text: accessibleLabel
             onClicked: root.recordViewModel.requestCaptureFrame()
         }
 
@@ -186,8 +220,6 @@ Rectangle {
             text: qsTr("Mark")
             glyph: ExoGlyph.Flag
             visible: root.recordViewModel.recording || root.recordViewModel.paused
-            ToolTip.visible: hovered
-            ToolTip.text: accessibleLabel
             onClicked: root.recordViewModel.requestAddMarker()
         }
 
@@ -196,10 +228,12 @@ Rectangle {
             accessibleLabel: qsTr("Split recording")
             text: qsTr("Split")
             glyph: ExoGlyph.Scissors
-            enabled: root.recordViewModel.splitEnabled
+            available: root.recordViewModel.splitEnabled
+            // Two real causes, and only the first is worth a sentence: a manual
+            // split needs a Matroska container, or one is already in flight. The
+            // second clears itself within a segment boundary.
+            unavailableReason: qsTr("Unavailable — a manual split needs an MKV or WebM container.")
             visible: root.recordViewModel.recording || root.recordViewModel.paused
-            ToolTip.visible: hovered
-            ToolTip.text: accessibleLabel
             onClicked: root.recordViewModel.requestSplit()
         }
 
@@ -214,8 +248,6 @@ Rectangle {
             text: qsTr("Pause")
             glyph: ExoGlyph.Pause
             visible: root.recordViewModel.recording
-            ToolTip.visible: hovered
-            ToolTip.text: accessibleLabel
             onClicked: root.recordViewModel.requestPause()
         }
 
@@ -268,11 +300,11 @@ Rectangle {
             if (!root.recordViewModel.active)
                 return
             Qt.callLater(() => {
-                if (pauseButton.visible && pauseButton.enabled)
+                if (pauseButton.visible && pauseButton.available)
                     pauseButton.forceActiveFocus()
-                else if (resumeButton.visible && resumeButton.enabled)
+                else if (resumeButton.visible && resumeButton.available)
                     resumeButton.forceActiveFocus()
-                else if (stopButton.visible && stopButton.enabled)
+                else if (stopButton.visible && stopButton.available)
                     stopButton.forceActiveFocus()
                 else if (primaryButton.visible)
                     primaryButton.forceActiveFocus()

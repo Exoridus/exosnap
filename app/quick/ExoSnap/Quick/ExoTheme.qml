@@ -120,6 +120,72 @@ QtObject {
         return root.dark ? Qt.darker(base, 1.10) : Qt.darker(base, 1.12);
     }
 
+    // An accent-tinted version of a surface, for a control that is ON. Blended
+    // into the surface rather than laid over it at alpha, so the same call
+    // produces one readable step in both appearances instead of washing a light
+    // surface out.
+    function accentTint(base: color, strength: real): color {
+        return Qt.tint(base, Qt.rgba(root.accent.r, root.accent.g, root.accent.b, strength));
+    }
+
+    // ── Transport dock controls ──────────────────────────────────────────────
+    //
+    // The dock is the recessed base and its round controls sit ON it. It used to
+    // be the other way round — a raised bar with controls a step DARKER than it —
+    // which read as eight holes punched into the transport rather than as eight
+    // buttons. These three functions are the whole relationship, in one place,
+    // because the source toggles and the action buttons are peers on the same bar
+    // and had drifted into three different treatments between them.
+    //
+    // Available and unavailable are deliberately far apart, on two cues at once:
+    // an unavailable control drops to the dock's own fill (so it is not raised)
+    // AND to the dimmest ink rung. The previous treatment moved only the ink,
+    // which made "no microphone attached" and "microphone switched off" look the
+    // same. It keeps its hairline, because a source that cannot be used stays
+    // VISIBLE and disabled rather than disappearing (product spec §8) — losing
+    // the border as well left a blank patch of dock where a control should be.
+    // Unavailable does not mean stateless. The transport locks its source
+    // toggles for the whole recording, which is exactly when "is the system
+    // audio actually being recorded?" matters most — so an unavailable control
+    // that is ON keeps the FULL accent on its icon and its ring, and says
+    // "not interactive" through the fill instead: flat with the dock, only
+    // lightly tinted, and with no hover or press state.
+    //
+    // The accent was briefly muted here (45 % on the ring, 60 % on the icon) to
+    // reinforce the unavailability. The contrast gate rejected it — the ring
+    // fell to 1.9:1 against a light dock — and the fix is the right design
+    // anyway: dimming the one cue that answers "which sources am I recording?"
+    // was paying in legibility for something the fill already says.
+    function dockFill(available: bool, active: bool, hovered: bool, pressed: bool): color {
+        if (!available)
+            return active ? root.accentTint(root.surface, 0.12) : root.surface;
+        const base = hovered || pressed ? root.surfaceHover : root.surfaceRaised;
+        const rest = active ? root.accentTint(base, 0.22) : base;
+        return pressed ? root.pressTint(rest) : rest;
+    }
+
+    function dockBorder(available: bool, active: bool, hovered: bool, errorState: bool, focused: bool): color {
+        if (focused)
+            return root.text;
+        if (!available)
+            return active ? root.accent : root.line;
+        if (errorState)
+            return root.error;
+        if (active)
+            return root.accent;
+        return hovered ? root.lineStrong : root.line;
+    }
+
+    function dockInk(available: bool, active: bool, errorState: bool, hovered: bool): color {
+        if (!available)
+            return active ? root.accent : root.textDim;
+        if (errorState)
+            return root.error;
+        if (active)
+            return root.accent;
+        return hovered ? root.text : root.textSecondary;
+    }
+
     // ── Responsive width classes ─────────────────────────────────────────────
     //
     // A desktop recorder, not a web page: three classes are enough, and every one

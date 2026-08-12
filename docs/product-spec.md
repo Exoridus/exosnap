@@ -38,19 +38,27 @@ principles that shape every visible decision:
 
 ## 2. Navigation and information architecture
 
-Top-level navigation is **six items**, in order:
+Every destination is directly reachable in the title band, in this order:
 
-**Record · Device · Settings · Diagnostics · Logs · About**
+**Record · Settings · Diagnostics · Logs · About**
+
+There is no overflow menu and no secondary navigation tier. Five words fit the band at the
+**860 × 700** minimum window, so hiding three of them behind a glyph bought nothing and cost a click
+plus a menu on the way to Diagnostics — the page a user opens precisely when something is already
+wrong. Below the regular width class the tabs give up horizontal padding (12 px → 8 px) and the gap
+after the wordmark narrows; the labels are never shortened, elided, or set smaller, and the window
+buttons never give up room (§ title bar below).
+
+The dividing rule for content is:
+
+- **Settings** owns what the user tells ExoSnap to do.
+- **Diagnostics** owns what ExoSnap observes about the machine and the runtime.
+
+A read-only hardware inspector therefore does not live in Settings, and an editable product
+setting does not live in Diagnostics.
 
 - **Record** — the operational view: capture target, readiness, live preview before recording, and
   the live runtime (technical) view while recording.
-- **Device** — encoder adapter selection plus the per-GPU capability matrix. One card per DXGI
-  adapter (iGPU/dGPU); a per-adapter matrix shows codec support and provenance for the selected
-  adapter, including per-codec 8-bit 4:4:4 (YUV444) encode support probed on that specific GPU
-  (H.264 / HEVC — AV1 is 4:2:0 only), plus per-codec NVENC advanced-encode facts — B-frames
-  (max count), Lookahead, and Temporal AQ — probed the same way (informational only; no Expert
-  control reads these facts yet). Not-yet-wired backends (AMD/AMF, Intel/QSV, software
-  x264/SVT-AV1) appear as honest grayed-out "planned" rows — never fabricated probes.
 - **Settings** — unified recording configuration, hosting embedded sections: **Container & codecs ·
   Quality & timing · Audio · Output · Webcam · Overlays · Notifications & presence · Hotkeys · Updates ·
   Appearance · Developer**. There is no separate Advanced section — a global **Expert** toggle
@@ -58,7 +66,15 @@ Top-level navigation is **six items**, in order:
   revealing a whole card; every section, including Developer, is visible in both modes (§12).
   Hotkeys is an embedded full-width card, not a separate nav item.
 - **Diagnostics** — the live, changeable environment as readiness cards (disk, display, audio,
-  elevation, blockers), plus a capability-matrix reference section.
+  elevation, blockers), plus a **Hardware capabilities** section: one card per detected DXGI
+  adapter (iGPU/dGPU), with the per-adapter capability matrix for whichever card is being
+  inspected — codec support and its provenance, per-codec 8-bit 4:4:4 (YUV444) encode support
+  probed on that specific GPU (H.264 / HEVC — AV1 is 4:2:0 only), and per-codec NVENC
+  advanced-encode facts: B-frames (max count), Lookahead and Temporal AQ. All of it is
+  informational; no Expert control reads these facts. Selecting a card is **inspection only** —
+  the encode device is not a user choice (see §2.1). The section is collapsed by default and
+  expanded in Expert mode; expanding it is what starts the adapter scan, so a cold DXGI
+  enumeration and NVENC probe are never paid for unasked.
 - **Logs** — runtime events and per-session recording diagnostics, a **Startup** latency table,
   and a **Create support bundle** action.
 - **About** — application identity, build metadata, and links. The metadata table permanently
@@ -80,18 +96,109 @@ stay clickable for the whole edit session. Its backdrop is opaque, so the Record
 show through. **Back** (or Escape / backdrop click, except while exporting) closes the overlay and
 returns to Record; when trim points or markers are set it asks before discarding them.
 
-The default theme is **dark mode**.
+### 2.1 The encode device is not a user choice
 
-The frameless main window carries a **subtle native 1px border** in the active theme's line color
-(it follows Windows 11's rounded window corners and updates on a theme switch). On Windows versions
-without per-window border colors the default system frame is kept — never an error.
+ExoSnap does not offer an encoder-device or encoder-backend selector, and the UI never implies one.
+
+The reason is the pipeline, not the design. The capture path creates one D3D11 device — matched to
+the adapter that owns the target monitor for DXGI Output Duplication, or the default adapter for
+window capture — and NVENC opens **on that same device**. There is no second, independently chosen
+encode device to point somewhere else, and no adapter preference in the recorder configuration.
+Presenting a picker would therefore either do nothing or require a cross-adapter transfer path the
+pipeline does not have.
+
+Consequences the UI must respect:
+
+- Diagnostics states which adapter is *actually* carrying the encode, and every other detected
+  adapter reads as **not encoding** — a fact about now, never a promise about a backend.
+- Unshipped encoder backends (AMD/AMF, Intel Quick Sync, software x264/SVT-AV1) do **not** appear
+  in production UI at all. Roadmap belongs in the repository roadmap, not in a product surface
+  where it reads as an available capability.
+- If explicit encode-device selection is ever shipped, it needs a persistent hardware identity
+  first: the DXGI adapter LUID identifies an adapter only within the current desktop session and
+  must not be persisted across reboots.
+
+### 2.2 Appearance and accent
+
+The product has exactly **two base appearances** — **Dark** (the default) and **Light** — and a
+small curated **accent** palette chosen independently of them. The default is **Dark + Aqua**, the
+Studio-Mint identity colour.
+
+The two axes are separate because coupling them served nobody: the four complete themes this
+replaces (`dark-default`, `dark-indigo`, `light-paper`, `light-slate`) each pinned one hue to one
+set of neutrals, so choosing indigo also meant accepting a different background, and two light
+themes existed mainly because neither could carry the other's accent.
+
+| Accent | Intent |
+|--------|--------|
+| **Aqua** (default) | Studio mint — the ExoSnap identity |
+| Sky | Petrol blue — cooler and quieter |
+| Violet | Periwinkle — more contrast against the neutrals |
+| Magenta | Warm pink — the most assertive of the four |
+
+The list is deliberately small, and deliberately all cool. **Coral, amber and green are the
+product's semantic colours** — recording/error, caution, ready/success — and an accent sharing one
+of those hues would make an ordinary selection read as a state. **Semantic meaning wins over palette
+breadth**: no state colour is ever derived from the accent, and switching accent never changes what
+recording, caution or ready look like. There is no free colour picker, no user-defined surface
+colour, and no separate primary/background/surface customisation.
+
+The accent drives selection: the active nav underline, the primary action, active toggles, focus
+rings and selected-card tint. Content drawn *on* a filled accent surface uses a curated contrasting
+ink per accent and appearance, never a derived one.
+
+**Light** is one base, rebuilt rather than inherited. It distinguishes four surface rungs —
+application background, primary surface, raised control surface, and hover/selected — none of which
+is pure white, plus restrained borders. Both light themes it replaces set the raised-control surface
+*and* the hover surface to pure white, which collapsed two rungs into one; that is why the light UI
+read as flat, and why a hovered control looked identical to a resting one. The page is a light cool
+neutral so a near-white control has something to sit on, and hover steps back *down* towards the
+page — there is no headroom above white to step up into.
+
+An installation that stored one of the four old theme ids is migrated to the closest pair on first
+launch and keeps the colour it had:
+
+| Stored theme | Appearance | Accent |
+|--------------|-----------|--------|
+| `dark-default` | Dark | Aqua |
+| `dark-indigo` | Dark | Violet |
+| `light-paper` | Light | **Sky** |
+| `light-slate` | Light | Violet |
+
+Mapped by the accent hue the user actually saw, not by position in the old list — which is why
+`light-paper` lands on Sky rather than on the default Aqua: its accent was petrol blue, exactly
+Sky's light value. An unreadable or absent preference resolves to **Dark + Aqua**; it never
+produces a blank or unstyled window.
+
+Every shipped appearance/accent pair is held to contrast thresholds by semantic role, not to one
+blanket ratio: **4.5:1** for text and for the ink on a filled accent or error control (WCAG 1.4.3 —
+the product's largest button label is 16 px DemiBold, which is not "large text", so nothing gets a
+discount), and **3:1** for the indicators that identify a control's state — the selected nav
+underline, an active control's ring, the keyboard focus ring, and the recording / caution / ready
+colours (WCAG 1.4.11). An **unavailable** control is exempt from both criteria, but the product
+promises it stays visible rather than disappearing (§8), so it is held to the same 3:1 anyway. A
+resting hairline is not: it separates surfaces, it is not what identifies a control.
+
+Settings → **Appearance** exposes the two axes as two rows: Appearance as a segmented Dark/Light
+control (two mutually exclusive values do not deserve a list that must be opened to see the other
+one), and Accent as a row of round swatches. Each swatch is drawn in the value the accent will
+actually take in the **current** appearance, so a light-mode swatch never shows its dark-mode
+colour. Selection is marked by a ring in the appearance's own text colour rather than in the accent
+— a swatch outlined in its own colour is invisible as a selection. Every swatch is keyboard
+reachable and carries the accent's name as its accessible name.
+
+---
+
+The frameless main window carries a **subtle native 1px border** in the active appearance's line
+color (it follows Windows 11's rounded window corners and updates on an appearance switch). On
+Windows versions without per-window border colors the default system frame is kept — never an error.
 
 The window has exactly **one** title bar: ExoSnap's own 40 px band. Windows reserves no non-client
 area for it, so no native caption is drawn above the product's. The band carries, left to right: the
-brand mark and the **exosnap** wordmark (the second half in the accent colour), the six nav
-destinations, the drag handle, the permanent engine-state pill, the notification bell, and the three
-window buttons. The **selected destination is marked by an accent underline**, not by an enclosing
-box — six words in a 40 px band shared with the window buttons cannot each carry a frame without the
+brand mark and the **exosnap** wordmark (the second half in the accent colour), the five nav
+destinations, the drag handle, the permanent engine-state pill, the
+notification bell, and the three window buttons. The **selected destination is marked by an accent
+underline**, not by an enclosing box — words in a 40 px band shared with the window buttons cannot each carry a frame without the
 band reading as a toolbar. The keyboard focus ring is drawn only while a keyboard user has focus.
 The window buttons are the last thing that may be given up when the band runs out of room: at the
 860 px minimum window the nav tabs compress before Close does.
@@ -109,7 +216,7 @@ was last closed comes back maximized without showing its normal size first.
 Every nav destination that has a page title states it the same way: the destination's name on the
 page-title rung, on the same axis as its own content, with that page's controls (Expert toggle,
 Rescan, filters) on the right of the same row. **Record** is the one destination with no page title
-— its context band names the capture target instead, because the preview is that page's subject —
+— its Preview Toolbar names the capture target instead, because the preview is that page's subject —
 and **About** is the one with no header at all, being a single centred identity card.
 
 ---
@@ -120,7 +227,8 @@ The built-in default profile is **MKV + AV1 + Opus + CFR 60 fps**.
 
 | Setting | Default |
 |---------|---------|
-| Theme | Dark mode |
+| Appearance | Dark |
+| Accent | Aqua |
 | Container | MKV |
 | Video codec | AV1 (NVENC) |
 | Audio codec | Opus |
@@ -495,9 +603,10 @@ picker releases every capture it opened.
 aspect ratio** — width-driven and vertically centered in the available space (height-clamped and
 horizontally centered for sources taller than the area) — so **the edge of the box is the edge of
 the recording**: there are no letterbox/pillarbox fill bars inside the box, and genuinely black
-recorded content is distinguishable from padding. The box is borderless and square-cornered in the
-neutral state; the recording / paused / warning / blocked status tone renders as a **square 1px
-line directly on the video edge** (plus the existing recording scanline treatment). The box follows
+recorded content is distinguishable from padding. The box carries a **1px line on its edge** in the
+current state's tone — quiet in the neutral state, and the recording / paused / warning / blocked
+tone otherwise (plus the existing recording scanline treatment); that line is the Preview Surface's
+own border, so the toolbar above the frame is inside the same ring (§8). The box follows
 aspect changes live: switching targets, changing a region, or the captured source changing its own
 dimensions re-fits the box. With no source selected (or before the source's dimensions are known)
 the box keeps its default full-area size. The preview's meta/stats text rows (top target line,
@@ -512,6 +621,15 @@ through a monitor unplug/replug** instead of blanking — production resumes whe
 The capture exists only while the preview is visible and is closed with it. Window and Region
 previews run their own Windows Graphics Capture of the selected target (see KNOWN_LIMITATIONS for
 the exact boundary).
+
+**Preview presentation is producer-driven, and never owes a frame.** The preview redraws when the
+capture producer publishes a frame, not on a timer and not at display refresh — an idle desktop
+costs nothing. The guarantee that comes with that: **if a frame has been published and the window
+could not render it — it was moving between monitors, it was unexposed, its scene graph was being
+rebuilt — that frame is presented as soon as the window can render again.** No second frame and no
+unrelated interaction is needed to release it. In particular, moving the window from one display to
+another never leaves the preview frozen until the mouse moves. This holds for the idle preview and
+for the live preview during a recording alike.
 
 **Ready-state dock gating.** The single-frame capture (screenshot) button reads a frame back from the
 live preview, so in the Ready state it stays disabled until that preview has actually rendered its
@@ -679,24 +797,36 @@ exists** (for example: no supported NVENC encoder detected, hard-stop disk thres
 unresolved HDR10-vs-H.264 conflict). If no supported NVIDIA NVENC encoder is detected, recording is
 blocked with a diagnostic message rather than silently falling back.
 
-**Page composition.** The Record page is three bands on one rhythm: a **context band**, the
-**preview stage**, and the **transport dock**.
+**Page composition.** The Record page is two things on one rhythm: the **Preview Surface** and the
+**transport dock**, with the shared 24 px page inset around them and 16 px between them.
 
-The context band replaces a page title. It states, on one quiet surface, what is being captured
-(target kind and name), whether that choice is currently locked by a running recording (a **LOCKED**
-badge), and what the recording will be written as (the resolved format summary), with **Change
-source** at its right end. It is a context statement, not a second toolbar, and it never duplicates
-what the preview already says.
+The **Preview Surface** is one surface with two parts — a compact **Preview Toolbar** and, directly
+below it, the live frame — sharing one border, one radius and one width, divided only by a hairline.
+It replaces a separate full-width context card that sat above the preview: two rounded rectangles a
+scale step apart said the same thing twice (the card named the source, the preview showed it), and
+the card's height plus the gap to the preview cost the page's subject roughly 70 px of stage for a
+row of text that never changes while recording.
 
-The preview stage is the page's subject and takes all remaining height. The live frame keeps the
-source's aspect ratio and is ringed in the current state's colour — quiet while idle, amber while
-counting down or paused, coral while recording or after a failure. Over it sit the state pill (top
-left) and, while recording or paused, the live readout (bitrate, drops, drift, output size) on the
-same ground as that pill. Nothing that changes with engine state is placed *around* the preview, so
-the frame never resizes because of a message appearing beside it.
+The toolbar is **38 px** — two rungs under the shell's 40 px title band, so the two never read as a
+pair of title bars — and it is chrome *on* the stage, not a second page header. It carries, left to
+right: a glyph for the capture-target kind (display / window / region), the source name, a
+**LOCKED** badge while a running recording has fixed that choice, and at the right end the resolved
+format summary as one understated run plus **Change source**. There is no separate `SCREEN` /
+`WINDOW` eyebrow — the glyph and the source name already say it, and the accessible name still
+states it in words. At the 860 px minimum window the toolbar stays **one line** and never grows: the
+format summary gives up room first, the source identity and the way back to the picker never do.
 
-**Transport dock.** The Record page's controls sit in one raised bar along the bottom, in three
-groups of deliberately different weight:
+The frame below the toolbar is the page's subject and takes all remaining height. It keeps the
+source's aspect ratio, and the whole Preview Surface is ringed in the current state's colour — quiet
+while idle, amber while counting down or paused, coral while recording or after a failure. Over the
+frame sit the state pill (top left) and, while recording or paused, the live readout (bitrate,
+drops, drift, output size) on the same ground as that pill. Nothing that changes with engine state
+is placed *around* the frame, so it never resizes because a message appeared beside it.
+
+**Transport dock.** The Record page's controls sit in one bar along the bottom, in three
+groups of deliberately different weight. The **dock is the recessed base and its controls sit on
+it** — a raised bar with darker controls read as holes punched into the transport, which made the
+thing meant to be pressed the darkest thing on the page.
 
 - **Left — the sources.** One round icon button per audio/video source (`APP`, `SYS`, `MIC`, camera),
   each carrying its live level as an arc on its own edge. These are icons, not labels: they are the
@@ -709,6 +839,27 @@ groups of deliberately different weight:
 - **Right — the actions**, in two tiers: the per-recording secondary actions (capture frame, add
   marker, split, pause) as round icon buttons, then the one recommended action — **Record**,
   **Resume** or **Stop** — as a wider filled pill. There is never more than one filled pill.
+
+**Round-control states.** Every round dock control reads the same way in every state, and the four
+states are told apart by more than one cue:
+
+| State | Reads as |
+|-------|----------|
+| Available, off | Raised surface, hairline border, secondary ink |
+| Hover | One step brighter surface, stronger border, full-strength ink; no movement |
+| Active / on | Accent-tinted surface **and** accent border **and** accent icon |
+| Unavailable | Drops to the dock's own fill (no longer raised) and to the dimmest ink, keeping its hairline so the control is still visibly there; no hover or press state |
+
+Unavailable and merely-off must never look alike. The earlier treatment moved only the icon colour,
+which made "no microphone attached" and "microphone switched off" identical.
+
+**Reason tooltips.** Every icon-only dock control has a tooltip naming it, and when it is
+unavailable the tooltip carries a second line saying **why**, in the product's own words — the
+camera's actual open failure when there is one, "no camera was detected", "no microphone was
+detected", "the capture setup is locked while a recording runs", "the preview has not produced a
+frame yet", "a manual split needs an MKV or WebM container". A reason is never invented when a real
+one exists. The reason is also the control's accessible description, and it is reachable by hover
+even though the control cannot be activated.
 
 **Preparing.** Between the trigger (or the end of the countdown) and the running recording, the app
 briefly shows a **Preparing** state while device setup — display facts, webcam open, and the capture
@@ -1043,7 +1194,8 @@ headline + subline, the Run-check control, and the last-check timestamp), then a
 — **Readiness · Encoder · Disk · Display · Audio · Capture target**, plus a **Last session** tile once
 a completed recording exists — that reflows from four columns down to two as the window narrows. Any
 Tier-1/Tier-2 card follows, then one bundled Tier-3 tip chip integrated into the same layout. The
-static capability matrix lives on the **Device** page, not here.
+per-adapter capability matrix follows below, inside the collapsed **Hardware capabilities** section
+(§2) — health first, technical capability second.
 
 **FixAction model.** Each detected issue can carry a typed, executable fix action with a safety
 class, never applied silently:

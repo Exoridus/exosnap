@@ -407,8 +407,8 @@ int main(int argc, char* argv[]) {
         quick_application.applyHarnessWindowSize(requested_size);
 
     // Harness-only: selects which navigation destination a --visual-test capture
-    // renders. Nav indices follow the canonical product order (Record, Device,
-    // Settings, Diagnostics, Logs, About).
+    // renders. Nav indices follow the canonical product order (Record, Settings,
+    // Diagnostics, Logs, About).
     const QString visual_page = optionValue(arguments, QStringLiteral("--visual-page"));
     if (!visual_page.isEmpty()) {
         bool page_ok = false;
@@ -421,13 +421,38 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Harness-only: renders a --visual-test capture in the named theme without
-    // touching persisted settings, so all four shipped themes stay reviewable.
-    const QString visual_theme = optionValue(arguments, QStringLiteral("--visual-theme"));
-    if (!visual_theme.isEmpty()) {
-        if (auto* tokens = quick_application.engine().singletonInstance<exosnap::quick::QuickThemeTokens*>(
-                QStringLiteral("ExoSnap.Quick"), QStringLiteral("QuickThemeTokens"))) {
-            tokens->setThemeId(visual_theme);
+    // Harness-only: renders a --visual-test capture in the named appearance and
+    // accent. Either may be given alone; the other keeps its current value.
+    //
+    // Driven through the settings adapter rather than straight into the token
+    // singleton, so the Appearance card's own controls agree with the colours
+    // the capture shows — a screenshot in Light whose segmented control reads
+    // "Dark" is worse evidence than no screenshot. Harness runs are isolated
+    // into a scratch config dir (harnessConfigId), so persisting is a no-op
+    // against the developer's real settings.
+    const QString visual_appearance = optionValue(arguments, QStringLiteral("--visual-appearance"));
+    const QString visual_accent = optionValue(arguments, QStringLiteral("--visual-accent"));
+    if (!visual_appearance.isEmpty() || !visual_accent.isEmpty()) {
+        if (auto* settings = quick_application.settingsAdapter()) {
+            if (!visual_appearance.isEmpty())
+                settings->setAppearanceId(visual_appearance);
+            if (!visual_accent.isEmpty())
+                settings->setAccentId(visual_accent);
+        } else if (auto* tokens = quick_application.engine().singletonInstance<exosnap::quick::QuickThemeTokens*>(
+                       QStringLiteral("ExoSnap.Quick"), QStringLiteral("QuickThemeTokens"))) {
+            tokens->setAppearance(visual_appearance.isEmpty() ? tokens->appearanceId() : visual_appearance,
+                                  visual_accent.isEmpty() ? tokens->accentId() : visual_accent);
+        }
+    }
+
+    // Harness-only: scrolls the Settings page to its end so a capture can reach
+    // the cards below the fold. Appearance is the last of them, and no window
+    // height on a real display reaches it — the window is clamped to the screen
+    // work area long before the content ends.
+    if (arguments.contains(QStringLiteral("--settings-visual-bottom"))) {
+        if (auto* page = root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
+                                                : nullptr) {
+            QMetaObject::invokeMethod(page, "scrollToBottom");
         }
     }
 

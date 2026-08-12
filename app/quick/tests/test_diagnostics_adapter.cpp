@@ -216,14 +216,11 @@ TEST(DiagnosticsAdapterTest, NavigationIsAnIntentNotAPageSwitch) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     SignalCounter logs(&adapter, &DiagnosticsAdapter::navigateToLogsRequested);
-    SignalCounter device(&adapter, &DiagnosticsAdapter::navigateToDeviceRequested);
     SignalCounter report(&adapter, &DiagnosticsAdapter::openLastReportRequested);
 
     adapter.openLogs();
-    adapter.openDevice();
     adapter.openLastReport(); // gated: no completed recording yet
     EXPECT_EQ(logs.count(), 1);
-    EXPECT_EQ(device.count(), 1);
     EXPECT_EQ(report.count(), 0);
 
     adapter.setHasLastRecording(true);

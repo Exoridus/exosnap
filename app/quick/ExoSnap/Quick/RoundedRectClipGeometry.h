@@ -22,6 +22,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace exosnap::quick {
@@ -33,30 +34,43 @@ inline constexpr int kClipBoundaryVertices = 4 * (kClipSegmentsPerCorner + 1);
 // One triangle per boundary edge, fanned from the centre, three vertices each.
 inline constexpr int kClipTriangleVertices = 3 * kClipBoundaryVertices;
 
+// Per-corner radii, in the order the loop below walks the ring:
+// top-right, bottom-right, bottom-left, top-left. A zero entry is a square
+// corner and is drawn as such — the arc degenerates to the corner point itself,
+// which the triangle list handles without a special case.
+//
+// Two radii exist because the Record preview is now the lower half of one
+// surface whose upper half is the preview toolbar: its bottom corners follow the
+// surface, its top corners meet a straight divider and must be square. A single
+// radius would either round the video away from the divider or leave its bottom
+// corners poking out past the surface border.
+using ClipCornerRadii = std::array<qreal, 4>;
+
 // Fills `geometry` with a rounded-rect mask for `rect` as an explicit triangle
-// list. `bounded_radius` must already be clamped to half the shorter side; the
-// caller decides the degenerate cases (a zero radius is a rectangular clip and
-// should never reach here).
-inline void BuildRoundedRectClipGeometry(QSGGeometry* geometry, const QRectF& rect, qreal bounded_radius) {
+// list. Every radius must already be clamped to half the shorter side; the
+// caller decides the degenerate cases (all-zero is a rectangular clip and should
+// never reach here).
+inline void BuildRoundedRectClipGeometry(QSGGeometry* geometry, const QRectF& rect, const ClipCornerRadii& radii) {
     geometry->allocate(kClipTriangleVertices);
     geometry->setDrawingMode(QSGGeometry::DrawTriangles);
     QSGGeometry::Point2D* vertices = geometry->vertexDataAsPoint2D();
 
     const QPointF corner_centers[] = {
-        {rect.right() - bounded_radius, rect.top() + bounded_radius},
-        {rect.right() - bounded_radius, rect.bottom() - bounded_radius},
-        {rect.left() + bounded_radius, rect.bottom() - bounded_radius},
-        {rect.left() + bounded_radius, rect.top() + bounded_radius},
+        {rect.right() - radii[0], rect.top() + radii[0]},
+        {rect.right() - radii[1], rect.bottom() - radii[1]},
+        {rect.left() + radii[2], rect.bottom() - radii[2]},
+        {rect.left() + radii[3], rect.top() + radii[3]},
     };
 
     QSGGeometry::Point2D boundary[kClipBoundaryVertices];
     int index = 0;
     for (int corner = 0; corner < 4; ++corner) {
         const qreal start_degrees = -90.0 + 90.0 * corner;
+        const qreal radius = radii[static_cast<size_t>(corner)];
         for (int segment = 0; segment <= kClipSegmentsPerCorner; ++segment) {
             const qreal radians = qDegreesToRadians(start_degrees + 90.0 * segment / kClipSegmentsPerCorner);
-            boundary[index++].set(static_cast<float>(corner_centers[corner].x() + std::cos(radians) * bounded_radius),
-                                  static_cast<float>(corner_centers[corner].y() + std::sin(radians) * bounded_radius));
+            boundary[index++].set(static_cast<float>(corner_centers[corner].x() + std::cos(radians) * radius),
+                                  static_cast<float>(corner_centers[corner].y() + std::sin(radians) * radius));
         }
     }
 
@@ -70,6 +84,12 @@ inline void BuildRoundedRectClipGeometry(QSGGeometry* geometry, const QRectF& re
         // Wraps on the last edge, which is what closes the ring.
         vertices[vertex++] = boundary[(edge + 1) % kClipBoundaryVertices];
     }
+}
+
+// The uniform case, which is what the editor player and every other caller want.
+inline void BuildRoundedRectClipGeometry(QSGGeometry* geometry, const QRectF& rect, qreal bounded_radius) {
+    BuildRoundedRectClipGeometry(geometry, rect,
+                                 ClipCornerRadii{bounded_radius, bounded_radius, bounded_radius, bounded_radius});
 }
 
 } // namespace exosnap::quick

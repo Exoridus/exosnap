@@ -213,7 +213,7 @@ DeviceAdapter::DeviceAdapter(QObject* parent) : QObject(parent) {
     // handed to the JS garbage collector either.
     QQmlEngine::setObjectOwnership(&adapter_model_, QQmlEngine::CppOwnership);
     QQmlEngine::setObjectOwnership(&capability_model_, QQmlEngine::CppOwnership);
-    updateSettingsBanner();
+    updateSummaryText();
 }
 
 QAbstractListModel* DeviceAdapter::adapters() noexcept {
@@ -282,9 +282,10 @@ QString DeviceAdapter::selectedStateBadge() const {
     if (!matrixVisible())
         return {};
     // Green "ACTIVE ENCODER" only for the one adapter actually backing the
-    // encoder right now; every other adapter — including a probed-but-unused
-    // second NVIDIA GPU — reads "Backend planned".
-    return selectedIsActive() ? QStringLiteral("ACTIVE ENCODER") : QStringLiteral("Backend planned");
+    // encoder right now. Every other adapter — including a probed-but-unused
+    // second NVIDIA GPU — reads "Not encoding": a statement about what this
+    // machine is doing, not a promise about a backend ExoSnap might ship.
+    return selectedIsActive() ? QStringLiteral("ACTIVE ENCODER") : QStringLiteral("Not encoding");
 }
 
 bool DeviceAdapter::selectedIsActive() const noexcept {
@@ -302,29 +303,6 @@ QString DeviceAdapter::provenanceText() const {
 
 bool DeviceAdapter::provenanceOk() const noexcept {
     return matrixVisible() && capabilities_[static_cast<size_t>(selected_index_)].probed;
-}
-
-QVariantList DeviceAdapter::roadmapBackends() const {
-    // Static roadmap list — these describe not-yet-implemented ENCODER BACKENDS
-    // (not specific hardware), so they are not derived from EnumerateAdapters().
-    struct Backend {
-        const char* name;
-        const char* description;
-    };
-    static constexpr Backend kBackends[] = {
-        {"AMD · AMF", "Radeon dGPU / APU encode path"},
-        {"Intel · Quick Sync (QSV)", "iGPU encode — detected above, backend not yet wired"},
-        {"Software · x264 / SVT-AV1", "CPU fallback when no hardware encoder is present"},
-    };
-
-    QVariantList backends;
-    for (const auto& backend : kBackends) {
-        QVariantMap entry;
-        entry.insert(QStringLiteral("name"), QString::fromUtf8(backend.name));
-        entry.insert(QStringLiteral("description"), QString::fromUtf8(backend.description));
-        backends.append(entry);
-    }
-    return backends;
 }
 
 void DeviceAdapter::ensureScanned() {
@@ -409,7 +387,7 @@ void DeviceAdapter::applyScanResults(std::vector<capability::AdapterInfo> adapte
         selected_luid_ = 0;
         renderCapabilityMatrix();
         setStatus(QStringLiteral("No encoder-capable adapters were found on this system."), true);
-        updateSettingsBanner();
+        updateSummaryText();
         emit scanCompleted();
         return;
     }
@@ -429,7 +407,7 @@ void DeviceAdapter::applyScanResults(std::vector<capability::AdapterInfo> adapte
     if (next_selection < 0)
         next_selection = active_index_ >= 0 ? active_index_ : 0;
     selectAdapter(next_selection);
-    updateSettingsBanner();
+    updateSummaryText();
     emit scanCompleted();
 }
 
@@ -552,19 +530,23 @@ void DeviceAdapter::renderCapabilityMatrix() {
     capability_model_.setRows(std::move(rows));
 }
 
-void DeviceAdapter::updateSettingsBanner() {
+void DeviceAdapter::updateSummaryText() {
     QString text;
     if (active_index_ >= 0 && active_index_ < static_cast<int>(adapters_.size())) {
-        text = QStringLiteral("ExoSnap encodes on %1 — Settings' codec, bit-depth, and resolution controls only "
-                              "offer what it can actually encode. Selecting another card above inspects that "
-                              "adapter's capabilities; switching the encode device is planned.")
+        // No roadmap language: the encode device is not a choice ExoSnap offers,
+        // because NVENC opens on the D3D11 device the capture path created for
+        // the target being recorded (video_thread.cpp). Saying "switching is
+        // planned" here presented a backlog item as a product capability.
+        text = QStringLiteral("ExoSnap encodes on %1 — the encoder follows the adapter that owns the capture "
+                              "target, and Settings only offers what it can encode. Selecting another card "
+                              "inspects that adapter's capabilities.")
                    .arg(AdapterDisplayTitle(adapters_[static_cast<size_t>(active_index_)]));
     } else if (scanned_ && adapters_.empty()) {
         text = QStringLiteral("No working NVENC encoder was detected — Settings falls back to the static "
                               "capability baseline.");
     } else if (scanned_) {
         text = QStringLiteral("No working NVENC encoder was detected — Settings falls back to the static "
-                              "capability baseline. Selecting a card above inspects that adapter's capabilities.");
+                              "capability baseline. Selecting a card inspects that adapter's capabilities.");
     } else {
         text = QStringLiteral("The active encoder device drives Settings' codec, bit-depth, and resolution options.");
     }

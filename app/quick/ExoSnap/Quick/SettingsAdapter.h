@@ -191,8 +191,12 @@ class SettingsAdapter : public QObject {
                    appSettingsChanged FINAL)
 
     // ---- Appearance ---------------------------------------------------------
-    Q_PROPERTY(QVariantList themeOptions READ themeOptions CONSTANT FINAL)
-    Q_PROPERTY(QString themeId READ themeId WRITE setThemeId NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(QVariantList appearanceOptions READ appearanceOptions CONSTANT FINAL)
+    Q_PROPERTY(QString appearanceId READ appearanceId WRITE setAppearanceId NOTIFY appSettingsChanged FINAL)
+    // Not CONSTANT: each entry carries the accent's swatch as it looks in the
+    // CURRENT appearance, so the list has to be re-read when that changes.
+    Q_PROPERTY(QVariantList accentOptions READ accentOptions NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(QString accentId READ accentId WRITE setAccentId NOTIFY appSettingsChanged FINAL)
 
     // ---- Developer ----------------------------------------------------------
     Q_PROPERTY(QVariantList logLevelOptions READ logLevelOptions CONSTANT FINAL)
@@ -408,8 +412,10 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void setRecordingOverlayElement(const QString& token, bool enabled);
     Q_INVOKABLE void setDiagnosticsOverlayElement(const QString& token, bool enabled);
 
-    [[nodiscard]] QVariantList themeOptions() const;
-    [[nodiscard]] QString themeId() const;
+    [[nodiscard]] QVariantList appearanceOptions() const;
+    [[nodiscard]] QString appearanceId() const;
+    [[nodiscard]] QVariantList accentOptions() const;
+    [[nodiscard]] QString accentId() const;
     [[nodiscard]] QVariantList logLevelOptions() const;
     [[nodiscard]] QString developerLogLevel() const;
     [[nodiscard]] QVariantList crashReportPolicyOptions() const;
@@ -527,7 +533,8 @@ class SettingsAdapter : public QObject {
     void setKeepRunningInTray(bool value);
     void setOpenEditorWhenFinished(bool value);
     void setPresentDiagnosticsOptIn(bool value);
-    void setThemeId(const QString& value);
+    void setAppearanceId(const QString& value);
+    void setAccentId(const QString& value);
     void setDeveloperLogLevel(const QString& value);
     void setCrashReportPolicy(int value);
     void setUpdateChannel(const QString& value);

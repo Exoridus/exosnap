@@ -49,9 +49,9 @@ qt_add_qml_module(exosnap
         CrashReportOverlay.qml
         DeviceAdapterCard.qml
         DeviceCapabilityMatrix.qml
+        DeviceCapabilityPanel.qml
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
-        DevicePage.qml
         DiagnosticsPage.qml
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
@@ -745,6 +745,30 @@ target_include_directories(settings_qml_adapter_tests
 )
 
 target_compile_definitions(settings_qml_adapter_tests PRIVATE NOMINMAX)
+
+# The appearance x accent contrast gate. Reads the resolved tokens through
+# QuickThemeTokens rather than the table, so a derivation rule that changes a
+# colour is caught here too, and needs nothing else from the application.
+exosnap_add_gtest(
+    NAME theme_contrast_tests
+    TEST_PREFIX quick_theme_contrast.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_theme_contrast.cpp
+        QuickThemeTokens.cpp
+        QuickThemeTokens.h
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+)
+
+target_include_directories(theme_contrast_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+
+target_compile_definitions(theme_contrast_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME device_qml_adapter_tests

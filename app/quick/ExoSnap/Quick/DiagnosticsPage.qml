@@ -17,6 +17,10 @@ Item {
     id: root
 
     required property DiagnosticsAdapter diagnostics
+    // Detected adapters and their encoder capabilities. Observed facts about the
+    // machine, so they belong here rather than under a navigation destination of
+    // their own — see DeviceCapabilityPanel.
+    required property DeviceAdapter device
 
     // The tile grid reflows on the tiles' own minimum width rather than on window
     // thresholds, so it stays right inside a narrow column too. Free in QML; there
@@ -36,7 +40,6 @@ Item {
     readonly property real sideInset: Math.max(0, (root.contentBox - root.contentWidth) / 2)
 
     signal navigateToLogsRequested()
-    signal navigateToDeviceRequested()
     signal navigateToSettingsRequested()
 
     objectName: "quickDiagnosticsPage"
@@ -67,10 +70,6 @@ Item {
 
         function onNavigateToLogsRequested(): void {
             root.navigateToLogsRequested();
-        }
-
-        function onNavigateToDeviceRequested(): void {
-            root.navigateToDeviceRequested();
         }
 
         function onNavigateToSettingsRequested(): void {
@@ -384,6 +383,31 @@ Item {
                     }
                 }
 
+                // ── Hardware capabilities ───────────────────────────────────────
+                //
+                // Available in Simple as well as Expert: this used to be a whole
+                // navigation destination, and burying it behind the Expert toggle
+                // would have removed reachable functionality rather than moved it.
+                // Collapsed by default so a healthy page stays short, and so the
+                // DXGI enumeration + NVENC probe behind it only runs when asked
+                // for — expanded straight away in Expert, where the rest of the
+                // technical taxonomy is already open.
+                ExoDisclosure {
+                    // No subtitle: the panel opens on DeviceAdapter's own summary
+                    // line, which says the same thing with the real adapter name
+                    // in it. Two explanatory paragraphs stacked on top of each
+                    // other read as one of them being unread.
+                    title: qsTr("Hardware capabilities")
+                    expanded: root.diagnostics.expertMode
+                    Layout.fillWidth: true
+
+                    body: Component {
+                        DeviceCapabilityPanel {
+                            device: root.device
+                        }
+                    }
+                }
+
                 // ── Expert-only taxonomy ────────────────────────────────────────
                 ColumnLayout {
                     spacing: ExoTheme.spacingLg
@@ -398,30 +422,6 @@ Item {
                     ExoKeyValueTable {
                         rows: root.diagnostics.environmentRows
                         Layout.fillWidth: true
-                    }
-
-                    RowLayout {
-                        spacing: ExoTheme.spacingMd
-                        Layout.fillWidth: true
-
-                        Label {
-                            text: qsTr("Hardware capabilities (GPU, codecs, displays, audio devices)")
-                            textFormat: Text.PlainText
-                            wrapMode: Text.WordWrap
-                            color: ExoTheme.textMuted
-                            Layout.fillWidth: true
-                            Layout.minimumHeight: 17
-                            font {
-                                family: ExoTheme.sansFamily
-                                pixelSize: ExoTheme.fontSecondary
-                            }
-                        }
-
-                        ExoButton {
-                            text: qsTr("Device →")
-                            quiet: true
-                            onClicked: root.diagnostics.openDevice()
-                        }
                     }
 
                     ExoDisclosure {

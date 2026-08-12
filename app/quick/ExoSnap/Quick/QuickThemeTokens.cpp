@@ -10,14 +10,17 @@
 namespace exosnap::quick {
 namespace {
 
-using ui::theme::ExoTheme;
-using ui::theme::kDefaultThemeId;
-using ui::theme::kExoThemes;
+using ui::theme::ExoAccent;
+using ui::theme::ExoAppearance;
+using ui::theme::kDefaultAccentId;
+using ui::theme::kDefaultAppearanceId;
+using ui::theme::kExoAccents;
+using ui::theme::kExoAppearances;
+using ui::theme::kExoThemeMigrations;
 using ui::theme::ThemeKind;
 
-// The theme table stores line tokens as CSS `rgba(r, g, b, a)` strings for the
-// QSS pipeline. QColor does not parse that form, so convert it here; plain hex
-// values pass straight through.
+// The tables store line tokens as CSS `rgba(r, g, b, a)` strings, which QColor
+// does not parse; plain hex values pass straight through.
 QColor parseToken(const char* token) {
     if (token == nullptr) {
         return {};
@@ -43,75 +46,112 @@ QColor blend(const QColor& from, const QColor& to, double t) {
                   qRound(from.blue() * (1.0 - s) + to.blue() * s));
 }
 
-const ExoTheme& resolveTheme(const QString& theme_id) {
-    for (const ExoTheme& theme : kExoThemes) {
-        if (theme_id == QLatin1StringView(theme.id)) {
-            return theme;
+const ExoAppearance& resolveAppearance(const QString& appearance_id) {
+    for (const ExoAppearance& appearance : kExoAppearances) {
+        if (appearance_id == QLatin1StringView(appearance.id)) {
+            return appearance;
         }
     }
-    return kExoThemes.front();
+    return kExoAppearances.front();
+}
+
+const ExoAccent& resolveAccent(const QString& accent_id) {
+    for (const ExoAccent& accent : kExoAccents) {
+        if (accent_id == QLatin1StringView(accent.id)) {
+            return accent;
+        }
+    }
+    return kExoAccents.front();
 }
 
 } // namespace
 
 QuickThemeTokens::QuickThemeTokens(QObject* parent) : QObject(parent) {
-    setThemeId(QString::fromUtf8(kDefaultThemeId));
+    setAppearance(QString::fromUtf8(kDefaultAppearanceId), QString::fromUtf8(kDefaultAccentId));
 }
 
-void QuickThemeTokens::setThemeId(const QString& theme_id) {
-    const ExoTheme& theme = resolveTheme(theme_id);
-    const QString resolved_id = QString::fromUtf8(theme.id);
-    if (theme_id_ == resolved_id) {
+void QuickThemeTokens::setAppearance(const QString& appearance_id, const QString& accent_id) {
+    const ExoAppearance& appearance = resolveAppearance(appearance_id);
+    const ExoAccent& accent = resolveAccent(accent_id);
+    const QString resolved_appearance = QString::fromUtf8(appearance.id);
+    const QString resolved_accent = QString::fromUtf8(accent.id);
+    if (appearance_id_ == resolved_appearance && accent_id_ == resolved_accent) {
         return;
     }
 
-    theme_id_ = resolved_id;
-    dark_ = theme.kind == ThemeKind::Dark;
+    appearance_id_ = resolved_appearance;
+    accent_id_ = resolved_accent;
+    dark_ = appearance.kind == ThemeKind::Dark;
 
-    background_ = parseToken(theme.bg);
-    surface_ = parseToken(theme.surf);
-    surface_raised_ = parseToken(theme.surf2);
-    surface_hover_ = parseToken(theme.raise);
-    line_ = parseToken(theme.line);
-    line_strong_ = parseToken(theme.line2);
-    text_ = parseToken(theme.ink);
-    text_muted_ = parseToken(theme.mut);
-    text_dim_ = parseToken(theme.dim);
-    accent_ = parseToken(theme.ac);
-    accent_ink_ = parseToken(theme.ac_ink);
-    warning_ = parseToken(theme.caution);
-    error_ = parseToken(theme.error);
-    error_ink_ = parseToken(theme.error_ink);
-    success_ = parseToken(theme.success);
+    background_ = parseToken(appearance.bg);
+    surface_ = parseToken(appearance.surf);
+    surface_raised_ = parseToken(appearance.surf2);
+    surface_hover_ = parseToken(appearance.raise);
+    line_ = parseToken(appearance.line);
+    line_strong_ = parseToken(appearance.line2);
+    text_ = parseToken(appearance.ink);
+    text_secondary_ = parseToken(appearance.text1);
+    text_muted_ = parseToken(appearance.mut);
+    text_dim_ = parseToken(appearance.dim);
+    warning_ = parseToken(appearance.caution);
+    error_ = parseToken(appearance.error);
+    error_ink_ = parseToken(appearance.error_ink);
+    success_ = parseToken(appearance.success);
 
-    // Same rule as the QSS pipeline: explicit override wins, otherwise derive.
-    text_secondary_ =
-        theme.text1_override != nullptr ? parseToken(theme.text1_override) : blend(text_, text_muted_, 0.42);
+    accent_ = parseToken(dark_ ? accent.dark : accent.light);
+    accent_ink_ = parseToken(dark_ ? accent.dark_ink : accent.light_ink);
 
-    // Tinted notice backgrounds have no entry in the shared table (QSS composes
-    // them with alpha). Deriving them from this theme's own base keeps all four
-    // themes consistent instead of hardcoding one palette's values.
+    // Tinted notice grounds have no entry in the shared tables (they are a
+    // design-system derivation, not a palette value). Derived from this
+    // appearance's own base so both appearances stay consistent instead of
+    // hardcoding one palette's values.
     warning_surface_ = blend(background_, warning_, dark_ ? 0.13 : 0.16);
     error_surface_ = blend(background_, error_, dark_ ? 0.13 : 0.16);
 
     emit changed();
 }
 
-QVariantList QuickThemeTokens::themeOptions() {
+QVariantList QuickThemeTokens::appearanceOptions() {
     QVariantList options;
-    for (const ExoTheme& theme : kExoThemes) {
+    for (const ExoAppearance& appearance : kExoAppearances) {
         QVariantMap entry;
-        entry.insert(QStringLiteral("value"), QString::fromUtf8(theme.id));
-        entry.insert(QStringLiteral("label"), QString::fromUtf8(theme.name));
+        entry.insert(QStringLiteral("value"), QString::fromUtf8(appearance.id));
+        entry.insert(QStringLiteral("label"), QString::fromUtf8(appearance.name));
         entry.insert(QStringLiteral("selectable"), true);
-        entry.insert(QStringLiteral("reason"), QString::fromUtf8(theme.intent));
+        entry.insert(QStringLiteral("reason"), QString::fromUtf8(appearance.intent));
         options.append(entry);
     }
     return options;
 }
 
-const QString& QuickThemeTokens::themeId() const noexcept {
-    return theme_id_;
+QVariantList QuickThemeTokens::accentOptions(const QString& appearance_id) {
+    const bool dark = resolveAppearance(appearance_id).kind == ThemeKind::Dark;
+    QVariantList options;
+    for (const ExoAccent& accent : kExoAccents) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("value"), QString::fromUtf8(accent.id));
+        entry.insert(QStringLiteral("label"), QString::fromUtf8(accent.name));
+        entry.insert(QStringLiteral("selectable"), true);
+        entry.insert(QStringLiteral("reason"), QString::fromUtf8(accent.intent));
+        entry.insert(QStringLiteral("swatch"), QString::fromUtf8(dark ? accent.dark : accent.light));
+        options.append(entry);
+    }
+    return options;
+}
+
+QString QuickThemeTokens::migratedAppearanceId(const QString& legacy_theme_id) {
+    return QString::fromUtf8(ui::theme::MigratedAppearanceId(legacy_theme_id.toStdString()));
+}
+
+QString QuickThemeTokens::migratedAccentId(const QString& legacy_theme_id) {
+    return QString::fromUtf8(ui::theme::MigratedAccentId(legacy_theme_id.toStdString()));
+}
+
+const QString& QuickThemeTokens::appearanceId() const noexcept {
+    return appearance_id_;
+}
+const QString& QuickThemeTokens::accentId() const noexcept {
+    return accent_id_;
 }
 bool QuickThemeTokens::dark() const noexcept {
     return dark_;

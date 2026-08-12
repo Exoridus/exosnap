@@ -1567,7 +1567,7 @@ void QuickApplication::applyThemeFromSettings() {
     // any theme-selection logic beyond binding to the resolved colours.
     if (auto* tokens = engine_.singletonInstance<QuickThemeTokens*>(QStringLiteral("ExoSnap.Quick"),
                                                                     QStringLiteral("QuickThemeTokens"))) {
-        tokens->setThemeId(settings_.theme_id);
+        tokens->setAppearance(settings_.appearance_id, settings_.accent_id);
     }
 }
 
@@ -1901,9 +1901,8 @@ void QuickApplication::runUpdatePrimaryAction() {
 
 void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
     // ADR 0033. Land on the page the pre-elevation instance was showing.
-    static const std::array<std::pair<const char*, ShellAdapter::Page>, 6> kNavLabels{{
+    static const std::array<std::pair<const char*, ShellAdapter::Page>, 5> kNavLabels{{
         {"Record", ShellAdapter::RecordPage},
-        {"Device", ShellAdapter::DevicePage},
         {"Settings", ShellAdapter::SettingsPage},
         {"Diagnostics", ShellAdapter::DiagnosticsPage},
         {"Logs", ShellAdapter::LogsPage},

@@ -4,11 +4,10 @@ import QtQuick.Controls.Basic
 // A destination in the shell's title band.
 //
 // Underline selection rather than an outlined pill. Both were tried; side by
-// side the pill draws a permanent rounded box around one of six words, which
-// reads as a button that happens to be stuck down rather than as the page you
-// are on, and it competes with the window buttons at the other end of the same
-// 40 px band. The underline states the same thing with one mint rule and no
-// enclosing shape.
+// side the pill draws a permanent rounded box around one word, which reads as a
+// button that happens to be stuck down rather than as the page you are on, and
+// it competes with the window buttons at the other end of the same 40 px band.
+// The underline states the same thing with one mint rule and no enclosing shape.
 //
 // The pill's one real advantage was that it could carry the keyboard focus ring.
 // That is kept — but only on visualFocus, so it appears when a keyboard user
@@ -16,14 +15,20 @@ import QtQuick.Controls.Basic
 Button {
     id: root
 
-    // Sized to its label, not to a grid: six tabs, a wordmark, a status pill, a
+    // Sized to its label, not to a grid: the tabs, a wordmark, a status pill, a
     // bell and three window buttons all share one 40 px band at the 860 px
     // minimum window, and a per-tab minimum width is what pushed the close
     // button off the right edge there.
     implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
     implicitHeight: 40 - 2 * ExoTheme.spacingXs
-    leftPadding: ExoTheme.spacingMd
-    rightPadding: ExoTheme.spacingMd
+    // All five destinations are direct tabs, so the band's width budget is the
+    // one thing deciding this padding. Below the regular width class it drops a
+    // rung — 8 px a side still leaves the shortest label ("Logs") a hit target
+    // wider than it is tall, and it is the only lever that costs nothing:
+    // shrinking the type or eliding the words would both make a destination
+    // harder to read to buy the same pixels.
+    leftPadding: root.compact ? ExoTheme.spacingSm : ExoTheme.spacingMd
+    rightPadding: root.compact ? ExoTheme.spacingSm : ExoTheme.spacingMd
     topPadding: 0
     bottomPadding: 0
     hoverEnabled: true
@@ -32,6 +37,9 @@ Button {
     focusPolicy: Qt.StrongFocus
 
     property alias selected: root.checked
+    property bool compact: false
+
+    Accessible.name: root.text
 
     contentItem: Label {
         horizontalAlignment: Text.AlignHCenter

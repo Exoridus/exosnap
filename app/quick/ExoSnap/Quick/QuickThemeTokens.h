@@ -8,19 +8,23 @@
 
 namespace exosnap::quick {
 
-// Resolved colour tokens for the active theme, exposed to QML as a singleton.
+// Resolved colour tokens for the active appearance and accent, exposed to QML
+// as a singleton.
 //
-// The theme table itself stays in `ui/theme/ExoSnapThemes.h`, which both
-// frontends read, so the four shipped themes have one definition. This type only
-// maps that table's Widgets-oriented token names onto the names the Quick design
-// system uses, and applies the same derivation rules (explicit override first,
-// otherwise blend/lighten/darken from the base) the QSS pipeline uses.
+// The tables themselves stay in `ui/theme/ExoSnapThemes.h`, so the appearances
+// and the accents have one definition. This type maps that table's token names
+// onto the names the Quick design system uses and applies the derivation rules
+// (tinted notice grounds) the design system needs but the table does not store.
+//
+// Appearance and accent are independent: setting one never changes the other,
+// and no semantic colour is ever derived from the accent.
 class QuickThemeTokens : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
 
-    Q_PROPERTY(QString themeId READ themeId NOTIFY changed FINAL)
+    Q_PROPERTY(QString appearanceId READ appearanceId NOTIFY changed FINAL)
+    Q_PROPERTY(QString accentId READ accentId NOTIFY changed FINAL)
     Q_PROPERTY(bool dark READ dark NOTIFY changed FINAL)
 
     Q_PROPERTY(QColor background READ background NOTIFY changed FINAL)
@@ -45,15 +49,27 @@ class QuickThemeTokens : public QObject {
   public:
     explicit QuickThemeTokens(QObject* parent = nullptr);
 
-    // Applies the theme with this id. An unknown id falls back to the shipped
-    // default rather than leaving the UI on a half-applied palette.
-    void setThemeId(const QString& theme_id);
+    // An unknown id falls back to the shipped default rather than leaving the
+    // UI on a half-applied palette.
+    void setAppearance(const QString& appearance_id, const QString& accent_id);
 
-    // The four shipped themes as `{ value, label, selectable, reason }` entries,
-    // read from the canonical table so the picker can never offer a dead id.
-    [[nodiscard]] static QVariantList themeOptions();
+    // The two shipped appearances / the curated accents, as
+    // `{ value, label, selectable, reason }` entries read from the canonical
+    // tables, so a picker can never offer a dead id. Accent entries additionally
+    // carry `swatch` — the accent as it will look in `appearance_id`, because a
+    // swatch drawn in the other appearance's value is the one thing a colour
+    // picker must not do.
+    [[nodiscard]] static QVariantList appearanceOptions();
+    [[nodiscard]] static QVariantList accentOptions(const QString& appearance_id);
 
-    [[nodiscard]] const QString& themeId() const noexcept;
+    // A pre-0.9 complete-theme id (`dark-indigo`, `light-paper`, …) mapped to
+    // its closest replacement. Anything unrecognised — including an already
+    // migrated id — resolves to the shipped default.
+    [[nodiscard]] static QString migratedAppearanceId(const QString& legacy_theme_id);
+    [[nodiscard]] static QString migratedAccentId(const QString& legacy_theme_id);
+
+    [[nodiscard]] const QString& appearanceId() const noexcept;
+    [[nodiscard]] const QString& accentId() const noexcept;
     [[nodiscard]] bool dark() const noexcept;
     [[nodiscard]] QColor background() const noexcept;
     [[nodiscard]] QColor surface() const noexcept;
@@ -78,7 +94,8 @@ class QuickThemeTokens : public QObject {
     void changed();
 
   private:
-    QString theme_id_;
+    QString appearance_id_;
+    QString accent_id_;
     bool dark_ = true;
     QColor background_;
     QColor surface_;

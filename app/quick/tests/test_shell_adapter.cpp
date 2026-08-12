@@ -282,4 +282,27 @@ TEST_F(ShellAdapterTest, NoProviderMeansNoTrayBranchAtAll) {
     EXPECT_EQ(hide.count(), 0);
 }
 
+// ── Navigation model ────────────────────────────────────────────────────────
+//
+// These indices are not private bookkeeping: AppShell's StackLayout, the
+// elevated-relaunch landing page (ADR 0033), every notification action that
+// navigates, and the --visual-page harness flag all address pages by this
+// number. A silent renumbering points all four somewhere else.
+
+TEST(ShellNavigation, PageIndicesAreTheShippedNavigationOrder) {
+    EXPECT_EQ(static_cast<int>(ShellAdapter::RecordPage), 0);
+    EXPECT_EQ(static_cast<int>(ShellAdapter::SettingsPage), 1);
+    EXPECT_EQ(static_cast<int>(ShellAdapter::DiagnosticsPage), 2);
+    EXPECT_EQ(static_cast<int>(ShellAdapter::LogsPage), 3);
+    EXPECT_EQ(static_cast<int>(ShellAdapter::AboutPage), 4);
+}
+
+TEST(ShellNavigation, EveryDestinationIsDirectlyAddressable) {
+    // All five are peers in the band — there is no secondary tier and no page
+    // that has to be reached through a menu. A sixth destination added here
+    // must therefore be a deliberate decision about the band's width budget at
+    // the 860 px minimum window, not an accident of appending an enumerator.
+    EXPECT_EQ(static_cast<int>(ShellAdapter::AboutPage) + 1, 5);
+}
+
 } // namespace

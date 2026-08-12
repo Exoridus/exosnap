@@ -327,6 +327,65 @@ the existing single-resolved `CapabilitySet` that still drives Settings/Diagnost
 unchanged. Diagnostics keeps only the live, changeable environment (disk/display/audio/elevation)
 as readiness cards; the static "Capability Matrix" section there is unaffected by this slice.
 
+**Top-level navigation: 6 → 5 direct tabs (Device tab removed).** The `Device` nav item was
+deleted, leaving `Record · Settings · Diagnostics · Logs · About` as five direct destinations in
+the title band. An intermediate step put the last three behind an overflow button; that was
+reverted — all five fit at the 860 px minimum window, so the menu bought nothing and cost a click
+on the way to Diagnostics, the page a user opens when something is already wrong. Device owned no
+user-selectable configuration — selecting an adapter card was, and remains, inspection only — so
+its read-only content moved into Diagnostics as a collapsed "Hardware capabilities" section, where
+it sits under the rule that Diagnostics owns what ExoSnap *observes* and Settings owns what the
+user *chooses*. The "ENCODER BACKENDS — ROADMAP" band (AMD/AMF, Intel QSV, software x264/SVT-AV1)
+and the "Backend planned" badge were removed outright: production UI must not present backlog as
+capability. No encoder-device selector was added — NVENC opens on the D3D11 device the capture path
+creates for the target being recorded (`video_thread.cpp`), so the choice would not be honoured;
+see product-spec §2.1.
+
+**Four complete themes → two appearances + a curated accent.** `dark-default`, `dark-indigo`,
+`light-paper` and `light-slate` were replaced by **Dark / Light** plus an independently chosen
+accent (**Aqua** default, Sky, Violet, Magenta). Each old theme pinned one hue to one set of
+neutrals, so picking indigo also meant accepting a different background, and the second light theme
+existed mainly because the first could not carry its accent. The persisted `theme_id` is migrated
+to the closest `(appearance_id, accent_id)` pair on load by accent hue — `light-paper` → Light +
+Sky, because its accent token was petrol blue — and `theme_id` is dropped on the next save; an
+unreadable value resolves to Dark + Aqua rather than to nothing. Settings version 20 → 21. The
+accent list is deliberately all cool: coral, amber and green are the semantic state colours and are
+never derived from, or displaced by, the accent (product-spec §2.2).
+
+**Contrast gate over the appearance × accent matrix.** `quick_theme_contrast.` validates the
+resolved tokens for all eight combinations, role by role rather than against one blanket ratio:
+WCAG 1.4.3 (4.5:1) for text and for ink on filled accent/error controls, WCAG 1.4.11 (3:1) for the
+indicators that identify state (nav underline, active ring, focus ring, state colours), and the
+same 3:1 as a *product* floor for unavailable controls — which WCAG exempts outright, but which
+product-spec §8 promises stay visible. A resting hairline is deliberately not held to 3:1: it is
+separation, not the information that identifies a control.
+
+Six pairs failed and were fixed by moving the responsible token, not the palette. Light `dim`
+`#868D9C` → `#798192` (2.74 → 3.22 on the page), light `success` `#1E9E63` → `#1C915B`, light
+`caution` `#B5801C` → `#A7761A`, light `error` `#CE4B36` → `#C94631` (its white ink on the filled
+Stop pill was 4.48 against the 4.5 bar), dark `dim` `#65656A` → `#67676C` (2.93 → 3.02 on the raised
+surface). Hue and saturation are unchanged throughout; only lightness moved. The Preview Toolbar's
+format summary moved from `textDim` to `textMuted` — it is live secondary metadata, so it belongs on
+a text rung. The locked-on dock state dropped its muted-accent alphas (45 % ring / 60 % icon, which
+fell to 1.9:1 on a light dock) and now carries the full accent, saying "not interactive" through the
+flat fill instead.
+
+**Record page: context card → Preview Surface.** The separate full-width context card above the
+preview was folded into a 38 px Preview Toolbar inside the preview's own border and radius, giving
+the page's subject back roughly 70 px of stage. The transport dock's surface relationship was
+inverted at the same time — the dock is now the recessed base and its round controls sit on it,
+where before a raised dock with darker controls read as holes punched into the bar. Unavailable
+controls drop to the dock's fill and carry a reason tooltip built from the adapter's own state
+(product-spec §8).
+
+**Preview presentation debt.** `PreviewUpdateScheduler` now tracks whether a published frame has
+been followed by a render pass, and `ExoPreviewItem` re-issues exactly one update on the window
+lifecycle transitions that drop render requests (expose, screen change, scene-graph
+re-initialisation). Without it a window crossing a monitor boundary left the preview frozen until an
+unrelated redraw — in practice, until the mouse moved. Producer-driven rendering is unchanged: with
+no frame outstanding the re-issue does nothing at all. `EXOSNAP_PREVIEW_TRACE=1` reports the
+transitions (AGENTS.md).
+
 **Update-check UI → About overlay.** The UpdateSettingsPanel was moved from the Settings page into
 the About overlay (PS-PHASE-E). It is no longer reachable from Settings. ADR 0012 (update security
 model) is unchanged; only the UI placement changed.

@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QStringList>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
@@ -245,10 +246,10 @@ TEST_F(DeviceAdapterTest, ActiveBadgeGoesToFirstProbedNvidiaNotFirstNvidia) {
     EXPECT_TRUE(adapter.selectedIsActive());
     EXPECT_EQ(adapter.selectedStateBadge(), QStringLiteral("ACTIVE ENCODER"));
 
-    // A probed-but-unused sibling still reads "Backend planned".
+    // A present-but-unused sibling states the current fact, not a future one.
     adapter.selectAdapter(0);
     EXPECT_FALSE(adapter.selectedIsActive());
-    EXPECT_EQ(adapter.selectedStateBadge(), QStringLiteral("Backend planned"));
+    EXPECT_EQ(adapter.selectedStateBadge(), QStringLiteral("Not encoding"));
 }
 
 TEST_F(DeviceAdapterTest, NoActiveBadgeWhenNoNvidiaProbeSucceeded) {
@@ -466,15 +467,32 @@ TEST_F(DeviceAdapterTest, SetCapabilitySetIsSafeBeforeAndAfterInjection) {
     EXPECT_GE(fresh.capabilityRows()->rowCount(), 2);
 }
 
-TEST_F(DeviceAdapterTest, RoadmapBackendsAreStaticAndIndependentOfAnyScan) {
-    const QVariantList before = adapter.roadmapBackends();
-    ASSERT_EQ(before.size(), 3);
-    EXPECT_TRUE(before.at(0).toMap().value(QStringLiteral("name")).toString().contains(QStringLiteral("AMD")));
-    EXPECT_TRUE(before.at(1).toMap().value(QStringLiteral("name")).toString().contains(QStringLiteral("Intel")));
-    EXPECT_TRUE(before.at(2).toMap().value(QStringLiteral("name")).toString().contains(QStringLiteral("x264")));
-
+// No production surface may promise a backend ExoSnap does not ship. The former
+// Device page carried an "ENCODER BACKENDS — ROADMAP" band and a "Backend
+// planned" badge; both stated future work as if it were current capability.
+TEST_F(DeviceAdapterTest, NoSurfaceTextPromisesAnUnshippedBackend) {
     InjectTwoAdapters();
-    EXPECT_EQ(adapter.roadmapBackends(), before);
+
+    const QStringList surface_text{adapter.bannerText(), adapter.statusText(), adapter.selectedStateBadge(),
+                                   adapter.selectedSubtitle()};
+    for (const QString& text : surface_text) {
+        EXPECT_FALSE(text.contains(QStringLiteral("planned"), Qt::CaseInsensitive)) << text.toStdString();
+        EXPECT_FALSE(text.contains(QStringLiteral("roadmap"), Qt::CaseInsensitive)) << text.toStdString();
+    }
+}
+
+// The inspected-but-inactive adapter states what it is doing now, not what a
+// future ExoSnap might do with it.
+TEST_F(DeviceAdapterTest, InactiveAdapterBadgeStatesTheCurrentFact) {
+    InjectTwoAdapters();
+    adapter.selectAdapter(1);
+
+    ASSERT_FALSE(adapter.selectedIsActive());
+    EXPECT_EQ(adapter.selectedStateBadge(), QStringLiteral("Not encoding"));
+
+    adapter.selectAdapter(0);
+    ASSERT_TRUE(adapter.selectedIsActive());
+    EXPECT_EQ(adapter.selectedStateBadge(), QStringLiteral("ACTIVE ENCODER"));
 }
 
 } // namespace

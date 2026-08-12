@@ -103,9 +103,13 @@ struct PersistedAppSettings {
     // Empty = no committed handoff. Default empty.
     QString applied_version;
 
-    // THEME-SLICE-1: accent_id renamed to theme_id. Pre-1.0: stale accent_id key in
-    // persisted data is simply ignored.
-    QString theme_id = QStringLiteral("dark-default");
+    // Appearance and accent are two independent choices. They replace the single
+    // `theme_id` that named one of four complete themes; a stored `theme_id` is
+    // migrated to the closest pair on load and then never written again, so an
+    // existing install keeps the colour it had rather than snapping to the
+    // default. See ui/theme/ExoSnapThemes.h for the mapping.
+    QString appearance_id = QStringLiteral("dark");
+    QString accent_id = QStringLiteral("aqua");
 
     // SETTINGS-TIERS-R1: global Expert mode toggle (default OFF).
     bool expert_mode_enabled = false;

@@ -310,46 +310,159 @@ TEST_F(SettingsAdapterTest, WebcamAvailabilityFollowsDiscoveredDevices) {
 }
 
 // ---------------------------------------------------------------------------
-// Theme
+// Appearance and accent
 // ---------------------------------------------------------------------------
 
-TEST_F(SettingsAdapterTest, ThemeOptionsOnlyOfferShippedThemeIds) {
-    const QVariantList options = adapter.themeOptions();
-    ASSERT_FALSE(options.isEmpty());
+TEST_F(SettingsAdapterTest, AppearanceAndAccentOptionsOnlyOfferShippedIds) {
+    const QVariantList appearances = adapter.appearanceOptions();
+    const QVariantList accents = adapter.accentOptions();
+    ASSERT_FALSE(appearances.isEmpty());
+    ASSERT_FALSE(accents.isEmpty());
 
-    for (const QVariant& entry : options) {
+    // Every offered id must resolve to itself; an invented id would silently
+    // fall back and leave the picker showing a value it never set.
+    for (const QVariant& entry : appearances) {
         const QString id = entry.toMap().value(QStringLiteral("value")).toString();
-        // Every offered id must resolve to a real theme; an invented id would
-        // silently fall back and leave the picker showing a theme it never set.
         QuickThemeTokens tokens;
-        tokens.setThemeId(id);
-        EXPECT_EQ(tokens.themeId(), id);
+        tokens.setAppearance(id, QStringLiteral("aqua"));
+        EXPECT_EQ(tokens.appearanceId(), id);
+    }
+    for (const QVariant& entry : accents) {
+        const QString id = entry.toMap().value(QStringLiteral("value")).toString();
+        QuickThemeTokens tokens;
+        tokens.setAppearance(QStringLiteral("dark"), id);
+        EXPECT_EQ(tokens.accentId(), id);
     }
 }
 
-TEST_F(SettingsAdapterTest, UnknownThemeIdFallsBackToTheShippedDefault) {
+TEST_F(SettingsAdapterTest, UnknownAppearanceOrAccentFallsBackToTheShippedDefault) {
     QuickThemeTokens tokens;
-    tokens.setThemeId(QStringLiteral("does-not-exist"));
+    tokens.setAppearance(QStringLiteral("does-not-exist"), QStringLiteral("also-not-real"));
 
-    EXPECT_EQ(tokens.themeId(), QStringLiteral("dark-default"));
+    EXPECT_EQ(tokens.appearanceId(), QStringLiteral("dark"));
+    EXPECT_EQ(tokens.accentId(), QStringLiteral("aqua"));
     EXPECT_TRUE(tokens.background().isValid());
     EXPECT_TRUE(tokens.accent().isValid());
 }
 
-TEST_F(SettingsAdapterTest, EveryShippedThemeResolvesOpaqueSurfacesAndText) {
-    for (const QVariant& entry : SettingsAdapter{}.themeOptions()) {
-        const QString id = entry.toMap().value(QStringLiteral("value")).toString();
-        QuickThemeTokens tokens;
-        tokens.setThemeId(id);
+TEST_F(SettingsAdapterTest, EveryAppearanceAccentPairResolvesEveryToken) {
+    for (const QVariant& appearance_entry : SettingsAdapter{}.appearanceOptions()) {
+        const QString appearance = appearance_entry.toMap().value(QStringLiteral("value")).toString();
+        for (const QVariant& accent_entry : QuickThemeTokens::accentOptions(appearance)) {
+            const QString accent = accent_entry.toMap().value(QStringLiteral("value")).toString();
+            const std::string pair = (appearance + QLatin1Char('+') + accent).toStdString();
+            QuickThemeTokens tokens;
+            tokens.setAppearance(appearance, accent);
 
-        EXPECT_TRUE(tokens.background().isValid()) << id.toStdString();
-        EXPECT_TRUE(tokens.surface().isValid()) << id.toStdString();
-        EXPECT_TRUE(tokens.text().isValid()) << id.toStdString();
-        EXPECT_TRUE(tokens.textSecondary().isValid()) << id.toStdString();
-        EXPECT_TRUE(tokens.warningSurface().isValid()) << id.toStdString();
-        // Line tokens carry alpha; they must still parse from their rgba() form.
-        EXPECT_TRUE(tokens.line().isValid()) << id.toStdString();
-        EXPECT_TRUE(tokens.lineStrong().isValid()) << id.toStdString();
+            EXPECT_TRUE(tokens.background().isValid()) << pair;
+            EXPECT_TRUE(tokens.surface().isValid()) << pair;
+            EXPECT_TRUE(tokens.surfaceRaised().isValid()) << pair;
+            EXPECT_TRUE(tokens.surfaceHover().isValid()) << pair;
+            EXPECT_TRUE(tokens.text().isValid()) << pair;
+            EXPECT_TRUE(tokens.textSecondary().isValid()) << pair;
+            EXPECT_TRUE(tokens.accent().isValid()) << pair;
+            EXPECT_TRUE(tokens.accentInk().isValid()) << pair;
+            EXPECT_TRUE(tokens.warningSurface().isValid()) << pair;
+            // Line tokens carry alpha; they must still parse from their rgba() form.
+            EXPECT_TRUE(tokens.line().isValid()) << pair;
+            EXPECT_TRUE(tokens.lineStrong().isValid()) << pair;
+        }
+    }
+}
+
+// Every surface rung must be a DIFFERENT colour. Both light themes this model
+// replaces set the raised-control surface and the hover surface to pure white,
+// which is why the light UI read as flat: a control, the card holding it and
+// that card's hover state were one colour, so hover did nothing at all.
+TEST_F(SettingsAdapterTest, EveryAppearanceHasFourDistinctSurfaceRungs) {
+    for (const QVariant& entry : SettingsAdapter{}.appearanceOptions()) {
+        const QString appearance = entry.toMap().value(QStringLiteral("value")).toString();
+        const std::string named = appearance.toStdString();
+        QuickThemeTokens tokens;
+        tokens.setAppearance(appearance, QStringLiteral("aqua"));
+
+        const QList<QColor> rungs{tokens.background(), tokens.surface(), tokens.surfaceRaised(), tokens.surfaceHover()};
+        for (qsizetype i = 0; i < rungs.size(); ++i) {
+            for (qsizetype j = i + 1; j < rungs.size(); ++j) {
+                EXPECT_NE(rungs[i].name(), rungs[j].name())
+                    << named << ": surface rungs " << i << " and " << j << " are the same colour";
+            }
+        }
+    }
+}
+
+// The accent is a highlight, never a state. A user who picks an accent must
+// still be able to tell selection from recording, caution and ready — which is
+// why the curated list is all cool hues and the semantic colours are stored on
+// the appearance rather than derived from the accent.
+//
+// Two thresholds, because the two confusions are not equally costly.
+// Error and caution mean "something is wrong": an accent close enough to either
+// makes an ordinary selection read as a problem, so the whole warm arc is out
+// of bounds. Ready/success is the benign one, and the product's own identity
+// colour — Studio Mint — has always sat within 30 degrees of it; that pair is
+// separated by saturation and by context (a status dot versus a selected tab)
+// rather than by hue, and it has shipped and been reviewed that way. Pinning it
+// at a lower bound records the real constraint instead of a number the shipped
+// palette does not meet.
+TEST_F(SettingsAdapterTest, NoAccentCollidesWithASemanticColour) {
+    const auto hue_distance = [](const QColor& a, const QColor& b) {
+        const int raw = std::abs(a.toHsv().hue() - b.toHsv().hue());
+        return std::min(raw, 360 - raw);
+    };
+
+    for (const QVariant& appearance_entry : SettingsAdapter{}.appearanceOptions()) {
+        const QString appearance = appearance_entry.toMap().value(QStringLiteral("value")).toString();
+        for (const QVariant& accent_entry : QuickThemeTokens::accentOptions(appearance)) {
+            const QString accent = accent_entry.toMap().value(QStringLiteral("value")).toString();
+            const std::string pair = (appearance + QLatin1Char('+') + accent).toStdString();
+            QuickThemeTokens tokens;
+            tokens.setAppearance(appearance, accent);
+            ASSERT_GE(tokens.accent().toHsv().hue(), 0) << pair << ": the accent has no hue to compare";
+
+            EXPECT_GE(hue_distance(tokens.accent(), tokens.error()), 40)
+                << pair << ": selection would read as a recording or error state";
+            EXPECT_GE(hue_distance(tokens.accent(), tokens.warning()), 40)
+                << pair << ": selection would read as a caution state";
+            EXPECT_GE(hue_distance(tokens.accent(), tokens.success()), 20)
+                << pair << ": selection would read as a ready state";
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Theme migration
+// ---------------------------------------------------------------------------
+
+TEST_F(SettingsAdapterTest, EveryLegacyThemeIdMigratesToALiveAppearanceAndAccent) {
+    // The exact mapping is a product promise: an existing install keeps the
+    // colour it had rather than snapping to the default. `light-paper` lands on
+    // Sky, not on the default Aqua, because its accent token WAS petrol blue.
+    const QList<std::array<QString, 3>> expected{
+        {QStringLiteral("dark-default"), QStringLiteral("dark"), QStringLiteral("aqua")},
+        {QStringLiteral("dark-indigo"), QStringLiteral("dark"), QStringLiteral("violet")},
+        {QStringLiteral("light-paper"), QStringLiteral("light"), QStringLiteral("sky")},
+        {QStringLiteral("light-slate"), QStringLiteral("light"), QStringLiteral("violet")},
+    };
+
+    for (const auto& row : expected) {
+        const std::string named = row[0].toStdString();
+        EXPECT_EQ(QuickThemeTokens::migratedAppearanceId(row[0]), row[1]) << named;
+        EXPECT_EQ(QuickThemeTokens::migratedAccentId(row[0]), row[2]) << named;
+
+        // And the pair it names must actually resolve, or the migration would
+        // hand the UI a value the tables do not carry.
+        QuickThemeTokens tokens;
+        tokens.setAppearance(row[1], row[2]);
+        EXPECT_EQ(tokens.appearanceId(), row[1]) << named;
+        EXPECT_EQ(tokens.accentId(), row[2]) << named;
+    }
+}
+
+TEST_F(SettingsAdapterTest, AnUnknownOrEmptyLegacyThemeIdMigratesToTheDefault) {
+    for (const QString& id : {QString(), QStringLiteral("dark-teal"), QStringLiteral("dark")}) {
+        EXPECT_EQ(QuickThemeTokens::migratedAppearanceId(id), QStringLiteral("dark"));
+        EXPECT_EQ(QuickThemeTokens::migratedAccentId(id), QStringLiteral("aqua"));
     }
 }
 

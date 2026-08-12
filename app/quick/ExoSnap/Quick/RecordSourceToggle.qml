@@ -1,16 +1,29 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-Button {
+// One audio/video source in the transport dock.
+//
+// A FocusScope around the Button rather than the Button itself, and `available`
+// rather than `enabled`, for one reason: a disabled QML control receives no
+// hover, so the tooltip that would explain WHY it is unavailable is exactly the
+// one that could never appear. The scope stays enabled and carries the hover
+// handler and the tooltip; the Button inside is genuinely disabled, so it cannot
+// be activated by mouse or keyboard and reports the real accessible state.
+FocusScope {
     id: root
 
     required property string shortLabel
     required property string accessibleLabel
-    property alias checkedState: root.checked
+    // Why this source cannot be used right now, as a sentence. Shown under the
+    // label in the tooltip while `available` is false, and never invented: the
+    // caller passes what the adapter actually knows.
+    property string unavailableReason: ""
+    property bool available: true
+    property bool checkedState: false
     property bool errorState: false
     property real meterLevel: 0
 
-    // An ExoGlyph.Kind. Set, the toggle draws the icon; -1 falls back to
+    // An ExoGlyph.Kind. Set, the toggle draws the icon; Invalid falls back to
     // `shortLabel`.
     //
     // The transport used to spell these out as "SYS", "APP", "MIC", "CAM" in 10 px
@@ -26,93 +39,122 @@ Button {
     // compact rung at all.
     property bool compact: false
 
+    readonly property string text: root.shortLabel
+    readonly property bool hovered: hover.hovered
+
+    signal clicked()
+
     // Round, like the Widgets transport's source buttons: circles read as one
     // group of peers, which is what these four are.
     implicitWidth: root.compact ? ExoTheme.controlHeight : ExoTheme.controlHeightLarge
     implicitHeight: root.implicitWidth
-    text: root.shortLabel
-    hoverEnabled: true
-    checkable: true
-    focusPolicy: Qt.StrongFocus
+
+    Accessible.role: Accessible.CheckBox
     Accessible.name: root.accessibleLabel
+    Accessible.description: root.available ? "" : root.unavailableReason
 
-    readonly property color _ink: !root.enabled ? ExoTheme.textDim
-                                  : root.errorState ? ExoTheme.error
-                                  : root.checkedState ? ExoTheme.accent : ExoTheme.textSecondary
+    HoverHandler {
+        id: hover
+    }
 
-    contentItem: Item {
-        Label {
-            anchors.centerIn: parent
-            text: root.text
-            textFormat: Text.PlainText
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            visible: root.glyph === ExoGlyph.Invalid
-            color: root._ink
-            font {
-                family: ExoTheme.monoFamily
-                pixelSize: ExoTheme.fontEyebrow
-                weight: Font.DemiBold
+    Button {
+        id: button
+
+        anchors.fill: parent
+        enabled: root.available
+        focus: true
+        hoverEnabled: true
+        checkable: true
+        checked: root.checkedState
+        focusPolicy: Qt.StrongFocus
+        text: root.shortLabel
+        // Spoken by the scope above, which is the item that stays enabled.
+        Accessible.ignored: true
+        onClicked: root.clicked()
+
+        readonly property color ink: ExoTheme.dockInk(root.available, root.checkedState, root.errorState, root.hovered)
+
+        contentItem: Item {
+            Label {
+                anchors.centerIn: parent
+                text: button.text
+                textFormat: Text.PlainText
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                visible: root.glyph === ExoGlyph.Invalid
+                color: button.ink
+                font {
+                    family: ExoTheme.monoFamily
+                    pixelSize: ExoTheme.fontEyebrow
+                    weight: Font.DemiBold
+                }
+            }
+
+            ExoGlyph {
+                anchors.centerIn: parent
+                kind: root.glyph
+                color: button.ink
+                visible: root.glyph !== ExoGlyph.Invalid
+                width: 18
+                height: 18
             }
         }
 
-        ExoGlyph {
-            anchors.centerIn: parent
-            kind: root.glyph
-            color: root._ink
-            visible: root.glyph !== ExoGlyph.Invalid
-            width: 18
-            height: 18
-        }
-    }
+        background: Rectangle {
+            color: ExoTheme.dockFill(root.available, root.checkedState, root.hovered && root.available, button.down)
+            border.width: 1
+            border.color: ExoTheme.dockBorder(root.available, root.checkedState, root.hovered && root.available,
+                                              root.errorState, button.visualFocus)
+            radius: height / 2
 
-    // Rest, hover and press are the same surface at three depths — so hover has
-    // to tint the fill this toggle actually HAS. It tinted `surfaceRaised`
-    // unconditionally, which meant hovering an unchecked toggle jumped two steps
-    // up to somewhere brighter than the checked state it was not in.
-    readonly property color _fill: root.checkedState && root.enabled ? ExoTheme.surfaceRaised : ExoTheme.surface
+            // The live level, as an arc hugging the button's own edge rather than a
+            // bar floating inside it — a circle has no bottom edge to sit a bar on.
+            Canvas {
+                id: meterArc
 
-    background: Rectangle {
-        color: root.down ? ExoTheme.pressTint(root._fill)
-             : root.hovered && root.enabled ? ExoTheme.hoverTint(root._fill) : root._fill
-        border.width: 1
-        border.color: root.visualFocus ? ExoTheme.text
-                                       : root.errorState ? ExoTheme.error
-                                                         : root.checkedState ? ExoTheme.accent : ExoTheme.line
-        radius: height / 2
+                // Deliberately NOT gated on `available`. The toggles are locked
+                // for the whole recording, which is precisely when the live
+                // level is the thing being watched.
+                readonly property real level: Math.max(0, Math.min(1, root.meterLevel))
+                readonly property color ink: root.checkedState ? ExoTheme.accent : ExoTheme.textDim
 
-        // The live level, as an arc hugging the button's own edge rather than a
-        // bar floating inside it — a circle has no bottom edge to sit a bar on.
-        Canvas {
-            id: meterArc
+                anchors.fill: parent
+                visible: meterArc.level > 0
 
-            readonly property real level: Math.max(0, Math.min(1, root.meterLevel))
-            readonly property color ink: root.checkedState ? ExoTheme.accent : ExoTheme.textDim
+                onLevelChanged: requestPaint()
+                onInkChanged: requestPaint()
 
-            anchors.fill: parent
-            visible: meterArc.level > 0
-
-            onLevelChanged: requestPaint()
-            onInkChanged: requestPaint()
-
-            onPaint: {
-                const ctx = getContext("2d");
-                ctx.reset();
-                if (meterArc.level <= 0)
-                    return;
-                ctx.strokeStyle = meterArc.ink;
-                ctx.lineWidth = 2;
-                ctx.lineCap = "round";
-                ctx.beginPath();
-                // Starts at the bottom and sweeps both ways, so a quiet source
-                // shows a short mark under the icon instead of a lopsided one.
-                const sweep = Math.PI * 0.9 * meterArc.level;
-                ctx.arc(width / 2, height / 2, width / 2 - 2, Math.PI / 2 - sweep / 2, Math.PI / 2 + sweep / 2);
-                ctx.stroke();
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.reset();
+                    if (meterArc.level <= 0)
+                        return;
+                    ctx.strokeStyle = meterArc.ink;
+                    ctx.lineWidth = 2;
+                    ctx.lineCap = "round";
+                    ctx.beginPath();
+                    // Starts at the bottom and sweeps both ways, so a quiet source
+                    // shows a short mark under the icon instead of a lopsided one.
+                    const sweep = Math.PI * 0.9 * meterArc.level;
+                    ctx.arc(width / 2, height / 2, width / 2 - 2, Math.PI / 2 - sweep / 2, Math.PI / 2 + sweep / 2);
+                    ctx.stroke();
+                }
             }
         }
     }
 
-    ToolTip.visible: root.hovered
-    ToolTip.text: root.accessibleLabel
+    // The reason belongs on its own line under the name: "Webcam" then
+    // "Unavailable — no camera was detected." reads as one control with a
+    // status, where a single run reads as a long control name.
+    ToolTip {
+        parent: root
+        visible: root.hovered
+        delay: 400
+        // The second line appears whenever there IS one — a camera that is
+        // detected but will not open is available to click and still owes the
+        // user the reason it is showing an error ring.
+        text: root.unavailableReason.length === 0
+              ? root.accessibleLabel
+              : qsTr("%1\n%2").arg(root.accessibleLabel).arg(root.unavailableReason)
+    }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PreviewMetricsSnapshot.h"
+#include "PreviewUpdateScheduler.h"
 #include "RecordPreviewAdapter.h"
 
 #include <QMutex>
@@ -14,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 namespace exosnap::quick {
 
@@ -23,6 +25,11 @@ class ExoPreviewItem : public QQuickItem {
     Q_PROPERTY(exosnap::quick::RecordPreviewAdapter* previewAdapter READ previewAdapter WRITE setPreviewAdapter NOTIFY
                    previewAdapterChanged FINAL)
     Q_PROPERTY(qreal cornerRadius READ cornerRadius WRITE setCornerRadius NOTIFY cornerRadiusChanged FINAL)
+    // The preview is the lower half of the Record page's Preview Surface, whose
+    // upper half is the preview toolbar. Its top corners therefore meet a
+    // straight divider and must be square while its bottom corners follow the
+    // surface. Negative (the default) means "same as cornerRadius".
+    Q_PROPERTY(qreal topCornerRadius READ topCornerRadius WRITE setTopCornerRadius NOTIFY topCornerRadiusChanged FINAL)
     Q_PROPERTY(QRectF normalizedSourceRect READ normalizedSourceRect WRITE setNormalizedSourceRect NOTIFY
                    normalizedSourceRectChanged FINAL)
     Q_PROPERTY(bool frameReady READ frameReady NOTIFY frameReadyChanged FINAL)
@@ -38,6 +45,11 @@ class ExoPreviewItem : public QQuickItem {
 
     [[nodiscard]] qreal cornerRadius() const noexcept;
     void setCornerRadius(qreal radius);
+    [[nodiscard]] qreal topCornerRadius() const noexcept;
+    void setTopCornerRadius(qreal radius);
+    // The radius the top corners actually clip to, resolving the "follow
+    // cornerRadius" default.
+    [[nodiscard]] qreal resolvedTopCornerRadius() const noexcept;
     [[nodiscard]] QRectF normalizedSourceRect() const noexcept;
     void setNormalizedSourceRect(const QRectF& rect);
 
@@ -55,6 +67,18 @@ class ExoPreviewItem : public QQuickItem {
     // reach for the producer itself: RecordPreviewAdapter owns the transport and
     // the PreviewUpdateScheduler that decides when this is worth calling.
     void requestSceneUpdate();
+
+    // GUI thread. Re-issues exactly one update when a publish is still owed a
+    // presentation. Called on the window lifecycle transitions that can swallow
+    // a render request — see PreviewUpdateScheduler for why the producer cannot
+    // re-offer the frame itself. A no-op when nothing is outstanding.
+    // `transition` names the caller for EXOSNAP_PREVIEW_TRACE.
+    void reissuePendingPresentation(const char* transition);
+
+    // The gate this item's renders are driven by, or nullptr before an adapter
+    // is attached. The scene-graph node keeps its own shared_ptr copy so it can
+    // record render passes without touching the GUI thread's members.
+    [[nodiscard]] const std::shared_ptr<PreviewUpdateScheduler>& updateScheduler() const noexcept;
 
     [[nodiscard]] PreviewMetricsSnapshot metricsSnapshot() const;
     void resetMetrics();
@@ -91,6 +115,7 @@ class ExoPreviewItem : public QQuickItem {
   signals:
     void previewAdapterChanged();
     void cornerRadiusChanged();
+    void topCornerRadiusChanged();
     void normalizedSourceRectChanged();
     void frameReadyChanged();
     void sourceSizeChanged();
@@ -99,6 +124,10 @@ class ExoPreviewItem : public QQuickItem {
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) override;
     void itemChange(ItemChange change, const ItemChangeData& value) override;
+    // Only for QEvent::Expose on the window. QQuickItem has no hook for it and
+    // QWindow emits no signal, but it is the transition that ends the window's
+    // non-renderable stretch — so it is where an owed frame becomes payable.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     friend class RecordPreviewAdapter;
@@ -112,6 +141,7 @@ class ExoPreviewItem : public QQuickItem {
 
     QPointer<RecordPreviewAdapter> preview_adapter_;
     qreal corner_radius_ = 12.0;
+    qreal top_corner_radius_ = -1.0;
     QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
 
     mutable QMutex pending_mutex_;
@@ -120,9 +150,12 @@ class ExoPreviewItem : public QQuickItem {
     quint64 next_generation_ = 1;
     std::atomic<quint64> active_generation_{0};
 
+    std::shared_ptr<PreviewUpdateScheduler> update_scheduler_;
+
     QPointer<QQuickWindow> connected_window_;
     QMetaObject::Connection scene_graph_invalidated_connection_;
     QMetaObject::Connection scene_graph_initialized_connection_;
+    QMetaObject::Connection screen_changed_connection_;
 
     bool frame_ready_ = false;
     QSize source_size_;

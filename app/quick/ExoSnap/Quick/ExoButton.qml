@@ -20,6 +20,11 @@ Button {
     // for the handful of actions whose whole name is a symbol (the preset
     // overflow). `text` stays as the accessible name's fallback.
     property int glyph: ExoGlyph.Invalid
+    // One control rung down, for a button that lives inside chrome rather than
+    // on a page: the Record page's preview toolbar is 38 px tall, and a
+    // full-height button there leaves a 1 px margin and reads as the toolbar's
+    // subject rather than as an action inside it.
+    property bool compact: false
 
     readonly property bool _iconOnly: root.glyph !== ExoGlyph.Invalid
 
@@ -29,12 +34,13 @@ Button {
     // A quiet button carries no chrome at rest, so a minimum width would only pad
     // a text run with dead space; a chromed one needs the reserve so a row of
     // short labels does not turn into a row of differently-sized boxes.
-    implicitWidth: root._iconOnly ? ExoTheme.controlHeight
-                                  : Math.max(root.quiet ? 0 : 88,
+    implicitWidth: root._iconOnly ? root.implicitHeight
+                                  : Math.max(root.quiet || root.compact ? 0 : 88,
                                              contentItem.implicitWidth + leftPadding + rightPadding)
-    implicitHeight: root.tone === "primary" ? ExoTheme.controlHeightLarge : ExoTheme.controlHeight
-    leftPadding: root._iconOnly ? 0 : ExoTheme.spacingLg
-    rightPadding: root._iconOnly ? 0 : ExoTheme.spacingLg
+    implicitHeight: root.compact ? ExoTheme.controlHeightCompact
+                                 : root.tone === "primary" ? ExoTheme.controlHeightLarge : ExoTheme.controlHeight
+    leftPadding: root._iconOnly ? 0 : root.compact ? ExoTheme.spacingMd : ExoTheme.spacingLg
+    rightPadding: root._iconOnly ? 0 : root.compact ? ExoTheme.spacingMd : ExoTheme.spacingLg
     topPadding: 0
     bottomPadding: 0
     hoverEnabled: true

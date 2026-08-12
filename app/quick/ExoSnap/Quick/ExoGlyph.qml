@@ -56,7 +56,9 @@ Item {
         Overflow,
         Dot,
         Warning,
-        Info
+        Info,
+        Display,
+        Region
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -127,7 +129,15 @@ Item {
         // rather than a filled circle, so the whole glyph stays one stroked path.
         "M9 3.2L16 15.2H2Z M9 7.6V11.2 M9 12.9V13.3",
         // Info.
-        "M14.5 9A5.5 5.5 0 1 0 3.5 9A5.5 5.5 0 1 0 14.5 9 M9 8.2V12.8 M9 5.4V5.9"
+        "M14.5 9A5.5 5.5 0 1 0 3.5 9A5.5 5.5 0 1 0 14.5 9 M9 8.2V12.8 M9 5.4V5.9",
+        // Display — panel plus stand: a whole monitor as a capture target.
+        // Distinct from AppWindow above, which has a title bar and no stand,
+        // because the preview toolbar has to say which of the two is being
+        // recorded with nothing but the icon.
+        "M1.8 3.5H16.2V12H1.8Z M6.2 15.5H11.8 M9 12V15.5",
+        // Region — four marquee corners: a rectangle the user drew, so it is
+        // deliberately not a closed shape.
+        "M2.5 6.2V2.5H6.2 M11.8 2.5H15.5V6.2 M15.5 11.8V15.5H11.8 M6.2 15.5H2.5V11.8"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

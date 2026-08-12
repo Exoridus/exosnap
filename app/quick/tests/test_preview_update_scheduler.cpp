@@ -29,6 +29,17 @@ void handleWake(PreviewUpdateScheduler& scheduler, bool item_alive = true) {
         scheduler.RecordSceneUpdateRequested();
 }
 
+// Stands in for ExoPreviewItem::reissuePendingPresentation(): the GUI thread
+// reacting to a lifecycle transition that made the window renderable again.
+// Returns whether it asked for anything, which is what the amplification tests
+// below measure.
+bool reissuePendingPresentation(PreviewUpdateScheduler& scheduler) {
+    if (!scheduler.HasUnrenderedPublish())
+        return false;
+    scheduler.RecordSceneUpdateRequested();
+    return true;
+}
+
 } // namespace
 
 TEST(PreviewUpdateSchedulerTest, QuietSourceRequestsNothing) {
@@ -119,6 +130,247 @@ TEST(PreviewUpdateSchedulerTest, ResetClearsCountersButNotTheGate) {
     EXPECT_TRUE(scheduler.WakeInFlightForTest());
     handleWake(scheduler);
     EXPECT_FALSE(scheduler.WakeInFlightForTest());
+}
+
+// ---------------------------------------------------------------------------
+// The presentation debt.
+//
+// Everything above assumes that asking for a scene update produces a render.
+// While the window is between screens, unexposed, or rebuilding its scene
+// graph, the render loop drops the request instead — and the producer cannot
+// re-offer it, because the transport is a last-value slot and the publish edge
+// is gone. Shipped, that read as "the preview only starts moving again when the
+// mouse moves": the next unrelated redraw was what finally consumed the frame.
+//
+// These tests pin the contract that closes it. Note that the whole class of
+// defect is invisible to the tests above, which never model a render that does
+// not happen.
+// ---------------------------------------------------------------------------
+
+TEST(PreviewUpdateSchedulerTest, QuietSchedulerOwesNothing) {
+    PreviewUpdateScheduler scheduler;
+    EXPECT_FALSE(scheduler.HasUnrenderedPublish());
+    EXPECT_FALSE(reissuePendingPresentation(scheduler)) << "a lifecycle transition with no frame pending must be inert";
+    EXPECT_EQ(scheduler.SceneUpdateRequests(), 0u);
+}
+
+TEST(PreviewUpdateSchedulerTest, ARenderPassClearsTheDebt) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+    EXPECT_TRUE(scheduler.HasUnrenderedPublish()) << "requesting the update is not the same as having rendered";
+
+    scheduler.NoteRenderPass();
+    EXPECT_FALSE(scheduler.HasUnrenderedPublish());
+    EXPECT_EQ(scheduler.RenderPasses(), 1u);
+}
+
+// The exact defect. Frame N is published while the window cannot render; its
+// wake-up is handled and its update request is dropped. When renderability
+// returns, frame N must reach the screen — without frame N+1 being published to
+// wake the scene graph, and without any unrelated redraw.
+TEST(PreviewUpdateSchedulerTest, FrameOwedWhileUnrenderableIsPresentedWhenRenderabilityReturns) {
+    PreviewUpdateScheduler scheduler;
+
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler); // ... and the render loop drops the request.
+    ASSERT_EQ(scheduler.RenderPasses(), 0u);
+    ASSERT_TRUE(scheduler.HasUnrenderedPublish());
+
+    // Renderability returns — a screen change, an expose, a rebuilt scene graph.
+    EXPECT_TRUE(reissuePendingPresentation(scheduler)) << "the frame published while unrenderable must be re-asked for";
+    scheduler.NoteRenderPass();
+
+    EXPECT_FALSE(scheduler.HasUnrenderedPublish());
+    EXPECT_EQ(scheduler.PublishSignals(), 1u) << "no second frame may be required to unstick the preview";
+    EXPECT_EQ(scheduler.SceneUpdateRequests(), 2u);
+}
+
+// The other direction of the same race: a publish that lands after a render
+// pass has started is not carried by it and must stay outstanding. Clearing the
+// debt after the acquire instead of before would write that frame off.
+TEST(PreviewUpdateSchedulerTest, PublishRacingARenderPassStaysOwed) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+
+    scheduler.NoteRenderPass(); // pass begins ...
+    ASSERT_TRUE(scheduler.ArmWake());
+    // ... and only now acquires the transport, having missed the publish above.
+
+    EXPECT_TRUE(scheduler.HasUnrenderedPublish());
+}
+
+// A lifecycle transition storm must not turn into a redraw storm. Only the
+// first transition after an owed frame asks for anything.
+TEST(PreviewUpdateSchedulerTest, RepeatedRenderabilityTransitionsDoNotAmplify) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+
+    EXPECT_TRUE(reissuePendingPresentation(scheduler));
+    scheduler.NoteRenderPass();
+    for (int i = 0; i < 20; ++i)
+        EXPECT_FALSE(reissuePendingPresentation(scheduler)) << "transition " << i << " had nothing to ask for";
+
+    EXPECT_EQ(scheduler.SceneUpdateRequests(), 2u);
+    EXPECT_EQ(scheduler.RenderPasses(), 1u);
+}
+
+// Re-issuing must never disturb the gate: it is a GUI-thread nudge, not a
+// producer edge, so it may neither arm nor leave the gate permanently armed.
+TEST(PreviewUpdateSchedulerTest, ReissuingLeavesTheGateOpen) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+    ASSERT_FALSE(scheduler.WakeInFlightForTest());
+
+    reissuePendingPresentation(scheduler);
+    scheduler.NoteRenderPass();
+
+    EXPECT_FALSE(scheduler.WakeInFlightForTest());
+    EXPECT_TRUE(scheduler.ArmWake()) << "the next real publish must still deliver its own wake-up";
+}
+
+// The benchmark window resets counters mid-flight. That must not forget a frame
+// that is still owed a render, or a measurement run could park the preview.
+TEST(PreviewUpdateSchedulerTest, ResetCountersKeepsThePresentationDebt) {
+    PreviewUpdateScheduler scheduler;
+    ASSERT_TRUE(scheduler.ArmWake());
+    handleWake(scheduler);
+    ASSERT_TRUE(scheduler.HasUnrenderedPublish());
+
+    scheduler.ResetCounters();
+
+    EXPECT_EQ(scheduler.RenderPasses(), 0u);
+    EXPECT_TRUE(scheduler.HasUnrenderedPublish());
+}
+
+// ---------------------------------------------------------------------------
+// Exhaustive interleaving check, with renderability.
+//
+// The model further down enumerates interleavings under the assumption that a
+// requested render always runs. This one drops that assumption: the window may
+// stop being renderable at any point and come back at any point, and a request
+// issued while it is not renderable is lost. The property is unchanged — no
+// terminal state may leave the preview behind — but only the re-issue on the
+// renderable edge can carry it.
+// ---------------------------------------------------------------------------
+namespace {
+
+enum class LifecycleStep { Publish, WakeDisarm, Render, Unrenderable, Renderable };
+
+struct LifecycleOutcome {
+    bool terminal = false;
+    bool stale = false;
+};
+
+LifecycleOutcome runLifecycleInterleaving(const std::vector<LifecycleStep>& steps, bool reissue_on_renderable) {
+    PreviewUpdateScheduler scheduler;
+    uint64_t version = 0;
+    uint64_t seen = 0;
+    int queued = 0;
+    bool renderable = true;
+    bool render_requested = false;
+
+    for (const LifecycleStep step : steps) {
+        switch (step) {
+        case LifecycleStep::Publish:
+            ++version;
+            if (scheduler.ArmWake())
+                ++queued;
+            break;
+
+        case LifecycleStep::WakeDisarm:
+            if (queued == 0)
+                break;
+            --queued;
+            scheduler.DisarmWake();
+            // The request only survives while the window can serve it.
+            if (renderable)
+                render_requested = true;
+            break;
+
+        case LifecycleStep::Render:
+            if (!render_requested || !renderable)
+                break;
+            scheduler.NoteRenderPass();
+            seen = version;
+            render_requested = false;
+            break;
+
+        case LifecycleStep::Unrenderable:
+            renderable = false;
+            render_requested = false; // anything outstanding is dropped
+            break;
+
+        case LifecycleStep::Renderable:
+            if (renderable)
+                break;
+            renderable = true;
+            if (reissue_on_renderable && scheduler.HasUnrenderedPublish())
+                render_requested = true;
+            break;
+        }
+    }
+
+    LifecycleOutcome outcome;
+    // Terminal: the window can render, nothing is queued, and nothing is
+    // outstanding. The desktop may now stay quiet forever.
+    outcome.terminal = renderable && queued == 0 && !render_requested;
+    outcome.stale = outcome.terminal && version > 0 && seen != version;
+    return outcome;
+}
+
+} // namespace
+
+TEST(PreviewUpdateSchedulerTest, NoRenderabilityInterleavingEndsOnAStaleFrame) {
+    constexpr int kMaxDepth = 8;
+    int terminal_states = 0;
+
+    std::vector<LifecycleStep> steps;
+    for (int depth = 1; depth <= kMaxDepth; ++depth) {
+        const long long combinations = static_cast<long long>(std::pow(5.0, depth));
+        for (long long encoded = 0; encoded < combinations; ++encoded) {
+            steps.clear();
+            long long remainder = encoded;
+            for (int i = 0; i < depth; ++i) {
+                steps.push_back(static_cast<LifecycleStep>(remainder % 5));
+                remainder /= 5;
+            }
+            const LifecycleOutcome outcome = runLifecycleInterleaving(steps, /*reissue_on_renderable=*/true);
+            if (!outcome.terminal)
+                continue;
+            ++terminal_states;
+            ASSERT_FALSE(outcome.stale) << "stale terminal state at depth " << depth << ", encoding " << encoded;
+        }
+    }
+
+    EXPECT_GT(terminal_states, 50000) << "the search covered too little to mean anything";
+}
+
+// The counterpart, and the reason the re-issue exists: without it a window that
+// stops being renderable and comes back does park the preview on a stale frame.
+// This is the shipped defect, pinned as a fact.
+TEST(PreviewUpdateSchedulerTest, WithoutTheReissueARenderabilityGapDoesStrand) {
+    constexpr int kMaxDepth = 6;
+    bool found_stale = false;
+
+    std::vector<LifecycleStep> steps;
+    for (int depth = 1; depth <= kMaxDepth && !found_stale; ++depth) {
+        const long long combinations = static_cast<long long>(std::pow(5.0, depth));
+        for (long long encoded = 0; encoded < combinations && !found_stale; ++encoded) {
+            steps.clear();
+            long long remainder = encoded;
+            for (int i = 0; i < depth; ++i) {
+                steps.push_back(static_cast<LifecycleStep>(remainder % 5));
+                remainder /= 5;
+            }
+            found_stale = runLifecycleInterleaving(steps, /*reissue_on_renderable=*/false).stale;
+        }
+    }
+
+    EXPECT_TRUE(found_stale) << "the model no longer distinguishes the two, so the test above proves nothing";
 }
 
 // ---------------------------------------------------------------------------

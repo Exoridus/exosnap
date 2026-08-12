@@ -14,16 +14,18 @@ Read:
 
 ## Product decisions (authoritative source: `docs/product-spec.md`)
 
-- Dark mode by default
+- **Dark** and **Light** are the only two appearances; the accent (Aqua default, plus Sky, Violet, Magenta) is chosen independently. Dark + Aqua is the default. The accent never redefines a semantic state — coral/amber/green stay recording-error/caution/ready
+- Record page composition: one **Preview Surface** (38 px Preview Toolbar + live frame, one border, one radius) → 16 px → transport dock. No separate context card
 - Audio source row order: `APP`, `SYS`, `MIC`. The `APP` row is always present and configurable; it takes effect while a specific application window is the capture target. For screen capture the shipped default is `SYS` on, `MIC` off
 - Each enabled source becomes its own resulting track unless merged with the row above
 - Exact label: `Merge with above`
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
-- Top-level navigation: **Record, Device, Settings, Diagnostics, Logs, About** (6 items; Hotkeys moved into Settings as an embedded card — PS-PHASE-C; Device tab added in the final-redesign port)
+- Top-level navigation: **Record, Settings, Diagnostics, Logs, About** — all five direct tabs in the title band, no overflow menu. All five fit at the 860×700 minimum window; below the regular width class the tabs give up padding, never label text or font size
+  - Content rule: **Settings** = what the user tells ExoSnap to do; **Diagnostics** = what ExoSnap observes about the machine and runtime
   - **Settings** hosts recording configuration across embedded sections (Container & codecs, Quality & timing, Audio, Output, Webcam, Overlays, Notifications & presence, Hotkeys, Updates, Appearance, Developer); no section is Expert-only — a shared Expert toggle reveals additional rows in place per section instead
   - **Overlays** configures the capture-excluded on-screen surfaces by behaviour and content (preset + per-element), never by visual token; the former single "Notifications & overlays" card was split once the overlays gained content configuration
-  - **Device** hosts adapter selection + the per-GPU capability matrix (moved out of Diagnostics)
+  - **Diagnostics** hosts the per-GPU adapter cards + capability matrix in a collapsed "Hardware capabilities" section; the former Device tab is gone, because it owned no user-selectable configuration. The encode device is **not** a user choice — NVENC opens on the D3D11 device the capture path already created, so no selector may be offered
   - **Edit/Output/Save** is an overlay over the Record page (ADR 0022), not a nav item
 
 ## Coordinate before driving the running application
@@ -59,6 +61,12 @@ categorical ban on ever interacting with a running instance — it is a coordina
   Be aware of what a fixture cannot reach: the Edit surface's decode path is only exercised by
   real media (`--auto-edit`), and a fixture-only suite once hid a defect that aborted the
   process on the first genuine clip.
+- The five capture-excluded overlays are **structurally unobservable**: `WDA_EXCLUDEFROMCAPTURE`
+  defeats screenshots, screen recording and `PrintWindow`, and the harness only grabs their scene
+  graph, which shows correct alpha even when the window composes wrongly on screen. A defect in
+  how they reach the desktop (composition, layering, z-order) can only be confirmed by the
+  developer looking at the screen — say so instead of claiming a visual verification you cannot
+  perform. Their `[overlay]` log lines exist for exactly this reason.
 - `--auto-record` is the same class of exception as `--visual-test`: CLI/env-configured, never
   mouse/keyboard synthesis or window automation. Bare mode never creates a window; preview mode
   creates one off-screen only to reuse the existing preview/hub and screenshot machinery, never to

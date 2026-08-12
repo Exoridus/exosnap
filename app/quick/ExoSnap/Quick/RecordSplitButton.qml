@@ -46,7 +46,13 @@ Item {
         id: pill
 
         anchors.fill: parent
-        color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surfaceRaised
+        // Unavailable drops to the dock's own fill, the same step the round peers
+        // take. It used to be `surfaceRaised` — which is now what an AVAILABLE
+        // round control sits on, so a Record button that cannot start would have
+        // read as the most ordinary control on the bar.
+        color: root.mainEnabled || root.busy ? root.fill : ExoTheme.surface
+        border.width: root.mainEnabled || root.busy ? 0 : 1
+        border.color: ExoTheme.line
         radius: height / 2
     }
 

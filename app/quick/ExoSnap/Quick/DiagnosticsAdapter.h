@@ -111,7 +111,6 @@ class DiagnosticsAdapter : public QObject {
     Q_INVOKABLE void openAssistedFix(const QString& fix_id);
     Q_INVOKABLE void createSupportBundle(const QUrl& destination);
     Q_INVOKABLE void openLogs();
-    Q_INVOKABLE void openDevice();
     Q_INVOKABLE void openLastReport();
 
     // ── Host-side input (C++ only) ─────────────────────────────────────────────
@@ -155,7 +154,6 @@ class DiagnosticsAdapter : public QObject {
     void applyFixAccepted(const QString& fixId);
     void assistedFixRequested(const QString& fixId);
     void navigateToLogsRequested();
-    void navigateToDeviceRequested();
     void navigateToSettingsRequested();
     void openLastReportRequested();
     void bundleFinished(bool ok, const QString& message);

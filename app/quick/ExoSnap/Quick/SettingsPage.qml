@@ -36,6 +36,29 @@ Item {
 
     objectName: "quickSettingsPage"
 
+    // Harness-only, same class of hook as --record-visual-menu: scrolls to the
+    // end of the page so a --visual-test capture can photograph the sections
+    // below the fold. Appearance is the last card on the page and there is no
+    // window height on any real display that reaches it — the window is clamped
+    // to the screen work area long before the content ends.
+    function scrollToBottom(): void {
+        scrollToBottomTimer.restart();
+    }
+
+    // Repeating, not one-shot: the request arrives during startup, when the
+    // column layout has not settled and contentHeight is still 0, and anything
+    // that rebuilds the content afterwards (the harness applying an appearance,
+    // a card hydrating) puts the view back at the top. Keeping it pinned until
+    // the capture fires is the only version of this that is not a race. It runs
+    // only in a harness process, which exits as soon as it has its screenshot.
+    Timer {
+        id: scrollToBottomTimer
+
+        interval: 250
+        repeat: true
+        onTriggered: scroll.contentItem.contentY = Math.max(0, scroll.contentHeight - scroll.height)
+    }
+
     // ── The sections themselves, instantiated exactly once ───────────────────
     //
     // Two compositions below claim them through LayoutItemProxy, which is what

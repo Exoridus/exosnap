@@ -310,10 +310,6 @@ void DiagnosticsAdapter::openLogs() {
     emit navigateToLogsRequested();
 }
 
-void DiagnosticsAdapter::openDevice() {
-    emit navigateToDeviceRequested();
-}
-
 void DiagnosticsAdapter::openLastReport() {
     if (!controller_.hasLastRecording())
         return;

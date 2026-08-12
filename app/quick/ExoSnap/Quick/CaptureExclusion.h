@@ -99,6 +99,9 @@ class CaptureExclusion : public QObject {
     QPointer<QQuickWindow> target_;
     bool granted_ = false;
     bool resolved_ = false;
+    // The WS_EX_LAYERED correction runs on every show; the log line for it runs
+    // once, so a session with twenty recordings does not carry twenty copies.
+    bool composition_logged_ = false;
 };
 
 } // namespace exosnap::quick

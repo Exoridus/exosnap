@@ -68,6 +68,13 @@ class RecordPreviewAdapter : public QObject {
     [[nodiscard]] const QString& statusText() const noexcept;
     [[nodiscard]] const QString& errorText() const noexcept;
     [[nodiscard]] QSize sourceSize() const;
+
+    // The redraw gate the producers arm. Handed to ExoPreviewItem so it can ask
+    // whether a published frame is still owed a presentation after the window
+    // was unable to render; the item never arms or disarms it.
+    [[nodiscard]] const std::shared_ptr<PreviewUpdateScheduler>& updateScheduler() const noexcept {
+        return update_scheduler_;
+    }
     [[nodiscard]] double presentationRate() const noexcept;
     [[nodiscard]] double sourceDeliveryRate() const noexcept;
     [[nodiscard]] double frameTimeP95Ms() const noexcept;

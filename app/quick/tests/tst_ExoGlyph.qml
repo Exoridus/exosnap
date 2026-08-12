@@ -42,6 +42,8 @@ Item {
         "Plus": ExoGlyph.Plus,
         "Minus": ExoGlyph.Minus,
         "Overflow": ExoGlyph.Overflow,
+        "Display": ExoGlyph.Display,
+        "Region": ExoGlyph.Region,
         "Dot": ExoGlyph.Dot,
         "Warning": ExoGlyph.Warning,
         "Info": ExoGlyph.Info

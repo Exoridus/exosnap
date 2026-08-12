@@ -27,6 +27,53 @@ CaptureExclusion::AffinityFunction& affinityOverride() {
     return fn;
 }
 
+#if defined(Q_OS_WIN)
+// Drops WS_EX_LAYERED from an overlay window that is about to be composed by
+// DirectComposition.
+//
+// The five overlays are translucent (`color: "transparent"` plus a clear colour
+// with alpha), so Qt requests an alpha channel for them and — as its own log
+// says — creates a Direct Composition device, "needed for semi-transparent
+// windows". The scene graph then renders into a composition swapchain whose
+// visual tree is bound to this HWND.
+//
+// Windows' platform plugin ALSO marks a translucent window WS_EX_LAYERED, which
+// is the other, older way to get per-pixel alpha. The two are mutually
+// exclusive: DWM composes a layered window from its redirection surface, and a
+// DXGI flip-model swapchain never writes there. The result is that the overlay
+// appears as the window class's unwritten background — a white plate with the
+// pill or the countdown circle drawn on it, instead of a shape floating over
+// the desktop.
+//
+// Removing the bit leaves DirectComposition as the single compositing path,
+// which is the one Qt already set up.
+//
+// Must be re-applied on every show. Qt does not set WS_EX_LAYERED when it
+// creates the HWND — measured at create() time, the bit is absent — it sets it
+// on the way to the screen, so a one-shot strip right after create() is a no-op
+// that looks like a fix. Same shape as the WS_THICKFRAME re-assert on the main
+// window: a Windows style Qt decides has to be corrected after the show, not
+// before it.
+//
+// Deliberately not conditional on "did Qt create a DComp device": that is not
+// observable from here, and on a machine where DComp were unavailable a layered
+// window would not have worked either.
+//
+// Returns whether the bit was present and had to be removed.
+bool dropLayeredAttribute(HWND hwnd) {
+    const LONG_PTR ex_style = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if ((ex_style & WS_EX_LAYERED) == 0)
+        return false;
+    ::SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
+    // The extended style of a mapped window only takes effect once the frame is
+    // recalculated. No move, no size, no z-order change, no activation — this
+    // window must not take focus and must not jump.
+    ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    return true;
+}
+#endif
+
 } // namespace
 
 CaptureExclusion::CaptureExclusion(QObject* parent) : QObject(parent) {
@@ -73,11 +120,34 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
     // It is also the only positive control for a capture-exclusion test -- "the
     // overlay is absent from the recording" means nothing unless the overlay was
     // proven to be on screen.
-    diagnostics::AppLog::info(
-        QStringLiteral("overlay"),
-        QStringLiteral("capture exclusion %1 for %2")
-            .arg(ok ? QStringLiteral("granted") : QStringLiteral("REFUSED"),
-                 window->objectName().isEmpty() ? QStringLiteral("(unnamed)") : window->objectName()));
+    const QString overlay_name = window->objectName().isEmpty() ? QStringLiteral("(unnamed)") : window->objectName();
+    diagnostics::AppLog::info(QStringLiteral("overlay"),
+                              QStringLiteral("capture exclusion %1 for %2")
+                                  .arg(ok ? QStringLiteral("granted") : QStringLiteral("REFUSED"), overlay_name));
+
+#if defined(Q_OS_WIN)
+    // Qt applies WS_EX_LAYERED on the way to the screen, so the correction has
+    // to ride every show rather than happening once here. The overlays are shown
+    // and hidden repeatedly across a session (each recording, each countdown).
+    QObject::connect(window, &QWindow::visibleChanged, this, [this, window](bool visible) {
+        if (!visible || window->winId() == 0)
+            return;
+        if (!dropLayeredAttribute(reinterpret_cast<HWND>(window->winId())))
+            return;
+        // Logged for the same reason the exclusion result is: a translucent
+        // overlay that composes wrongly is a white plate on the recorded screen,
+        // and it is capture-excluded, so no screenshot, recording or render
+        // harness can ever show it. Once per window — the correction repeats on
+        // every show, and a line per recording would drown the log.
+        if (composition_logged_)
+            return;
+        composition_logged_ = true;
+        diagnostics::AppLog::info(
+            QStringLiteral("overlay"),
+            QStringLiteral("composition un-layered for %1 — DirectComposition owns the alpha")
+                .arg(window->objectName().isEmpty() ? QStringLiteral("(unnamed)") : window->objectName()));
+    });
+#endif
 
     if (!ok) {
         // Second safeguard, independent of the QML `visible` binding: with the

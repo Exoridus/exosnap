@@ -27,10 +27,15 @@ class ShellAdapter : public QObject {
     QML_UNCREATABLE("ShellAdapter is provided by the application")
 
     // Canonical navigation order (product decision, see CLAUDE.md):
-    // Record, Device, Settings, Diagnostics, Logs, About. Named here so a
-    // navigation request never has to spell a bare integer.
+    // Record, Settings, Diagnostics, Logs, About — all five are direct
+    // destinations in the title band, in this order. Named here so a navigation
+    // request never has to spell a bare integer.
+    //
+    // Device is deliberately absent: it owned no user-selectable configuration,
+    // and its read-only adapter/encoder capability content now lives in
+    // Diagnostics, which is where what ExoSnap OBSERVES belongs.
   public:
-    enum Page { RecordPage = 0, DevicePage = 1, SettingsPage = 2, DiagnosticsPage = 3, LogsPage = 4, AboutPage = 5 };
+    enum Page { RecordPage = 0, SettingsPage = 1, DiagnosticsPage = 2, LogsPage = 3, AboutPage = 4 };
     Q_ENUM(Page)
 
   private:

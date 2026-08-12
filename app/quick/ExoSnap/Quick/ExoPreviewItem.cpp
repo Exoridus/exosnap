@@ -4,6 +4,7 @@
 #include "RecordPreviewAdapter.h"
 #include "RoundedRectClipGeometry.h"
 
+#include <QEvent>
 #include <QMetaObject>
 #include <QMutexLocker>
 #include <QQuickWindow>
@@ -13,6 +14,7 @@
 #include <QSGRendererInterface>
 #include <QSGTexture>
 #include <QScopeGuard>
+#include <QScreen>
 #include <QThread>
 #include <QtMath>
 #include <QtQuick/qsgtexture_platform.h>
@@ -42,6 +44,37 @@ using Clock = std::chrono::steady_clock;
 
 qint64 nowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+}
+
+// `EXOSNAP_PREVIEW_TRACE=1` writes one `preview-trace:` line per presentation
+// lifecycle transition. Off by default and read once: this path runs on window
+// moves and exposes, and the whole point of the redraw gate is that the preview
+// costs nothing while the desktop is quiet.
+//
+// It exists because the defect it was written for is invisible to every other
+// instrument the product has. A screenshot cannot show that frames stopped
+// arriving, the metrics overlay reports rates rather than the transition that
+// broke them, and the failure only reproduces by dragging a real window across
+// a real monitor boundary.
+bool previewTraceEnabled() {
+    static const bool enabled = qEnvironmentVariableIntValue("EXOSNAP_PREVIEW_TRACE") != 0;
+    return enabled;
+}
+
+void tracePresentation(const char* transition, const QQuickWindow* window, const PreviewUpdateScheduler* scheduler,
+                       bool render_loop_active, bool reissued) {
+    if (!previewTraceEnabled())
+        return;
+    const QScreen* screen = window != nullptr ? window->screen() : nullptr;
+    qInfo("preview-trace: %s screen=%s dpr=%.2f exposed=%d visible=%d loop=%d owed=%d reissued=%d publishes=%llu "
+          "wakeups=%llu updates=%llu renders=%llu",
+          transition, screen != nullptr ? qPrintable(screen->name()) : "<none>",
+          window != nullptr ? window->devicePixelRatio() : 0.0, window != nullptr && window->isExposed() ? 1 : 0,
+          window != nullptr && window->isVisible() ? 1 : 0, render_loop_active ? 1 : 0,
+          scheduler != nullptr && scheduler->HasUnrenderedPublish() ? 1 : 0, reissued ? 1 : 0,
+          scheduler != nullptr ? scheduler->PublishSignals() : 0ULL, scheduler != nullptr ? scheduler->Wakeups() : 0ULL,
+          scheduler != nullptr ? scheduler->SceneUpdateRequests() : 0ULL,
+          scheduler != nullptr ? scheduler->RenderPasses() : 0ULL);
 }
 
 double percentile(std::vector<double> values, double fraction) {
@@ -74,6 +107,11 @@ class PreviewTextureNode final : public QSGNode {
         window_ = window;
         owner_ = owner;
         metrics_ = &metrics;
+        // Copied here rather than reached for in preprocess(). adopt() runs at
+        // the sync point with the GUI thread blocked, so this is the one moment
+        // the render thread may read the item's members; afterwards the node
+        // owns a shared_ptr that outlives any adapter swap.
+        scheduler_ = owner != nullptr ? owner->updateScheduler() : nullptr;
         generation_ = source.generation;
         if (source.clear || source.handle == nullptr)
             return;
@@ -265,6 +303,10 @@ class PreviewTextureNode final : public QSGNode {
         if (!valid_ || window_ == nullptr || owner_ == nullptr || metrics_ == nullptr || !owner_->renderLoopActive()) {
             return;
         }
+        // Before the acquire below, so a publish that races this pass stays
+        // outstanding rather than being written off as presented.
+        if (scheduler_ != nullptr)
+            scheduler_->NoteRenderPass();
         QString error;
         const bool first_frame = !has_frame_;
         const bool consumed = consume(window_, *metrics_, error);
@@ -289,12 +331,13 @@ class PreviewTextureNode final : public QSGNode {
         // and scene-graph re-initialisation.
     }
 
-    void setGeometryForRect(const QRectF& rect, qreal radius, const QRectF& normalized_source_rect) {
+    void setGeometryForRect(const QRectF& rect, qreal radius, qreal top_radius, const QRectF& normalized_source_rect) {
         if (rect == geometry_rect_ && qFuzzyCompare(radius, geometry_radius_) &&
-            normalized_source_rect == normalized_source_rect_)
+            qFuzzyCompare(top_radius, geometry_top_radius_) && normalized_source_rect == normalized_source_rect_)
             return;
         geometry_rect_ = rect;
         geometry_radius_ = radius;
+        geometry_top_radius_ = top_radius;
         normalized_source_rect_ = normalized_source_rect;
         target_rect_ = rect;
         if (image_node_ != nullptr) {
@@ -303,7 +346,7 @@ class PreviewTextureNode final : public QSGNode {
                                               normalized_source_rect.width() * width_,
                                               normalized_source_rect.height() * height_));
         }
-        updateClipGeometry(rect, radius);
+        updateClipGeometry(rect, radius, top_radius);
     }
 
     [[nodiscard]] bool valid() const noexcept {
@@ -331,17 +374,20 @@ class PreviewTextureNode final : public QSGNode {
         metrics.render_frames.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void updateClipGeometry(const QRectF& rect, qreal radius) {
+    void updateClipGeometry(const QRectF& rect, qreal radius, qreal top_radius) {
         if (clip_node_ == nullptr)
             return;
-        const qreal bounded_radius = std::clamp(radius, 0.0, std::min(rect.width(), rect.height()) / 2.0);
+        const qreal limit = std::min(rect.width(), rect.height()) / 2.0;
+        const qreal bottom = std::clamp(radius, 0.0, limit);
+        const qreal top = std::clamp(top_radius, 0.0, limit);
         clip_node_->setClipRect(rect);
-        if (bounded_radius <= 0.0 || rect.isEmpty()) {
+        if ((bottom <= 0.0 && top <= 0.0) || rect.isEmpty()) {
             clip_node_->setIsRectangular(true);
             return;
         }
 
-        BuildRoundedRectClipGeometry(clip_node_->geometry(), rect, bounded_radius);
+        // Ring order: top-right, bottom-right, bottom-left, top-left.
+        BuildRoundedRectClipGeometry(clip_node_->geometry(), rect, ClipCornerRadii{top, bottom, bottom, top});
         clip_node_->setIsRectangular(false);
         clip_node_->markDirty(QSGNode::DirtyGeometry);
     }
@@ -371,9 +417,11 @@ class PreviewTextureNode final : public QSGNode {
     QQuickWindow* window_ = nullptr;
     QPointer<ExoPreviewItem> owner_;
     ExoPreviewItem::Metrics* metrics_ = nullptr;
+    std::shared_ptr<PreviewUpdateScheduler> scheduler_;
     QRectF target_rect_;
     QRectF geometry_rect_;
     qreal geometry_radius_ = -1.0;
+    qreal geometry_top_radius_ = -1.0;
     QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
 
     ComPtr<ID3D11Device> device_;
@@ -419,6 +467,7 @@ void ExoPreviewItem::setPreviewAdapter(RecordPreviewAdapter* adapter) {
     if (preview_adapter_ != nullptr)
         preview_adapter_->detachPreviewItem(this);
     preview_adapter_ = adapter;
+    update_scheduler_ = adapter != nullptr ? adapter->updateScheduler() : nullptr;
     if (preview_adapter_ != nullptr)
         preview_adapter_->attachPreviewItem(this);
     emit previewAdapterChanged();
@@ -435,6 +484,22 @@ void ExoPreviewItem::setCornerRadius(qreal radius) {
     corner_radius_ = bounded;
     emit cornerRadiusChanged();
     update();
+}
+
+qreal ExoPreviewItem::topCornerRadius() const noexcept {
+    return top_corner_radius_;
+}
+
+void ExoPreviewItem::setTopCornerRadius(qreal radius) {
+    if (qFuzzyCompare(top_corner_radius_, radius))
+        return;
+    top_corner_radius_ = radius;
+    emit topCornerRadiusChanged();
+    update();
+}
+
+qreal ExoPreviewItem::resolvedTopCornerRadius() const noexcept {
+    return top_corner_radius_ < 0.0 ? corner_radius_ : top_corner_radius_;
 }
 
 QRectF ExoPreviewItem::normalizedSourceRect() const noexcept {
@@ -504,6 +569,38 @@ void ExoPreviewItem::clearSharedTexture() {
 void ExoPreviewItem::requestSceneUpdate() {
     Q_ASSERT(QThread::currentThread() == thread());
     update();
+    // update() alone does not survive a window that could not render. It only
+    // reaches the render loop the first time it dirties the item:
+    // QQuickItemPrivate::dirty() short-circuits while the item is already dirty
+    // AND already on the window's dirty list, which is exactly the state a
+    // dropped request leaves behind. Every later publish then hits the
+    // short-circuit and nothing re-asks for the render. The window's own
+    // update() keeps no such bookkeeping, and the transport is consumed in the
+    // node's preprocess(), which runs on any render pass — so this is what
+    // makes one publish reliably worth one presentation.
+    if (QQuickWindow* host = window(); host != nullptr)
+        host->update();
+}
+
+void ExoPreviewItem::reissuePendingPresentation(const char* transition) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const bool loop_active = render_loop_active_.load(std::memory_order_acquire);
+    const bool reissue = loop_active && update_scheduler_ != nullptr && update_scheduler_->HasUnrenderedPublish();
+    tracePresentation(transition, window(), update_scheduler_.get(), loop_active, reissue);
+    if (!reissue)
+        return;
+    update_scheduler_->RecordSceneUpdateRequested();
+    requestSceneUpdate();
+}
+
+const std::shared_ptr<PreviewUpdateScheduler>& ExoPreviewItem::updateScheduler() const noexcept {
+    return update_scheduler_;
+}
+
+bool ExoPreviewItem::eventFilter(QObject* watched, QEvent* event) {
+    if (event != nullptr && event->type() == QEvent::Expose && watched == connected_window_)
+        reissuePendingPresentation("expose");
+    return QQuickItem::eventFilter(watched, event);
 }
 
 PreviewMetricsSnapshot ExoPreviewItem::metricsSnapshot() const {
@@ -607,9 +704,9 @@ QSGNode* ExoPreviewItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
         return nullptr;
 
     if (node->valid() && isVisible()) {
-        node->setGeometryForRect(boundingRect(), corner_radius_, normalized_source_rect_);
+        node->setGeometryForRect(boundingRect(), corner_radius_, resolvedTopCornerRadius(), normalized_source_rect_);
     } else {
-        node->setGeometryForRect({}, 0.0, normalized_source_rect_);
+        node->setGeometryForRect({}, 0.0, 0.0, normalized_source_rect_);
     }
     return node;
 }
@@ -625,8 +722,22 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
             disconnect(scene_graph_invalidated_connection_);
         if (scene_graph_initialized_connection_)
             disconnect(scene_graph_initialized_connection_);
+        if (screen_changed_connection_)
+            disconnect(screen_changed_connection_);
+        if (connected_window_ != nullptr)
+            connected_window_->removeEventFilter(this);
         connected_window_ = value.window;
         if (value.window != nullptr) {
+            // The two transitions that end a stretch in which the render loop
+            // drops update requests. Neither replays the producer's publish
+            // edge, so without this the newest frame waits for an unrelated
+            // redraw — the "preview only moves again when the mouse moves"
+            // defect. reissuePendingPresentation() is a no-op unless a publish
+            // is genuinely still owed a render, so this adds no steady-state
+            // work whatsoever.
+            value.window->installEventFilter(this);
+            screen_changed_connection_ = connect(value.window, &QWindow::screenChanged, this,
+                                                 [this](QScreen*) { reissuePendingPresentation("screen-changed"); });
             scene_graph_invalidated_connection_ =
                 connect(value.window, &QQuickWindow::sceneGraphInvalidated, this, [this]() {
                     render_loop_active_.store(false, std::memory_order_release);
@@ -638,7 +749,11 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
                     if (queueRetainedSource()) {
                         render_loop_active_.store(isVisible(), std::memory_order_release);
                         update();
+                        return;
                     }
+                    // No source to re-adopt, but a rebuilt scene graph is still
+                    // a stretch in which requests were dropped.
+                    reissuePendingPresentation("scenegraph-initialized");
                 });
             if (queueRetainedSource())
                 update();

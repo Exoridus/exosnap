@@ -96,25 +96,29 @@ class DeviceCapabilityRowModel : public QAbstractListModel {
     std::vector<Row> rows_;
 };
 
-// Narrow QML boundary for the Device area — the encoder-capability home.
+// Narrow QML boundary for the adapter / encoder-capability facts.
+//
+// These are things ExoSnap OBSERVES about the machine, never things the user
+// tells it to do, so they live on Diagnostics (DeviceCapabilityPanel) rather
+// than in Settings, and no longer under a navigation destination of their own.
 //
 // It owns the multi-adapter facts (capability::EnumerateAdapters +
 // ProbeAdapterEncoderCapability) plus the static, system-wide
 // capability::CapabilitySet declarations, and exposes them as two list models
 // and a set of already-resolved presentation properties. Which adapter carries
 // the "Active encoder" badge, how a rescan re-finds the inspected adapter, what
-// the settings banner says, and which feature rows an unprobed adapter is
-// allowed to show are all decided here; QML renders what it is handed.
+// the capability summary line says, and which feature rows an unprobed adapter
+// is allowed to show are all decided here; QML renders what it is handed.
 //
 // Scan lifecycle (PERF): construction does NO hardware work — no DXGI
 // enumeration, no NVENC session. The first scan starts on ensureScanned(),
-// which the page calls the first time it actually becomes visible, and runs on
-// a worker thread exactly like the Widgets DevicePage. Results are applied on
-// the GUI thread.
+// which the surface calls the first time the capability panel is actually
+// opened, and runs on a worker thread. Results are applied on the GUI thread.
 //
 // Selecting a card is INSPECTION ONLY: it switches which adapter's capability
 // matrix is shown. It does not persist a choice and does not steer the encoder
-// or Settings.
+// or Settings — the encode device is not user-selectable, because NVENC binds
+// to the D3D11 device the capture path already created (video_thread.cpp).
 class DeviceAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -148,8 +152,6 @@ class DeviceAdapter : public QObject {
     Q_PROPERTY(QString provenanceText READ provenanceText NOTIFY selectionChanged FINAL)
     Q_PROPERTY(bool provenanceOk READ provenanceOk NOTIFY selectionChanged FINAL)
 
-    Q_PROPERTY(QVariantList roadmapBackends READ roadmapBackends CONSTANT FINAL)
-
   public:
     explicit DeviceAdapter(QObject* parent = nullptr);
 
@@ -173,7 +175,6 @@ class DeviceAdapter : public QObject {
     [[nodiscard]] const QVariantList& codecChips() const noexcept;
     [[nodiscard]] QString provenanceText() const;
     [[nodiscard]] bool provenanceOk() const noexcept;
-    [[nodiscard]] QVariantList roadmapBackends() const;
 
     // Starts the first scan if none has run and none is in flight. Called when
     // the page first becomes visible, never from the constructor.
@@ -209,7 +210,7 @@ class DeviceAdapter : public QObject {
                           std::vector<capability::AdapterEncoderCapability> capabilities);
     void rebuildSelectorRows();
     void renderCapabilityMatrix();
-    void updateSettingsBanner();
+    void updateSummaryText();
     void setStatus(const QString& text, bool visible);
 
     capability::CapabilitySet caps_;

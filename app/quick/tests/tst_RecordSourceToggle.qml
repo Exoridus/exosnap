@@ -65,11 +65,28 @@ Item {
             tryCompare(toggle, "activated", true)
         }
 
-        function test_disabledToggleDoesNotActivate() {
-            let toggle = createTemporaryObject(sourceToggleComponent, root, { activated: false, enabled: false })
+        function test_unavailableToggleDoesNotActivate() {
+            let toggle = createTemporaryObject(sourceToggleComponent, root, { activated: false, available: false })
             verify(!!toggle, "Component exists")
             mouseClick(toggle)
             tryCompare(toggle, "activated", false)
+        }
+
+        // The reason this control cannot be used is exactly the tooltip a
+        // disabled QML control cannot show, because a disabled item receives no
+        // hover at all. The scope around the button is what keeps it reachable,
+        // so hover on an unavailable toggle is the property under test.
+        function test_unavailableToggleStillReportsHover() {
+            let toggle = createTemporaryObject(sourceToggleComponent, root, {
+                                                   activated: false,
+                                                   available: false,
+                                                   unavailableReason: "Unavailable — no microphone was detected."
+                                               })
+            verify(!!toggle, "Component exists")
+            compare(toggle.hovered, false)
+            mouseMove(toggle, toggle.width / 2, toggle.height / 2)
+            tryCompare(toggle, "hovered", true)
+            compare(toggle.Accessible.description, "Unavailable — no microphone was detected.")
         }
     }
 }

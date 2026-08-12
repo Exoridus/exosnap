@@ -44,10 +44,21 @@ Item {
     // nav destination — so its visibility is shell state, not a stack index.
     property bool editOverlayOpen: false
 
-    // Nav index -> stack index. Every canonical destination now has a page, so the
-    // two indices coincide; the mapping stays explicit because the nav order is a
-    // product decision (Record, Device, Settings, Diagnostics, Logs, About).
+    // Page index -> stack index. Single index space, mirroring ShellAdapter::Page:
+    // Record 0, Settings 1, Diagnostics 2, Logs 3, About 4.
     readonly property int stackIndex: root.currentPage
+
+    // Every destination, directly. Five words fit the band at the 860 px minimum
+    // window, so hiding three of them behind a glyph bought nothing and cost a
+    // click plus a menu on the way to Diagnostics — the page a user goes to
+    // precisely when something is already wrong.
+    readonly property var navPages: [qsTr("Record"), qsTr("Settings"), qsTr("Diagnostics"), qsTr("Logs"), qsTr("About")]
+
+    // Below the regular width class the band gives up tab padding rather than
+    // label text or font size: a truncated destination is unreadable and a
+    // smaller one breaks the band's single type rung, while 8 px of side padding
+    // still leaves every tab a comfortable desktop hit target.
+    readonly property bool compactNav: !ExoTheme.isRegular(root.width)
 
     objectName: "quickAppShell"
 
@@ -134,7 +145,10 @@ Item {
 
                 Row {
                     Layout.leftMargin: ExoTheme.spacingSm - ExoTheme.spacingXs
-                    Layout.rightMargin: ExoTheme.spacingXl
+                    // The one gap in the band that separates identity from
+                    // navigation, so it is the first thing to give when five
+                    // destinations have to fit beside three window buttons.
+                    Layout.rightMargin: root.compactNav ? ExoTheme.spacingMd : ExoTheme.spacingXl
                     Layout.alignment: Qt.AlignVCenter
 
                     Label {
@@ -163,12 +177,10 @@ Item {
                 Repeater {
                     id: navRepeater
 
-                    // Nav order is a product decision (Record, Device, Settings,
-                    // Diagnostics, Logs, About). Kept as a list rather than six
+                    // Nav order is a product decision. Kept as a list rather than
                     // copies of the same button so the hit-test rects can be
                     // collected by index.
-                    model: [qsTr("Record"), qsTr("Device"), qsTr("Settings"),
-                            qsTr("Diagnostics"), qsTr("Logs"), qsTr("About")]
+                    model: root.navPages
 
                     delegate: ExoNavTab {
                         required property int index
@@ -176,6 +188,7 @@ Item {
 
                         text: modelData
                         selected: root.currentPage === index
+                        compact: root.compactNav
                         Layout.alignment: Qt.AlignVCenter
                         // Shrinkable to nothing on purpose. Everything to the
                         // right of the drag handle is fixed-size, so when the
@@ -281,13 +294,6 @@ Item {
                 Layout.fillHeight: true
             }
 
-            DevicePage {
-                device: root.deviceAdapter
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                onSettingsRequested: root.currentPage = 2
-            }
-
             SettingsPage {
                 settings: root.settingsAdapter
                 Layout.fillWidth: true
@@ -296,11 +302,11 @@ Item {
 
             DiagnosticsPage {
                 diagnostics: root.diagnosticsAdapter
+                device: root.deviceAdapter
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                onNavigateToLogsRequested: root.currentPage = 4
-                onNavigateToDeviceRequested: root.currentPage = 1
-                onNavigateToSettingsRequested: root.currentPage = 2
+                onNavigateToLogsRequested: root.currentPage = 3
+                onNavigateToSettingsRequested: root.currentPage = 1
             }
 
             LogsPage {

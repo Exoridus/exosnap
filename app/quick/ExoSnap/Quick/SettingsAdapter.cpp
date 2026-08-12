@@ -1340,14 +1340,22 @@ void SettingsAdapter::setDiagnosticsOverlayElement(const QString& token, bool en
     commitAppSettingsEdit();
 }
 
-QVariantList SettingsAdapter::themeOptions() const {
-    // Read from the canonical theme table rather than restating ids here -- a
-    // hand-written list silently offers themes that do not exist.
-    return QuickThemeTokens::themeOptions();
+QVariantList SettingsAdapter::appearanceOptions() const {
+    // Read from the canonical tables rather than restating ids here -- a
+    // hand-written list silently offers values that do not exist.
+    return QuickThemeTokens::appearanceOptions();
 }
 
-QString SettingsAdapter::themeId() const {
-    return app_settings_.theme_id;
+QString SettingsAdapter::appearanceId() const {
+    return app_settings_.appearance_id;
+}
+
+QVariantList SettingsAdapter::accentOptions() const {
+    return QuickThemeTokens::accentOptions(app_settings_.appearance_id);
+}
+
+QString SettingsAdapter::accentId() const {
+    return app_settings_.accent_id;
 }
 
 QVariantList SettingsAdapter::logLevelOptions() const {
@@ -1975,11 +1983,19 @@ void SettingsAdapter::setPresentDiagnosticsOptIn(bool value) {
     commitAppSettingsEdit();
 }
 
-void SettingsAdapter::setThemeId(const QString& value) {
-    if (app_settings_.theme_id == value) {
+void SettingsAdapter::setAppearanceId(const QString& value) {
+    if (app_settings_.appearance_id == value) {
         return;
     }
-    app_settings_.theme_id = value;
+    app_settings_.appearance_id = value;
+    commitAppSettingsEdit();
+}
+
+void SettingsAdapter::setAccentId(const QString& value) {
+    if (app_settings_.accent_id == value) {
+        return;
+    }
+    app_settings_.accent_id = value;
     commitAppSettingsEdit();
 }
 

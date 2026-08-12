@@ -193,6 +193,29 @@ its cause is gone.
 Combine with `--hwnd-audit` for a run that measures all of this and exits without
 ever activating the window.
 
+### Preview presentation tracing
+
+`EXOSNAP_PREVIEW_TRACE=1` writes one `preview-trace:` line per Record-preview
+presentation lifecycle transition (window expose, screen change, scene-graph
+re-initialisation):
+
+```
+preview-trace: screen-changed screen=\\.\DISPLAY2 dpr=1.00 exposed=1 visible=1 loop=1 owed=1 reissued=1 publishes=412 wakeups=409 updates=410 renders=409
+```
+
+`owed=1` means a producer published a frame that no render pass has followed —
+i.e. the newest frame is sitting in the transport and the screen has not shown
+it. `reissued=1` is this transition asking for the render that frame is owed.
+The pair is the whole contract: a transition that finds `owed=0` does nothing,
+and a frame that is owed one is never left waiting for an unrelated redraw.
+
+Off by default and read once, because the point of the preview's redraw gate is
+that a quiet desktop costs nothing. It exists because the defect it was written
+for — the preview freezing when the window crosses a monitor boundary, until the
+mouse moves — is invisible to every other instrument: a screenshot cannot show
+that frames stopped arriving, and the metrics overlay reports rates rather than
+the transition that broke them.
+
 ### Final validation
 
 Run once after the integrated branch is complete:
